@@ -1,0 +1,4 @@
+build/
+raytracer
+*.ppm
+*.png
