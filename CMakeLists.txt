@@ -33,6 +33,7 @@ set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
     src/renderer/orbit_camera.cpp
+    src/renderer/settings.cpp
 )
 
 # Platform-specific renderer backend

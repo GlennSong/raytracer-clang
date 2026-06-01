@@ -4,3 +4,4 @@ raytracer
 viewer
 *.ppm
 *.png
+settings.json

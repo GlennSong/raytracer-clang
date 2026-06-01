@@ -31,13 +31,15 @@ void OrbitCamera::update(const InputState& input, double deltaTime) {
     if (input.keyShift) speed *= 3.0f;
 
     float yawRad = static_cast<float>(degreesToRadians(yaw));
-    float forwardX = std::sin(yawRad);
-    float forwardZ = std::cos(yawRad);
+    float forwardX = -std::sin(yawRad);
+    float forwardZ = -std::cos(yawRad);
+    float rightX = std::cos(yawRad);
+    float rightZ = -std::sin(yawRad);
 
     if (input.keyW) { target.x += forwardX * speed; target.z += forwardZ * speed; }
     if (input.keyS) { target.x -= forwardX * speed; target.z -= forwardZ * speed; }
-    if (input.keyA) { target.x -= std::cos(yawRad) * speed; target.z += std::sin(yawRad) * speed; }
-    if (input.keyD) { target.x += std::cos(yawRad) * speed; target.z -= std::sin(yawRad) * speed; }
+    if (input.keyA) { target.x -= rightX * speed; target.z -= rightZ * speed; }
+    if (input.keyD) { target.x += rightX * speed; target.z += rightZ * speed; }
     if (input.keyQ) { target.y -= speed; }
     if (input.keyE) { target.y += speed; }
 }

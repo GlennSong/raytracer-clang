@@ -2,8 +2,11 @@
 #include "renderer/renderer.h"
 #include "renderer/window.h"
 #include "renderer/orbit_camera.h"
+#include "renderer/settings.h"
 #include <iostream>
 #include <vector>
+
+const std::string SETTINGS_FILE = "settings.json";
 
 struct SceneObject {
     MeshHandle mesh;
@@ -88,8 +91,14 @@ RenderMesh createBoxMesh(Vec3 size) {
 }
 
 int main() {
+    Settings settings;
+    settings.load(SETTINGS_FILE);
+
+    int winWidth = static_cast<int>(settings.getDouble("windowWidth", 1024));
+    int winHeight = static_cast<int>(settings.getDouble("windowHeight", 1024));
+
     Window window;
-    if (!window.initialize(1024, 1024, "Raytracer Viewer")) {
+    if (!window.initialize(winWidth, winHeight, "Raytracer Viewer")) {
         std::cerr << "Failed to create window\n";
         return 1;
     }
@@ -180,11 +189,15 @@ int main() {
     };
 
     OrbitCamera camera;
-    camera.target = Vec3(0, 1, 0);
-    camera.distance = 8.0f;
-    camera.pitch = 25.0f;
+    camera.target = Vec3(
+        settings.getDouble("cameraTargetX", 0.0),
+        settings.getDouble("cameraTargetY", 1.0),
+        settings.getDouble("cameraTargetZ", 0.0));
+    camera.distance = static_cast<float>(settings.getDouble("cameraDistance", 8.0));
+    camera.yaw = static_cast<float>(settings.getDouble("cameraYaw", 0.0));
+    camera.pitch = static_cast<float>(settings.getDouble("cameraPitch", 25.0));
 
-    float exposure = 1.0f;
+    float exposure = static_cast<float>(settings.getDouble("exposure", 0.5));
 
     std::cerr << "Controls:\n";
     std::cerr << "  Left-drag=orbit, Right-drag=pan, Scroll=zoom\n";
@@ -225,6 +238,21 @@ int main() {
 
         renderer->endFrame();
     }
+
+    // Save settings on exit
+    int ww, wh;
+    window.getSize(ww, wh);
+    settings.setDouble("windowWidth", ww);
+    settings.setDouble("windowHeight", wh);
+    settings.setDouble("exposure", exposure);
+    settings.setDouble("cameraTargetX", camera.target.x);
+    settings.setDouble("cameraTargetY", camera.target.y);
+    settings.setDouble("cameraTargetZ", camera.target.z);
+    settings.setDouble("cameraDistance", camera.distance);
+    settings.setDouble("cameraYaw", camera.yaw);
+    settings.setDouble("cameraPitch", camera.pitch);
+    settings.save(SETTINGS_FILE);
+    std::cerr << "Settings saved to " << SETTINGS_FILE << "\n";
 
     renderer->shutdown();
     return 0;
