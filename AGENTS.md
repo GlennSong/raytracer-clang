@@ -5,6 +5,10 @@
 A portable C++ raytracer built from scratch using only standard libraries.
 Compiled with clang++ targeting C++17. No external dependencies.
 
+Significant architectural decisions — with their alternatives, trade-offs, and
+revisit triggers — are recorded in `docs/decisions.md`. Add an ADR there when a
+decision is hard to reverse or spans multiple modules.
+
 ## Architecture
 
 ```
