@@ -2,6 +2,17 @@
 #include "window.h"
 #include <GLFW/glfw3.h>
 
+// Native window-handle access is the one genuinely per-platform piece of the
+// window layer. It is confined here so the backend (and engine) never touch a
+// windowing-library symbol. Add a branch per platform as backends land.
+#if defined(__APPLE__)
+#define GLFW_EXPOSE_NATIVE_COCOA
+#include <GLFW/glfw3native.h>
+#elif defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
+
 Window::Window()
     : window(nullptr), lastMouseX(0), lastMouseY(0),
       lastFrameTime(0), deltaTime(0), firstMouse(true) {}
@@ -32,9 +43,24 @@ bool Window::initialize(int width, int height, const std::string& title) {
     glfwSetWindowFocusCallback(window, windowFocusCallback);
     glfwSetWindowIconifyCallback(window, windowIconifyCallback);
     glfwSetWindowCloseCallback(window, windowCloseCallback);
+    glfwSetWindowRefreshCallback(window, windowRefreshCallback);
 
     lastFrameTime = glfwGetTime();
     return true;
+}
+
+void* Window::nativeWindowHandle() const {
+#if defined(__APPLE__)
+    return glfwGetCocoaWindow(window);
+#elif defined(_WIN32)
+    return glfwGetWin32Window(window);
+#else
+    return nullptr;
+#endif
+}
+
+void Window::setDrawCallback(std::function<void()> callback) {
+    drawCallback = std::move(callback);
 }
 
 void Window::shutdown() {
@@ -210,4 +236,9 @@ void Window::windowIconifyCallback(GLFWwindow* glfwWindow, int iconified) {
 void Window::windowCloseCallback(GLFWwindow* glfwWindow) {
     auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
     self->events.push_back(Event(EventType::WindowCloseRequested));
+}
+
+void Window::windowRefreshCallback(GLFWwindow* glfwWindow) {
+    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+    if (self->drawCallback) self->drawCallback();
 }

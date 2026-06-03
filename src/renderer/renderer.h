@@ -68,6 +68,8 @@ class Renderer {
 public:
     virtual ~Renderer() = default;
 
+    // windowHandle is an opaque native OS window pointer (e.g. NSWindow* on
+    // macOS) from Window::nativeWindowHandle() — never a windowing-library type.
     virtual bool initialize(void* windowHandle, int width, int height) = 0;
     virtual void shutdown() = 0;
     virtual void resize(int width, int height) = 0;

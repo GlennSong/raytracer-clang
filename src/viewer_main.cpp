@@ -103,7 +103,7 @@ int main() {
     window.getFramebufferSize(fbWidth, fbHeight);
 
     auto renderer = Renderer::create();
-    if (!renderer->initialize(window.getHandle(), fbWidth, fbHeight)) {
+    if (!renderer->initialize(window.nativeWindowHandle(), fbWidth, fbHeight)) {
         std::cerr << "Failed to initialize renderer\n";
         return 1;
     }
@@ -213,6 +213,36 @@ int main() {
     std::cerr << "  Up/Down=exposure, Esc=quit\n";
     std::cerr << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n";
 
+    // Rendering lives in a callback so the window can also invoke it during a
+    // modal resize, when pollEvents blocks and the loop below is suspended.
+    // Framebuffer-size reconciliation happens here for the same reason: the
+    // resize event can't be drained mid-drag, so the render path owns it.
+    double renderAlpha = 0.0;
+    auto renderFrame = [&]() {
+        int w, h;
+        window.getFramebufferSize(w, h);
+        if (w != fbWidth || h != fbHeight) {
+            fbWidth = w;
+            fbHeight = h;
+            renderer->resize(w, h);
+        }
+
+        float aspect = (fbHeight > 0) ? static_cast<float>(fbWidth) / fbHeight : 1.0f;
+        CameraState camState = camera.getCameraState(aspect);
+
+        renderer->beginFrame();
+        renderer->setCamera(camState);
+        renderer->setLights(lights, exposure);
+
+        for (const Entity& e : world.entities()) {
+            Transform t = world.renderTransform(e, renderAlpha);
+            renderer->drawMesh(e.mesh, t.matrix(), e.material);
+        }
+
+        renderer->endFrame();
+    };
+    window.setDrawCallback(renderFrame);
+
     bool quit = false;
 
     while (!window.shouldClose() && !quit) {
@@ -226,11 +256,6 @@ int main() {
             switch (event.type) {
                 case EventType::WindowCloseRequested:
                     quit = true;
-                    break;
-                case EventType::FramebufferResized:
-                    fbWidth = event.width;
-                    fbHeight = event.height;
-                    renderer->resize(fbWidth, fbHeight);
                     break;
                 case EventType::KeyPressed:
                     if (event.repeat) break;
@@ -264,21 +289,9 @@ int main() {
         clock.setTimeScale(paused ? 0.0 : simSpeed);
         int steps = clock.advance(dt);
         for (int i = 0; i < steps; i++) world.step(clock.fixedStep());
-        double alpha = clock.interpolationAlpha();
+        renderAlpha = clock.interpolationAlpha();
 
-        float aspect = (fbHeight > 0) ? static_cast<float>(fbWidth) / fbHeight : 1.0f;
-        CameraState camState = camera.getCameraState(aspect);
-
-        renderer->beginFrame();
-        renderer->setCamera(camState);
-        renderer->setLights(lights, exposure);
-
-        for (const Entity& e : world.entities()) {
-            Transform t = world.renderTransform(e, alpha);
-            renderer->drawMesh(e.mesh, t.matrix(), e.material);
-        }
-
-        renderer->endFrame();
+        renderFrame();
     }
 
     // Save settings on exit

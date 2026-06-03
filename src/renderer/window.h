@@ -4,6 +4,7 @@
 #include "event.h"
 #include <string>
 #include <vector>
+#include <functional>
 
 struct GLFWwindow;
 
@@ -36,15 +37,26 @@ public:
     void pollEvents();
     void getSize(int& width, int& height) const;
     void getFramebufferSize(int& width, int& height) const;
-    GLFWwindow* getHandle() const { return window; }
+
+    // Opaque native OS window pointer (NSWindow* on macOS, HWND on Windows...)
+    // for the renderer to bind its surface to. The only seam through which a
+    // platform handle crosses into the renderer; keeps GLFW out of the backend.
+    void* nativeWindowHandle() const;
+
     const InputState& getInput() const { return input; }
     const std::vector<Event>& getEvents() const { return events; }
     double getDeltaTime() const { return deltaTime; }
+
+    // Invoked to redraw a frame. The platform calls this both from the normal
+    // loop and during a modal resize (when pollEvents blocks), so the window
+    // keeps painting instead of freezing while the user drags its edge.
+    void setDrawCallback(std::function<void()> callback);
 
 private:
     GLFWwindow* window;
     InputState input;
     std::vector<Event> events;
+    std::function<void()> drawCallback;
     double lastMouseX, lastMouseY;
     double lastFrameTime;
     double deltaTime;
@@ -59,6 +71,7 @@ private:
     static void windowFocusCallback(GLFWwindow* window, int focused);
     static void windowIconifyCallback(GLFWwindow* window, int iconified);
     static void windowCloseCallback(GLFWwindow* window);
+    static void windowRefreshCallback(GLFWwindow* window);
 };
 
 #endif

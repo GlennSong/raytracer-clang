@@ -3,10 +3,7 @@
 #import "metal_renderer.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-#define GLFW_INCLUDE_NONE
-#define GLFW_EXPOSE_NATIVE_COCOA
-#import <GLFW/glfw3.h>
-#import <GLFW/glfw3native.h>
+#import <AppKit/AppKit.h>
 #import <simd/simd.h>
 #include <unordered_map>
 #include <vector>
@@ -134,8 +131,7 @@ MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
 MetalRenderer::~MetalRenderer() { shutdown(); }
 
 bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
-    GLFWwindow* glfwWindow = static_cast<GLFWwindow*>(windowHandle);
-    NSWindow* nsWindow = glfwGetCocoaWindow(glfwWindow);
+    NSWindow* nsWindow = (__bridge NSWindow*)windowHandle;
 
     impl->device = MTLCreateSystemDefaultDevice();
     if (!impl->device) return false;

@@ -20,8 +20,47 @@ src/
   main.cpp                   — Entry point, render loop
 ```
 
+The interactive viewer adds a renderer and engine layer on top of the shared
+math/core modules:
+
+```
+src/
+  renderer/
+    renderer.h              — RHI: backend-agnostic rendering interface
+    event.h                  — Backend-neutral window/input events
+    window.h / window.cpp    — Windowing + input (GLFW), the platform boundary
+    orbit_camera.h / .cpp    — Interactive orbit camera
+    settings.h / settings.cpp — Persisted viewer settings
+    metal/metal_renderer.mm  — Metal backend implementation (macOS)
+  engine/
+    clock.h / clock.cpp      — Fixed-timestep simulation clock
+    world.h / world.cpp      — Entity / Transform world model
+  viewer_main.cpp            — Interactive viewer entry point
+```
+
 Each module is one header + one implementation file. Keep includes minimal —
 a module should only include what it directly uses.
+
+## Platform Abstraction (Engine Rule)
+
+The engine defines coherent, backend-neutral interfaces; OS-, windowing-, and
+graphics-backend specifics are implemented *behind* those interfaces — one
+implementation per platform, selected at build time. This rule is load-bearing:
+it is what lets new platforms be added by writing an implementation rather than
+by threading conditionals through shared code.
+
+- Engine and application code MUST NOT reference a windowing library, OS, or
+  graphics-backend symbol directly. No `GLFW_*`, no `NSWindow`/`HWND`, no
+  Metal/Vulkan types outside the file that implements that seam.
+- The seams are `Renderer` (rendering backend) and `Window` (windowing + input).
+  They expose only backend-neutral types.
+- Anything crossing a seam must be backend-neutral: events use our own
+  `Event` / `KeyCode` / `MouseButton` (never GLFW codes); native window handles
+  cross as opaque `void*`; etc.
+- Platform-specific code is confined to its own file or a single `#ifdef` branch
+  inside the seam's implementation — e.g. `metal/metal_renderer.mm`, or the
+  native-handle branch in `window.cpp`. Adding a backend means adding an
+  implementation of the seam, not editing call sites.
 
 ## Coding Standards
 
