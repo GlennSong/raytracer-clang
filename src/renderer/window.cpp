@@ -13,100 +13,19 @@
 #include <GLFW/glfw3native.h>
 #endif
 
-Window::Window()
-    : window(nullptr), lastMouseX(0), lastMouseY(0),
-      lastFrameTime(0), deltaTime(0), firstMouse(true) {}
-
-Window::~Window() {
-    shutdown();
-}
-
-bool Window::initialize(int width, int height, const std::string& title) {
-    if (!glfwInit()) return false;
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-    window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
-    if (!window) {
-        glfwTerminate();
-        return false;
-    }
-
-    glfwSetWindowUserPointer(window, this);
-    glfwSetCursorPosCallback(window, mouseCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-    glfwSetKeyCallback(window, keyCallback);
-    glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetWindowSizeCallback(window, windowSizeCallback);
-    glfwSetWindowFocusCallback(window, windowFocusCallback);
-    glfwSetWindowIconifyCallback(window, windowIconifyCallback);
-    glfwSetWindowCloseCallback(window, windowCloseCallback);
-    glfwSetWindowRefreshCallback(window, windowRefreshCallback);
-
-    lastFrameTime = glfwGetTime();
-    return true;
-}
-
-void* Window::nativeWindowHandle() const {
-#if defined(__APPLE__)
-    return glfwGetCocoaWindow(window);
-#elif defined(_WIN32)
-    return glfwGetWin32Window(window);
-#else
-    return nullptr;
-#endif
-}
-
-void Window::setDrawCallback(std::function<void()> callback) {
-    drawCallback = std::move(callback);
-}
-
-void Window::shutdown() {
-    if (window) {
-        glfwDestroyWindow(window);
-        window = nullptr;
-    }
-    glfwTerminate();
-}
-
-bool Window::shouldClose() const {
-    return glfwWindowShouldClose(window);
-}
-
-void Window::pollEvents() {
-    input.mouseDeltaX = 0;
-    input.mouseDeltaY = 0;
-    input.scrollDelta = 0;
-    events.clear();
-
-    glfwPollEvents();
-
-    input.mouseLeftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-    input.mouseRightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    input.keyW = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
-    input.keyA = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
-    input.keyS = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
-    input.keyD = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
-    input.keyQ = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
-    input.keyE = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-    input.keyShift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-    input.keyUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
-    input.keyDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
-
-    double now = glfwGetTime();
-    deltaTime = now - lastFrameTime;
-    lastFrameTime = now;
-}
-
-void Window::getSize(int& width, int& height) const {
-    glfwGetWindowSize(window, &width, &height);
-}
-
-void Window::getFramebufferSize(int& width, int& height) const {
-    glfwGetFramebufferSize(window, &width, &height);
-}
+// All GLFW-typed state lives here, out of the public header. The GLFW user
+// pointer is set to this Impl, so the file-local callbacks below operate on it
+// directly without going back through Window.
+struct Window::Impl {
+    GLFWwindow* window = nullptr;
+    InputState input;
+    std::vector<Event> events;
+    std::function<void()> drawCallback;
+    double lastMouseX = 0, lastMouseY = 0;
+    double lastFrameTime = 0;
+    double deltaTime = 0;
+    bool firstMouse = true;
+};
 
 // Maps backend (GLFW) key codes to the backend-independent KeyCode the rest of
 // the engine sees. This table is the only place that knows GLFW key values.
@@ -150,95 +69,205 @@ static MouseButton translateButton(int glfwButton) {
     }
 }
 
-void Window::mouseCallback(GLFWwindow* glfwWindow, double xpos, double ypos) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    if (self->firstMouse) {
-        self->lastMouseX = xpos;
-        self->lastMouseY = ypos;
-        self->firstMouse = false;
+static Window::Impl* implOf(GLFWwindow* window) {
+    return static_cast<Window::Impl*>(glfwGetWindowUserPointer(window));
+}
+
+static void onCursorPos(GLFWwindow* window, double xpos, double ypos) {
+    auto* impl = implOf(window);
+    if (impl->firstMouse) {
+        impl->lastMouseX = xpos;
+        impl->lastMouseY = ypos;
+        impl->firstMouse = false;
     }
-    self->input.mouseDeltaX = xpos - self->lastMouseX;
-    self->input.mouseDeltaY = ypos - self->lastMouseY;
-    self->lastMouseX = xpos;
-    self->lastMouseY = ypos;
-    self->input.mouseX = xpos;
-    self->input.mouseY = ypos;
+    impl->input.mouseDeltaX = xpos - impl->lastMouseX;
+    impl->input.mouseDeltaY = ypos - impl->lastMouseY;
+    impl->lastMouseX = xpos;
+    impl->lastMouseY = ypos;
+    impl->input.mouseX = xpos;
+    impl->input.mouseY = ypos;
 
     Event event(EventType::MouseMoved);
     event.x = xpos;
     event.y = ypos;
-    self->events.push_back(event);
+    impl->events.push_back(event);
 }
 
-void Window::scrollCallback(GLFWwindow* glfwWindow, double xoffset, double yoffset) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    self->input.scrollDelta = yoffset;
+static void onScroll(GLFWwindow* window, double xoffset, double yoffset) {
+    auto* impl = implOf(window);
+    impl->input.scrollDelta = yoffset;
 
     Event event(EventType::MouseScrolled);
     event.x = xoffset;
     event.y = yoffset;
-    self->events.push_back(event);
+    impl->events.push_back(event);
 }
 
-void Window::keyCallback(GLFWwindow* glfwWindow, int key, int, int action, int) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+static void onKey(GLFWwindow* window, int key, int, int action, int) {
+    auto* impl = implOf(window);
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         Event event(EventType::KeyPressed);
         event.key = translateKey(key);
         event.repeat = (action == GLFW_REPEAT);
-        self->events.push_back(event);
+        impl->events.push_back(event);
     } else if (action == GLFW_RELEASE) {
         Event event(EventType::KeyReleased);
         event.key = translateKey(key);
-        self->events.push_back(event);
+        impl->events.push_back(event);
     }
 }
 
-void Window::mouseButtonCallback(GLFWwindow* glfwWindow, int button, int action, int) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+static void onMouseButton(GLFWwindow* window, int button, int action, int) {
+    auto* impl = implOf(window);
     EventType type = (action == GLFW_PRESS) ? EventType::MouseButtonPressed
                                             : EventType::MouseButtonReleased;
     Event event(type);
     event.button = translateButton(button);
-    event.x = self->input.mouseX;
-    event.y = self->input.mouseY;
-    self->events.push_back(event);
+    event.x = impl->input.mouseX;
+    event.y = impl->input.mouseY;
+    impl->events.push_back(event);
 }
 
-void Window::framebufferSizeCallback(GLFWwindow* glfwWindow, int width, int height) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+static void onFramebufferSize(GLFWwindow* window, int width, int height) {
+    auto* impl = implOf(window);
     Event event(EventType::FramebufferResized);
     event.width = width;
     event.height = height;
-    self->events.push_back(event);
+    impl->events.push_back(event);
 }
 
-void Window::windowSizeCallback(GLFWwindow* glfwWindow, int width, int height) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+static void onWindowSize(GLFWwindow* window, int width, int height) {
+    auto* impl = implOf(window);
     Event event(EventType::WindowResized);
     event.width = width;
     event.height = height;
-    self->events.push_back(event);
+    impl->events.push_back(event);
 }
 
-void Window::windowFocusCallback(GLFWwindow* glfwWindow, int focused) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    self->events.push_back(Event(focused ? EventType::WindowFocused
+static void onWindowFocus(GLFWwindow* window, int focused) {
+    auto* impl = implOf(window);
+    impl->events.push_back(Event(focused ? EventType::WindowFocused
                                          : EventType::WindowUnfocused));
 }
 
-void Window::windowIconifyCallback(GLFWwindow* glfwWindow, int iconified) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    self->events.push_back(Event(iconified ? EventType::WindowMinimized
+static void onWindowIconify(GLFWwindow* window, int iconified) {
+    auto* impl = implOf(window);
+    impl->events.push_back(Event(iconified ? EventType::WindowMinimized
                                            : EventType::WindowRestored));
 }
 
-void Window::windowCloseCallback(GLFWwindow* glfwWindow) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    self->events.push_back(Event(EventType::WindowCloseRequested));
+static void onWindowClose(GLFWwindow* window) {
+    auto* impl = implOf(window);
+    impl->events.push_back(Event(EventType::WindowCloseRequested));
 }
 
-void Window::windowRefreshCallback(GLFWwindow* glfwWindow) {
-    auto* self = static_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
-    if (self->drawCallback) self->drawCallback();
+static void onWindowRefresh(GLFWwindow* window) {
+    auto* impl = implOf(window);
+    if (impl->drawCallback) impl->drawCallback();
+}
+
+Window::Window() : impl(std::make_unique<Impl>()) {}
+
+Window::~Window() {
+    shutdown();
+}
+
+bool Window::initialize(int width, int height, const std::string& title) {
+    if (!glfwInit()) return false;
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    impl->window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
+    if (!impl->window) {
+        glfwTerminate();
+        return false;
+    }
+
+    glfwSetWindowUserPointer(impl->window, impl.get());
+    glfwSetCursorPosCallback(impl->window, onCursorPos);
+    glfwSetScrollCallback(impl->window, onScroll);
+    glfwSetKeyCallback(impl->window, onKey);
+    glfwSetMouseButtonCallback(impl->window, onMouseButton);
+    glfwSetFramebufferSizeCallback(impl->window, onFramebufferSize);
+    glfwSetWindowSizeCallback(impl->window, onWindowSize);
+    glfwSetWindowFocusCallback(impl->window, onWindowFocus);
+    glfwSetWindowIconifyCallback(impl->window, onWindowIconify);
+    glfwSetWindowCloseCallback(impl->window, onWindowClose);
+    glfwSetWindowRefreshCallback(impl->window, onWindowRefresh);
+
+    impl->lastFrameTime = glfwGetTime();
+    return true;
+}
+
+void Window::shutdown() {
+    if (impl->window) {
+        glfwDestroyWindow(impl->window);
+        impl->window = nullptr;
+    }
+    glfwTerminate();
+}
+
+bool Window::shouldClose() const {
+    return glfwWindowShouldClose(impl->window);
+}
+
+void Window::pollEvents() {
+    impl->input.mouseDeltaX = 0;
+    impl->input.mouseDeltaY = 0;
+    impl->input.scrollDelta = 0;
+    impl->events.clear();
+
+    glfwPollEvents();
+
+    GLFWwindow* window = impl->window;
+    impl->input.mouseLeftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    impl->input.mouseRightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    impl->input.keyW = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
+    impl->input.keyA = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+    impl->input.keyS = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
+    impl->input.keyD = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+    impl->input.keyQ = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+    impl->input.keyE = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+    impl->input.keyShift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+    impl->input.keyUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
+    impl->input.keyDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
+
+    double now = glfwGetTime();
+    impl->deltaTime = now - impl->lastFrameTime;
+    impl->lastFrameTime = now;
+}
+
+void Window::getSize(int& width, int& height) const {
+    glfwGetWindowSize(impl->window, &width, &height);
+}
+
+void Window::getFramebufferSize(int& width, int& height) const {
+    glfwGetFramebufferSize(impl->window, &width, &height);
+}
+
+void* Window::nativeWindowHandle() const {
+#if defined(__APPLE__)
+    return glfwGetCocoaWindow(impl->window);
+#elif defined(_WIN32)
+    return glfwGetWin32Window(impl->window);
+#else
+    return nullptr;
+#endif
+}
+
+const InputState& Window::getInput() const {
+    return impl->input;
+}
+
+const std::vector<Event>& Window::getEvents() const {
+    return impl->events;
+}
+
+double Window::getDeltaTime() const {
+    return impl->deltaTime;
+}
+
+void Window::setDrawCallback(std::function<void()> callback) {
+    impl->drawCallback = std::move(callback);
 }

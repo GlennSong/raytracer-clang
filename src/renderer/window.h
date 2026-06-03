@@ -5,8 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
-
-struct GLFWwindow;
+#include <memory>
 
 struct InputState {
     double mouseX, mouseY;
@@ -26,6 +25,9 @@ struct InputState {
           keyUp(false), keyDown(false) {}
 };
 
+// The windowing/input seam. All GLFW (and any other backend) state is hidden in
+// the .cpp-only Impl, so this header carries no windowing-library types — engine
+// and app code depend only on backend-neutral InputState / Event.
 class Window {
 public:
     Window();
@@ -43,9 +45,9 @@ public:
     // platform handle crosses into the renderer; keeps GLFW out of the backend.
     void* nativeWindowHandle() const;
 
-    const InputState& getInput() const { return input; }
-    const std::vector<Event>& getEvents() const { return events; }
-    double getDeltaTime() const { return deltaTime; }
+    const InputState& getInput() const;
+    const std::vector<Event>& getEvents() const;
+    double getDeltaTime() const;
 
     // Invoked to redraw a frame. The platform calls this both from the normal
     // loop and during a modal resize (when pollEvents blocks), so the window
@@ -53,25 +55,8 @@ public:
     void setDrawCallback(std::function<void()> callback);
 
 private:
-    GLFWwindow* window;
-    InputState input;
-    std::vector<Event> events;
-    std::function<void()> drawCallback;
-    double lastMouseX, lastMouseY;
-    double lastFrameTime;
-    double deltaTime;
-    bool firstMouse;
-
-    static void mouseCallback(GLFWwindow* window, double xpos, double ypos);
-    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
-    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
-    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
-    static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
-    static void windowSizeCallback(GLFWwindow* window, int width, int height);
-    static void windowFocusCallback(GLFWwindow* window, int focused);
-    static void windowIconifyCallback(GLFWwindow* window, int iconified);
-    static void windowCloseCallback(GLFWwindow* window);
-    static void windowRefreshCallback(GLFWwindow* window);
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 };
 
 #endif
