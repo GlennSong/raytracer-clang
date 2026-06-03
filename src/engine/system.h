@@ -1,0 +1,52 @@
+#ifndef RAYTRACER_ENGINE_SYSTEM_H
+#define RAYTRACER_ENGINE_SYSTEM_H
+
+#include "world.h"
+#include "clock.h"
+#include "../renderer/renderer.h"
+#include "../renderer/window.h"
+#include "../renderer/settings.h"
+#include <vector>
+
+// Shared "what to render this frame" resource. Systems that produce view data
+// (camera, lighting, exposure) write it; the render system reads it. A minimal
+// stand-in for the resource concept a full ECS will formalize later.
+struct RenderView {
+    CameraState camera;
+    std::vector<PointLight> lights;
+    float exposure = 1.0f;
+};
+
+// Services and per-frame data handed to every system hook. Field validity by
+// phase: frameDelta in update(), interpolation in render(), clock.fixedStep()
+// in fixedUpdate().
+struct FrameContext {
+    World& world;
+    Renderer& renderer;
+    RenderView& view;
+    SimClock& clock;
+    Settings& settings;
+    const InputState& input;
+    int framebufferWidth;
+    int framebufferHeight;
+    double frameDelta;
+    double interpolation;
+    bool& quit;
+};
+
+// A unit of engine behaviour, ticked by Application each frame. Override only
+// the hooks you need; all default to no-ops. The interface is deliberately
+// independent of the entity-storage model, so it survives the move to an ECS.
+class System {
+public:
+    virtual ~System() = default;
+
+    virtual void onStart(FrameContext&) {}
+    virtual void onEvent(const Event&, FrameContext&) {}
+    virtual void update(FrameContext&) {}
+    virtual void fixedUpdate(FrameContext&) {}
+    virtual void render(FrameContext&) {}
+    virtual void onStop(FrameContext&) {}
+};
+
+#endif

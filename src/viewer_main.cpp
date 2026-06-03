@@ -1,14 +1,12 @@
 #include "math.h"
 #include "renderer/renderer.h"
-#include "renderer/window.h"
-#include "renderer/orbit_camera.h"
-#include "renderer/settings.h"
-#include "engine/clock.h"
 #include "engine/world.h"
+#include "engine/application.h"
+#include "engine/systems/dev_control_system.h"
+#include "engine/systems/camera_system.h"
+#include "engine/systems/motion_system.h"
+#include "engine/systems/render_system.h"
 #include <iostream>
-#include <vector>
-
-const std::string SETTINGS_FILE = "settings.json";
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
     RenderMesh mesh;
@@ -86,41 +84,19 @@ RenderMesh createBoxMesh(Vec3 size) {
     return mesh;
 }
 
-int main() {
-    Settings settings;
-    settings.load(SETTINGS_FILE);
-
-    int winWidth = static_cast<int>(settings.getDouble("windowWidth", 1024));
-    int winHeight = static_cast<int>(settings.getDouble("windowHeight", 1024));
-
-    Window window;
-    if (!window.initialize(winWidth, winHeight, "Raytracer Viewer")) {
-        std::cerr << "Failed to create window\n";
-        return 1;
-    }
-
-    int fbWidth, fbHeight;
-    window.getFramebufferSize(fbWidth, fbHeight);
-
-    auto renderer = Renderer::create();
-    if (!renderer->initialize(window.nativeWindowHandle(), fbWidth, fbHeight)) {
-        std::cerr << "Failed to initialize renderer\n";
-        return 1;
-    }
-
-    World world;
-
+// Populates the Cornell-box scene: static room + spheres and a spinning box,
+// plus the lights the render system reads from the shared RenderView.
+static void buildScene(World& world, Renderer& renderer, RenderView& view) {
     auto addStatic = [&](MeshHandle mesh, const Vec3& position,
-                         const RenderMaterial& material) -> Entity& {
+                         const RenderMaterial& material) {
         Entity e;
         e.mesh = mesh;
         e.material = material;
         e.transform.position = position;
         e.simulated = false;
-        return world.add(e);
+        world.add(e);
     };
 
-    // Room materials
     RenderMaterial whiteMat;
     whiteMat.albedo = Vec3(0.73, 0.73, 0.73);
     whiteMat.roughness = 0.9f;
@@ -135,182 +111,69 @@ int main() {
 
     // Walls bake their position into the mesh geometry, so the entity transform
     // stays at the origin.
-    auto floorMesh = createQuadMesh(Vec3(-5, 0, -5), Vec3(10, 0, 0), Vec3(0, 0, 10));
-    addStatic(renderer->uploadMesh(floorMesh), Vec3(0, 0, 0), whiteMat);
+    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, -5), Vec3(10, 0, 0), Vec3(0, 0, 10))),
+              Vec3(0, 0, 0), whiteMat);
+    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 8, 5), Vec3(10, 0, 0), Vec3(0, 0, -10))),
+              Vec3(0, 0, 0), whiteMat);
+    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, 5), Vec3(10, 0, 0), Vec3(0, 8, 0))),
+              Vec3(0, 0, 0), whiteMat);
+    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, -5), Vec3(0, 0, 10), Vec3(0, 8, 0))),
+              Vec3(0, 0, 0), redWall);
+    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(5, 0, 5), Vec3(0, 0, -10), Vec3(0, 8, 0))),
+              Vec3(0, 0, 0), greenWall);
 
-    auto ceilMesh = createQuadMesh(Vec3(-5, 8, 5), Vec3(10, 0, 0), Vec3(0, 0, -10));
-    addStatic(renderer->uploadMesh(ceilMesh), Vec3(0, 0, 0), whiteMat);
+    MeshHandle sphereHandle = renderer.uploadMesh(createSphereMesh(1.0f, 32, 64));
 
-    auto backMesh = createQuadMesh(Vec3(-5, 0, 5), Vec3(10, 0, 0), Vec3(0, 8, 0));
-    addStatic(renderer->uploadMesh(backMesh), Vec3(0, 0, 0), whiteMat);
-
-    auto leftMesh = createQuadMesh(Vec3(-5, 0, -5), Vec3(0, 0, 10), Vec3(0, 8, 0));
-    addStatic(renderer->uploadMesh(leftMesh), Vec3(0, 0, 0), redWall);
-
-    auto rightMesh = createQuadMesh(Vec3(5, 0, 5), Vec3(0, 0, -10), Vec3(0, 8, 0));
-    addStatic(renderer->uploadMesh(rightMesh), Vec3(0, 0, 0), greenWall);
-
-    // Red sphere
     RenderMaterial redMat;
     redMat.albedo = Vec3(0.8, 0.1, 0.1);
     redMat.roughness = 0.3f;
-    auto sphereMesh = createSphereMesh(1.0f, 32, 64);
-    MeshHandle sphereHandle = renderer->uploadMesh(sphereMesh);
     addStatic(sphereHandle, Vec3(-2.0, 1.0, 0.0), redMat);
 
-    // Metal sphere
     RenderMaterial metalMat;
     metalMat.albedo = Vec3(0.9, 0.9, 0.95);
     metalMat.metallic = 1.0f;
     metalMat.roughness = 0.1f;
     addStatic(sphereHandle, Vec3(0.0, 1.0, 0.0), metalMat);
 
-    // Glass-like sphere (semi-transparent)
     RenderMaterial glassMat;
     glassMat.albedo = Vec3(0.5, 0.8, 1.0);
     glassMat.roughness = 0.1f;
     glassMat.opacity = 0.3f;
     addStatic(sphereHandle, Vec3(2.0, 1.0, 0.0), glassMat);
 
-    // Green box — simulated: spins in place so the fixed timestep and time
-    // controls are visible. Real motion systems plug into World::step the same way.
+    // Simulated: spins in place so the fixed timestep and time controls are
+    // visible. Real motion systems integrate the same velocity fields.
     RenderMaterial greenMat;
     greenMat.albedo = Vec3(0.2, 0.7, 0.2);
     greenMat.roughness = 0.5f;
-    auto boxMesh = createBoxMesh(Vec3(1.5, 3.0, 1.5));
     Entity box;
-    box.mesh = renderer->uploadMesh(boxMesh);
+    box.mesh = renderer.uploadMesh(createBoxMesh(Vec3(1.5, 3.0, 1.5)));
     box.material = greenMat;
     box.transform.position = Vec3(3.0, 1.5, 2.0);
     box.transform.rotation = Vec3(0.0, 0.4, 0.0);
     box.angularVelocity = Vec3(0.0, 0.6, 0.3);
     world.add(box);
 
-    // Lights
-    std::vector<PointLight> lights = {
+    view.lights = {
         PointLight(Vec3(0, 7.0, 0), Vec3(1.0, 0.95, 0.9), 25.0f),
         PointLight(Vec3(-3, 5, -3), Vec3(0.4, 0.5, 1.0), 10.0f)
     };
+}
 
-    OrbitCamera camera;
-    camera.target = Vec3(
-        settings.getDouble("cameraTargetX", 0.0),
-        settings.getDouble("cameraTargetY", 1.0),
-        settings.getDouble("cameraTargetZ", 0.0));
-    camera.distance = static_cast<float>(settings.getDouble("cameraDistance", 8.0));
-    camera.yaw = static_cast<float>(settings.getDouble("cameraYaw", 0.0));
-    camera.pitch = static_cast<float>(settings.getDouble("cameraPitch", 25.0));
-
-    float exposure = static_cast<float>(settings.getDouble("exposure", 0.5));
-
-    SimClock clock(settings.getDouble("fixedTimestep", 1.0 / 60.0));
-    double simSpeed = settings.getDouble("timeScale", 1.0);  // speed when not paused
-    bool paused = false;
-
-    std::cerr << "Controls:\n";
-    std::cerr << "  Left-drag=orbit, Right-drag=pan, Scroll=zoom\n";
-    std::cerr << "  WASD=move, QE=up/down, Shift=fast\n";
-    std::cerr << "  Up/Down=exposure, Esc=quit\n";
-    std::cerr << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n";
-
-    // Rendering lives in a callback so the window can also invoke it during a
-    // modal resize, when pollEvents blocks and the loop below is suspended.
-    // Framebuffer-size reconciliation happens here for the same reason: the
-    // resize event can't be drained mid-drag, so the render path owns it.
-    double renderAlpha = 0.0;
-    auto renderFrame = [&]() {
-        int w, h;
-        window.getFramebufferSize(w, h);
-        if (w != fbWidth || h != fbHeight) {
-            fbWidth = w;
-            fbHeight = h;
-            renderer->resize(w, h);
-        }
-
-        float aspect = (fbHeight > 0) ? static_cast<float>(fbWidth) / fbHeight : 1.0f;
-        CameraState camState = camera.getCameraState(aspect);
-
-        renderer->beginFrame();
-        renderer->setCamera(camState);
-        renderer->setLights(lights, exposure);
-
-        for (const Entity& e : world.entities()) {
-            Transform t = world.renderTransform(e, renderAlpha);
-            renderer->drawMesh(e.mesh, t.matrix(), e.material);
-        }
-
-        renderer->endFrame();
-    };
-    window.setDrawCallback(renderFrame);
-
-    bool quit = false;
-
-    while (!window.shouldClose() && !quit) {
-        window.pollEvents();
-        const InputState& input = window.getInput();
-        double dt = window.getDeltaTime();
-
-        // Discrete reactions come from the event queue; continuous input
-        // (camera, exposure ramp) reads the polled held-state below.
-        for (const Event& event : window.getEvents()) {
-            switch (event.type) {
-                case EventType::WindowCloseRequested:
-                    quit = true;
-                    break;
-                case EventType::KeyPressed:
-                    if (event.repeat) break;
-                    switch (event.key) {
-                        case KeyCode::Escape: quit = true; break;
-                        case KeyCode::Space:  paused = !paused; break;
-                        case KeyCode::Comma:
-                            simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
-                            break;
-                        case KeyCode::Period:
-                            simSpeed = std::clamp(simSpeed * 2.0, 0.0625, 16.0);
-                            break;
-                        case KeyCode::Num0:
-                            simSpeed = 1.0;
-                            paused = false;
-                            break;
-                        default: break;
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        camera.update(input, dt);
-
-        if (input.keyUp) exposure *= 1.0f + 2.0f * static_cast<float>(dt);
-        if (input.keyDown) exposure *= 1.0f - 2.0f * static_cast<float>(dt);
-        exposure = std::clamp(exposure, 0.05f, 20.0f);
-
-        clock.setTimeScale(paused ? 0.0 : simSpeed);
-        int steps = clock.advance(dt);
-        for (int i = 0; i < steps; i++) world.step(clock.fixedStep());
-        renderAlpha = clock.interpolationAlpha();
-
-        renderFrame();
+int main() {
+    Application app;
+    if (!app.initialize({1024, 1024, "Raytracer Viewer", "settings.json"})) {
+        std::cerr << "Failed to initialize application\n";
+        return 1;
     }
 
-    // Save settings on exit
-    int ww, wh;
-    window.getSize(ww, wh);
-    settings.setDouble("windowWidth", ww);
-    settings.setDouble("windowHeight", wh);
-    settings.setDouble("exposure", exposure);
-    settings.setDouble("timeScale", simSpeed);
-    settings.setDouble("fixedTimestep", clock.fixedStep());
-    settings.setDouble("cameraTargetX", camera.target.x);
-    settings.setDouble("cameraTargetY", camera.target.y);
-    settings.setDouble("cameraTargetZ", camera.target.z);
-    settings.setDouble("cameraDistance", camera.distance);
-    settings.setDouble("cameraYaw", camera.yaw);
-    settings.setDouble("cameraPitch", camera.pitch);
-    settings.save(SETTINGS_FILE);
-    std::cerr << "Settings saved to " << SETTINGS_FILE << "\n";
+    buildScene(app.world(), app.renderer(), app.renderView());
 
-    renderer->shutdown();
+    app.addSystem<DevControlSystem>();
+    app.addSystem<CameraSystem>();
+    app.addSystem<MotionSystem>();
+    app.addSystem<RenderSystem>();
+
+    app.run();
     return 0;
 }

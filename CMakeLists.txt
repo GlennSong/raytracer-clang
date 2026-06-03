@@ -36,6 +36,11 @@ set(VIEWER_SOURCES
     src/renderer/settings.cpp
     src/engine/clock.cpp
     src/engine/world.cpp
+    src/engine/application.cpp
+    src/engine/systems/camera_system.cpp
+    src/engine/systems/motion_system.cpp
+    src/engine/systems/render_system.cpp
+    src/engine/systems/dev_control_system.cpp
 )
 
 # Platform-specific renderer backend
