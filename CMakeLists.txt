@@ -34,6 +34,8 @@ set(VIEWER_SOURCES
     src/renderer/window.cpp
     src/renderer/orbit_camera.cpp
     src/renderer/settings.cpp
+    src/engine/clock.cpp
+    src/engine/world.cpp
 )
 
 # Platform-specific renderer backend

@@ -3,16 +3,12 @@
 #include "renderer/window.h"
 #include "renderer/orbit_camera.h"
 #include "renderer/settings.h"
+#include "engine/clock.h"
+#include "engine/world.h"
 #include <iostream>
 #include <vector>
 
 const std::string SETTINGS_FILE = "settings.json";
-
-struct SceneObject {
-    MeshHandle mesh;
-    Mat4 transform;
-    RenderMaterial material;
-};
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
     RenderMesh mesh;
@@ -112,7 +108,17 @@ int main() {
         return 1;
     }
 
-    std::vector<SceneObject> objects;
+    World world;
+
+    auto addStatic = [&](MeshHandle mesh, const Vec3& position,
+                         const RenderMaterial& material) -> Entity& {
+        Entity e;
+        e.mesh = mesh;
+        e.material = material;
+        e.transform.position = position;
+        e.simulated = false;
+        return world.add(e);
+    };
 
     // Room materials
     RenderMaterial whiteMat;
@@ -127,30 +133,22 @@ int main() {
     greenWall.albedo = Vec3(0.12, 0.45, 0.15);
     greenWall.roughness = 0.9f;
 
-    // Floor
+    // Walls bake their position into the mesh geometry, so the entity transform
+    // stays at the origin.
     auto floorMesh = createQuadMesh(Vec3(-5, 0, -5), Vec3(10, 0, 0), Vec3(0, 0, 10));
-    MeshHandle floorHandle = renderer->uploadMesh(floorMesh);
-    objects.push_back({floorHandle, Mat4::identity(), whiteMat});
+    addStatic(renderer->uploadMesh(floorMesh), Vec3(0, 0, 0), whiteMat);
 
-    // Ceiling
     auto ceilMesh = createQuadMesh(Vec3(-5, 8, 5), Vec3(10, 0, 0), Vec3(0, 0, -10));
-    MeshHandle ceilHandle = renderer->uploadMesh(ceilMesh);
-    objects.push_back({ceilHandle, Mat4::identity(), whiteMat});
+    addStatic(renderer->uploadMesh(ceilMesh), Vec3(0, 0, 0), whiteMat);
 
-    // Back wall
     auto backMesh = createQuadMesh(Vec3(-5, 0, 5), Vec3(10, 0, 0), Vec3(0, 8, 0));
-    MeshHandle backHandle = renderer->uploadMesh(backMesh);
-    objects.push_back({backHandle, Mat4::identity(), whiteMat});
+    addStatic(renderer->uploadMesh(backMesh), Vec3(0, 0, 0), whiteMat);
 
-    // Left wall (red)
     auto leftMesh = createQuadMesh(Vec3(-5, 0, -5), Vec3(0, 0, 10), Vec3(0, 8, 0));
-    MeshHandle leftHandle = renderer->uploadMesh(leftMesh);
-    objects.push_back({leftHandle, Mat4::identity(), redWall});
+    addStatic(renderer->uploadMesh(leftMesh), Vec3(0, 0, 0), redWall);
 
-    // Right wall (green)
     auto rightMesh = createQuadMesh(Vec3(5, 0, 5), Vec3(0, 0, -10), Vec3(0, 8, 0));
-    MeshHandle rightHandle = renderer->uploadMesh(rightMesh);
-    objects.push_back({rightHandle, Mat4::identity(), greenWall});
+    addStatic(renderer->uploadMesh(rightMesh), Vec3(0, 0, 0), greenWall);
 
     // Red sphere
     RenderMaterial redMat;
@@ -158,29 +156,35 @@ int main() {
     redMat.roughness = 0.3f;
     auto sphereMesh = createSphereMesh(1.0f, 32, 64);
     MeshHandle sphereHandle = renderer->uploadMesh(sphereMesh);
-    objects.push_back({sphereHandle, Mat4::translate(-2.0, 1.0, 0.0), redMat});
+    addStatic(sphereHandle, Vec3(-2.0, 1.0, 0.0), redMat);
 
     // Metal sphere
     RenderMaterial metalMat;
     metalMat.albedo = Vec3(0.9, 0.9, 0.95);
     metalMat.metallic = 1.0f;
     metalMat.roughness = 0.1f;
-    objects.push_back({sphereHandle, Mat4::translate(0.0, 1.0, 0.0), metalMat});
+    addStatic(sphereHandle, Vec3(0.0, 1.0, 0.0), metalMat);
 
     // Glass-like sphere (semi-transparent)
     RenderMaterial glassMat;
     glassMat.albedo = Vec3(0.5, 0.8, 1.0);
     glassMat.roughness = 0.1f;
     glassMat.opacity = 0.3f;
-    objects.push_back({sphereHandle, Mat4::translate(2.0, 1.0, 0.0), glassMat});
+    addStatic(sphereHandle, Vec3(2.0, 1.0, 0.0), glassMat);
 
-    // Green box
+    // Green box — simulated: spins in place so the fixed timestep and time
+    // controls are visible. Real motion systems plug into World::step the same way.
     RenderMaterial greenMat;
     greenMat.albedo = Vec3(0.2, 0.7, 0.2);
     greenMat.roughness = 0.5f;
     auto boxMesh = createBoxMesh(Vec3(1.5, 3.0, 1.5));
-    MeshHandle boxHandle = renderer->uploadMesh(boxMesh);
-    objects.push_back({boxHandle, Mat4::translate(3.0, 1.5, 2.0) * Mat4::rotateY(0.4), greenMat});
+    Entity box;
+    box.mesh = renderer->uploadMesh(boxMesh);
+    box.material = greenMat;
+    box.transform.position = Vec3(3.0, 1.5, 2.0);
+    box.transform.rotation = Vec3(0.0, 0.4, 0.0);
+    box.angularVelocity = Vec3(0.0, 0.6, 0.3);
+    world.add(box);
 
     // Lights
     std::vector<PointLight> lights = {
@@ -199,10 +203,20 @@ int main() {
 
     float exposure = static_cast<float>(settings.getDouble("exposure", 0.5));
 
+    SimClock clock(settings.getDouble("fixedTimestep", 1.0 / 60.0));
+    double simSpeed = settings.getDouble("timeScale", 1.0);  // speed when not paused
+    bool paused = false;
+
     std::cerr << "Controls:\n";
     std::cerr << "  Left-drag=orbit, Right-drag=pan, Scroll=zoom\n";
     std::cerr << "  WASD=move, QE=up/down, Shift=fast\n";
     std::cerr << "  Up/Down=exposure, Esc=quit\n";
+    std::cerr << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n";
+
+    // Time controls fire on key-press edges, not while held; track last frame's
+    // state to detect the rising edge. (A proper event queue would deliver these
+    // as discrete press events instead of us reconstructing them here.)
+    bool prevSpace = false, prevComma = false, prevPeriod = false, prevNum0 = false;
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -216,6 +230,22 @@ int main() {
         if (input.keyUp) exposure *= 1.0f + 2.0f * static_cast<float>(dt);
         if (input.keyDown) exposure *= 1.0f - 2.0f * static_cast<float>(dt);
         exposure = std::clamp(exposure, 0.05f, 20.0f);
+
+        if (input.keySpace && !prevSpace) paused = !paused;
+        if (input.keyComma && !prevComma)
+            simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
+        if (input.keyPeriod && !prevPeriod)
+            simSpeed = std::clamp(simSpeed * 2.0, 0.0625, 16.0);
+        if (input.keyNum0 && !prevNum0) { simSpeed = 1.0; paused = false; }
+        prevSpace = input.keySpace;
+        prevComma = input.keyComma;
+        prevPeriod = input.keyPeriod;
+        prevNum0 = input.keyNum0;
+
+        clock.setTimeScale(paused ? 0.0 : simSpeed);
+        int steps = clock.advance(dt);
+        for (int i = 0; i < steps; i++) world.step(clock.fixedStep());
+        double alpha = clock.interpolationAlpha();
 
         int w, h;
         window.getFramebufferSize(w, h);
@@ -232,8 +262,9 @@ int main() {
         renderer->setCamera(camState);
         renderer->setLights(lights, exposure);
 
-        for (const auto& obj : objects) {
-            renderer->drawMesh(obj.mesh, obj.transform, obj.material);
+        for (const Entity& e : world.entities()) {
+            Transform t = world.renderTransform(e, alpha);
+            renderer->drawMesh(e.mesh, t.matrix(), e.material);
         }
 
         renderer->endFrame();
@@ -245,6 +276,8 @@ int main() {
     settings.setDouble("windowWidth", ww);
     settings.setDouble("windowHeight", wh);
     settings.setDouble("exposure", exposure);
+    settings.setDouble("timeScale", simSpeed);
+    settings.setDouble("fixedTimestep", clock.fixedStep());
     settings.setDouble("cameraTargetX", camera.target.x);
     settings.setDouble("cameraTargetY", camera.target.y);
     settings.setDouble("cameraTargetZ", camera.target.z);

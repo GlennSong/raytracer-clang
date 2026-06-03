@@ -61,6 +61,10 @@ void Window::pollEvents() {
     input.keyUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
     input.keyDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
     input.keyEscape = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    input.keySpace = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+    input.keyComma = glfwGetKey(window, GLFW_KEY_COMMA) == GLFW_PRESS;
+    input.keyPeriod = glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS;
+    input.keyNum0 = glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS;
 
     double now = glfwGetTime();
     deltaTime = now - lastFrameTime;

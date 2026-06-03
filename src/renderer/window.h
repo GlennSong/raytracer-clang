@@ -15,13 +15,15 @@ struct InputState {
     bool keyW, keyA, keyS, keyD, keyQ, keyE;
     bool keyShift;
     bool keyUp, keyDown, keyEscape;
+    bool keySpace, keyComma, keyPeriod, keyNum0;
 
     InputState()
         : mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0),
           scrollDelta(0), mouseLeftDown(false), mouseRightDown(false),
           keyW(false), keyA(false), keyS(false), keyD(false),
           keyQ(false), keyE(false), keyShift(false),
-          keyUp(false), keyDown(false), keyEscape(false) {}
+          keyUp(false), keyDown(false), keyEscape(false),
+          keySpace(false), keyComma(false), keyPeriod(false), keyNum0(false) {}
 };
 
 class Window {

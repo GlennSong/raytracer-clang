@@ -7,7 +7,17 @@ SRC_DIR = src
 BUILD_DIR = build
 TARGET = raytracer
 
-SRCS = $(wildcard $(SRC_DIR)/*.cpp)
+# Offline path tracer only. The interactive viewer (viewer_main.cpp, renderer/,
+# engine/) needs GLFW + a platform backend and is built via CMake instead.
+SRCS = \
+	$(SRC_DIR)/main.cpp \
+	$(SRC_DIR)/math.cpp \
+	$(SRC_DIR)/image.cpp \
+	$(SRC_DIR)/camera.cpp \
+	$(SRC_DIR)/geometry.cpp \
+	$(SRC_DIR)/material.cpp \
+	$(SRC_DIR)/scene.cpp \
+	$(SRC_DIR)/kdtree.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 .PHONY: all release clean
