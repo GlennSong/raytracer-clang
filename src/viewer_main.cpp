@@ -213,17 +213,47 @@ int main() {
     std::cerr << "  Up/Down=exposure, Esc=quit\n";
     std::cerr << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n";
 
-    // Time controls fire on key-press edges, not while held; track last frame's
-    // state to detect the rising edge. (A proper event queue would deliver these
-    // as discrete press events instead of us reconstructing them here.)
-    bool prevSpace = false, prevComma = false, prevPeriod = false, prevNum0 = false;
+    bool quit = false;
 
-    while (!window.shouldClose()) {
+    while (!window.shouldClose() && !quit) {
         window.pollEvents();
         const InputState& input = window.getInput();
         double dt = window.getDeltaTime();
 
-        if (input.keyEscape) break;
+        // Discrete reactions come from the event queue; continuous input
+        // (camera, exposure ramp) reads the polled held-state below.
+        for (const Event& event : window.getEvents()) {
+            switch (event.type) {
+                case EventType::WindowCloseRequested:
+                    quit = true;
+                    break;
+                case EventType::FramebufferResized:
+                    fbWidth = event.width;
+                    fbHeight = event.height;
+                    renderer->resize(fbWidth, fbHeight);
+                    break;
+                case EventType::KeyPressed:
+                    if (event.repeat) break;
+                    switch (event.key) {
+                        case KeyCode::Escape: quit = true; break;
+                        case KeyCode::Space:  paused = !paused; break;
+                        case KeyCode::Comma:
+                            simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
+                            break;
+                        case KeyCode::Period:
+                            simSpeed = std::clamp(simSpeed * 2.0, 0.0625, 16.0);
+                            break;
+                        case KeyCode::Num0:
+                            simSpeed = 1.0;
+                            paused = false;
+                            break;
+                        default: break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
 
         camera.update(input, dt);
 
@@ -231,31 +261,12 @@ int main() {
         if (input.keyDown) exposure *= 1.0f - 2.0f * static_cast<float>(dt);
         exposure = std::clamp(exposure, 0.05f, 20.0f);
 
-        if (input.keySpace && !prevSpace) paused = !paused;
-        if (input.keyComma && !prevComma)
-            simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
-        if (input.keyPeriod && !prevPeriod)
-            simSpeed = std::clamp(simSpeed * 2.0, 0.0625, 16.0);
-        if (input.keyNum0 && !prevNum0) { simSpeed = 1.0; paused = false; }
-        prevSpace = input.keySpace;
-        prevComma = input.keyComma;
-        prevPeriod = input.keyPeriod;
-        prevNum0 = input.keyNum0;
-
         clock.setTimeScale(paused ? 0.0 : simSpeed);
         int steps = clock.advance(dt);
         for (int i = 0; i < steps; i++) world.step(clock.fixedStep());
         double alpha = clock.interpolationAlpha();
 
-        int w, h;
-        window.getFramebufferSize(w, h);
-        if (w != fbWidth || h != fbHeight) {
-            fbWidth = w;
-            fbHeight = h;
-            renderer->resize(w, h);
-        }
-
-        float aspect = (h > 0) ? static_cast<float>(w) / h : 1.0f;
+        float aspect = (fbHeight > 0) ? static_cast<float>(fbWidth) / fbHeight : 1.0f;
         CameraState camState = camera.getCameraState(aspect);
 
         renderer->beginFrame();
