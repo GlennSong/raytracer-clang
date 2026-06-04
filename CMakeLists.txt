@@ -56,6 +56,27 @@ add_test(NAME unit_tests COMMAND run_tests)
 # ============================================================
 option(RT_ENABLE_PHYSICS "Build Jolt physics and its headless tests" ON)
 if(RT_ENABLE_PHYSICS)
+    # The Jolt submodule isn't fetched by a plain clone/branch sync. If it's
+    # missing, try to initialize it; otherwise fail with a clear instruction
+    # rather than a cryptic add_subdirectory error.
+    set(JOLT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/JoltPhysics)
+    if(NOT EXISTS ${JOLT_DIR}/Build/CMakeLists.txt)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.git)
+            message(STATUS "Jolt submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+                        third_party/JoltPhysics
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${JOLT_DIR}/Build/CMakeLists.txt)
+        message(FATAL_ERROR
+            "Jolt physics submodule not found at third_party/JoltPhysics.\n"
+            "Fetch it with:  git submodule update --init --recursive\n"
+            "or configure with -DRT_ENABLE_PHYSICS=OFF to build without physics.")
+    endif()
+
     # Configure Jolt before pulling it in. Keep it from clobbering global flags
     # or forcing LTO; single precision (ADR-0005 deferral); drop unused bits.
     set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
