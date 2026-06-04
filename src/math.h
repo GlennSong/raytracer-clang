@@ -23,7 +23,9 @@ struct Vec3 {
     Vec3 operator-() const { return {-x, -y, -z}; }
 
     Vec3& operator+=(const Vec3& v) { x += v.x; y += v.y; z += v.z; return *this; }
+    Vec3& operator-=(const Vec3& v) { x -= v.x; y -= v.y; z -= v.z; return *this; }
     Vec3& operator*=(Real t) { x *= t; y *= t; z *= t; return *this; }
+    Vec3& operator/=(Real t) { x /= t; y /= t; z /= t; return *this; }
 
     Real length() const { return std::sqrt(x * x + y * y + z * z); }
     Real lengthSquared() const { return x * x + y * y + z * z; }
@@ -74,6 +76,30 @@ inline Vec3 clampVec(const Vec3& v, Real lo, Real hi) {
     };
 }
 
+inline Vec3 lerp(const Vec3& a, const Vec3& b, Real t) {
+    return a + (b - a) * t;
+}
+
+inline Real distance(const Vec3& a, const Vec3& b) { return (a - b).length(); }
+inline Real distanceSquared(const Vec3& a, const Vec3& b) {
+    return (a - b).lengthSquared();
+}
+
+inline Vec3 minVec(const Vec3& a, const Vec3& b) {
+    return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)};
+}
+inline Vec3 maxVec(const Vec3& a, const Vec3& b) {
+    return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
+}
+
+inline bool approxEqual(Real a, Real b, Real eps = 1e-6) {
+    return std::abs(a - b) <= eps;
+}
+inline bool approxEqual(const Vec3& a, const Vec3& b, Real eps = 1e-6) {
+    return approxEqual(a.x, b.x, eps) && approxEqual(a.y, b.y, eps) &&
+           approxEqual(a.z, b.z, eps);
+}
+
 struct Ray {
     Vec3 origin;
     Vec3 direction;
@@ -84,6 +110,8 @@ struct Ray {
 
     Vec3 at(Real t) const { return origin + direction * t; }
 };
+
+struct Quat;
 
 struct Mat4 {
     Real m[4][4];
@@ -175,6 +203,27 @@ struct Mat4 {
         return result;
     }
 
+    // Right-handed view matrix (world -> view), camera at eye looking toward
+    // center; matches the renderer convention of looking down -z. Built engine-
+    // side so it is backend-neutral and testable (companion to the projection
+    // helpers; see ADR-0009).
+    static Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up) {
+        Vec3 f = normalize(center - eye);
+        Vec3 s = normalize(cross(f, up));
+        Vec3 u = cross(s, f);
+
+        Mat4 m;
+        m.m[0][0] = s.x;  m.m[0][1] = s.y;  m.m[0][2] = s.z;  m.m[0][3] = -dot(s, eye);
+        m.m[1][0] = u.x;  m.m[1][1] = u.y;  m.m[1][2] = u.z;  m.m[1][3] = -dot(u, eye);
+        m.m[2][0] = -f.x; m.m[2][1] = -f.y; m.m[2][2] = -f.z; m.m[2][3] = dot(f, eye);
+        return m;
+    }
+
+    // Compose translation * rotation * scale into a model matrix. Defined after
+    // Quat below.
+    static Mat4 trs(const Vec3& translation, const Quat& rotation,
+                    const Vec3& scale);
+
     Mat4 operator*(const Mat4& b) const {
         Mat4 result;
         for (int i = 0; i < 4; i++)
@@ -204,10 +253,135 @@ struct Mat4 {
     }
 };
 
+// Unit quaternion for rotations. Stored (x, y, z, w) with w the scalar part;
+// identity is (0, 0, 0, 1). Preferred over Euler angles for orientation: no
+// gimbal lock, clean composition, and slerp for wobble-free interpolation (the
+// limitation ADR-0006 flagged). Bridges cleanly to physics quaternions.
+struct Quat {
+    Real x, y, z, w;
+
+    Quat() : x(0), y(0), z(0), w(1) {}
+    Quat(Real x, Real y, Real z, Real w) : x(x), y(y), z(z), w(w) {}
+
+    static Quat identity() { return Quat(); }
+
+    static Quat fromAxisAngle(const Vec3& axis, Real radians) {
+        Vec3 n = normalize(axis);
+        Real half = radians * 0.5;
+        Real s = std::sin(half);
+        return Quat(n.x * s, n.y * s, n.z * s, std::cos(half));
+    }
+
+    // Euler radians applied X then Y then Z, matching the old Transform matrix
+    // order (rotateZ * rotateY * rotateX), so existing poses round-trip.
+    static Quat fromEuler(Real ex, Real ey, Real ez) {
+        return fromAxisAngle(Vec3(0, 0, 1), ez) *
+               fromAxisAngle(Vec3(0, 1, 0), ey) *
+               fromAxisAngle(Vec3(1, 0, 0), ex);
+    }
+    static Quat fromEuler(const Vec3& e) { return fromEuler(e.x, e.y, e.z); }
+
+    // Hamilton product: composing rotations (this applied after b on a vector).
+    Quat operator*(const Quat& b) const {
+        return Quat(
+            w * b.x + x * b.w + y * b.z - z * b.y,
+            w * b.y - x * b.z + y * b.w + z * b.x,
+            w * b.z + x * b.y - y * b.x + z * b.w,
+            w * b.w - x * b.x - y * b.y - z * b.z);
+    }
+
+    Real dot(const Quat& b) const { return x * b.x + y * b.y + z * b.z + w * b.w; }
+    Real length() const { return std::sqrt(x * x + y * y + z * z + w * w); }
+
+    Quat normalized() const {
+        Real len = length();
+        if (len > 0) return Quat(x / len, y / len, z / len, w / len);
+        return identity();
+    }
+
+    Quat conjugate() const { return Quat(-x, -y, -z, w); }
+
+    Quat inverse() const {
+        Real lenSq = x * x + y * y + z * z + w * w;
+        if (lenSq <= 0) return identity();
+        return Quat(-x / lenSq, -y / lenSq, -z / lenSq, w / lenSq);
+    }
+
+    // Rotate a vector by this (assumed unit) quaternion.
+    Vec3 rotate(const Vec3& v) const {
+        Vec3 u(x, y, z);
+        return u * (2.0 * dot3(u, v)) + v * (w * w - dot3(u, u)) +
+               cross(u, v) * (2.0 * w);
+    }
+
+    Vec3 toEuler() const;
+    Mat4 toMat4() const;
+
+    // Shortest-arc spherical interpolation, robust as the inputs become parallel.
+    static Quat slerp(const Quat& a, Quat b, Real t) {
+        Real d = a.dot(b);
+        if (d < 0) {                       // take the shorter path
+            b = Quat(-b.x, -b.y, -b.z, -b.w);
+            d = -d;
+        }
+        if (d > 0.9995) {                  // nearly identical: lerp + normalize
+            return Quat(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                        a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t).normalized();
+        }
+        Real theta0 = std::acos(d);
+        Real theta = theta0 * t;
+        Real sinTheta0 = std::sin(theta0);
+        Real s1 = std::sin(theta) / sinTheta0;
+        Real s0 = std::cos(theta) - d * s1;
+        return Quat(a.x * s0 + b.x * s1, a.y * s0 + b.y * s1,
+                    a.z * s0 + b.z * s1, a.w * s0 + b.w * s1);
+    }
+
+private:
+    static Real dot3(const Vec3& a, const Vec3& b) { return ::dot(a, b); }
+};
+
+inline Mat4 Quat::toMat4() const {
+    Real xx = x * x, yy = y * y, zz = z * z;
+    Real xy = x * y, xz = x * z, yz = y * z;
+    Real wx = w * x, wy = w * y, wz = w * z;
+
+    Mat4 m;  // identity; fill the rotation 3x3 (column-vector convention)
+    m.m[0][0] = 1 - 2 * (yy + zz); m.m[0][1] = 2 * (xy - wz);     m.m[0][2] = 2 * (xz + wy);
+    m.m[1][0] = 2 * (xy + wz);     m.m[1][1] = 1 - 2 * (xx + zz); m.m[1][2] = 2 * (yz - wx);
+    m.m[2][0] = 2 * (xz - wy);     m.m[2][1] = 2 * (yz + wx);     m.m[2][2] = 1 - 2 * (xx + yy);
+    return m;
+}
+
+inline Vec3 Quat::toEuler() const {
+    Mat4 r = toMat4();
+    Real ex = std::atan2(r.m[2][1], r.m[2][2]);
+    Real ey = std::asin(std::clamp(-r.m[2][0], Real(-1), Real(1)));
+    Real ez = std::atan2(r.m[1][0], r.m[0][0]);
+    return Vec3(ex, ey, ez);
+}
+
+inline Mat4 Mat4::trs(const Vec3& translation, const Quat& rotation,
+                      const Vec3& scale) {
+    Mat4 m = rotation.toMat4();
+    // Scale the rotated basis columns, then set the translation column.
+    m.m[0][0] *= scale.x; m.m[1][0] *= scale.x; m.m[2][0] *= scale.x;
+    m.m[0][1] *= scale.y; m.m[1][1] *= scale.y; m.m[2][1] *= scale.y;
+    m.m[0][2] *= scale.z; m.m[1][2] *= scale.z; m.m[2][2] *= scale.z;
+    m.m[0][3] = translation.x;
+    m.m[1][3] = translation.y;
+    m.m[2][3] = translation.z;
+    return m;
+}
+
 constexpr Real PI = 3.14159265358979323846;
 
 inline Real degreesToRadians(Real degrees) {
     return degrees * PI / 180.0;
+}
+
+inline Real radiansToDegrees(Real radians) {
+    return radians * 180.0 / PI;
 }
 
 inline double randomDouble() {

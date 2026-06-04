@@ -136,7 +136,7 @@ generated worlds.
 settings.
 
 ### 2.3 Jolt Physics integration
-**Status:** Not started
+**Status:** Math foundation done (Step B); Jolt submodule + `PhysicsSystem` next.
 **Why:** Rigid bodies, collision detection, and world interaction. Essential for
 simulation (objects falling, stacking, vehicles on roads) and for the player
 moving through generated environments without clipping through geometry.
@@ -144,16 +144,29 @@ moving through generated environments without clipping through geometry.
 **Why Jolt:** Modern C++17 library, active development, proven at scale
 (Horizon Forbidden West), clean API, permissive license. Preferred over Bullet
 (older API), PhysX (heavier integration), or rolling our own (not worth it).
+Cross-platform pure C++ — unlike the window/render backends, it **builds and
+runs headless in CI/Linux**, so physics is unit-testable here. Pin to a release
+tag (latest stable v5.5.0); GitHub reachable from this environment.
 
 **Scope:**
-- Add Jolt as a dependency (git submodule or vendored).
-- A `PhysicsSystem` that owns the Jolt world and syncs with our ECS.
-- Wrapper types to bridge Jolt's math types (`JPH::Vec3`) ↔ our `Vec3`.
-- `RigidBody` / `Collider` components in the ECS.
-- Basic shapes: box, sphere, capsule, mesh collider.
-- Debug visualization of collision shapes (via ImGui / debug draw).
+- ✅ **Math foundation (Step B):** a `Quat` class (compose, `rotate`, `slerp`,
+  axis-angle/Euler conversion), `Mat4::trs` and `Mat4::lookAt` (view matrix off
+  the backend), Vec3 helpers. `Transform` now stores a quaternion `orientation`
+  instead of Euler angles; `MotionSystem`/scene/interpolation migrated. Retires
+  the Euler-wobble debt ADR-0006 flagged. Unit-tested.
+- ⏳ ADR for the integration (layers, allocators, the precision bridge).
+- ⏳ Add Jolt as a git submodule + build wiring; a `PhysicsWorld` wrapper for
+  init/teardown (broadphase/object layers, temp allocator, job system).
+- ⏳ A `PhysicsSystem` stepping in `fixedUpdate` (deterministic, fits ADR-0002);
+  `RigidBody` / `Collider` components; entity↔`BodyID` map; write-back to
+  `Transform`. Retires the placeholder `MotionSystem`.
+- ⏳ Shapes (box/sphere/capsule), motion types, friction/restitution; headless
+  drop/stack/determinism tests.
+- ⏳ Debug visualization of colliders — needs a line/debug-draw primitive
+  (macOS/Metal); deferred / minimal.
 
-**Depends on:** ECS (done), benefits from ImGui (1.1) for physics debug viz.
+**Depends on:** ECS (done), quaternion math (done). Benefits from ImGui (1.1)
+for physics debug viz.
 
 ### 2.4 Gamepad & local-player input
 **Status:** Engine-side done (gamepad bindings, per-player input, `ControlledBy`);

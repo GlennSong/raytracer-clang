@@ -7,7 +7,7 @@
 // Position / orientation / scale. Compose into a model matrix with matrix().
 struct Transform {
     Vec3 position;
-    Vec3 rotation;   // euler radians, applied X then Y then Z
+    Quat orientation;
     Vec3 scale;
 
     Transform() : scale(1, 1, 1) {}
@@ -15,9 +15,8 @@ struct Transform {
     Mat4 matrix() const;
 };
 
-// Component-wise interpolation. Euler rotation is lerped, which is fine for the
-// small per-step deltas the fixed timestep produces; swap to quaternions if
-// larger angular steps ever wobble.
+// Interpolated for smooth rendering between fixed steps: position/scale linearly,
+// orientation via slerp (no Euler wobble — see ADR-0006).
 Transform lerp(const Transform& a, const Transform& b, Real t);
 
 // Previous step's transform, kept so rendering can interpolate to the current

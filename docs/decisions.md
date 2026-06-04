@@ -286,7 +286,9 @@ Orthographic is the basis for future 2D rendering.
   (ROADMAP 1.2).** Construction moved engine-side to `Mat4::perspective` /
   `Mat4::orthographic`; the Metal backend builds a `Mat4` and uploads it via the
   existing `toSimd`, so the math is now backend-neutral and Linux-testable. A
-  second backend reuses these rather than re-implementing.
+  second backend reuses these rather than re-implementing. The **view matrix**
+  (`Mat4::lookAt`) was likewise moved engine-side during the quaternion-math
+  work, so the backend now holds no matrix math at all.
 - No 2D camera controller yet; `OrbitCamera` in ortho mode is the stand-in.
 - ~~The pre-existing **perspective** matrix uses the OpenGL [-1,1] depth
   convention~~ **Resolved (ROADMAP 1.2).** Perspective now targets Metal's [0,1]

@@ -125,3 +125,107 @@ TEST_CASE(orthographic_xy_scale) {
     CHECK_APPROX(top.y, 1, EPS);
     CHECK_APPROX(right.x, 1, EPS);
 }
+
+TEST_CASE(vec3_lerp_distance_minmax) {
+    Vec3 mid = lerp(Vec3(0, 0, 0), Vec3(10, 0, 0), 0.5);
+    CHECK_APPROX(mid.x, 5, EPS);
+
+    CHECK_APPROX(distance(Vec3(0, 0, 0), Vec3(3, 4, 0)), 5, EPS);
+    CHECK_APPROX(distanceSquared(Vec3(0, 0, 0), Vec3(3, 4, 0)), 25, EPS);
+
+    Vec3 lo = minVec(Vec3(1, 5, 3), Vec3(4, 2, 6));
+    Vec3 hi = maxVec(Vec3(1, 5, 3), Vec3(4, 2, 6));
+    CHECK(approxEqual(lo, Vec3(1, 2, 3)));
+    CHECK(approxEqual(hi, Vec3(4, 5, 6)));
+
+    CHECK(approxEqual(Vec3(1, 1, 1), Vec3(1, 1, 1.0000001), 1e-5));
+    CHECK(!approxEqual(1.0, 1.1));
+}
+
+TEST_CASE(radians_degrees_round_trip) {
+    CHECK_APPROX(radiansToDegrees(PI), 180, EPS);
+    CHECK_APPROX(degreesToRadians(radiansToDegrees(1.234)), 1.234, EPS);
+}
+
+TEST_CASE(quat_identity_is_inert) {
+    Vec3 v(1, 2, 3);
+    Vec3 r = Quat::identity().rotate(v);
+    CHECK(approxEqual(r, v));
+}
+
+TEST_CASE(quat_axis_angle_rotates_vector) {
+    Quat qy = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(90));
+    Vec3 r = qy.rotate(Vec3(0, 0, -1));
+    CHECK(approxEqual(r, Vec3(-1, 0, 0)));
+    // Rotation preserves length.
+    CHECK_APPROX(qy.rotate(Vec3(3, 0, 4)).length(), 5, EPS);
+}
+
+TEST_CASE(quat_compose_applies_right_first) {
+    Quat qy90 = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(90));
+    Quat qy180 = qy90 * qy90;
+    Vec3 r = qy180.rotate(Vec3(0, 0, -1));
+    CHECK(approxEqual(r, Vec3(0, 0, 1)));
+}
+
+TEST_CASE(quat_inverse_undoes_rotation) {
+    Quat q = Quat::fromAxisAngle(Vec3(1, 2, 3), 1.1);
+    Quat back = q * q.inverse();
+    CHECK(approxEqual(back.rotate(Vec3(5, -2, 1)), Vec3(5, -2, 1)));
+}
+
+TEST_CASE(quat_normalize) {
+    Quat q(1, 2, 3, 4);
+    CHECK_APPROX(q.normalized().length(), 1, EPS);
+}
+
+TEST_CASE(quat_matrix_matches_rotate) {
+    Quat q = Quat::fromAxisAngle(normalize(Vec3(1, 1, 0)), degreesToRadians(50));
+    Mat4 m = q.toMat4();
+    Vec3 v(0.3, -1.2, 2.0);
+    CHECK(approxEqual(m.transformDirection(v), q.rotate(v)));
+}
+
+TEST_CASE(quat_euler_round_trip) {
+    Vec3 e(0.3, -0.4, 0.5);
+    Vec3 back = Quat::fromEuler(e).toEuler();
+    CHECK(approxEqual(back, e, 1e-6));
+}
+
+TEST_CASE(quat_slerp_endpoints_and_midpoint) {
+    Quat a = Quat::identity();
+    Quat b = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(90));
+
+    CHECK(approxEqual(Quat::slerp(a, b, 0.0).rotate(Vec3(0, 0, -1)), Vec3(0, 0, -1)));
+    CHECK(approxEqual(Quat::slerp(a, b, 1.0).rotate(Vec3(0, 0, -1)), Vec3(-1, 0, 0)));
+
+    // Halfway is a 45-degree rotation of -Z.
+    Vec3 mid = Quat::slerp(a, b, 0.5).rotate(Vec3(0, 0, -1));
+    Real s = std::sin(degreesToRadians(45));
+    CHECK(approxEqual(mid, Vec3(-s, 0, -s)));
+}
+
+TEST_CASE(mat4_look_at) {
+    Mat4 view = Mat4::lookAt(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    // World origin sits 5 units down the view -z; the eye maps to the origin.
+    CHECK(approxEqual(view.transformPoint(Vec3(0, 0, 0)), Vec3(0, 0, -5)));
+    CHECK(approxEqual(view.transformPoint(Vec3(0, 0, 5)), Vec3(0, 0, 0)));
+}
+
+TEST_CASE(mat4_trs) {
+    // Translation only.
+    Vec3 p = Mat4::trs(Vec3(1, 2, 3), Quat::identity(), Vec3(1, 1, 1))
+                 .transformPoint(Vec3(0, 0, 0));
+    CHECK(approxEqual(p, Vec3(1, 2, 3)));
+
+    // Scale only.
+    Vec3 s = Mat4::trs(Vec3(0, 0, 0), Quat::identity(), Vec3(2, 3, 4))
+                 .transformPoint(Vec3(1, 1, 1));
+    CHECK(approxEqual(s, Vec3(2, 3, 4)));
+
+    // Scale then rotate then translate: rotate -Z by 90 about Y -> -X, +offset.
+    Quat qy = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(90));
+    Vec3 r = Mat4::trs(Vec3(10, 0, 0), qy, Vec3(1, 1, 1))
+                 .transformPoint(Vec3(0, 0, -1));
+    CHECK(approxEqual(r, Vec3(9, 0, 0)));
+}

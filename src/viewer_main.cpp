@@ -156,7 +156,7 @@ static void buildScene(World& world, Renderer& renderer, RenderView& view) {
     Entity box = world.create();
     Transform boxTransform;
     boxTransform.position = Vec3(3.0, 1.5, 2.0);
-    boxTransform.rotation = Vec3(0.0, 0.4, 0.0);
+    boxTransform.orientation = Quat::fromEuler(0.0, 0.4, 0.0);
     world.add<Transform>(box, boxTransform);
     world.add<PrevTransform>(box, PrevTransform{boxTransform});
     Renderable boxRender;

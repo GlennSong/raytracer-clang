@@ -58,21 +58,6 @@ static simd_float4x4 toSimd(const Mat4& m) {
     return result;
 }
 
-static simd_float4x4 lookAtMatrix(simd_float3 eye, simd_float3 center, simd_float3 up) {
-    simd_float3 f = simd_normalize(center - eye);
-    simd_float3 s = simd_normalize(simd_cross(f, up));
-    simd_float3 u = simd_cross(s, f);
-
-    simd_float4x4 m = matrix_identity_float4x4;
-    m.columns[0][0] = s.x; m.columns[1][0] = s.y; m.columns[2][0] = s.z;
-    m.columns[0][1] = u.x; m.columns[1][1] = u.y; m.columns[2][1] = u.z;
-    m.columns[0][2] = -f.x; m.columns[1][2] = -f.y; m.columns[2][2] = -f.z;
-    m.columns[3][0] = -simd_dot(s, eye);
-    m.columns[3][1] = -simd_dot(u, eye);
-    m.columns[3][2] = simd_dot(f, eye);
-    return m;
-}
-
 static simd_float4x4 inverseTranspose(simd_float4x4 m) {
     return simd_transpose(simd_inverse(m));
 }
@@ -264,17 +249,10 @@ void MetalRenderer::beginFrame() {
 
 void MetalRenderer::setCamera(const CameraState& camera) {
     float fovRad = static_cast<float>(degreesToRadians(camera.fovDegrees));
-    simd_float3 eye = {static_cast<float>(camera.position.x),
-                       static_cast<float>(camera.position.y),
-                       static_cast<float>(camera.position.z)};
-    simd_float3 center = {static_cast<float>(camera.target.x),
-                          static_cast<float>(camera.target.y),
-                          static_cast<float>(camera.target.z)};
-    simd_float3 up = {static_cast<float>(camera.up.x),
-                      static_cast<float>(camera.up.y),
-                      static_cast<float>(camera.up.z)};
 
-    simd_float4x4 view = lookAtMatrix(eye, center, up);
+    // View and projection are both built engine-side (Mat4) and transposed into
+    // Metal's column-major layout here; no matrix math lives in the backend.
+    simd_float4x4 view = toSimd(Mat4::lookAt(camera.position, camera.target, camera.up));
     Mat4 projMat = (camera.projection == CameraProjection::Orthographic)
         ? Mat4::orthographic(camera.orthoHeight, camera.aspectRatio,
                              camera.nearPlane, camera.farPlane)
@@ -284,7 +262,9 @@ void MetalRenderer::setCamera(const CameraState& camera) {
 
     impl->cameraUniforms.viewProjection = simd_mul(proj, view);
     impl->cameraUniforms.view = view;
-    impl->cameraUniforms.cameraPosition = eye;
+    impl->cameraUniforms.cameraPosition = {static_cast<float>(camera.position.x),
+                                           static_cast<float>(camera.position.y),
+                                           static_cast<float>(camera.position.z)};
     impl->currentCameraPos = camera.position;
 }
 
