@@ -46,18 +46,22 @@ struct PointLight {
         : position(pos), color(col), intensity(intensity) {}
 };
 
+enum class CameraProjection { Perspective, Orthographic };
+
 struct CameraState {
     Vec3 position;
     Vec3 target;
     Vec3 up;
-    float fovDegrees;
+    CameraProjection projection = CameraProjection::Perspective;
+    float fovDegrees;       // vertical field of view (perspective)
+    float orthoHeight;      // vertical world units visible (orthographic)
     float aspectRatio;
     float nearPlane;
     float farPlane;
 
     CameraState()
         : position(0, 0, 3), target(0, 0, 0), up(0, 1, 0),
-          fovDegrees(60.0f), aspectRatio(1.0f),
+          fovDegrees(60.0f), orthoHeight(10.0f), aspectRatio(1.0f),
           nearPlane(0.1f), farPlane(1000.0f) {}
 };
 

@@ -8,6 +8,14 @@ void CameraSystem::onStart(FrameContext& ctx) {
     camera.distance = static_cast<float>(ctx.settings.getDouble("cameraDistance", 8.0));
     camera.yaw = static_cast<float>(ctx.settings.getDouble("cameraYaw", 0.0));
     camera.pitch = static_cast<float>(ctx.settings.getDouble("cameraPitch", 25.0));
+    camera.orthographic = ctx.settings.getBool("cameraOrthographic", false);
+}
+
+void CameraSystem::onEvent(const Event& event, FrameContext&) {
+    if (event.type == EventType::KeyPressed && !event.repeat &&
+        event.key == KeyCode::P) {
+        camera.orthographic = !camera.orthographic;
+    }
 }
 
 void CameraSystem::update(FrameContext& ctx) {
@@ -25,4 +33,5 @@ void CameraSystem::onStop(FrameContext& ctx) {
     ctx.settings.setDouble("cameraDistance", camera.distance);
     ctx.settings.setDouble("cameraYaw", camera.yaw);
     ctx.settings.setDouble("cameraPitch", camera.pitch);
+    ctx.settings.setBool("cameraOrthographic", camera.orthographic);
 }

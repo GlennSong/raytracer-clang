@@ -9,6 +9,7 @@
 class CameraSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
+    void onEvent(const Event& event, FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 

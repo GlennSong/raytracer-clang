@@ -14,6 +14,7 @@ public:
     float moveSpeed;
     float rotateSpeed;
     float zoomSpeed;
+    bool orthographic;
 
     OrbitCamera();
 

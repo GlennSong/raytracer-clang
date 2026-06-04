@@ -10,7 +10,8 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  Left-drag=orbit, Right-drag=pan, Scroll=zoom\n"
               << "  WASD=move, QE=up/down, Shift=fast\n"
               << "  Up/Down=exposure, Esc=quit\n"
-              << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n";
+              << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
+              << "  P=toggle perspective/orthographic camera\n";
 }
 
 void DevControlSystem::onEvent(const Event& event, FrameContext& ctx) {

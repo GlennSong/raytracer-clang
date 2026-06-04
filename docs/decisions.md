@@ -260,6 +260,39 @@ arena first, then targeted allocators with tracking as data dictates.
 
 ---
 
+## ADR-0009 — Camera projection: perspective + orthographic via CameraState
+**Status:** Accepted · **Date:** 2026-06-03
+
+**Context.** Only perspective rendering existed. 2D (and CAD-style views) needs
+orthographic projection, and the engine should let cameras choose.
+
+**Decision.** `CameraState` carries a `CameraProjection` mode (`Perspective` |
+`Orthographic`) plus `orthoHeight`; the renderer builds the matching projection
+matrix. `OrbitCamera` exposes an `orthographic` flag and derives `orthoHeight`
+from its orbit distance (`2·distance·tan(fov/2)`) so toggling preserves framing
+and zoom keeps working. Runtime toggle on `P`, persisted in settings.
+Orthographic is the basis for future 2D rendering.
+
+**Alternatives considered.**
+- Compute view/projection matrices engine-side (in `Mat4`) and pass them to a
+  "dumb" renderer — cleaner and Linux-verifiable, but would disturb the working
+  perspective path (depth-range/handedness conventions live in the backend) and
+  is a larger interface change. Deferred.
+- A separate 2D camera type — deferred; reusing `OrbitCamera` made the feature
+  testable on the existing scene without a 2D demo.
+
+**Consequences / tech debt.**
+- **Projection-matrix construction still lives in the backend**
+  (`metal_renderer.mm`): perspective and now orthographic. Each future backend
+  re-implements it, and the math is not Linux-compile-verifiable. Moving it
+  engine-side (into `Mat4`) is the eventual cleanup.
+- No 2D camera controller yet; `OrbitCamera` in ortho mode is the stand-in.
+
+**Revisit trigger.** Adding a second backend (de-duplicate projection math, or
+move it engine-side), or building real 2D (a dedicated pan/zoom camera).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -276,6 +309,8 @@ to be replaced; listed here so they stay visible.
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
+| Projection matrices built in backend | `metal_renderer.mm` | Working perspective path lives there (ADR-0009) | Move projection math engine-side (`Mat4`) |
+| No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 
 ---
 
