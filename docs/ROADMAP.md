@@ -83,16 +83,27 @@ A `tests/` target is the safety net before bigger refactors.
 The systems needed to move through and interact with a 3D world.
 
 ### 2.1 Input-action mapping
-**Status:** Not started (see tech-debt register: hardcoded keybindings)
+**Status:** Done — `InputMap` in `src/engine/input/`, covered by
+`tests/test_input_map.cpp`; `DevControlSystem` migrated off hardcoded keys.
 **Why:** Keybindings are hardcoded in `DevControlSystem`. An action layer
 ("move_forward", "toggle_wireframe" → configurable keys) is necessary before
 building a real 3D camera or any interactive simulation controls.
 
 **Scope:**
-- An `InputAction` abstraction: named actions bound to keys/mouse/axes.
-- A data-driven binding table (loaded from settings or a config file).
-- Continuous actions (held keys → axis values) and discrete actions (pressed
-  this frame).
+- ✅ `InputMap` abstraction: named button actions and axes bound to
+  keys/mouse, driven by the backend-neutral `Event`/`KeyCode` types so it is
+  unit-testable without a window.
+- ✅ Data-driven binding table via key *names* (`bindButtonByName`,
+  `keyCodeFromName`); `DevControlSystem` reads `bind.<action>` overrides from
+  `Settings` and falls back to defaults.
+- ✅ Continuous queries (`held`, `axis` → summed/clamped to [-1, 1]) and
+  per-frame edges (`pressed`/`released`). Wired into `Application`/`FrameContext`
+  (`ctx.actions`), updated from the event stream each frame; edges consumed in
+  `update()` so a press toggles exactly once.
+
+**Remaining for a follow-up:** `CameraSystem`'s `P` toggle and the orbit
+camera's WASD still read keys/`InputState` directly; migrate them to actions
+when the fly camera (2.2) lands (its natural consumer).
 
 **Depends on:** Nothing directly, but benefits from ImGui (1.1) for a binding
 editor.

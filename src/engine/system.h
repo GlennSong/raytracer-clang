@@ -3,6 +3,7 @@
 
 #include "world.h"
 #include "clock.h"
+#include "input/input_map.h"
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
@@ -26,7 +27,8 @@ struct FrameContext {
     RenderView& view;
     SimClock& clock;
     Settings& settings;
-    const InputState& input;
+    const InputState& input;   // polled continuous snapshot (mouse, raw keys)
+    InputMap& actions;         // named action/axis bindings (see input_map.h)
     int framebufferWidth;
     int framebufferHeight;
     double frameDelta;

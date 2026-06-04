@@ -308,7 +308,7 @@ to be replaced; listed here so they stay visible.
 |---|---|---|---|
 | `RenderView` shared resource | `engine/system.h` | Minimal stand-in for engine resources | A real ECS resource/blackboard (ADR-0006) |
 | `MotionSystem` does simple Euler integration | `engine/systems/motion_system.cpp` | Placeholder kinematics, not real physics | A physics/collision system (Step 6) |
-| Hardcoded keybindings | `engine/systems/dev_control_system.cpp` | No input-mapping layer yet | An input-action mapping abstraction |
+| ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` binds actions with `bind.<action>` Settings overrides. (Orbit camera WASD / `P` toggle still direct — migrate with the fly camera.)* | — |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
 | Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |

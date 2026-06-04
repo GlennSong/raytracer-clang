@@ -54,6 +54,7 @@ private:
     World worldState;
     SimClock clock;
     Settings settingsStore;
+    InputMap inputMap;
     RenderView view;
     std::vector<std::unique_ptr<System>> systems;
 

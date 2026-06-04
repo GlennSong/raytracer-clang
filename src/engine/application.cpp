@@ -27,7 +27,7 @@ bool Application::initialize(const Config& config) {
 FrameContext Application::makeContext() {
     return FrameContext{
         worldState, *rendererPtr, view, clock, settingsStore,
-        window.getInput(),
+        window.getInput(), inputMap,
         framebufferWidth, framebufferHeight,
         frameDelta, interpolation, quit
     };
@@ -68,7 +68,9 @@ void Application::run() {
 
         {
             FrameContext ctx = makeContext();
+            inputMap.beginFrame();
             for (const Event& event : window.getEvents()) {
+                inputMap.processEvent(event);
                 if (event.type == EventType::WindowCloseRequested) quit = true;
                 for (auto& system : systems) system->onEvent(event, ctx);
             }
