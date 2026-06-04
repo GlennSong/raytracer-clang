@@ -2,6 +2,11 @@
 #include "window.h"
 #include <GLFW/glfw3.h>
 
+#ifdef RT_ENABLE_IMGUI
+#include "imgui.h"
+#include "backends/imgui_impl_glfw.h"
+#endif
+
 // Native window-handle access is the one genuinely per-platform piece of the
 // window layer. It is confined here so the backend (and engine) never touch a
 // windowing-library symbol. Add a branch per platform as backends land.
@@ -326,23 +331,24 @@ void Window::setDrawCallback(std::function<void()> callback) {
 }
 
 // Debug-UI GLFW backend (ADR-0011). The ImGui platform backend lives here, the
-// one file that owns the GLFWwindow*. Filled in on macOS; no-op without ImGui.
+// one file that owns the GLFWwindow*. No-op without ImGui.
 void Window::initDebugUi() {
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui_ImplGlfw_InitForOther(impl->window, true);
-    // Requires the ImGui context to already exist (Renderer::initDebugUi runs
-    // first). Installs ImGui's own GLFW input callbacks.
+    // The ImGui context already exists (Renderer::initDebugUi ran first).
+    // InitForOther is the right entry point for a non-GL/Vulkan (Metal) backend;
+    // true installs ImGui's GLFW input callbacks, chained to ours.
+    ImGui_ImplGlfw_InitForOther(impl->window, true);
 #endif
 }
 
 void Window::newDebugUiFrame() {
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
 #endif
 }
 
 void Window::shutdownDebugUi() {
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui_ImplGlfw_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
 #endif
 }

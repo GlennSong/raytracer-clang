@@ -371,7 +371,7 @@ the single authoritative `World`.
 ---
 
 ## ADR-0011 — Dear ImGui for debug UI, behind the platform seams
-**Status:** Pending (architecture laid; backend integration is macOS work) · **Date:** 2026-06-04
+**Status:** Accepted (implemented; pending macOS build verification) · **Date:** 2026-06-04
 
 **Context.** The engine needs debug overlays, live parameter tuning, entity
 inspection, and an in-game console (ROADMAP 1.1). Dear ImGui is the standard
@@ -421,14 +421,22 @@ alternative; submodule preferred for a single well-known dep.)
 - Building it now in this environment — impossible: ImGui's backends need
   GLFW + Metal, which don't compile in the Linux sandbox.
 
+**Implementation note.** The Metal backend defers its whole pass to `endFrame`,
+but ImGui widgets are emitted by systems' `render()` (before `endFrame`), and
+`ImGui::NewFrame()` must precede them. So `beginFrame` now acquires the drawable
+and builds the pass descriptor (needed by `ImGui_ImplMetal_NewFrame`) and starts
+the ImGui frame; `endFrame` reuses that descriptor and submits the ImGui draw
+data after the scene. The GLFW new-frame runs in `Window::pollEvents`.
+
 **Consequences / tech debt.**
 - The backend glue (`ImGui_ImplGlfw_*` in `window.cpp`, `ImGui_ImplMetal_*` in
-  `metal_renderer.mm`) is **macOS-only and currently stubbed with TODO markers**
-  — it must be written and verified on a Mac. The engine-side seam, the
-  build option, and `DebugOverlaySystem`'s no-op path are in place and compile.
+  `metal_renderer.mm`) is written but **macOS-only, so unverified in CI/Linux**
+  — it needs a Mac build (`-DRT_ENABLE_IMGUI=ON`). API signatures were checked
+  against the vendored ImGui headers; the engine-side seam, build option, and
+  `DebugOverlaySystem` are Linux-verified.
 - Modal-resize repaint calls `renderFrame` without a preceding `pollEvents`, so
-  the GLFW new-frame may be skipped for those repaints; guard the ImGui frame
-  accordingly when implementing (documented here so it isn't a surprise).
+  the GLFW new-frame is skipped for those repaints (input frozen mid-drag, as it
+  already is); ImGui keeps its last display size, no assert.
 
 **Revisit trigger.** Implementing the macOS backend glue (flip the option, add
 the submodule, fill the TODOs); or adding a second render backend (give it the

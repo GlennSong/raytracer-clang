@@ -19,7 +19,7 @@ Standing code rules live in `AGENTS.md`.
 Items that make every subsequent feature faster to build and safer to change.
 
 ### 1.1 ImGui integration
-**Status:** Architecture laid (ADR-0011); macOS backend glue pending.
+**Status:** Implemented (ADR-0011); pending macOS build verification.
 **Why first:** Debug UI, parameter tweaking, entity inspection, and an in-game
 console all fall out of a single integration. Every subsequent tier benefits
 from runtime-tunable controls. ImGui already ships GLFW + Metal backends —
@@ -31,10 +31,13 @@ exactly our stack.
   added (`initDebugUi`/`shutdownDebugUi`/`newDebugUiFrame`), wired in
   `Application`, with a `DebugOverlaySystem` (FPS/entities/camera) that is inert
   until enabled.
-- ✅ Build flag `RT_ENABLE_IMGUI` (CMake `option`, OFF) + submodule layout —
-  Linux/offline/tests stay green; macOS lights it up.
-- ⏳ Fill the `ImGui_ImplGlfw_*` / `ImGui_ImplMetal_*` TODOs in `window.cpp` /
-  `metal_renderer.mm` and verify on a Mac (add the `third_party/imgui` submodule).
+- ✅ Build flag `RT_ENABLE_IMGUI` (CMake `option`, OFF) + `third_party/imgui`
+  submodule (v1.92.8) — Linux/offline/tests stay green; macOS lights it up.
+- ✅ Backend glue written: `ImGui_ImplGlfw_*` in `window.cpp`, `ImGui_ImplMetal_*`
+  in `metal_renderer.mm` (drawable/descriptor moved to `beginFrame` so the UI
+  frame brackets the scene). API checked against the vendored headers.
+- ⏳ **Verify on a Mac** (`cmake -DRT_ENABLE_IMGUI=ON`); the debug overlay should
+  appear over the scene.
 - ⏳ In-game console wired to a command registry (after the base overlay).
 
 **Delivers for free:**

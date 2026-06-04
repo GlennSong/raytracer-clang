@@ -9,6 +9,11 @@
 #include <vector>
 #include <algorithm>
 
+#ifdef RT_ENABLE_IMGUI
+#include "imgui.h"
+#include "backends/imgui_impl_metal.h"
+#endif
+
 // Uniform structs must match Metal shader layout exactly.
 // simd_float3 is 16 bytes on Apple — no manual padding between float3 fields.
 
@@ -82,6 +87,8 @@ struct MetalRenderer::Impl {
     id<CAMetalDrawable> currentDrawable;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
+    MTLRenderPassDescriptor* currentPassDesc;   // built in beginFrame, used in endFrame
+    bool imguiInitialized = false;
 
     int framebufferWidth = 0;
     int framebufferHeight = 0;
@@ -245,6 +252,32 @@ void MetalRenderer::removeMesh(MeshHandle handle) {
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
+
+    // Acquire the drawable and build the pass descriptor up front so the debug
+    // UI's new-frame (which needs the descriptor's formats) can run before
+    // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
+    impl->currentDrawable = [impl->metalLayer nextDrawable];
+    impl->currentPassDesc = nil;
+    if (impl->currentDrawable) {
+        MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+        passDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+        passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
+        passDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+        passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.12, 1.0);
+        passDesc.depthAttachment.texture = impl->depthTexture;
+        passDesc.depthAttachment.loadAction = MTLLoadActionClear;
+        passDesc.depthAttachment.storeAction = MTLStoreActionDontCare;
+        passDesc.depthAttachment.clearDepth = 1.0;
+        impl->currentPassDesc = passDesc;
+    }
+
+#ifdef RT_ENABLE_IMGUI
+    if (impl->imguiInitialized && impl->currentPassDesc) {
+        ImGui_ImplMetal_NewFrame(impl->currentPassDesc);
+        // ImGui_ImplGlfw_NewFrame() is run by Window in pollEvents.
+        ImGui::NewFrame();
+    }
+#endif
 }
 
 void MetalRenderer::setCamera(const CameraState& camera) {
@@ -306,22 +339,14 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
 }
 
 void MetalRenderer::endFrame() {
-    impl->currentDrawable = [impl->metalLayer nextDrawable];
-    if (!impl->currentDrawable) return;
-
-    MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-    passDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
-    passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
-    passDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
-    passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.12, 1.0);
-    passDesc.depthAttachment.texture = impl->depthTexture;
-    passDesc.depthAttachment.loadAction = MTLLoadActionClear;
-    passDesc.depthAttachment.storeAction = MTLStoreActionDontCare;
-    passDesc.depthAttachment.clearDepth = 1.0;
+    // Drawable + pass descriptor were acquired in beginFrame(). If there was no
+    // drawable, beginFrame() also skipped ImGui::NewFrame(), so the NewFrame/
+    // Render pairing stays balanced by doing nothing here.
+    if (!impl->currentDrawable || !impl->currentPassDesc) return;
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
     impl->currentEncoder = [impl->currentCommandBuffer
-        renderCommandEncoderWithDescriptor:passDesc];
+        renderCommandEncoderWithDescriptor:impl->currentPassDesc];
 
     [impl->currentEncoder setFrontFacingWinding:MTLWindingClockwise];
     [impl->currentEncoder setCullMode:MTLCullModeBack];
@@ -390,13 +415,13 @@ void MetalRenderer::endFrame() {
     }
 
     // Debug UI (ADR-0011) records last, over the scene, into the same encoder.
-    // NOTE: this backend builds the encoder here in endFrame, so ImGui's
-    // new-frame / draw-data placement must be reconciled with that deferred
-    // structure when implemented (see ADR-0011).
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui::Render();
-    //   ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
-    //       impl->currentCommandBuffer, impl->currentEncoder);
+    if (impl->imguiInitialized) {
+        ImGui::Render();
+        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+                                       impl->currentCommandBuffer,
+                                       impl->currentEncoder);
+    }
 #endif
 
     [impl->currentEncoder endEncoding];
@@ -406,15 +431,23 @@ void MetalRenderer::endFrame() {
 
 void MetalRenderer::initDebugUi(void* /*windowHandle*/) {
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui::CreateContext(); ImGui::StyleColorsDark();
-    //   ImGui_ImplMetal_Init(impl->device);
-    // Runs before Window::initDebugUi (which attaches the GLFW backend).
+    // Create the ImGui context and the Metal backend. Runs before
+    // Window::initDebugUi, which attaches the GLFW backend to this context.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;   // don't write imgui.ini
+    ImGui::StyleColorsDark();
+    ImGui_ImplMetal_Init(impl->device);
+    impl->imguiInitialized = true;
 #endif
 }
 
 void MetalRenderer::shutdownDebugUi() {
 #ifdef RT_ENABLE_IMGUI
-    // TODO(macos): ImGui_ImplMetal_Shutdown(); ImGui::DestroyContext();
+    if (!impl->imguiInitialized) return;
+    ImGui_ImplMetal_Shutdown();
+    ImGui::DestroyContext();   // Window::shutdownDebugUi (GLFW) ran first
+    impl->imguiInitialized = false;
 #endif
 }
 

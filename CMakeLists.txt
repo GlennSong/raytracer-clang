@@ -186,6 +186,22 @@ endif()
 option(RT_ENABLE_IMGUI "Build the viewer with Dear ImGui debug UI" OFF)
 if(RT_ENABLE_IMGUI)
     set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
+    # Fetch the submodule if a plain clone/branch sync left it empty.
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "Dear ImGui submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+                        third_party/imgui
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        message(FATAL_ERROR
+            "Dear ImGui submodule not found at third_party/imgui.\n"
+            "Fetch it with:  git submodule update --init --recursive")
+    endif()
     target_sources(viewer PRIVATE
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
