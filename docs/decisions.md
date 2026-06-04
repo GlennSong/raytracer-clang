@@ -287,6 +287,11 @@ Orthographic is the basis for future 2D rendering.
   re-implements it, and the math is not Linux-compile-verifiable. Moving it
   engine-side (into `Mat4`) is the eventual cleanup.
 - No 2D camera controller yet; `OrbitCamera` in ortho mode is the stand-in.
+- The pre-existing **perspective** matrix uses the OpenGL [-1,1] depth
+  convention on a Metal [0,1] renderer; it survives only because the scene sits
+  far enough that the perspective divide lands NDC z in [0,1]. Geometry very
+  close to the camera would be wrongly clipped. The ortho matrix targets [0,1]
+  directly; perspective should be made consistent in the eventual cleanup.
 
 **Revisit trigger.** Adding a second backend (de-duplicate projection math, or
 move it engine-side), or building real 2D (a dedicated pan/zoom camera).

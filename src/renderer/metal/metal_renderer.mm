@@ -77,11 +77,14 @@ static simd_float4x4 orthographicMatrix(float height, float aspect, float near, 
     float w = height * aspect;
     float zRange = far - near;
 
+    // Metal clip-space depth is [0, 1] (near -> 0, far -> 1), unlike OpenGL's
+    // [-1, 1]. With no perspective divide to rescue it, ortho must target [0, 1]
+    // directly or the whole scene is depth-clipped.
     simd_float4x4 m = {};
     m.columns[0][0] = 2.0f / w;
     m.columns[1][1] = 2.0f / h;
-    m.columns[2][2] = -2.0f / zRange;
-    m.columns[3][2] = -(far + near) / zRange;
+    m.columns[2][2] = -1.0f / zRange;
+    m.columns[3][2] = -near / zRange;
     m.columns[3][3] = 1.0f;
     return m;
 }
