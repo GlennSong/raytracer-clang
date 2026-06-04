@@ -195,15 +195,15 @@ lightweight components.
 ---
 
 ## ADR-0007 — Core primitives: `Handle` + `SlotMap`, logging, assert
-**Status:** Pending · **Date:** 2026-06-03
+**Status:** Accepted · **Date:** 2026-06-03
 
 **Context.** The ECS (ADR-0006) and a future asset manager both need stable,
 recyclable identities with stale-handle detection; the codebase logs via
 scattered `std::cerr` and has no assert convention.
 
-**Decision (planned).** Add at the core layer (`src/` root, alongside
-`math.h`): `Handle<Tag>` (index + generation), `SlotMap<T>` (recycling storage
-with generation-checked access), leveled logging (`LOG_INFO/WARN/ERROR`), and
+**Decision.** Added at the core layer (`src/` root, alongside `math.h`):
+`Handle<Tag>` (index + generation), `SlotMap<T>` (recycling storage with
+generation-checked access), leveled logging (`LOG_INFO/WARN/ERROR`), and
 `ASSERT`/`CHECK` macros. Purely additive — existing `MeshHandle`/`World` are
 **not** migrated yet (that touches the macOS-only backend; deferred to
 Steps 3/5).

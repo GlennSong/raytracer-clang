@@ -13,7 +13,11 @@ decision is hard to reverse or spans multiple modules.
 
 ```
 src/
-  math.h / math.cpp       — Vec3, Mat4, Ray, all linear algebra
+  math.h / math.cpp       — Vec3, Mat4, Ray, all linear algebra (Real scalar)
+  handle.h                — Handle<Tag>: type-safe recyclable IDs
+  slot_map.h              — SlotMap<T>: recycling storage, stale-handle detection
+  log.h / log.cpp         — leveled logging (LOG_INFO / LOG_WARN / LOG_ERROR)
+  check.h                 — ASSERT (debug-only) / CHECK (always-on) macros
   image.h / image.cpp      — Image buffer and PPM output
   camera.h / camera.cpp    — Camera model and ray generation
   geometry.h / geometry.cpp — Shapes (Sphere, Triangle), hit records
@@ -91,6 +95,8 @@ Name variables by what they represent, not what type they are.
 - Keep modules self-contained: one header + one .cpp per logical unit.
 - Minimize header includes; forward-declare where possible.
 - All math types and operations live in `math.h` / `math.cpp`.
+- Use `Real` (from `math.h`) for engine math scalars rather than raw `double`
+  or `float`; the precision choice is centralized there (see ADR-0005).
 - No `using namespace std;` in headers. Acceptable in .cpp files.
 
 ### Style

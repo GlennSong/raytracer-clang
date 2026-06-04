@@ -12,6 +12,7 @@ TARGET = raytracer
 SRCS = \
 	$(SRC_DIR)/main.cpp \
 	$(SRC_DIR)/math.cpp \
+	$(SRC_DIR)/log.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/geometry.cpp \

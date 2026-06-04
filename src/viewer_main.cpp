@@ -6,7 +6,7 @@
 #include "engine/systems/camera_system.h"
 #include "engine/systems/motion_system.h"
 #include "engine/systems/render_system.h"
-#include <iostream>
+#include "log.h"
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
     RenderMesh mesh;
@@ -163,7 +163,7 @@ static void buildScene(World& world, Renderer& renderer, RenderView& view) {
 int main() {
     Application app;
     if (!app.initialize({1024, 1024, "Raytracer Viewer", "settings.json"})) {
-        std::cerr << "Failed to initialize application\n";
+        LOG_ERROR << "Failed to initialize application";
         return 1;
     }
 
