@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Shared math/core sources (used by both targets)
 set(CORE_SOURCES
     src/math.cpp
+    src/log.cpp
     src/image.cpp
     src/camera.cpp
     src/geometry.cpp
@@ -34,6 +35,14 @@ set(VIEWER_SOURCES
     src/renderer/window.cpp
     src/renderer/orbit_camera.cpp
     src/renderer/settings.cpp
+    src/engine/clock.cpp
+    src/engine/world.cpp
+    src/engine/components.cpp
+    src/engine/application.cpp
+    src/engine/systems/camera_system.cpp
+    src/engine/systems/motion_system.cpp
+    src/engine/systems/render_system.cpp
+    src/engine/systems/dev_control_system.cpp
 )
 
 # Platform-specific renderer backend

@@ -1,10 +1,11 @@
 #ifndef RAYTRACER_WINDOW_H
 #define RAYTRACER_WINDOW_H
 
+#include "event.h"
 #include <string>
+#include <vector>
 #include <functional>
-
-struct GLFWwindow;
+#include <memory>
 
 struct InputState {
     double mouseX, mouseY;
@@ -14,16 +15,19 @@ struct InputState {
     bool mouseRightDown;
     bool keyW, keyA, keyS, keyD, keyQ, keyE;
     bool keyShift;
-    bool keyUp, keyDown, keyEscape;
+    bool keyUp, keyDown;
 
     InputState()
         : mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0),
           scrollDelta(0), mouseLeftDown(false), mouseRightDown(false),
           keyW(false), keyA(false), keyS(false), keyD(false),
           keyQ(false), keyE(false), keyShift(false),
-          keyUp(false), keyDown(false), keyEscape(false) {}
+          keyUp(false), keyDown(false) {}
 };
 
+// The windowing/input seam. All GLFW (and any other backend) state is hidden in
+// the .cpp-only Impl, so this header carries no windowing-library types — engine
+// and app code depend only on backend-neutral InputState / Event.
 class Window {
 public:
     Window();
@@ -35,20 +39,28 @@ public:
     void pollEvents();
     void getSize(int& width, int& height) const;
     void getFramebufferSize(int& width, int& height) const;
-    GLFWwindow* getHandle() const { return window; }
-    const InputState& getInput() const { return input; }
-    double getDeltaTime() const { return deltaTime; }
+
+    // Opaque native OS window pointer (NSWindow* on macOS, HWND on Windows...)
+    // for the renderer to bind its surface to. The only seam through which a
+    // platform handle crosses into the renderer; keeps GLFW out of the backend.
+    void* nativeWindowHandle() const;
+
+    const InputState& getInput() const;
+    const std::vector<Event>& getEvents() const;
+    double getDeltaTime() const;
+
+    // Invoked to redraw a frame. The platform calls this both from the normal
+    // loop and during a modal resize (when pollEvents blocks), so the window
+    // keeps painting instead of freezing while the user drags its edge.
+    void setDrawCallback(std::function<void()> callback);
+
+    // Opaque implementation, defined in window.cpp. Public only so the
+    // file-local platform callbacks there can name the type; its members and
+    // the impl pointer below remain implementation details.
+    struct Impl;
 
 private:
-    GLFWwindow* window;
-    InputState input;
-    double lastMouseX, lastMouseY;
-    double lastFrameTime;
-    double deltaTime;
-    bool firstMouse;
-
-    static void mouseCallback(GLFWwindow* window, double xpos, double ypos);
-    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
+    std::unique_ptr<Impl> impl;
 };
 
 #endif

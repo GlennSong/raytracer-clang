@@ -4,7 +4,8 @@
 
 OrbitCamera::OrbitCamera()
     : target(0, 0, 0), distance(5.0f), yaw(0.0f), pitch(20.0f),
-      fovDegrees(60.0f), moveSpeed(3.0f), rotateSpeed(0.3f), zoomSpeed(1.0f) {}
+      fovDegrees(60.0f), moveSpeed(3.0f), rotateSpeed(0.3f), zoomSpeed(1.0f),
+      orthographic(false) {}
 
 void OrbitCamera::update(const InputState& input, double deltaTime) {
     if (input.mouseLeftDown) {
@@ -60,7 +61,13 @@ CameraState OrbitCamera::getCameraState(float aspectRatio) const {
     state.position = getPosition();
     state.target = target;
     state.up = Vec3(0, 1, 0);
+    state.projection = orthographic ? CameraProjection::Orthographic
+                                    : CameraProjection::Perspective;
     state.fovDegrees = fovDegrees;
+    // Match the perspective framing at the orbit distance so toggling keeps the
+    // subject the same size, and zoom (distance) keeps working in ortho.
+    float fovRad = static_cast<float>(degreesToRadians(fovDegrees));
+    state.orthoHeight = 2.0f * distance * std::tan(fovRad * 0.5f);
     state.aspectRatio = aspectRatio;
     state.nearPlane = 0.1f;
     state.farPlane = 1000.0f;

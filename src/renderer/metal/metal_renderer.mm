@@ -3,10 +3,7 @@
 #import "metal_renderer.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-#define GLFW_INCLUDE_NONE
-#define GLFW_EXPOSE_NATIVE_COCOA
-#import <GLFW/glfw3.h>
-#import <GLFW/glfw3native.h>
+#import <AppKit/AppKit.h>
 #import <simd/simd.h>
 #include <unordered_map>
 #include <vector>
@@ -75,6 +72,23 @@ static simd_float4x4 perspectiveMatrix(float fovY, float aspect, float near, flo
     return m;
 }
 
+static simd_float4x4 orthographicMatrix(float height, float aspect, float near, float far) {
+    float h = height;
+    float w = height * aspect;
+    float zRange = far - near;
+
+    // Metal clip-space depth is [0, 1] (near -> 0, far -> 1), unlike OpenGL's
+    // [-1, 1]. With no perspective divide to rescue it, ortho must target [0, 1]
+    // directly or the whole scene is depth-clipped.
+    simd_float4x4 m = {};
+    m.columns[0][0] = 2.0f / w;
+    m.columns[1][1] = 2.0f / h;
+    m.columns[2][2] = -1.0f / zRange;
+    m.columns[3][2] = -near / zRange;
+    m.columns[3][3] = 1.0f;
+    return m;
+}
+
 static simd_float4x4 lookAtMatrix(simd_float3 eye, simd_float3 center, simd_float3 up) {
     simd_float3 f = simd_normalize(center - eye);
     simd_float3 s = simd_normalize(simd_cross(f, up));
@@ -134,8 +148,7 @@ MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
 MetalRenderer::~MetalRenderer() { shutdown(); }
 
 bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
-    GLFWwindow* glfwWindow = static_cast<GLFWwindow*>(windowHandle);
-    NSWindow* nsWindow = glfwGetCocoaWindow(glfwWindow);
+    NSWindow* nsWindow = (__bridge NSWindow*)windowHandle;
 
     impl->device = MTLCreateSystemDefaultDevice();
     if (!impl->device) return false;
@@ -293,8 +306,11 @@ void MetalRenderer::setCamera(const CameraState& camera) {
                       static_cast<float>(camera.up.z)};
 
     simd_float4x4 view = lookAtMatrix(eye, center, up);
-    simd_float4x4 proj = perspectiveMatrix(fovRad, camera.aspectRatio,
-                                            camera.nearPlane, camera.farPlane);
+    simd_float4x4 proj = (camera.projection == CameraProjection::Orthographic)
+        ? orthographicMatrix(camera.orthoHeight, camera.aspectRatio,
+                             camera.nearPlane, camera.farPlane)
+        : perspectiveMatrix(fovRad, camera.aspectRatio,
+                            camera.nearPlane, camera.farPlane);
 
     impl->cameraUniforms.viewProjection = simd_mul(proj, view);
     impl->cameraUniforms.view = view;

@@ -5,11 +5,19 @@
 A portable C++ raytracer built from scratch using only standard libraries.
 Compiled with clang++ targeting C++17. No external dependencies.
 
+Significant architectural decisions — with their alternatives, trade-offs, and
+revisit triggers — are recorded in `docs/decisions.md`. Add an ADR there when a
+decision is hard to reverse or spans multiple modules.
+
 ## Architecture
 
 ```
 src/
-  math.h / math.cpp       — Vec3, Mat4, Ray, all linear algebra
+  math.h / math.cpp       — Vec3, Mat4, Ray, all linear algebra (Real scalar)
+  handle.h                — Handle<Tag>: type-safe recyclable IDs
+  slot_map.h              — SlotMap<T>: recycling storage, stale-handle detection
+  log.h / log.cpp         — leveled logging (LOG_INFO / LOG_WARN / LOG_ERROR)
+  check.h                 — ASSERT (debug-only) / CHECK (always-on) macros
   image.h / image.cpp      — Image buffer and PPM output
   camera.h / camera.cpp    — Camera model and ray generation
   geometry.h / geometry.cpp — Shapes (Sphere, Triangle), hit records
@@ -20,8 +28,47 @@ src/
   main.cpp                   — Entry point, render loop
 ```
 
+The interactive viewer adds a renderer and engine layer on top of the shared
+math/core modules:
+
+```
+src/
+  renderer/
+    renderer.h              — RHI: backend-agnostic rendering interface
+    event.h                  — Backend-neutral window/input events
+    window.h / window.cpp    — Windowing + input (GLFW), the platform boundary
+    orbit_camera.h / .cpp    — Interactive orbit camera
+    settings.h / settings.cpp — Persisted viewer settings
+    metal/metal_renderer.mm  — Metal backend implementation (macOS)
+  engine/
+    clock.h / clock.cpp      — Fixed-timestep simulation clock
+    world.h / world.cpp      — Entity / Transform world model
+  viewer_main.cpp            — Interactive viewer entry point
+```
+
 Each module is one header + one implementation file. Keep includes minimal —
 a module should only include what it directly uses.
+
+## Platform Abstraction (Engine Rule)
+
+The engine defines coherent, backend-neutral interfaces; OS-, windowing-, and
+graphics-backend specifics are implemented *behind* those interfaces — one
+implementation per platform, selected at build time. This rule is load-bearing:
+it is what lets new platforms be added by writing an implementation rather than
+by threading conditionals through shared code.
+
+- Engine and application code MUST NOT reference a windowing library, OS, or
+  graphics-backend symbol directly. No `GLFW_*`, no `NSWindow`/`HWND`, no
+  Metal/Vulkan types outside the file that implements that seam.
+- The seams are `Renderer` (rendering backend) and `Window` (windowing + input).
+  They expose only backend-neutral types.
+- Anything crossing a seam must be backend-neutral: events use our own
+  `Event` / `KeyCode` / `MouseButton` (never GLFW codes); native window handles
+  cross as opaque `void*`; etc.
+- Platform-specific code is confined to its own file or a single `#ifdef` branch
+  inside the seam's implementation — e.g. `metal/metal_renderer.mm`, or the
+  native-handle branch in `window.cpp`. Adding a backend means adding an
+  implementation of the seam, not editing call sites.
 
 ## Coding Standards
 
@@ -48,6 +95,8 @@ Name variables by what they represent, not what type they are.
 - Keep modules self-contained: one header + one .cpp per logical unit.
 - Minimize header includes; forward-declare where possible.
 - All math types and operations live in `math.h` / `math.cpp`.
+- Use `Real` (from `math.h`) for engine math scalars rather than raw `double`
+  or `float`; the precision choice is centralized there (see ADR-0005).
 - No `using namespace std;` in headers. Acceptable in .cpp files.
 
 ### Style
