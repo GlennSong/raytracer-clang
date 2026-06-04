@@ -50,10 +50,40 @@ enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
 
 # ============================================================
-# Interactive viewer (GPU + windowing)
+# Physics (Jolt) — cross-platform C++, builds and runs headless (ADR-0012).
+# Jolt's PUBLIC compile definitions propagate to anything linking the `Jolt`
+# target, so the JPH_* config stays consistent automatically.
 # ============================================================
-find_package(glfw3 REQUIRED)
+option(RT_ENABLE_PHYSICS "Build Jolt physics and its headless tests" ON)
+if(RT_ENABLE_PHYSICS)
+    # Configure Jolt before pulling it in. Keep it from clobbering global flags
+    # or forcing LTO; single precision (ADR-0005 deferral); drop unused bits.
+    set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+    set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OBJECT_STREAM OFF CACHE BOOL "" FORCE)
+    set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+    set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
+    add_executable(physics_tests
+        tests/main.cpp
+        tests/test_physics.cpp
+        src/engine/physics/physics_world.cpp
+    )
+    target_include_directories(physics_tests PRIVATE src)
+    target_compile_options(physics_tests PRIVATE -Wall -Wextra)
+    target_link_libraries(physics_tests PRIVATE Jolt)
+    add_test(NAME physics_tests COMMAND physics_tests)
+endif()
+
+# ============================================================
+# Interactive viewer (GPU + windowing) — only when GLFW is available, so the
+# rest of the project still configures on headless/CI machines.
+# ============================================================
+find_package(glfw3 QUIET)
+if(glfw3_FOUND)
 set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
@@ -134,4 +164,7 @@ if(RT_ENABLE_IMGUI)
     endif()
     target_include_directories(viewer PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
     target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)
+endif()
+else()
+    message(STATUS "glfw3 not found — skipping the interactive viewer target")
 endif()

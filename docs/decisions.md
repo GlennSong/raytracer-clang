@@ -436,6 +436,68 @@ same `initDebugUi`/`shutdownDebugUi` treatment).
 
 ---
 
+## ADR-0012 — Jolt physics, sealed behind a Jolt-free `PhysicsWorld`
+**Status:** Accepted (Step A — integration foundation) · **Date:** 2026-06-04
+
+**Context.** The engine needs rigid bodies and collision (ROADMAP 2.3); Jolt was
+the chosen library. The questions for *how* to integrate: how to keep Jolt types
+out of engine/game code, how to avoid Jolt's compile-define consistency footgun,
+the object-layer scheme, the job system, and the precision bridge.
+
+**Decision.**
+- **Seal Jolt behind `PhysicsWorld`** (`engine/physics/`), a pimpl whose header
+  carries no `JPH::` type — exactly how `Window` seals GLFW (ADR-0001). Engine,
+  game, and tests speak only our `Vec3`/`Quat` and an opaque `PhysicsBodyId`.
+  The ECS `PhysicsSystem` (Step C) will drive bodies through this wrapper.
+- **Git submodule pinned to a release tag** (`third_party/JoltPhysics` @ v5.5.0).
+  **Link the `Jolt` CMake target**, not hand-rolled include paths: all the
+  `JPH_*` config defines are `PUBLIC` on that target, so they propagate to us
+  automatically — which is what defuses the #1 Jolt footgun (mismatched defines
+  between the lib and its consumers).
+- **Two object layers** (`NON_MOVING`/`MOVING`) with a 1:1 broadphase mapping —
+  the standard minimal scheme so the static tree never rebuilds.
+- **Single-threaded job system** (`JobSystemSingleThreaded`). The engine is
+  single-threaded and workloads are tiny; this is deterministic and avoids
+  spinning a pool. Revisit with multithreading (ADR-0008) or when physics shows
+  in a profile.
+- **Single precision** (`JPH_DOUBLE_PRECISION` off); the wrapper bridges our
+  `double` to Jolt `float`. Consistent with the deferred precision choice
+  (ADR-0005); revisit for large-world coordinates.
+- Jolt's process-global allocator/factory/type registration is **reference-
+  counted** across `PhysicsWorld` instances (so multiple worlds / sequential
+  tests are safe).
+
+**Verification angle (notable).** Jolt is cross-platform C++ with no GPU/OS
+dependency, so — unlike the window/render backends — **it builds and runs
+headless here**. A `physics_tests` CMake target links Jolt and asserts real
+behaviour (a sphere falls, rests at radius height on the floor, determinism,
+initial velocity). To make this configurable on headless/CI machines, the
+**viewer CMake target is now optional** (built only when GLFW is found); the
+offline tracer, unit tests, and physics tests always configure.
+
+**Alternatives considered.**
+- Expose `JPH::` types directly in engine code — rejected: couples the engine to
+  Jolt; the wrapper costs little and keeps the door open to swapping later.
+- Vendored copy instead of submodule — rejected: submodule keeps our tree clean
+  and the version explicit.
+- Multi-threaded `JobSystemThreadPool` now — deferred: premature for our load.
+
+**Consequences / tech debt.**
+- Adds a real third-party dependency (engine/viewer scope; the offline tracer
+  stays std-lib-only). Building it requires `git submodule update --init`.
+- **Step C still to come:** `RigidBody`/`Collider` components + a `PhysicsSystem`
+  stepping in `fixedUpdate` and writing back to `Transform`, retiring the
+  placeholder `MotionSystem`.
+- **Collider debug-draw** needs a line/debug primitive (macOS/Metal) — deferred.
+- The wrapper currently exposes box/sphere shapes and basic body ops; capsule,
+  mesh colliders, materials (friction/restitution), and contact events are
+  follow-ups.
+
+**Revisit trigger.** Multithreading the sim (job pool); large-world precision
+(double); or a second physics need that the wrapper's surface doesn't cover.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

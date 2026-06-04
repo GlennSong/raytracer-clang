@@ -136,7 +136,9 @@ generated worlds.
 settings.
 
 ### 2.3 Jolt Physics integration
-**Status:** Math foundation done (Step B); Jolt submodule + `PhysicsSystem` next.
+**Status:** Foundation done (Steps A + B): math (Quat/TRS/lookAt), Jolt submodule
++ build wiring + a sealed `PhysicsWorld`, verified by headless physics tests.
+Next: the ECS `PhysicsSystem` (Step C). See ADR-0012.
 **Why:** Rigid bodies, collision detection, and world interaction. Essential for
 simulation (objects falling, stacking, vehicles on roads) and for the player
 moving through generated environments without clipping through geometry.
@@ -154,14 +156,19 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
   the backend), Vec3 helpers. `Transform` now stores a quaternion `orientation`
   instead of Euler angles; `MotionSystem`/scene/interpolation migrated. Retires
   the Euler-wobble debt ADR-0006 flagged. Unit-tested.
-- ⏳ ADR for the integration (layers, allocators, the precision bridge).
-- ⏳ Add Jolt as a git submodule + build wiring; a `PhysicsWorld` wrapper for
-  init/teardown (broadphase/object layers, temp allocator, job system).
+- ✅ **ADR-0012** for the integration (layers, single-threaded job system, the
+  single-precision bridge, the Jolt-free wrapper seam).
+- ✅ **Jolt submodule (v5.5.0) + build wiring**; a `PhysicsWorld` pimpl sealing
+  Jolt (broadphase/object layers, temp allocator, job system, refcounted global
+  init). Viewer CMake target made optional so the project configures headless.
+- ✅ **Headless physics tests** (`physics_tests` CMake target): sphere falls,
+  rests at radius height, determinism, initial velocity, static body, safe
+  invalid handle — all green in Linux/CI.
 - ⏳ A `PhysicsSystem` stepping in `fixedUpdate` (deterministic, fits ADR-0002);
-  `RigidBody` / `Collider` components; entity↔`BodyID` map; write-back to
-  `Transform`. Retires the placeholder `MotionSystem`.
-- ⏳ Shapes (box/sphere/capsule), motion types, friction/restitution; headless
-  drop/stack/determinism tests.
+  `RigidBody` / `Collider` components; entity↔`BodyId` map; write-back to
+  `Transform`. Retires the placeholder `MotionSystem`. (Step C)
+- ⏳ More shapes (capsule/mesh), materials (friction/restitution), contact
+  events.
 - ⏳ Debug visualization of colliders — needs a line/debug-draw primitive
   (macOS/Metal); deferred / minimal.
 
