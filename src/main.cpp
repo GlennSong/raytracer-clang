@@ -1,4 +1,4 @@
-#include "math.h"
+#include "rt_math.h"
 #include "image.h"
 #include "camera.h"
 #include "scene.h"

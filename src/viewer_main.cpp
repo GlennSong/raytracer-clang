@@ -1,4 +1,4 @@
-#include "math.h"
+#include "rt_math.h"
 #include "renderer/renderer.h"
 #include "engine/world.h"
 #include "engine/components.h"

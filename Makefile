@@ -11,7 +11,7 @@ TARGET = raytracer
 # engine/) needs GLFW + a platform backend and is built via CMake instead.
 SRCS = \
 	$(SRC_DIR)/main.cpp \
-	$(SRC_DIR)/math.cpp \
+	$(SRC_DIR)/rt_math.cpp \
 	$(SRC_DIR)/log.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/camera.cpp \

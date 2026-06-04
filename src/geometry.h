@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_GEOMETRY_H
 #define RAYTRACER_GEOMETRY_H
 
-#include "math.h"
+#include "rt_math.h"
 
 struct HitRecord {
     double t;

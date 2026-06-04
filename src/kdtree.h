@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_KDTREE_H
 #define RAYTRACER_KDTREE_H
 
-#include "math.h"
+#include "rt_math.h"
 #include "geometry.h"
 #include <vector>
 #include <memory>

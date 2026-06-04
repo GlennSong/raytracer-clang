@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_MATERIAL_H
 #define RAYTRACER_MATERIAL_H
 
-#include "math.h"
+#include "rt_math.h"
 
 enum class MaterialType {
     DIFFUSE,

@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_SCENE_H
 #define RAYTRACER_SCENE_H
 
-#include "math.h"
+#include "rt_math.h"
 #include "geometry.h"
 #include "material.h"
 #include "kdtree.h"

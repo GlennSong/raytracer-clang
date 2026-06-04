@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Shared math/core sources (used by both targets)
 set(CORE_SOURCES
-    src/math.cpp
+    src/rt_math.cpp
     src/log.cpp
     src/image.cpp
     src/camera.cpp

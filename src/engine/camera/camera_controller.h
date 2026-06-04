@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_CAMERA_CONTROLLER_H
 #define RAYTRACER_ENGINE_CAMERA_CONTROLLER_H
 
-#include "../../math.h"
+#include "../../rt_math.h"
 #include "../../renderer/renderer.h"
 
 // Resolved camera intent for one frame, decoupled from how it was sourced

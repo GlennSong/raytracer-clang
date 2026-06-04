@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PHYSICS_WORLD_H
 #define RAYTRACER_ENGINE_PHYSICS_WORLD_H
 
-#include "../../math.h"
+#include "../../rt_math.h"
 
 #include <cstdint>
 #include <memory>

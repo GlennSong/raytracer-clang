@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_COMPONENTS_H
 #define RAYTRACER_ENGINE_COMPONENTS_H
 
-#include "../math.h"
+#include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "physics/physics_world.h"
 

@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_RENDERER_H
 #define RAYTRACER_RENDERER_H
 
-#include "../math.h"
+#include "../rt_math.h"
 #include <vector>
 #include <memory>
 #include <cstdint>

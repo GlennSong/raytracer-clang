@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_INPUT_MAP_H
 #define RAYTRACER_ENGINE_INPUT_MAP_H
 
-#include "../../math.h"
+#include "../../rt_math.h"
 #include "../../renderer/event.h"
 #include "../../renderer/gamepad.h"
 

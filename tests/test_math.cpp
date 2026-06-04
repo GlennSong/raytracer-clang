@@ -1,6 +1,6 @@
 #include "test_framework.h"
 
-#include "../src/math.h"
+#include "../src/rt_math.h"
 
 namespace {
 constexpr Real EPS = 1e-9;

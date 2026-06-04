@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_CAMERA_H
 #define RAYTRACER_CAMERA_H
 
-#include "math.h"
+#include "rt_math.h"
 
 class Camera {
 public:

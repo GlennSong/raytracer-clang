@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_IMAGE_H
 #define RAYTRACER_IMAGE_H
 
-#include "math.h"
+#include "rt_math.h"
 #include <vector>
 #include <string>
 
