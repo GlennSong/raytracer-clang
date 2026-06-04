@@ -139,6 +139,42 @@ struct Mat4 {
         return result;
     }
 
+    // Right-handed perspective projection mapping clip-space depth to [0, 1]
+    // (Metal/Vulkan/D3D convention), with the camera looking down -z. Built
+    // engine-side so the math is backend-neutral and testable (see ADR-0009);
+    // the backend transposes to its column-major layout when uploading.
+    static Mat4 perspective(Real fovYRadians, Real aspect, Real nearPlane, Real farPlane) {
+        Real yScale = 1.0 / std::tan(fovYRadians * 0.5);
+        Real xScale = yScale / aspect;
+        Real zRange = farPlane - nearPlane;
+
+        Mat4 result;
+        result.m[0][0] = xScale;
+        result.m[1][1] = yScale;
+        result.m[2][2] = -farPlane / zRange;
+        result.m[2][3] = -(farPlane * nearPlane) / zRange;
+        result.m[3][2] = -1.0;
+        result.m[3][3] = 0.0;
+        // Off-diagonal entries left from identity construction are all zero
+        // except the ones set above; the remaining identity 1s we override here.
+        return result;
+    }
+
+    // Orthographic projection (centered, given full height and aspect) mapping
+    // clip-space depth to [0, 1]. Same conventions as perspective().
+    static Mat4 orthographic(Real height, Real aspect, Real nearPlane, Real farPlane) {
+        Real h = height;
+        Real w = height * aspect;
+        Real zRange = farPlane - nearPlane;
+
+        Mat4 result;
+        result.m[0][0] = 2.0 / w;
+        result.m[1][1] = 2.0 / h;
+        result.m[2][2] = -1.0 / zRange;
+        result.m[2][3] = -nearPlane / zRange;
+        return result;
+    }
+
     Mat4 operator*(const Mat4& b) const {
         Mat4 result;
         for (int i = 0; i < 4; i++)

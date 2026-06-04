@@ -41,31 +41,38 @@ exactly our stack.
 **Depends on:** Nothing.
 
 ### 1.2 Projection math engine-side
-**Status:** Not started (see ADR-0009 consequences)
+**Status:** Done — `Mat4::perspective` / `Mat4::orthographic` in `math.h`,
+covered by `tests/test_math.cpp`.
 **Why:** Projection matrix construction currently lives in `metal_renderer.mm`.
 Moving it to `Mat4` makes the math backend-neutral, Linux-compilable, and
 testable. Small, mechanical change — removes tech debt before more features
 pile on.
 
 **Scope:**
-- Add `Mat4::perspective(fov, aspect, near, far)` and
-  `Mat4::orthographic(width, height, near, far)` targeting Metal's [0,1] depth.
-- Have the renderer call these instead of inline matrix math.
-- Fix the pre-existing perspective matrix depth convention (currently uses
-  OpenGL [-1,1] on a Metal [0,1] renderer — see ADR-0009).
+- ✅ Added `Mat4::perspective(fovYRadians, aspect, near, far)` and
+  `Mat4::orthographic(height, aspect, near, far)` targeting Metal's [0,1] depth.
+- ✅ The Metal backend now calls these (via the existing `toSimd`) instead of
+  its own inline matrix builders, which were deleted.
+- ✅ Fixed the pre-existing perspective matrix depth convention (was OpenGL
+  [-1,1] on a Metal [0,1] renderer — see ADR-0009); a regression test pins
+  near→0 / far→1.
 
 **Depends on:** Nothing. Can parallel with 1.1.
 
 ### 1.3 Automated tests
-**Status:** Not started (see tech-debt register)
+**Status:** Done — `tests/` target with 33 cases; `make test` (and CTest via
+the `run_tests` CMake target). Runs on Linux/CI; no GPU deps.
 **Why:** `SlotMap`, `SparseSet`, math, and ECS queries have no test coverage.
 A `tests/` target is the safety net before bigger refactors.
 
 **Scope:**
-- Add a lightweight test harness (e.g. Catch2 single-header, or a minimal
-  hand-rolled runner).
-- Cover: `Handle`/`SlotMap` lifecycle, `SparseSet` add/remove/iterate,
-  `World::each` queries, `Vec3`/`Mat4` operations, `SimClock` stepping.
+- ✅ Minimal hand-rolled runner (`tests/test_framework.h`) — standard library
+  only, per AGENTS.md's no-external-deps rule (Catch2 was the alternative).
+- ✅ Covers: `Handle`/`SlotMap` lifecycle + recycling/stale detection,
+  `SparseSet` add/remove/iterate (swap-and-pop), `World` create/destroy and
+  `each` queries (single + intersection), `Vec3`/`Mat4` operations including
+  the projection depth mapping (1.2), and `SimClock` stepping / `timeScale` /
+  spiral-of-death guard.
 
 **Depends on:** Nothing. Can parallel with 1.1 and 1.2.
 

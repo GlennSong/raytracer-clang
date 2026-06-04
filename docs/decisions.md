@@ -282,16 +282,17 @@ Orthographic is the basis for future 2D rendering.
   testable on the existing scene without a 2D demo.
 
 **Consequences / tech debt.**
-- **Projection-matrix construction still lives in the backend**
-  (`metal_renderer.mm`): perspective and now orthographic. Each future backend
-  re-implements it, and the math is not Linux-compile-verifiable. Moving it
-  engine-side (into `Mat4`) is the eventual cleanup.
+- ~~**Projection-matrix construction still lives in the backend**~~ **Resolved
+  (ROADMAP 1.2).** Construction moved engine-side to `Mat4::perspective` /
+  `Mat4::orthographic`; the Metal backend builds a `Mat4` and uploads it via the
+  existing `toSimd`, so the math is now backend-neutral and Linux-testable. A
+  second backend reuses these rather than re-implementing.
 - No 2D camera controller yet; `OrbitCamera` in ortho mode is the stand-in.
-- The pre-existing **perspective** matrix uses the OpenGL [-1,1] depth
-  convention on a Metal [0,1] renderer; it survives only because the scene sits
-  far enough that the perspective divide lands NDC z in [0,1]. Geometry very
-  close to the camera would be wrongly clipped. The ortho matrix targets [0,1]
-  directly; perspective should be made consistent in the eventual cleanup.
+- ~~The pre-existing **perspective** matrix uses the OpenGL [-1,1] depth
+  convention~~ **Resolved (ROADMAP 1.2).** Perspective now targets Metal's [0,1]
+  depth directly (near→0, far→1), matching the ortho path; a regression test in
+  `tests/test_math.cpp` pins the mapping, so close geometry is no longer at risk
+  of being wrongly clipped.
 
 **Revisit trigger.** Adding a second backend (de-duplicate projection math, or
 move it engine-side), or building real 2D (a dedicated pan/zoom camera).
@@ -309,12 +310,12 @@ to be replaced; listed here so they stay visible.
 | `MotionSystem` does simple Euler integration | `engine/systems/motion_system.cpp` | Placeholder kinematics, not real physics | A physics/collision system (Step 6) |
 | Hardcoded keybindings | `engine/systems/dev_control_system.cpp` | No input-mapping layer yet | An input-action mapping abstraction |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
-| No automated tests | repo-wide | No harness yet | A `tests/` target (esp. for `SlotMap`, math) |
+| ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
 | Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
-| Projection matrices built in backend | `metal_renderer.mm` | Working perspective path lives there (ADR-0009) | Move projection math engine-side (`Mat4`) |
+| ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 
 ---

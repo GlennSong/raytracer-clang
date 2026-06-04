@@ -21,7 +21,23 @@ SRCS = \
 	$(SRC_DIR)/kdtree.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
-.PHONY: all release clean
+# Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
+# engine .cpp units the tests exercise. No GPU/windowing deps, so this builds
+# and runs anywhere the offline tracer does (including Linux CI).
+TEST_DIR = tests
+TEST_SRCS = \
+	$(TEST_DIR)/main.cpp \
+	$(TEST_DIR)/test_math.cpp \
+	$(TEST_DIR)/test_slot_map.cpp \
+	$(TEST_DIR)/test_sparse_set.cpp \
+	$(TEST_DIR)/test_world.cpp \
+	$(TEST_DIR)/test_clock.cpp
+TEST_ENGINE_SRCS = \
+	$(SRC_DIR)/engine/world.cpp \
+	$(SRC_DIR)/engine/clock.cpp
+TEST_TARGET = run_tests
+
+.PHONY: all release test clean
 
 all: CXXFLAGS += $(DEBUG_FLAGS)
 all: $(TARGET)
@@ -38,5 +54,12 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+test: CXXFLAGS += $(DEBUG_FLAGS)
+test: $(TEST_TARGET)
+	./$(TEST_TARGET)
+
+$(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET)

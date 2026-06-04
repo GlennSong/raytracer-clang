@@ -2,6 +2,7 @@ build/
 build-cmake/
 raytracer
 viewer
+run_tests
 *.ppm
 *.png
 settings.json

@@ -26,6 +26,23 @@ add_executable(raytracer
 target_compile_options(raytracer PRIVATE -Wall -Wextra -Wpedantic)
 
 # ============================================================
+# Unit tests (no GPU dependencies)
+# ============================================================
+add_executable(run_tests
+    tests/main.cpp
+    tests/test_math.cpp
+    tests/test_slot_map.cpp
+    tests/test_sparse_set.cpp
+    tests/test_world.cpp
+    tests/test_clock.cpp
+    src/engine/world.cpp
+    src/engine/clock.cpp
+)
+target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
+enable_testing()
+add_test(NAME unit_tests COMMAND run_tests)
+
+# ============================================================
 # Interactive viewer (GPU + windowing)
 # ============================================================
 find_package(glfw3 REQUIRED)
