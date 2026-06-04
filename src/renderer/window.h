@@ -54,8 +54,12 @@ public:
     // keeps painting instead of freezing while the user drags its edge.
     void setDrawCallback(std::function<void()> callback);
 
-private:
+    // Opaque implementation, defined in window.cpp. Public only so the
+    // file-local platform callbacks there can name the type; its members and
+    // the impl pointer below remain implementation details.
     struct Impl;
+
+private:
     std::unique_ptr<Impl> impl;
 };
 
