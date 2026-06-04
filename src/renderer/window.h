@@ -58,6 +58,13 @@ public:
     // keeps painting instead of freezing while the user drags its edge.
     void setDrawCallback(std::function<void()> callback);
 
+    // Debug-UI (Dear ImGui) GLFW-backend hooks — see ADR-0011. No-ops unless
+    // the build defines RT_ENABLE_IMGUI. newDebugUiFrame() is called from
+    // pollEvents; init/shutdown bracket the app lifetime.
+    void initDebugUi();
+    void newDebugUiFrame();
+    void shutdownDebugUi();
+
     // Opaque implementation, defined in window.cpp. Public only so the
     // file-local platform callbacks there can name the type; its members and
     // the impl pointer below remain implementation details.

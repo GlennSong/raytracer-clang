@@ -7,6 +7,7 @@
 #include "engine/systems/camera_system.h"
 #include "engine/systems/motion_system.h"
 #include "engine/systems/render_system.h"
+#include "engine/systems/debug_overlay_system.h"
 #include "log.h"
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
@@ -185,6 +186,7 @@ int main() {
     app.addSystem<CameraSystem>();
     app.addSystem<MotionSystem>();
     app.addSystem<RenderSystem>();
+    app.addSystem<DebugOverlaySystem>();   // inert unless built with ImGui
 
     app.run();
     return 0;

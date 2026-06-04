@@ -409,9 +409,33 @@ void MetalRenderer::endFrame() {
         issueDraw(dc);
     }
 
+    // Debug UI (ADR-0011) records last, over the scene, into the same encoder.
+    // NOTE: this backend builds the encoder here in endFrame, so ImGui's
+    // new-frame / draw-data placement must be reconciled with that deferred
+    // structure when implemented (see ADR-0011).
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui::Render();
+    //   ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+    //       impl->currentCommandBuffer, impl->currentEncoder);
+#endif
+
     [impl->currentEncoder endEncoding];
     [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];
     [impl->currentCommandBuffer commit];
+}
+
+void MetalRenderer::initDebugUi(void* /*windowHandle*/) {
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui::CreateContext(); ImGui::StyleColorsDark();
+    //   ImGui_ImplMetal_Init(impl->device);
+    // Runs before Window::initDebugUi (which attaches the GLFW backend).
+#endif
+}
+
+void MetalRenderer::shutdownDebugUi() {
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui_ImplMetal_Shutdown(); ImGui::DestroyContext();
+#endif
 }
 
 std::unique_ptr<Renderer> Renderer::create() {

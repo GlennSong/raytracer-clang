@@ -19,18 +19,23 @@ Standing code rules live in `AGENTS.md`.
 Items that make every subsequent feature faster to build and safer to change.
 
 ### 1.1 ImGui integration
-**Status:** Not started
+**Status:** Architecture laid (ADR-0011); macOS backend glue pending.
 **Why first:** Debug UI, parameter tweaking, entity inspection, and an in-game
 console all fall out of a single integration. Every subsequent tier benefits
 from runtime-tunable controls. ImGui already ships GLFW + Metal backends —
 exactly our stack.
 
 **Scope:**
-- Add ImGui as a vendored dependency (or git submodule).
-- Wire up the GLFW + Metal backends to `Window` and `MetalRenderer`.
-- Expose an `ImGuiSystem` so any `System` can emit ImGui calls in its `render`
-  hook.
-- Build a minimal debug overlay: FPS counter, entity count, camera state.
+- ✅ Seam designed (ADR-0011): ImGui *core* callable by systems in `render()`;
+  ImGui's GLFW/Metal *backends* stay behind `Window`/`Renderer`. No-op hooks
+  added (`initDebugUi`/`shutdownDebugUi`/`newDebugUiFrame`), wired in
+  `Application`, with a `DebugOverlaySystem` (FPS/entities/camera) that is inert
+  until enabled.
+- ✅ Build flag `RT_ENABLE_IMGUI` (CMake `option`, OFF) + submodule layout —
+  Linux/offline/tests stay green; macOS lights it up.
+- ⏳ Fill the `ImGui_ImplGlfw_*` / `ImGui_ImplMetal_*` TODOs in `window.cpp` /
+  `metal_renderer.mm` and verify on a Mac (add the `third_party/imgui` submodule).
+- ⏳ In-game console wired to a command registry (after the base overlay).
 
 **Delivers for free:**
 - **System font rendering** — ImGui bundles a bitmap font and loads TTFs via
@@ -109,16 +114,23 @@ when the fly camera (2.2) lands (its natural consumer).
 editor.
 
 ### 2.2 Free-fly / FPS camera
-**Status:** Not started
+**Status:** Done (engine-side) — `FlyCameraController` + `CameraController` seam;
+orbit migrated onto it and off direct `InputState`. Feel/sensitivity to be tuned
+on a macOS viewer build.
 **Why:** The orbit camera can't navigate generated cities or terrain. A
 free-fly camera (WASD + mouse look) is essential for exploring procedurally
 generated worlds.
 
 **Scope:**
-- A `FlyCameraController` that reads input actions (2.1) and produces a
-  `CameraState`.
-- Collision-aware movement (once physics lands, 2.3).
-- Toggle between orbit and fly cameras at runtime.
+- ✅ A `CameraController` seam (`engine/camera/`) with `CameraInput`; `FlyCamera`
+  and `OrbitCamera` controllers both implement it. Pure/window-free, unit-tested.
+- ✅ Input routed through the action layer (2.1): movement/look/boost/toggles as
+  actions/axes; **gamepad-drivable for free** (sticks/triggers), and the orbit
+  camera no longer reads `InputState` directly. Mouse-look/scroll come from the
+  pointer (unbounded, so not normalized actions).
+- ✅ Runtime toggle between orbit and fly (`Tab` / gamepad Back); per-mode pose
+  and projection persisted.
+- ⏳ Collision-aware movement deferred until physics lands (2.3).
 
 **Depends on:** Input-action mapping (2.1). Enhanced by ImGui (1.1) for camera
 settings.

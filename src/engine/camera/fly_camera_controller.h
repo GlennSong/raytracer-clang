@@ -1,0 +1,29 @@
+#ifndef RAYTRACER_ENGINE_FLY_CAMERA_CONTROLLER_H
+#define RAYTRACER_ENGINE_FLY_CAMERA_CONTROLLER_H
+
+#include "camera_controller.h"
+
+// Free-fly / FPS camera: the camera is a free agent in space. Look deltas rotate
+// the view (yaw/pitch); move axes translate along the facing direction (forward/
+// strafe) and world up. The camera for traversing large/generated worlds
+// (ROADMAP 2.2).
+class FlyCameraController : public CameraController {
+public:
+    Vec3 eye{0, 1.5, 8};
+    Real yaw = 0.0;     // degrees; 0 looks down -Z
+    Real pitch = 0.0;   // degrees
+    Real fovDegrees = 60.0;
+    Real moveSpeed = 5.0;
+    Real boostMultiplier = 4.0;
+
+    void update(const CameraInput& input, Real dt) override;
+    CameraState cameraState(float aspect) const override;
+
+    Vec3 forward() const;
+    Vec3 right() const;
+
+private:
+    static constexpr Real PITCH_LIMIT = 89.0;
+};
+
+#endif

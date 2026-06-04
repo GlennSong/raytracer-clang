@@ -37,10 +37,13 @@ add_executable(run_tests
     tests/test_clock.cpp
     tests/test_input_map.cpp
     tests/test_player_input.cpp
+    tests/test_camera.cpp
     src/engine/world.cpp
     src/engine/clock.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
+    src/engine/camera/orbit_camera_controller.cpp
+    src/engine/camera/fly_camera_controller.cpp
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 enable_testing()
@@ -54,7 +57,6 @@ find_package(glfw3 REQUIRED)
 set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
-    src/renderer/orbit_camera.cpp
     src/renderer/settings.cpp
     src/engine/clock.cpp
     src/engine/world.cpp
@@ -62,10 +64,13 @@ set(VIEWER_SOURCES
     src/engine/application.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
+    src/engine/camera/orbit_camera_controller.cpp
+    src/engine/camera/fly_camera_controller.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/dev_control_system.cpp
+    src/engine/systems/debug_overlay_system.cpp
 )
 
 # Platform-specific renderer backend
@@ -102,4 +107,31 @@ if(APPLE)
         src/renderer/metal/metal_renderer.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
+endif()
+
+# ============================================================
+# Dear ImGui debug UI (ADR-0011) — off by default.
+# When ON: add the submodule at third_party/imgui, compile its core + the
+# glfw/metal backends, and define RT_ENABLE_IMGUI. The seam in window.cpp /
+# metal_renderer.mm / DebugOverlaySystem lights up; off, they are no-ops.
+# ============================================================
+option(RT_ENABLE_IMGUI "Build the viewer with Dear ImGui debug UI" OFF)
+if(RT_ENABLE_IMGUI)
+    set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
+    target_sources(viewer PRIVATE
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    )
+    if(APPLE)
+        target_sources(viewer PRIVATE ${IMGUI_DIR}/backends/imgui_impl_metal.mm)
+        set_source_files_properties(
+            ${IMGUI_DIR}/backends/imgui_impl_metal.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+        )
+    endif()
+    target_include_directories(viewer PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+    target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)
 endif()

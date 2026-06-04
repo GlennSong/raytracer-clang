@@ -20,6 +20,11 @@ bool Application::initialize(const Config& config) {
         return false;
     }
 
+    // Debug UI (ADR-0011): renderer creates the ImGui context, then the window
+    // attaches its GLFW backend. Both no-ops without RT_ENABLE_IMGUI.
+    rendererPtr->initDebugUi(window.nativeWindowHandle());
+    window.initDebugUi();
+
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
     return true;
 }
@@ -77,6 +82,10 @@ void Application::run() {
                 for (auto& system : systems) system->onEvent(event, ctx);
             }
             playerInputs.updateGamepads(window.getGamepads());
+            // The viewer's global actions (camera, dev controls) also follow the
+            // first gamepad, so a single controller drives the viewer without a
+            // player slot. Per-player gameplay input still flows via players.
+            inputMap.updateGamepad(window.getGamepads()[0]);
             for (auto& system : systems) system->update(ctx);
         }
 
@@ -103,5 +112,7 @@ void Application::run() {
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
+    window.shutdownDebugUi();
+    rendererPtr->shutdownDebugUi();
     rendererPtr->shutdown();
 }

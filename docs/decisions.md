@@ -368,6 +368,72 @@ the single authoritative `World`.
 
 ---
 
+## ADR-0011 — Dear ImGui for debug UI, behind the platform seams
+**Status:** Pending (architecture laid; backend integration is macOS work) · **Date:** 2026-06-04
+
+**Context.** The engine needs debug overlays, live parameter tuning, entity
+inspection, and an in-game console (ROADMAP 1.1). Dear ImGui is the standard
+immediate-mode choice and ships GLFW + Metal backends — exactly our stack. The
+question is how to integrate it without violating the platform-abstraction rule
+(ADR-0001: no windowing/graphics-backend symbols in engine/game code), and
+without breaking the Linux-buildable offline tracer + tests.
+
+**Decision.** Split ImGui by the same seam rule we use everywhere:
+- **ImGui *core* (`ImGui::Begin/Text/SliderFloat/...`) is portable** and may be
+  called by engine/game systems in their `render()` hook. This is the whole
+  point of immediate-mode UI; wrapping it in a neutral abstraction would defeat
+  it. It is *not* a graphics/windowing backend, so it does not breach ADR-0001.
+- **ImGui's *platform backends* stay behind the seams.** `ImGui_ImplGlfw_*`
+  lives only in `window.cpp` (it needs the `GLFWwindow*`); `ImGui_ImplMetal_*`
+  lives only in `metal_renderer.mm` (it needs the device/command buffer).
+  Neither leaks into engine code.
+
+Frame flow (no extra bracketing system needed): `Window` runs the GLFW
+new-frame in `pollEvents`; the Metal backend brackets ImGui *inside*
+`beginFrame()`/`endFrame()` (Metal new-frame + `ImGui::NewFrame()` after begin;
+`ImGui::Render()` + draw-data submit before present). Systems therefore just
+emit ImGui calls in `render()` between the engine's existing begin/end.
+
+Seam surface (no-ops unless built with ImGui):
+- `Renderer::initDebugUi(void* nativeWindow)` / `shutdownDebugUi()` — Metal
+  side; new-frame/submit are internal to begin/endFrame.
+- `Window::initDebugUi()` / `newDebugUiFrame()` / `shutdownDebugUi()` — GLFW side.
+- `DebugOverlaySystem` (engine) — the agreed home for debug UI; a no-op `System`
+  unless `RT_ENABLE_IMGUI` is defined, then it draws the base overlay
+  (FPS, entity count, camera). Other systems may also emit ImGui directly.
+
+**Build.** A CMake `option(RT_ENABLE_IMGUI ... OFF)`. Off (default): the seam
+methods are no-ops, no dependency, nothing changes — Linux/offline/tests stay
+green. On: add ImGui as a git submodule, compile its core + the glfw/metal
+backends, and define `RT_ENABLE_IMGUI`.
+
+**Vendoring.** Git submodule (`third_party/imgui`) pinned to a release tag —
+keeps our tree clean and updates explicit. (Vendoring a copy was the
+alternative; submodule preferred for a single well-known dep.)
+
+**Alternatives considered.**
+- A neutral `DebugUi` wrapper interface over ImGui — rejected: reinvents
+  immediate-mode for no portability gain (we have one UI lib).
+- A dedicated bracketing `ImGuiSystem` registered first/last — rejected:
+  bracketing inside the renderer's begin/endFrame is simpler and order-proof.
+- Building it now in this environment — impossible: ImGui's backends need
+  GLFW + Metal, which don't compile in the Linux sandbox.
+
+**Consequences / tech debt.**
+- The backend glue (`ImGui_ImplGlfw_*` in `window.cpp`, `ImGui_ImplMetal_*` in
+  `metal_renderer.mm`) is **macOS-only and currently stubbed with TODO markers**
+  — it must be written and verified on a Mac. The engine-side seam, the
+  build option, and `DebugOverlaySystem`'s no-op path are in place and compile.
+- Modal-resize repaint calls `renderFrame` without a preceding `pollEvents`, so
+  the GLFW new-frame may be skipped for those repaints; guard the ImGui frame
+  accordingly when implementing (documented here so it isn't a surprise).
+
+**Revisit trigger.** Implementing the macOS backend glue (flip the option, add
+the submodule, fill the TODOs); or adding a second render backend (give it the
+same `initDebugUi`/`shutdownDebugUi` treatment).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -377,7 +443,7 @@ to be replaced; listed here so they stay visible.
 |---|---|---|---|
 | `RenderView` shared resource | `engine/system.h` | Minimal stand-in for engine resources | A real ECS resource/blackboard (ADR-0006) |
 | `MotionSystem` does simple Euler integration | `engine/systems/motion_system.cpp` | Placeholder kinematics, not real physics | A physics/collision system (Step 6) |
-| ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` binds actions with `bind.<action>` Settings overrides. (Orbit camera WASD / `P` toggle still direct — migrate with the fly camera.)* | — |
+| ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1, 2.2): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` and `CameraSystem` (orbit + fly) drive entirely off actions, gamepad included.* | — |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
 | Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |

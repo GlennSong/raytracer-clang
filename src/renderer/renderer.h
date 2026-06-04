@@ -88,6 +88,14 @@ public:
                           const RenderMaterial& material) = 0;
     virtual void endFrame() = 0;
 
+    // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a
+    // backend implements them and the build defines RT_ENABLE_IMGUI; engine
+    // code never sees ImGui types. The per-frame new-frame/submit are handled
+    // internally inside beginFrame()/endFrame(); only setup/teardown are here.
+    // windowHandle is the same opaque native pointer passed to initialize().
+    virtual void initDebugUi(void* /*windowHandle*/) {}
+    virtual void shutdownDebugUi() {}
+
     static std::unique_ptr<Renderer> create();
 };
 

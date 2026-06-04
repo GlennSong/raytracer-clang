@@ -29,6 +29,9 @@ public:
                   const RenderMaterial& material) override;
     void endFrame() override;
 
+    void initDebugUi(void* windowHandle) override;
+    void shutdownDebugUi() override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

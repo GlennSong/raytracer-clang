@@ -283,6 +283,8 @@ void Window::pollEvents() {
     double now = glfwGetTime();
     impl->deltaTime = now - impl->lastFrameTime;
     impl->lastFrameTime = now;
+
+    newDebugUiFrame();   // ImGui GLFW new-frame (no-op without RT_ENABLE_IMGUI)
 }
 
 void Window::getSize(int& width, int& height) const {
@@ -321,4 +323,26 @@ double Window::getDeltaTime() const {
 
 void Window::setDrawCallback(std::function<void()> callback) {
     impl->drawCallback = std::move(callback);
+}
+
+// Debug-UI GLFW backend (ADR-0011). The ImGui platform backend lives here, the
+// one file that owns the GLFWwindow*. Filled in on macOS; no-op without ImGui.
+void Window::initDebugUi() {
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui_ImplGlfw_InitForOther(impl->window, true);
+    // Requires the ImGui context to already exist (Renderer::initDebugUi runs
+    // first). Installs ImGui's own GLFW input callbacks.
+#endif
+}
+
+void Window::newDebugUiFrame() {
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui_ImplGlfw_NewFrame();
+#endif
+}
+
+void Window::shutdownDebugUi() {
+#ifdef RT_ENABLE_IMGUI
+    // TODO(macos): ImGui_ImplGlfw_Shutdown();
+#endif
 }
