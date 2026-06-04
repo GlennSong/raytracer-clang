@@ -9,6 +9,12 @@ make clean      # remove build artifacts
 ./raytracer     # renders to output.ppm
 ```
 
+## Planning
+
+See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D
+infrastructure → content pipeline → procedural generation). Architecture
+decisions live in `docs/decisions.md`.
+
 ## Key Conventions
 
 - C++17, clang++, standard library only — no external deps
