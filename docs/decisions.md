@@ -164,33 +164,38 @@ vs templated/mixed precision.
 
 ---
 
-## ADR-0006 — Entity model: moving toward a lightweight ECS
-**Status:** Pending · **Date:** 2026-06-03
+## ADR-0006 — Entity model: a lightweight sparse-set ECS
+**Status:** Accepted · **Date:** 2026-06-03
 
-**Context.** The world is currently a `std::vector<Entity>` of fixed structs
+**Context.** The world was a `std::vector<Entity>` of fixed structs
 (`Transform` + render fields + velocity). For 2D/3D/physics/simulation
 generality we want game type to be a *configuration* of components, not a fork.
 
-**Decision (in principle).** Adopt an ECS: entities as `Handle<Entity>` with
-generation tracking, components in per-type storage (sparse-set / `SlotMap`),
-systems querying components. Build a **pragmatic** sparse-set ECS — enough
-flexibility without heavyweight archetype-migration machinery. Not yet built;
-sequenced after the core primitives (ADR-0007).
+**Decision.** Adopted a pragmatic sparse-set ECS. Entities are
+`Handle<EntityTag>` backed by a `SlotMap` (generation-checked); components
+(`Transform`, `PrevTransform`, `Velocity`, `Renderable`) live in per-type
+`SparseSet`s; systems query via `World::each<Ts...>(fn)` receiving
+`(Entity, Ts&...)`. "Simulated" = has `Velocity`; every renderable carries
+`PrevTransform` so render interpolation uses one uniform query. Sparse sets, not
+archetypes — flexibility without heavyweight migration machinery.
 
 **Alternatives considered.**
-- Lightweight optional-components on the current `World` — viable, lower
-  ceiling; the user leaned ECS.
+- Lightweight optional-components on the old `World` — viable, lower ceiling.
 - Scheduler-only with fixed entity structs — rejected: component set baked in,
   poor fit for 2D vs 3D vs sim.
+- Archetype ECS (EnTT groups, etc.) — rejected: more machinery than a light
+  engine needs now.
 
-**Consequences / tech debt.** Until built, `Entity` is a fixed struct and
-`MotionSystem` wraps `World::step` (see register). The `System`/`FrameContext`
-seam (ADR-0004) was designed to survive this migration without signature
-changes.
+**Consequences / tech debt.** The fixed `Entity` struct and `World::step` are
+gone; `MotionSystem`/`RenderSystem` query components. The `System`/
+`FrameContext` seam (ADR-0004) survived unchanged, as designed. Known limits:
+`each` forbids structural mutation of the iterated component types mid-callback
+(documented contract); it iterates the first listed pool (no "smallest pool"
+optimization); `each` always passes `Entity` (no component-only overload).
 
-**Revisit trigger.** Build it (Step 3). If entity counts stay tiny and
-component variety low, reconsider whether full ECS is worth its complexity vs
-lightweight components.
+**Revisit trigger.** Entity counts/iteration showing up in a profile (→ pick
+smallest pool, or groups); needing safe structural edits during iteration
+(→ deferred command buffer).
 
 ---
 
@@ -263,7 +268,7 @@ to be replaced; listed here so they stay visible.
 | Item | Where | Why interim | Replace with |
 |---|---|---|---|
 | `RenderView` shared resource | `engine/system.h` | Minimal stand-in for engine resources | A real ECS resource/blackboard (ADR-0006) |
-| `MotionSystem` wraps `World::step` | `engine/systems/motion_system.cpp` | Kinematics live on `World` pre-ECS | A physics/integration system over components |
+| `MotionSystem` does simple Euler integration | `engine/systems/motion_system.cpp` | Placeholder kinematics, not real physics | A physics/collision system (Step 6) |
 | Hardcoded keybindings | `engine/systems/dev_control_system.cpp` | No input-mapping layer yet | An input-action mapping abstraction |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | No automated tests | repo-wide | No harness yet | A `tests/` target (esp. for `SlotMap`, math) |

@@ -37,6 +37,7 @@ set(VIEWER_SOURCES
     src/renderer/settings.cpp
     src/engine/clock.cpp
     src/engine/world.cpp
+    src/engine/components.cpp
     src/engine/application.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/motion_system.cpp

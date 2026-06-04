@@ -1,4 +1,5 @@
 #include "render_system.h"
+#include "../components.h"
 
 #include <algorithm>
 
@@ -18,10 +19,12 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.renderer.setCamera(ctx.view.camera);
     ctx.renderer.setLights(ctx.view.lights, ctx.view.exposure);
 
-    for (const Entity& e : ctx.world.entities()) {
-        Transform t = ctx.world.renderTransform(e, ctx.interpolation);
-        ctx.renderer.drawMesh(e.mesh, t.matrix(), e.material);
-    }
+    Real alpha = ctx.interpolation;
+    ctx.world.each<Transform, PrevTransform, Renderable>(
+        [&](Entity, Transform& t, PrevTransform& prev, Renderable& r) {
+            Mat4 model = lerp(prev.value, t, alpha).matrix();
+            ctx.renderer.drawMesh(r.mesh, model, r.material);
+        });
 }
 
 void RenderSystem::onStop(FrameContext& ctx) {

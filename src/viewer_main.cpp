@@ -1,6 +1,7 @@
 #include "math.h"
 #include "renderer/renderer.h"
 #include "engine/world.h"
+#include "engine/components.h"
 #include "engine/application.h"
 #include "engine/systems/dev_control_system.h"
 #include "engine/systems/camera_system.h"
@@ -87,14 +88,19 @@ RenderMesh createBoxMesh(Vec3 size) {
 // Populates the Cornell-box scene: static room + spheres and a spinning box,
 // plus the lights the render system reads from the shared RenderView.
 static void buildScene(World& world, Renderer& renderer, RenderView& view) {
+    // Every renderable carries a PrevTransform so the render system can use one
+    // uniform query; static entities simply never have it updated.
     auto addStatic = [&](MeshHandle mesh, const Vec3& position,
                          const RenderMaterial& material) {
-        Entity e;
-        e.mesh = mesh;
-        e.material = material;
-        e.transform.position = position;
-        e.simulated = false;
-        world.add(e);
+        Entity e = world.create();
+        Transform t;
+        t.position = position;
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.mesh = mesh;
+        r.material = material;
+        world.add<Renderable>(e, r);
     };
 
     RenderMaterial whiteMat;
@@ -141,18 +147,24 @@ static void buildScene(World& world, Renderer& renderer, RenderView& view) {
     glassMat.opacity = 0.3f;
     addStatic(sphereHandle, Vec3(2.0, 1.0, 0.0), glassMat);
 
-    // Simulated: spins in place so the fixed timestep and time controls are
-    // visible. Real motion systems integrate the same velocity fields.
+    // Simulated: has a Velocity, so MotionSystem spins it in place — making the
+    // fixed timestep and time controls visible.
     RenderMaterial greenMat;
     greenMat.albedo = Vec3(0.2, 0.7, 0.2);
     greenMat.roughness = 0.5f;
-    Entity box;
-    box.mesh = renderer.uploadMesh(createBoxMesh(Vec3(1.5, 3.0, 1.5)));
-    box.material = greenMat;
-    box.transform.position = Vec3(3.0, 1.5, 2.0);
-    box.transform.rotation = Vec3(0.0, 0.4, 0.0);
-    box.angularVelocity = Vec3(0.0, 0.6, 0.3);
-    world.add(box);
+    Entity box = world.create();
+    Transform boxTransform;
+    boxTransform.position = Vec3(3.0, 1.5, 2.0);
+    boxTransform.rotation = Vec3(0.0, 0.4, 0.0);
+    world.add<Transform>(box, boxTransform);
+    world.add<PrevTransform>(box, PrevTransform{boxTransform});
+    Renderable boxRender;
+    boxRender.mesh = renderer.uploadMesh(createBoxMesh(Vec3(1.5, 3.0, 1.5)));
+    boxRender.material = greenMat;
+    world.add<Renderable>(box, boxRender);
+    Velocity boxVelocity;
+    boxVelocity.angular = Vec3(0.0, 0.6, 0.3);
+    world.add<Velocity>(box, boxVelocity);
 
     view.lights = {
         PointLight(Vec3(0, 7.0, 0), Vec3(1.0, 0.95, 0.9), 25.0f),
