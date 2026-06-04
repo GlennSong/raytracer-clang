@@ -220,6 +220,41 @@ handle usages then.
 
 ---
 
+## ADR-0008 — Defer a custom memory-management system
+**Status:** Deferred · **Date:** 2026-06-03
+
+**Context.** Question raised whether to build a memory-management system —
+pools, custom allocators (arena/stack), and per-subsystem tracking/leak
+detection — to manage and track objects in memory.
+
+**Decision.** Defer it. Pooled object storage is already provided by `SlotMap`
+(recycling slots, stable handles, generation-checked access); the ECS
+(ADR-0006) builds its component pools on it. Otherwise rely on RAII /
+smart pointers (per `AGENTS.md`) and the system allocator. A frame
+(linear/bump) arena is the first allocator we'd add — but only when transient
+per-frame allocation churn is actually measured. Broader allocators and memory
+tracking wait for profiling data or a hard constraint.
+
+**Alternatives considered.**
+- Build a frame arena now — rejected: no transient churn to put in it yet;
+  speculative.
+- Build a full allocator hierarchy + tracking now — rejected: premature without
+  profiling data; adds complexity and hides use-after-free/leaks from
+  AddressSanitizer/Valgrind, trading away memory-safety tooling for unproven
+  speed. Workloads are tiny, single-threaded, desktop (good system malloc).
+
+**Consequences / tech debt.**
+- No custom allocators and no per-subsystem memory budgets/leak tracking beyond
+  what sanitizers provide. If perf or budgets later bite, this is retrofit work.
+- `SlotMap` is the de facto pooling mechanism until then.
+
+**Revisit trigger.** Any of: (a) allocation cost shows up in a profile;
+(b) multithreading introduces allocator contention; (c) targeting a console or
+a fixed memory budget; (d) measurable transient per-frame churn — add a frame
+arena first, then targeted allocators with tracking as data dictates.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -235,6 +270,7 @@ to be replaced; listed here so they stay visible.
 | Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
+| No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
 
 ---
 
