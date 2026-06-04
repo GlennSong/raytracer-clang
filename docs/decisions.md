@@ -437,7 +437,7 @@ same `initDebugUi`/`shutdownDebugUi` treatment).
 ---
 
 ## ADR-0012 — Jolt physics, sealed behind a Jolt-free `PhysicsWorld`
-**Status:** Accepted (Step A — integration foundation) · **Date:** 2026-06-04
+**Status:** Accepted (Steps A + C done — foundation + ECS `PhysicsSystem`) · **Date:** 2026-06-04
 
 **Context.** The engine needs rigid bodies and collision (ROADMAP 2.3); Jolt was
 the chosen library. The questions for *how* to integrate: how to keep Jolt types
@@ -485,9 +485,9 @@ offline tracer, unit tests, and physics tests always configure.
 **Consequences / tech debt.**
 - Adds a real third-party dependency (engine/viewer scope; the offline tracer
   stays std-lib-only). Building it requires `git submodule update --init`.
-- **Step C still to come:** `RigidBody`/`Collider` components + a `PhysicsSystem`
-  stepping in `fixedUpdate` and writing back to `Transform`, retiring the
-  placeholder `MotionSystem`.
+- **Step C done:** `RigidBody`/`Collider` + `PhysicsSystem` step/write-back;
+  `MotionSystem` repositioned (kinematic mover, yields to physics) rather than
+  retired. Core logic is headless-tested.
 - **Collider debug-draw** needs a line/debug primitive (macOS/Metal) — deferred.
 - The wrapper currently exposes box/sphere shapes and basic body ops; capsule,
   mesh colliders, materials (friction/restitution), and contact events are
@@ -506,7 +506,7 @@ to be replaced; listed here so they stay visible.
 | Item | Where | Why interim | Replace with |
 |---|---|---|---|
 | `RenderView` shared resource | `engine/system.h` | Minimal stand-in for engine resources | A real ECS resource/blackboard (ADR-0006) |
-| `MotionSystem` does simple Euler integration | `engine/systems/motion_system.cpp` | Placeholder kinematics, not real physics | A physics/collision system (Step 6) |
+| ~~`MotionSystem` is a physics placeholder~~ | ~~`engine/systems/motion_system.cpp`~~ | *Repositioned (ROADMAP 2.3 Step C): not a placeholder — it is the kinematic mover for cheap, collision-free scripted motion. Dynamics live in `PhysicsSystem` (ADR-0012); MotionSystem yields any entity with a `RigidBody`.* | — |
 | ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1, 2.2): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` and `CameraSystem` (orbit + fly) drive entirely off actions, gamepad included.* | — |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |

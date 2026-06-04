@@ -3,6 +3,7 @@
 
 #include "../math.h"
 #include "../renderer/renderer.h"
+#include "physics/physics_world.h"
 
 // Position / orientation / scale. Compose into a model matrix with matrix().
 struct Transform {
@@ -44,6 +45,24 @@ struct Renderable {
 // engine does not define any other notion of "player".
 struct ControlledBy {
     int playerIndex = 0;
+};
+
+// Collision shape for a physics body. (ADR-0012; box/sphere for now.)
+enum class ColliderShape { Box, Sphere };
+struct Collider {
+    ColliderShape shape = ColliderShape::Box;
+    Vec3 halfExtent{0.5, 0.5, 0.5};   // used when shape == Box
+    Real radius = 0.5;                // used when shape == Sphere
+};
+
+// Marks an entity as simulated by the PhysicsSystem (ADR-0012). The body is
+// created from the entity's Transform + Collider; bodyId is filled in then.
+// PhysicsSystem owns the Transform of these entities — MotionSystem yields to
+// it — so an entity should not carry both a RigidBody and a script-driven
+// Velocity for the same motion.
+struct RigidBody {
+    BodyMotion motion = BodyMotion::Dynamic;
+    PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
 #endif

@@ -70,7 +70,12 @@ if(RT_ENABLE_PHYSICS)
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
+        tests/test_physics_system.cpp
         src/engine/physics/physics_world.cpp
+        src/engine/systems/physics_system.cpp
+        src/engine/systems/motion_system.cpp
+        src/engine/world.cpp
+        src/engine/components.cpp
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
@@ -103,6 +108,13 @@ set(VIEWER_SOURCES
     src/engine/systems/debug_overlay_system.cpp
 )
 
+if(RT_ENABLE_PHYSICS)
+    list(APPEND VIEWER_SOURCES
+        src/engine/physics/physics_world.cpp
+        src/engine/systems/physics_system.cpp
+    )
+endif()
+
 # Platform-specific renderer backend
 if(APPLE)
     enable_language(OBJCXX)
@@ -130,6 +142,11 @@ add_executable(viewer
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(viewer PRIVATE glfw ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
+
+if(RT_ENABLE_PHYSICS)
+    target_link_libraries(viewer PRIVATE Jolt)
+    target_compile_definitions(viewer PRIVATE RT_ENABLE_PHYSICS=1)
+endif()
 
 # Set Obj-C++ flags for .mm files
 if(APPLE)

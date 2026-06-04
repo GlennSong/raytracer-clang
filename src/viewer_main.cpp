@@ -8,6 +8,9 @@
 #include "engine/systems/motion_system.h"
 #include "engine/systems/render_system.h"
 #include "engine/systems/debug_overlay_system.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "engine/systems/physics_system.h"
+#endif
 #include "log.h"
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
@@ -167,6 +170,41 @@ static void buildScene(World& world, Renderer& renderer, RenderView& view) {
     boxVelocity.angular = Vec3(0.0, 0.6, 0.3);
     world.add<Velocity>(box, boxVelocity);
 
+#ifdef RT_ENABLE_PHYSICS
+    // Physics demo (ADR-0012): a dynamic sphere falls onto a static floor whose
+    // collider top sits at y=0, matching the visible floor. The spinning box
+    // above stays on MotionSystem — the two motion systems coexist.
+    {
+        Entity floor = world.create();
+        Transform floorTransform;
+        floorTransform.position = Vec3(0.0, -1.0, 0.0);
+        world.add<Transform>(floor, floorTransform);
+        Collider floorCollider;
+        floorCollider.shape = ColliderShape::Box;
+        floorCollider.halfExtent = Vec3(5.0, 1.0, 5.0);
+        world.add<Collider>(floor, floorCollider);
+        world.add<RigidBody>(floor, RigidBody{BodyMotion::Static, INVALID_PHYSICS_BODY});
+
+        Entity ball = world.create();
+        Transform ballTransform;
+        ballTransform.position = Vec3(0.5, 6.0, -1.0);
+        world.add<Transform>(ball, ballTransform);
+        world.add<PrevTransform>(ball, PrevTransform{ballTransform});
+        Collider ballCollider;
+        ballCollider.shape = ColliderShape::Sphere;
+        ballCollider.radius = 1.0;
+        world.add<Collider>(ball, ballCollider);
+        world.add<RigidBody>(ball, RigidBody{BodyMotion::Dynamic, INVALID_PHYSICS_BODY});
+        RenderMaterial ballMat;
+        ballMat.albedo = Vec3(1.0, 0.8, 0.2);
+        ballMat.roughness = 0.4f;
+        Renderable ballRender;
+        ballRender.mesh = sphereHandle;
+        ballRender.material = ballMat;
+        world.add<Renderable>(ball, ballRender);
+    }
+#endif
+
     view.lights = {
         PointLight(Vec3(0, 7.0, 0), Vec3(1.0, 0.95, 0.9), 25.0f),
         PointLight(Vec3(-3, 5, -3), Vec3(0.4, 0.5, 1.0), 10.0f)
@@ -184,7 +222,10 @@ int main() {
 
     app.addSystem<DevControlSystem>();
     app.addSystem<CameraSystem>();
-    app.addSystem<MotionSystem>();
+#ifdef RT_ENABLE_PHYSICS
+    app.addSystem<PhysicsSystem>();        // owns RigidBody entities
+#endif
+    app.addSystem<MotionSystem>();         // owns Velocity-only entities
     app.addSystem<RenderSystem>();
     app.addSystem<DebugOverlaySystem>();   // inert unless built with ImGui
 

@@ -164,11 +164,16 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
 - ✅ **Headless physics tests** (`physics_tests` CMake target): sphere falls,
   rests at radius height, determinism, initial velocity, static body, safe
   invalid handle — all green in Linux/CI.
-- ⏳ A `PhysicsSystem` stepping in `fixedUpdate` (deterministic, fits ADR-0002);
-  `RigidBody` / `Collider` components; entity↔`BodyId` map; write-back to
-  `Transform`. Retires the placeholder `MotionSystem`. (Step C)
+- ✅ **`PhysicsSystem` (Step C):** `RigidBody` / `Collider` components; creates
+  bodies from Transform+Collider; steps in `fixedUpdate` (deterministic, fits
+  ADR-0002); captures `PrevTransform` and writes simulated transforms back. Its
+  core (`createBodies`/`step`) takes a `World` directly, so it is unit-tested
+  headless. `MotionSystem` is **repositioned** as the kinematic mover (cheap,
+  collision-free scripted motion) and yields any entity that also has a
+  `RigidBody`. Viewer demo: a sphere falls onto the floor while the box keeps
+  spinning on MotionSystem.
 - ⏳ More shapes (capsule/mesh), materials (friction/restitution), contact
-  events.
+  events, Jolt kinematic bodies (script-driven motion that pushes dynamics).
 - ⏳ Debug visualization of colliders — needs a line/debug-draw primitive
   (macOS/Metal); deferred / minimal.
 
