@@ -21,6 +21,8 @@ enum class EventType {
     WindowMinimized,
     WindowRestored,
     WindowCloseRequested,
+    GamepadConnected,
+    GamepadDisconnected,
 };
 
 enum class KeyCode {
@@ -46,6 +48,7 @@ enum class MouseButton {
 //   MouseMoved                   -> x, y (cursor position)
 //   MouseScrolled                -> x, y (scroll offset)
 //   WindowResized/FramebufferResized -> width, height
+//   Gamepad{Connected,Disconnected}  -> gamepad (device id)
 struct Event {
     EventType type;
     KeyCode key = KeyCode::Unknown;
@@ -53,6 +56,7 @@ struct Event {
     MouseButton button = MouseButton::Left;
     double x = 0.0, y = 0.0;
     int width = 0, height = 0;
+    int gamepad = -1;
 
     explicit Event(EventType type) : type(type) {}
 };

@@ -36,9 +36,11 @@ add_executable(run_tests
     tests/test_world.cpp
     tests/test_clock.cpp
     tests/test_input_map.cpp
+    tests/test_player_input.cpp
     src/engine/world.cpp
     src/engine/clock.cpp
     src/engine/input/input_map.cpp
+    src/engine/input/player_input.cpp
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 enable_testing()
@@ -59,6 +61,7 @@ set(VIEWER_SOURCES
     src/engine/components.cpp
     src/engine/application.cpp
     src/engine/input/input_map.cpp
+    src/engine/input/player_input.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp

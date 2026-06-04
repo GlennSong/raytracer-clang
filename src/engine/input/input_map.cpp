@@ -4,9 +4,10 @@
 
 namespace {
 
-// Mouse buttons share the encoded-source space with keys; offset them past the
-// KeyCode range so the two never collide.
+// Mouse buttons and gamepad buttons share the encoded-source space with keys;
+// offset each past the others' range so encodings never collide.
 constexpr int MOUSE_SOURCE_BASE = 100000;
+constexpr int GAMEPAD_BUTTON_BASE = 200000;
 
 // Canonical KeyCode <-> name table. Order mirrors the enum for readability.
 const std::vector<std::pair<KeyCode, const char*>>& keyNameTable() {
@@ -59,6 +60,25 @@ int InputMap::encodeMouse(MouseButton button) {
     return MOUSE_SOURCE_BASE + static_cast<int>(button);
 }
 
+int InputMap::encodeGamepadButton(GamepadButton button) {
+    return GAMEPAD_BUTTON_BASE + static_cast<int>(button);
+}
+
+Real InputMap::applyDeadzone(Real value) const {
+    Real magnitude = std::abs(value);
+    if (magnitude < deadzone) return 0.0;
+    // Rescale (deadzone, 1] back to (0, 1] so motion starts smoothly at the edge
+    // of the dead region rather than jumping.
+    Real sign = value < 0.0 ? -1.0 : 1.0;
+    Real span = 1.0 - deadzone;
+    if (span <= 0.0) return value;
+    return sign * std::min(Real(1.0), (magnitude - deadzone) / span);
+}
+
+void InputMap::setDeadzone(Real value) {
+    deadzone = std::clamp(value, Real(0.0), Real(0.95));
+}
+
 void InputMap::bindButton(const std::string& action, KeyCode key) {
     buttons[action].push_back(encodeKey(key));
 }
@@ -67,8 +87,18 @@ void InputMap::bindButton(const std::string& action, MouseButton button) {
     buttons[action].push_back(encodeMouse(button));
 }
 
+void InputMap::bindButton(const std::string& action, GamepadButton button) {
+    buttons[action].push_back(encodeGamepadButton(button));
+}
+
 void InputMap::bindAxis(const std::string& axis, KeyCode key, Real scale) {
-    axes[axis].emplace_back(encodeKey(key), scale);
+    axes[axis].push_back({AxisContribution::Kind::Digital, encodeKey(key), scale});
+}
+
+void InputMap::bindAxis(const std::string& axis, GamepadAxis gamepadAxis,
+                        Real scale) {
+    axes[axis].push_back({AxisContribution::Kind::Gamepad,
+                          static_cast<int>(gamepadAxis), scale});
 }
 
 bool InputMap::bindButtonByName(const std::string& action,
@@ -127,6 +157,29 @@ void InputMap::processEvent(const Event& event) {
     }
 }
 
+void InputMap::updateGamepad(const GamepadState& pad) {
+    // Buttons: derive edges by diffing this frame against the last. A
+    // disconnected pad reads all-false, so its buttons release cleanly.
+    for (std::size_t i = 0; i < GAMEPAD_BUTTON_COUNT; i++) {
+        bool down = pad.connected && pad.buttons[i];
+        bool was = prevGamepadButtons[i];
+        int source = GAMEPAD_BUTTON_BASE + static_cast<int>(i);
+        if (down && !was) {
+            heldSources.insert(source);
+            pressedSources.insert(source);
+        } else if (!down && was) {
+            heldSources.erase(source);
+            releasedSources.insert(source);
+        }
+        prevGamepadButtons[i] = down;
+    }
+
+    // Axes: store deadzoned values for axis() to read.
+    for (std::size_t i = 0; i < GAMEPAD_AXIS_COUNT; i++) {
+        gamepadAxisValues[i] = pad.connected ? applyDeadzone(pad.axes[i]) : 0.0;
+    }
+}
+
 bool InputMap::anyBoundSourceIn(const std::string& action,
                                 const std::unordered_set<int>& sources) const {
     auto it = buttons.find(action);
@@ -152,7 +205,12 @@ Real InputMap::axis(const std::string& name) const {
     auto it = axes.find(name);
     if (it == axes.end()) return 0.0;
     Real value = 0.0;
-    for (const auto& contribution : it->second)
-        if (heldSources.count(contribution.first)) value += contribution.second;
+    for (const auto& contribution : it->second) {
+        if (contribution.kind == AxisContribution::Kind::Digital) {
+            if (heldSources.count(contribution.source)) value += contribution.scale;
+        } else {
+            value += contribution.scale * gamepadAxisValues[contribution.source];
+        }
+    }
     return std::clamp(value, Real(-1.0), Real(1.0));
 }

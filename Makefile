@@ -32,11 +32,13 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sparse_set.cpp \
 	$(TEST_DIR)/test_world.cpp \
 	$(TEST_DIR)/test_clock.cpp \
-	$(TEST_DIR)/test_input_map.cpp
+	$(TEST_DIR)/test_input_map.cpp \
+	$(TEST_DIR)/test_player_input.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/world.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
-	$(SRC_DIR)/engine/input/input_map.cpp
+	$(SRC_DIR)/engine/input/input_map.cpp \
+	$(SRC_DIR)/engine/input/player_input.cpp
 TEST_TARGET = run_tests
 
 .PHONY: all release test clean

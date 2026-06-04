@@ -24,6 +24,20 @@ Event mouseDown(MouseButton button) {
     return e;
 }
 
+GamepadState pad() {
+    GamepadState s;
+    s.connected = true;
+    return s;
+}
+
+void setButton(GamepadState& s, GamepadButton b, bool down) {
+    s.buttons[static_cast<std::size_t>(b)] = down;
+}
+
+void setAxis(GamepadState& s, GamepadAxis a, float v) {
+    s.axes[static_cast<std::size_t>(a)] = v;
+}
+
 constexpr Real EPS = 1e-9;
 
 }  // namespace
@@ -146,6 +160,98 @@ TEST_CASE(input_key_name_round_trip) {
 
     CHECK(std::string(keyCodeName(KeyCode::Space)) == "Space");
     CHECK(std::string(keyCodeName(KeyCode::Up)) == "Up");
+}
+
+TEST_CASE(input_gamepad_button_edges) {
+    InputMap map;
+    map.bindButton("jump", GamepadButton::A);
+
+    // Press: held + pressed edge derived from the polled snapshot.
+    GamepadState s = pad();
+    setButton(s, GamepadButton::A, true);
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(map.pressed("jump"));
+    CHECK(map.held("jump"));
+
+    // Next frame still down: held, but no fresh press edge.
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(!map.pressed("jump"));
+    CHECK(map.held("jump"));
+
+    // Release.
+    GamepadState up = pad();
+    map.beginFrame();
+    map.updateGamepad(up);
+    CHECK(map.released("jump"));
+    CHECK(!map.held("jump"));
+}
+
+TEST_CASE(input_gamepad_axis_with_deadzone) {
+    InputMap map;
+    map.bindAxis("move_x", GamepadAxis::LeftX, 1.0);
+
+    // Inside the default 0.15 deadzone reads as zero.
+    GamepadState small = pad();
+    setAxis(small, GamepadAxis::LeftX, 0.1f);
+    map.beginFrame();
+    map.updateGamepad(small);
+    CHECK_APPROX(map.axis("move_x"), 0.0, 1e-6);
+
+    // 0.575 past a 0.15 deadzone rescales to 0.5 ((0.575-0.15)/0.85).
+    GamepadState half = pad();
+    setAxis(half, GamepadAxis::LeftX, 0.575f);
+    map.beginFrame();
+    map.updateGamepad(half);
+    CHECK_APPROX(map.axis("move_x"), 0.5, 1e-5);
+
+    // Full deflection saturates at 1.
+    GamepadState full = pad();
+    setAxis(full, GamepadAxis::LeftX, 1.0f);
+    map.beginFrame();
+    map.updateGamepad(full);
+    CHECK_APPROX(map.axis("move_x"), 1.0, 1e-6);
+}
+
+TEST_CASE(input_axis_mixes_keyboard_and_gamepad) {
+    InputMap map;
+    map.bindAxis("move", KeyCode::W, 1.0);
+    map.bindAxis("move", GamepadAxis::LeftY, -1.0);
+
+    // Keyboard contribution alone.
+    map.beginFrame();
+    map.processEvent(keyDown(KeyCode::W));
+    map.updateGamepad(pad());
+    CHECK_APPROX(map.axis("move"), 1.0, EPS);
+
+    // Stick pushing the other way cancels the held key.
+    GamepadState s = pad();
+    setAxis(s, GamepadAxis::LeftY, 1.0f);  // *-1 scale -> -1, plus +1 key = 0
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK_APPROX(map.axis("move"), 0.0, 1e-6);
+}
+
+TEST_CASE(input_gamepad_disconnect_clears_state) {
+    InputMap map;
+    map.bindButton("fire", GamepadButton::RightBumper);
+    map.bindAxis("aim", GamepadAxis::RightX, 1.0);
+
+    GamepadState s = pad();
+    setButton(s, GamepadButton::RightBumper, true);
+    setAxis(s, GamepadAxis::RightX, 1.0f);
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(map.held("fire"));
+
+    // A disconnected snapshot releases the button and zeroes axes.
+    GamepadState gone;  // connected == false
+    map.beginFrame();
+    map.updateGamepad(gone);
+    CHECK(!map.held("fire"));
+    CHECK(map.released("fire"));
+    CHECK_APPROX(map.axis("aim"), 0.0, EPS);
 }
 
 TEST_CASE(input_bind_by_name) {

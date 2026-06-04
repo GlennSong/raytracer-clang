@@ -20,6 +20,7 @@ struct Window::Impl {
     GLFWwindow* window = nullptr;
     InputState input;
     std::vector<Event> events;
+    GamepadSet gamepads;
     std::function<void()> drawCallback;
     double lastMouseX = 0, lastMouseY = 0;
     double lastFrameTime = 0;
@@ -71,6 +72,29 @@ static MouseButton translateButton(int glfwButton) {
 
 static Window::Impl* implOf(GLFWwindow* window) {
     return static_cast<Window::Impl*>(glfwGetWindowUserPointer(window));
+}
+
+// Translate GLFW's gamepad snapshot into our backend-neutral one. Our
+// GamepadButton/GamepadAxis enums mirror GLFW's standard layout order, but we
+// map explicitly (and normalize triggers from GLFW's [-1, 1] to [0, 1]) so the
+// neutral types stay decoupled from GLFW values.
+static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
+    out.connected = true;
+    for (std::size_t i = 0; i < GAMEPAD_BUTTON_COUNT; i++)
+        out.buttons[i] = (in.buttons[i] == GLFW_PRESS);
+
+    out.axes[static_cast<std::size_t>(GamepadAxis::LeftX)] =
+        in.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
+    out.axes[static_cast<std::size_t>(GamepadAxis::LeftY)] =
+        in.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
+    out.axes[static_cast<std::size_t>(GamepadAxis::RightX)] =
+        in.axes[GLFW_GAMEPAD_AXIS_RIGHT_X];
+    out.axes[static_cast<std::size_t>(GamepadAxis::RightY)] =
+        in.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y];
+    out.axes[static_cast<std::size_t>(GamepadAxis::LeftTrigger)] =
+        (in.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
+    out.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] =
+        (in.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
 }
 
 static void onCursorPos(GLFWwindow* window, double xpos, double ypos) {
@@ -233,6 +257,29 @@ void Window::pollEvents() {
     impl->input.keyUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
     impl->input.keyDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
 
+    // Poll every gamepad slot; surface connect/disconnect transitions as events.
+    for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
+        GamepadState& slot = impl->gamepads[jid];
+        bool wasConnected = slot.connected;
+
+        GLFWgamepadstate gs;
+        if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &gs)) {
+            fillGamepadState(slot, gs);
+        } else {
+            slot = GamepadState{};
+        }
+
+        if (slot.connected && !wasConnected) {
+            Event event(EventType::GamepadConnected);
+            event.gamepad = jid;
+            impl->events.push_back(event);
+        } else if (!slot.connected && wasConnected) {
+            Event event(EventType::GamepadDisconnected);
+            event.gamepad = jid;
+            impl->events.push_back(event);
+        }
+    }
+
     double now = glfwGetTime();
     impl->deltaTime = now - impl->lastFrameTime;
     impl->lastFrameTime = now;
@@ -262,6 +309,10 @@ const InputState& Window::getInput() const {
 
 const std::vector<Event>& Window::getEvents() const {
     return impl->events;
+}
+
+const GamepadSet& Window::getGamepads() const {
+    return impl->gamepads;
 }
 
 double Window::getDeltaTime() const {

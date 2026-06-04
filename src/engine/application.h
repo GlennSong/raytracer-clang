@@ -55,6 +55,7 @@ private:
     SimClock clock;
     Settings settingsStore;
     InputMap inputMap;
+    PlayerInputs playerInputs;
     RenderView view;
     std::vector<std::unique_ptr<System>> systems;
 

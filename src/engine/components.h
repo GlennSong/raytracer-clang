@@ -39,4 +39,12 @@ struct Renderable {
     RenderMaterial material;
 };
 
+// Associates an entity with a local player slot (ADR-0010). This is the only
+// bridge the engine provides between players and entities: the game tags
+// whatever entity it wants and reads the player's input via that index. The
+// engine does not define any other notion of "player".
+struct ControlledBy {
+    int playerIndex = 0;
+};
+
 #endif

@@ -2,6 +2,7 @@
 #define RAYTRACER_WINDOW_H
 
 #include "event.h"
+#include "gamepad.h"
 #include <string>
 #include <vector>
 #include <functional>
@@ -47,6 +48,9 @@ public:
 
     const InputState& getInput() const;
     const std::vector<Event>& getEvents() const;
+    // Polled gamepad snapshots, indexed by device id. Refreshed by pollEvents;
+    // connect/disconnect also surface as events in getEvents().
+    const GamepadSet& getGamepads() const;
     double getDeltaTime() const;
 
     // Invoked to redraw a frame. The platform calls this both from the normal

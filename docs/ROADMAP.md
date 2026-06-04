@@ -143,6 +143,36 @@ moving through generated environments without clipping through geometry.
 
 **Depends on:** ECS (done), benefits from ImGui (1.1) for physics debug viz.
 
+### 2.4 Gamepad & local-player input
+**Status:** Engine-side done (gamepad bindings, per-player input, `ControlledBy`);
+GLFW polling in `window.cpp` pending macOS verification with a real controller.
+See ADR-0010 for the engine/game boundary.
+**Why:** Multiple controllers (e.g. four Xbox pads) and the foundation for local
+"couch" multiplayer. Built on the action layer (2.1).
+
+**Scope:**
+- ✅ Backend-neutral gamepad types (`renderer/gamepad.h`): `GamepadButton` /
+  `GamepadAxis` / `GamepadState`, up to `MAX_GAMEPADS` (16).
+- ✅ `InputMap` gains device-relative gamepad button/axis bindings, polled
+  button-edge diffing, and a stick deadzone.
+- ✅ Per-player layer (`PlayerInput` / `PlayerInputs`): device assignment,
+  gamepad auto-join/disconnect, event routing (KBM → owning slot, gamepad
+  state → owning slot by device id). Exposed as `ctx.players`; system/menu
+  controls stay on the global `ctx.actions`.
+- ✅ Generic `ControlledBy{ playerIndex }` component — the only engine bridge
+  from a player slot to an entity (game adds its own components).
+- ⏳ `window.cpp` polls GLFW gamepads and emits connect/disconnect events —
+  written, but macOS-only, so unverified in the Linux sandbox.
+
+**Deferred (ADR-0010):** networked multiplayer (transport, authority,
+replication, prediction/rollback) — premature; the deterministic sim (ADR-0002)
+and ECS keep the door open.
+
+**Next (game layer, not engine):** a `ControlledBy`-driven movement system in a
+demo, to exercise split-screen / multi-pad control end to end.
+
+**Depends on:** Input-action mapping (2.1).
+
 ---
 
 ## Tier 3 — Content Pipeline

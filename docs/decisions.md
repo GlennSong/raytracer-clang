@@ -299,6 +299,75 @@ move it engine-side), or building real 2D (a dedicated pan/zoom camera).
 
 ---
 
+## ADR-0010 — Input/player split: engine owns devices + per-player input, not "players"
+**Status:** Accepted · **Date:** 2026-06-04
+
+**Context.** We want multiple gamepads (e.g. four Xbox controllers) and,
+eventually, local "couch" multiplayer. The open question was where the line
+sits: should the engine define a `Player` object (with its own state) so
+multiplayer is "built in", or is that game-specific? Conflating the two would
+bake gameplay policy into the engine, against ADR-0006 (game type = a
+*configuration of components*, not an engine-defined type).
+
+**Decision.** Split input into three layers by a single litmus test — *"a human
+with input devices and their own bindings"* is **engine**; *"a player with
+health/score/team/an avatar"* is **game**:
+
+1. **Device layer (engine).** A backend-neutral `GamepadState` (connected,
+   buttons, axes) per device, for up to `MAX_GAMEPADS` (16, GLFW's limit). The
+   `Window` seam polls the backend and fills these; our own `GamepadButton` /
+   `GamepadAxis` enums cross the seam, never GLFW constants (ADR-0001).
+2. **Per-player input layer (engine).** A `PlayerInput` slot = a device
+   assignment **+ its own `InputMap`** (so per-player rebinding is free).
+   `PlayerInputs` manages slots and auto-joins a player when an unassigned pad
+   appears. It carries **no gameplay state**. `InputMap` gains device-relative
+   gamepad sources (bind to "the A button" / "left stick X"; the player layer
+   routes hardware device N to the owning slot), plus a stick **deadzone**.
+3. **Game layer (not engine).** The engine provides a generic
+   `ControlledBy{ playerIndex }` component as the only bridge: the *game* tags
+   whatever entity it likes and adds its own components. The engine never
+   decides what a player entity *is*.
+
+System/menu controls (quit, pause) stay on a **global** `InputMap`
+(`ctx.actions`); gameplay reads **per-player** input (`ctx.players`). One shared
+`World` for all players (see below).
+
+**Alternatives considered.**
+- An engine `Player` type owning per-player state — **rejected**: gameplay
+  policy in the engine; violates ADR-0006. `ControlledBy` + game components give
+  the same capability without the engine prescribing semantics.
+- **Per-player `World`/registry** ("each player owns their own ECS state") —
+  **rejected**: couch co-op players share one world (they collide, see, and
+  interact); separate Worlds fragment the entity space and break every
+  cross-player query, physics, and render pass. Players are an *input-routing
+  layer over one World*, not a partition of it.
+- Bindings that name a specific device index (`gamepad 2's A`) — rejected:
+  device-relative bindings + slot routing keep `InputMap` reusable across slots.
+- **Networked multiplayer now** — **deferred** (see below).
+
+**Consequences / tech debt.**
+- `FrameContext` grows a `PlayerInputs& players` alongside the global
+  `actions`. Single-player is just the one-slot case.
+- The actual gamepad **polling lives in `window.cpp`** (GLFW), which is
+  macOS-only and not Linux-compilable — same constraint as the rest of the
+  window seam. The engine-side parts (`InputMap` gamepad logic, `PlayerInputs`,
+  deadzone) are unit-tested without a window.
+- No "drive the avatar from a player's axis" system is provided — that first
+  touch of gameplay belongs to a game/demo layer, not the engine.
+- **Networked multiplayer is explicitly out of scope**: it is a cross-cutting
+  commitment (transport, authority, replication/serialization, prediction +
+  reconciliation or deterministic rollback) that would distort an engine still
+  lacking a second render backend, assets, and physics. Deferring costs little:
+  the deterministic fixed-step sim (ADR-0002) and the ECS (ADR-0006) are exactly
+  the substrate netcode is built on, so the door stays open.
+
+**Revisit trigger.** Building real local multiplayer gameplay (add the
+`ControlledBy`-driven movement system in the game layer); or starting netcode —
+at which point reopen ADR-0002 (rollback/lockstep) and design replication over
+the single authoritative `World`.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
