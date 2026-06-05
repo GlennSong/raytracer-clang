@@ -600,6 +600,63 @@ container thread-safety / a deferred command buffer, ADR-0006).
 
 ---
 
+## ADR-0014 — Engine code lives in `namespace engine`
+**Status:** Accepted (migration in progress — core layer done) · **Date:** 2026-06-05
+
+**Context.** All of our types sat in the global namespace — `Vec3`, `Mat4`,
+`Handle`, `World`, `Entity`, `Renderer`, `JobSystem`, `Material`, `Scene`, … As
+third-party libraries arrived (Jolt, ImGui; asset/glTF loaders to come) this
+started to bite: wiring our pool into Jolt (ADR-0012) hit a real collision —
+inside a class deriving from `JPH::JobSystem`, the bare name `JobSystem` resolved
+to Jolt's, forcing a `::JobSystem` workaround. Global names only get more
+crowded as the surface grows. Engines namespace themselves for exactly this
+reason (Jolt `JPH::`, Godot `godot::`, Bullet `bt`).
+
+**Decision.** Put all our code in `namespace engine`. Macros stay global
+(`LOG_*`, `CHECK`, `ASSERT`) — they ignore namespaces and are already
+`UPPER_SNAKE`.
+
+Migrate **layer by layer, bottom-up (core first)** rather than in one sweep, to
+keep each step reviewable and to limit blast radius on the macOS-only backends
+that can't be compiled in CI. Between stages, each migrated header re-exports its
+public names at global scope with transitional `using engine::Name;`
+declarations, so un-migrated consumers keep compiling **unchanged**. The aliases
+are deleted in the final stage. Order: **core math + identity (rt_math, handle,
+slot_map) → job_system + logging → engine (world/ECS/systems/cameras/physics) →
+renderer → offline tracer → drop the shims.**
+
+**Name.** `engine` (descriptive, unambiguous about intent). Considered `rt` (ties
+to the `rt_` file prefix; shorter) and `rtx`/`rte`; `engine` was chosen for
+clarity at call sites now that this is an engine, not just a tracer.
+
+**Alternatives considered.**
+- **One big-bang sweep** — rejected for now: a ~60-file mechanical diff that's
+  hard to review and would touch the unverifiable Metal/GLFW files all at once.
+- **A short prefix instead of a namespace** (`btScalar`-style) — rejected:
+  namespaces compose with `using`, support ADL, and are the modern idiom.
+- **Re-export via `using namespace engine;` in headers** — rejected: pollutes
+  every includer and, being a using-*directive*, doesn't satisfy qualified
+  (`::Name`) lookup, so it would break existing `::JobSystem`-style references.
+  Explicit `using engine::Name;` declarations do, so those are used.
+
+**Consequences / tech debt.**
+- A window of **transitional global aliases** exists until the migration
+  completes (tracked in the register). Each is a one-line `using` to delete.
+- **Forward-declared types** can't be shimmed transparently: a global
+  `using engine::JobSystem;` conflicts with a global `class JobSystem;` forward
+  declaration. `JobSystem` is forward-declared in three physics files, so it
+  migrates *with* the physics layer (its decls flip to `namespace engine { … }`),
+  not in the first core step.
+- **Operators need no alias** — found by ADL through their engine-typed operands.
+- Inside a `JPH::`-derived class, our names still need qualifying
+  (`engine::JobSystem`), since the base scope is searched first.
+
+**Revisit trigger.** Migration completion → delete every transitional alias and
+this note's "in progress" status. If `engine` proves too generic against a
+future embedded/3rd-party `engine` symbol, revisit the name.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -617,6 +674,7 @@ to be replaced; listed here so they stay visible.
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
 | Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0013) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
+| Transitional global `using engine::…` aliases | `rt_math.h`, `handle.h`, `slot_map.h` (more as layers migrate) | Namespace migration is staged (ADR-0014); shims keep un-migrated consumers compiling | Delete every alias once all layers are inside `namespace engine` |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

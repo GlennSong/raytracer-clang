@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace engine {
+
 // Stable handles into recycling storage. insert() returns a Handle valid until
 // erase(); freed slots are reused by later inserts with a bumped generation, so
 // a handle to a freed (and possibly reused) slot is reported stale rather than
@@ -117,5 +119,11 @@ private:
     uint32_t freeHead = NO_SLOT;
     std::size_t count = 0;
 };
+
+}  // namespace engine
+
+// Transitional global alias (ADR-0014); removed once all consumers are
+// namespaced.
+using engine::SlotMap;
 
 #endif

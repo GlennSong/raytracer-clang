@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace engine {
+
 // A type-safe, recyclable identity into a SlotMap. The Tag parameter makes
 // Handle<Mesh> a distinct type from Handle<Entity> at compile time. A handle is
 // null when generation == 0; a non-null handle goes stale once its slot is
@@ -20,5 +22,11 @@ struct Handle {
     }
     bool operator!=(const Handle& other) const { return !(*this == other); }
 };
+
+}  // namespace engine
+
+// Transitional global alias (ADR-0014); removed once all consumers are
+// namespaced.
+using engine::Handle;
 
 #endif
