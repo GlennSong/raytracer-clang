@@ -601,7 +601,7 @@ container thread-safety / a deferred command buffer, ADR-0006).
 ---
 
 ## ADR-0014 — Engine code lives in `namespace engine`
-**Status:** Accepted (migration in progress — core layer done) · **Date:** 2026-06-05
+**Status:** Accepted (migration in progress — core + job_system/logging done) · **Date:** 2026-06-05
 
 **Context.** All of our types sat in the global namespace — `Vec3`, `Mat4`,
 `Handle`, `World`, `Entity`, `Renderer`, `JobSystem`, `Material`, `Scene`, … As
@@ -674,7 +674,7 @@ to be replaced; listed here so they stay visible.
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
 | Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0013) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
-| Transitional global `using engine::…` aliases | `rt_math.h`, `handle.h`, `slot_map.h` (more as layers migrate) | Namespace migration is staged (ADR-0014); shims keep un-migrated consumers compiling | Delete every alias once all layers are inside `namespace engine` |
+| Transitional global `using engine::…` aliases | `rt_math.h`, `handle.h`, `slot_map.h`, `job_system.h` (more as layers migrate) | Namespace migration is staged (ADR-0014); shims keep un-migrated consumers compiling | Delete every alias once all layers are inside `namespace engine` |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

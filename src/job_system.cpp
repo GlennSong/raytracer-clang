@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 JobSystem::JobSystem(unsigned workerThreads) {
     unsigned count = workerThreads;
     if (count == AUTO) {
@@ -123,3 +125,5 @@ void JobSystem::parallelFor(std::size_t begin, std::size_t end,
     }
     wait(&counter);
 }
+
+}  // namespace engine

@@ -157,7 +157,7 @@ struct PhysicsWorld::Impl {
 PhysicsWorld::PhysicsWorld() = default;
 PhysicsWorld::~PhysicsWorld() { shutdown(); }
 
-bool PhysicsWorld::initialize(JobSystem* jobSystem) {
+bool PhysicsWorld::initialize(engine::JobSystem* jobSystem) {
     if (impl) return true;
     globalAcquire();   // registers Jolt's allocator, needed before the job pool
     impl = std::make_unique<Impl>();

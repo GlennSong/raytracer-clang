@@ -3,6 +3,7 @@
 
 #include <sstream>
 
+namespace engine {
 namespace logging {
 
 enum class Level { Info, Warn, Error };
@@ -27,9 +28,10 @@ private:
 };
 
 }  // namespace logging
+}  // namespace engine
 
-#define LOG_INFO  ::logging::LogLine(::logging::Level::Info)
-#define LOG_WARN  ::logging::LogLine(::logging::Level::Warn)
-#define LOG_ERROR ::logging::LogLine(::logging::Level::Error)
+#define LOG_INFO  ::engine::logging::LogLine(::engine::logging::Level::Info)
+#define LOG_WARN  ::engine::logging::LogLine(::engine::logging::Level::Warn)
+#define LOG_ERROR ::engine::logging::LogLine(::engine::logging::Level::Error)
 
 #endif

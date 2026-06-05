@@ -2,7 +2,7 @@
 
 #include "../components.h"
 
-bool PhysicsSystem::initialize(JobSystem* jobs) { return physics.initialize(jobs); }
+bool PhysicsSystem::initialize(engine::JobSystem* jobs) { return physics.initialize(jobs); }
 
 void PhysicsSystem::shutdown() { physics.shutdown(); }
 

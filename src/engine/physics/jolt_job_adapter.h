@@ -16,14 +16,14 @@
 #include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Core/FixedSizeFreeList.h>
 
-class JobSystem;   // our thread pool (src/job_system.h)
+namespace engine { class JobSystem; }   // our thread pool (src/job_system.h)
 
 class JoltJobAdapter final : public JPH::JobSystemWithBarrier {
 public:
-    // Our pool is spelled ::JobSystem throughout: inside a JPH::JobSystem-derived
-    // class, an unqualified "JobSystem" would resolve to the Jolt base.
-    // pool must outlive this adapter (owned by the engine, e.g. Application).
-    JoltJobAdapter(::JobSystem& pool, JPH::uint maxJobs, JPH::uint maxBarriers);
+    // Our pool is spelled engine::JobSystem throughout: inside a
+    // JPH::JobSystem-derived class, an unqualified "JobSystem" would resolve to
+    // the Jolt base. pool must outlive this adapter (owned by e.g. Application).
+    JoltJobAdapter(engine::JobSystem& pool, JPH::uint maxJobs, JPH::uint maxBarriers);
 
     int GetMaxConcurrency() const override;
     JobHandle CreateJob(const char* inName, JPH::ColorArg inColor,
@@ -36,7 +36,7 @@ protected:
     void FreeJob(Job* inJob) override;
 
 private:
-    ::JobSystem& pool;
+    engine::JobSystem& pool;
 
     // Fixed-size storage for in-flight jobs, exactly as the stock Jolt job
     // systems use; sized to maxJobs at construction.

@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+namespace engine {
+
 // A minimal task scheduler: a fixed pool of worker threads draining one shared
 // queue. The point is to have a single place that owns threads, so the rest of
 // the codebase expresses *what* may run in parallel (parallelFor over an image
@@ -72,5 +74,12 @@ private:
     std::vector<std::thread> workers;
     bool stopping = false;
 };
+
+}  // namespace engine
+
+// Transitional global alias (ADR-0014); removed once all consumers are
+// namespaced. (The physics files that forward-declare JobSystem already use the
+// engine:: name, so they don't rely on this.)
+using engine::JobSystem;
 
 #endif

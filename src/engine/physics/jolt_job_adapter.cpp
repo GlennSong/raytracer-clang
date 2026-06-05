@@ -2,7 +2,7 @@
 
 #include "../../job_system.h"
 
-JoltJobAdapter::JoltJobAdapter(::JobSystem& pool, JPH::uint maxJobs, JPH::uint maxBarriers)
+JoltJobAdapter::JoltJobAdapter(engine::JobSystem& pool, JPH::uint maxJobs, JPH::uint maxBarriers)
     : JPH::JobSystemWithBarrier(maxBarriers), pool(pool) {
     jobs.Init(maxJobs, maxJobs);
 }
