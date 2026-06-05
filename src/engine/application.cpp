@@ -31,7 +31,7 @@ bool Application::initialize(const Config& config) {
 
 FrameContext Application::makeContext() {
     return FrameContext{
-        worldState, *rendererPtr, view, clock, settingsStore,
+        worldState, *rendererPtr, view, clock, settingsStore, jobs,
         window.getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight,
         frameDelta, interpolation, quit

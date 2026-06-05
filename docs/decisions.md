@@ -453,7 +453,7 @@ same `initDebugUi`/`shutdownDebugUi` treatment).
 ---
 
 ## ADR-0012 — Jolt physics, sealed behind a Jolt-free `PhysicsWorld`
-**Status:** Accepted (Steps A + C done — foundation + ECS `PhysicsSystem`) · **Date:** 2026-06-04
+**Status:** Accepted (Steps A + C done; step now runs on the shared pool, ADR-0013) · **Date:** 2026-06-04
 
 **Context.** The engine needs rigid bodies and collision (ROADMAP 2.3); Jolt was
 the chosen library. The questions for *how* to integrate: how to keep Jolt types
@@ -472,10 +472,16 @@ the object-layer scheme, the job system, and the precision bridge.
   between the lib and its consumers).
 - **Two object layers** (`NON_MOVING`/`MOVING`) with a 1:1 broadphase mapping —
   the standard minimal scheme so the static tree never rebuilds.
-- **Single-threaded job system** (`JobSystemSingleThreaded`). The engine is
-  single-threaded and workloads are tiny; this is deterministic and avoids
-  spinning a pool. Revisit with multithreading (ADR-0008) or when physics shows
-  in a profile.
+- ~~**Single-threaded job system** (`JobSystemSingleThreaded`).~~ **Updated.**
+  Jolt's step now runs on the engine's shared `JobSystem` (ADR-0013) via a
+  `JoltJobAdapter` (`engine/physics/jolt_job_adapter.*`) — a `JPH::JobSystem`
+  that forwards each ready Jolt job to `JobSystem::run` instead of spawning a
+  second pool. Jolt still owns the job *graph* (deps/barriers, via the
+  `JobSystemWithBarrier` base); we own the *threads*. `PhysicsWorld::initialize`
+  takes an optional `JobSystem*`; null keeps the deterministic
+  `JobSystemSingleThreaded` path (used by unit tests). Determinism holds —
+  same machine + Jolt, multi-threaded simulation is repeatable — and a test
+  pins the threaded result equal to single-threaded.
 - **Single precision** (`JPH_DOUBLE_PRECISION` off); the wrapper bridges our
   `double` to Jolt `float`. Consistent with the deferred precision choice
   (ADR-0005); revisit for large-world coordinates.
@@ -496,7 +502,10 @@ offline tracer, unit tests, and physics tests always configure.
   Jolt; the wrapper costs little and keeps the door open to swapping later.
 - Vendored copy instead of submodule — rejected: submodule keeps our tree clean
   and the version explicit.
-- Multi-threaded `JobSystemThreadPool` now — deferred: premature for our load.
+- ~~Multi-threaded `JobSystemThreadPool` now — deferred.~~ When we did thread the
+  step, the **adapter over our own pool** was chosen over Jolt's stock
+  `JobSystemThreadPool` precisely to avoid two competing pools on one machine —
+  one pool, with Jolt as a guest that brings its schedule but rents our threads.
 
 **Consequences / tech debt.**
 - Adds a real third-party dependency (engine/viewer scope; the offline tracer
@@ -505,6 +514,11 @@ offline tracer, unit tests, and physics tests always configure.
   `MotionSystem` repositioned (kinematic mover, yields to physics) rather than
   retired. Core logic is headless-tested.
 - **Collider debug-draw** needs a line/debug primitive (macOS/Metal) — deferred.
+- **`JoltJobAdapter` must be compiled `-fno-rtti`** (set per-source in CMake):
+  Jolt is built without RTTI, so a derived class with an out-of-line key function
+  would emit typeinfo referencing a base typeinfo symbol Jolt never produced
+  (link error). Also: inside a `JPH::JobSystem`-derived class the unqualified name
+  `JobSystem` resolves to the Jolt base, so our pool is spelled `::JobSystem`.
 - The wrapper currently exposes box/sphere shapes and basic body ops; capsule,
   mesh colliders, materials (friction/restitution), and contact events are
   follow-ups.
@@ -575,10 +589,14 @@ matches the old output, with `user`≈`3×real` confirming the parallelism.
 - Single shared queue can become a contention point at high task rates — fine
   for current coarse workloads, revisited by profile.
 
+**First external consumer.** Jolt's physics step now runs on this pool via a
+`JPH::JobSystem` adapter (ADR-0012) — `QueueJob` forwards each ready job to
+`run`. This validated the `run`/`wait` surface against a real, dependency-rich
+external scheduler.
+
 **Revisit trigger.** A profile showing queue contention or scheduling overhead
-(→ per-worker work-stealing deques); parallelizing ECS systems (→ define core
-container thread-safety / a deferred command buffer, ADR-0006); or giving Jolt a
-`JPH::JobSystem` adapter over this pool (ADR-0012's multithreading trigger).
+(→ per-worker work-stealing deques); or parallelizing ECS systems (→ define core
+container thread-safety / a deferred command buffer, ADR-0006).
 
 ---
 

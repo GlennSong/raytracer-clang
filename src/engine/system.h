@@ -8,6 +8,7 @@
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
+#include "../job_system.h"
 #include <vector>
 
 // Shared "what to render this frame" resource. Systems that produce view data
@@ -28,6 +29,7 @@ struct FrameContext {
     RenderView& view;
     SimClock& clock;
     Settings& settings;
+    JobSystem& jobs;           // shared thread pool (ADR-0013): physics today
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)

@@ -1,5 +1,8 @@
 #include "physics_world.h"
 
+#include "jolt_job_adapter.h"
+#include "../../job_system.h"
+
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Core/Factory.h>
@@ -137,7 +140,9 @@ struct PhysicsWorld::Impl {
     // Declared before physicsSystem so they outlive it (members destruct in
     // reverse order — physicsSystem references these interfaces).
     JPH::TempAllocatorImpl tempAllocator{10 * 1024 * 1024};
-    JPH::JobSystemSingleThreaded jobSystem{JPH::cMaxPhysicsJobs};
+    // Either a JoltJobAdapter over our pool, or a JobSystemSingleThreaded; chosen
+    // in initialize() once we know whether a pool was supplied.
+    std::unique_ptr<JPH::JobSystem> jobSystem;
     BPLayerInterfaceImpl broadPhaseLayers;
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhase;
     ObjectLayerPairFilterImpl objectVsObject;
@@ -152,10 +157,17 @@ struct PhysicsWorld::Impl {
 PhysicsWorld::PhysicsWorld() = default;
 PhysicsWorld::~PhysicsWorld() { shutdown(); }
 
-bool PhysicsWorld::initialize() {
+bool PhysicsWorld::initialize(JobSystem* jobSystem) {
     if (impl) return true;
-    globalAcquire();
+    globalAcquire();   // registers Jolt's allocator, needed before the job pool
     impl = std::make_unique<Impl>();
+    if (jobSystem) {
+        impl->jobSystem = std::make_unique<JoltJobAdapter>(
+            *jobSystem, JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers);
+    } else {
+        impl->jobSystem =
+            std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    }
     impl->physicsSystem.Init(MAX_BODIES, 0, MAX_BODY_PAIRS, MAX_CONTACT_CONSTRAINTS,
                              impl->broadPhaseLayers, impl->objectVsBroadPhase,
                              impl->objectVsObject);
@@ -245,6 +257,6 @@ void PhysicsWorld::optimizeBroadPhase() {
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
-                                   &impl->tempAllocator, &impl->jobSystem);
+                                   &impl->tempAllocator, impl->jobSystem.get());
     }
 }

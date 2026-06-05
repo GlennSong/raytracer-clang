@@ -4,6 +4,8 @@
 #include "../system.h"
 #include "../physics/physics_world.h"
 
+class JobSystem;   // our shared thread pool (src/job_system.h)
+
 // Drives Jolt physics from the ECS (ADR-0012, ROADMAP 2.3 Step C). Creates a
 // body for every entity with Transform + RigidBody + Collider, steps the world
 // each fixed update (deterministic — fits ADR-0002), and writes simulated
@@ -18,7 +20,7 @@ public:
     void fixedUpdate(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
-    bool initialize();
+    bool initialize(JobSystem* jobs = nullptr);
     void shutdown();
     void createBodies(World& world);
     void step(World& world, Real dt);

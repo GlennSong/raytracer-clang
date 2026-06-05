@@ -54,6 +54,9 @@ private:
     World worldState;
     SimClock clock;
     Settings settingsStore;
+    // The one shared thread pool (ADR-0013). Declared before `systems` so it
+    // outlives them — a system (e.g. physics) may hold work referencing it.
+    JobSystem jobs;
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;

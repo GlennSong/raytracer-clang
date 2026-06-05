@@ -2,7 +2,7 @@
 
 #include "../components.h"
 
-bool PhysicsSystem::initialize() { return physics.initialize(); }
+bool PhysicsSystem::initialize(JobSystem* jobs) { return physics.initialize(jobs); }
 
 void PhysicsSystem::shutdown() { physics.shutdown(); }
 
@@ -43,7 +43,7 @@ void PhysicsSystem::step(World& world, Real dt) {
 }
 
 void PhysicsSystem::onStart(FrameContext& ctx) {
-    initialize();
+    initialize(&ctx.jobs);   // run Jolt's step on the engine's shared pool
     createBodies(ctx.world);
 }
 

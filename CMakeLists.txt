@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Threads back the JobSystem (and the offline tracer that now uses it).
 find_package(Threads REQUIRED)
 
+# The Jolt job adapter derives from a JPH polymorphic base. Jolt is built without
+# C++ RTTI, so this one TU must match — otherwise its typeinfo references a base
+# typeinfo symbol Jolt never emitted (link error). Applies in every target that
+# compiles the file (physics_tests, viewer).
+set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
+    PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+
 # Shared math/core sources (used by both targets)
 set(CORE_SOURCES
     src/rt_math.cpp
@@ -101,14 +108,16 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics.cpp
         tests/test_physics_system.cpp
         src/engine/physics/physics_world.cpp
+        src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/motion_system.cpp
         src/engine/world.cpp
         src/engine/components.cpp
+        src/job_system.cpp
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
-    target_link_libraries(physics_tests PRIVATE Jolt)
+    target_link_libraries(physics_tests PRIVATE Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
 endif()
 
@@ -140,6 +149,7 @@ set(VIEWER_SOURCES
 if(RT_ENABLE_PHYSICS)
     list(APPEND VIEWER_SOURCES
         src/engine/physics/physics_world.cpp
+        src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
     )
 endif()

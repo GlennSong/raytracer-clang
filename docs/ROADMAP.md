@@ -330,8 +330,9 @@ Items that become relevant as the world grows large.
   procgen workloads. *Foundation done: a minimal shared-queue `JobSystem`
   (`src/job_system.*`, ADR-0013) — `parallelFor` + counter-based `run`/`wait`,
   synchronous mode for tests; the offline tracer renders on it. Pulled forward
-  from Tier 5 as low-level foundation. Remaining: parallel ECS system execution
-  (needs container thread-safety) and a Jolt job-system adapter.*
+  from Tier 5 as low-level foundation. **Jolt physics now steps on this pool**
+  via a `JoltJobAdapter` (ADR-0012). Remaining: parallel ECS system execution
+  (needs container thread-safety).*
 - **Custom allocators** — revisit ADR-0008 when allocation churn is measured.
 
 ---

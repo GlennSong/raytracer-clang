@@ -17,6 +17,8 @@ enum class BodyMotion { Static, Kinematic, Dynamic };
 using PhysicsBodyId = uint32_t;
 constexpr PhysicsBodyId INVALID_PHYSICS_BODY = 0xFFFFFFFFu;
 
+class JobSystem;   // our thread pool (src/job_system.h)
+
 class PhysicsWorld {
 public:
     PhysicsWorld();
@@ -25,7 +27,9 @@ public:
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-    bool initialize();
+    // Pass a JobSystem to run Jolt's step on our shared pool (ADR-0013); leave it
+    // null to run single-threaded (the ADR-0012 default — used by unit tests).
+    bool initialize(JobSystem* jobSystem = nullptr);
     void shutdown();
 
     // Body creation. orientation defaults to identity; static bodies are added
