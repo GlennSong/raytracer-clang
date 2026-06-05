@@ -216,12 +216,20 @@ Steps 3/5).
 **Alternatives considered.** Raw `uint32_t` handles (current `MeshHandle`) —
 rejected for entities/assets: no stale detection, no recycling safety.
 
-**Consequences / tech debt.** Two handle styles coexist until migration: the
+**Consequences / tech debt.** ~~Two handle styles coexist until migration: the
 new `Handle` and the legacy `uint32_t` `MeshHandle`/`BufferHandle` in
-`renderer.h`.
+`renderer.h`.~~ **Resolved.** `MeshHandle`/`BufferHandle` are now
+`Handle<MeshTag>` / `Handle<BufferTag>`, and the Metal backend stores meshes in
+a `SlotMap<GPUMesh, MeshTag>` (handing out generation-checked handles, dropping
+the old `uint32_t` counter + `unordered_map`). `Renderable.mesh` defaults to a
+null handle instead of `0`. Engine-side consumers (`components.*`,
+`render_system.cpp`, `viewer_main.cpp`) are headless syntax-verified; the Metal
+storage swap is macOS-only, so unverified in CI (the standing backend
+constraint). `SlotMap` gained a `clear()`. This is the first piece of the asset
+system (ROADMAP 3.1) landing ahead of the manager itself.
 
-**Revisit trigger.** Building the ECS and asset manager — migrate existing
-handle usages then.
+**Revisit trigger.** Building the asset manager — it owns these handles and adds
+async creation/destruction on top of the now-migrated `Handle`/`SlotMap` base.
 
 ---
 
@@ -586,7 +594,7 @@ to be replaced; listed here so they stay visible.
 | ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1, 2.2): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` and `CameraSystem` (orbit + fly) drive entirely off actions, gamepad included.* | — |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
-| Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |
+| ~~Legacy `uint32_t` handles~~ | ~~`renderer.h` (`MeshHandle`)~~ | *Resolved (ADR-0007): `MeshHandle`/`BufferHandle` are now `Handle<Tag>`; the Metal backend stores meshes in a `SlotMap<GPUMesh>`. First brick of the asset system.* | — |
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |

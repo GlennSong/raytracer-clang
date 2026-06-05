@@ -5,7 +5,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <AppKit/AppKit.h>
 #import <simd/simd.h>
-#include <unordered_map>
+#include "../../slot_map.h"
 #include <vector>
 #include <algorithm>
 
@@ -78,8 +78,9 @@ struct MetalRenderer::Impl {
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
 
-    std::unordered_map<MeshHandle, GPUMesh> meshes;
-    MeshHandle nextMeshHandle = 1;
+    // Generation-checked GPU mesh storage (ADR-0007): hands out MeshHandles and
+    // detects use of a freed/reused handle, replacing the old uint32 counter.
+    SlotMap<GPUMesh, MeshTag> meshes;
 
     CameraUniforms cameraUniforms;
     LightUniforms lightUniforms;
@@ -240,9 +241,7 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
 
     gpuMesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
 
-    MeshHandle handle = impl->nextMeshHandle++;
-    impl->meshes[handle] = gpuMesh;
-    return handle;
+    return impl->meshes.insert(gpuMesh);
 }
 
 void MetalRenderer::removeMesh(MeshHandle handle) {
@@ -352,9 +351,8 @@ void MetalRenderer::endFrame() {
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
     auto issueDraw = [&](const Impl::DrawCall& dc) {
-        auto it = impl->meshes.find(dc.meshHandle);
-        if (it == impl->meshes.end()) return;
-        const GPUMesh& mesh = it->second;
+        const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
+        if (!mesh) return;   // stale/removed handle — skip
 
         ModelUniforms modelUniforms;
         modelUniforms.model = toSimd(dc.transform);
@@ -371,7 +369,7 @@ void MetalRenderer::endFrame() {
                                 static_cast<float>(dc.material.emission.y),
                                 static_cast<float>(dc.material.emission.z)};
 
-        [impl->currentEncoder setVertexBuffer:mesh.vertexBuffer offset:0 atIndex:0];
+        [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setVertexBytes:&modelUniforms
@@ -384,9 +382,9 @@ void MetalRenderer::endFrame() {
                                         length:sizeof(LightUniforms) atIndex:4];
 
         [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                         indexCount:mesh.indexCount
+                                         indexCount:mesh->indexCount
                                           indexType:MTLIndexTypeUInt32
-                                        indexBuffer:mesh.indexBuffer
+                                        indexBuffer:mesh->indexBuffer
                                   indexBufferOffset:0];
     };
 

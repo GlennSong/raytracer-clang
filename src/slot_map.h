@@ -59,6 +59,14 @@ public:
     bool contains(HandleType handle) const { return slotFor(handle) != nullptr; }
     std::size_t size() const { return count; }
 
+    // Drop all elements. Existing handles become stale (their slots no longer
+    // exist), so access through them is reported null rather than aliasing.
+    void clear() {
+        slots.clear();
+        freeHead = NO_SLOT;
+        count = 0;
+    }
+
     // The live handle occupying a slot, or a null handle if the slot is empty.
     // Lets callers that track raw indices (e.g. an ECS) recover a full handle.
     HandleType handleAt(uint32_t index) const {

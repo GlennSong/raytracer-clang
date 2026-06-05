@@ -2,6 +2,7 @@
 #define RAYTRACER_RENDERER_H
 
 #include "../rt_math.h"
+#include "../handle.h"
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -65,8 +66,14 @@ struct CameraState {
           nearPlane(0.1f), farPlane(1000.0f) {}
 };
 
-using BufferHandle = uint32_t;
-using MeshHandle = uint32_t;
+// Generation-checked GPU-resource identities (ADR-0007). Distinct tag types so
+// a MeshHandle can't be passed where a BufferHandle is expected, and a stale
+// handle (its slot freed and reused) is detected rather than silently aliasing.
+// A default-constructed handle is null (valid() == false).
+struct MeshTag {};
+struct BufferTag {};
+using MeshHandle = Handle<MeshTag>;
+using BufferHandle = Handle<BufferTag>;
 
 class Renderer {
 public:

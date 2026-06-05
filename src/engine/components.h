@@ -35,7 +35,7 @@ struct Velocity {
 
 // What to draw for an entity.
 struct Renderable {
-    MeshHandle mesh = 0;
+    MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
 };
 

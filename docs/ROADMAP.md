@@ -223,13 +223,18 @@ from disk" pipelines with procgen bolted on later. Every asset type should be
 constructible programmatically as a first-class path.
 
 ### 3.1 Asset / resource system
-**Status:** Not started (see tech-debt register: legacy uint32_t handles)
+**Status:** Started — handle migration done (`MeshHandle`/`BufferHandle` →
+`Handle`/`SlotMap`, ADR-0007); the `AssetManager` itself is not yet built and
+needs design discussion (formats, async loading, animation — a large
+undertaking).
 **Why:** The engine needs a unified way to create, own, and reference meshes,
 textures, and materials — whether loaded from disk or generated at runtime.
 
 **Scope:**
-- Migrate `MeshHandle` / `BufferHandle` from `uint32_t` to `Handle`/`SlotMap`
-  (ADR-0007).
+- ✅ Migrate `MeshHandle` / `BufferHandle` from `uint32_t` to `Handle`/`SlotMap`
+  (ADR-0007). Done: distinct-tag `Handle` types; the Metal backend stores meshes
+  in a `SlotMap<GPUMesh, MeshTag>` with generation-checked handles. Engine side
+  headless-verified; backend storage swap macOS-only.
 - An `AssetManager` that owns GPU resources, supports dynamic creation and
   destruction, and provides typed handles.
 - Async loading support (load from disk on a background thread, procgen on any
