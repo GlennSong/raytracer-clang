@@ -1,6 +1,10 @@
 #define GLFW_INCLUDE_NONE
 #include "window.h"
+#include "gamepad_gc.h"
+#include "../log.h"
 #include <GLFW/glfw3.h>
+#include <fstream>
+#include <sstream>
 
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
@@ -26,6 +30,7 @@ struct Window::Impl {
     InputState input;
     std::vector<Event> events;
     GamepadSet gamepads;
+    std::array<bool, MAX_GAMEPADS> prevConnected{};
     std::function<void()> drawCallback;
     double lastMouseX = 0, lastMouseY = 0;
     double lastFrameTime = 0;
@@ -204,6 +209,19 @@ Window::~Window() {
 bool Window::initialize(int width, int height, const std::string& title) {
     if (!glfwInit()) return false;
 
+    {
+        std::ifstream file("gamecontrollerdb.txt");
+        if (file) {
+            std::ostringstream buf;
+            buf << file.rdbuf();
+            std::string mappings = buf.str();
+            if (glfwUpdateGamepadMappings(mappings.c_str()))
+                LOG_INFO << "Loaded gamepad mappings from gamecontrollerdb.txt";
+            else
+                LOG_WARN << "gamecontrollerdb.txt found but glfwUpdateGamepadMappings failed";
+        }
+    }
+
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
@@ -262,10 +280,13 @@ void Window::pollEvents() {
     impl->input.keyUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
     impl->input.keyDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
 
-    // Poll every gamepad slot; surface connect/disconnect transitions as events.
+    // Poll every gamepad slot. GLFW's IOKit path handles controllers it
+    // recognizes; the GCController layer (macOS-only) overwrites slots where
+    // Apple's Game Controller framework provides data — this is the only
+    // reliable path for Xbox/PS controllers on macOS 13+ where Apple's
+    // DriverKit driver intercepts the USB device (ADR-0010).
     for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
         GamepadState& slot = impl->gamepads[jid];
-        bool wasConnected = slot.connected;
 
         GLFWgamepadstate gs;
         if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &gs)) {
@@ -273,12 +294,29 @@ void Window::pollEvents() {
         } else {
             slot = GamepadState{};
         }
+    }
+
+    // GCController overlay: fills slots that GLFW left empty (or overwrites
+    // with better data). Does nothing on non-Apple platforms.
+    gcPollGamepads(impl->gamepads);
+
+    // Surface connect/disconnect transitions as events. Run after both
+    // backends have had their say.
+    for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
+        GamepadState& slot = impl->gamepads[jid];
+        bool wasConnected = impl->prevConnected[jid];
+        impl->prevConnected[jid] = slot.connected;
 
         if (slot.connected && !wasConnected) {
+            const char* name = glfwJoystickPresent(jid)
+                ? glfwGetJoystickName(jid) : nullptr;
+            LOG_INFO << "Gamepad " << jid << " connected"
+                     << (name ? std::string(": \"") + name + "\"" : "");
             Event event(EventType::GamepadConnected);
             event.gamepad = jid;
             impl->events.push_back(event);
         } else if (!slot.connected && wasConnected) {
+            LOG_INFO << "Gamepad " << jid << " disconnected";
             Event event(EventType::GamepadDisconnected);
             event.gamepad = jid;
             impl->events.push_back(event);

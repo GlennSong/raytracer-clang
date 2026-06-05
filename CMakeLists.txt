@@ -139,13 +139,17 @@ endif()
 # Platform-specific renderer backend
 if(APPLE)
     enable_language(OBJCXX)
-    list(APPEND VIEWER_SOURCES src/renderer/metal/metal_renderer.mm)
+    list(APPEND VIEWER_SOURCES
+        src/renderer/metal/metal_renderer.mm
+        src/renderer/gamepad_gc.mm
+    )
     set(PLATFORM_LIBS
         "-framework Metal"
         "-framework MetalKit"
         "-framework QuartzCore"
         "-framework Cocoa"
         "-framework IOKit"
+        "-framework GameController"
     )
     set(PLATFORM_DEFINES USE_METAL=1)
 # elseif(WIN32 OR UNIX)
@@ -173,6 +177,7 @@ endif()
 if(APPLE)
     set_source_files_properties(
         src/renderer/metal/metal_renderer.mm
+        src/renderer/gamepad_gc.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
