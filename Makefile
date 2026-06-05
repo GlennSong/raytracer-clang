@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic
+CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread
 DEBUG_FLAGS = -g -O0
 RELEASE_FLAGS = -O2
 
@@ -12,6 +12,7 @@ TARGET = raytracer
 SRCS = \
 	$(SRC_DIR)/main.cpp \
 	$(SRC_DIR)/rt_math.cpp \
+	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/camera.cpp \
@@ -34,8 +35,10 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_clock.cpp \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
-	$(TEST_DIR)/test_camera.cpp
+	$(TEST_DIR)/test_camera.cpp \
+	$(TEST_DIR)/test_job_system.cpp
 TEST_ENGINE_SRCS = \
+	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/engine/world.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
 	$(SRC_DIR)/engine/input/input_map.cpp \

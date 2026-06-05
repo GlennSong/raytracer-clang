@@ -4,9 +4,13 @@ project(raytracer LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Threads back the JobSystem (and the offline tracer that now uses it).
+find_package(Threads REQUIRED)
+
 # Shared math/core sources (used by both targets)
 set(CORE_SOURCES
     src/rt_math.cpp
+    src/job_system.cpp
     src/log.cpp
     src/image.cpp
     src/camera.cpp
@@ -24,6 +28,7 @@ add_executable(raytracer
     ${CORE_SOURCES}
 )
 target_compile_options(raytracer PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(raytracer PRIVATE Threads::Threads)
 
 # ============================================================
 # Unit tests (no GPU dependencies)
@@ -38,6 +43,8 @@ add_executable(run_tests
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
+    tests/test_job_system.cpp
+    src/job_system.cpp
     src/engine/world.cpp
     src/engine/clock.cpp
     src/engine/input/input_map.cpp
@@ -46,6 +53,7 @@ add_executable(run_tests
     src/engine/camera/fly_camera_controller.cpp
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(run_tests PRIVATE Threads::Threads)
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
 
@@ -165,7 +173,7 @@ add_executable(viewer
 )
 
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(viewer PRIVATE glfw ${PLATFORM_LIBS})
+target_link_libraries(viewer PRIVATE glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 
 if(RT_ENABLE_PHYSICS)

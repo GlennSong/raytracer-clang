@@ -322,7 +322,11 @@ Items that become relevant as the world grows large.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction
   (ADR-0001).
 - **Multithreaded systems** — parallel system execution, job system for
-  procgen workloads.
+  procgen workloads. *Foundation done: a minimal shared-queue `JobSystem`
+  (`src/job_system.*`, ADR-0013) — `parallelFor` + counter-based `run`/`wait`,
+  synchronous mode for tests; the offline tracer renders on it. Pulled forward
+  from Tier 5 as low-level foundation. Remaining: parallel ECS system execution
+  (needs container thread-safety) and a Jolt job-system adapter.*
 - **Custom allocators** — revisit ADR-0008 when allocation churn is measured.
 
 ---

@@ -506,6 +506,74 @@ offline tracer, unit tests, and physics tests always configure.
 
 ---
 
+## ADR-0013 — A minimal shared-queue `JobSystem` for parallelism
+**Status:** Accepted · **Date:** 2026-06-05
+
+**Context.** Parallelism was ad-hoc: the offline tracer hand-rolled
+`std::thread`-per-tile in `main.cpp`, and Jolt runs on its own single-threaded
+job system (ADR-0012). There was no shared place that owns threads. Every future
+parallel workload — parallel ECS systems (ADR-0004's revisit trigger), async
+asset loading, procgen fan-out (Tier 4) — would otherwise re-invent thread
+management. We wanted the foundational threading primitive *before* the asset
+system, since async loading is built on it. (`docs/ROADMAP.md` lists a job system
+under Tier 5; it was pulled forward as low-level foundation by user direction.)
+
+**Decision.** A `JobSystem` (core layer, `src/job_system.{h,cpp}`, std-lib only
+per AGENTS.md) owning a fixed pool of worker threads that drain **one shared,
+mutex-guarded queue**. Public surface kept deliberately small:
+- `parallelFor(begin, end, body, grainSize)` — splits a range into grain-sized
+  chunks, runs them across the pool, and blocks until done. The calling thread
+  helps drain while it waits, so no worker idles behind the caller.
+- `run(task, counter)` / `wait(counter)` — the lower-level async primitive
+  (counter-based completion) that async asset loads will sit on later.
+- `AUTO` worker count = `hardware_concurrency() - 1` (leave a core for the
+  caller); **0 workers = synchronous mode** (tasks run inline, no threads),
+  which keeps tests deterministic and single-core machines correct.
+
+The internals are intentionally simple: **no work stealing**, one queue. The API
+hides the queue so the internals can become per-worker deques later without
+touching callers — but only when a profile asks for it (ADR-0008: measure
+before optimizing).
+
+**Determinism (defends ADR-0002).** The scheduler must never change *results*.
+`parallelFor` is contracted as safe only over **independent** work (each index
+writes its own data; no order-dependent reductions). Fixed-step ECS systems stay
+serial unless a system explicitly opts into `parallelFor` over independent
+entities. The contract is documented, not enforced.
+
+**First consumer.** The offline tracer's per-tile `std::thread` loop was migrated
+onto `run()` + a completion counter (rows are tasks; the main thread reports
+progress, then `wait()`s). This deleted the hand-rolled threading and is the
+real, **headless/Linux-verifiable** proving ground — a full Cornell-box render
+matches the old output, with `user`≈`3×real` confirming the parallelism.
+
+**Alternatives considered.**
+- **Work-stealing deques now** — rejected: premature (ADR-0008); no measured
+  contention, and our workloads (image rows, future asset loads) are coarse
+  enough that one queue is fine. The API leaves the door open.
+- **Reuse Jolt's job system** — rejected: it's sealed behind `PhysicsWorld`
+  (ADR-0012) and tuned for physics jobs; coupling general engine parallelism to
+  the physics dependency is backwards. (Later we may *give* Jolt an adapter over
+  this pool — see revisit.)
+- **`std::async` / per-task `std::thread`** — rejected: no pool (thread churn),
+  no batching/`wait`, and exactly the ad-hoc style we're replacing.
+
+**Consequences / tech debt.**
+- Threads now link into the offline tracer + tests (`-pthread` / CMake
+  `Threads::Threads`). The std-lib-only rule holds — no new third-party dep.
+- **Does not make `SlotMap`/`SparseSet`/`World` thread-safe**, and does **not**
+  wire the pool into Jolt or into ECS system execution. Those are explicit
+  follow-ups; `parallelFor` bodies must not structurally mutate the ECS.
+- Single shared queue can become a contention point at high task rates — fine
+  for current coarse workloads, revisited by profile.
+
+**Revisit trigger.** A profile showing queue contention or scheduling overhead
+(→ per-worker work-stealing deques); parallelizing ECS systems (→ define core
+container thread-safety / a deferred command buffer, ADR-0006); or giving Jolt a
+`JPH::JobSystem` adapter over this pool (ADR-0012's multithreading trigger).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -522,6 +590,7 @@ to be replaced; listed here so they stay visible.
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
+| Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0013) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

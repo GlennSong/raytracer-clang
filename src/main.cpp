@@ -2,10 +2,11 @@
 #include "image.h"
 #include "camera.h"
 #include "scene.h"
+#include "job_system.h"
 #include <iostream>
 #include <thread>
+#include <chrono>
 #include <atomic>
-#include <vector>
 
 const int IMAGE_SIZE = 512;
 const int SAMPLES_PER_PIXEL = 128;
@@ -45,26 +46,24 @@ Scene buildCornellBox() {
     return scene;
 }
 
-void renderTile(const Scene& scene, const Camera& camera, Image& image,
-                int yStart, int yEnd, std::atomic<int>& linesComplete) {
-    for (int y = yStart; y < yEnd; y++) {
-        for (int x = 0; x < IMAGE_SIZE; x++) {
-            Vec3 color(0, 0, 0);
-            for (int s = 0; s < SAMPLES_PER_PIXEL; s++) {
-                double u = (x + randomDouble()) / (IMAGE_SIZE - 1);
-                double v = (IMAGE_SIZE - 1 - y + randomDouble()) / (IMAGE_SIZE - 1);
-                Ray ray = camera.generateRay(u, v);
-                color += scene.tracePath(ray, MAX_BOUNCES);
-            }
-            color = color / static_cast<double>(SAMPLES_PER_PIXEL);
-
-            color = Vec3(std::sqrt(color.x), std::sqrt(color.y), std::sqrt(color.z));
-            color = clampVec(color, 0.0, 1.0);
-
-            image.setPixel(x, y, color);
+void renderRow(const Scene& scene, const Camera& camera, Image& image,
+               int y, std::atomic<int>& linesComplete) {
+    for (int x = 0; x < IMAGE_SIZE; x++) {
+        Vec3 color(0, 0, 0);
+        for (int s = 0; s < SAMPLES_PER_PIXEL; s++) {
+            double u = (x + randomDouble()) / (IMAGE_SIZE - 1);
+            double v = (IMAGE_SIZE - 1 - y + randomDouble()) / (IMAGE_SIZE - 1);
+            Ray ray = camera.generateRay(u, v);
+            color += scene.tracePath(ray, MAX_BOUNCES);
         }
-        linesComplete.fetch_add(1);
+        color = color / static_cast<double>(SAMPLES_PER_PIXEL);
+
+        color = Vec3(std::sqrt(color.x), std::sqrt(color.y), std::sqrt(color.z));
+        color = clampVec(color, 0.0, 1.0);
+
+        image.setPixel(x, y, color);
     }
+    linesComplete.fetch_add(1);
 }
 
 int main() {
@@ -84,31 +83,27 @@ int main() {
     std::cerr << "  Quads: " << scene.quads.size() << "\n";
     std::cerr << "  Spheres: " << scene.spheres.size() << "\n";
 
-    int numThreads = std::max(1u, std::thread::hardware_concurrency());
-    std::cerr << "Rendering with " << numThreads << " threads, "
+    JobSystem jobs;  // one shared pool owns the threads; rows are the tasks
+    std::cerr << "Rendering with " << jobs.workerCount() << " worker threads, "
               << SAMPLES_PER_PIXEL << " spp...\n";
 
     std::atomic<int> linesComplete(0);
-    std::vector<std::thread> threads;
-    int rowsPerThread = IMAGE_SIZE / numThreads;
-
-    for (int t = 0; t < numThreads; t++) {
-        int yStart = t * rowsPerThread;
-        int yEnd = (t == numThreads - 1) ? IMAGE_SIZE : yStart + rowsPerThread;
-        threads.emplace_back(renderTile, std::cref(scene), std::cref(camera),
-                             std::ref(image), yStart, yEnd, std::ref(linesComplete));
+    std::atomic<int> renderCounter(0);
+    for (int y = 0; y < IMAGE_SIZE; y++) {
+        jobs.run([&scene, &camera, &image, y, &linesComplete] {
+            renderRow(scene, camera, image, y, linesComplete);
+        }, &renderCounter);
     }
 
+    // The main thread reports progress while the pool renders. (In synchronous
+    // mode the rows have already run during dispatch, so this loop is skipped.)
     while (linesComplete.load() < IMAGE_SIZE) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         int done = linesComplete.load();
         int pct = (done * 100) / IMAGE_SIZE;
         std::cerr << "\r  Progress: " << pct << "% (" << done << "/" << IMAGE_SIZE << ")  " << std::flush;
     }
-
-    for (auto& t : threads) {
-        t.join();
-    }
+    jobs.wait(&renderCounter);
 
     std::cerr << "\r  Progress: 100%                \n";
     std::cerr << "Done rendering.\n";
