@@ -5,6 +5,8 @@
 #include "../renderer/renderer.h"
 #include "physics/physics_world.h"
 
+namespace engine {
+
 // Position / orientation / scale. Compose into a model matrix with matrix().
 struct Transform {
     Vec3 position;
@@ -64,5 +66,8 @@ struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
+
+
+}  // namespace engine
 
 #endif

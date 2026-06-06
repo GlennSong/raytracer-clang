@@ -2,6 +2,8 @@
 
 #include "../src/engine/input/input_map.h"
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 namespace {
 
 // Build the events the window layer would produce, for driving InputMap.

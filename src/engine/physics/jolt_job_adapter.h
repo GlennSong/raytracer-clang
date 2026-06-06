@@ -16,7 +16,9 @@
 #include <Jolt/Core/JobSystemWithBarrier.h>
 #include <Jolt/Core/FixedSizeFreeList.h>
 
-namespace engine { class JobSystem; }   // our thread pool (src/job_system.h)
+namespace engine {
+
+class JobSystem;   // our thread pool (src/job_system.h)
 
 class JoltJobAdapter final : public JPH::JobSystemWithBarrier {
 public:
@@ -43,5 +45,8 @@ private:
     using AvailableJobs = JPH::FixedSizeFreeList<Job>;
     AvailableJobs jobs;
 };
+
+
+}  // namespace engine
 
 #endif

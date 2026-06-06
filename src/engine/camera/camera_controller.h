@@ -4,6 +4,8 @@
 #include "../../rt_math.h"
 #include "../../renderer/renderer.h"
 
+namespace engine {
+
 // Resolved camera intent for one frame, decoupled from how it was sourced
 // (keyboard, mouse, gamepad). CameraSystem fills this from the action layer and
 // pointer state; controllers consume it. Movement axes are normalized intent in
@@ -37,5 +39,8 @@ public:
 protected:
     bool orthoEnabled = false;
 };
+
+
+}  // namespace engine
 
 #endif

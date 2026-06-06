@@ -1,6 +1,8 @@
 #ifndef RAYTRACER_ENGINE_CLOCK_H
 #define RAYTRACER_ENGINE_CLOCK_H
 
+namespace engine {
+
 // Decouples a fixed-timestep simulation from a variable frame rate.
 //
 // Each frame, feed the real elapsed seconds to advance(); it returns how many
@@ -42,5 +44,8 @@ private:
     static constexpr double MAX_FRAME_SECONDS = 0.25;
     static constexpr int MAX_STEPS_PER_ADVANCE = 8;
 };
+
+
+}  // namespace engine
 
 #endif

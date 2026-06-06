@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
+namespace engine {
+
 namespace {
 
 // Default key for each action, overridable via a "bind.<action>" Settings entry
@@ -65,3 +67,6 @@ void DevControlSystem::update(FrameContext& ctx) {
 void DevControlSystem::onStop(FrameContext& ctx) {
     ctx.settings.setDouble("timeScale", simSpeed);
 }
+
+}  // namespace engine
+

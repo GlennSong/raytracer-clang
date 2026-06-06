@@ -1,5 +1,7 @@
 #include "application.h"
 
+namespace engine {
+
 Application::Application() = default;
 Application::~Application() = default;
 
@@ -116,3 +118,6 @@ void Application::run() {
     rendererPtr->shutdownDebugUi();
     rendererPtr->shutdown();
 }
+
+}  // namespace engine
+

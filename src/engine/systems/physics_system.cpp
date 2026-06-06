@@ -2,6 +2,8 @@
 
 #include "../components.h"
 
+namespace engine {
+
 bool PhysicsSystem::initialize(engine::JobSystem* jobs) { return physics.initialize(jobs); }
 
 void PhysicsSystem::shutdown() { physics.shutdown(); }
@@ -52,3 +54,6 @@ void PhysicsSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void PhysicsSystem::onStop(FrameContext&) { shutdown(); }
+
+}  // namespace engine
+

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstddef>
 
+namespace engine {
+
 // Type-erased base so the registry can hold one pool per component type and
 // drop a destroyed entity's component without knowing the component type.
 class ISparseSet {
@@ -67,5 +69,8 @@ private:
     std::vector<uint32_t> denseEntity;  // dense position -> entityIndex
     std::vector<T> denseData;           // dense position -> component
 };
+
+
+}  // namespace engine
 
 #endif

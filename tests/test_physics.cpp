@@ -3,6 +3,8 @@
 #include "../src/engine/physics/physics_world.h"
 #include "../src/job_system.h"
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 namespace {
 
 // A ground box centered at y=-1 with half-height 1, so its top is y=0.

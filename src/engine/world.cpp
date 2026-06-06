@@ -1,5 +1,7 @@
 #include "world.h"
 
+namespace engine {
+
 Entity World::create() {
     return entities.insert(EntityMeta{});
 }
@@ -12,3 +14,6 @@ void World::destroy(Entity entity) {
 bool World::alive(Entity entity) const {
     return entities.contains(entity);
 }
+
+}  // namespace engine
+

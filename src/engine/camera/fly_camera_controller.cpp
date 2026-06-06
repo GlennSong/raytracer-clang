@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 // Convention: yaw rotates about world Y, pitch about the camera's right axis.
 // At yaw = pitch = 0 the camera looks down -Z and right is +X.
 Vec3 FlyCameraController::forward() const {
@@ -49,3 +51,6 @@ CameraState FlyCameraController::cameraState(float aspect) const {
     state.farPlane = 1000.0f;
     return state;
 }
+
+}  // namespace engine
+

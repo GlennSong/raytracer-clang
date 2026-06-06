@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 void OrbitCameraController::update(const CameraInput& input, Real dt) {
     yaw += input.lookYawDelta;
     pitch += input.lookPitchDelta;
@@ -47,3 +49,6 @@ CameraState OrbitCameraController::cameraState(float aspect) const {
     state.farPlane = 1000.0f;
     return state;
 }
+
+}  // namespace engine
+

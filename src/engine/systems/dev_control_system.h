@@ -3,6 +3,8 @@
 
 #include "../system.h"
 
+namespace engine {
+
 // Built-in development controls: quit, pause, and simulation-speed adjustment.
 // Bindings go through the named-action layer (see input_map.h), so keys are
 // configurable via Settings rather than hardcoded. Persists the chosen speed
@@ -17,5 +19,8 @@ private:
     double simSpeed = 1.0;   // time scale applied when not paused
     bool paused = false;
 };
+
+
+}  // namespace engine
 
 #endif

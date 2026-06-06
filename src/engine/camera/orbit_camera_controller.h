@@ -3,6 +3,8 @@
 
 #include "camera_controller.h"
 
+namespace engine {
+
 // Orbits a target point: look deltas rotate around it, move axes pan the target,
 // zoom changes orbit distance. Good for inspecting a fixed subject. (Port of the
 // former renderer/OrbitCamera onto the controller seam.)
@@ -21,5 +23,8 @@ public:
 
     Vec3 position() const;
 };
+
+
+}  // namespace engine
 
 #endif

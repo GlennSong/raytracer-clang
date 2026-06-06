@@ -5,6 +5,8 @@
 #include "../src/engine/world.h"
 #include "../src/engine/components.h"
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 namespace {
 
 Entity addFloor(World& world) {

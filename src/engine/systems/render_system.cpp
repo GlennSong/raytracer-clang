@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 void RenderSystem::onStart(FrameContext& ctx) {
     exposure = static_cast<float>(ctx.settings.getDouble("exposure", 0.5));
     ctx.view.exposure = exposure;
@@ -30,3 +32,6 @@ void RenderSystem::render(FrameContext& ctx) {
 void RenderSystem::onStop(FrameContext& ctx) {
     ctx.settings.setDouble("exposure", exposure);
 }
+
+}  // namespace engine
+

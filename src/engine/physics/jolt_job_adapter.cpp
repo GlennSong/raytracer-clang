@@ -2,6 +2,8 @@
 
 #include "../../job_system.h"
 
+namespace engine {
+
 JoltJobAdapter::JoltJobAdapter(engine::JobSystem& pool, JPH::uint maxJobs, JPH::uint maxBarriers)
     : JPH::JobSystemWithBarrier(maxBarriers), pool(pool) {
     jobs.Init(maxJobs, maxJobs);
@@ -50,3 +52,6 @@ void JoltJobAdapter::QueueJobs(Job** inJobs, JPH::uint inNumJobs) {
 void JoltJobAdapter::FreeJob(Job* inJob) {
     jobs.DestructObject(inJob);
 }
+
+}  // namespace engine
+

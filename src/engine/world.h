@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstddef>
 
+namespace engine {
+
 struct EntityTag {};
 using Entity = Handle<EntityTag>;
 
@@ -108,5 +110,8 @@ private:
     SlotMap<EntityMeta, EntityTag> entities;
     std::unordered_map<ComponentId, std::unique_ptr<ISparseSet>> pools;
 };
+
+
+}  // namespace engine
 
 #endif

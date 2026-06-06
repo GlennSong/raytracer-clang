@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace engine {
+
 // Thin wrapper that seals Jolt behind a Jolt-free interface (ADR-0012), the same
 // way Window seals GLFW: no JPH:: type appears in this header, so engine/game
 // code and tests depend only on our own math types. The PhysicsSystem (ECS
@@ -17,7 +19,7 @@ enum class BodyMotion { Static, Kinematic, Dynamic };
 using PhysicsBodyId = uint32_t;
 constexpr PhysicsBodyId INVALID_PHYSICS_BODY = 0xFFFFFFFFu;
 
-namespace engine { class JobSystem; }   // our thread pool (src/job_system.h)
+class JobSystem;   // our thread pool (src/job_system.h)
 
 class PhysicsWorld {
 public:
@@ -56,5 +58,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
+
+
+}  // namespace engine
 
 #endif

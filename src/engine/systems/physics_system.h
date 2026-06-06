@@ -4,7 +4,9 @@
 #include "../system.h"
 #include "../physics/physics_world.h"
 
-namespace engine { class JobSystem; }   // our shared thread pool (src/job_system.h)
+namespace engine {
+
+class JobSystem;   // our shared thread pool (src/job_system.h)
 
 // Drives Jolt physics from the ECS (ADR-0012, ROADMAP 2.3 Step C). Creates a
 // body for every entity with Transform + RigidBody + Collider, steps the world
@@ -30,5 +32,8 @@ public:
 private:
     PhysicsWorld physics;
 };
+
+
+}  // namespace engine
 
 #endif

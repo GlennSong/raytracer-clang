@@ -5,6 +5,8 @@
 #include "../camera/orbit_camera_controller.h"
 #include "../camera/fly_camera_controller.h"
 
+namespace engine {
+
 // Drives the active camera controller from the action layer (keyboard, mouse,
 // and gamepad) each frame and publishes the resulting view into the RenderView.
 // Holds both an orbit and a fly controller and toggles between them at runtime
@@ -27,5 +29,8 @@ private:
     Real mouseSensitivity = 0.3;   // degrees per pixel
     Real stickLookSpeed = 120.0;   // degrees/sec at full stick deflection
 };
+
+
+}  // namespace engine
 
 #endif

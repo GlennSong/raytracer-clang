@@ -18,6 +18,8 @@
 #include <cstdarg>
 #include <cstdio>
 
+namespace engine {
+
 JPH_SUPPRESS_WARNINGS
 
 namespace {
@@ -260,3 +262,6 @@ void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
                                    &impl->tempAllocator, impl->jobSystem.get());
     }
 }
+
+}  // namespace engine
+

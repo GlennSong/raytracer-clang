@@ -4,6 +4,8 @@
 #include <imgui.h>
 #endif
 
+namespace engine {
+
 void DebugOverlaySystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     ImGui::Begin("Debug");
@@ -22,3 +24,5 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     (void)ctx;  // inert without ImGui (ADR-0011)
 #endif
 }
+
+}  // namespace engine

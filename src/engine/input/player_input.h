@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+namespace engine {
+
 // Local-player input infrastructure (ADR-0010). A "player" here is purely an
 // input concept — a human at a device with their own bindings — and carries NO
 // gameplay state. Gameplay associates an entity with a player via the generic
@@ -71,5 +73,8 @@ private:
     std::vector<std::unique_ptr<PlayerInput>> players;
     bool autoJoin = true;
 };
+
+
+}  // namespace engine
 
 #endif

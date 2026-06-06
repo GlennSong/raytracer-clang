@@ -12,6 +12,8 @@
 #include <vector>
 #include <utility>
 
+namespace engine {
+
 // Owns the window, renderer, world, clock, and the set of Systems, and drives
 // the fixed-timestep frame loop that ticks them. Pure mechanism: all
 // game-specific behaviour lives in Systems and the scene built into world().
@@ -69,5 +71,8 @@ private:
     double interpolation = 0.0;
     bool quit = false;
 };
+
+
+}  // namespace engine
 
 #endif

@@ -2,6 +2,8 @@
 
 #include "../src/engine/world.h"
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 // Local component types so these tests exercise the registry without pulling in
 // the renderer-coupled engine components.
 namespace {

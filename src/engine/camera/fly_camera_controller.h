@@ -3,6 +3,8 @@
 
 #include "camera_controller.h"
 
+namespace engine {
+
 // Free-fly / FPS camera: the camera is a free agent in space. Look deltas rotate
 // the view (yaw/pitch); move axes translate along the facing direction (forward/
 // strafe) and world up. The camera for traversing large/generated worlds
@@ -25,5 +27,8 @@ public:
 private:
     static constexpr Real PITCH_LIMIT = 89.0;
 };
+
+
+}  // namespace engine
 
 #endif

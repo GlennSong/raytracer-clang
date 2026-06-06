@@ -11,6 +11,8 @@
 #include "../job_system.h"
 #include <vector>
 
+namespace engine {
+
 // Shared "what to render this frame" resource. Systems that produce view data
 // (camera, lighting, exposure) write it; the render system reads it. A minimal
 // stand-in for the resource concept a full ECS will formalize later.
@@ -54,5 +56,8 @@ public:
     virtual void render(FrameContext&) {}
     virtual void onStop(FrameContext&) {}
 };
+
+
+}  // namespace engine
 
 #endif

@@ -1,5 +1,7 @@
 #include "camera_system.h"
 
+namespace engine {
+
 void CameraSystem::registerBindings(InputMap& actions) const {
     // Movement: keyboard digital + gamepad sticks/triggers. Gamepad axis signs
     // account for GLFW's convention (stick up and look up are negative).
@@ -110,3 +112,6 @@ void CameraSystem::onStop(FrameContext& ctx) {
 
     ctx.settings.setString("cameraMode", flyActive ? "fly" : "orbit");
 }
+
+}  // namespace engine
+
