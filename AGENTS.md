@@ -13,18 +13,17 @@ decision is hard to reverse or spans multiple modules.
 
 ```
 src/
-  math.h / math.cpp       — Vec3, Mat4, Ray, all linear algebra (Real scalar)
-  handle.h                — Handle<Tag>: type-safe recyclable IDs
-  slot_map.h              — SlotMap<T>: recycling storage, stale-handle detection
-  log.h / log.cpp         — leveled logging (LOG_INFO / LOG_WARN / LOG_ERROR)
-  check.h                 — ASSERT (debug-only) / CHECK (always-on) macros
-  image.h / image.cpp      — Image buffer and PPM output
-  camera.h / camera.cpp    — Camera model and ray generation
-  geometry.h / geometry.cpp — Shapes (Sphere, Triangle), hit records
-  material.h / material.cpp — Materials and BRDFs
-  scene.h / scene.cpp       — Scene graph, object list
-  objloader.h / objloader.cpp — Wavefront OBJ parser
-  kdtree.h / kdtree.cpp     — KD-tree acceleration structure
+  rt_math.h / rt_math.cpp   — Vec3, Mat4, Quat, Ray, all linear algebra (Real scalar)
+  handle.h                   — Handle<Tag>: type-safe recyclable IDs
+  slot_map.h                 — SlotMap<T>: recycling storage, stale-handle detection
+  log.h / log.cpp            — leveled logging (LOG_INFO / LOG_WARN / LOG_ERROR)
+  check.h                    — ASSERT (debug-only) / CHECK (always-on) macros
+  image.h / image.cpp        — Image buffer and PPM output
+  camera.h / camera.cpp      — Camera model and ray generation
+  geometry.h / geometry.cpp  — Shapes (Sphere, Triangle), hit records
+  material.h / material.cpp  — Materials and BRDFs
+  scene.h / scene.cpp        — Scene graph, object list
+  kdtree.h / kdtree.cpp      — KD-tree acceleration structure
   main.cpp                   — Entry point, render loop
 ```
 
@@ -34,16 +33,36 @@ math/core modules:
 ```
 src/
   renderer/
-    renderer.h              — RHI: backend-agnostic rendering interface
-    event.h                  — Backend-neutral window/input events
-    window.h / window.cpp    — Windowing + input (GLFW), the platform boundary
-    orbit_camera.h / .cpp    — Interactive orbit camera
+    renderer.h               — RHI: backend-agnostic rendering interface
+    event.h                   — Backend-neutral window/input events (incl. gamepad)
+    gamepad.h                 — Backend-neutral gamepad types (buttons/axes/state)
+    gamepad_gc.h / .mm        — GCController backend (macOS); no-op elsewhere (ADR-0013)
+    window.h / window.cpp     — Windowing + input (GLFW), the platform boundary
     settings.h / settings.cpp — Persisted viewer settings
-    metal/metal_renderer.mm  — Metal backend implementation (macOS)
+    metal/metal_renderer.mm   — Metal backend implementation (macOS)
   engine/
-    clock.h / clock.cpp      — Fixed-timestep simulation clock
-    world.h / world.cpp      — Entity / Transform world model
-  viewer_main.cpp            — Interactive viewer entry point
+    clock.h / clock.cpp       — Fixed-timestep simulation clock
+    world.h / world.cpp       — Entity / Transform world model (sparse-set ECS)
+    components.h / .cpp       — ECS components (Transform, Renderable, Velocity, etc.)
+    application.h / .cpp      — Application spine + system scheduler
+    system.h                  — System base class + FrameContext
+    input/
+      input_map.h / .cpp      — Named-action input mapping layer
+      player_input.h / .cpp   — Per-player input routing + device assignment
+    camera/
+      camera_controller.h     — CameraController seam (orbit/fly)
+      orbit_camera_controller.h / .cpp
+      fly_camera_controller.h / .cpp
+    physics/
+      physics_world.h / .cpp  — Jolt wrapper (pimpl, Jolt-free header)
+    systems/
+      camera_system.h / .cpp  — Camera input bindings + controller switching
+      dev_control_system.h / .cpp — Pause/quit/time-scale/exposure
+      motion_system.h / .cpp  — Kinematic mover (Velocity-driven)
+      physics_system.h / .cpp — Jolt-driven rigid body simulation
+      render_system.h / .cpp  — ECS → RenderView bridge
+      debug_overlay_system.h / .cpp — ImGui overlays (inert without RT_ENABLE_IMGUI)
+  viewer_main.cpp             — Interactive viewer entry point
 ```
 
 Each module is one header + one implementation file. Keep includes minimal —

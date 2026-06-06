@@ -25,6 +25,11 @@ The viewer target builds only where GLFW is found (e.g. macOS); physics
 (`-DRT_ENABLE_PHYSICS=ON`, default) is cross-platform and builds/tests headless.
 Add `-DRT_ENABLE_IMGUI=ON` to enable the Dear ImGui debug overlay.
 
+Gamepad support uses Apple's GCController framework on macOS (ADR-0013) for
+Xbox/PS controllers, with GLFW's IOKit path as fallback. A
+`gamecontrollerdb.txt` (SDL_GameControllerDB) is loaded at init for the IOKit
+path. See `src/renderer/gamepad_gc.mm`.
+
 ## Planning
 
 See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D

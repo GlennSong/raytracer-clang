@@ -184,9 +184,10 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
 for physics debug viz.
 
 ### 2.4 Gamepad & local-player input
-**Status:** Engine-side done (gamepad bindings, per-player input, `ControlledBy`);
-GLFW polling in `window.cpp` pending macOS verification with a real controller.
-See ADR-0010 for the engine/game boundary.
+**Status:** Done — engine input layer, GLFW polling, and GCController backend
+all verified on macOS 15.5 with an Xbox Series controller over USB.
+See ADR-0010 for the engine/game boundary, ADR-0013 for the GCController macOS
+gamepad backend.
 **Why:** Multiple controllers (e.g. four Xbox pads) and the foundation for local
 "couch" multiplayer. Built on the action layer (2.1).
 
@@ -201,8 +202,13 @@ See ADR-0010 for the engine/game boundary.
   controls stay on the global `ctx.actions`.
 - ✅ Generic `ControlledBy{ playerIndex }` component — the only engine bridge
   from a player slot to an entity (game adds its own components).
-- ⏳ `window.cpp` polls GLFW gamepads and emits connect/disconnect events —
-  written, but macOS-only, so unverified in the Linux sandbox.
+- ✅ `window.cpp` polls GLFW gamepads (IOKit path) and emits connect/disconnect
+  events; `gamepad_gc.mm` provides a GCController overlay for controllers that
+  macOS claims via DriverKit (Xbox/PS on macOS 13+). See ADR-0013.
+- ✅ `gamecontrollerdb.txt` (SDL_GameControllerDB) loaded at init for GLFW's
+  IOKit fallback path.
+- ✅ Verified on macOS 15.5 with Xbox Series controller (USB): left stick moves,
+  right stick looks, triggers up/down, bumper boosts, Back/Start toggle modes.
 
 **Deferred (ADR-0010):** networked multiplayer (transport, authority,
 replication, prediction/rollback) — premature; the deterministic sim (ADR-0002)

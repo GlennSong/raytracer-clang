@@ -358,9 +358,11 @@ System/menu controls (quit, pause) stay on a **global** `InputMap`
 **Consequences / tech debt.**
 - `FrameContext` grows a `PlayerInputs& players` alongside the global
   `actions`. Single-player is just the one-slot case.
-- The actual gamepad **polling lives in `window.cpp`** (GLFW), which is
-  macOS-only and not Linux-compilable — same constraint as the rest of the
-  window seam. The engine-side parts (`InputMap` gamepad logic, `PlayerInputs`,
+- The actual gamepad **polling lives in `window.cpp`** (GLFW) and
+  `gamepad_gc.mm` (GCController), both macOS-only and not Linux-compilable —
+  same constraint as the rest of the window seam. The GCController layer was
+  necessary because macOS 13+ DriverKit intercepts Xbox/PS controllers; see
+  ADR-0013. The engine-side parts (`InputMap` gamepad logic, `PlayerInputs`,
   deadzone) are unit-tested without a window.
 - No "drive the avatar from a player's axis" system is provided — that first
   touch of gameplay belongs to a game/demo layer, not the engine.
@@ -528,6 +530,84 @@ offline tracer, unit tests, and physics tests always configure.
 
 ---
 
+## ADR-0013 — GCController gamepad backend for macOS
+**Status:** Accepted · **Date:** 2026-06-04
+
+**Context.** GLFW 3.4's IOKit-based joystick backend cannot read Xbox or
+PlayStation controllers on macOS 13+. Apple's DriverKit extension
+(`com.apple.gamecontroller.driver.XboxGamepad`) claims these devices at the USB
+level and re-presents them with a vendor-specific HID descriptor (usage page
+`0xFF00`). IOKit sees the device as present but reports 0 axes, 0 buttons, 0
+hats — regardless of permissions, gamepad mapping databases, or GLFW version.
+Steam works because it has its own HID driver layer bypassing IOKit entirely.
+
+The **only** reliable path on modern macOS is Apple's Game Controller framework
+(`GCController`), which speaks the vendor protocol natively.
+
+**Decision.** Add a GCController polling layer (`renderer/gamepad_gc.mm`) that
+runs alongside GLFW's existing IOKit path. Architecture:
+
+- **Callback-based.** A `valueChangedHandler` on each controller's
+  `GCExtendedGamepad` caches the latest input snapshot in a static
+  `GCCachedPad` array. Polling alone does not work — GCController delivers
+  input updates asynchronously through the Cocoa run loop, which GLFW's
+  `glfwPollEvents()` does not fully service.
+- **Run loop pump.** `gcPollGamepads()` explicitly services `NSRunLoop` each
+  frame (`runMode:beforeDate:`) so GCController's internal dispatch delivers
+  pending input events and connect/disconnect notifications.
+- **Notification-based connect/disconnect.** Listens for
+  `GCControllerDidConnectNotification` / `GCControllerDidDisconnectNotification`
+  rather than re-enumerating `[GCController controllers]` each frame. On
+  connect, a slot is assigned and the `valueChangedHandler` installed; on
+  disconnect, the slot is released.
+- **Overlay, not replacement.** `gcPollGamepads()` runs after GLFW's gamepad
+  loop in `Window::pollEvents()` and overwrites any slot where GCController has
+  data. Controllers that GLFW's IOKit path handles natively (non-Apple-claimed
+  devices, or future GLFW versions with GCController support) continue to work
+  unchanged. On non-Apple platforms, `gcPollGamepads` is an inline no-op.
+- **Y-axis negated** to match GLFW convention (stick-up = negative), so existing
+  camera bindings work without modification.
+- **`gamecontrollerdb.txt`** (SDL_GameControllerDB) loaded at init as a fallback
+  for GLFW's IOKit mapping path. Harmless and provides coverage for any
+  controller that IOKit *can* still see.
+
+Adheres to ADR-0001: `gamepad_gc.mm` is a platform-specific file behind the
+Window seam; the engine sees only `GamepadState`. The header (`gamepad_gc.h`)
+compiles to an inline no-op on non-Apple platforms.
+
+**Alternatives considered.**
+- Building GLFW from source with GCController support — rejected: GLFW 3.4
+  (including `main` branch) has no GCController backend; it is IOKit-only on
+  macOS.
+- Writing our own IOKit HID layer to parse the vendor-specific descriptor —
+  rejected: reverse-engineering Apple's proprietary protocol is fragile and
+  duplicates what GCController already does.
+- Using SDL2 for gamepad input — rejected: heavy dependency for a single
+  feature; GCController is ~100 lines of Obj-C++ and is the official Apple API.
+- Polling `gp.leftThumbstick.xAxis.value` directly without callbacks — tried
+  first; values always read 0 because the run loop was not servicing
+  GCController's internal dispatch. The callback approach solved this.
+
+**Consequences / tech debt.**
+- `gamepad_gc.mm` is Objective-C++ and macOS-only. It links
+  `GameController.framework`, added to `CMakeLists.txt` under the Apple
+  platform block.
+- The `GCCachedPad` cache is written from GCController's dispatch queue and
+  read from the main thread. `GamepadState` is small and reads happen between
+  frames, so a torn read produces at most one frame of mixed old/new data —
+  acceptable for input.
+- Controllers already plugged in at launch require a run loop pump during
+  `gcInit()` to deliver the pending connect notifications before enumeration.
+  If a controller is still not detected at launch, a physical reconnect
+  triggers the notification reliably.
+
+**Revisit trigger.** GLFW adding native GCController support (eliminating the
+need for this layer); targeting non-Apple platforms that need a similar
+workaround (→ consider SDL2 at that point); or Apple changing the DriverKit
+protocol (unlikely to break GCController, since it's their own framework).
+
+---
+
 ## ADR-0014 — A minimal shared-queue `JobSystem` for parallelism
 **Status:** Accepted · **Date:** 2026-06-05
 
@@ -683,7 +763,7 @@ to be replaced; listed here so they stay visible.
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
 | ~~Legacy `uint32_t` handles~~ | ~~`renderer.h` (`MeshHandle`)~~ | *Resolved (ADR-0007): `MeshHandle`/`BufferHandle` are now `Handle<Tag>`; the Metal backend stores meshes in a `SlotMap<GPUMesh>`. First brick of the asset system.* | — |
-| macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
+| macOS-only verification | `window.cpp`, `metal_renderer.mm`, `gamepad_gc.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
 | Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0014) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
