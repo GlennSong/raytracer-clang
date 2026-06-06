@@ -63,9 +63,9 @@ CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
     in.moveUp = ctx.actions.axis("cam_up");
     in.boost = ctx.actions.held("cam_boost");
 
-    // Mouse look is active while dragging: left button for orbit (rotate about
-    // the subject), right button for fly (mouse-look). Stick look is always on.
-    bool mouseLook = flyActive ? ctx.input.mouseRightDown : ctx.input.mouseLeftDown;
+    bool mouseLook = flyActive
+        ? (fly.positionLocked || ctx.input.mouseRightDown)
+        : ctx.input.mouseLeftDown;
     Real mouseYaw = mouseLook ? -ctx.input.mouseDeltaX * mouseSensitivity : 0.0;
     Real mousePitch = mouseLook ? -ctx.input.mouseDeltaY * mouseSensitivity : 0.0;
 

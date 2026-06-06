@@ -19,6 +19,19 @@ struct Vertex {
         : position(pos), normal(norm), u(u), v(v) {}
 };
 
+inline BoundingSphere computeBoundingSphere(const Vertex* vertices, size_t count) {
+    if (count == 0) return {};
+    Vec3 center;
+    for (size_t i = 0; i < count; i++) center += vertices[i].position;
+    center /= static_cast<Real>(count);
+    Real maxDistSq = 0;
+    for (size_t i = 0; i < count; i++) {
+        Real dSq = (vertices[i].position - center).lengthSquared();
+        if (dSq > maxDistSq) maxDistSq = dSq;
+    }
+    return {center, std::sqrt(maxDistSq)};
+}
+
 struct RenderMaterial {
     Vec3 albedo;
     float metallic;
@@ -47,6 +60,64 @@ struct PointLight {
     PointLight() : color(1, 1, 1), intensity(1.0f) {}
     PointLight(const Vec3& pos, const Vec3& col, float intensity)
         : position(pos), color(col), intensity(intensity) {}
+};
+
+struct DirectionalLight {
+    Vec3 direction;     // toward the light source (sun direction)
+    Vec3 color;
+    float intensity;
+    bool castsShadow;
+
+    DirectionalLight()
+        : direction(0.5, 0.7, -0.3), color(1, 1, 1), intensity(1.0f),
+          castsShadow(true) {}
+    DirectionalLight(const Vec3& dir, const Vec3& col, float intensity,
+                     bool shadow = true)
+        : direction(dir), color(col), intensity(intensity),
+          castsShadow(shadow) {}
+};
+
+struct SpotLight {
+    Vec3 position;
+    Vec3 direction;     // toward target
+    Vec3 color;
+    float intensity;
+    float innerConeAngle;   // radians
+    float outerConeAngle;   // radians
+    bool castsShadow;
+
+    SpotLight()
+        : color(1, 1, 1), intensity(1.0f),
+          innerConeAngle(0.3f), outerConeAngle(0.5f),
+          castsShadow(false) {}
+    SpotLight(const Vec3& pos, const Vec3& dir, const Vec3& col,
+              float intensity, float inner, float outer,
+              bool shadow = false)
+        : position(pos), direction(dir), color(col), intensity(intensity),
+          innerConeAngle(inner), outerConeAngle(outer),
+          castsShadow(shadow) {}
+};
+
+struct ShadowConfig {
+    float bias = 0.005f;
+    float normalBias = 0.02f;
+    int resolution = 2048;
+    bool enabled = true;
+};
+
+struct SceneLighting {
+    DirectionalLight sun;
+    std::vector<PointLight> pointLights;
+    std::vector<SpotLight> spotLights;
+    ShadowConfig shadow;
+    float exposure = 1.0f;
+};
+
+struct RenderStats {
+    uint32_t drawCalls = 0;
+    uint32_t instancedDrawCalls = 0;
+    uint32_t totalInstances = 0;
+    uint32_t entitiesSubmitted = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };
@@ -89,10 +160,12 @@ public:
 
     virtual MeshHandle uploadMesh(const RenderMesh& mesh) = 0;
     virtual void removeMesh(MeshHandle handle) = 0;
+    virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
+    virtual RenderStats getRenderStats() const = 0;
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
-    virtual void setLights(const std::vector<PointLight>& lights, float exposure = 1.0f) = 0;
+    virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
     virtual void endFrame() = 0;

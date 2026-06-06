@@ -38,16 +38,30 @@ struct MaterialUniforms {
     simd_float3 emission;
 };
 
-struct LightData {
-    simd_float3 position;
-    simd_float3 color;
-    float intensity;
+enum GPULightType : int32_t {
+    LightType_Point       = 0,
+    LightType_Directional = 1,
+    LightType_Spot        = 2,
+};
+
+struct alignas(16) GPULight {
+    simd_float3   position;       // point/spot
+    float         intensity;
+    simd_float3   direction;      // directional/spot
+    float         innerCosAngle;  // spot (cos of inner cone)
+    simd_float3   color;
+    float         outerCosAngle;  // spot (cos of outer cone)
+    simd_float4x4 lightViewProjection; // shadow matrix
+    int32_t       type;           // GPULightType
+    int32_t       shadowMapIndex; // -1 = no shadow
+    float         _pad[2];
 };
 
 struct LightUniforms {
-    LightData lights[8];
-    int lightCount;
-    float exposure;
+    GPULight lights[32];
+    int32_t  lightCount;
+    float    exposure;
+    float    _pad[2];
 };
 
 struct GPUMesh {
@@ -55,7 +69,21 @@ struct GPUMesh {
     id<MTLBuffer> indexBuffer;
     uint32_t indexCount;
     int materialIndex;
+    BoundingSphere bounds;
 };
+
+struct alignas(16) GPUInstanceData {
+    simd_float4x4 model;
+    simd_float4x4 normalMatrix;
+    simd_float4 albedo;     // w unused
+    float metallic;
+    float roughness;
+    float opacity;
+    float _pad0;
+    simd_float4 emission;   // w unused
+};
+
+static constexpr uint32_t MAX_INSTANCES = 4096;
 
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
@@ -74,8 +102,11 @@ struct MetalRenderer::Impl {
     id<MTLCommandQueue> commandQueue;
     id<MTLRenderPipelineState> opaquePipeline;
     id<MTLRenderPipelineState> transparentPipeline;
+    id<MTLRenderPipelineState> opaqueInstancedPipeline;
+    id<MTLRenderPipelineState> transparentInstancedPipeline;
     id<MTLDepthStencilState> depthStateOpaque;
     id<MTLDepthStencilState> depthStateTransparent;
+    id<MTLBuffer> instanceBuffer;
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
@@ -86,6 +117,25 @@ struct MetalRenderer::Impl {
 
     CameraUniforms cameraUniforms;
     LightUniforms lightUniforms;
+    id<MTLBuffer> lightBuffer;
+
+    // Shadow mapping
+    id<MTLTexture> shadowMap;
+    id<MTLRenderPipelineState> shadowPipeline;
+    id<MTLRenderPipelineState> shadowInstancedPipeline;
+    id<MTLDepthStencilState> shadowDepthState;
+    id<MTLSamplerState> shadowSampler;
+    int shadowMapSize = 2048;
+    bool shadowEnabled = false;
+    CameraUniforms shadowCameraUniforms;  // light VP for shadow pass
+
+    struct ShadowUniforms {
+        float shadowBias;
+        float normalBias;
+        float pcfRadius;
+        int32_t shadowMapSize;
+    };
+    ShadowUniforms shadowUniforms;
 
     id<CAMetalDrawable> currentDrawable;
     id<MTLCommandBuffer> currentCommandBuffer;
@@ -106,6 +156,7 @@ struct MetalRenderer::Impl {
     std::vector<DrawCall> opaqueDrawCalls;
     std::vector<DrawCall> transparentDrawCalls;
     Vec3 currentCameraPos;
+    RenderStats lastStats;
 };
 
 MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
@@ -151,6 +202,8 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     id<MTLFunction> vertexFunc = [library newFunctionWithName:@"vertexMain"];
     id<MTLFunction> fragmentFunc = [library newFunctionWithName:@"fragmentMain"];
+    id<MTLFunction> vertexInstancedFunc = [library newFunctionWithName:@"vertexMainInstanced"];
+    id<MTLFunction> fragmentInstancedFunc = [library newFunctionWithName:@"fragmentMainInstanced"];
 
     // Opaque pipeline
     MTLRenderPipelineDescriptor* pipelineDesc = [[MTLRenderPipelineDescriptor alloc] init];
@@ -166,7 +219,19 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         return false;
     }
 
+    // Opaque instanced pipeline
+    pipelineDesc.vertexFunction = vertexInstancedFunc;
+    pipelineDesc.fragmentFunction = fragmentInstancedFunc;
+    impl->opaqueInstancedPipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                                                 error:&error];
+    if (!impl->opaqueInstancedPipeline) {
+        NSLog(@"Instanced pipeline error: %@", error);
+        return false;
+    }
+
     // Transparent pipeline (alpha blending)
+    pipelineDesc.vertexFunction = vertexFunc;
+    pipelineDesc.fragmentFunction = fragmentFunc;
     pipelineDesc.colorAttachments[0].blendingEnabled = YES;
     pipelineDesc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
     pipelineDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
@@ -175,6 +240,79 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     impl->transparentPipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
                                                                              error:&error];
+
+    // Transparent instanced pipeline
+    pipelineDesc.vertexFunction = vertexInstancedFunc;
+    pipelineDesc.fragmentFunction = fragmentInstancedFunc;
+    impl->transparentInstancedPipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                                                      error:&error];
+
+    // Instance data buffer
+    impl->instanceBuffer = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
+                                                     options:MTLResourceStorageModeShared];
+
+    // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
+    impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
+                                                  options:MTLResourceStorageModeShared];
+
+    // Shadow map texture
+    {
+        MTLTextureDescriptor* shadowDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                         width:impl->shadowMapSize
+                                        height:impl->shadowMapSize
+                                     mipmapped:NO];
+        shadowDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        shadowDesc.storageMode = MTLStorageModePrivate;
+        impl->shadowMap = [impl->device newTextureWithDescriptor:shadowDesc];
+    }
+
+    // Shadow depth-only pipelines
+    {
+        id<MTLFunction> shadowVertFunc = [library newFunctionWithName:@"vertexShadow"];
+        id<MTLFunction> shadowVertInstFunc = [library newFunctionWithName:@"vertexShadowInstanced"];
+
+        MTLRenderPipelineDescriptor* shadowPipeDesc = [[MTLRenderPipelineDescriptor alloc] init];
+        shadowPipeDesc.vertexFunction = shadowVertFunc;
+        shadowPipeDesc.fragmentFunction = nil;
+        shadowPipeDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+        // No color attachment for shadow pass
+
+        impl->shadowPipeline = [impl->device newRenderPipelineStateWithDescriptor:shadowPipeDesc
+                                                                            error:&error];
+        if (!impl->shadowPipeline) {
+            NSLog(@"Shadow pipeline error: %@", error);
+        }
+
+        shadowPipeDesc.vertexFunction = shadowVertInstFunc;
+        impl->shadowInstancedPipeline = [impl->device newRenderPipelineStateWithDescriptor:shadowPipeDesc
+                                                                                     error:&error];
+        if (!impl->shadowInstancedPipeline) {
+            NSLog(@"Shadow instanced pipeline error: %@", error);
+        }
+    }
+
+    // Shadow depth state
+    {
+        MTLDepthStencilDescriptor* shadowDepthDesc = [[MTLDepthStencilDescriptor alloc] init];
+        shadowDepthDesc.depthCompareFunction = MTLCompareFunctionLess;
+        shadowDepthDesc.depthWriteEnabled = YES;
+        impl->shadowDepthState = [impl->device newDepthStencilStateWithDescriptor:shadowDepthDesc];
+    }
+
+    // Shadow comparison sampler
+    {
+        MTLSamplerDescriptor* samplerDesc = [[MTLSamplerDescriptor alloc] init];
+        samplerDesc.compareFunction = MTLCompareFunctionLessEqual;
+        samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        samplerDesc.mipFilter = MTLSamplerMipFilterNotMipmapped;
+        samplerDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        samplerDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        impl->shadowSampler = [impl->device newSamplerStateWithDescriptor:samplerDesc];
+    }
+
+    impl->shadowUniforms = {0.005f, 0.02f, 1.0f, impl->shadowMapSize};
 
     // Depth states
     MTLDepthStencilDescriptor* depthDesc = [[MTLDepthStencilDescriptor alloc] init];
@@ -242,12 +380,23 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
                                                    options:MTLResourceStorageModeShared];
 
     gpuMesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
+    gpuMesh.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
 
     return impl->meshes.insert(gpuMesh);
 }
 
 void MetalRenderer::removeMesh(MeshHandle handle) {
     impl->meshes.erase(handle);
+}
+
+BoundingSphere MetalRenderer::getMeshBounds(MeshHandle handle) const {
+    const GPUMesh* mesh = impl->meshes.get(handle);
+    if (!mesh) return {};
+    return mesh->bounds;
+}
+
+RenderStats MetalRenderer::getRenderStats() const {
+    return impl->lastStats;
 }
 
 void MetalRenderer::beginFrame() {
@@ -302,22 +451,103 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     impl->currentCameraPos = camera.position;
 }
 
-void MetalRenderer::setLights(const std::vector<PointLight>& lights, float exposure) {
-    impl->lightUniforms.lightCount = std::min(static_cast<int>(lights.size()), 8);
-    impl->lightUniforms.exposure = exposure;
-    for (int i = 0; i < impl->lightUniforms.lightCount; i++) {
-        impl->lightUniforms.lights[i].position = {
-            static_cast<float>(lights[i].position.x),
-            static_cast<float>(lights[i].position.y),
-            static_cast<float>(lights[i].position.z)
-        };
-        impl->lightUniforms.lights[i].color = {
-            static_cast<float>(lights[i].color.x),
-            static_cast<float>(lights[i].color.y),
-            static_cast<float>(lights[i].color.z)
-        };
-        impl->lightUniforms.lights[i].intensity = lights[i].intensity;
+static simd_float3 toSimd3(const Vec3& v) {
+    return {static_cast<float>(v.x), static_cast<float>(v.y),
+            static_cast<float>(v.z)};
+}
+
+void MetalRenderer::setLights(const SceneLighting& lighting) {
+    auto& lu = impl->lightUniforms;
+    int idx = 0;
+    constexpr int MAX_LIGHTS = 32;
+
+    // Directional light (sun)
+    impl->shadowEnabled = false;
+    if (idx < MAX_LIGHTS) {
+        auto& g = lu.lights[idx];
+        g.position = {};
+        g.intensity = lighting.sun.intensity;
+        Vec3 sunDir = normalize(lighting.sun.direction);
+        g.direction = toSimd3(sunDir);
+        g.innerCosAngle = 0;
+        g.color = toSimd3(lighting.sun.color);
+        g.outerCosAngle = 0;
+
+        if (lighting.sun.castsShadow && lighting.shadow.enabled) {
+            // Compute light VP for shadow mapping
+            Real sceneBound = 30.0;
+            Vec3 sceneCenter(0, 0, 0);
+            Vec3 lightPos = sceneCenter + sunDir * sceneBound;
+            // Avoid degenerate up vector when light is nearly vertical
+            Vec3 up = (std::abs(sunDir.y) > 0.99) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+            Mat4 lightView = Mat4::lookAt(lightPos, sceneCenter, up);
+            Mat4 lightProj = Mat4::orthographic(sceneBound * 2.0, 1.0, 0.1, sceneBound * 2.0);
+            Mat4 lightVP = lightProj * lightView;
+            g.lightViewProjection = toSimd(lightVP);
+
+            // Store for shadow pass encoding
+            impl->shadowCameraUniforms.viewProjection = g.lightViewProjection;
+            impl->shadowCameraUniforms.view = toSimd(lightView);
+            impl->shadowCameraUniforms.cameraPosition = toSimd3(lightPos);
+            impl->shadowEnabled = true;
+
+            g.shadowMapIndex = 0;
+            impl->shadowUniforms.shadowBias = lighting.shadow.bias;
+            impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
+            impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
+        } else {
+            g.lightViewProjection = simd_matrix_from_rows(
+                simd_make_float4(1,0,0,0), simd_make_float4(0,1,0,0),
+                simd_make_float4(0,0,1,0), simd_make_float4(0,0,0,1));
+            g.shadowMapIndex = -1;
+        }
+
+        g.type = LightType_Directional;
+        g._pad[0] = g._pad[1] = 0;
+        idx++;
     }
+
+    // Point lights
+    for (size_t i = 0; i < lighting.pointLights.size() && idx < MAX_LIGHTS; i++, idx++) {
+        auto& g = lu.lights[idx];
+        const auto& pl = lighting.pointLights[i];
+        g.position = toSimd3(pl.position);
+        g.intensity = pl.intensity;
+        g.direction = {};
+        g.innerCosAngle = 0;
+        g.color = toSimd3(pl.color);
+        g.outerCosAngle = 0;
+        g.lightViewProjection = simd_matrix_from_rows(
+            simd_make_float4(1,0,0,0), simd_make_float4(0,1,0,0),
+            simd_make_float4(0,0,1,0), simd_make_float4(0,0,0,1));
+        g.type = LightType_Point;
+        g.shadowMapIndex = -1;
+        g._pad[0] = g._pad[1] = 0;
+    }
+
+    // Spot lights
+    for (size_t i = 0; i < lighting.spotLights.size() && idx < MAX_LIGHTS; i++, idx++) {
+        auto& g = lu.lights[idx];
+        const auto& sl = lighting.spotLights[i];
+        g.position = toSimd3(sl.position);
+        g.intensity = sl.intensity;
+        g.direction = toSimd3(normalize(sl.direction));
+        g.innerCosAngle = std::cos(sl.innerConeAngle);
+        g.color = toSimd3(sl.color);
+        g.outerCosAngle = std::cos(sl.outerConeAngle);
+        g.lightViewProjection = simd_matrix_from_rows(
+            simd_make_float4(1,0,0,0), simd_make_float4(0,1,0,0),
+            simd_make_float4(0,0,1,0), simd_make_float4(0,0,0,1));
+        g.type = LightType_Spot;
+        g.shadowMapIndex = -1;
+        g._pad[0] = g._pad[1] = 0;
+    }
+
+    lu.lightCount = idx;
+    lu.exposure = lighting.exposure;
+    lu._pad[0] = lu._pad[1] = 0;
+
+    memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
 
 void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
@@ -340,21 +570,94 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
 }
 
 void MetalRenderer::endFrame() {
-    // Drawable + pass descriptor were acquired in beginFrame(). If there was no
-    // drawable, beginFrame() also skipped ImGui::NewFrame(), so the NewFrame/
-    // Render pairing stays balanced by doing nothing here.
     if (!impl->currentDrawable || !impl->currentPassDesc) return;
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
+
+    // --- Shadow pass ---
+    if (impl->shadowEnabled && impl->shadowPipeline) {
+        MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+        shadowPassDesc.depthAttachment.texture = impl->shadowMap;
+        shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+        shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
+        shadowPassDesc.depthAttachment.clearDepth = 1.0;
+
+        id<MTLRenderCommandEncoder> shadowEncoder = [impl->currentCommandBuffer
+            renderCommandEncoderWithDescriptor:shadowPassDesc];
+        [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
+        [shadowEncoder setCullMode:MTLCullModeBack];
+        [shadowEncoder setDepthStencilState:impl->shadowDepthState];
+        [shadowEncoder setDepthBias:0.005 slopeScale:1.5 clamp:0.01];
+
+        // Render all opaque draw calls from light's perspective
+        for (auto& dc : impl->opaqueDrawCalls) {
+            const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
+            if (!mesh) continue;
+
+            ModelUniforms modelU;
+            modelU.model = toSimd(dc.transform);
+            modelU.normalMatrix = inverseTranspose(modelU.model);
+
+            [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
+            [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+            [shadowEncoder setVertexBytes:&impl->shadowCameraUniforms
+                                   length:sizeof(CameraUniforms) atIndex:1];
+            [shadowEncoder setVertexBytes:&modelU
+                                   length:sizeof(ModelUniforms) atIndex:2];
+            [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                      indexCount:mesh->indexCount
+                                       indexType:MTLIndexTypeUInt32
+                                     indexBuffer:mesh->indexBuffer
+                               indexBufferOffset:0];
+        }
+
+        [shadowEncoder endEncoding];
+    }
+
+    // --- Main color pass ---
     impl->currentEncoder = [impl->currentCommandBuffer
         renderCommandEncoderWithDescriptor:impl->currentPassDesc];
 
     [impl->currentEncoder setFrontFacingWinding:MTLWindingClockwise];
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
-    auto issueDraw = [&](const Impl::DrawCall& dc) {
+    // Bind shadow resources for the entire main pass
+    if (impl->shadowEnabled) {
+        [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
+        [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
+        [impl->currentEncoder setFragmentBytes:&impl->shadowUniforms
+                                        length:sizeof(Impl::ShadowUniforms) atIndex:5];
+    } else {
+        // Still need to bind something so the shader doesn't crash
+        [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
+        [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
+        Impl::ShadowUniforms noShadow = {0, 0, 0, impl->shadowMapSize};
+        [impl->currentEncoder setFragmentBytes:&noShadow
+                                        length:sizeof(Impl::ShadowUniforms) atIndex:5];
+    }
+
+    RenderStats stats;
+
+    auto fillInstanceData = [&](const Impl::DrawCall& dc) -> GPUInstanceData {
+        GPUInstanceData inst;
+        inst.model = toSimd(dc.transform);
+        inst.normalMatrix = inverseTranspose(inst.model);
+        inst.albedo = {static_cast<float>(dc.material.albedo.x),
+                       static_cast<float>(dc.material.albedo.y),
+                       static_cast<float>(dc.material.albedo.z), 0};
+        inst.metallic = dc.material.metallic;
+        inst.roughness = dc.material.roughness;
+        inst.opacity = dc.material.opacity;
+        inst._pad0 = 0;
+        inst.emission = {static_cast<float>(dc.material.emission.x),
+                         static_cast<float>(dc.material.emission.y),
+                         static_cast<float>(dc.material.emission.z), 0};
+        return inst;
+    };
+
+    auto issueSingleDraw = [&](const Impl::DrawCall& dc) {
         const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
-        if (!mesh) return;   // stale/removed handle — skip
+        if (!mesh) return;
 
         ModelUniforms modelUniforms;
         modelUniforms.model = toSimd(dc.transform);
@@ -380,39 +683,111 @@ void MetalRenderer::endFrame() {
                                         length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBytes:&matUniforms
                                         length:sizeof(MaterialUniforms) atIndex:3];
-        [impl->currentEncoder setFragmentBytes:&impl->lightUniforms
-                                        length:sizeof(LightUniforms) atIndex:4];
+        [impl->currentEncoder setFragmentBuffer:impl->lightBuffer
+                                        offset:0 atIndex:4];
 
         [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                          indexCount:mesh->indexCount
                                           indexType:MTLIndexTypeUInt32
                                         indexBuffer:mesh->indexBuffer
                                   indexBufferOffset:0];
+        stats.drawCalls++;
+        stats.totalInstances++;
     };
 
-    // Opaque pass: front-to-back, depth write on
+    auto issuePass = [&](std::vector<Impl::DrawCall>& drawCalls,
+                         id<MTLRenderPipelineState> singlePipeline,
+                         id<MTLRenderPipelineState> instancedPipeline,
+                         id<MTLDepthStencilState> depthState) {
+        if (drawCalls.empty()) return;
+
+        [impl->currentEncoder setDepthStencilState:depthState];
+
+        // Stable sort by mesh handle to group identical meshes while preserving
+        // depth order within each group.
+        std::stable_sort(drawCalls.begin(), drawCalls.end(),
+                         [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
+                             return a.meshHandle < b.meshHandle;
+                         });
+
+        GPUInstanceData* instanceBuf =
+            static_cast<GPUInstanceData*>([impl->instanceBuffer contents]);
+        uint32_t instanceOffset = 0;
+
+        size_t i = 0;
+        while (i < drawCalls.size()) {
+            size_t batchStart = i;
+            MeshHandle batchMesh = drawCalls[i].meshHandle;
+            while (i < drawCalls.size() && drawCalls[i].meshHandle == batchMesh)
+                i++;
+            uint32_t batchSize = static_cast<uint32_t>(i - batchStart);
+
+            const GPUMesh* mesh = impl->meshes.get(batchMesh);
+            if (!mesh) continue;
+
+            if (batchSize == 1) {
+                [impl->currentEncoder setRenderPipelineState:singlePipeline];
+                issueSingleDraw(drawCalls[batchStart]);
+                continue;
+            }
+
+            if (instanceOffset + batchSize > MAX_INSTANCES) {
+                [impl->currentEncoder setRenderPipelineState:singlePipeline];
+                for (size_t j = batchStart; j < batchStart + batchSize; j++)
+                    issueSingleDraw(drawCalls[j]);
+                continue;
+            }
+
+            for (size_t j = batchStart; j < batchStart + batchSize; j++)
+                instanceBuf[instanceOffset + (j - batchStart)] =
+                    fillInstanceData(drawCalls[j]);
+
+            [impl->currentEncoder setRenderPipelineState:instancedPipeline];
+            [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+            [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
+                                          length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setVertexBuffer:impl->instanceBuffer
+                                           offset:instanceOffset * sizeof(GPUInstanceData)
+                                          atIndex:2];
+            [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
+                                            length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setFragmentBytes:&impl->lightUniforms
+                                            length:sizeof(LightUniforms) atIndex:4];
+
+            [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                             indexCount:mesh->indexCount
+                                              indexType:MTLIndexTypeUInt32
+                                            indexBuffer:mesh->indexBuffer
+                                      indexBufferOffset:0
+                                          instanceCount:batchSize];
+            stats.drawCalls++;
+            stats.instancedDrawCalls++;
+            stats.totalInstances += batchSize;
+            instanceOffset += batchSize;
+        }
+    };
+
+    stats.entitiesSubmitted = static_cast<uint32_t>(
+        impl->opaqueDrawCalls.size() + impl->transparentDrawCalls.size());
+
+    // Sort each pass by distance first, then issuePass stable-sorts by mesh.
     std::sort(impl->opaqueDrawCalls.begin(), impl->opaqueDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
                   return a.distanceToCamera < b.distanceToCamera;
               });
 
-    [impl->currentEncoder setRenderPipelineState:impl->opaquePipeline];
-    [impl->currentEncoder setDepthStencilState:impl->depthStateOpaque];
-    for (const auto& dc : impl->opaqueDrawCalls) {
-        issueDraw(dc);
-    }
+    issuePass(impl->opaqueDrawCalls, impl->opaquePipeline,
+              impl->opaqueInstancedPipeline, impl->depthStateOpaque);
 
-    // Transparent pass: back-to-front, depth write off
     std::sort(impl->transparentDrawCalls.begin(), impl->transparentDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
                   return a.distanceToCamera > b.distanceToCamera;
               });
 
-    [impl->currentEncoder setRenderPipelineState:impl->transparentPipeline];
-    [impl->currentEncoder setDepthStencilState:impl->depthStateTransparent];
-    for (const auto& dc : impl->transparentDrawCalls) {
-        issueDraw(dc);
-    }
+    issuePass(impl->transparentDrawCalls, impl->transparentPipeline,
+              impl->transparentInstancedPipeline, impl->depthStateTransparent);
+
+    impl->lastStats = stats;
 
     // Debug UI (ADR-0011) records last, over the scene, into the same encoder.
 #ifdef RT_ENABLE_IMGUI

@@ -21,6 +21,10 @@ struct Handle {
         return index == other.index && generation == other.generation;
     }
     bool operator!=(const Handle& other) const { return !(*this == other); }
+    bool operator<(const Handle& other) const {
+        return index < other.index ||
+               (index == other.index && generation < other.generation);
+    }
 };
 
 }  // namespace engine

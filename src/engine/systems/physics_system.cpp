@@ -9,18 +9,33 @@ bool PhysicsSystem::initialize(engine::JobSystem* jobs) { return physics.initial
 void PhysicsSystem::shutdown() { physics.shutdown(); }
 
 void PhysicsSystem::createBodies(World& world) {
+    bool created = false;
     world.each<Transform, RigidBody, Collider>(
-        [this](Entity, Transform& t, RigidBody& rb, Collider& collider) {
-            if (rb.bodyId != INVALID_PHYSICS_BODY) return;  // already created
-            if (collider.shape == ColliderShape::Sphere) {
-                rb.bodyId = physics.addSphere(collider.radius, t.position,
-                                              t.orientation, rb.motion);
-            } else {
-                rb.bodyId = physics.addBox(collider.halfExtent, t.position,
-                                           t.orientation, rb.motion);
+        [this, &created](Entity, Transform& t, RigidBody& rb, Collider& c) {
+            if (rb.bodyId != INVALID_PHYSICS_BODY) return;
+            switch (c.shape) {
+                case ColliderShape::Sphere:
+                    rb.bodyId = physics.addSphere(c.radius, t.position,
+                                                  t.orientation, rb.motion,
+                                                  c.restitution, c.friction,
+                                                  rb.lockRotation);
+                    break;
+                case ColliderShape::Capsule:
+                    rb.bodyId = physics.addCapsule(c.halfHeight, c.radius,
+                                                   t.position, t.orientation,
+                                                   rb.motion, c.restitution,
+                                                   c.friction, rb.lockRotation);
+                    break;
+                default:
+                    rb.bodyId = physics.addBox(c.halfExtent, t.position,
+                                               t.orientation, rb.motion,
+                                               c.restitution, c.friction,
+                                               rb.lockRotation);
+                    break;
             }
+            created = true;
         });
-    physics.optimizeBroadPhase();
+    if (created) physics.optimizeBroadPhase();
 }
 
 void PhysicsSystem::step(World& world, Real dt) {
@@ -50,6 +65,7 @@ void PhysicsSystem::onStart(FrameContext& ctx) {
 }
 
 void PhysicsSystem::fixedUpdate(FrameContext& ctx) {
+    createBodies(ctx.world);
     step(ctx.world, ctx.clock.fixedStep());
 }
 

@@ -17,6 +17,7 @@ public:
     Real fovDegrees = 60.0;
     Real moveSpeed = 5.0;
     Real boostMultiplier = 4.0;
+    bool positionLocked = false;
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;

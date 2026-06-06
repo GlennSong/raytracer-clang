@@ -17,6 +17,8 @@ public:
     void update(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
+    FlyCameraController& flyController() { return fly; }
+
 private:
     void registerBindings(InputMap& actions) const;
     CameraInput gatherInput(FrameContext& ctx) const;

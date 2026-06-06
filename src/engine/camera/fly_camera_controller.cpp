@@ -25,6 +25,8 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     pitch += input.lookPitchDelta;
     pitch = std::clamp(pitch, -PITCH_LIMIT, PITCH_LIMIT);
 
+    if (positionLocked) return;
+
     Real speed = moveSpeed * dt * (input.boost ? boostMultiplier : Real(1.0));
     Vec3 f = forward();
     Vec3 r = right();

@@ -49,12 +49,14 @@ struct ControlledBy {
     int playerIndex = 0;
 };
 
-// Collision shape for a physics body. (ADR-0012; box/sphere for now.)
-enum class ColliderShape { Box, Sphere };
+enum class ColliderShape { Box, Sphere, Capsule };
 struct Collider {
     ColliderShape shape = ColliderShape::Box;
-    Vec3 halfExtent{0.5, 0.5, 0.5};   // used when shape == Box
-    Real radius = 0.5;                // used when shape == Sphere
+    Vec3 halfExtent{0.5, 0.5, 0.5};   // Box
+    Real radius = 0.5;                // Sphere, Capsule
+    Real halfHeight = 0.5;            // Capsule (half of the cylinder segment)
+    Real restitution = 0.0;
+    Real friction = 0.2;
 };
 
 // Marks an entity as simulated by the PhysicsSystem (ADR-0012). The body is
@@ -65,6 +67,7 @@ struct Collider {
 struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
+    bool lockRotation = false;
 };
 
 

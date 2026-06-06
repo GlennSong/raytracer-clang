@@ -18,8 +18,7 @@ namespace engine {
 // stand-in for the resource concept a full ECS will formalize later.
 struct RenderView {
     CameraState camera;
-    std::vector<PointLight> lights;
-    float exposure = 1.0f;
+    SceneLighting lighting;
 };
 
 // Services and per-frame data handed to every system hook. Field validity by

@@ -37,12 +37,21 @@ public:
     // Body creation. orientation defaults to identity; static bodies are added
     // asleep, dynamic/kinematic active.
     PhysicsBodyId addBox(const Vec3& halfExtent, const Vec3& position,
-                         const Quat& orientation, BodyMotion motion);
+                         const Quat& orientation, BodyMotion motion,
+                         Real restitution = 0.0, Real friction = 0.2,
+                         bool lockRotation = false);
     PhysicsBodyId addSphere(Real radius, const Vec3& position,
-                            const Quat& orientation, BodyMotion motion);
+                            const Quat& orientation, BodyMotion motion,
+                            Real restitution = 0.0, Real friction = 0.2,
+                            bool lockRotation = false);
+    PhysicsBodyId addCapsule(Real halfHeight, Real radius, const Vec3& position,
+                             const Quat& orientation, BodyMotion motion,
+                             Real restitution = 0.0, Real friction = 0.2,
+                             bool lockRotation = false);
     void removeBody(PhysicsBodyId id);
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
+    Vec3 getLinearVelocity(PhysicsBodyId id) const;
     Vec3 bodyPosition(PhysicsBodyId id) const;
     Quat bodyOrientation(PhysicsBodyId id) const;
 

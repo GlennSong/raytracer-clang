@@ -51,6 +51,7 @@ add_executable(run_tests
     tests/test_player_input.cpp
     tests/test_camera.cpp
     tests/test_job_system.cpp
+    tests/test_frustum.cpp
     src/job_system.cpp
     src/engine/world.cpp
     src/engine/clock.cpp
@@ -151,6 +152,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
+        src/engine/systems/player_system.cpp
     )
 endif()
 

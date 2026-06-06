@@ -36,7 +36,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
-	$(TEST_DIR)/test_job_system.cpp
+	$(TEST_DIR)/test_job_system.cpp \
+	$(TEST_DIR)/test_frustum.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/engine/world.cpp \

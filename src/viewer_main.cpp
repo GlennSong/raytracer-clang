@@ -10,10 +10,11 @@
 #include "engine/systems/debug_overlay_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "engine/systems/physics_system.h"
+#include "engine/systems/player_system.h"
 #endif
 #include "log.h"
 
-using namespace engine;  // namespace migration (ADR-0015)
+using namespace engine;
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
     RenderMesh mesh;
@@ -91,145 +92,179 @@ RenderMesh createBoxMesh(Vec3 size) {
     return mesh;
 }
 
-// Populates the Cornell-box scene: static room + spheres and a spinning box,
-// plus the lights the render system reads from the shared RenderView.
-static void buildScene(World& world, Renderer& renderer, RenderView& view) {
-    // Every renderable carries a PrevTransform so the render system can use one
-    // uniform query; static entities simply never have it updated.
-    auto addStatic = [&](MeshHandle mesh, const Vec3& position,
-                         const RenderMaterial& material) {
+static void buildArena(World& world, Renderer& renderer, RenderView& view) {
+    MeshHandle sphereHandle = renderer.uploadMesh(createSphereMesh(1.0f, 32, 64));
+
+    constexpr Real ARENA = 25.0;
+    constexpr Real WALL_HEIGHT = 4.0;
+    constexpr Real WALL_THICK = 0.5;
+
+    RenderMaterial floorMat;
+    floorMat.albedo = Vec3(0.4, 0.4, 0.4);
+    floorMat.roughness = 0.8f;
+
+    RenderMaterial wallMat;
+    wallMat.albedo = Vec3(0.6, 0.6, 0.65);
+    wallMat.roughness = 0.7f;
+
+    RenderMaterial rampMat;
+    rampMat.albedo = Vec3(0.5, 0.35, 0.2);
+    rampMat.roughness = 0.6f;
+
+    RenderMaterial obstacleMat;
+    obstacleMat.albedo = Vec3(0.3, 0.3, 0.7);
+    obstacleMat.roughness = 0.5f;
+
+    // Helper: static physics box with visual
+    auto addStaticBox = [&](const Vec3& halfExt, const Vec3& pos,
+                            const RenderMaterial& mat,
+                            const Quat& orient = Quat::identity()) {
+        MeshHandle mesh = renderer.uploadMesh(createBoxMesh(halfExt * 2.0));
         Entity e = world.create();
         Transform t;
-        t.position = position;
+        t.position = pos;
+        t.orientation = orient;
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;
         r.mesh = mesh;
-        r.material = material;
+        r.material = mat;
         world.add<Renderable>(e, r);
+        Collider c;
+        c.shape = ColliderShape::Box;
+        c.halfExtent = halfExt;
+        c.friction = 0.5;
+        world.add<Collider>(e, c);
+        world.add<RigidBody>(e, RigidBody{BodyMotion::Static, INVALID_PHYSICS_BODY});
+        return e;
     };
 
-    RenderMaterial whiteMat;
-    whiteMat.albedo = Vec3(0.73, 0.73, 0.73);
-    whiteMat.roughness = 0.9f;
+    // Helper: dynamic physics sphere with visual
+    auto addDynamicSphere = [&](Real radius, const Vec3& pos,
+                                const RenderMaterial& mat) {
+        Entity e = world.create();
+        Transform t;
+        t.position = pos;
+        t.scale = Vec3(radius, radius, radius);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.mesh = sphereHandle;
+        r.material = mat;
+        world.add<Renderable>(e, r);
+        Collider c;
+        c.shape = ColliderShape::Sphere;
+        c.radius = radius;
+        c.restitution = 0.5;
+        c.friction = 0.3;
+        world.add<Collider>(e, c);
+        world.add<RigidBody>(e, RigidBody{BodyMotion::Dynamic, INVALID_PHYSICS_BODY});
+        return e;
+    };
 
-    RenderMaterial redWall;
-    redWall.albedo = Vec3(0.65, 0.05, 0.05);
-    redWall.roughness = 0.9f;
+    // Floor (top surface at y=0)
+    addStaticBox(Vec3(ARENA, 1.0, ARENA), Vec3(0, -1.0, 0), floorMat);
 
-    RenderMaterial greenWall;
-    greenWall.albedo = Vec3(0.12, 0.45, 0.15);
-    greenWall.roughness = 0.9f;
+    // 4 walls
+    addStaticBox(Vec3(ARENA, WALL_HEIGHT * 0.5, WALL_THICK),
+                 Vec3(0, WALL_HEIGHT * 0.5, -ARENA), wallMat);  // north
+    addStaticBox(Vec3(ARENA, WALL_HEIGHT * 0.5, WALL_THICK),
+                 Vec3(0, WALL_HEIGHT * 0.5, ARENA), wallMat);   // south
+    addStaticBox(Vec3(WALL_THICK, WALL_HEIGHT * 0.5, ARENA),
+                 Vec3(-ARENA, WALL_HEIGHT * 0.5, 0), wallMat);  // west
+    addStaticBox(Vec3(WALL_THICK, WALL_HEIGHT * 0.5, ARENA),
+                 Vec3(ARENA, WALL_HEIGHT * 0.5, 0), wallMat);   // east
 
-    // Walls bake their position into the mesh geometry, so the entity transform
-    // stays at the origin.
-    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, -5), Vec3(10, 0, 0), Vec3(0, 0, 10))),
-              Vec3(0, 0, 0), whiteMat);
-    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 8, 5), Vec3(10, 0, 0), Vec3(0, 0, -10))),
-              Vec3(0, 0, 0), whiteMat);
-    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, 5), Vec3(10, 0, 0), Vec3(0, 8, 0))),
-              Vec3(0, 0, 0), whiteMat);
-    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(-5, 0, -5), Vec3(0, 0, 10), Vec3(0, 8, 0))),
-              Vec3(0, 0, 0), redWall);
-    addStatic(renderer.uploadMesh(createQuadMesh(Vec3(5, 0, 5), Vec3(0, 0, -10), Vec3(0, 8, 0))),
-              Vec3(0, 0, 0), greenWall);
+    // Ramps (rotated boxes)
+    Real rampAngle = degreesToRadians(15.0);
+    addStaticBox(Vec3(3.0, 0.25, 2.0),
+                 Vec3(-10, 0.8, -10),
+                 rampMat,
+                 Quat::fromAxisAngle(Vec3(1, 0, 0), rampAngle));
 
-    MeshHandle sphereHandle = renderer.uploadMesh(createSphereMesh(1.0f, 32, 64));
+    addStaticBox(Vec3(3.0, 0.25, 2.0),
+                 Vec3(10, 0.8, 10),
+                 rampMat,
+                 Quat::fromAxisAngle(Vec3(1, 0, 0), -rampAngle));
 
-    RenderMaterial redMat;
-    redMat.albedo = Vec3(0.8, 0.1, 0.1);
-    redMat.roughness = 0.3f;
-    addStatic(sphereHandle, Vec3(-2.0, 1.0, 0.0), redMat);
+    // Static obstacles (pillars)
+    addStaticBox(Vec3(1.0, 2.0, 1.0), Vec3(-6, 2.0, 5), obstacleMat);
+    addStaticBox(Vec3(1.0, 2.0, 1.0), Vec3(6, 2.0, -5), obstacleMat);
+    addStaticBox(Vec3(2.0, 1.0, 0.5), Vec3(0, 1.0, -8), obstacleMat);
 
-    RenderMaterial metalMat;
-    metalMat.albedo = Vec3(0.9, 0.9, 0.95);
-    metalMat.metallic = 1.0f;
-    metalMat.roughness = 0.1f;
-    addStatic(sphereHandle, Vec3(0.0, 1.0, 0.0), metalMat);
+    // Dynamic spheres (4 player-sized balls)
+    RenderMaterial ballMats[4];
+    ballMats[0].albedo = Vec3(0.9, 0.2, 0.2); ballMats[0].roughness = 0.3f;
+    ballMats[1].albedo = Vec3(0.2, 0.7, 0.2); ballMats[1].roughness = 0.3f;
+    ballMats[2].albedo = Vec3(0.2, 0.3, 0.9); ballMats[2].roughness = 0.3f;
+    ballMats[3].albedo = Vec3(0.9, 0.8, 0.1); ballMats[3].roughness = 0.3f;
 
-    RenderMaterial glassMat;
-    glassMat.albedo = Vec3(0.5, 0.8, 1.0);
-    glassMat.roughness = 0.1f;
-    glassMat.opacity = 0.3f;
-    addStatic(sphereHandle, Vec3(2.0, 1.0, 0.0), glassMat);
+    addDynamicSphere(1.0, Vec3(-5, 1.5, -3), ballMats[0]);
+    addDynamicSphere(1.0, Vec3(5, 1.5, 3), ballMats[1]);
+    addDynamicSphere(1.0, Vec3(-3, 1.5, 8), ballMats[2]);
+    addDynamicSphere(1.0, Vec3(8, 1.5, -8), ballMats[3]);
 
-    // Simulated: has a Velocity, so MotionSystem spins it in place — making the
-    // fixed timestep and time controls visible.
-    RenderMaterial greenMat;
-    greenMat.albedo = Vec3(0.2, 0.7, 0.2);
-    greenMat.roughness = 0.5f;
-    Entity box = world.create();
-    Transform boxTransform;
-    boxTransform.position = Vec3(3.0, 1.5, 2.0);
-    boxTransform.orientation = Quat::fromEuler(0.0, 0.4, 0.0);
-    world.add<Transform>(box, boxTransform);
-    world.add<PrevTransform>(box, PrevTransform{boxTransform});
-    Renderable boxRender;
-    boxRender.mesh = renderer.uploadMesh(createBoxMesh(Vec3(1.5, 3.0, 1.5)));
-    boxRender.material = greenMat;
-    world.add<Renderable>(box, boxRender);
-    Velocity boxVelocity;
-    boxVelocity.angular = Vec3(0.0, 0.6, 0.3);
-    world.add<Velocity>(box, boxVelocity);
-
-#ifdef RT_ENABLE_PHYSICS
-    // Physics demo (ADR-0012): a dynamic sphere falls onto a static floor whose
-    // collider top sits at y=0, matching the visible floor. The spinning box
-    // above stays on MotionSystem — the two motion systems coexist.
+    // Player (capsule)
     {
-        Entity floor = world.create();
-        Transform floorTransform;
-        floorTransform.position = Vec3(0.0, -1.0, 0.0);
-        world.add<Transform>(floor, floorTransform);
-        Collider floorCollider;
-        floorCollider.shape = ColliderShape::Box;
-        floorCollider.halfExtent = Vec3(5.0, 1.0, 5.0);
-        world.add<Collider>(floor, floorCollider);
-        world.add<RigidBody>(floor, RigidBody{BodyMotion::Static, INVALID_PHYSICS_BODY});
-
-        Entity ball = world.create();
-        Transform ballTransform;
-        ballTransform.position = Vec3(0.5, 6.0, -1.0);
-        world.add<Transform>(ball, ballTransform);
-        world.add<PrevTransform>(ball, PrevTransform{ballTransform});
-        Collider ballCollider;
-        ballCollider.shape = ColliderShape::Sphere;
-        ballCollider.radius = 1.0;
-        world.add<Collider>(ball, ballCollider);
-        world.add<RigidBody>(ball, RigidBody{BodyMotion::Dynamic, INVALID_PHYSICS_BODY});
-        RenderMaterial ballMat;
-        ballMat.albedo = Vec3(1.0, 0.8, 0.2);
-        ballMat.roughness = 0.4f;
-        Renderable ballRender;
-        ballRender.mesh = sphereHandle;
-        ballRender.material = ballMat;
-        world.add<Renderable>(ball, ballRender);
+        Entity player = world.create();
+        Transform t;
+        t.position = Vec3(0, 1.0, 5);
+        world.add<Transform>(player, t);
+        world.add<PrevTransform>(player, PrevTransform{t});
+        Collider c;
+        c.shape = ColliderShape::Capsule;
+        c.halfHeight = 0.4;
+        c.radius = 0.3;
+        c.friction = 0.5;
+        world.add<Collider>(player, c);
+        RigidBody rb;
+        rb.motion = BodyMotion::Dynamic;
+        rb.lockRotation = true;
+        world.add<RigidBody>(player, rb);
+        world.add<ControlledBy>(player, ControlledBy{0});
     }
-#endif
 
-    view.lights = {
-        PointLight(Vec3(0, 7.0, 0), Vec3(1.0, 0.95, 0.9), 25.0f),
-        PointLight(Vec3(-3, 5, -3), Vec3(0.4, 0.5, 1.0), 10.0f)
+    // Lighting
+    auto& lighting = view.lighting;
+    lighting.sun = DirectionalLight(
+        Vec3(0.4, 0.8, -0.3),      // sun direction (toward source)
+        Vec3(1.0, 0.98, 0.92),     // warm white
+        1.5f, true);               // intensity, casts shadow
+
+    lighting.pointLights = {
+        PointLight(Vec3(0, 12.0, 0), Vec3(1.0, 0.95, 0.9), 50.0f),
+        PointLight(Vec3(-15, 8, -15), Vec3(0.4, 0.5, 1.0), 30.0f),
+        PointLight(Vec3(15, 8, 15), Vec3(1.0, 0.7, 0.3), 30.0f),
     };
+
+    lighting.spotLights = {
+        SpotLight(Vec3(0, 10, 0), Vec3(0, -1, 0), Vec3(1.0, 0.9, 0.8),
+                  40.0f, 0.3f, 0.5f),
+    };
+
+    lighting.exposure = 0.5f;
 }
 
 int main() {
     Application app;
-    if (!app.initialize({1024, 1024, "Raytracer Viewer", "settings.json"})) {
+    if (!app.initialize({1280, 720, "FPS Arena", "settings.json"})) {
         LOG_ERROR << "Failed to initialize application";
         return 1;
     }
 
-    buildScene(app.world(), app.renderer(), app.renderView());
+    buildArena(app.world(), app.renderer(), app.renderView());
+
+    app.settings().setString("cameraMode", "fly");
 
     app.addSystem<DevControlSystem>();
-    app.addSystem<CameraSystem>();
+    auto& camSys = app.addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
-    app.addSystem<PhysicsSystem>();        // owns RigidBody entities
+    auto& physSys = app.addSystem<PhysicsSystem>();
+    app.addSystem<PlayerSystem>(camSys.flyController(), physSys);
 #endif
-    app.addSystem<MotionSystem>();         // owns Velocity-only entities
+    app.addSystem<MotionSystem>();
     app.addSystem<RenderSystem>();
-    app.addSystem<DebugOverlaySystem>();   // inert unless built with ImGui
+    app.addSystem<DebugOverlaySystem>();
 
     app.run();
     return 0;

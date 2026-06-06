@@ -19,6 +19,13 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Projection: %s",
                 cam.projection == CameraProjection::Orthographic ? "Orthographic"
                                                                  : "Perspective");
+
+    RenderStats rs = ctx.renderer.getRenderStats();
+    uint32_t culled = static_cast<uint32_t>(ctx.world.entityCount()) - rs.entitiesSubmitted;
+    ImGui::Separator();
+    ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
+    ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
+    ImGui::Text("Instances: %u", rs.totalInstances);
     ImGui::End();
 #else
     (void)ctx;  // inert without ImGui (ADR-0011)

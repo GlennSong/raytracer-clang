@@ -376,6 +376,21 @@ inline Mat4 Mat4::trs(const Vec3& translation, const Quat& rotation,
     return m;
 }
 
+// Minimal bounding volume for frustum culling. Center is in model space;
+// radius is the max distance from center to any vertex.
+struct BoundingSphere {
+    Vec3 center;
+    Real radius = 0;
+};
+
+struct Frustum {
+    Vec3 normals[6];
+    Real distances[6];
+
+    static Frustum fromViewProjection(const Mat4& vp);
+    bool containsSphere(const Vec3& center, Real radius) const;
+};
+
 constexpr Real PI = 3.14159265358979323846;
 
 inline Real degreesToRadians(Real degrees) {
@@ -414,6 +429,53 @@ inline Vec3 randomHemisphere(const Vec3& normal) {
 inline Vec3 randomCosineHemisphere(const Vec3& normal) {
     Vec3 dir = normalize(randomInUnitSphere() + normal);
     return dir;
+}
+
+// Gribb-Hartmann frustum plane extraction from a view-projection matrix.
+// Each plane's normal points inward; a point is inside when dot(n,p)+d >= 0.
+inline Frustum Frustum::fromViewProjection(const Mat4& vp) {
+    Frustum f;
+    // Row accessors: vp.m[row][col] (row-major)
+    auto extractPlane = [&](int index, Real r0, Real r1, Real r2, Real r3) {
+        Real len = Vec3(r0, r1, r2).length();
+        if (len > 0) {
+            f.normals[index] = Vec3(r0, r1, r2) / len;
+            f.distances[index] = r3 / len;
+        }
+    };
+    // Left:   row3 + row0
+    extractPlane(0,
+        vp.m[3][0] + vp.m[0][0], vp.m[3][1] + vp.m[0][1],
+        vp.m[3][2] + vp.m[0][2], vp.m[3][3] + vp.m[0][3]);
+    // Right:  row3 - row0
+    extractPlane(1,
+        vp.m[3][0] - vp.m[0][0], vp.m[3][1] - vp.m[0][1],
+        vp.m[3][2] - vp.m[0][2], vp.m[3][3] - vp.m[0][3]);
+    // Bottom: row3 + row1
+    extractPlane(2,
+        vp.m[3][0] + vp.m[1][0], vp.m[3][1] + vp.m[1][1],
+        vp.m[3][2] + vp.m[1][2], vp.m[3][3] + vp.m[1][3]);
+    // Top:    row3 - row1
+    extractPlane(3,
+        vp.m[3][0] - vp.m[1][0], vp.m[3][1] - vp.m[1][1],
+        vp.m[3][2] - vp.m[1][2], vp.m[3][3] - vp.m[1][3]);
+    // Near:   row3 + row2
+    extractPlane(4,
+        vp.m[3][0] + vp.m[2][0], vp.m[3][1] + vp.m[2][1],
+        vp.m[3][2] + vp.m[2][2], vp.m[3][3] + vp.m[2][3]);
+    // Far:    row3 - row2
+    extractPlane(5,
+        vp.m[3][0] - vp.m[2][0], vp.m[3][1] - vp.m[2][1],
+        vp.m[3][2] - vp.m[2][2], vp.m[3][3] - vp.m[2][3]);
+    return f;
+}
+
+inline bool Frustum::containsSphere(const Vec3& center, Real radius) const {
+    for (int i = 0; i < 6; i++) {
+        Real dist = dot(normals[i], center) + distances[i];
+        if (dist < -radius) return false;
+    }
+    return true;
 }
 
 }  // namespace engine

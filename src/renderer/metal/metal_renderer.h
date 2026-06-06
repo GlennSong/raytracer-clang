@@ -23,10 +23,12 @@ public:
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override;
     void removeMesh(MeshHandle handle) override;
+    BoundingSphere getMeshBounds(MeshHandle handle) const override;
+    RenderStats getRenderStats() const override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
-    void setLights(const std::vector<PointLight>& lights, float exposure = 1.0f) override;
+    void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
     void endFrame() override;
