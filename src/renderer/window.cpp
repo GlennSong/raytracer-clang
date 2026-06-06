@@ -22,6 +22,8 @@
 #include <GLFW/glfw3native.h>
 #endif
 
+namespace engine {
+
 // All GLFW-typed state lives here, out of the public header. The GLFW user
 // pointer is set to this Impl, so the file-local callbacks below operate on it
 // directly without going back through Window.
@@ -390,3 +392,5 @@ void Window::shutdownDebugUi() {
     ImGui_ImplGlfw_Shutdown();
 #endif
 }
+
+}  // namespace engine

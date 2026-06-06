@@ -3,6 +3,8 @@
 #include <sstream>
 #include <algorithm>
 
+namespace engine {
+
 static std::string trim(const std::string& s) {
     size_t start = s.find_first_not_of(" \t\n\r");
     if (start == std::string::npos) return "";
@@ -113,3 +115,6 @@ std::string Settings::getString(const std::string& key, const std::string& defau
 void Settings::setString(const std::string& key, const std::string& value) {
     values[key] = value;
 }
+
+}  // namespace engine
+

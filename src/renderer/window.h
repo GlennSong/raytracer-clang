@@ -8,6 +8,8 @@
 #include <functional>
 #include <memory>
 
+namespace engine {
+
 struct InputState {
     double mouseX, mouseY;
     double mouseDeltaX, mouseDeltaY;
@@ -73,5 +75,8 @@ public:
 private:
     std::unique_ptr<Impl> impl;
 };
+
+
+}  // namespace engine
 
 #endif

@@ -4,6 +4,8 @@
 #include <string>
 #include <unordered_map>
 
+namespace engine {
+
 class Settings {
 public:
     void load(const std::string& filepath);
@@ -21,5 +23,8 @@ public:
 private:
     std::unordered_map<std::string, std::string> values;
 };
+
+
+}  // namespace engine
 
 #endif

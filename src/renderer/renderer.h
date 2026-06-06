@@ -7,6 +7,8 @@
 #include <memory>
 #include <cstdint>
 
+namespace engine {
+
 struct Vertex {
     Vec3 position;
     Vec3 normal;
@@ -105,5 +107,8 @@ public:
 
     static std::unique_ptr<Renderer> create();
 };
+
+
+}  // namespace engine
 
 #endif

@@ -14,6 +14,8 @@
 #include "backends/imgui_impl_metal.h"
 #endif
 
+namespace engine {
+
 // Uniform structs must match Metal shader layout exactly.
 // simd_float3 is 16 bytes on Apple — no manual padding between float3 fields.
 
@@ -452,5 +454,7 @@ void MetalRenderer::shutdownDebugUi() {
 std::unique_ptr<Renderer> Renderer::create() {
     return std::make_unique<MetalRenderer>();
 }
+
+}  // namespace engine
 
 #endif // __APPLE__

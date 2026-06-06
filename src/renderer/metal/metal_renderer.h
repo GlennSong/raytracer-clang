@@ -10,6 +10,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #endif
 
+namespace engine {
+
 class MetalRenderer : public Renderer {
 public:
     MetalRenderer();
@@ -36,6 +38,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
+
+}  // namespace engine
 
 #endif // __APPLE__
 #endif
