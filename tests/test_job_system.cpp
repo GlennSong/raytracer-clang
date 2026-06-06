@@ -5,7 +5,7 @@
 #include <atomic>
 #include <vector>
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
 

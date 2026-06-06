@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 TEST_CASE(sparse_set_insert_get) {
     SparseSet<int> set;

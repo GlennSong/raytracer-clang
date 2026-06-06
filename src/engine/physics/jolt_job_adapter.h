@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PHYSICS_JOLT_JOB_ADAPTER_H
 #define RAYTRACER_ENGINE_PHYSICS_JOLT_JOB_ADAPTER_H
 
-// Lets Jolt run its simulation jobs on OUR JobSystem (ADR-0013) instead of
+// Lets Jolt run its simulation jobs on OUR JobSystem (ADR-0014) instead of
 // spawning a second thread pool. Jolt owns the job *graph* (dependencies and
 // barriers — handled by the JobSystemWithBarrier base); we own the *threads*.
 // The only real integration point is QueueJob, which forwards a ready-to-run

@@ -453,7 +453,7 @@ same `initDebugUi`/`shutdownDebugUi` treatment).
 ---
 
 ## ADR-0012 — Jolt physics, sealed behind a Jolt-free `PhysicsWorld`
-**Status:** Accepted (Steps A + C done; step now runs on the shared pool, ADR-0013) · **Date:** 2026-06-04
+**Status:** Accepted (Steps A + C done; step now runs on the shared pool, ADR-0014) · **Date:** 2026-06-04
 
 **Context.** The engine needs rigid bodies and collision (ROADMAP 2.3); Jolt was
 the chosen library. The questions for *how* to integrate: how to keep Jolt types
@@ -473,7 +473,7 @@ the object-layer scheme, the job system, and the precision bridge.
 - **Two object layers** (`NON_MOVING`/`MOVING`) with a 1:1 broadphase mapping —
   the standard minimal scheme so the static tree never rebuilds.
 - ~~**Single-threaded job system** (`JobSystemSingleThreaded`).~~ **Updated.**
-  Jolt's step now runs on the engine's shared `JobSystem` (ADR-0013) via a
+  Jolt's step now runs on the engine's shared `JobSystem` (ADR-0014) via a
   `JoltJobAdapter` (`engine/physics/jolt_job_adapter.*`) — a `JPH::JobSystem`
   that forwards each ready Jolt job to `JobSystem::run` instead of spawning a
   second pool. Jolt still owns the job *graph* (deps/barriers, via the
@@ -528,7 +528,7 @@ offline tracer, unit tests, and physics tests always configure.
 
 ---
 
-## ADR-0013 — A minimal shared-queue `JobSystem` for parallelism
+## ADR-0014 — A minimal shared-queue `JobSystem` for parallelism
 **Status:** Accepted · **Date:** 2026-06-05
 
 **Context.** Parallelism was ad-hoc: the offline tracer hand-rolled
@@ -600,7 +600,7 @@ container thread-safety / a deferred command buffer, ADR-0006).
 
 ---
 
-## ADR-0014 — Engine code lives in `namespace engine`
+## ADR-0015 — Engine code lives in `namespace engine`
 **Status:** Accepted (migration complete) · **Date:** 2026-06-05
 
 **Context.** All of our types sat in the global namespace — `Vec3`, `Mat4`,
@@ -686,8 +686,8 @@ to be replaced; listed here so they stay visible.
 | macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
-| Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0013) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
-| ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0014): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
+| Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0014) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
+| ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0015): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

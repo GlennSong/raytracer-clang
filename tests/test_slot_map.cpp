@@ -2,7 +2,7 @@
 
 #include "../src/slot_map.h"
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
 struct Thing {

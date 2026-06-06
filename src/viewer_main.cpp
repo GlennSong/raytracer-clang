@@ -13,7 +13,7 @@
 #endif
 #include "log.h"
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 RenderMesh createQuadMesh(Vec3 corner, Vec3 edge1, Vec3 edge2) {
     RenderMesh mesh;

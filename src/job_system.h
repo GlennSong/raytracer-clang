@@ -17,7 +17,7 @@ namespace engine {
 // the codebase expresses *what* may run in parallel (parallelFor over an image
 // today, async asset loads later) without hand-rolling std::thread management.
 //
-// Deliberately simple (ADR-0013): one mutex-guarded queue, no work stealing.
+// Deliberately simple (ADR-0014): one mutex-guarded queue, no work stealing.
 // The public surface hides the queue, so the internals can grow into per-worker
 // deques later without touching callers — but only once a profile asks for it
 // (ADR-0008: measure before optimizing).

@@ -29,7 +29,7 @@ public:
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-    // Pass a JobSystem to run Jolt's step on our shared pool (ADR-0013); leave it
+    // Pass a JobSystem to run Jolt's step on our shared pool (ADR-0014); leave it
     // null to run single-threaded (the ADR-0012 default — used by unit tests).
     bool initialize(engine::JobSystem* jobSystem = nullptr);
     void shutdown();

@@ -328,7 +328,7 @@ Items that become relevant as the world grows large.
   (ADR-0001).
 - **Multithreaded systems** — parallel system execution, job system for
   procgen workloads. *Foundation done: a minimal shared-queue `JobSystem`
-  (`src/job_system.*`, ADR-0013) — `parallelFor` + counter-based `run`/`wait`,
+  (`src/job_system.*`, ADR-0014) — `parallelFor` + counter-based `run`/`wait`,
   synchronous mode for tests; the offline tracer renders on it. Pulled forward
   from Tier 5 as low-level foundation. **Jolt physics now steps on this pool**
   via a `JoltJobAdapter` (ADR-0012). Remaining: parallel ECS system execution

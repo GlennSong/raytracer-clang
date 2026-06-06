@@ -31,7 +31,7 @@ struct FrameContext {
     RenderView& view;
     SimClock& clock;
     Settings& settings;
-    JobSystem& jobs;           // shared thread pool (ADR-0013): physics today
+    JobSystem& jobs;           // shared thread pool (ADR-0014): physics today
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)

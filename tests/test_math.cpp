@@ -2,7 +2,7 @@
 
 #include "../src/rt_math.h"
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
 constexpr Real EPS = 1e-9;

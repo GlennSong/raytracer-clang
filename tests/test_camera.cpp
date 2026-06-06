@@ -3,7 +3,7 @@
 #include "../src/engine/camera/fly_camera_controller.h"
 #include "../src/engine/camera/orbit_camera_controller.h"
 
-using namespace engine;  // namespace migration (ADR-0014)
+using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
 constexpr Real EPS = 1e-6;
