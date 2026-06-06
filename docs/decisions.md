@@ -661,8 +661,9 @@ namespace references left are a `using namespace engine;` in the leaf
 consumers (`main.cpp`, `viewer_main.cpp`, and the test `.cpp`s) and `int main()`
 itself. The macOS-only backends (`metal_renderer.mm`, `window.cpp`,
 `gamepad_gc.mm`) were wrapped with the namespace placed outside any ObjC
-construct and after all (incl. conditional) includes; structurally balanced but
-pending a Mac build to compile, as ever.
+construct and after all (incl. conditional) includes; **confirmed building and
+running on macOS** (viewer), closing the usual can't-compile-in-CI gap for this
+change.
 
 **Revisit trigger.** If `engine` proves too generic against a future
 embedded/3rd-party `engine` symbol, revisit the name.
