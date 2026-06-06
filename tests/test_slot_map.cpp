@@ -2,6 +2,8 @@
 
 #include "../src/slot_map.h"
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 namespace {
 struct Thing {
     int value;

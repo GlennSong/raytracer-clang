@@ -3,6 +3,8 @@
 
 #include "rt_math.h"
 
+namespace engine {
+
 enum class MaterialType {
     DIFFUSE,
     METAL,
@@ -52,5 +54,8 @@ struct Material {
         return mat;
     }
 };
+
+
+}  // namespace engine
 
 #endif

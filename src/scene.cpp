@@ -1,5 +1,7 @@
 #include "scene.h"
 
+namespace engine {
+
 int Scene::addMaterial(const Material& mat) {
     materials.push_back(mat);
     return static_cast<int>(materials.size()) - 1;
@@ -156,3 +158,6 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
 
     return radiance;
 }
+
+}  // namespace engine
+

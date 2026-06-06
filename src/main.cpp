@@ -8,6 +8,8 @@
 #include <chrono>
 #include <atomic>
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 const int IMAGE_SIZE = 512;
 const int SAMPLES_PER_PIXEL = 128;
 const int MAX_BOUNCES = 10;

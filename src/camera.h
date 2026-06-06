@@ -3,6 +3,8 @@
 
 #include "rt_math.h"
 
+namespace engine {
+
 class Camera {
 public:
     Vec3 position;
@@ -14,5 +16,8 @@ public:
 
     Ray generateRay(double u, double v) const;
 };
+
+
+}  // namespace engine
 
 #endif

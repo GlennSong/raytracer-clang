@@ -122,8 +122,4 @@ private:
 
 }  // namespace engine
 
-// Transitional global alias (ADR-0014); removed once all consumers are
-// namespaced.
-using engine::SlotMap;
-
 #endif

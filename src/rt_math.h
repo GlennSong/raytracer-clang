@@ -418,36 +418,4 @@ inline Vec3 randomCosineHemisphere(const Vec3& normal) {
 
 }  // namespace engine
 
-// --- Transitional global aliases (ADR-0014) --------------------------------
-// The codebase is migrating into namespace engine, layer by layer (core first).
-// Until every consumer is namespaced, re-export the core math names at global
-// scope so un-migrated code keeps compiling unchanged. Operators are found via
-// ADL (their operands are engine types), so they need no alias. This block is
-// deleted in the final migration step.
-using engine::Real;
-using engine::Vec3;
-using engine::Ray;
-using engine::Mat4;
-using engine::Quat;
-using engine::PI;
-using engine::dot;
-using engine::cross;
-using engine::normalize;
-using engine::reflect;
-using engine::refract;
-using engine::schlick;
-using engine::clampVec;
-using engine::lerp;
-using engine::distance;
-using engine::distanceSquared;
-using engine::minVec;
-using engine::maxVec;
-using engine::approxEqual;
-using engine::degreesToRadians;
-using engine::radiansToDegrees;
-using engine::randomDouble;
-using engine::randomInUnitSphere;
-using engine::randomHemisphere;
-using engine::randomCosineHemisphere;
-
 #endif

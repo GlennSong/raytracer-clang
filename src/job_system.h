@@ -77,9 +77,4 @@ private:
 
 }  // namespace engine
 
-// Transitional global alias (ADR-0014); removed once all consumers are
-// namespaced. (The physics files that forward-declare JobSystem already use the
-// engine:: name, so they don't rely on this.)
-using engine::JobSystem;
-
 #endif

@@ -5,6 +5,8 @@
 #include <atomic>
 #include <vector>
 
+using namespace engine;  // namespace migration (ADR-0014)
+
 namespace {
 
 // A representative workload size: large enough to span many chunks/threads.

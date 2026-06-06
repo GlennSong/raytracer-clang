@@ -1,5 +1,7 @@
 #include "geometry.h"
 
+namespace engine {
+
 bool Sphere::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const {
     Vec3 oc = ray.origin - center;
     double a = dot(ray.direction, ray.direction);
@@ -79,3 +81,6 @@ bool Quad::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) c
     rec.materialIndex = materialIndex;
     return true;
 }
+
+}  // namespace engine
+

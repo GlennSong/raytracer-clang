@@ -601,7 +601,7 @@ container thread-safety / a deferred command buffer, ADR-0006).
 ---
 
 ## ADR-0014 — Engine code lives in `namespace engine`
-**Status:** Accepted (migration in progress — core + job_system/logging + engine layer done; renderer + tracer remain) · **Date:** 2026-06-05
+**Status:** Accepted (migration complete) · **Date:** 2026-06-05
 
 **Context.** All of our types sat in the global namespace — `Vec3`, `Mat4`,
 `Handle`, `World`, `Entity`, `Renderer`, `JobSystem`, `Material`, `Scene`, … As
@@ -654,9 +654,18 @@ clarity at call sites now that this is an engine, not just a tracer.
 - Inside a `JPH::`-derived class, our names still need qualifying
   (`engine::JobSystem`), since the base scope is searched first.
 
-**Revisit trigger.** Migration completion → delete every transitional alias and
-this note's "in progress" status. If `engine` proves too generic against a
-future embedded/3rd-party `engine` symbol, revisit the name.
+**Outcome.** Migration completed in five staged commits (core → job_system/
+logging → engine → renderer → tracer + shim removal). All of `src/` now lives in
+`namespace engine`; every transitional alias is gone. The only global-scope
+namespace references left are a `using namespace engine;` in the leaf
+consumers (`main.cpp`, `viewer_main.cpp`, and the test `.cpp`s) and `int main()`
+itself. The macOS-only backends (`metal_renderer.mm`, `window.cpp`,
+`gamepad_gc.mm`) were wrapped with the namespace placed outside any ObjC
+construct and after all (incl. conditional) includes; structurally balanced but
+pending a Mac build to compile, as ever.
+
+**Revisit trigger.** If `engine` proves too generic against a future
+embedded/3rd-party `engine` symbol, revisit the name.
 
 ---
 
@@ -677,7 +686,7 @@ to be replaced; listed here so they stay visible.
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
 | Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0013) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
-| Transitional namespace shims | core headers (`using engine::…` aliases) + `using namespace engine;` in leaf consumers (`viewer_main.cpp`, engine-touching tests) | Namespace migration is staged (ADR-0014); shims keep un-migrated layers (renderer, tracer) and consumers compiling | Delete the core aliases and the consumer `using namespace engine;` once renderer + tracer are inside `namespace engine` |
+| ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0014): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

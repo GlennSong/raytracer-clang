@@ -3,6 +3,8 @@
 
 #include "rt_math.h"
 
+namespace engine {
+
 struct HitRecord {
     double t;
     Vec3 point;
@@ -52,5 +54,8 @@ struct Quad {
 
     bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
 };
+
+
+}  // namespace engine
 
 #endif

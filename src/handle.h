@@ -25,8 +25,4 @@ struct Handle {
 
 }  // namespace engine
 
-// Transitional global alias (ADR-0014); removed once all consumers are
-// namespaced.
-using engine::Handle;
-
 #endif

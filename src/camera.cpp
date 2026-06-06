@@ -1,5 +1,7 @@
 #include "camera.h"
 
+namespace engine {
+
 Camera::Camera(Vec3 lookFrom, Vec3 lookAt, Vec3 up,
                double fovDegrees, double aspectRatio) {
     double theta = degreesToRadians(fovDegrees);
@@ -20,3 +22,6 @@ Ray Camera::generateRay(double u, double v) const {
     Vec3 direction = normalize(lowerLeft + u * horizontal + v * vertical - position);
     return {position, direction};
 }
+
+}  // namespace engine
+

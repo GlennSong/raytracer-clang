@@ -8,6 +8,8 @@
 #include <vector>
 #include <limits>
 
+namespace engine {
+
 class Scene {
 public:
     std::vector<Sphere> spheres;
@@ -27,5 +29,8 @@ public:
     bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
     Vec3 tracePath(const Ray& ray, int maxBounces) const;
 };
+
+
+}  // namespace engine
 
 #endif
