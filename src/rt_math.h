@@ -253,6 +253,52 @@ struct Mat4 {
             m[2][0] * d.x + m[2][1] * d.y + m[2][2] * d.z
         };
     }
+
+    Mat4 transpose() const {
+        Mat4 r;
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                r.m[i][j] = m[j][i];
+        return r;
+    }
+
+    // 4×4 matrix inverse via cofactor expansion. Returns identity if singular.
+    Mat4 inverse() const {
+        // Compute cofactors for each element of the result
+        Real c[16]; // cofactors laid out row-major
+        const Real* s = &m[0][0];
+
+        c[0]  =  s[5]*(s[10]*s[15]-s[11]*s[14]) - s[9]*(s[6]*s[15]-s[7]*s[14]) + s[13]*(s[6]*s[11]-s[7]*s[10]);
+        c[1]  = -(s[4]*(s[10]*s[15]-s[11]*s[14]) - s[8]*(s[6]*s[15]-s[7]*s[14]) + s[12]*(s[6]*s[11]-s[7]*s[10]));
+        c[2]  =  s[4]*(s[9]*s[15]-s[11]*s[13]) - s[8]*(s[5]*s[15]-s[7]*s[13]) + s[12]*(s[5]*s[11]-s[7]*s[9]);
+        c[3]  = -(s[4]*(s[9]*s[14]-s[10]*s[13]) - s[8]*(s[5]*s[14]-s[6]*s[13]) + s[12]*(s[5]*s[10]-s[6]*s[9]));
+
+        c[4]  = -(s[1]*(s[10]*s[15]-s[11]*s[14]) - s[9]*(s[2]*s[15]-s[3]*s[14]) + s[13]*(s[2]*s[11]-s[3]*s[10]));
+        c[5]  =  s[0]*(s[10]*s[15]-s[11]*s[14]) - s[8]*(s[2]*s[15]-s[3]*s[14]) + s[12]*(s[2]*s[11]-s[3]*s[10]);
+        c[6]  = -(s[0]*(s[9]*s[15]-s[11]*s[13]) - s[8]*(s[1]*s[15]-s[3]*s[13]) + s[12]*(s[1]*s[11]-s[3]*s[9]));
+        c[7]  =  s[0]*(s[9]*s[14]-s[10]*s[13]) - s[8]*(s[1]*s[14]-s[2]*s[13]) + s[12]*(s[1]*s[10]-s[2]*s[9]);
+
+        c[8]  =  s[1]*(s[6]*s[15]-s[7]*s[14]) - s[5]*(s[2]*s[15]-s[3]*s[14]) + s[13]*(s[2]*s[7]-s[3]*s[6]);
+        c[9]  = -(s[0]*(s[6]*s[15]-s[7]*s[14]) - s[4]*(s[2]*s[15]-s[3]*s[14]) + s[12]*(s[2]*s[7]-s[3]*s[6]));
+        c[10] =  s[0]*(s[5]*s[15]-s[7]*s[13]) - s[4]*(s[1]*s[15]-s[3]*s[13]) + s[12]*(s[1]*s[7]-s[3]*s[5]);
+        c[11] = -(s[0]*(s[5]*s[14]-s[6]*s[13]) - s[4]*(s[1]*s[14]-s[2]*s[13]) + s[12]*(s[1]*s[6]-s[2]*s[5]));
+
+        c[12] = -(s[1]*(s[6]*s[11]-s[7]*s[10]) - s[5]*(s[2]*s[11]-s[3]*s[10]) + s[9]*(s[2]*s[7]-s[3]*s[6]));
+        c[13] =  s[0]*(s[6]*s[11]-s[7]*s[10]) - s[4]*(s[2]*s[11]-s[3]*s[10]) + s[8]*(s[2]*s[7]-s[3]*s[6]);
+        c[14] = -(s[0]*(s[5]*s[11]-s[7]*s[9]) - s[4]*(s[1]*s[11]-s[3]*s[9]) + s[8]*(s[1]*s[7]-s[3]*s[5]));
+        c[15] =  s[0]*(s[5]*s[10]-s[6]*s[9]) - s[4]*(s[1]*s[10]-s[2]*s[9]) + s[8]*(s[1]*s[6]-s[2]*s[5]);
+
+        Real det = s[0]*c[0] + s[1]*c[1] + s[2]*c[2] + s[3]*c[3];
+        if (std::abs(det) < 1e-12) return Mat4(); // singular → identity
+
+        Real invDet = 1.0 / det;
+        Mat4 r;
+        // Transpose of cofactor matrix divided by determinant
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                r.m[j][i] = c[i * 4 + j] * invDet;
+        return r;
+    }
 };
 
 // Unit quaternion for rotations. Stored (x, y, z, w) with w the scalar part;

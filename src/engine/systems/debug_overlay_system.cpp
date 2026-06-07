@@ -26,6 +26,16 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u", rs.totalInstances);
+
+    ImGui::Separator();
+    ImGui::Text("Post-Processing");
+    ImGui::Checkbox("SSAO", &ctx.renderer.ssaoEnabled);
+    ImGui::Checkbox("SSR", &ctx.renderer.ssrEnabled);
+    ImGui::Checkbox("Reflection Probes", &ctx.renderer.reflectionProbesEnabled);
+
+    ImGui::Separator();
+    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth"};
+    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 4);
     ImGui::End();
 #else
     (void)ctx;  // inert without ImGui (ADR-0011)

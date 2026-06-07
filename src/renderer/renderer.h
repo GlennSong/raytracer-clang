@@ -38,10 +38,13 @@ struct RenderMaterial {
     float roughness;
     float opacity;
     Vec3 emission;
+    uint32_t flags = 0;
+
+    static constexpr uint32_t FLAG_CHECKERBOARD = 1;
 
     RenderMaterial()
         : albedo(0.8, 0.8, 0.8), metallic(0.0), roughness(0.5),
-          opacity(1.0), emission(0, 0, 0) {}
+          opacity(1.0), emission(0, 0, 0), flags(0) {}
 };
 
 struct RenderMesh {
@@ -113,6 +116,17 @@ struct SceneLighting {
     float exposure = 1.0f;
 };
 
+struct ReflectionProbe {
+    Vec3 position;
+    float influenceRadius;
+    Vec3 boxMin, boxMax;    // AABB for parallax correction
+    int priority = 0;       // higher = preferred when overlapping
+
+    ReflectionProbe() : influenceRadius(10.0f) {}
+    ReflectionProbe(const Vec3& pos, float radius, const Vec3& bMin, const Vec3& bMax)
+        : position(pos), influenceRadius(radius), boxMin(bMin), boxMax(bMax) {}
+};
+
 struct RenderStats {
     uint32_t drawCalls = 0;
     uint32_t instancedDrawCalls = 0;
@@ -168,6 +182,7 @@ public:
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
+    virtual void setReflectionProbes(const std::vector<ReflectionProbe>& probes) {}
     virtual void endFrame() = 0;
 
     // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a
@@ -177,6 +192,14 @@ public:
     // windowHandle is the same opaque native pointer passed to initialize().
     virtual void initDebugUi(void* /*windowHandle*/) {}
     virtual void shutdownDebugUi() {}
+
+    // Runtime toggles for post-processing effects (debug/tuning)
+    bool ssaoEnabled = true;
+    bool ssrEnabled = true;
+    bool reflectionProbesEnabled = true;
+
+    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth
+    int debugView = 0;
 
     static std::unique_ptr<Renderer> create();
 };

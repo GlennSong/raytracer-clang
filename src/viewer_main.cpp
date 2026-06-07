@@ -11,6 +11,7 @@
 #ifdef RT_ENABLE_PHYSICS
 #include "engine/systems/physics_system.h"
 #include "engine/systems/player_system.h"
+#include "engine/systems/shooting_system.h"
 #endif
 #include "log.h"
 
@@ -92,6 +93,51 @@ RenderMesh createBoxMesh(Vec3 size) {
     return mesh;
 }
 
+RenderMesh createCylinderMesh(float radius, float height, int slices) {
+    RenderMesh mesh;
+    float halfH = height * 0.5f;
+    // Side vertices
+    for (int i = 0; i <= slices; i++) {
+        float phi = 2.0f * static_cast<float>(PI) * i / slices;
+        float x = radius * std::cos(phi);
+        float z = radius * std::sin(phi);
+        Vec3 normal = normalize(Vec3(x, 0, z));
+        mesh.vertices.push_back(Vertex(Vec3(x, -halfH, z), normal));
+        mesh.vertices.push_back(Vertex(Vec3(x, halfH, z), normal));
+    }
+    for (int i = 0; i < slices; i++) {
+        uint32_t a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+        mesh.indices.insert(mesh.indices.end(), {a, c, b, b, c, d});
+    }
+    // Top cap
+    uint32_t topCenter = static_cast<uint32_t>(mesh.vertices.size());
+    mesh.vertices.push_back(Vertex(Vec3(0, halfH, 0), Vec3(0, 1, 0)));
+    for (int i = 0; i <= slices; i++) {
+        float phi = 2.0f * static_cast<float>(PI) * i / slices;
+        mesh.vertices.push_back(Vertex(
+            Vec3(radius * std::cos(phi), halfH, radius * std::sin(phi)),
+            Vec3(0, 1, 0)));
+    }
+    for (int i = 0; i < slices; i++)
+        mesh.indices.insert(mesh.indices.end(),
+            {topCenter, topCenter + 1 + static_cast<uint32_t>(i + 1),
+             topCenter + 1 + static_cast<uint32_t>(i)});
+    // Bottom cap
+    uint32_t botCenter = static_cast<uint32_t>(mesh.vertices.size());
+    mesh.vertices.push_back(Vertex(Vec3(0, -halfH, 0), Vec3(0, -1, 0)));
+    for (int i = 0; i <= slices; i++) {
+        float phi = 2.0f * static_cast<float>(PI) * i / slices;
+        mesh.vertices.push_back(Vertex(
+            Vec3(radius * std::cos(phi), -halfH, radius * std::sin(phi)),
+            Vec3(0, -1, 0)));
+    }
+    for (int i = 0; i < slices; i++)
+        mesh.indices.insert(mesh.indices.end(),
+            {botCenter, botCenter + 1 + static_cast<uint32_t>(i),
+             botCenter + 1 + static_cast<uint32_t>(i + 1)});
+    return mesh;
+}
+
 static void buildArena(World& world, Renderer& renderer, RenderView& view) {
     MeshHandle sphereHandle = renderer.uploadMesh(createSphereMesh(1.0f, 32, 64));
 
@@ -100,8 +146,9 @@ static void buildArena(World& world, Renderer& renderer, RenderView& view) {
     constexpr Real WALL_THICK = 0.5;
 
     RenderMaterial floorMat;
-    floorMat.albedo = Vec3(0.4, 0.4, 0.4);
+    floorMat.albedo = Vec3(0.7, 0.7, 0.7);
     floorMat.roughness = 0.8f;
+    floorMat.flags = RenderMaterial::FLAG_CHECKERBOARD;
 
     RenderMaterial wallMat;
     wallMat.albedo = Vec3(0.6, 0.6, 0.65);
@@ -254,6 +301,17 @@ int main() {
 
     buildArena(app.world(), app.renderer(), app.renderView());
 
+    // Reflection probes — baked cubemap captures of the arena for metallic reflections.
+    // The center probe covers the whole arena; corner probes provide parallax correction.
+    {
+        constexpr float ARENA = 25.0f;
+        std::vector<ReflectionProbe> probes;
+        probes.push_back(ReflectionProbe(
+            Vec3(0, 3, 0), 35.0f,
+            Vec3(-ARENA, -1, -ARENA), Vec3(ARENA, 10, ARENA)));
+        app.renderer().setReflectionProbes(probes);
+    }
+
     app.settings().setString("cameraMode", "fly");
 
     app.addSystem<DevControlSystem>();
@@ -261,6 +319,7 @@ int main() {
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = app.addSystem<PhysicsSystem>();
     app.addSystem<PlayerSystem>(camSys.flyController(), physSys);
+    app.addSystem<ShootingSystem>(camSys.flyController(), physSys, app.renderer());
 #endif
     app.addSystem<MotionSystem>();
     app.addSystem<RenderSystem>();

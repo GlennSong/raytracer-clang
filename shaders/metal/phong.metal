@@ -18,6 +18,13 @@ struct CameraUniforms {
     float4x4 viewProjection;
     float4x4 view;
     float3 cameraPosition;
+    float _camPad0;
+    float4x4 invViewProjection;
+    float4x4 projection;
+    float4x4 invProjection;
+    float2 screenSize;
+    float nearPlane;
+    float farPlane;
 };
 
 struct ModelUniforms {
@@ -30,6 +37,8 @@ struct MaterialUniforms {
     float metallic;
     float roughness;
     float opacity;
+    float flags;
+    float _matPad;
     float3 emission;
 };
 
@@ -59,20 +68,76 @@ struct LightUniforms {
     float  _pad[2];
 };
 
-// Procedural environment — gives metals something to reflect
+// Procedural daytime sky environment
 float3 sampleEnvironment(float3 dir) {
-    float3 sky = mix(float3(0.15, 0.15, 0.2), float3(0.4, 0.5, 0.7), saturate(dir.y * 0.5 + 0.5));
-    float3 ground = float3(0.1, 0.08, 0.06);
-    float blend = smoothstep(-0.1, 0.1, dir.y);
-    float3 env = mix(ground, sky, blend);
+    // Sky gradient: warm horizon to deep blue zenith
+    float3 zenith = float3(0.25, 0.45, 0.85);
+    float3 horizon = float3(0.6, 0.75, 0.9);
+    float3 ground = float3(0.35, 0.3, 0.25);
 
-    // Fake sun highlight
-    float3 sunDir = normalize(float3(0.5, 0.7, -0.3));
+    float skyBlend = saturate(dir.y);
+    float3 sky = mix(horizon, zenith, pow(skyBlend, 0.5));
+
+    // Soft ground plane below horizon
+    float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
+    float3 env = mix(ground, sky, horizonBlend);
+
+    // Sun disc and glow
+    float3 sunDir = normalize(float3(0.4, 0.8, -0.3));
     float sunDot = max(dot(dir, sunDir), 0.0);
-    env += float3(1.0, 0.9, 0.7) * pow(sunDot, 64.0) * 2.0;
-    env += float3(1.0, 0.9, 0.8) * pow(sunDot, 8.0) * 0.3;
+    env += float3(1.0, 0.95, 0.8) * pow(sunDot, 256.0) * 8.0;   // bright disc
+    env += float3(1.0, 0.9, 0.7) * pow(sunDot, 32.0) * 1.0;     // inner glow
+    env += float3(1.0, 0.85, 0.6) * pow(sunDot, 4.0) * 0.15;    // outer halo
+
+    // Subtle atmospheric scattering near horizon
+    float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
+    env += float3(0.8, 0.7, 0.5) * horizonGlow * 0.1;
 
     return env;
+}
+
+// --- Skybox shaders ---
+struct SkyboxOut {
+    float4 position [[position]];
+    float3 viewDir;
+};
+
+// Fullscreen triangle: 3 vertices cover the screen without a vertex buffer
+vertex SkyboxOut vertexSkybox(
+    constant CameraUniforms& camera [[buffer(1)]],
+    uint vid [[vertex_id]]
+) {
+    // Generate fullscreen triangle (oversized, clipped to viewport)
+    float2 uv = float2((vid << 1) & 2, vid & 2);
+    // z=0.999 — just inside the far plane to avoid far-plane clipping on some GPUs
+    float4 clipPos = float4(uv * 2.0 - 1.0, 0.999, 1.0);
+
+    SkyboxOut out;
+    out.position = clipPos;
+
+    // Reconstruct world-space view direction via inverse view-projection.
+    // This correctly accounts for FOV and aspect ratio so the sky matches
+    // the scene perspective.
+    float4 worldPos = camera.invViewProjection * float4(clipPos.xy, 1.0, 1.0);
+    out.viewDir = normalize(worldPos.xyz / worldPos.w - camera.cameraPosition);
+    return out;
+}
+
+fragment float4 fragmentSkybox(
+    SkyboxOut in [[stage_in]],
+    device const LightUniforms& lightData [[buffer(4)]]
+) {
+    float3 color = sampleEnvironment(normalize(in.viewDir));
+    color *= lightData.exposure;
+    return float4(color, 1.0);  // linear HDR — tone mapping in composite pass
+}
+
+// Checkerboard pattern based on world position
+float3 applyCheckerboard(float3 albedo, float3 worldPos) {
+    int cx = int(floor(worldPos.x));
+    int cz = int(floor(worldPos.z));
+    bool dark = ((cx + cz) & 1) != 0;
+    return dark ? albedo * 0.3 : albedo;
 }
 
 float fresnelSchlick(float cosTheta, float f0) {
@@ -90,7 +155,7 @@ struct InstanceData {
     float metallic;
     float roughness;
     float opacity;
-    float _pad0;
+    float flags;
     float4 emission;    // w unused
 };
 
@@ -145,6 +210,240 @@ float computeShadow(depth2d<float> shadowMap, sampler smp,
     return sampleShadowPCF(shadowMap, smp, uv, ndc.z, texelSize);
 }
 
+// --- Reflection probe structures ---
+
+struct GPUReflectionProbe {
+    float3 position;
+    float influenceRadius;
+    float3 boxMin;
+    float _pad0;
+    float3 boxMax;
+    int probeIndex;       // index into cubemap array
+};
+
+struct ProbeUniforms {
+    int probeCount;
+    int maxMipLevel;      // number of roughness mip levels in cubemap
+    float _pad[2];
+};
+
+// Parallax-corrected box projection for cubemap sampling
+float3 boxProjectReflection(float3 reflectDir, float3 worldPos,
+                             float3 boxMin, float3 boxMax, float3 probePos) {
+    float3 firstPlaneIntersect = (boxMax - worldPos) / reflectDir;
+    float3 secondPlaneIntersect = (boxMin - worldPos) / reflectDir;
+    float3 furthestPlane = max(firstPlaneIntersect, secondPlaneIntersect);
+    float dist = min(min(furthestPlane.x, furthestPlane.y), furthestPlane.z);
+    float3 intersectPos = worldPos + reflectDir * dist;
+    return intersectPos - probePos;
+}
+
+// Sample reflection from probes with distance-based blending, fallback to procedural sky
+float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughness,
+                               float3 normal, float NdotV, float3 f0,
+                               device const GPUReflectionProbe* probes,
+                               constant ProbeUniforms& probeParams,
+                               texturecube_array<float> cubemapArray,
+                               texture2d<float> brdfLUT,
+                               sampler envSampler) {
+    // Perceptual roughness-to-mip mapping — square the roughness for smoother
+    // transitions between mip levels (avoids visible banding with box-filter mips)
+    float mipLevel = roughness * roughness * float(probeParams.maxMipLevel);
+
+    // Find the two best probes
+    int bestIdx[2] = {-1, -1};
+    float bestWeight[2] = {0.0, 0.0};
+
+    for (int i = 0; i < probeParams.probeCount && i < 8; i++) {
+        float dist = length(worldPos - probes[i].position);
+        float radius = probes[i].influenceRadius;
+        if (dist >= radius) continue;
+
+        // Smooth falloff from center to edge
+        float weight = 1.0 - smoothstep(radius * 0.7, radius, dist);
+
+        if (weight > bestWeight[0]) {
+            bestIdx[1] = bestIdx[0];
+            bestWeight[1] = bestWeight[0];
+            bestIdx[0] = i;
+            bestWeight[0] = weight;
+        } else if (weight > bestWeight[1]) {
+            bestIdx[1] = i;
+            bestWeight[1] = weight;
+        }
+    }
+
+    // Sample BRDF LUT for split-sum
+    float2 brdf = brdfLUT.sample(envSampler, float2(NdotV, roughness)).rg;
+    float3 fresnel = f0 * brdf.x + brdf.y;
+
+    float totalWeight = bestWeight[0] + bestWeight[1];
+    if (totalWeight < 0.001) {
+        // Outside all probes — fall back to procedural sky
+        float3 envColor = sampleEnvironment(reflectDir);
+        float mipBlur = roughness * roughness * roughness;  // smooth falloff
+        envColor = mix(envColor, sampleEnvironment(normal), mipBlur);
+        return fresnelSchlickVec(NdotV, f0) * envColor;
+    }
+
+    float3 probeColor = float3(0.0);
+    for (int j = 0; j < 2; j++) {
+        if (bestIdx[j] < 0) continue;
+        int pi = bestIdx[j];
+        float3 correctedDir = boxProjectReflection(reflectDir, worldPos,
+                                                     probes[pi].boxMin,
+                                                     probes[pi].boxMax,
+                                                     probes[pi].position);
+        float3 sample = cubemapArray.sample(envSampler, correctedDir,
+                                             probes[pi].probeIndex, level(mipLevel)).rgb;
+        probeColor += sample * (bestWeight[j] / totalWeight);
+    }
+
+    // Blend remaining weight to procedural sky fallback
+    float skyWeight = 1.0 - saturate(totalWeight);
+    if (skyWeight > 0.001) {
+        float3 skyColor = sampleEnvironment(reflectDir);
+        float mipBlur = roughness * roughness;
+        skyColor = mix(skyColor, sampleEnvironment(normal), mipBlur);
+        probeColor = mix(probeColor, skyColor, skyWeight);
+    }
+
+    return fresnel * probeColor;
+}
+
+// --- BRDF integration LUT compute shader (split-sum, run once at startup) ---
+
+// Van der Corput radical inverse for Hammersley sequence
+float radicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+float2 hammersley(uint i, uint N) {
+    return float2(float(i) / float(N), radicalInverse_VdC(i));
+}
+
+float3 importanceSampleGGX(float2 Xi, float3 N, float roughness) {
+    float a = roughness * roughness;
+    float phi = 2.0 * M_PI_F * Xi.x;
+    float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    float3 H = float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    // Tangent-space to world-space
+    float3 up = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(up, N));
+    float3 bitangent = cross(N, tangent);
+
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+kernel void integrateBRDF(
+    texture2d<float, access::write> lut [[texture(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    float2 texSize = float2(lut.get_width(), lut.get_height());
+    if (gid.x >= uint(texSize.x) || gid.y >= uint(texSize.y)) return;
+
+    float NdotV = (float(gid.x) + 0.5) / texSize.x;
+    float roughness = (float(gid.y) + 0.5) / texSize.y;
+    NdotV = max(NdotV, 0.001);
+
+    float3 V;
+    V.x = sqrt(1.0 - NdotV * NdotV);
+    V.y = 0.0;
+    V.z = NdotV;
+
+    float3 N = float3(0, 0, 1);
+    float A = 0.0, B = 0.0;
+    const uint SAMPLES = 1024u;
+
+    for (uint i = 0u; i < SAMPLES; i++) {
+        float2 Xi = hammersley(i, SAMPLES);
+        float3 H = importanceSampleGGX(Xi, N, roughness);
+        float3 L = normalize(2.0 * dot(V, H) * H - V);
+
+        float NdotL = max(L.z, 0.0);
+        float NdotH = max(H.z, 0.0);
+        float VdotH = max(dot(V, H), 0.0);
+
+        if (NdotL > 0.0) {
+            float a2 = roughness * roughness * roughness * roughness;
+            float G_V = NdotL * (NdotV * (1.0 - sqrt(a2)) + sqrt(a2));
+            float G_L = NdotV * (NdotL * (1.0 - sqrt(a2)) + sqrt(a2));
+            float G = 0.5 / max(G_V + G_L, 0.001);
+            float G_Vis = (G * VdotH * NdotL) / max(NdotH, 0.001);
+            float Fc = pow(1.0 - VdotH, 5.0);
+            A += (1.0 - Fc) * G_Vis;
+            B += Fc * G_Vis;
+        }
+    }
+
+    A /= float(SAMPLES);
+    B /= float(SAMPLES);
+    lut.write(float4(A, B, 0, 1), gid);
+}
+
+// --- Cubemap pre-filter compute shader (GGX importance sampling per mip level) ---
+
+kernel void prefilterEnvMap(
+    texturecube<float> inputCube [[texture(0)]],
+    texturecube<float, access::write> outputFace [[texture(1)]],
+    constant float& roughness [[buffer(0)]],
+    constant int& faceIndex [[buffer(1)]],
+    sampler envSampler [[sampler(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint size = outputFace.get_width();
+    if (gid.x >= size || gid.y >= size) return;
+
+    // Convert pixel to cubemap direction
+    float2 uv = (float2(gid) + 0.5) / float(size) * 2.0 - 1.0;
+
+    float3 dir;
+    switch (faceIndex) {
+        case 0: dir = float3( 1, -uv.y, -uv.x); break; // +X
+        case 1: dir = float3(-1, -uv.y,  uv.x); break; // -X
+        case 2: dir = float3( uv.x,  1,  uv.y); break; // +Y
+        case 3: dir = float3( uv.x, -1, -uv.y); break; // -Y
+        case 4: dir = float3( uv.x, -uv.y,  1); break; // +Z
+        case 5: dir = float3(-uv.x, -uv.y, -1); break; // -Z
+    }
+    float3 N = normalize(dir);
+
+    if (roughness < 0.01) {
+        // No filtering needed for mip 0
+        outputFace.write(inputCube.sample(envSampler, N), gid, faceIndex);
+        return;
+    }
+
+    float3 R = N;
+    float3 V = R;
+    float3 prefilteredColor = float3(0.0);
+    float totalWeight = 0.0;
+    const uint SAMPLES = 512u;
+
+    for (uint i = 0u; i < SAMPLES; i++) {
+        float2 Xi = hammersley(i, SAMPLES);
+        float3 H = importanceSampleGGX(Xi, N, roughness);
+        float3 L = normalize(2.0 * dot(V, H) * H - V);
+
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL > 0.0) {
+            prefilteredColor += inputCube.sample(envSampler, L).rgb * NdotL;
+            totalWeight += NdotL;
+        }
+    }
+
+    prefilteredColor /= max(totalWeight, 0.001);
+    outputFace.write(float4(prefilteredColor, 1.0), gid, faceIndex);
+}
+
 struct FragmentData {
     float4 position [[position]];
     float3 worldPosition;
@@ -154,6 +453,7 @@ struct FragmentData {
     float metallic;
     float roughness;
     float opacity;
+    float flags;
     float3 emission;
 };
 
@@ -175,6 +475,7 @@ vertex FragmentData vertexMainInstanced(
     out.metallic = inst.metallic;
     out.roughness = inst.roughness;
     out.opacity = inst.opacity;
+    out.flags = inst.flags;
     out.emission = inst.emission.xyz;
     return out;
 }
@@ -238,31 +539,50 @@ fragment float4 fragmentMainInstanced(
     constant CameraUniforms& camera [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
     constant ShadowUniforms& shadowData [[buffer(5)]],
+    constant ProbeUniforms& probeParams [[buffer(6)]],
+    device const GPUReflectionProbe* probes [[buffer(7)]],
     depth2d<float> shadowMap [[texture(0)]],
-    sampler shadowSampler [[sampler(0)]]
+    texturecube_array<float> cubemapArray [[texture(1)]],
+    texture2d<float> brdfLUT [[texture(2)]],
+    sampler shadowSampler [[sampler(0)]],
+    sampler envSampler [[sampler(1)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
+    float3 albedo = in.albedo;
+    if (int(in.flags) & 1) albedo = applyCheckerboard(albedo, in.worldPosition);
+
     float3 normal = normalize(in.worldNormal);
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
     float3 reflectDir = reflect(-viewDir, normal);
-    float3 envReflection = sampleEnvironment(reflectDir);
+    float3 f0 = mix(float3(0.04), albedo, in.metallic);
 
-    float3 f0 = mix(float3(0.04), in.albedo, in.metallic);
+    // Environment specular: use probes if available, otherwise procedural sky
+    float3 envSpecular;
+    float3 envReflection;
+    if (probeParams.probeCount > 0) {
+        envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
+                                              in.roughness, normal, NdotV, f0,
+                                              probes, probeParams,
+                                              cubemapArray, brdfLUT, envSampler);
+        envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
+    } else {
+        envReflection = sampleEnvironment(reflectDir);
+        float3 fresnel = fresnelSchlickVec(NdotV, f0);
+        float mipBlur = in.roughness * in.roughness;
+        float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
+        envSpecular = fresnel * envBlurred;
+    }
+
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
-
-    float mipBlur = in.roughness * in.roughness;
-    float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
-    float3 envSpecular = fresnel * envBlurred;
-
     float3 directLight = evaluateLighting(in.worldPosition, normal, viewDir,
-                                           in.albedo, in.metallic, in.roughness,
+                                           albedo, in.metallic, in.roughness,
                                            fresnel, lightData,
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = in.albedo * sampleEnvironment(normal) * 0.3 * (1.0 - in.metallic);
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * 0.3 * (1.0 - in.metallic);
     float3 color = in.emission + directLight + ambientDiffuse + envSpecular;
 
     float alpha = in.opacity;
@@ -273,11 +593,7 @@ fragment float4 fragmentMainInstanced(
     }
 
     color *= lightData.exposure;
-    float3 x = color;
-    color = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-    color = saturate(color);
-    color = pow(color, float3(1.0 / 2.2));
-    return float4(color, alpha);
+    return float4(color, alpha);  // linear HDR — tone mapping in composite pass
 }
 
 vertex VertexOut vertexMain(
@@ -301,31 +617,50 @@ fragment float4 fragmentMain(
     constant MaterialUniforms& material [[buffer(3)]],
     device const LightUniforms& lightData [[buffer(4)]],
     constant ShadowUniforms& shadowData [[buffer(5)]],
+    constant ProbeUniforms& probeParams [[buffer(6)]],
+    device const GPUReflectionProbe* probes [[buffer(7)]],
     depth2d<float> shadowMap [[texture(0)]],
-    sampler shadowSampler [[sampler(0)]]
+    texturecube_array<float> cubemapArray [[texture(1)]],
+    texture2d<float> brdfLUT [[texture(2)]],
+    sampler shadowSampler [[sampler(0)]],
+    sampler envSampler [[sampler(1)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
+    float3 albedo = material.albedo;
+    if (int(material.flags) & 1) albedo = applyCheckerboard(albedo, in.worldPosition);
+
     float3 normal = normalize(in.worldNormal);
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
     float3 reflectDir = reflect(-viewDir, normal);
-    float3 envReflection = sampleEnvironment(reflectDir);
+    float3 f0 = mix(float3(0.04), albedo, material.metallic);
 
-    float3 f0 = mix(float3(0.04), material.albedo, material.metallic);
+    // Environment specular: use probes if available, otherwise procedural sky
+    float3 envSpecular;
+    float3 envReflection;
+    if (probeParams.probeCount > 0) {
+        envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
+                                              material.roughness, normal, NdotV, f0,
+                                              probes, probeParams,
+                                              cubemapArray, brdfLUT, envSampler);
+        envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
+    } else {
+        envReflection = sampleEnvironment(reflectDir);
+        float3 fresnel = fresnelSchlickVec(NdotV, f0);
+        float mipBlur = material.roughness * material.roughness;
+        float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
+        envSpecular = fresnel * envBlurred;
+    }
+
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
-
-    float mipBlur = material.roughness * material.roughness;
-    float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
-    float3 envSpecular = fresnel * envBlurred;
-
     float3 directLight = evaluateLighting(in.worldPosition, normal, viewDir,
-                                           material.albedo, material.metallic,
+                                           albedo, material.metallic,
                                            material.roughness, fresnel, lightData,
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = material.albedo * sampleEnvironment(normal) * 0.3 * (1.0 - material.metallic);
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * 0.3 * (1.0 - material.metallic);
     float3 color = material.emission + directLight + ambientDiffuse + envSpecular;
 
     float alpha = material.opacity;
@@ -336,9 +671,494 @@ fragment float4 fragmentMain(
     }
 
     color *= lightData.exposure;
-    float3 x = color;
-    color = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    return float4(color, alpha);  // linear HDR — tone mapping in composite pass
+}
+
+// --- Screen-Space Reflections (SSR) ---
+
+// Reconstruct view-space position from NDC depth and screen UV
+float3 ssrViewPos(float depth, float2 uv, float4x4 invProjection) {
+    float4 clip = float4(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0), depth, 1.0);
+    float4 vp = invProjection * clip;
+    return vp.xyz / vp.w;
+}
+
+kernel void ssrRayMarch(
+    texture2d<float, access::read> sceneColor [[texture(0)]],
+    texture2d<float, access::read> depthTex [[texture(1)]],
+    texture2d<float, access::write> ssrResult [[texture(2)]],
+    constant CameraUniforms& camera [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    // SSR runs at half resolution; depth/scene are full resolution
+    uint2 outSize = uint2(ssrResult.get_width(), ssrResult.get_height());
+    if (gid.x >= outSize.x || gid.y >= outSize.y) return;
+
+    float2 uv = (float2(gid) + 0.5) / float2(outSize);
+    float2 fullSize = camera.screenSize;
+    uint2 fullMax = uint2(fullSize) - 1;
+
+    // Read depth at full resolution
+    uint2 depthCoord = min(uint2(uv * fullSize), fullMax);
+    float depth = depthTex.read(depthCoord).x;
+
+    if (depth >= 0.999) {
+        ssrResult.write(float4(0.0), gid);
+        return;
+    }
+
+    // Reconstruct view-space position and normal from full-res depth
+    float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
+
+    float2 texel = 1.0 / fullSize;
+    float2 uvR = uv + float2(texel.x, 0.0);
+    float2 uvD = uv + float2(0.0, texel.y);
+    float depthR = depthTex.read(min(uint2(uvR * fullSize), fullMax)).x;
+    float depthD = depthTex.read(min(uint2(uvD * fullSize), fullMax)).x;
+    float3 viewPosR = ssrViewPos(depthR, uvR, camera.invProjection);
+    float3 viewPosD = ssrViewPos(depthD, uvD, camera.invProjection);
+    float3 viewNormal = normalize(cross(viewPosD - viewPos, viewPosR - viewPos));
+    if (viewNormal.z < 0.0) viewNormal = -viewNormal;
+
+    float3 viewDir = normalize(viewPos);
+    float3 reflectDir = reflect(viewDir, viewNormal);
+
+    if (reflectDir.z > 0.2) {
+        ssrResult.write(float4(0.0), gid);
+        return;
+    }
+
+    // Ray march in view space (reduced steps for half-res)
+    const int MAX_STEPS = 32;
+    const int BINARY_STEPS = 5;
+    float stepSize = 0.5;
+    float maxRayDist = 25.0;
+    float thickness = 0.5;
+
+    bool hit = false;
+    float2 hitUV = float2(0.0);
+    float hitDist = 0.0;
+    float traveled = 0.0;
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+        traveled += stepSize;
+        if (traveled > maxRayDist) break;
+
+        float3 samplePos = viewPos + reflectDir * traveled;
+        float4 proj = camera.projection * float4(samplePos, 1.0);
+        if (proj.w <= 0.0) break;
+
+        float3 ndc = proj.xyz / proj.w;
+        float2 sampleUV = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+        if (any(sampleUV < float2(0.0)) || any(sampleUV > float2(1.0))) break;
+
+        uint2 sampleCoord = min(uint2(sampleUV * fullSize), fullMax);
+        float sceneDepth = depthTex.read(sampleCoord).x;
+        float rayDepth = ndc.z;
+
+        if (rayDepth > sceneDepth && sceneDepth > 0.0) {
+            float3 scenePos = ssrViewPos(sceneDepth, sampleUV, camera.invProjection);
+            float depthDiff = length(samplePos) - length(scenePos);
+
+            if (depthDiff > 0.0 && depthDiff < thickness) {
+                float lo = traveled - stepSize;
+                float hi = traveled;
+                for (int b = 0; b < BINARY_STEPS; b++) {
+                    float mid = (lo + hi) * 0.5;
+                    float3 midPos = viewPos + reflectDir * mid;
+                    float4 midProj = camera.projection * float4(midPos, 1.0);
+                    float3 midNDC = midProj.xyz / midProj.w;
+                    float2 midUV = float2(midNDC.x * 0.5 + 0.5, -midNDC.y * 0.5 + 0.5);
+                    midUV = clamp(midUV, float2(0.0), float2(1.0));
+                    uint2 midCoord = min(uint2(midUV * fullSize), fullMax);
+
+                    if (midNDC.z > depthTex.read(midCoord).x) {
+                        hi = mid; sampleUV = midUV;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                hit = true;
+                hitUV = sampleUV;
+                hitDist = (lo + hi) * 0.5;
+                break;
+            }
+        }
+        stepSize *= 1.05;
+    }
+
+    if (!hit) {
+        ssrResult.write(float4(0.0), gid);
+        return;
+    }
+
+    uint2 hitCoord = min(uint2(hitUV * fullSize), fullMax);
+    float3 hitColor = sceneColor.read(hitCoord).rgb;
+
+    float2 edgeFade = smoothstep(float2(0.0), float2(0.05), hitUV) *
+                       smoothstep(float2(0.0), float2(0.05), 1.0 - hitUV);
+    float confidence = edgeFade.x * edgeFade.y;
+    confidence *= 1.0 - saturate(hitDist / maxRayDist);
+
+    float NdotV = saturate(dot(viewNormal, -viewDir));
+    float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
+    confidence *= fresnel;
+
+    ssrResult.write(float4(hitColor, confidence), gid);
+}
+
+// Bilateral blur for SSR (horizontal) — half-res input, full-res depth
+kernel void ssrBlurH(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::read> depthTex [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint w = input.get_width();
+    uint h = input.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    // Map half-res gid to full-res depth coordinate
+    uint2 fullSize = uint2(depthTex.get_width(), depthTex.get_height());
+    uint2 depthCenter = min(uint2(float2(gid) / float2(w, h) * float2(fullSize)), fullSize - 1);
+    float centerDepth = depthTex.read(depthCenter).x;
+    float4 centerColor = input.read(gid);
+
+    if (centerColor.a < 0.001) {
+        output.write(float4(0.0), gid);
+        return;
+    }
+
+    float4 total = centerColor;
+    float weightSum = 1.0;
+    const int RADIUS = 4;
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        if (i == 0) continue;
+        uint2 coord = uint2(clamp(int(gid.x) + i, 0, int(w) - 1), gid.y);
+        float4 s = input.read(coord);
+
+        uint2 depthCoord = min(uint2(float2(coord) / float2(w, h) * float2(fullSize)), fullSize - 1);
+        float sd = depthTex.read(depthCoord).x;
+
+        float spatial = exp(-float(i * i) / 10.0);
+        float depthW = (abs(sd - centerDepth) < 0.003) ? 1.0 : 0.1;
+        float wt = spatial * depthW;
+
+        total += s * wt;
+        weightSum += wt;
+    }
+
+    output.write(total / weightSum, gid);
+}
+
+// Bilateral blur for SSR (vertical) — half-res input, full-res depth
+kernel void ssrBlurV(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::read> depthTex [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint w = input.get_width();
+    uint h = input.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    uint2 fullSize = uint2(depthTex.get_width(), depthTex.get_height());
+    uint2 depthCenter = min(uint2(float2(gid) / float2(w, h) * float2(fullSize)), fullSize - 1);
+    float centerDepth = depthTex.read(depthCenter).x;
+    float4 centerColor = input.read(gid);
+
+    if (centerColor.a < 0.001) {
+        output.write(float4(0.0), gid);
+        return;
+    }
+
+    float4 total = centerColor;
+    float weightSum = 1.0;
+    const int RADIUS = 4;
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        if (i == 0) continue;
+        uint2 coord = uint2(gid.x, clamp(int(gid.y) + i, 0, int(h) - 1));
+        float4 s = input.read(coord);
+
+        uint2 depthCoord = min(uint2(float2(coord) / float2(w, h) * float2(fullSize)), fullSize - 1);
+        float sd = depthTex.read(depthCoord).x;
+
+        float spatial = exp(-float(i * i) / 10.0);
+        float depthW = (abs(sd - centerDepth) < 0.003) ? 1.0 : 0.1;
+        float wt = spatial * depthW;
+
+        total += s * wt;
+        weightSum += wt;
+    }
+
+    output.write(total / weightSum, gid);
+}
+
+// --- Screen-Space Ambient Occlusion (GTAO) ---
+// Full-resolution compute with fewer samples per pixel.
+
+kernel void gtaoCompute(
+    texture2d<float, access::read> depthTex [[texture(0)]],
+    texture2d<float, access::write> aoResult [[texture(1)]],
+    constant CameraUniforms& camera [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint2 texSize = uint2(aoResult.get_width(), aoResult.get_height());
+    if (gid.x >= texSize.x || gid.y >= texSize.y) return;
+
+    float depth = depthTex.read(gid).x;
+
+    // Sky pixels — no occlusion
+    if (depth >= 0.999) {
+        aoResult.write(float4(1.0), gid);
+        return;
+    }
+
+    float2 uv = (float2(gid) + 0.5) / float2(texSize);
+
+    // Reconstruct view-space position
+    float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
+
+    // Reconstruct normal from depth neighbors (central differences, pick best pair)
+    uint2 maxCoord = texSize - 1;
+    float depthL = depthTex.read(uint2(max(int(gid.x) - 1, 0), gid.y)).x;
+    float depthR = depthTex.read(uint2(min(gid.x + 1, maxCoord.x), gid.y)).x;
+    float depthU = depthTex.read(uint2(gid.x, max(int(gid.y) - 1, 0))).x;
+    float depthD = depthTex.read(uint2(gid.x, min(gid.y + 1, maxCoord.y))).x;
+
+    float2 texel = 1.0 / float2(texSize);
+    float3 viewPosL = ssrViewPos(depthL, uv - float2(texel.x, 0), camera.invProjection);
+    float3 viewPosR = ssrViewPos(depthR, uv + float2(texel.x, 0), camera.invProjection);
+    float3 viewPosU = ssrViewPos(depthU, uv - float2(0, texel.y), camera.invProjection);
+    float3 viewPosD = ssrViewPos(depthD, uv + float2(0, texel.y), camera.invProjection);
+
+    float3 ddx = (abs(depthR - depth) < abs(depthL - depth))
+                 ? (viewPosR - viewPos) : (viewPos - viewPosL);
+    float3 ddy = (abs(depthD - depth) < abs(depthU - depth))
+                 ? (viewPosD - viewPos) : (viewPos - viewPosU);
+    float3 viewNormal = normalize(cross(ddy, ddx));
+    if (viewNormal.z < 0.0) viewNormal = -viewNormal;
+
+    // GTAO parameters — tuned for full-res, fewer samples
+    const int NUM_DIRECTIONS = 4;
+    const int NUM_STEPS = 4;
+    float radius = 1.5;       // larger radius for wider, softer falloff
+    float intensity = 0.8;
+    float bias = 0.05;
+
+    // Per-pixel rotation: interleaved gradient noise (Jimenez, SIGGRAPH 2014)
+    // Produces well-distributed values in [0, 2π] with no visible tiling
+    float rotAngle = fract(52.9829189 * fract(0.06711056 * float(gid.x) + 0.00583715 * float(gid.y))) * 2.0 * M_PI_F;
+
+    // Screen-space pixel radius (adapts to depth)
+    float projScale = camera.projection[1][1] * float(texSize.y) * 0.5;
+    float screenRadius = clamp(radius * projScale / (-viewPos.z), 3.0, 64.0);
+
+    float occlusion = 0.0;
+
+    for (int d = 0; d < NUM_DIRECTIONS; d++) {
+        float angle = rotAngle + float(d) * (2.0 * M_PI_F / float(NUM_DIRECTIONS));
+        float2 dir = float2(cos(angle), sin(angle));
+
+        float horizonCos = bias;
+
+        for (int s = 1; s <= NUM_STEPS; s++) {
+            float t = float(s) / float(NUM_STEPS);
+            float2 sampleOffset = dir * t * screenRadius / float2(texSize);
+            float2 sampleUV = uv + sampleOffset;
+
+            if (any(sampleUV < float2(0.0)) || any(sampleUV > float2(1.0))) continue;
+
+            uint2 sampleCoord = min(uint2(sampleUV * float2(texSize)), maxCoord);
+            float sampleDepth = depthTex.read(sampleCoord).x;
+            if (sampleDepth >= 0.999) continue;
+
+            float3 samplePos = ssrViewPos(sampleDepth, sampleUV, camera.invProjection);
+            float3 horizonVec = samplePos - viewPos;
+            float horizonDist = length(horizonVec);
+            if (horizonDist < 0.01) continue;
+
+            float h = dot(normalize(horizonVec), viewNormal);
+            // Smooth falloff: gentle fade from 80% of radius to the edge
+            float distRatio = horizonDist / radius;
+            float distFade = 1.0 - smoothstep(0.3, 1.0, distRatio);
+            h *= distFade;
+
+            horizonCos = max(horizonCos, h);
+        }
+
+        occlusion += horizonCos;
+    }
+
+    occlusion /= float(NUM_DIRECTIONS);
+    float ao = 1.0 - saturate(occlusion * intensity);
+
+    aoResult.write(float4(ao, ao, ao, 1.0), gid);
+}
+
+// AO bilateral blur (horizontal) — same resolution, depth-aware
+kernel void aoBlurH(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::read> depthTex [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint w = output.get_width();
+    uint h = output.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    float centerAO = input.read(gid).r;
+    float centerDepth = depthTex.read(gid).x;
+
+    float total = centerAO;
+    float weightSum = 1.0;
+    const int RADIUS = 4;
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        if (i == 0) continue;
+        uint2 coord = uint2(clamp(int(gid.x) + i, 0, int(w) - 1), gid.y);
+        float sampleAO = input.read(coord).r;
+        float sampleDepth = depthTex.read(coord).x;
+
+        float spatial = exp(-float(i * i) / 8.0);
+        float depthDiff = abs(sampleDepth - centerDepth);
+        float depthW = exp(-depthDiff * depthDiff * 100000.0);
+        float wt = spatial * depthW;
+
+        total += sampleAO * wt;
+        weightSum += wt;
+    }
+
+    output.write(float4(total / weightSum, 0, 0, 1), gid);
+}
+
+// AO bilateral blur (vertical) — same resolution, depth-aware
+kernel void aoBlurV(
+    texture2d<float, access::read> input [[texture(0)]],
+    texture2d<float, access::read> depthTex [[texture(1)]],
+    texture2d<float, access::write> output [[texture(2)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint w = output.get_width();
+    uint h = output.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    float centerAO = input.read(gid).r;
+    float centerDepth = depthTex.read(gid).x;
+
+    float total = centerAO;
+    float weightSum = 1.0;
+    const int RADIUS = 4;
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        if (i == 0) continue;
+        uint2 coord = uint2(gid.x, clamp(int(gid.y) + i, 0, int(h) - 1));
+        float sampleAO = input.read(coord).r;
+        float sampleDepth = depthTex.read(coord).x;
+
+        float spatial = exp(-float(i * i) / 8.0);
+        float depthDiff = abs(sampleDepth - centerDepth);
+        float depthW = exp(-depthDiff * depthDiff * 100000.0);
+        float wt = spatial * depthW;
+
+        total += sampleAO * wt;
+        weightSum += wt;
+    }
+
+    output.write(float4(total / weightSum, 0, 0, 1), gid);
+}
+
+// --- Composite pass: tone map + gamma from HDR scene texture to LDR drawable ---
+
+struct CompositeParams {
+    int ssaoEnabled;
+    int ssrEnabled;
+    int debugView;      // 0=normal, 1=AO only, 2=SSR only, 3=depth
+    float _pad;
+};
+
+struct CompositeOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex CompositeOut vertexComposite(uint vid [[vertex_id]]) {
+    float2 uv = float2((vid << 1) & 2, vid & 2);
+    CompositeOut out;
+    out.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = float2(uv.x, 1.0 - uv.y);  // flip Y for Metal texture origin
+    return out;
+}
+
+fragment float4 fragmentComposite(
+    CompositeOut in [[stage_in]],
+    texture2d<float> sceneColor [[texture(0)]],
+    texture2d<float> ssrTexture [[texture(1)]],
+    texture2d<float> aoTexture [[texture(2)]],
+    depth2d<float> depthTex [[texture(3)]],
+    constant CameraUniforms& camera [[buffer(0)]],
+    constant CompositeParams& params [[buffer(1)]],
+    sampler smp [[sampler(0)]]
+) {
+    // Read depth at this fragment's pixel position (no sampler needed)
+    float depth = depthTex.read(uint2(in.position.xy));
+
+    // --- Debug visualization modes ---
+    if (params.debugView == 1) {
+        // AO only — white = no occlusion, black = full occlusion
+        float ao = aoTexture.sample(smp, in.uv).r;
+        if (depth >= 0.999) ao = 1.0;
+        return float4(ao, ao, ao, 1.0);
+    }
+    if (params.debugView == 2) {
+        // SSR only — show reflected color where SSR hit, black elsewhere
+        float4 ssr = ssrTexture.sample(smp, in.uv);
+        return float4(ssr.rgb * ssr.a, 1.0);
+    }
+    if (params.debugView == 3) {
+        // Depth — linearized, white=near black=far
+        float lin = camera.nearPlane / (camera.farPlane - depth * (camera.farPlane - camera.nearPlane));
+        lin = saturate(lin * camera.farPlane * 0.1);
+        return float4(lin, lin, lin, 1.0);
+    }
+
+    // --- Normal rendering ---
+    float3 hdrColor;
+    if (depth >= 0.999) {
+        // Sky pixel — render procedural sky directly in composite.
+        float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
+        float4 nearWorld = camera.invViewProjection * float4(ndc, 0.0, 1.0);
+        float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
+        float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
+        hdrColor = sampleEnvironment(rayDir);
+        hdrColor *= 0.5;  // exposure
+    } else {
+        float4 hdr = sceneColor.sample(smp, in.uv);
+
+        // Apply ambient occlusion if enabled
+        if (params.ssaoEnabled != 0) {
+            float ao = aoTexture.sample(smp, in.uv).r;
+            hdr.rgb *= max(ao, 0.15);
+        }
+
+        // Blend SSR reflections if enabled
+        if (params.ssrEnabled != 0) {
+            float4 ssr = ssrTexture.sample(smp, in.uv);
+            hdr.rgb = mix(hdr.rgb, ssr.rgb, ssr.a * 0.5);
+        }
+
+        hdrColor = hdr.rgb;
+    }
+
+    // ACES filmic tone mapping
+    float3 x = hdrColor;
+    float3 color = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
     color = saturate(color);
+
+    // Gamma correction
     color = pow(color, float3(1.0 / 2.2));
-    return float4(color, alpha);
+
+    return float4(color, 1.0);
 }

@@ -31,6 +31,7 @@ public:
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
+    void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
     void endFrame() override;
 
     void initDebugUi(void* windowHandle) override;

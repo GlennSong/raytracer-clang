@@ -153,6 +153,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
+        src/engine/systems/shooting_system.cpp
     )
 endif()
 

@@ -1,6 +1,7 @@
 #include "physics_system.h"
 
 #include "../components.h"
+#include <vector>
 
 namespace engine {
 
@@ -10,8 +11,12 @@ void PhysicsSystem::shutdown() { physics.shutdown(); }
 
 void PhysicsSystem::createBodies(World& world) {
     bool created = false;
+    // Collect newly created entities to set initial velocity after iteration
+    struct NewBody { PhysicsBodyId id; Vec3 velocity; };
+    std::vector<NewBody> newBodies;
+
     world.each<Transform, RigidBody, Collider>(
-        [this, &created](Entity, Transform& t, RigidBody& rb, Collider& c) {
+        [this, &created, &world, &newBodies](Entity e, Transform& t, RigidBody& rb, Collider& c) {
             if (rb.bodyId != INVALID_PHYSICS_BODY) return;
             switch (c.shape) {
                 case ColliderShape::Sphere:
@@ -33,8 +38,19 @@ void PhysicsSystem::createBodies(World& world) {
                                                rb.lockRotation);
                     break;
             }
+            // If entity has a Velocity component, queue initial velocity
+            auto* vel = world.get<Velocity>(e);
+            if (vel && rb.bodyId != INVALID_PHYSICS_BODY) {
+                newBodies.push_back({rb.bodyId, vel->linear});
+            }
             created = true;
         });
+
+    // Apply initial velocities outside iteration
+    for (auto& nb : newBodies) {
+        physics.setLinearVelocity(nb.id, nb.velocity);
+    }
+
     if (created) physics.optimizeBroadPhase();
 }
 

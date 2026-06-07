@@ -231,3 +231,56 @@ TEST_CASE(mat4_trs) {
                  .transformPoint(Vec3(0, 0, -1));
     CHECK(approxEqual(r, Vec3(9, 0, 0)));
 }
+
+TEST_CASE(mat4_transpose) {
+    Mat4 a;
+    a.m[0][1] = 2; a.m[0][2] = 3;
+    a.m[1][0] = 4; a.m[2][0] = 5;
+    Mat4 t = a.transpose();
+    CHECK_APPROX(t.m[1][0], 2, EPS);
+    CHECK_APPROX(t.m[2][0], 3, EPS);
+    CHECK_APPROX(t.m[0][1], 4, EPS);
+    CHECK_APPROX(t.m[0][2], 5, EPS);
+    // Diagonal unchanged
+    CHECK_APPROX(t.m[0][0], 1, EPS);
+    CHECK_APPROX(t.m[3][3], 1, EPS);
+}
+
+TEST_CASE(mat4_inverse_identity) {
+    Mat4 inv = Mat4::identity().inverse();
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            CHECK_APPROX(inv.m[i][j], (i == j) ? 1.0 : 0.0, EPS);
+}
+
+TEST_CASE(mat4_inverse_translation) {
+    Mat4 t = Mat4::translate(3, -5, 7);
+    Mat4 inv = t.inverse();
+    Vec3 p = (t * inv).transformPoint(Vec3(1, 2, 3));
+    CHECK(approxEqual(p, Vec3(1, 2, 3)));
+    // Inverse of a translation is the negative translation
+    CHECK_APPROX(inv.m[0][3], -3, EPS);
+    CHECK_APPROX(inv.m[1][3], 5, EPS);
+    CHECK_APPROX(inv.m[2][3], -7, EPS);
+}
+
+TEST_CASE(mat4_inverse_perspective) {
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.6, 0.1, 100.0);
+    Mat4 inv = proj.inverse();
+    Mat4 product = proj * inv;
+    // Product should be approximately identity
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            CHECK_APPROX(product.m[i][j], (i == j) ? 1.0 : 0.0, 1e-6);
+}
+
+TEST_CASE(mat4_inverse_view_projection) {
+    Mat4 view = Mat4::lookAt(Vec3(5, 3, 10), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.6, 0.1, 100.0);
+    Mat4 vp = proj * view;
+    Mat4 inv = vp.inverse();
+    Mat4 product = vp * inv;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            CHECK_APPROX(product.m[i][j], (i == j) ? 1.0 : 0.0, 1e-5);
+}

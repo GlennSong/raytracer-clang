@@ -23,6 +23,13 @@ struct CameraUniforms {
     simd_float4x4 viewProjection;
     simd_float4x4 view;
     simd_float3 cameraPosition;
+    float _camPad0;
+    simd_float4x4 invViewProjection;
+    simd_float4x4 projection;
+    simd_float4x4 invProjection;
+    simd_float2 screenSize;
+    float nearPlane;
+    float farPlane;
 };
 
 struct ModelUniforms {
@@ -35,6 +42,8 @@ struct MaterialUniforms {
     float metallic;
     float roughness;
     float opacity;
+    float flags;
+    float _matPad;
     simd_float3 emission;
 };
 
@@ -79,7 +88,7 @@ struct alignas(16) GPUInstanceData {
     float metallic;
     float roughness;
     float opacity;
-    float _pad0;
+    float flags;            // material flags (checkerboard, etc.)
     simd_float4 emission;   // w unused
 };
 
@@ -119,6 +128,57 @@ struct MetalRenderer::Impl {
     LightUniforms lightUniforms;
     id<MTLBuffer> lightBuffer;
 
+    // Skybox
+    id<MTLRenderPipelineState> skyboxPipeline;
+    id<MTLDepthStencilState> skyboxDepthState;
+
+    // Post-processing: offscreen HDR target + composite pass
+    id<MTLTexture> sceneColorTexture;
+    id<MTLRenderPipelineState> compositePipeline;
+    id<MTLSamplerState> linearClampSampler;
+
+    // Screen-space reflections (SSR)
+    id<MTLTexture> ssrTexture;         // RGBA16Float — SSR result (rgb=color, a=confidence)
+    id<MTLTexture> ssrBlurTemp;        // RGBA16Float — ping-pong for bilateral blur
+    id<MTLComputePipelineState> ssrPipeline;
+    id<MTLComputePipelineState> ssrBlurHPipeline;
+    id<MTLComputePipelineState> ssrBlurVPipeline;
+
+    // Screen-space ambient occlusion (SSAO/GTAO)
+    id<MTLTexture> aoTexture;          // R16Float — full-res AO result
+    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong
+    id<MTLComputePipelineState> aoPipeline;
+    id<MTLComputePipelineState> aoBlurHPipeline;
+    id<MTLComputePipelineState> aoBlurVPipeline;
+
+    // Reflection probes (cubemap-based IBL)
+    struct alignas(16) GPUReflectionProbe {
+        simd_float3 position;
+        float influenceRadius;
+        simd_float3 boxMin;
+        float _pad0;
+        simd_float3 boxMax;
+        int32_t probeIndex;
+    };
+    struct ProbeUniforms {
+        int32_t probeCount;
+        int32_t maxMipLevel;
+        float _pad[2];
+    };
+    id<MTLTexture> probeCubemapArray;      // texturecube_array, RGBA16Float
+    id<MTLTexture> brdfLUT;                // 256×256 RG16Float
+    id<MTLBuffer> probeBuffer;             // GPUReflectionProbe[]
+    ProbeUniforms probeUniforms = {};
+    id<MTLComputePipelineState> brdfLUTPipeline;
+    id<MTLComputePipelineState> prefilterPipeline;
+    static constexpr int PROBE_CUBEMAP_SIZE = 256;
+    static constexpr int PROBE_MIP_LEVELS = 6;  // mip 0..5
+    static constexpr int MAX_PROBES = 8;
+    int probeCount = 0;
+    bool probesBaked = false;
+    bool probesPendingBake = false;
+    std::vector<ReflectionProbe> pendingProbes;
+
     // Shadow mapping
     id<MTLTexture> shadowMap;
     id<MTLRenderPipelineState> shadowPipeline;
@@ -140,7 +200,8 @@ struct MetalRenderer::Impl {
     id<CAMetalDrawable> currentDrawable;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
-    MTLRenderPassDescriptor* currentPassDesc;   // built in beginFrame, used in endFrame
+    MTLRenderPassDescriptor* currentPassDesc;   // scene pass (HDR offscreen)
+    MTLRenderPassDescriptor* compositePassDesc; // composite pass (LDR drawable)
     bool imguiInitialized = false;
 
     int framebufferWidth = 0;
@@ -157,6 +218,8 @@ struct MetalRenderer::Impl {
     std::vector<DrawCall> transparentDrawCalls;
     Vec3 currentCameraPos;
     RenderStats lastStats;
+
+    static void bakeProbes(Impl* impl, const std::vector<ReflectionProbe>& probes);
 };
 
 MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
@@ -209,7 +272,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     MTLRenderPipelineDescriptor* pipelineDesc = [[MTLRenderPipelineDescriptor alloc] init];
     pipelineDesc.vertexFunction = vertexFunc;
     pipelineDesc.fragmentFunction = fragmentFunc;
-    pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
     pipelineDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
     impl->opaquePipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
@@ -246,6 +309,152 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     pipelineDesc.fragmentFunction = fragmentInstancedFunc;
     impl->transparentInstancedPipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
                                                                                       error:&error];
+
+    // Skybox pipeline
+    {
+        id<MTLFunction> skyVert = [library newFunctionWithName:@"vertexSkybox"];
+        id<MTLFunction> skyFrag = [library newFunctionWithName:@"fragmentSkybox"];
+        MTLRenderPipelineDescriptor* skyDesc = [[MTLRenderPipelineDescriptor alloc] init];
+        skyDesc.vertexFunction = skyVert;
+        skyDesc.fragmentFunction = skyFrag;
+        skyDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        skyDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+        impl->skyboxPipeline = [impl->device newRenderPipelineStateWithDescriptor:skyDesc
+                                                                            error:&error];
+        if (!impl->skyboxPipeline) NSLog(@"Skybox pipeline error: %@", error);
+
+        MTLDepthStencilDescriptor* skyDepthDesc = [[MTLDepthStencilDescriptor alloc] init];
+        skyDepthDesc.depthCompareFunction = MTLCompareFunctionAlways;
+        skyDepthDesc.depthWriteEnabled = NO;
+        impl->skyboxDepthState = [impl->device newDepthStencilStateWithDescriptor:skyDepthDesc];
+    }
+
+    // Composite pipeline (fullscreen triangle, reads HDR scene texture, writes to drawable)
+    {
+        id<MTLFunction> compVert = [library newFunctionWithName:@"vertexComposite"];
+        id<MTLFunction> compFrag = [library newFunctionWithName:@"fragmentComposite"];
+        MTLRenderPipelineDescriptor* compDesc = [[MTLRenderPipelineDescriptor alloc] init];
+        compDesc.vertexFunction = compVert;
+        compDesc.fragmentFunction = compFrag;
+        compDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        // No depth attachment for the composite pass
+        impl->compositePipeline = [impl->device newRenderPipelineStateWithDescriptor:compDesc
+                                                                               error:&error];
+        if (!impl->compositePipeline) NSLog(@"Composite pipeline error: %@", error);
+    }
+
+    // Linear clamp sampler (for post-processing texture reads)
+    {
+        MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
+        sampDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        sampDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        impl->linearClampSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
+    }
+
+    // Compute pipelines for IBL (reflection probes)
+    {
+        id<MTLFunction> brdfFunc = [library newFunctionWithName:@"integrateBRDF"];
+        if (brdfFunc) {
+            impl->brdfLUTPipeline = [impl->device newComputePipelineStateWithFunction:brdfFunc
+                                                                                error:&error];
+            if (!impl->brdfLUTPipeline) NSLog(@"BRDF LUT pipeline error: %@", error);
+        }
+        id<MTLFunction> prefilterFunc = [library newFunctionWithName:@"prefilterEnvMap"];
+        if (prefilterFunc) {
+            impl->prefilterPipeline = [impl->device newComputePipelineStateWithFunction:prefilterFunc
+                                                                                  error:&error];
+            if (!impl->prefilterPipeline) NSLog(@"Prefilter pipeline error: %@", error);
+        }
+    }
+
+    // SSR compute pipelines
+    {
+        id<MTLFunction> ssrFunc = [library newFunctionWithName:@"ssrRayMarch"];
+        if (ssrFunc) {
+            impl->ssrPipeline = [impl->device newComputePipelineStateWithFunction:ssrFunc
+                                                                            error:&error];
+            if (!impl->ssrPipeline) NSLog(@"SSR pipeline error: %@", error);
+        }
+        id<MTLFunction> blurHFunc = [library newFunctionWithName:@"ssrBlurH"];
+        if (blurHFunc) {
+            impl->ssrBlurHPipeline = [impl->device newComputePipelineStateWithFunction:blurHFunc
+                                                                                 error:&error];
+            if (!impl->ssrBlurHPipeline) NSLog(@"SSR blur H pipeline error: %@", error);
+        }
+        id<MTLFunction> blurVFunc = [library newFunctionWithName:@"ssrBlurV"];
+        if (blurVFunc) {
+            impl->ssrBlurVPipeline = [impl->device newComputePipelineStateWithFunction:blurVFunc
+                                                                                 error:&error];
+            if (!impl->ssrBlurVPipeline) NSLog(@"SSR blur V pipeline error: %@", error);
+        }
+    }
+
+    // SSAO compute pipelines
+    {
+        id<MTLFunction> aoFunc = [library newFunctionWithName:@"gtaoCompute"];
+        if (aoFunc) {
+            impl->aoPipeline = [impl->device newComputePipelineStateWithFunction:aoFunc
+                                                                           error:&error];
+            if (!impl->aoPipeline) NSLog(@"GTAO pipeline error: %@", error);
+        }
+        id<MTLFunction> aoBlurHFunc = [library newFunctionWithName:@"aoBlurH"];
+        if (aoBlurHFunc) {
+            impl->aoBlurHPipeline = [impl->device newComputePipelineStateWithFunction:aoBlurHFunc
+                                                                                error:&error];
+            if (!impl->aoBlurHPipeline) NSLog(@"AO blur H pipeline error: %@", error);
+        }
+        id<MTLFunction> aoBlurVFunc = [library newFunctionWithName:@"aoBlurV"];
+        if (aoBlurVFunc) {
+            impl->aoBlurVPipeline = [impl->device newComputePipelineStateWithFunction:aoBlurVFunc
+                                                                                error:&error];
+            if (!impl->aoBlurVPipeline) NSLog(@"AO blur V pipeline error: %@", error);
+        }
+    }
+
+    // Generate BRDF integration LUT (one-time, 256×256)
+    {
+        MTLTextureDescriptor* brdfDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRG16Float
+                                         width:256
+                                        height:256
+                                     mipmapped:NO];
+        brdfDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        brdfDesc.storageMode = MTLStorageModePrivate;
+        impl->brdfLUT = [impl->device newTextureWithDescriptor:brdfDesc];
+
+        if (impl->brdfLUTPipeline) {
+            id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:impl->brdfLUTPipeline];
+            [enc setTexture:impl->brdfLUT atIndex:0];
+            MTLSize grid = MTLSizeMake(256, 256, 1);
+            MTLSize group = MTLSizeMake(16, 16, 1);
+            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc endEncoding];
+            [cmdBuf commit];
+            [cmdBuf waitUntilCompleted];
+        }
+    }
+
+    // Probe buffer (GPU-side probe metadata)
+    impl->probeBuffer = [impl->device newBufferWithLength:Impl::MAX_PROBES * sizeof(Impl::GPUReflectionProbe)
+                                                  options:MTLResourceStorageModeShared];
+
+    // Dummy 1×1 cubemap array for when no probes are baked (shader requires valid binding)
+    {
+        MTLTextureDescriptor* dummyCubeDesc = [[MTLTextureDescriptor alloc] init];
+        dummyCubeDesc.textureType = MTLTextureTypeCubeArray;
+        dummyCubeDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+        dummyCubeDesc.width = 1;
+        dummyCubeDesc.height = 1;
+        dummyCubeDesc.arrayLength = 1;
+        dummyCubeDesc.mipmapLevelCount = 1;
+        dummyCubeDesc.usage = MTLTextureUsageShaderRead;
+        dummyCubeDesc.storageMode = MTLStorageModePrivate;
+        impl->probeCubemapArray = [impl->device newTextureWithDescriptor:dummyCubeDesc];
+    }
 
     // Instance data buffer
     impl->instanceBuffer = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
@@ -343,9 +552,43 @@ void MetalRenderer::resize(int width, int height) {
                                      width:width
                                     height:height
                                  mipmapped:NO];
-    depthDesc.usage = MTLTextureUsageRenderTarget;
+    depthDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     depthDesc.storageMode = MTLStorageModePrivate;
     impl->depthTexture = [impl->device newTextureWithDescriptor:depthDesc];
+
+    // Offscreen HDR scene color target (Phase 0C)
+    MTLTextureDescriptor* sceneColorDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    sceneColorDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    sceneColorDesc.storageMode = MTLStorageModePrivate;
+    impl->sceneColorTexture = [impl->device newTextureWithDescriptor:sceneColorDesc];
+
+    // SSR textures (half resolution for performance)
+    int halfW = std::max(width / 2, 1);
+    int halfH = std::max(height / 2, 1);
+    MTLTextureDescriptor* ssrDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:halfW
+                                    height:halfH
+                                 mipmapped:NO];
+    ssrDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    ssrDesc.storageMode = MTLStorageModePrivate;
+    impl->ssrTexture = [impl->device newTextureWithDescriptor:ssrDesc];
+    impl->ssrBlurTemp = [impl->device newTextureWithDescriptor:ssrDesc];
+
+    // AO textures (full resolution — fewer samples per pixel instead of half-res)
+    MTLTextureDescriptor* aoDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatR16Float
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    aoDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    aoDesc.storageMode = MTLStorageModePrivate;
+    impl->aoTexture = [impl->device newTextureWithDescriptor:aoDesc];
+    impl->aoBlurTemp = [impl->device newTextureWithDescriptor:aoDesc];
 }
 
 MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
@@ -408,22 +651,32 @@ void MetalRenderer::beginFrame() {
     // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
     impl->currentDrawable = [impl->metalLayer nextDrawable];
     impl->currentPassDesc = nil;
+    impl->compositePassDesc = nil;
     if (impl->currentDrawable) {
+        // Main scene pass renders to offscreen HDR texture (not the drawable).
+        // Tone mapping + gamma happens in a separate composite pass.
         MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-        passDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+        passDesc.colorAttachments[0].texture = impl->sceneColorTexture;
         passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
         passDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
-        passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.12, 1.0);
+        passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
         passDesc.depthAttachment.texture = impl->depthTexture;
         passDesc.depthAttachment.loadAction = MTLLoadActionClear;
-        passDesc.depthAttachment.storeAction = MTLStoreActionDontCare;
+        passDesc.depthAttachment.storeAction = MTLStoreActionStore;
         passDesc.depthAttachment.clearDepth = 1.0;
         impl->currentPassDesc = passDesc;
+
+        // Composite pass renders to the drawable (BGRA8Unorm, no depth).
+        MTLRenderPassDescriptor* compDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+        compDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+        compDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        compDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+        impl->compositePassDesc = compDesc;
     }
 
 #ifdef RT_ENABLE_IMGUI
-    if (impl->imguiInitialized && impl->currentPassDesc) {
-        ImGui_ImplMetal_NewFrame(impl->currentPassDesc);
+    if (impl->imguiInitialized && impl->compositePassDesc) {
+        ImGui_ImplMetal_NewFrame(impl->compositePassDesc);
         // ImGui_ImplGlfw_NewFrame() is run by Window in pollEvents.
         ImGui::NewFrame();
     }
@@ -443,11 +696,24 @@ void MetalRenderer::setCamera(const CameraState& camera) {
                             camera.nearPlane, camera.farPlane);
     simd_float4x4 proj = toSimd(projMat);
 
-    impl->cameraUniforms.viewProjection = simd_mul(proj, view);
+    simd_float4x4 vp = simd_mul(proj, view);
+    impl->cameraUniforms.viewProjection = vp;
     impl->cameraUniforms.view = view;
     impl->cameraUniforms.cameraPosition = {static_cast<float>(camera.position.x),
                                            static_cast<float>(camera.position.y),
                                            static_cast<float>(camera.position.z)};
+    impl->cameraUniforms._camPad0 = 0;
+
+    // Inverse matrices for screen-space effects (SSR, SSAO)
+    Mat4 viewMat = Mat4::lookAt(camera.position, camera.target, camera.up);
+    Mat4 vpMat = projMat * viewMat;
+    impl->cameraUniforms.invViewProjection = toSimd(vpMat.inverse());
+    impl->cameraUniforms.projection = proj;
+    impl->cameraUniforms.invProjection = toSimd(projMat.inverse());
+    impl->cameraUniforms.screenSize = {static_cast<float>(impl->framebufferWidth),
+                                       static_cast<float>(impl->framebufferHeight)};
+    impl->cameraUniforms.nearPlane = static_cast<float>(camera.nearPlane);
+    impl->cameraUniforms.farPlane = static_cast<float>(camera.farPlane);
     impl->currentCameraPos = camera.position;
 }
 
@@ -550,6 +816,221 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
 
+void MetalRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {
+    if (probes.empty()) {
+        impl->probeUniforms.probeCount = 0;
+        impl->probeCount = 0;
+        return;
+    }
+
+    // Store probes and mark for baking on the next endFrame() when draw calls exist
+    impl->pendingProbes = probes;
+    impl->probesPendingBake = true;
+    impl->probesBaked = false;
+}
+
+// Internal: actually bake probes (called from endFrame when draw calls are available).
+void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionProbe>& probes) {
+    int count = std::min(static_cast<int>(probes.size()), static_cast<int>(8));
+    impl->probeCount = count;
+
+    // Create cubemap array if needed
+    if (!impl->probeCubemapArray) {
+        int size = Impl::PROBE_CUBEMAP_SIZE;
+        MTLTextureDescriptor* cubeDesc = [[MTLTextureDescriptor alloc] init];
+        cubeDesc.textureType = MTLTextureTypeCubeArray;
+        cubeDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+        cubeDesc.width = size;
+        cubeDesc.height = size;
+        cubeDesc.arrayLength = count;
+        cubeDesc.mipmapLevelCount = Impl::PROBE_MIP_LEVELS;
+        cubeDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        cubeDesc.storageMode = MTLStorageModePrivate;
+        impl->probeCubemapArray = [impl->device newTextureWithDescriptor:cubeDesc];
+    }
+
+    // Upload probe metadata
+    auto* gpuProbes = static_cast<Impl::GPUReflectionProbe*>([impl->probeBuffer contents]);
+    for (int i = 0; i < count; i++) {
+        gpuProbes[i].position = toSimd3(probes[i].position);
+        gpuProbes[i].influenceRadius = probes[i].influenceRadius;
+        gpuProbes[i].boxMin = toSimd3(probes[i].boxMin);
+        gpuProbes[i]._pad0 = 0;
+        gpuProbes[i].boxMax = toSimd3(probes[i].boxMax);
+        gpuProbes[i].probeIndex = i;
+    }
+
+    impl->probeUniforms.probeCount = count;
+    impl->probeUniforms.maxMipLevel = Impl::PROBE_MIP_LEVELS - 1;
+    impl->probeUniforms._pad[0] = impl->probeUniforms._pad[1] = 0;
+
+    // Bake cubemaps: render 6 faces per probe using existing scene geometry
+    if (!impl->probesBaked) {
+        int size = Impl::PROBE_CUBEMAP_SIZE;
+
+        // Temporary per-face render target for baking (we'll blit to the array)
+        MTLTextureDescriptor* faceDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:size
+                                        height:size
+                                     mipmapped:NO];
+        faceDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        faceDesc.storageMode = MTLStorageModePrivate;
+
+        MTLTextureDescriptor* depthFaceDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                         width:size
+                                        height:size
+                                     mipmapped:NO];
+        depthFaceDesc.usage = MTLTextureUsageRenderTarget;
+        depthFaceDesc.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> faceDepth = [impl->device newTextureWithDescriptor:depthFaceDesc];
+
+        // Face directions for cubemap rendering
+        struct CubeFace {
+            Vec3 target;
+            Vec3 up;
+        };
+        CubeFace faces[6] = {
+            {{1, 0, 0},  {0, -1, 0}},  // +X
+            {{-1, 0, 0}, {0, -1, 0}},  // -X
+            {{0, 1, 0},  {0, 0, 1}},   // +Y
+            {{0, -1, 0}, {0, 0, -1}},  // -Y
+            {{0, 0, 1},  {0, -1, 0}},  // +Z
+            {{0, 0, -1}, {0, -1, 0}},  // -Z
+        };
+
+        Real fovRad = degreesToRadians(90.0);
+        Mat4 projMat = Mat4::perspective(fovRad, 1.0, 0.1, 200.0);
+        simd_float4x4 proj = toSimd(projMat);
+
+        for (int pi = 0; pi < count; pi++) {
+            id<MTLTexture> faceColor = [impl->device newTextureWithDescriptor:faceDesc];
+
+            for (int face = 0; face < 6; face++) {
+                Vec3 eye = probes[pi].position;
+                Vec3 target = eye + faces[face].target;
+                Mat4 viewMat = Mat4::lookAt(eye, target, faces[face].up);
+                simd_float4x4 view = toSimd(viewMat);
+
+                CameraUniforms faceCam = {};
+                faceCam.viewProjection = simd_mul(proj, view);
+                faceCam.view = view;
+                faceCam.cameraPosition = toSimd3(eye);
+
+                // Render scene to face
+                id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
+
+                MTLRenderPassDescriptor* rpDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+                rpDesc.colorAttachments[0].texture = faceColor;
+                rpDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
+                rpDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+                rpDesc.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+                rpDesc.depthAttachment.texture = faceDepth;
+                rpDesc.depthAttachment.loadAction = MTLLoadActionClear;
+                rpDesc.depthAttachment.storeAction = MTLStoreActionDontCare;
+                rpDesc.depthAttachment.clearDepth = 1.0;
+
+                id<MTLRenderCommandEncoder> enc = [cmdBuf renderCommandEncoderWithDescriptor:rpDesc];
+                [enc setFrontFacingWinding:MTLWindingClockwise];
+                [enc setCullMode:MTLCullModeBack];
+                [enc setDepthStencilState:impl->depthStateOpaque];
+
+                // Bind shadow resources (lights won't have shadows in probes, but shader expects bindings)
+                [enc setFragmentTexture:impl->shadowMap atIndex:0];
+                [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
+                Impl::ShadowUniforms noShadow = {0, 0, 0, impl->shadowMapSize};
+                [enc setFragmentBytes:&noShadow length:sizeof(Impl::ShadowUniforms) atIndex:5];
+
+                // Bind empty probe data (no recursion)
+                Impl::ProbeUniforms noProbes = {0, 0, {0, 0}};
+                [enc setFragmentBytes:&noProbes length:sizeof(Impl::ProbeUniforms) atIndex:6];
+                [enc setFragmentBuffer:impl->probeBuffer offset:0 atIndex:7];
+                // Bind dummy textures for probe slots (shader expects them)
+                [enc setFragmentTexture:impl->brdfLUT atIndex:2];
+                [enc setFragmentSamplerState:impl->linearClampSampler atIndex:1];
+
+                // Draw skybox
+                if (impl->skyboxPipeline) {
+                    [enc setRenderPipelineState:impl->skyboxPipeline];
+                    [enc setDepthStencilState:impl->skyboxDepthState];
+                    [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
+                    [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                }
+
+                // Draw opaque scene geometry
+                [enc setDepthStencilState:impl->depthStateOpaque];
+                for (auto& dc : impl->opaqueDrawCalls) {
+                    const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
+                    if (!mesh) continue;
+
+                    ModelUniforms modelU;
+                    modelU.model = toSimd(dc.transform);
+                    modelU.normalMatrix = inverseTranspose(modelU.model);
+
+                    MaterialUniforms matU;
+                    matU.albedo = {static_cast<float>(dc.material.albedo.x),
+                                   static_cast<float>(dc.material.albedo.y),
+                                   static_cast<float>(dc.material.albedo.z)};
+                    matU.metallic = dc.material.metallic;
+                    matU.roughness = dc.material.roughness;
+                    matU.opacity = dc.material.opacity;
+                    matU.flags = static_cast<float>(dc.material.flags);
+                    matU._matPad = 0;
+                    matU.emission = {static_cast<float>(dc.material.emission.x),
+                                     static_cast<float>(dc.material.emission.y),
+                                     static_cast<float>(dc.material.emission.z)};
+
+                    [enc setRenderPipelineState:impl->opaquePipeline];
+                    [enc setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+                    [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
+                    [enc setVertexBytes:&modelU length:sizeof(ModelUniforms) atIndex:2];
+                    [enc setFragmentBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
+                    [enc setFragmentBytes:&matU length:sizeof(MaterialUniforms) atIndex:3];
+                    [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:mesh->indexCount
+                                     indexType:MTLIndexTypeUInt32
+                                   indexBuffer:mesh->indexBuffer
+                             indexBufferOffset:0];
+                }
+
+                [enc endEncoding];
+
+                // Blit face to cubemap array (mip 0)
+                id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
+                [blit copyFromTexture:faceColor
+                          sourceSlice:0 sourceLevel:0
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(size, size, 1)
+                            toTexture:impl->probeCubemapArray
+                     destinationSlice:pi * 6 + face destinationLevel:0
+                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit endEncoding];
+
+                [cmdBuf commit];
+                [cmdBuf waitUntilCompleted];
+            }
+
+            // Generate mipmaps for roughness blur (box filter for now — GGX prefilter
+            // upgrade is a TODO; this gives reasonable roughness blur)
+            {
+                id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
+                id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
+                // Generate mipmaps for this probe's slices in the cubemap array
+                // Metal's generateMipmaps works on the entire texture
+                [blit generateMipmapsForTexture:impl->probeCubemapArray];
+                [blit endEncoding];
+                [cmdBuf commit];
+                [cmdBuf waitUntilCompleted];
+            }
+        }
+
+        impl->probesBaked = true;
+    }
+}
+
 void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
                               const RenderMaterial& material) {
     Vec3 meshCenter = transform.transformPoint(Vec3(0, 0, 0));
@@ -571,6 +1052,13 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
 
 void MetalRenderer::endFrame() {
     if (!impl->currentDrawable || !impl->currentPassDesc) return;
+
+    // Bake reflection probes on first frame when draw calls exist
+    if (impl->probesPendingBake && !impl->opaqueDrawCalls.empty()) {
+        Impl::bakeProbes(impl.get(), impl->pendingProbes);
+        impl->probesPendingBake = false;
+        impl->pendingProbes.clear();
+    }
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
 
@@ -636,6 +1124,31 @@ void MetalRenderer::endFrame() {
                                         length:sizeof(Impl::ShadowUniforms) atIndex:5];
     }
 
+    // Bind reflection probe resources for the entire main pass
+    Impl::ProbeUniforms activeProbeUniforms = impl->probeUniforms;
+    if (!reflectionProbesEnabled) {
+        activeProbeUniforms.probeCount = 0;
+    }
+    [impl->currentEncoder setFragmentBytes:&activeProbeUniforms
+                                    length:sizeof(Impl::ProbeUniforms) atIndex:6];
+    [impl->currentEncoder setFragmentBuffer:impl->probeBuffer offset:0 atIndex:7];
+    if (impl->probeCubemapArray) {
+        [impl->currentEncoder setFragmentTexture:impl->probeCubemapArray atIndex:1];
+    }
+    [impl->currentEncoder setFragmentTexture:impl->brdfLUT atIndex:2];
+    [impl->currentEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:1];
+
+    // Draw skybox first (behind everything, no depth write)
+    if (impl->skyboxPipeline) {
+        [impl->currentEncoder setRenderPipelineState:impl->skyboxPipeline];
+        [impl->currentEncoder setDepthStencilState:impl->skyboxDepthState];
+        [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
+                                      length:sizeof(CameraUniforms) atIndex:1];
+        [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+        [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                 vertexStart:0 vertexCount:3];
+    }
+
     RenderStats stats;
 
     auto fillInstanceData = [&](const Impl::DrawCall& dc) -> GPUInstanceData {
@@ -648,7 +1161,7 @@ void MetalRenderer::endFrame() {
         inst.metallic = dc.material.metallic;
         inst.roughness = dc.material.roughness;
         inst.opacity = dc.material.opacity;
-        inst._pad0 = 0;
+        inst.flags = static_cast<float>(dc.material.flags);
         inst.emission = {static_cast<float>(dc.material.emission.x),
                          static_cast<float>(dc.material.emission.y),
                          static_cast<float>(dc.material.emission.z), 0};
@@ -670,6 +1183,8 @@ void MetalRenderer::endFrame() {
         matUniforms.metallic = dc.material.metallic;
         matUniforms.roughness = dc.material.roughness;
         matUniforms.opacity = dc.material.opacity;
+        matUniforms.flags = static_cast<float>(dc.material.flags);
+        matUniforms._matPad = 0;
         matUniforms.emission = {static_cast<float>(dc.material.emission.x),
                                 static_cast<float>(dc.material.emission.y),
                                 static_cast<float>(dc.material.emission.z)};
@@ -789,17 +1304,125 @@ void MetalRenderer::endFrame() {
 
     impl->lastStats = stats;
 
-    // Debug UI (ADR-0011) records last, over the scene, into the same encoder.
-#ifdef RT_ENABLE_IMGUI
-    if (impl->imguiInitialized) {
-        ImGui::Render();
-        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
-                                       impl->currentCommandBuffer,
-                                       impl->currentEncoder);
+    [impl->currentEncoder endEncoding];
+
+    // --- SSAO compute pass (full resolution, fewer samples) ---
+    if (impl->aoPipeline && impl->aoTexture && ssaoEnabled) {
+        int fullW = impl->framebufferWidth;
+        int fullH = impl->framebufferHeight;
+        MTLSize grid = MTLSizeMake(fullW, fullH, 1);
+        MTLSize group = MTLSizeMake(8, 8, 1);
+
+        // GTAO compute at full resolution
+        {
+            id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+            [enc setComputePipelineState:impl->aoPipeline];
+            [enc setTexture:impl->depthTexture atIndex:0];
+            [enc setTexture:impl->aoTexture atIndex:1];
+            [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc endEncoding];
+        }
+
+        // Bilateral blur (H → aoBlurTemp, V → aoTexture)
+        if (impl->aoBlurHPipeline && impl->aoBlurVPipeline && impl->aoBlurTemp) {
+            {
+                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc setComputePipelineState:impl->aoBlurHPipeline];
+                [enc setTexture:impl->aoTexture atIndex:0];
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->aoBlurTemp atIndex:2];
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc endEncoding];
+            }
+            {
+                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc setComputePipelineState:impl->aoBlurVPipeline];
+                [enc setTexture:impl->aoBlurTemp atIndex:0];
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->aoTexture atIndex:2];
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc endEncoding];
+            }
+        }
     }
+
+    // --- SSR compute pass (half resolution) ---
+    if (impl->ssrPipeline && impl->ssrTexture && ssrEnabled) {
+        int halfW = std::max(impl->framebufferWidth / 2, 1);
+        int halfH = std::max(impl->framebufferHeight / 2, 1);
+        MTLSize grid = MTLSizeMake(halfW, halfH, 1);
+        MTLSize group = MTLSizeMake(8, 8, 1);
+
+        // Ray march
+        {
+            id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+            [enc setComputePipelineState:impl->ssrPipeline];
+            [enc setTexture:impl->sceneColorTexture atIndex:0];
+            [enc setTexture:impl->depthTexture atIndex:1];
+            [enc setTexture:impl->ssrTexture atIndex:2];
+            [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc endEncoding];
+        }
+
+        // Bilateral blur (horizontal → ssrBlurTemp, vertical → ssrTexture)
+        if (impl->ssrBlurHPipeline && impl->ssrBlurVPipeline && impl->ssrBlurTemp) {
+            {
+                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc setComputePipelineState:impl->ssrBlurHPipeline];
+                [enc setTexture:impl->ssrTexture atIndex:0];
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->ssrBlurTemp atIndex:2];
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc endEncoding];
+            }
+            {
+                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc setComputePipelineState:impl->ssrBlurVPipeline];
+                [enc setTexture:impl->ssrBlurTemp atIndex:0];
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->ssrTexture atIndex:2];
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc endEncoding];
+            }
+        }
+    }
+
+    // --- Composite pass: tone map HDR scene to LDR drawable ---
+    if (impl->compositePipeline && impl->compositePassDesc) {
+        id<MTLRenderCommandEncoder> compEncoder = [impl->currentCommandBuffer
+            renderCommandEncoderWithDescriptor:impl->compositePassDesc];
+        [compEncoder setRenderPipelineState:impl->compositePipeline];
+        [compEncoder setFragmentTexture:impl->sceneColorTexture atIndex:0];
+        [compEncoder setFragmentTexture:impl->ssrTexture atIndex:1];
+        [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
+        [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
+        [compEncoder setFragmentBytes:&impl->cameraUniforms
+                               length:sizeof(CameraUniforms) atIndex:0];
+        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView; float _pad; } compositeParams;
+        compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
+        compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
+        compositeParams.debugView = debugView;
+        compositeParams._pad = 0;
+        [compEncoder setFragmentBytes:&compositeParams
+                               length:sizeof(compositeParams) atIndex:1];
+        [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
+        [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+
+        // Debug UI (ADR-0011) renders on top of the tone-mapped image.
+#ifdef RT_ENABLE_IMGUI
+        if (impl->imguiInitialized) {
+            ImGui::Render();
+            ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+                                           impl->currentCommandBuffer,
+                                           compEncoder);
+        }
 #endif
 
-    [impl->currentEncoder endEncoding];
+        [compEncoder endEncoding];
+    }
+
     [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];
     [impl->currentCommandBuffer commit];
 }
