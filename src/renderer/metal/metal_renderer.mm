@@ -70,7 +70,8 @@ struct LightUniforms {
     GPULight lights[32];
     int32_t  lightCount;
     float    exposure;
-    float    _pad[2];
+    float    ambientMultiplier;
+    float    _pad[1];
 };
 
 struct GPUMesh {
@@ -132,8 +133,9 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> skyboxPipeline;
     id<MTLDepthStencilState> skyboxDepthState;
 
-    // Post-processing: offscreen HDR target + composite pass
+    // Post-processing: offscreen HDR target + G-buffer normals + composite pass
     id<MTLTexture> sceneColorTexture;
+    id<MTLTexture> viewNormalTexture;
     id<MTLRenderPipelineState> compositePipeline;
     id<MTLSamplerState> linearClampSampler;
 
@@ -268,11 +270,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     id<MTLFunction> vertexInstancedFunc = [library newFunctionWithName:@"vertexMainInstanced"];
     id<MTLFunction> fragmentInstancedFunc = [library newFunctionWithName:@"fragmentMainInstanced"];
 
-    // Opaque pipeline
+    // Opaque pipeline (MRT: color + view-space normals)
     MTLRenderPipelineDescriptor* pipelineDesc = [[MTLRenderPipelineDescriptor alloc] init];
     pipelineDesc.vertexFunction = vertexFunc;
     pipelineDesc.fragmentFunction = fragmentFunc;
     pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+    pipelineDesc.colorAttachments[1].pixelFormat = MTLPixelFormatRGBA8Unorm;
     pipelineDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
     impl->opaquePipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
@@ -318,6 +321,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         skyDesc.vertexFunction = skyVert;
         skyDesc.fragmentFunction = skyFrag;
         skyDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        skyDesc.colorAttachments[1].pixelFormat = MTLPixelFormatRGBA8Unorm;
         skyDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
         impl->skyboxPipeline = [impl->device newRenderPipelineStateWithDescriptor:skyDesc
                                                                             error:&error];
@@ -566,6 +570,16 @@ void MetalRenderer::resize(int width, int height) {
     sceneColorDesc.storageMode = MTLStorageModePrivate;
     impl->sceneColorTexture = [impl->device newTextureWithDescriptor:sceneColorDesc];
 
+    // View-space normal G-buffer for SSR
+    MTLTextureDescriptor* normalDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    normalDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    normalDesc.storageMode = MTLStorageModePrivate;
+    impl->viewNormalTexture = [impl->device newTextureWithDescriptor:normalDesc];
+
     // SSR textures (half resolution for performance)
     int halfW = std::max(width / 2, 1);
     int halfH = std::max(height / 2, 1);
@@ -660,6 +674,10 @@ void MetalRenderer::beginFrame() {
         passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
         passDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
         passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+        passDesc.colorAttachments[1].texture = impl->viewNormalTexture;
+        passDesc.colorAttachments[1].loadAction = MTLLoadActionClear;
+        passDesc.colorAttachments[1].storeAction = MTLStoreActionStore;
+        passDesc.colorAttachments[1].clearColor = MTLClearColorMake(0.5, 0.5, 1.0, 0.0);
         passDesc.depthAttachment.texture = impl->depthTexture;
         passDesc.depthAttachment.loadAction = MTLLoadActionClear;
         passDesc.depthAttachment.storeAction = MTLStoreActionStore;
@@ -811,7 +829,8 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
 
     lu.lightCount = idx;
     lu.exposure = lighting.exposure;
-    lu._pad[0] = lu._pad[1] = 0;
+    lu.ambientMultiplier = lighting.ambientMultiplier;
+    lu._pad[0] = 0;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
@@ -886,6 +905,16 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
         depthFaceDesc.storageMode = MTLStorageModePrivate;
         id<MTLTexture> faceDepth = [impl->device newTextureWithDescriptor:depthFaceDesc];
 
+        // Dummy normal attachment (pipelines now output MRT)
+        MTLTextureDescriptor* faceNormalDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                         width:size
+                                        height:size
+                                     mipmapped:NO];
+        faceNormalDesc.usage = MTLTextureUsageRenderTarget;
+        faceNormalDesc.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> faceNormal = [impl->device newTextureWithDescriptor:faceNormalDesc];
+
         // Face directions for cubemap rendering
         struct CubeFace {
             Vec3 target;
@@ -926,6 +955,9 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 rpDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
                 rpDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
                 rpDesc.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+                rpDesc.colorAttachments[1].texture = faceNormal;
+                rpDesc.colorAttachments[1].loadAction = MTLLoadActionDontCare;
+                rpDesc.colorAttachments[1].storeAction = MTLStoreActionDontCare;
                 rpDesc.depthAttachment.texture = faceDepth;
                 rpDesc.depthAttachment.loadAction = MTLLoadActionClear;
                 rpDesc.depthAttachment.storeAction = MTLStoreActionDontCare;
@@ -1320,6 +1352,11 @@ void MetalRenderer::endFrame() {
             [enc setTexture:impl->depthTexture atIndex:0];
             [enc setTexture:impl->aoTexture atIndex:1];
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            struct { float radius, intensity, bias; int dirs, steps; float _p[3]; } aoP = {
+                ssaoParams.radius, ssaoParams.intensity, ssaoParams.bias,
+                ssaoParams.directions, ssaoParams.steps, {}
+            };
+            [enc setBytes:&aoP length:sizeof(aoP) atIndex:1];
             [enc dispatchThreads:grid threadsPerThreadgroup:group];
             [enc endEncoding];
         }
@@ -1361,7 +1398,13 @@ void MetalRenderer::endFrame() {
             [enc setTexture:impl->sceneColorTexture atIndex:0];
             [enc setTexture:impl->depthTexture atIndex:1];
             [enc setTexture:impl->ssrTexture atIndex:2];
+            [enc setTexture:impl->viewNormalTexture atIndex:3];
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            struct { float maxRayDist, thickness, thicknessFar, stride, blendStrength; float _p[3]; } ssrP = {
+                ssrParams.maxRayDist, ssrParams.thickness, ssrParams.thicknessFar,
+                ssrParams.stride, ssrParams.blendStrength, {}
+            };
+            [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
             [enc dispatchThreads:grid threadsPerThreadgroup:group];
             [enc endEncoding];
         }
@@ -1398,13 +1441,14 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentTexture:impl->ssrTexture atIndex:1];
         [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
         [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
+        [compEncoder setFragmentTexture:impl->viewNormalTexture atIndex:4];
         [compEncoder setFragmentBytes:&impl->cameraUniforms
                                length:sizeof(CameraUniforms) atIndex:0];
-        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView; float _pad; } compositeParams;
+        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView; float ssrBlendStrength; } compositeParams;
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
-        compositeParams._pad = 0;
+        compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];

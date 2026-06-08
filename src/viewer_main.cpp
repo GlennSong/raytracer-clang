@@ -7,7 +7,7 @@
 #include "engine/systems/camera_system.h"
 #include "engine/systems/motion_system.h"
 #include "engine/systems/render_system.h"
-#include "engine/systems/debug_overlay_system.h"
+#include "engine/states/playing_state.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "engine/systems/physics_system.h"
 #include "engine/systems/player_system.h"
@@ -314,16 +314,17 @@ int main() {
 
     app.settings().setString("cameraMode", "fly");
 
-    app.addSystem<DevControlSystem>();
-    auto& camSys = app.addSystem<CameraSystem>();
+    auto playing = std::make_unique<PlayingState>(app.windowRef());
+    playing->addSystem<DevControlSystem>();
+    auto& camSys = playing->addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
-    auto& physSys = app.addSystem<PhysicsSystem>();
-    app.addSystem<PlayerSystem>(camSys.flyController(), physSys);
-    app.addSystem<ShootingSystem>(camSys.flyController(), physSys, app.renderer());
+    auto& physSys = playing->addSystem<PhysicsSystem>();
+    playing->addSystem<PlayerSystem>(camSys.flyController(), physSys);
+    playing->addSystem<ShootingSystem>(camSys.flyController(), physSys, app.renderer());
 #endif
-    app.addSystem<MotionSystem>();
-    app.addSystem<RenderSystem>();
-    app.addSystem<DebugOverlaySystem>();
+    playing->addSystem<MotionSystem>();
+    playing->addSystem<RenderSystem>();
+    app.pushState(std::move(playing));
 
     app.run();
     return 0;

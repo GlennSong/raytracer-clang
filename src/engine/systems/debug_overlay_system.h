@@ -11,6 +11,7 @@ namespace engine {
 // also emit ImGui directly in their own render().
 class DebugOverlaySystem : public System {
 public:
+    void onStart(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
 };
 

@@ -70,6 +70,7 @@ static KeyCode translateKey(int glfwKey) {
         case GLFW_KEY_SEMICOLON:     return KeyCode::Semicolon;
         case GLFW_KEY_MINUS:         return KeyCode::Minus;
         case GLFW_KEY_EQUAL:         return KeyCode::Equal;
+        case GLFW_KEY_GRAVE_ACCENT:  return KeyCode::GraveAccent;
         default:                     return KeyCode::Unknown;
     }
 }
@@ -255,6 +256,18 @@ void Window::shutdown() {
         impl->window = nullptr;
     }
     glfwTerminate();
+}
+
+void Window::setCursorMode(CursorMode mode) {
+    int glfwMode = (mode == CursorMode::Disabled) ? GLFW_CURSOR_DISABLED
+                                                  : GLFW_CURSOR_NORMAL;
+    glfwSetInputMode(impl->window, GLFW_CURSOR, glfwMode);
+}
+
+void Window::resetMouseDelta() {
+    impl->firstMouse = true;
+    impl->input.mouseDeltaX = 0;
+    impl->input.mouseDeltaY = 0;
 }
 
 bool Window::shouldClose() const {

@@ -6,9 +6,69 @@
 
 namespace engine {
 
+static void loadPostProcessSettings(FrameContext& ctx) {
+    auto& s = ctx.settings;
+    auto& ao = ctx.renderer.ssaoParams;
+    auto& ssr = ctx.renderer.ssrParams;
+    auto& lit = ctx.view.lighting;
+
+    ao.radius    = static_cast<float>(s.getDouble("ssao.radius", ao.radius));
+    ao.intensity = static_cast<float>(s.getDouble("ssao.intensity", ao.intensity));
+    ao.bias      = static_cast<float>(s.getDouble("ssao.bias", ao.bias));
+    ao.directions = static_cast<int>(s.getDouble("ssao.directions", ao.directions));
+    ao.steps     = static_cast<int>(s.getDouble("ssao.steps", ao.steps));
+
+    ssr.maxRayDist    = static_cast<float>(s.getDouble("ssr.maxRayDist", ssr.maxRayDist));
+    ssr.thickness     = static_cast<float>(s.getDouble("ssr.thickness", ssr.thickness));
+    ssr.thicknessFar  = static_cast<float>(s.getDouble("ssr.thicknessFar", ssr.thicknessFar));
+    ssr.stride        = static_cast<float>(s.getDouble("ssr.stride", ssr.stride));
+    ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
+
+    lit.exposure          = static_cast<float>(s.getDouble("lighting.exposure", lit.exposure));
+    lit.ambientMultiplier = static_cast<float>(s.getDouble("lighting.ambient", lit.ambientMultiplier));
+    lit.sun.intensity     = static_cast<float>(s.getDouble("lighting.sunIntensity", lit.sun.intensity));
+
+    ctx.renderer.showHud = s.getBool("hud.show", ctx.renderer.showHud);
+}
+
+static void savePostProcessSettings(FrameContext& ctx) {
+    auto& s = ctx.settings;
+    auto& ao = ctx.renderer.ssaoParams;
+    auto& ssr = ctx.renderer.ssrParams;
+    auto& lit = ctx.view.lighting;
+
+    s.setDouble("ssao.radius", ao.radius);
+    s.setDouble("ssao.intensity", ao.intensity);
+    s.setDouble("ssao.bias", ao.bias);
+    s.setDouble("ssao.directions", ao.directions);
+    s.setDouble("ssao.steps", ao.steps);
+
+    s.setDouble("ssr.maxRayDist", ssr.maxRayDist);
+    s.setDouble("ssr.thickness", ssr.thickness);
+    s.setDouble("ssr.thicknessFar", ssr.thicknessFar);
+    s.setDouble("ssr.stride", ssr.stride);
+    s.setDouble("ssr.blendStrength", ssr.blendStrength);
+
+    s.setDouble("lighting.exposure", lit.exposure);
+    s.setDouble("lighting.ambient", lit.ambientMultiplier);
+    s.setDouble("lighting.sunIntensity", lit.sun.intensity);
+
+    s.setBool("hud.show", ctx.renderer.showHud);
+
+    s.save("settings.json");
+}
+
+void DebugOverlaySystem::onStart(FrameContext& ctx) {
+    loadPostProcessSettings(ctx);
+}
+
 void DebugOverlaySystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     ImGui::Begin("Debug");
+
+    ImGui::Checkbox("Show HUD", &ctx.renderer.showHud);
+    ImGui::Separator();
+
     double fps = ctx.frameDelta > 0.0 ? 1.0 / ctx.frameDelta : 0.0;
     ImGui::Text("FPS: %.1f (%.2f ms)", fps, ctx.frameDelta * 1000.0);
     ImGui::Text("Entities: %zu", ctx.world.entityCount());
@@ -16,29 +76,59 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     const CameraState& cam = ctx.view.camera;
     ImGui::Text("Camera pos: %.2f, %.2f, %.2f",
                 cam.position.x, cam.position.y, cam.position.z);
-    ImGui::Text("Projection: %s",
-                cam.projection == CameraProjection::Orthographic ? "Orthographic"
-                                                                 : "Perspective");
 
     RenderStats rs = ctx.renderer.getRenderStats();
     uint32_t culled = static_cast<uint32_t>(ctx.world.entityCount()) - rs.entitiesSubmitted;
-    ImGui::Separator();
     ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
-    ImGui::Text("Instances: %u", rs.totalInstances);
 
     ImGui::Separator();
-    ImGui::Text("Post-Processing");
-    ImGui::Checkbox("SSAO", &ctx.renderer.ssaoEnabled);
-    ImGui::Checkbox("SSR", &ctx.renderer.ssrEnabled);
-    ImGui::Checkbox("Reflection Probes", &ctx.renderer.reflectionProbesEnabled);
+    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals"};
+    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 5);
+
+    if (ImGui::CollapsingHeader("Lighting")) {
+        auto& lit = ctx.view.lighting;
+        ImGui::SliderFloat("Sun Intensity", &lit.sun.intensity, 0.0f, 20.0f);
+        ImGui::SliderFloat("Exposure", &lit.exposure, 0.01f, 5.0f);
+        ImGui::SliderFloat("Ambient", &lit.ambientMultiplier, 0.0f, 1.0f);
+    }
+
+    if (ImGui::CollapsingHeader("SSAO")) {
+        ImGui::Checkbox("Enabled##ssao", &ctx.renderer.ssaoEnabled);
+        auto& ao = ctx.renderer.ssaoParams;
+        ImGui::SliderFloat("Radius##ao", &ao.radius, 0.1f, 5.0f);
+        ImGui::SliderFloat("Intensity##ao", &ao.intensity, 0.0f, 3.0f);
+        ImGui::SliderFloat("Bias##ao", &ao.bias, 0.0f, 0.3f);
+        ImGui::SliderInt("Directions", &ao.directions, 1, 8);
+        ImGui::SliderInt("Steps", &ao.steps, 1, 8);
+    }
+
+    if (ImGui::CollapsingHeader("SSR")) {
+        ImGui::Checkbox("Enabled##ssr", &ctx.renderer.ssrEnabled);
+        auto& ssr = ctx.renderer.ssrParams;
+        ImGui::SliderFloat("Max Ray Dist", &ssr.maxRayDist, 1.0f, 100.0f);
+        ImGui::SliderFloat("Thickness Near", &ssr.thickness, 0.01f, 2.0f);
+        ImGui::SliderFloat("Thickness Far", &ssr.thicknessFar, 0.1f, 10.0f);
+        ImGui::SliderFloat("Stride (px)", &ssr.stride, 1.0f, 8.0f);
+        ImGui::SliderFloat("Blend Strength", &ssr.blendStrength, 0.0f, 1.0f);
+    }
+
+    if (ImGui::CollapsingHeader("Other")) {
+        ImGui::Checkbox("Reflection Probes", &ctx.renderer.reflectionProbesEnabled);
+    }
 
     ImGui::Separator();
-    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth"};
-    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 4);
+    if (ImGui::Button("Save Settings")) {
+        savePostProcessSettings(ctx);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Settings")) {
+        loadPostProcessSettings(ctx);
+    }
+
     ImGui::End();
 #else
-    (void)ctx;  // inert without ImGui (ADR-0011)
+    (void)ctx;
 #endif
 }
 

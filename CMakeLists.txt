@@ -136,6 +136,9 @@ set(VIEWER_SOURCES
     src/engine/world.cpp
     src/engine/components.cpp
     src/engine/application.cpp
+    src/engine/state_stack.cpp
+    src/engine/states/playing_state.cpp
+    src/engine/states/debug_overlay_state.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp

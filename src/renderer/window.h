@@ -10,6 +10,8 @@
 
 namespace engine {
 
+enum class CursorMode { Normal, Disabled };
+
 struct InputState {
     double mouseX, mouseY;
     double mouseDeltaX, mouseDeltaY;
@@ -63,6 +65,9 @@ public:
     // Debug-UI (Dear ImGui) GLFW-backend hooks — see ADR-0011. No-ops unless
     // the build defines RT_ENABLE_IMGUI. newDebugUiFrame() is called from
     // pollEvents; init/shutdown bracket the app lifetime.
+    void setCursorMode(CursorMode mode);
+    void resetMouseDelta();
+
     void initDebugUi();
     void newDebugUiFrame();
     void shutdownDebugUi();

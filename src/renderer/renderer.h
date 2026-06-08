@@ -114,6 +114,7 @@ struct SceneLighting {
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;
     float exposure = 1.0f;
+    float ambientMultiplier = 0.3f;
 };
 
 struct ReflectionProbe {
@@ -198,8 +199,29 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
-    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth
+    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
     int debugView = 0;
+
+    // Compact stats HUD visible during gameplay
+    bool showHud = false;
+
+    // SSR tuning parameters
+    struct SSRParams {
+        float maxRayDist    = 20.0f;
+        float thickness     = 0.3f;
+        float thicknessFar  = 2.0f;
+        float stride        = 2.0f;
+        float blendStrength = 0.5f;
+    } ssrParams;
+
+    // SSAO tuning parameters
+    struct SSAOParams {
+        float radius    = 1.5f;
+        float intensity = 0.8f;
+        float bias      = 0.05f;
+        int directions  = 4;
+        int steps       = 4;
+    } ssaoParams;
 
     static std::unique_ptr<Renderer> create();
 };

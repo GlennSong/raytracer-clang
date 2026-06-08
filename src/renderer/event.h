@@ -36,6 +36,7 @@ enum class KeyCode {
     Escape, Space, Enter, Tab, Backspace,
     LeftShift, RightShift, LeftControl, RightControl, LeftAlt, RightAlt,
     Comma, Period, Slash, Semicolon, Minus, Equal,
+    GraveAccent,
 };
 
 enum class MouseButton {

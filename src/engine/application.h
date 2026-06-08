@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_APPLICATION_H
 
 #include "system.h"
+#include "state_stack.h"
 #include "world.h"
 #include "clock.h"
 #include "../renderer/renderer.h"
@@ -32,18 +33,13 @@ public:
     bool initialize(const Config& config);
     void run();
 
-    // Systems run in registration order across every phase.
-    template <typename T, typename... Args>
-    T& addSystem(Args&&... args) {
-        auto system = std::make_unique<T>(std::forward<Args>(args)...);
-        T& ref = *system;
-        systems.push_back(std::move(system));
-        return ref;
-    }
+    void pushState(std::unique_ptr<AppState> state);
+    void popState();
 
     World& world() { return worldState; }
     Renderer& renderer() { return *rendererPtr; }
     RenderView& renderView() { return view; }
+    Window& windowRef() { return window; }
     Settings& settings() { return settingsStore; }
 
 private:
@@ -62,7 +58,8 @@ private:
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;
-    std::vector<std::unique_ptr<System>> systems;
+    StateStack stateStack;
+    bool debugOverlayActive = false;
 
     std::string settingsFile;
     int framebufferWidth = 0;

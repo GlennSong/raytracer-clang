@@ -65,7 +65,26 @@ struct LightUniforms {
     Light  lights[32];
     int    lightCount;
     float  exposure;
-    float  _pad[2];
+    float  ambientMultiplier;
+    float  _pad[1];
+};
+
+struct SSRParams {
+    float maxRayDist;
+    float thickness;
+    float thicknessFar;
+    float stride;
+    float blendStrength;
+    float _pad[3];
+};
+
+struct SSAOParams {
+    float radius;
+    float intensity;
+    float bias;
+    int   directions;
+    int   steps;
+    float _pad[3];
 };
 
 // Procedural daytime sky environment
@@ -534,7 +553,12 @@ float3 evaluateLighting(float3 worldPos, float3 normal, float3 viewDir,
     return directLight;
 }
 
-fragment float4 fragmentMainInstanced(
+struct GBufferOut {
+    float4 color [[color(0)]];
+    float4 viewNormal [[color(1)]];
+};
+
+fragment GBufferOut fragmentMainInstanced(
     FragmentData in [[stage_in]],
     constant CameraUniforms& camera [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
@@ -582,7 +606,7 @@ fragment float4 fragmentMainInstanced(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * 0.3 * (1.0 - in.metallic);
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - in.metallic);
     float3 color = in.emission + directLight + ambientDiffuse + envSpecular;
 
     float alpha = in.opacity;
@@ -593,7 +617,11 @@ fragment float4 fragmentMainInstanced(
     }
 
     color *= lightData.exposure;
-    return float4(color, alpha);  // linear HDR — tone mapping in composite pass
+    float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
+    GBufferOut out;
+    out.color = float4(color, alpha);
+    out.viewNormal = float4(viewN * 0.5 + 0.5, 1.0);
+    return out;
 }
 
 vertex VertexOut vertexMain(
@@ -611,7 +639,7 @@ vertex VertexOut vertexMain(
     return out;
 }
 
-fragment float4 fragmentMain(
+fragment GBufferOut fragmentMain(
     VertexOut in [[stage_in]],
     constant CameraUniforms& camera [[buffer(1)]],
     constant MaterialUniforms& material [[buffer(3)]],
@@ -660,7 +688,7 @@ fragment float4 fragmentMain(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * 0.3 * (1.0 - material.metallic);
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - material.metallic);
     float3 color = material.emission + directLight + ambientDiffuse + envSpecular;
 
     float alpha = material.opacity;
@@ -671,7 +699,11 @@ fragment float4 fragmentMain(
     }
 
     color *= lightData.exposure;
-    return float4(color, alpha);  // linear HDR — tone mapping in composite pass
+    float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
+    GBufferOut gout;
+    gout.color = float4(color, alpha);
+    gout.viewNormal = float4(viewN * 0.5 + 0.5, 1.0);
+    return gout;
 }
 
 // --- Screen-Space Reflections (SSR) ---
@@ -687,10 +719,12 @@ kernel void ssrRayMarch(
     texture2d<float, access::read> sceneColor [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
     texture2d<float, access::write> ssrResult [[texture(2)]],
+    texture2d<float, access::read> normalTex [[texture(3)]],
     constant CameraUniforms& camera [[buffer(0)]],
+    constant SSRParams& params [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
-    // SSR runs at half resolution; depth/scene are full resolution
+    // SSR runs at half resolution; depth/scene/normals are full resolution
     uint2 outSize = uint2(ssrResult.get_width(), ssrResult.get_height());
     if (gid.x >= outSize.x || gid.y >= outSize.y) return;
 
@@ -707,84 +741,121 @@ kernel void ssrRayMarch(
         return;
     }
 
-    // Reconstruct view-space position and normal from full-res depth
+    // Reconstruct view-space position from depth, read normal from G-buffer
     float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
-
-    float2 texel = 1.0 / fullSize;
-    float2 uvR = uv + float2(texel.x, 0.0);
-    float2 uvD = uv + float2(0.0, texel.y);
-    float depthR = depthTex.read(min(uint2(uvR * fullSize), fullMax)).x;
-    float depthD = depthTex.read(min(uint2(uvD * fullSize), fullMax)).x;
-    float3 viewPosR = ssrViewPos(depthR, uvR, camera.invProjection);
-    float3 viewPosD = ssrViewPos(depthD, uvD, camera.invProjection);
-    float3 viewNormal = normalize(cross(viewPosD - viewPos, viewPosR - viewPos));
-    if (viewNormal.z < 0.0) viewNormal = -viewNormal;
+    float3 viewNormal = normalTex.read(depthCoord).xyz * 2.0 - 1.0;
+    viewNormal = normalize(viewNormal);
 
     float3 viewDir = normalize(viewPos);
     float3 reflectDir = reflect(viewDir, viewNormal);
 
-    if (reflectDir.z > 0.2) {
-        ssrResult.write(float4(0.0), gid);
-        return;
-    }
+    // Project start and a point along the ray into screen space
+    float4 startProj = camera.projection * float4(viewPos, 1.0);
+    float3 startNDC = startProj.xyz / startProj.w;
 
-    // Ray march in view space (reduced steps for half-res)
-    const int MAX_STEPS = 32;
-    const int BINARY_STEPS = 5;
-    float stepSize = 0.5;
-    float maxRayDist = 25.0;
-    float thickness = 0.5;
+    float maxRayDist = params.maxRayDist;
+    float3 rayEnd = viewPos + reflectDir * maxRayDist;
+    float4 endProj = camera.projection * float4(rayEnd, 1.0);
+    if (endProj.w <= 0.0) {
+        // Ray goes behind camera — clip to near plane
+        float t = (-viewPos.z - 0.1) / reflectDir.z;
+        if (t <= 0.0) { ssrResult.write(float4(0.0), gid); return; }
+        rayEnd = viewPos + reflectDir * t * 0.99;
+        endProj = camera.projection * float4(rayEnd, 1.0);
+        maxRayDist = t * 0.99;
+    }
+    float3 endNDC = endProj.xyz / endProj.w;
+
+    // Convert NDC to UV
+    float2 startScreenUV = float2(startNDC.x * 0.5 + 0.5, -startNDC.y * 0.5 + 0.5);
+    float2 endScreenUV   = float2(endNDC.x * 0.5 + 0.5,   -endNDC.y * 0.5 + 0.5);
+
+    float2 deltaUV = endScreenUV - startScreenUV;
+    float2 deltaPixels = deltaUV * fullSize;
+    float pixelDist = max(abs(deltaPixels.x), abs(deltaPixels.y));
+    if (pixelDist < 1.0) { ssrResult.write(float4(0.0), gid); return; }
+
+    const int MAX_STEPS = 48;
+    const int BINARY_STEPS = 6;
+    float pixelStride = params.stride;
+    int stepCount = min(MAX_STEPS, int(pixelDist / pixelStride));
+    if (stepCount < 1) stepCount = 1;
+
+    float2 stepUV = deltaUV / float(stepCount);
+
+    // Perspective-correct interpolation: NDC z
+    float startInvW = 1.0 / startProj.w;
+    float endInvW   = 1.0 / endProj.w;
+    float startZoW  = startNDC.z * startInvW;
+    float endZoW    = endNDC.z * endInvW;
+
+    // Precompute near/far for NDC→linear conversion
+    float near = camera.nearPlane;
+    float far  = camera.farPlane;
+
+    // Per-pixel jitter
+    float hash = fract(sin(dot(float2(gid), float2(127.1, 311.7))) * 43758.5453);
 
     bool hit = false;
     float2 hitUV = float2(0.0);
     float hitDist = 0.0;
-    float traveled = 0.0;
 
-    for (int i = 0; i < MAX_STEPS; i++) {
-        traveled += stepSize;
-        if (traveled > maxRayDist) break;
-
-        float3 samplePos = viewPos + reflectDir * traveled;
-        float4 proj = camera.projection * float4(samplePos, 1.0);
-        if (proj.w <= 0.0) break;
-
-        float3 ndc = proj.xyz / proj.w;
-        float2 sampleUV = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    for (int i = 0; i < stepCount; i++) {
+        float t = (float(i) + 1.0 + hash) / float(stepCount);
+        float2 sampleUV = startScreenUV + deltaUV * t;
         if (any(sampleUV < float2(0.0)) || any(sampleUV > float2(1.0))) break;
 
         uint2 sampleCoord = min(uint2(sampleUV * fullSize), fullMax);
         float sceneDepth = depthTex.read(sampleCoord).x;
-        float rayDepth = ndc.z;
+        if (sceneDepth >= 0.999) continue;
 
-        if (rayDepth > sceneDepth && sceneDepth > 0.0) {
-            float3 scenePos = ssrViewPos(sceneDepth, sampleUV, camera.invProjection);
-            float depthDiff = length(samplePos) - length(scenePos);
+        // Perspective-correct ray depth in NDC
+        float invW = mix(startInvW, endInvW, t);
+        float rayDepth = mix(startZoW, endZoW, t) / invW;
 
-            if (depthDiff > 0.0 && depthDiff < thickness) {
-                float lo = traveled - stepSize;
-                float hi = traveled;
-                for (int b = 0; b < BINARY_STEPS; b++) {
-                    float mid = (lo + hi) * 0.5;
-                    float3 midPos = viewPos + reflectDir * mid;
-                    float4 midProj = camera.projection * float4(midPos, 1.0);
-                    float3 midNDC = midProj.xyz / midProj.w;
-                    float2 midUV = float2(midNDC.x * 0.5 + 0.5, -midNDC.y * 0.5 + 0.5);
-                    midUV = clamp(midUV, float2(0.0), float2(1.0));
-                    uint2 midCoord = min(uint2(midUV * fullSize), fullMax);
+        float depthDiff = rayDepth - sceneDepth;
 
-                    if (midNDC.z > depthTex.read(midCoord).x) {
-                        hi = mid; sampleUV = midUV;
-                    } else {
-                        lo = mid;
-                    }
+        // Convert ray's linear depth for distance-aware thickness
+        // linearZ = near * far / (far - ndcZ * (far - near))
+        float rayLinZ = near * far / (far - rayDepth * (far - near));
+        float thicknessWorld = mix(params.thickness, params.thicknessFar, saturate(rayLinZ / 30.0));
+        // Convert world thickness to NDC at this depth:
+        // dNDC/dZ ≈ near * far / (linearZ^2 * (far - near) / (far))
+        //         = near * far^2 / (linearZ^2 * (far - near))  ... but simpler:
+        float offsetZ = rayLinZ + thicknessWorld;
+        float ndcAtOffset = far * (offsetZ - near) / (offsetZ * (far - near));
+        float thicknessNDC = ndcAtOffset - rayDepth;
+
+        if (depthDiff > 0.0 && depthDiff < thicknessNDC) {
+            // Binary search refinement — pure NDC comparison, no matrix math
+            float tLo = (float(i) + hash) / float(stepCount);
+            float tHi = t;
+            float2 bestUV = sampleUV;
+            for (int b = 0; b < BINARY_STEPS; b++) {
+                float tMid = (tLo + tHi) * 0.5;
+                float2 midUV = startScreenUV + deltaUV * tMid;
+                midUV = clamp(midUV, float2(0.0), float2(1.0));
+                uint2 midCoord = min(uint2(midUV * fullSize), fullMax);
+
+                float midInvW = mix(startInvW, endInvW, tMid);
+                float midRayZ = mix(startZoW, endZoW, tMid) / midInvW;
+
+                if (midRayZ > depthTex.read(midCoord).x) {
+                    tHi = tMid; bestUV = midUV;
+                } else {
+                    tLo = tMid;
                 }
-                hit = true;
-                hitUV = sampleUV;
-                hitDist = (lo + hi) * 0.5;
-                break;
             }
+            hit = true;
+            hitUV = bestUV;
+            float finalT = (tLo + tHi) * 0.5;
+            float finalInvW = mix(startInvW, endInvW, finalT);
+            float finalRayZ = mix(startZoW, endZoW, finalT) / finalInvW;
+            float finalLinZ = near * far / (far - finalRayZ * (far - near));
+            float startLinZ = near * far / (far - startNDC.z * (far - near));
+            hitDist = finalLinZ - startLinZ;
+            break;
         }
-        stepSize *= 1.05;
     }
 
     if (!hit) {
@@ -842,7 +913,7 @@ kernel void ssrBlurH(
         float sd = depthTex.read(depthCoord).x;
 
         float spatial = exp(-float(i * i) / 10.0);
-        float depthW = (abs(sd - centerDepth) < 0.003) ? 1.0 : 0.1;
+        float depthW = exp(-abs(sd - centerDepth) / 0.003);
         float wt = spatial * depthW;
 
         total += s * wt;
@@ -886,7 +957,7 @@ kernel void ssrBlurV(
         float sd = depthTex.read(depthCoord).x;
 
         float spatial = exp(-float(i * i) / 10.0);
-        float depthW = (abs(sd - centerDepth) < 0.003) ? 1.0 : 0.1;
+        float depthW = exp(-abs(sd - centerDepth) / 0.003);
         float wt = spatial * depthW;
 
         total += s * wt;
@@ -903,6 +974,7 @@ kernel void gtaoCompute(
     texture2d<float, access::read> depthTex [[texture(0)]],
     texture2d<float, access::write> aoResult [[texture(1)]],
     constant CameraUniforms& camera [[buffer(0)]],
+    constant SSAOParams& aoParams [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint2 texSize = uint2(aoResult.get_width(), aoResult.get_height());
@@ -941,12 +1013,11 @@ kernel void gtaoCompute(
     float3 viewNormal = normalize(cross(ddy, ddx));
     if (viewNormal.z < 0.0) viewNormal = -viewNormal;
 
-    // GTAO parameters — tuned for full-res, fewer samples
-    const int NUM_DIRECTIONS = 4;
-    const int NUM_STEPS = 4;
-    float radius = 1.5;       // larger radius for wider, softer falloff
-    float intensity = 0.8;
-    float bias = 0.05;
+    const int NUM_DIRECTIONS = aoParams.directions;
+    const int NUM_STEPS = aoParams.steps;
+    float radius = aoParams.radius;
+    float intensity = aoParams.intensity;
+    float bias = aoParams.bias;
 
     // Per-pixel rotation: interleaved gradient noise (Jimenez, SIGGRAPH 2014)
     // Produces well-distributed values in [0, 2π] with no visible tiling
@@ -1075,7 +1146,8 @@ kernel void aoBlurV(
 struct CompositeParams {
     int ssaoEnabled;
     int ssrEnabled;
-    int debugView;      // 0=normal, 1=AO only, 2=SSR only, 3=depth
+    int debugView;      // 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
+    float ssrBlendStrength;
     float _pad;
 };
 
@@ -1098,6 +1170,7 @@ fragment float4 fragmentComposite(
     texture2d<float> ssrTexture [[texture(1)]],
     texture2d<float> aoTexture [[texture(2)]],
     depth2d<float> depthTex [[texture(3)]],
+    texture2d<float> normalTexture [[texture(4)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeParams& params [[buffer(1)]],
     sampler smp [[sampler(0)]]
@@ -1123,6 +1196,12 @@ fragment float4 fragmentComposite(
         lin = saturate(lin * camera.farPlane * 0.1);
         return float4(lin, lin, lin, 1.0);
     }
+    if (params.debugView == 4) {
+        // View-space normals visualization
+        float3 n = normalTexture.read(uint2(in.position.xy)).xyz;
+        if (depth >= 0.999) return float4(0.5, 0.5, 1.0, 1.0);
+        return float4(n, 1.0);
+    }
 
     // --- Normal rendering ---
     float3 hdrColor;
@@ -1146,7 +1225,7 @@ fragment float4 fragmentComposite(
         // Blend SSR reflections if enabled
         if (params.ssrEnabled != 0) {
             float4 ssr = ssrTexture.sample(smp, in.uv);
-            hdr.rgb = mix(hdr.rgb, ssr.rgb, ssr.a * 0.5);
+            hdr.rgb = mix(hdr.rgb, ssr.rgb, ssr.a * params.ssrBlendStrength);
         }
 
         hdrColor = hdr.rgb;

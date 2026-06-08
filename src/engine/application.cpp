@@ -1,4 +1,5 @@
 #include "application.h"
+#include "states/debug_overlay_state.h"
 
 namespace engine {
 
@@ -31,6 +32,14 @@ bool Application::initialize(const Config& config) {
     return true;
 }
 
+void Application::pushState(std::unique_ptr<AppState> state) {
+    stateStack.pushState(std::move(state));
+}
+
+void Application::popState() {
+    stateStack.popState();
+}
+
 FrameContext Application::makeContext() {
     return FrameContext{
         worldState, *rendererPtr, view, clock, settingsStore, jobs,
@@ -54,14 +63,14 @@ void Application::renderFrame() {
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
     rendererPtr->beginFrame();
-    for (auto& system : systems) system->render(ctx);
+    stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
     rendererPtr->endFrame();
 }
 
 void Application::run() {
     {
         FrameContext ctx = makeContext();
-        for (auto& system : systems) system->onStart(ctx);
+        stateStack.onStart(ctx);
     }
 
     // Render through the window so it keeps painting during a modal resize,
@@ -81,14 +90,26 @@ void Application::run() {
                 inputMap.processEvent(event);
                 playerInputs.routeEvent(event);
                 if (event.type == EventType::WindowCloseRequested) quit = true;
-                for (auto& system : systems) system->onEvent(event, ctx);
+
+                // Backtick toggles debug overlay
+                if (event.type == EventType::KeyPressed
+                    && event.key == KeyCode::GraveAccent
+                    && !event.repeat) {
+                    if (debugOverlayActive) {
+                        stateStack.popState();
+                        debugOverlayActive = false;
+                    } else {
+                        stateStack.pushState(
+                            std::make_unique<DebugOverlayState>(window));
+                        debugOverlayActive = true;
+                    }
+                } else {
+                    stateStack.onEvent(event, ctx);
+                }
             }
             playerInputs.updateGamepads(window.getGamepads());
-            // The viewer's global actions (camera, dev controls) also follow the
-            // first gamepad, so a single controller drives the viewer without a
-            // player slot. Per-player gameplay input still flows via players.
             inputMap.updateGamepad(window.getGamepads()[0]);
-            for (auto& system : systems) system->update(ctx);
+            stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
         }
 
         int steps = clock.advance(frameDelta);
@@ -96,15 +117,20 @@ void Application::run() {
         {
             FrameContext ctx = makeContext();
             for (int i = 0; i < steps; i++)
-                for (auto& system : systems) system->fixedUpdate(ctx);
+                stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
         }
 
         renderFrame();
+
+        {
+            FrameContext ctx = makeContext();
+            stateStack.applyPending(ctx);
+        }
     }
 
     {
         FrameContext ctx = makeContext();
-        for (auto& system : systems) system->onStop(ctx);
+        stateStack.onStop(ctx);
     }
 
     int winWidth, winHeight;
@@ -120,4 +146,3 @@ void Application::run() {
 }
 
 }  // namespace engine
-
