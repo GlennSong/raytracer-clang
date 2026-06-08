@@ -202,8 +202,19 @@ public:
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
     int debugView = 0;
 
+    // Bloom
+    bool bloomEnabled = true;
+    struct BloomParams {
+        float threshold = 1.0f;
+        float knee      = 0.5f;
+        float intensity = 0.3f;
+    } bloomParams;
+
     // Compact stats HUD visible during gameplay
     bool showHud = false;
+
+    // Frame rate cap (0 = uncapped, otherwise target FPS like 30 or 60)
+    int targetFps = 0;
 
     // SSR tuning parameters
     struct SSRParams {

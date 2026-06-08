@@ -146,6 +146,13 @@ struct MetalRenderer::Impl {
     id<MTLComputePipelineState> ssrBlurHPipeline;
     id<MTLComputePipelineState> ssrBlurVPipeline;
 
+    // Bloom
+    static constexpr int BLOOM_MIP_COUNT = 5;
+    id<MTLTexture> bloomMips[BLOOM_MIP_COUNT];     // RGBA16Float downsample chain
+    id<MTLTexture> bloomUpsampleMips[BLOOM_MIP_COUNT]; // upsample chain (reuses mip 0 slot for final)
+    id<MTLComputePipelineState> bloomDownsamplePipeline;
+    id<MTLComputePipelineState> bloomUpsamplePipeline;
+
     // Screen-space ambient occlusion (SSAO/GTAO)
     id<MTLTexture> aoTexture;          // R16Float — full-res AO result
     id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong
@@ -417,6 +424,22 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         }
     }
 
+    // Bloom compute pipelines
+    {
+        id<MTLFunction> downFunc = [library newFunctionWithName:@"bloomDownsample"];
+        if (downFunc) {
+            impl->bloomDownsamplePipeline = [impl->device newComputePipelineStateWithFunction:downFunc
+                                                                                         error:&error];
+            if (!impl->bloomDownsamplePipeline) NSLog(@"Bloom downsample pipeline error: %@", error);
+        }
+        id<MTLFunction> upFunc = [library newFunctionWithName:@"bloomUpsample"];
+        if (upFunc) {
+            impl->bloomUpsamplePipeline = [impl->device newComputePipelineStateWithFunction:upFunc
+                                                                                       error:&error];
+            if (!impl->bloomUpsamplePipeline) NSLog(@"Bloom upsample pipeline error: %@", error);
+        }
+    }
+
     // Generate BRDF integration LUT (one-time, 256×256)
     {
         MTLTextureDescriptor* brdfDesc = [MTLTextureDescriptor
@@ -603,6 +626,25 @@ void MetalRenderer::resize(int width, int height) {
     aoDesc.storageMode = MTLStorageModePrivate;
     impl->aoTexture = [impl->device newTextureWithDescriptor:aoDesc];
     impl->aoBlurTemp = [impl->device newTextureWithDescriptor:aoDesc];
+
+    // Bloom mip chain (progressive half-res)
+    {
+        int mipW = halfW;
+        int mipH = halfH;
+        for (int m = 0; m < MetalRenderer::Impl::BLOOM_MIP_COUNT; m++) {
+            MTLTextureDescriptor* bloomDesc = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                             width:std::max(mipW, 1)
+                                            height:std::max(mipH, 1)
+                                         mipmapped:NO];
+            bloomDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            bloomDesc.storageMode = MTLStorageModePrivate;
+            impl->bloomMips[m] = [impl->device newTextureWithDescriptor:bloomDesc];
+            impl->bloomUpsampleMips[m] = [impl->device newTextureWithDescriptor:bloomDesc];
+            mipW = std::max(mipW / 2, 1);
+            mipH = std::max(mipH / 2, 1);
+        }
+    }
 }
 
 MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
@@ -1338,16 +1380,24 @@ void MetalRenderer::endFrame() {
 
     [impl->currentEncoder endEncoding];
 
-    // --- SSAO compute pass (full resolution, fewer samples) ---
-    if (impl->aoPipeline && impl->aoTexture && ssaoEnabled) {
-        int fullW = impl->framebufferWidth;
-        int fullH = impl->framebufferHeight;
-        MTLSize grid = MTLSizeMake(fullW, fullH, 1);
+    // --- Post-processing compute passes (single encoder) ---
+    // Batching SSAO, SSR, and bloom into one compute encoder eliminates
+    // per-encoder CPU overhead (~15 encoder create/destroy → 1).
+    bool needsCompute = (impl->aoPipeline && impl->aoTexture && ssaoEnabled)
+                     || (impl->ssrPipeline && impl->ssrTexture && ssrEnabled)
+                     || (bloomEnabled && impl->bloomDownsamplePipeline
+                         && impl->bloomUpsamplePipeline && impl->bloomMips[0]);
+
+    if (needsCompute) {
+        id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
         MTLSize group = MTLSizeMake(8, 8, 1);
 
-        // GTAO compute at full resolution
-        {
-            id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+        // --- SSAO ---
+        if (impl->aoPipeline && impl->aoTexture && ssaoEnabled) {
+            int fullW = impl->framebufferWidth;
+            int fullH = impl->framebufferHeight;
+            MTLSize aoGrid = MTLSizeMake(fullW, fullH, 1);
+
             [enc setComputePipelineState:impl->aoPipeline];
             [enc setTexture:impl->depthTexture atIndex:0];
             [enc setTexture:impl->aoTexture atIndex:1];
@@ -1357,43 +1407,32 @@ void MetalRenderer::endFrame() {
                 ssaoParams.directions, ssaoParams.steps, {}
             };
             [enc setBytes:&aoP length:sizeof(aoP) atIndex:1];
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
-            [enc endEncoding];
-        }
+            [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
 
-        // Bilateral blur (H → aoBlurTemp, V → aoTexture)
-        if (impl->aoBlurHPipeline && impl->aoBlurVPipeline && impl->aoBlurTemp) {
-            {
-                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+            if (impl->aoBlurHPipeline && impl->aoBlurVPipeline && impl->aoBlurTemp) {
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->aoBlurHPipeline];
                 [enc setTexture:impl->aoTexture atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoBlurTemp atIndex:2];
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
-                [enc endEncoding];
-            }
-            {
-                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->aoBlurVPipeline];
                 [enc setTexture:impl->aoBlurTemp atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoTexture atIndex:2];
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
-                [enc endEncoding];
+                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
             }
         }
-    }
 
-    // --- SSR compute pass (half resolution) ---
-    if (impl->ssrPipeline && impl->ssrTexture && ssrEnabled) {
-        int halfW = std::max(impl->framebufferWidth / 2, 1);
-        int halfH = std::max(impl->framebufferHeight / 2, 1);
-        MTLSize grid = MTLSizeMake(halfW, halfH, 1);
-        MTLSize group = MTLSizeMake(8, 8, 1);
+        // --- SSR ---
+        if (impl->ssrPipeline && impl->ssrTexture && ssrEnabled) {
+            int halfW = std::max(impl->framebufferWidth / 2, 1);
+            int halfH = std::max(impl->framebufferHeight / 2, 1);
+            MTLSize ssrGrid = MTLSizeMake(halfW, halfH, 1);
 
-        // Ray march
-        {
-            id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+            [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
             [enc setComputePipelineState:impl->ssrPipeline];
             [enc setTexture:impl->sceneColorTexture atIndex:0];
             [enc setTexture:impl->depthTexture atIndex:1];
@@ -1405,31 +1444,75 @@ void MetalRenderer::endFrame() {
                 ssrParams.stride, ssrParams.blendStrength, {}
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
-            [enc endEncoding];
-        }
+            [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
 
-        // Bilateral blur (horizontal → ssrBlurTemp, vertical → ssrTexture)
-        if (impl->ssrBlurHPipeline && impl->ssrBlurVPipeline && impl->ssrBlurTemp) {
-            {
-                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+            if (impl->ssrBlurHPipeline && impl->ssrBlurVPipeline && impl->ssrBlurTemp) {
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->ssrBlurHPipeline];
                 [enc setTexture:impl->ssrTexture atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrBlurTemp atIndex:2];
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
-                [enc endEncoding];
-            }
-            {
-                id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
+                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->ssrBlurVPipeline];
                 [enc setTexture:impl->ssrBlurTemp atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrTexture atIndex:2];
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
-                [enc endEncoding];
+                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
             }
         }
+
+        // --- Bloom ---
+        if (bloomEnabled && impl->bloomDownsamplePipeline && impl->bloomUpsamplePipeline
+            && impl->bloomMips[0]) {
+            [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+
+            // Downsample chain: scene → mip0 → mip1 → ... → mip[N-1]
+            for (int m = 0; m < MetalRenderer::Impl::BLOOM_MIP_COUNT; m++) {
+                if (m > 0) [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+                id<MTLTexture> src = (m == 0) ? impl->sceneColorTexture : impl->bloomMips[m - 1];
+                id<MTLTexture> dst = impl->bloomMips[m];
+
+                struct { float threshold, knee, intensity; int srcW, srcH; float _p[3]; } bp = {
+                    bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
+                    static_cast<int>(src.width), static_cast<int>(src.height), {}
+                };
+
+                [enc setComputePipelineState:impl->bloomDownsamplePipeline];
+                [enc setTexture:src atIndex:0];
+                [enc setTexture:dst atIndex:1];
+                [enc setBytes:&bp length:sizeof(bp) atIndex:0];
+                MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            }
+
+            // Upsample chain: read directly from downsample mips (no blit copy needed)
+            int last = MetalRenderer::Impl::BLOOM_MIP_COUNT - 1;
+            for (int m = last; m >= 0; m--) {
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+                id<MTLTexture> src = (m == last)
+                    ? impl->bloomMips[last]           // smallest downsample mip as seed
+                    : impl->bloomUpsampleMips[m + 1]; // previously upsampled result
+                id<MTLTexture> higher = impl->bloomMips[m];
+                id<MTLTexture> dst = impl->bloomUpsampleMips[m];
+
+                struct { float threshold, knee, intensity; int srcW, srcH; float _p[3]; } bp = {
+                    bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
+                    static_cast<int>(src.width), static_cast<int>(src.height), {}
+                };
+
+                [enc setComputePipelineState:impl->bloomUpsamplePipeline];
+                [enc setTexture:src atIndex:0];
+                [enc setTexture:higher atIndex:1];
+                [enc setTexture:dst atIndex:2];
+                [enc setBytes:&bp length:sizeof(bp) atIndex:0];
+                MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
+                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            }
+        }
+
+        [enc endEncoding];
     }
 
     // --- Composite pass: tone map HDR scene to LDR drawable ---
@@ -1442,13 +1525,21 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
         [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
         [compEncoder setFragmentTexture:impl->viewNormalTexture atIndex:4];
+        if (bloomEnabled && impl->bloomUpsampleMips[0]) {
+            [compEncoder setFragmentTexture:impl->bloomUpsampleMips[0] atIndex:5];
+        }
         [compEncoder setFragmentBytes:&impl->cameraUniforms
                                length:sizeof(CameraUniforms) atIndex:0];
-        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView; float ssrBlendStrength; } compositeParams;
+        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView;
+                 float ssrBlendStrength; int32_t bloomEnabled; float bloomIntensity;
+                 float _pad[2]; } compositeParams;
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
+        compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
+        compositeParams.bloomIntensity = bloomParams.intensity;
+        compositeParams._pad[0] = 0; compositeParams._pad[1] = 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];

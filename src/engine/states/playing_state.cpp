@@ -1,4 +1,5 @@
 #include "playing_state.h"
+#include "../systems/debug_overlay_system.h"
 #include "../../renderer/window.h"
 
 #ifdef RT_ENABLE_IMGUI
@@ -13,6 +14,7 @@ void PlayingState::onEnter(FrameContext& ctx) {
     window.setCursorMode(CursorMode::Disabled);
     window.resetMouseDelta();
     for (auto& system : systems) system->onStart(ctx);
+    DebugOverlaySystem::loadSettings(ctx);
 }
 
 void PlayingState::onExit(FrameContext& ctx) {

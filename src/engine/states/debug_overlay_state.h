@@ -25,7 +25,6 @@ public:
 private:
     Window& window;
     DebugOverlaySystem overlay;
-    bool started = false;
 };
 
 }  // namespace engine

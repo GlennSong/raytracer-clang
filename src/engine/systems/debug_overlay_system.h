@@ -12,7 +12,12 @@ namespace engine {
 class DebugOverlaySystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
+    void onStop(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
+
+    static void loadSettings(FrameContext& ctx);
+    static void saveSettings(FrameContext& ctx);
+    static void resetDefaults(FrameContext& ctx);
 };
 
 

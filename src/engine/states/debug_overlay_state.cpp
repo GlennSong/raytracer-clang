@@ -7,15 +7,10 @@ DebugOverlayState::DebugOverlayState(Window& window) : window(window) {}
 
 void DebugOverlayState::onEnter(FrameContext& ctx) {
     window.setCursorMode(CursorMode::Normal);
-    if (!started) {
-        overlay.onStart(ctx);
-        started = true;
-    }
 }
 
 void DebugOverlayState::onExit(FrameContext& ctx) {
     overlay.onStop(ctx);
-    started = false;
 }
 
 void DebugOverlayState::onEvent(const Event& event, FrameContext& ctx) {

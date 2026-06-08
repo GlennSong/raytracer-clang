@@ -6,7 +6,7 @@
 
 namespace engine {
 
-static void loadPostProcessSettings(FrameContext& ctx) {
+void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     auto& s = ctx.settings;
     auto& ao = ctx.renderer.ssaoParams;
     auto& ssr = ctx.renderer.ssrParams;
@@ -28,10 +28,16 @@ static void loadPostProcessSettings(FrameContext& ctx) {
     lit.ambientMultiplier = static_cast<float>(s.getDouble("lighting.ambient", lit.ambientMultiplier));
     lit.sun.intensity     = static_cast<float>(s.getDouble("lighting.sunIntensity", lit.sun.intensity));
 
+    auto& bloom = ctx.renderer.bloomParams;
+    bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
+    bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
+    bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
+
     ctx.renderer.showHud = s.getBool("hud.show", ctx.renderer.showHud);
+    ctx.renderer.targetFps = static_cast<int>(s.getDouble("targetFps", ctx.renderer.targetFps));
 }
 
-static void savePostProcessSettings(FrameContext& ctx) {
+void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     auto& s = ctx.settings;
     auto& ao = ctx.renderer.ssaoParams;
     auto& ssr = ctx.renderer.ssrParams;
@@ -53,13 +59,33 @@ static void savePostProcessSettings(FrameContext& ctx) {
     s.setDouble("lighting.ambient", lit.ambientMultiplier);
     s.setDouble("lighting.sunIntensity", lit.sun.intensity);
 
+    auto& bloom = ctx.renderer.bloomParams;
+    s.setDouble("bloom.threshold", bloom.threshold);
+    s.setDouble("bloom.knee", bloom.knee);
+    s.setDouble("bloom.intensity", bloom.intensity);
+
     s.setBool("hud.show", ctx.renderer.showHud);
+    s.setDouble("targetFps", ctx.renderer.targetFps);
 
     s.save("settings.json");
 }
 
+void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {
+    ctx.renderer.ssaoParams = Renderer::SSAOParams{};
+    ctx.renderer.ssrParams = Renderer::SSRParams{};
+    ctx.renderer.bloomParams = Renderer::BloomParams{};
+    ctx.view.lighting.exposure = 1.0f;
+    ctx.view.lighting.ambientMultiplier = 0.3f;
+    ctx.view.lighting.sun.intensity = 1.5f;
+    ctx.renderer.targetFps = 0;
+}
+
 void DebugOverlaySystem::onStart(FrameContext& ctx) {
-    loadPostProcessSettings(ctx);
+    loadSettings(ctx);
+}
+
+void DebugOverlaySystem::onStop(FrameContext& ctx) {
+    saveSettings(ctx);
 }
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
@@ -113,17 +139,34 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Blend Strength", &ssr.blendStrength, 0.0f, 1.0f);
     }
 
+    if (ImGui::CollapsingHeader("Bloom")) {
+        ImGui::Checkbox("Enabled##bloom", &ctx.renderer.bloomEnabled);
+        auto& bloom = ctx.renderer.bloomParams;
+        ImGui::SliderFloat("Threshold", &bloom.threshold, 0.0f, 3.0f);
+        ImGui::SliderFloat("Knee", &bloom.knee, 0.0f, 1.0f);
+        ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 2.0f);
+    }
+
     if (ImGui::CollapsingHeader("Other")) {
         ImGui::Checkbox("Reflection Probes", &ctx.renderer.reflectionProbesEnabled);
+        const char* fpsOptions[] = {"Uncapped", "30", "60"};
+        int fpsIdx = (ctx.renderer.targetFps == 30) ? 1 : (ctx.renderer.targetFps == 60) ? 2 : 0;
+        if (ImGui::Combo("FPS Cap", &fpsIdx, fpsOptions, 3)) {
+            ctx.renderer.targetFps = (fpsIdx == 1) ? 30 : (fpsIdx == 2) ? 60 : 0;
+        }
     }
 
     ImGui::Separator();
     if (ImGui::Button("Save Settings")) {
-        savePostProcessSettings(ctx);
+        saveSettings(ctx);
     }
     ImGui::SameLine();
     if (ImGui::Button("Load Settings")) {
-        loadPostProcessSettings(ctx);
+        loadSettings(ctx);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset Defaults")) {
+        resetDefaults(ctx);
     }
 
     ImGui::End();

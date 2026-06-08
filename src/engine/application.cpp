@@ -1,5 +1,7 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include <thread>
+#include <chrono>
 
 namespace engine {
 
@@ -120,7 +122,15 @@ void Application::run() {
                 stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
         }
 
+        auto frameStart = std::chrono::steady_clock::now();
         renderFrame();
+
+        if (rendererPtr->targetFps > 0) {
+            auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
+            auto elapsed = std::chrono::steady_clock::now() - frameStart;
+            if (elapsed < targetDuration)
+                std::this_thread::sleep_for(targetDuration - elapsed);
+        }
 
         {
             FrameContext ctx = makeContext();
