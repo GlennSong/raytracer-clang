@@ -24,6 +24,9 @@ public:
     MeshHandle uploadMesh(const RenderMesh& mesh) override;
     void removeMesh(MeshHandle handle) override;
     BoundingSphere getMeshBounds(MeshHandle handle) const override;
+    TextureHandle uploadTexture(int width, int height, int channels,
+                                const uint8_t* data) override;
+    void removeTexture(TextureHandle handle) override;
     RenderStats getRenderStats() const override;
 
     void beginFrame() override;

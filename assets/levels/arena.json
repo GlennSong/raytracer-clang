@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.05, 0.05, 0.08]
+  },
+  "entities": [
+    {
+      "shape": "box",
+      "size": [50, 2, 50],
+      "position": [0, -1, 0],
+      "material": {
+        "albedo": [0.7, 0.7, 0.7],
+        "roughness": 0.8,
+        "flags": ["checkerboard"]
+      },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [50, 4, 1],
+      "position": [0, 2, -25],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [50, 4, 1],
+      "position": [0, 2, 25],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [1, 4, 50],
+      "position": [-25, 2, 0],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [1, 4, 50],
+      "position": [25, 2, 0],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [6, 0.5, 4],
+      "position": [-10, 0.8, -10],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": 15 },
+      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [6, 0.5, 4],
+      "position": [10, 0.8, 10],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": -15 },
+      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [2, 4, 2],
+      "position": [-6, 2, 5],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [2, 4, 2],
+      "position": [6, 2, -5],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [4, 2, 1],
+      "position": [0, 1, -8],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [-5, 1.5, -3],
+      "material": { "albedo": [0.9, 0.2, 0.2], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [5, 1.5, 3],
+      "material": { "albedo": [0.2, 0.7, 0.2], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [-3, 1.5, 8],
+      "material": { "albedo": [0.2, 0.3, 0.9], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [8, 1.5, -8],
+      "material": { "albedo": [0.9, 0.8, 0.1], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "cone",
+      "size": [1.5, 3, 1],
+      "position": [12, 1.5, 0],
+      "material": { "albedo": [0.8, 0.4, 0.1], "roughness": 0.4, "metallic": 0.2 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "torus",
+      "size": [2, 0.4, 1],
+      "position": [-12, 2, 0],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": 90 },
+      "material": { "albedo": [0.9, 0.1, 0.6], "roughness": 0.2, "metallic": 0.8 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "wedge",
+      "size": [4, 2, 3],
+      "position": [0, 0, 15],
+      "material": { "albedo": [0.2, 0.6, 0.4], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.6 }
+    },
+    {
+      "shape": "capsule",
+      "size": [0.8, 2, 1],
+      "position": [-8, 2, -12],
+      "material": { "albedo": [0.3, 0.7, 0.9], "roughness": 0.25, "metallic": 0.6 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.4 }
+    },
+    {
+      "mesh": "../models/DamagedHelmet.glb",
+      "position": [0, 3, -3],
+      "scale": [1.5, 1.5, 1.5],
+      "physics": { "motion": "static" }
+    }
+  ],
+  "player": {
+    "position": [0, 1, 5],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.4, 0.8, -0.3],
+      "color": [1.0, 0.98, 0.92],
+      "intensity": 1.5,
+      "castsShadow": true
+    },
+    "pointLights": [
+      { "position": [0, 12, 0],     "color": [1.0, 0.95, 0.9], "intensity": 50 },
+      { "position": [-15, 8, -15],  "color": [0.4, 0.5, 1.0],  "intensity": 30 },
+      { "position": [15, 8, 15],    "color": [1.0, 0.7, 0.3],  "intensity": 30 }
+    ],
+    "spotLights": [
+      {
+        "position": [0, 10, 0],
+        "direction": [0, -1, 0],
+        "color": [1.0, 0.9, 0.8],
+        "intensity": 40,
+        "innerConeAngle": 0.3,
+        "outerConeAngle": 0.5
+      }
+    ],
+    "exposure": 0.5,
+    "ambientMultiplier": 0.3
+  },
+  "reflectionProbes": [
+    {
+      "position": [0, 3, 0],
+      "radius": 35,
+      "boxMin": [-25, -1, -25],
+      "boxMax": [25, 10, 25]
+    }
+  ]
+}

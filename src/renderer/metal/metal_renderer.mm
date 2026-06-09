@@ -43,7 +43,7 @@ struct MaterialUniforms {
     float roughness;
     float opacity;
     float flags;
-    float _matPad;
+    uint32_t textureFlags;
     simd_float3 emission;
 };
 
@@ -89,8 +89,10 @@ struct alignas(16) GPUInstanceData {
     float metallic;
     float roughness;
     float opacity;
-    float flags;            // material flags (checkerboard, etc.)
+    float flags;
     simd_float4 emission;   // w unused
+    uint32_t textureFlags;
+    float _instPad[3];
 };
 
 static constexpr uint32_t MAX_INSTANCES = 4096;
@@ -121,9 +123,10 @@ struct MetalRenderer::Impl {
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
 
-    // Generation-checked GPU mesh storage (ADR-0007): hands out MeshHandles and
-    // detects use of a freed/reused handle, replacing the old uint32 counter.
     SlotMap<GPUMesh, MeshTag> meshes;
+    SlotMap<id<MTLTexture>, TextureTag> textures;
+    id<MTLSamplerState> linearWrapSampler;
+    id<MTLTexture> defaultWhiteTexture;
 
     CameraUniforms cameraUniforms;
     LightUniforms lightUniforms;
@@ -362,6 +365,31 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         sampDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
         sampDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
         impl->linearClampSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
+    }
+
+    // Linear wrap sampler (for material textures)
+    {
+        MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
+        sampDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.mipFilter = MTLSamplerMipFilterLinear;
+        sampDesc.sAddressMode = MTLSamplerAddressModeRepeat;
+        sampDesc.tAddressMode = MTLSamplerAddressModeRepeat;
+        impl->linearWrapSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
+    }
+
+    // 1x1 white default texture (bound when no material texture is set)
+    {
+        MTLTextureDescriptor* desc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                         width:1 height:1 mipmapped:NO];
+        desc.usage = MTLTextureUsageShaderRead;
+        impl->defaultWhiteTexture = [impl->device newTextureWithDescriptor:desc];
+        uint8_t white[] = {255, 255, 255, 255};
+        [impl->defaultWhiteTexture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+                                     mipmapLevel:0
+                                       withBytes:white
+                                     bytesPerRow:4];
     }
 
     // Compute pipelines for IBL (reflection probes)
@@ -654,6 +682,7 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     struct GPUVertex {
         float position[3];
         float normal[3];
+        float tangent[3];
         float texcoord[2];
     };
 
@@ -666,6 +695,9 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
             {static_cast<float>(mesh.vertices[i].normal.x),
              static_cast<float>(mesh.vertices[i].normal.y),
              static_cast<float>(mesh.vertices[i].normal.z)},
+            {static_cast<float>(mesh.vertices[i].tangent.x),
+             static_cast<float>(mesh.vertices[i].tangent.y),
+             static_cast<float>(mesh.vertices[i].tangent.z)},
             {mesh.vertices[i].u, mesh.vertices[i].v}
         };
     }
@@ -686,6 +718,50 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
 
 void MetalRenderer::removeMesh(MeshHandle handle) {
     impl->meshes.erase(handle);
+}
+
+TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
+                                            const uint8_t* data) {
+    MTLTextureDescriptor* desc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:width height:height mipmapped:YES];
+    desc.usage = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+
+    id<MTLTexture> texture = [impl->device newTextureWithDescriptor:desc];
+
+    if (channels == 4) {
+        [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+                   mipmapLevel:0
+                     withBytes:data
+                   bytesPerRow:width * 4];
+    } else {
+        std::vector<uint8_t> rgba(width * height * 4);
+        for (int i = 0; i < width * height; i++) {
+            rgba[i * 4 + 0] = (channels > 0) ? data[i * channels + 0] : 255;
+            rgba[i * 4 + 1] = (channels > 1) ? data[i * channels + 1] : 255;
+            rgba[i * 4 + 2] = (channels > 2) ? data[i * channels + 2] : 255;
+            rgba[i * 4 + 3] = (channels > 3) ? data[i * channels + 3] : 255;
+        }
+        [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+                   mipmapLevel:0
+                     withBytes:rgba.data()
+                   bytesPerRow:width * 4];
+    }
+
+    // Generate mipmaps
+    id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
+    [blit generateMipmapsForTexture:texture];
+    [blit endEncoding];
+    [cmdBuf commit];
+    [cmdBuf waitUntilCompleted];
+
+    return impl->textures.insert(texture);
+}
+
+void MetalRenderer::removeTexture(TextureHandle handle) {
+    impl->textures.erase(handle);
 }
 
 BoundingSphere MetalRenderer::getMeshBounds(MeshHandle handle) const {
@@ -1051,7 +1127,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     matU.roughness = dc.material.roughness;
                     matU.opacity = dc.material.opacity;
                     matU.flags = static_cast<float>(dc.material.flags);
-                    matU._matPad = 0;
+                    matU.textureFlags = 0;
                     matU.emission = {static_cast<float>(dc.material.emission.x),
                                      static_cast<float>(dc.material.emission.y),
                                      static_cast<float>(dc.material.emission.z)};
@@ -1063,6 +1139,12 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setFragmentBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBytes:&matU length:sizeof(MaterialUniforms) atIndex:3];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:3];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:4];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:5];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:6];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:7];
+                    [enc setFragmentSamplerState:impl->linearWrapSampler atIndex:2];
                     [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                     indexCount:mesh->indexCount
                                      indexType:MTLIndexTypeUInt32
@@ -1225,6 +1307,30 @@ void MetalRenderer::endFrame() {
 
     RenderStats stats;
 
+    auto computeTextureFlags = [&](const RenderMaterial& mat) -> uint32_t {
+        uint32_t tf = 0;
+        if (mat.albedoMap.valid())            tf |= 1u;
+        if (mat.metallicRoughnessMap.valid()) tf |= 2u;
+        if (mat.normalMap.valid())            tf |= 4u;
+        if (mat.aoMap.valid())                tf |= 8u;
+        if (mat.emissiveMap.valid())          tf |= 16u;
+        return tf;
+    };
+
+    auto bindMaterialTextures = [&](const RenderMaterial& mat, uint32_t) {
+        auto resolve = [&](TextureHandle h) -> id<MTLTexture> {
+            if (!h.valid()) return impl->defaultWhiteTexture;
+            auto* t = impl->textures.get(h);
+            return t ? *t : impl->defaultWhiteTexture;
+        };
+        [impl->currentEncoder setFragmentTexture:resolve(mat.albedoMap) atIndex:3];
+        [impl->currentEncoder setFragmentTexture:resolve(mat.metallicRoughnessMap) atIndex:4];
+        [impl->currentEncoder setFragmentTexture:resolve(mat.normalMap) atIndex:5];
+        [impl->currentEncoder setFragmentTexture:resolve(mat.aoMap) atIndex:6];
+        [impl->currentEncoder setFragmentTexture:resolve(mat.emissiveMap) atIndex:7];
+        [impl->currentEncoder setFragmentSamplerState:impl->linearWrapSampler atIndex:2];
+    };
+
     auto fillInstanceData = [&](const Impl::DrawCall& dc) -> GPUInstanceData {
         GPUInstanceData inst;
         inst.model = toSimd(dc.transform);
@@ -1239,6 +1345,8 @@ void MetalRenderer::endFrame() {
         inst.emission = {static_cast<float>(dc.material.emission.x),
                          static_cast<float>(dc.material.emission.y),
                          static_cast<float>(dc.material.emission.z), 0};
+        inst.textureFlags = computeTextureFlags(dc.material);
+        inst._instPad[0] = inst._instPad[1] = inst._instPad[2] = 0;
         return inst;
     };
 
@@ -1250,6 +1358,7 @@ void MetalRenderer::endFrame() {
         modelUniforms.model = toSimd(dc.transform);
         modelUniforms.normalMatrix = inverseTranspose(modelUniforms.model);
 
+        uint32_t tf = computeTextureFlags(dc.material);
         MaterialUniforms matUniforms;
         matUniforms.albedo = {static_cast<float>(dc.material.albedo.x),
                               static_cast<float>(dc.material.albedo.y),
@@ -1258,10 +1367,12 @@ void MetalRenderer::endFrame() {
         matUniforms.roughness = dc.material.roughness;
         matUniforms.opacity = dc.material.opacity;
         matUniforms.flags = static_cast<float>(dc.material.flags);
-        matUniforms._matPad = 0;
+        matUniforms.textureFlags = tf;
         matUniforms.emission = {static_cast<float>(dc.material.emission.x),
                                 static_cast<float>(dc.material.emission.y),
                                 static_cast<float>(dc.material.emission.z)};
+
+        bindMaterialTextures(dc.material, tf);
 
         [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
@@ -1342,6 +1453,9 @@ void MetalRenderer::endFrame() {
                                             length:sizeof(CameraUniforms) atIndex:1];
             [impl->currentEncoder setFragmentBytes:&impl->lightUniforms
                                             length:sizeof(LightUniforms) atIndex:4];
+
+            bindMaterialTextures(drawCalls[batchStart].material,
+                                computeTextureFlags(drawCalls[batchStart].material));
 
             [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                              indexCount:mesh->indexCount

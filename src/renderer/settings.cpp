@@ -1,65 +1,40 @@
 #include "settings.h"
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
-#include <algorithm>
+
+using json = nlohmann::json;
 
 namespace engine {
-
-static std::string trim(const std::string& s) {
-    size_t start = s.find_first_not_of(" \t\n\r");
-    if (start == std::string::npos) return "";
-    size_t end = s.find_last_not_of(" \t\n\r");
-    return s.substr(start, end - start + 1);
-}
 
 void Settings::load(const std::string& filepath) {
     std::ifstream file(filepath);
     if (!file.is_open()) return;
 
-    std::string content((std::istreambuf_iterator<char>(file)),
-                         std::istreambuf_iterator<char>());
+    json root;
+    try {
+        root = json::parse(file);
+    } catch (const json::parse_error&) {
+        return;
+    }
 
-    size_t pos = 0;
-    while (pos < content.size()) {
-        size_t keyStart = content.find('"', pos);
-        if (keyStart == std::string::npos) break;
-        size_t keyEnd = content.find('"', keyStart + 1);
-        if (keyEnd == std::string::npos) break;
-
-        std::string key = content.substr(keyStart + 1, keyEnd - keyStart - 1);
-
-        size_t colon = content.find(':', keyEnd);
-        if (colon == std::string::npos) break;
-
-        size_t valStart = colon + 1;
-        while (valStart < content.size() && content[valStart] == ' ') valStart++;
-
-        std::string value;
-        if (valStart < content.size() && content[valStart] == '"') {
-            size_t valEnd = content.find('"', valStart + 1);
-            if (valEnd == std::string::npos) break;
-            value = content.substr(valStart + 1, valEnd - valStart - 1);
-            pos = valEnd + 1;
-        } else {
-            size_t valEnd = content.find_first_of(",}\n", valStart);
-            if (valEnd == std::string::npos) valEnd = content.size();
-            value = trim(content.substr(valStart, valEnd - valStart));
-            pos = valEnd + 1;
-        }
-
-        values[key] = value;
+    for (auto& [key, val] : root.items()) {
+        if (val.is_string())
+            values[key] = val.get<std::string>();
+        else if (val.is_boolean())
+            values[key] = val.get<bool>() ? "true" : "false";
+        else if (val.is_number())
+            values[key] = std::to_string(val.get<double>());
     }
 }
 
 void Settings::save(const std::string& filepath) const {
-    std::ofstream file(filepath);
-    if (!file.is_open()) return;
-
-    file << "{\n";
-    size_t count = 0;
+    json root = json::object();
     for (const auto& [key, value] : values) {
-        file << "  \"" << key << "\": ";
-
+        if (value == "true" || value == "false") {
+            root[key] = (value == "true");
+            continue;
+        }
         bool isNumber = !value.empty();
         bool hasDot = false;
         for (size_t i = 0; i < value.size(); i++) {
@@ -68,19 +43,16 @@ void Settings::save(const std::string& filepath) const {
             if (c == '.' && !hasDot) { hasDot = true; continue; }
             if (!std::isdigit(c)) { isNumber = false; break; }
         }
-
-        bool isBool = (value == "true" || value == "false");
-
-        if (isNumber || isBool) {
-            file << value;
+        if (isNumber) {
+            root[key] = std::stod(value);
         } else {
-            file << "\"" << value << "\"";
+            root[key] = value;
         }
-
-        if (++count < values.size()) file << ",";
-        file << "\n";
     }
-    file << "}\n";
+
+    std::ofstream file(filepath);
+    if (!file.is_open()) return;
+    file << root.dump(2) << "\n";
 }
 
 double Settings::getDouble(const std::string& key, double defaultValue) const {
@@ -117,4 +89,3 @@ void Settings::setString(const std::string& key, const std::string& value) {
 }
 
 }  // namespace engine
-

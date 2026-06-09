@@ -139,6 +139,10 @@ set(VIEWER_SOURCES
     src/engine/state_stack.cpp
     src/engine/states/playing_state.cpp
     src/engine/states/debug_overlay_state.cpp
+    src/engine/mesh_builder.cpp
+    src/engine/level_loader.cpp
+    src/engine/model_importer.cpp
+    src/game/arena_state.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp
@@ -189,6 +193,7 @@ add_executable(viewer
 )
 
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(viewer PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_link_libraries(viewer PRIVATE glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 

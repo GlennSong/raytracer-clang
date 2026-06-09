@@ -4,13 +4,15 @@ using namespace metal;
 struct Vertex {
     packed_float3 position;
     packed_float3 normal;
-    float2 texcoord;
+    packed_float3 tangent;
+    packed_float2 texcoord;
 };
 
 struct VertexOut {
     float4 position [[position]];
     float3 worldPosition;
     float3 worldNormal;
+    float3 worldTangent;
     float2 texcoord;
 };
 
@@ -38,7 +40,7 @@ struct MaterialUniforms {
     float roughness;
     float opacity;
     float flags;
-    float _matPad;
+    uint textureFlags;
     float3 emission;
 };
 
@@ -176,6 +178,8 @@ struct InstanceData {
     float opacity;
     float flags;
     float4 emission;    // w unused
+    uint textureFlags;
+    float _instPad[3];
 };
 
 struct ShadowUniforms {
@@ -467,6 +471,7 @@ struct FragmentData {
     float4 position [[position]];
     float3 worldPosition;
     float3 worldNormal;
+    float3 worldTangent;
     float2 texcoord;
     float3 albedo;
     float metallic;
@@ -474,6 +479,7 @@ struct FragmentData {
     float opacity;
     float flags;
     float3 emission;
+    uint textureFlags;
 };
 
 vertex FragmentData vertexMainInstanced(
@@ -489,6 +495,7 @@ vertex FragmentData vertexMainInstanced(
     out.position = camera.viewProjection * worldPos;
     out.worldPosition = worldPos.xyz;
     out.worldNormal = normalize((inst.normalMatrix * float4(vertices[vid].normal, 0.0)).xyz);
+    out.worldTangent = normalize((inst.model * float4(float3(vertices[vid].tangent), 0.0)).xyz);
     out.texcoord = vertices[vid].texcoord;
     out.albedo = inst.albedo.xyz;
     out.metallic = inst.metallic;
@@ -496,6 +503,7 @@ vertex FragmentData vertexMainInstanced(
     out.opacity = inst.opacity;
     out.flags = inst.flags;
     out.emission = inst.emission.xyz;
+    out.textureFlags = inst.textureFlags;
     return out;
 }
 
@@ -568,46 +576,70 @@ fragment GBufferOut fragmentMainInstanced(
     depth2d<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
+    texture2d<float> albedoMap [[texture(3)]],
+    texture2d<float> metalRoughMap [[texture(4)]],
+    texture2d<float> normalMap [[texture(5)]],
+    texture2d<float> aoMap [[texture(6)]],
+    texture2d<float> emissiveMap [[texture(7)]],
     sampler shadowSampler [[sampler(0)]],
-    sampler envSampler [[sampler(1)]]
+    sampler envSampler [[sampler(1)]],
+    sampler texSampler [[sampler(2)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
     float3 albedo = in.albedo;
-    if (int(in.flags) & 1) albedo = applyCheckerboard(albedo, in.worldPosition);
+    float mtl = in.metallic;
+    float rough = in.roughness;
+    float3 emit = in.emission;
+    float ao = 1.0;
+    uint tf = in.textureFlags;
+    if (tf & 1u) albedo *= albedoMap.sample(texSampler, in.texcoord).rgb;
+    if (tf & 2u) {
+        float4 mr = metalRoughMap.sample(texSampler, in.texcoord);
+        rough *= mr.g;
+        mtl *= mr.b;
+    }
+    if (tf & 8u) ao = aoMap.sample(texSampler, in.texcoord).r;
+    if (tf & 16u) emit *= emissiveMap.sample(texSampler, in.texcoord).rgb;
+    if (!(tf & 1u) && (int(in.flags) & 1)) albedo = applyCheckerboard(albedo, in.worldPosition);
 
     float3 normal = normalize(in.worldNormal);
+    if (tf & 4u) {
+        float3 T = normalize(in.worldTangent - normal * dot(normal, in.worldTangent));
+        float3 B = cross(normal, T);
+        float3 tsNormal = normalMap.sample(texSampler, in.texcoord).xyz * 2.0 - 1.0;
+        normal = normalize(T * tsNormal.x + B * tsNormal.y + normal * tsNormal.z);
+    }
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
     float3 reflectDir = reflect(-viewDir, normal);
-    float3 f0 = mix(float3(0.04), albedo, in.metallic);
+    float3 f0 = mix(float3(0.04), albedo, mtl);
 
-    // Environment specular: use probes if available, otherwise procedural sky
     float3 envSpecular;
     float3 envReflection;
     if (probeParams.probeCount > 0) {
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
-                                              in.roughness, normal, NdotV, f0,
+                                              rough, normal, NdotV, f0,
                                               probes, probeParams,
                                               cubemapArray, brdfLUT, envSampler);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
     } else {
         envReflection = sampleEnvironment(reflectDir);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
-        float mipBlur = in.roughness * in.roughness;
+        float mipBlur = rough * rough;
         float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
         envSpecular = fresnel * envBlurred;
     }
 
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
     float3 directLight = evaluateLighting(in.worldPosition, normal, viewDir,
-                                           albedo, in.metallic, in.roughness,
+                                           albedo, mtl, rough,
                                            fresnel, lightData,
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - in.metallic);
-    float3 color = in.emission + directLight + ambientDiffuse + envSpecular;
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = in.opacity;
     if (alpha < 1.0) {
@@ -635,6 +667,7 @@ vertex VertexOut vertexMain(
     out.position = camera.viewProjection * worldPos;
     out.worldPosition = worldPos.xyz;
     out.worldNormal = normalize((model.normalMatrix * float4(vertices[vid].normal, 0.0)).xyz);
+    out.worldTangent = normalize((model.model * float4(float3(vertices[vid].tangent), 0.0)).xyz);
     out.texcoord = vertices[vid].texcoord;
     return out;
 }
@@ -650,46 +683,69 @@ fragment GBufferOut fragmentMain(
     depth2d<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
+    texture2d<float> albedoMap [[texture(3)]],
+    texture2d<float> metalRoughMap [[texture(4)]],
+    texture2d<float> normalMap [[texture(5)]],
+    texture2d<float> aoMap [[texture(6)]],
+    texture2d<float> emissiveMap [[texture(7)]],
     sampler shadowSampler [[sampler(0)]],
-    sampler envSampler [[sampler(1)]]
+    sampler envSampler [[sampler(1)]],
+    sampler texSampler [[sampler(2)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
     float3 albedo = material.albedo;
-    if (int(material.flags) & 1) albedo = applyCheckerboard(albedo, in.worldPosition);
+    float mtl = material.metallic;
+    float rough = material.roughness;
+    float3 emit = material.emission;
+    float ao = 1.0;
+    uint tf = material.textureFlags;
+    if (tf & 1u) albedo *= albedoMap.sample(texSampler, in.texcoord).rgb;
+    if (tf & 2u) {
+        float4 mr = metalRoughMap.sample(texSampler, in.texcoord);
+        rough *= mr.g;
+        mtl *= mr.b;
+    }
+    if (tf & 8u) ao = aoMap.sample(texSampler, in.texcoord).r;
+    if (tf & 16u) emit *= emissiveMap.sample(texSampler, in.texcoord).rgb;
+    if (!(tf & 1u) && (int(material.flags) & 1)) albedo = applyCheckerboard(albedo, in.worldPosition);
 
     float3 normal = normalize(in.worldNormal);
+    if (tf & 4u) {
+        float3 T = normalize(in.worldTangent - normal * dot(normal, in.worldTangent));
+        float3 B = cross(normal, T);
+        float3 tsNormal = normalMap.sample(texSampler, in.texcoord).xyz * 2.0 - 1.0;
+        normal = normalize(T * tsNormal.x + B * tsNormal.y + normal * tsNormal.z);
+    }
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
     float3 reflectDir = reflect(-viewDir, normal);
-    float3 f0 = mix(float3(0.04), albedo, material.metallic);
+    float3 f0 = mix(float3(0.04), albedo, mtl);
 
-    // Environment specular: use probes if available, otherwise procedural sky
     float3 envSpecular;
     float3 envReflection;
     if (probeParams.probeCount > 0) {
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
-                                              material.roughness, normal, NdotV, f0,
+                                              rough, normal, NdotV, f0,
                                               probes, probeParams,
                                               cubemapArray, brdfLUT, envSampler);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
     } else {
         envReflection = sampleEnvironment(reflectDir);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
-        float mipBlur = material.roughness * material.roughness;
+        float mipBlur = rough * rough;
         float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
         envSpecular = fresnel * envBlurred;
     }
 
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
     float3 directLight = evaluateLighting(in.worldPosition, normal, viewDir,
-                                           albedo, material.metallic,
-                                           material.roughness, fresnel, lightData,
+                                           albedo, mtl, rough, fresnel, lightData,
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - material.metallic);
-    float3 color = material.emission + directLight + ambientDiffuse + envSpecular;
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = material.opacity;
     if (alpha < 1.0) {

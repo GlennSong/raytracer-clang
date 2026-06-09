@@ -3,6 +3,9 @@ build-cmake/
 raytracer
 viewer
 run_tests
+*.dSYM/
 *.ppm
 *.png
 settings.json
+assets/models/*.glb
+assets/models/*.gltf

@@ -9,14 +9,24 @@
 
 namespace engine {
 
+struct MeshTag {};
+struct BufferTag {};
+struct TextureTag {};
+using MeshHandle = Handle<MeshTag>;
+using BufferHandle = Handle<BufferTag>;
+using TextureHandle = Handle<TextureTag>;
+
 struct Vertex {
     Vec3 position;
     Vec3 normal;
+    Vec3 tangent;
     float u, v;
 
     Vertex() : u(0), v(0) {}
     Vertex(const Vec3& pos, const Vec3& norm, float u = 0, float v = 0)
         : position(pos), normal(norm), u(u), v(v) {}
+    Vertex(const Vec3& pos, const Vec3& norm, const Vec3& tan, float u = 0, float v = 0)
+        : position(pos), normal(norm), tangent(tan), u(u), v(v) {}
 };
 
 inline BoundingSphere computeBoundingSphere(const Vertex* vertices, size_t count) {
@@ -41,6 +51,12 @@ struct RenderMaterial {
     uint32_t flags = 0;
 
     static constexpr uint32_t FLAG_CHECKERBOARD = 1;
+
+    TextureHandle albedoMap;
+    TextureHandle normalMap;
+    TextureHandle metallicRoughnessMap;
+    TextureHandle emissiveMap;
+    TextureHandle aoMap;
 
     RenderMaterial()
         : albedo(0.8, 0.8, 0.8), metallic(0.0), roughness(0.5),
@@ -154,15 +170,6 @@ struct CameraState {
           nearPlane(0.1f), farPlane(1000.0f) {}
 };
 
-// Generation-checked GPU-resource identities (ADR-0007). Distinct tag types so
-// a MeshHandle can't be passed where a BufferHandle is expected, and a stale
-// handle (its slot freed and reused) is detected rather than silently aliasing.
-// A default-constructed handle is null (valid() == false).
-struct MeshTag {};
-struct BufferTag {};
-using MeshHandle = Handle<MeshTag>;
-using BufferHandle = Handle<BufferTag>;
-
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -176,6 +183,9 @@ public:
     virtual MeshHandle uploadMesh(const RenderMesh& mesh) = 0;
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
+    virtual TextureHandle uploadTexture(int width, int height, int channels,
+                                        const uint8_t* data) = 0;
+    virtual void removeTexture(TextureHandle handle) = 0;
     virtual RenderStats getRenderStats() const = 0;
 
     virtual void beginFrame() = 0;
