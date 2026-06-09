@@ -37,9 +37,11 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
-	$(TEST_DIR)/test_frustum.cpp
+	$(TEST_DIR)/test_frustum.cpp \
+	$(TEST_DIR)/test_day_night.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
+	$(SRC_DIR)/engine/day_night_cycle.cpp \
 	$(SRC_DIR)/engine/world.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
 	$(SRC_DIR)/engine/input/input_map.cpp \

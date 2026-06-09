@@ -52,7 +52,9 @@ add_executable(run_tests
     tests/test_camera.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
+    tests/test_day_night.cpp
     src/job_system.cpp
+    src/engine/day_night_cycle.cpp
     src/engine/world.cpp
     src/engine/clock.cpp
     src/engine/input/input_map.cpp
@@ -142,6 +144,7 @@ set(VIEWER_SOURCES
     src/engine/mesh_builder.cpp
     src/engine/level_loader.cpp
     src/engine/model_importer.cpp
+    src/engine/day_night_cycle.cpp
     src/game/arena_state.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
@@ -152,6 +155,7 @@ set(VIEWER_SOURCES
     src/engine/systems/render_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
+    src/engine/systems/day_night_system.cpp
 )
 
 if(RT_ENABLE_PHYSICS)

@@ -3,6 +3,7 @@
 #include "../engine/systems/dev_control_system.h"
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/motion_system.h"
+#include "../engine/systems/day_night_system.h"
 #include "../engine/systems/render_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
@@ -25,6 +26,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<ShootingSystem>(camSys.flyController(), physSys, renderer);
 #endif
     addSystem<MotionSystem>();
+    addSystem<DayNightSystem>();
     addSystem<RenderSystem>();
 }
 

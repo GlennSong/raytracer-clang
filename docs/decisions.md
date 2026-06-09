@@ -751,7 +751,7 @@ embedded/3rd-party `engine` symbol, revisit the name.
 ---
 
 ## ADR-0016 — An environment-provider seam; HDR via vendored `stb_image`
-**Status:** Accepted (provider seam + HDR path); procedural day/night and clouds **Pending** · **Date:** 2026-06-09
+**Status:** Accepted (provider seam + HDR path); procedural day/night **Implemented** (macOS verification pending); clouds **Pending** · **Date:** 2026-06-09
 
 **Context.** The scene's environment is hardcoded: `sampleEnvironment(dir)` in
 `shaders/metal/phong.metal` is a fixed daytime-sky function (sun disc, horizon
@@ -821,9 +821,18 @@ ship. AGENTS.md is updated to state the refined rule.
 - Equirect 2D sampling for the skybox is fine; **prefilter/probe bake still wants
   a cubemap**, so a later step may bake the equirect into a cubemap once at load
   for cheaper sampling. Deferred until measured.
-- Procedural day–night and clouds are **Pending** — the seam is landed by the HDR
-  step, but the analytic atmosphere (Preetham/Hosek–Wilkie) and the FBM cloud
-  layer are separate follow-ups (ROADMAP steps 2 and 3 of this feature).
+- Procedural **day–night is implemented** (step 2): a pure, unit-tested engine
+  helper `DayNightCycle` (`src/engine/day_night_cycle.*`) maps a normalized
+  time-of-day to a sun arc and a graded sky/light palette; a `DayNightSystem`
+  advances it each frame and drives **both** the procedural sky and the scene's
+  directional sun, so shading and shadows track the sky. The sky parameters ride
+  in `LightUniforms` (already bound everywhere `sampleEnvironment` is sampled),
+  so no new shader buffer was threaded; `sampleEnvironment(dir, env)` now reads
+  sun direction/colors from that uniform instead of hardcoded constants. Defaults
+  in `ProceduralSky` reproduce the original fixed daytime sky. *macOS/Metal
+  verification pending* (Linux can't compile the backend); the time-of-day curve
+  is covered by `tests/test_day_night.cpp`. A full analytic atmosphere
+  (Preetham/Hosek–Wilkie), and the FBM **clouds** layer (step 3), remain Pending.
 - Volumetric (raymarched) clouds are explicitly **out of scope** here — a
   Tier-4/5-sized effort, not a slot-in to this seam.
 

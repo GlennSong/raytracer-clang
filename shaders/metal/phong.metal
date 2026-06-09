@@ -69,6 +69,14 @@ struct LightUniforms {
     float  exposure;
     float  ambientMultiplier;
     float  _pad[1];
+    // Procedural sky (ADR-0016, day/night). Mirrors C++ `LightUniforms`; each
+    // float3 packs with its trailing scalar into 16 bytes (as the Light struct
+    // already relies on). Written from `SceneLighting::sky` in setLights().
+    float3 skySunDir;     float skySunIntensity;  // disc brightness, 0 at night
+    float3 skySunColor;   float _skp0;
+    float3 skyZenith;     float _skp1;
+    float3 skyHorizon;    float _skp2;
+    float3 skyGround;     float _skp3;
 };
 
 struct SSRParams {
@@ -103,32 +111,31 @@ float3 sampleEquirect(texture2d<float> envMap, sampler s, float3 dir) {
     return envMap.sample(s, float2(u, v)).rgb;
 }
 
-// Procedural daytime sky environment
-float3 sampleEnvironment(float3 dir) {
-    // Sky gradient: warm horizon to deep blue zenith
-    float3 zenith = float3(0.25, 0.45, 0.85);
-    float3 horizon = float3(0.6, 0.75, 0.9);
-    float3 ground = float3(0.35, 0.3, 0.25);
-
+// Procedural sky environment. Colors and the sun arc come from `env` (the day/
+// night state baked into LightUniforms), so dawn→day→dusk→night grade smoothly
+// and the disc fades out as the sun sets. The shader only interpolates; the
+// time-of-day curve is computed engine-side (DayNightCycle).
+float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     float skyBlend = saturate(dir.y);
-    float3 sky = mix(horizon, zenith, pow(skyBlend, 0.5));
+    float3 sky = mix(env.skyHorizon, env.skyZenith, pow(skyBlend, 0.5));
 
     // Soft ground plane below horizon
     float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
-    float3 env = mix(ground, sky, horizonBlend);
+    float3 col = mix(env.skyGround, sky, horizonBlend);
 
-    // Sun disc and glow
-    float3 sunDir = normalize(float3(0.4, 0.8, -0.3));
-    float sunDot = max(dot(dir, sunDir), 0.0);
-    env += float3(1.0, 0.95, 0.8) * pow(sunDot, 256.0) * 8.0;   // bright disc
-    env += float3(1.0, 0.9, 0.7) * pow(sunDot, 32.0) * 1.0;     // inner glow
-    env += float3(1.0, 0.85, 0.6) * pow(sunDot, 4.0) * 0.15;    // outer halo
+    // Sun disc and glow — `skySunIntensity` is 0 at night, so they vanish.
+    float disc = env.skySunIntensity;
+    float3 sc = env.skySunColor;
+    float sunDot = max(dot(dir, env.skySunDir), 0.0);
+    col += sc * pow(sunDot, 256.0) * 8.0  * disc;   // bright disc
+    col += sc * pow(sunDot, 32.0)  * 1.0  * disc;   // inner glow
+    col += sc * pow(sunDot, 4.0)   * 0.15 * disc;   // outer halo
 
-    // Subtle atmospheric scattering near horizon
+    // Subtle atmospheric scattering near horizon, tinted by the sun
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
-    env += float3(0.8, 0.7, 0.5) * horizonGlow * 0.1;
+    col += sc * horizonGlow * 0.1 * disc;
 
-    return env;
+    return col;
 }
 
 // --- Skybox shaders ---
@@ -167,7 +174,7 @@ fragment float4 fragmentSkybox(
 ) {
     float3 dir = normalize(in.viewDir);
     float3 color = (env.mode == 1) ? sampleEquirect(envMap, envSampler, dir)
-                                   : sampleEnvironment(dir);
+                                   : sampleEnvironment(dir, lightData);
     color *= lightData.exposure;
     return float4(color, 1.0);  // linear HDR — tone mapping in composite pass
 }
@@ -287,7 +294,8 @@ float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughnes
                                constant ProbeUniforms& probeParams,
                                texturecube_array<float> cubemapArray,
                                texture2d<float> brdfLUT,
-                               sampler envSampler) {
+                               sampler envSampler,
+                               device const LightUniforms& env) {
     // Perceptual roughness-to-mip mapping — square the roughness for smoother
     // transitions between mip levels (avoids visible banding with box-filter mips)
     float mipLevel = roughness * roughness * float(probeParams.maxMipLevel);
@@ -322,9 +330,9 @@ float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughnes
     float totalWeight = bestWeight[0] + bestWeight[1];
     if (totalWeight < 0.001) {
         // Outside all probes — fall back to procedural sky
-        float3 envColor = sampleEnvironment(reflectDir);
+        float3 envColor = sampleEnvironment(reflectDir, env);
         float mipBlur = roughness * roughness * roughness;  // smooth falloff
-        envColor = mix(envColor, sampleEnvironment(normal), mipBlur);
+        envColor = mix(envColor, sampleEnvironment(normal, env), mipBlur);
         return fresnelSchlickVec(NdotV, f0) * envColor;
     }
 
@@ -344,9 +352,9 @@ float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughnes
     // Blend remaining weight to procedural sky fallback
     float skyWeight = 1.0 - saturate(totalWeight);
     if (skyWeight > 0.001) {
-        float3 skyColor = sampleEnvironment(reflectDir);
+        float3 skyColor = sampleEnvironment(reflectDir, env);
         float mipBlur = roughness * roughness;
-        skyColor = mix(skyColor, sampleEnvironment(normal), mipBlur);
+        skyColor = mix(skyColor, sampleEnvironment(normal, env), mipBlur);
         probeColor = mix(probeColor, skyColor, skyWeight);
     }
 
@@ -640,13 +648,14 @@ fragment GBufferOut fragmentMainInstanced(
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
                                               rough, normal, NdotV, f0,
                                               probes, probeParams,
-                                              cubemapArray, brdfLUT, envSampler);
+                                              cubemapArray, brdfLUT, envSampler,
+                                              lightData);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
     } else {
-        envReflection = sampleEnvironment(reflectDir);
+        envReflection = sampleEnvironment(reflectDir, lightData);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
         float mipBlur = rough * rough;
-        float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
+        float3 envBlurred = mix(envReflection, sampleEnvironment(normal, lightData), mipBlur);
         envSpecular = fresnel * envBlurred;
     }
 
@@ -657,7 +666,7 @@ fragment GBufferOut fragmentMainInstanced(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal, lightData) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
     float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = in.opacity;
@@ -747,13 +756,14 @@ fragment GBufferOut fragmentMain(
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
                                               rough, normal, NdotV, f0,
                                               probes, probeParams,
-                                              cubemapArray, brdfLUT, envSampler);
+                                              cubemapArray, brdfLUT, envSampler,
+                                              lightData);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
     } else {
-        envReflection = sampleEnvironment(reflectDir);
+        envReflection = sampleEnvironment(reflectDir, lightData);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
         float mipBlur = rough * rough;
-        float3 envBlurred = mix(envReflection, sampleEnvironment(normal), mipBlur);
+        float3 envBlurred = mix(envReflection, sampleEnvironment(normal, lightData), mipBlur);
         envSpecular = fresnel * envBlurred;
     }
 
@@ -763,7 +773,7 @@ fragment GBufferOut fragmentMain(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 ambientDiffuse = albedo * sampleEnvironment(normal, lightData) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
     float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = material.opacity;
@@ -1343,6 +1353,7 @@ fragment float4 fragmentComposite(
     texture2d<float> bloomTexture [[texture(5)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeParams& params [[buffer(1)]],
+    device const LightUniforms& lightData [[buffer(4)]],
     sampler smp [[sampler(0)]]
 ) {
     // Read depth at this fragment's pixel position (no sampler needed)
@@ -1381,7 +1392,7 @@ fragment float4 fragmentComposite(
         float4 nearWorld = camera.invViewProjection * float4(ndc, 0.0, 1.0);
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
-        hdrColor = sampleEnvironment(rayDir);
+        hdrColor = sampleEnvironment(rayDir, lightData);
         hdrColor *= 0.5;  // exposure
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);

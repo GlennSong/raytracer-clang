@@ -72,6 +72,14 @@ struct LightUniforms {
     float    exposure;
     float    ambientMultiplier;
     float    _pad[1];
+    // Procedural sky (ADR-0016, day/night). Mirrors `LightUniforms` in
+    // phong.metal — each simd_float3 packs with its trailing scalar into 16
+    // bytes, matching MSL's float3 layout (as GPULight above already does).
+    simd_float3 skySunDir;   float skySunIntensity;
+    simd_float3 skySunColor; float _skp0;
+    simd_float3 skyZenith;   float _skp1;
+    simd_float3 skyHorizon;  float _skp2;
+    simd_float3 skyGround;   float _skp3;
 };
 
 struct GPUMesh {
@@ -1012,6 +1020,16 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.ambientMultiplier = lighting.ambientMultiplier;
     lu._pad[0] = 0;
 
+    // Procedural sky (ADR-0016): the analytic skybox and IBL fallback read these.
+    const ProceduralSky& sky = lighting.sky;
+    lu.skySunDir = toSimd3(normalize(sky.sunDirection));
+    lu.skySunIntensity = sky.sunDiscIntensity;
+    lu.skySunColor = toSimd3(sky.sunColor);
+    lu.skyZenith = toSimd3(sky.zenithColor);
+    lu.skyHorizon = toSimd3(sky.horizonColor);
+    lu.skyGround = toSimd3(sky.groundColor);
+    lu._skp0 = lu._skp1 = lu._skp2 = lu._skp3 = 0;
+
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
 
@@ -1731,6 +1749,8 @@ void MetalRenderer::endFrame() {
         compositeParams._pad[0] = 0; compositeParams._pad[1] = 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
+        // Day/night procedural sky for sky pixels rendered in the composite pass.
+        [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 

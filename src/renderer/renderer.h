@@ -124,11 +124,25 @@ struct ShadowConfig {
     bool enabled = true;
 };
 
+// Procedural sky parameters (ADR-0016). Drive the analytic skybox and, via the
+// reflection-probe bake, image-based lighting. A DayNightCycle writes these each
+// frame; the defaults reproduce the original fixed daytime sky, so behavior is
+// unchanged when nothing drives them.
+struct ProceduralSky {
+    Vec3  sunDirection{0.4, 0.8, -0.3};   // toward the sun (world space)
+    Vec3  sunColor{1.0, 0.95, 0.8};       // sun disc / glow tint
+    float sunDiscIntensity = 1.0f;        // disc brightness scale (0 at night)
+    Vec3  zenithColor{0.25, 0.45, 0.85};
+    Vec3  horizonColor{0.6, 0.75, 0.9};
+    Vec3  groundColor{0.35, 0.3, 0.25};
+};
+
 struct SceneLighting {
     DirectionalLight sun;
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;
+    ProceduralSky sky;
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
 };
