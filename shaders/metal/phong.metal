@@ -89,6 +89,20 @@ struct SSAOParams {
     float _pad[3];
 };
 
+// Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR equirect.
+struct EnvUniforms {
+    int   mode;
+    float _pad[3];
+};
+
+// Sample an equirectangular (lat-long) environment map by world-space direction.
+// u wraps around the horizon (longitude), v runs zenith→nadir (latitude).
+float3 sampleEquirect(texture2d<float> envMap, sampler s, float3 dir) {
+    float u = atan2(dir.z, dir.x) * (0.5 / M_PI_F) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / M_PI_F);
+    return envMap.sample(s, float2(u, v)).rgb;
+}
+
 // Procedural daytime sky environment
 float3 sampleEnvironment(float3 dir) {
     // Sky gradient: warm horizon to deep blue zenith
@@ -146,9 +160,14 @@ vertex SkyboxOut vertexSkybox(
 
 fragment float4 fragmentSkybox(
     SkyboxOut in [[stage_in]],
-    device const LightUniforms& lightData [[buffer(4)]]
+    device const LightUniforms& lightData [[buffer(4)]],
+    constant EnvUniforms& env [[buffer(5)]],
+    texture2d<float> envMap [[texture(0)]],
+    sampler envSampler [[sampler(0)]]
 ) {
-    float3 color = sampleEnvironment(normalize(in.viewDir));
+    float3 dir = normalize(in.viewDir);
+    float3 color = (env.mode == 1) ? sampleEquirect(envMap, envSampler, dir)
+                                   : sampleEnvironment(dir);
     color *= lightData.exposure;
     return float4(color, 1.0);  // linear HDR — tone mapping in composite pass
 }

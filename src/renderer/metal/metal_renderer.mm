@@ -136,6 +136,16 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> skyboxPipeline;
     id<MTLDepthStencilState> skyboxDepthState;
 
+    // Environment (ADR-0016): an equirectangular HDR map drives the skybox and,
+    // via the probe bake, IBL. nil => procedural sky. Mirrors `EnvUniforms` in
+    // the shader (mode 0 = procedural, 1 = HDR equirect).
+    struct EnvUniforms {
+        int32_t mode;
+        float   _pad[3];
+    };
+    id<MTLTexture> environmentTexture;     // equirect RGBA16Float, nil if procedural
+    id<MTLSamplerState> equirectSampler;   // linear, wrap-U / clamp-V
+
     // Post-processing: offscreen HDR target + G-buffer normals + composite pass
     id<MTLTexture> sceneColorTexture;
     id<MTLTexture> viewNormalTexture;
@@ -376,6 +386,17 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         sampDesc.sAddressMode = MTLSamplerAddressModeRepeat;
         sampDesc.tAddressMode = MTLSamplerAddressModeRepeat;
         impl->linearWrapSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
+    }
+
+    // Equirectangular environment sampler: wrap horizontally (longitude is
+    // periodic), clamp vertically (poles), linear filtering (ADR-0016).
+    {
+        MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
+        sampDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.sAddressMode = MTLSamplerAddressModeRepeat;
+        sampDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        impl->equirectSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
     }
 
     // 1x1 white default texture (bound when no material texture is set)
@@ -760,8 +781,49 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
     return impl->textures.insert(texture);
 }
 
+TextureHandle MetalRenderer::uploadTextureHDR(int width, int height, int channels,
+                                              const float* data) {
+    if (!data || width <= 0 || height <= 0) return TextureHandle{};
+
+    MTLTextureDescriptor* desc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:width height:height mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> texture = [impl->device newTextureWithDescriptor:desc];
+
+    // Expand to RGBA half-float; Metal has no 3-channel float texture format.
+    const int n = width * height;
+    std::vector<__fp16> rgba(static_cast<size_t>(n) * 4);
+    for (int i = 0; i < n; i++) {
+        const float* src = data + static_cast<size_t>(i) * channels;
+        rgba[i * 4 + 0] = static_cast<__fp16>(channels > 0 ? src[0] : 0.0f);
+        rgba[i * 4 + 1] = static_cast<__fp16>(channels > 1 ? src[1] : 0.0f);
+        rgba[i * 4 + 2] = static_cast<__fp16>(channels > 2 ? src[2] : 0.0f);
+        rgba[i * 4 + 3] = static_cast<__fp16>(channels > 3 ? src[3] : 1.0f);
+    }
+    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0
+                 withBytes:rgba.data()
+               bytesPerRow:static_cast<NSUInteger>(width) * 4 * sizeof(__fp16)];
+
+    return impl->textures.insert(texture);
+}
+
 void MetalRenderer::removeTexture(TextureHandle handle) {
     impl->textures.erase(handle);
+}
+
+void MetalRenderer::setEnvironmentMap(TextureHandle equirect) {
+    auto* tex = impl->textures.get(equirect);
+    impl->environmentTexture = tex ? *tex : nil;
+
+    // If probes are already baked against the old environment, re-bake so IBL
+    // tracks the new map (ADR-0016: the bake renders the skybox into the cubes).
+    if (!impl->pendingProbes.empty()) {
+        impl->probesBaked = false;
+        impl->probesPendingBake = true;
+    }
 }
 
 BoundingSphere MetalRenderer::getMeshBounds(MeshHandle handle) const {
@@ -1100,12 +1162,19 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 [enc setFragmentTexture:impl->brdfLUT atIndex:2];
                 [enc setFragmentSamplerState:impl->linearClampSampler atIndex:1];
 
-                // Draw skybox
+                // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
+                // it into the cube faces is what makes IBL track the environment.
                 if (impl->skyboxPipeline) {
                     [enc setRenderPipelineState:impl->skyboxPipeline];
                     [enc setDepthStencilState:impl->skyboxDepthState];
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, {0, 0, 0}};
+                    [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
+                    [enc setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
+                                                                       : impl->defaultWhiteTexture)
+                                    atIndex:0];
+                    [enc setFragmentSamplerState:impl->equirectSampler atIndex:0];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
                 }
 
@@ -1301,6 +1370,12 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+        Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, {0, 0, 0}};
+        [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
+        [impl->currentEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
+                                                                            : impl->defaultWhiteTexture)
+                                         atIndex:0];
+        [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                  vertexStart:0 vertexCount:3];
     }

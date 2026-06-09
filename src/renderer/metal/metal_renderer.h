@@ -26,7 +26,10 @@ public:
     BoundingSphere getMeshBounds(MeshHandle handle) const override;
     TextureHandle uploadTexture(int width, int height, int channels,
                                 const uint8_t* data) override;
+    TextureHandle uploadTextureHDR(int width, int height, int channels,
+                                   const float* data) override;
     void removeTexture(TextureHandle handle) override;
+    void setEnvironmentMap(TextureHandle equirect) override;
     RenderStats getRenderStats() const override;
 
     void beginFrame() override;

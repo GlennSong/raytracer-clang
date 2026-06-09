@@ -750,6 +750,90 @@ embedded/3rd-party `engine` symbol, revisit the name.
 
 ---
 
+## ADR-0016 — An environment-provider seam; HDR via vendored `stb_image`
+**Status:** Accepted (provider seam + HDR path); procedural day/night and clouds **Pending** · **Date:** 2026-06-09
+
+**Context.** The scene's environment is hardcoded: `sampleEnvironment(dir)` in
+`shaders/metal/phong.metal` is a fixed daytime-sky function (sun disc, horizon
+blend, ground tint). Everything downstream samples *that one function* — the
+skybox pass, the per-pixel ambient/diffuse term, and the reflection-probe bake
+(ADR for probes lives in the post-processing work). There is no way to feed in a
+captured environment, and no axis for time-of-day. We want three things, not one:
+a **captured HDR** environment for realism and image-based lighting; a **richer
+procedural sky** with a real sun direction / day–night cycle; and, later,
+**clouds**. These should coexist and be swappable, not fork the renderer.
+
+A decode question rode along: an HDR equirect map is Radiance RGBE, which needs a
+decoder. The project's standing rule (AGENTS.md) is "no external dependencies."
+
+**Decision — two parts.**
+
+1. **Environment-provider seam.** Model the environment as *one question*: given
+   a world-space direction, what radiance arrives? Both consumers that exist
+   today (skybox fragment shader, probe bake) already funnel through
+   `sampleEnvironment(dir)`, so the seam lives at that function plus a small
+   uniform selecting the active provider. Planned providers:
+   - **HDR** — sample a vendored equirect float texture (`dir → spherical UV`).
+   - **Procedural** — the analytic sky, to be promoted from today's fixed tint to
+     a sun-direction / turbidity model (day–night) driven by ImGui controls.
+   - **Composited** — procedural atmosphere with a clouds layer on top.
+
+   The provider is a *render-side* concept selected by a uniform/flag, not a new
+   class hierarchy in the shader; the C++ side owns which provider is bound and
+   its parameters. Because the probe bake renders the skybox into cubemap faces,
+   IBL tracks whichever provider is active **for free** — bake the HDR (or the
+   static procedural sky) and reflections/ambient follow. Animated clouds are a
+   sky-dome *visual* layer and are **not** baked into probes (a stale snapshot at
+   most); a captured HDR already contains its own clouds, so the clouds layer is
+   procedural-only.
+
+2. **HDR decode reuses vendored `stb_image`.** `third_party/tinygltf/stb_image.h`
+   is already in the tree and already compiled into the build via the glTF
+   importer (`src/engine/model_importer.cpp`). `stbi_loadf()` decodes `.hdr`
+   (Radiance RGBE) to linear `float` RGB in one call — and PNG/JPG/TGA besides.
+   Use it rather than hand-rolling an RGBE decoder.
+
+**Dependency-rule clarification.** AGENTS.md's "no external dependencies" is
+reinterpreted, not broken: it now means **no new third-party dependencies**.
+Single-header libraries already vendored and built — `stb_image`/`stb_image_write`
+(via tinygltf), tinygltf itself, Dear ImGui, Jolt — are accepted; using
+`stb_image` for HDR adds no new dependency, no new submodule, no new build edge,
+and matches how glTF textures are already decoded. The from-scratch RGBE decoder
+(~60 lines, a stable format) was a defensible alternative but only adds
+maintained surface area for strictly less coverage than the decoder we already
+ship. AGENTS.md is updated to state the refined rule.
+
+**Alternatives considered.**
+- **HDR replaces the procedural sky** — rejected: loses day–night authoring and
+  the clouds path; the provider seam keeps both as first-class.
+- **Hand-written RGBE decoder** — rejected (see above): small but redundant
+  against vendored `stb_image`, which also covers LDR formats we'll want anyway.
+- **A new third-party HDR/IBL library** (e.g. a dedicated loader/baker) —
+  rejected: heavier than the need; `stbi_loadf` + the existing probe bake suffice.
+- **Provider as a shader subclass / function-pointer table** — rejected: a
+  uniform-selected branch is simpler and the consumer count is small (skybox +
+  bake); revisit if provider count or per-provider cost grows.
+
+**Consequences / tech debt.**
+- A float-texture upload path is required; today's `uploadTexture` is RGBA8-only.
+  Added as an HDR-specific entry point (`RGBA16Float` equirect 2D) rather than
+  overloading the 8-bit path.
+- Equirect 2D sampling for the skybox is fine; **prefilter/probe bake still wants
+  a cubemap**, so a later step may bake the equirect into a cubemap once at load
+  for cheaper sampling. Deferred until measured.
+- Procedural day–night and clouds are **Pending** — the seam is landed by the HDR
+  step, but the analytic atmosphere (Preetham/Hosek–Wilkie) and the FBM cloud
+  layer are separate follow-ups (ROADMAP steps 2 and 3 of this feature).
+- Volumetric (raymarched) clouds are explicitly **out of scope** here — a
+  Tier-4/5-sized effort, not a slot-in to this seam.
+
+**Revisit trigger.** Equirect sampling showing up hot in a GPU capture (→ bake to
+cubemap); adding a second renderer backend (the provider uniform/shader split
+must hold behind the RHI, ADR-0001); or provider count/per-provider state growing
+enough that the uniform-selected branch wants to become real polymorphism.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

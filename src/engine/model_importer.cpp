@@ -259,4 +259,30 @@ void ModelImporter::clearCache() {
     cache.clear();
 }
 
+HdrImage EnvironmentLoader::loadHdr(const std::string& path) {
+    HdrImage out;
+    int w = 0, h = 0, n = 0;
+    // Force 3 channels (RGB); stbi_loadf returns linear float for .hdr (RGBE).
+    float* data = stbi_loadf(path.c_str(), &w, &h, &n, 3);
+    if (!data) {
+        std::cerr << "[ERROR] Failed to load HDR environment map: " << path
+                  << " (" << stbi_failure_reason() << ")\n";
+        return out;
+    }
+    out.width = w;
+    out.height = h;
+    out.pixels.assign(data, data + static_cast<size_t>(w) * h * 3);
+    stbi_image_free(data);
+    std::cout << "[INFO] Loaded HDR environment: " << path
+              << " (" << w << "x" << h << ")\n";
+    return out;
+}
+
+TextureHandle EnvironmentLoader::loadEnvironmentMap(const std::string& path,
+                                                    Renderer& renderer) {
+    HdrImage img = loadHdr(path);
+    if (!img.valid()) return TextureHandle{};
+    return renderer.uploadTextureHDR(img.width, img.height, 3, img.pixels.data());
+}
+
 }  // namespace engine

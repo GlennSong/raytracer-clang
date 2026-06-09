@@ -185,7 +185,19 @@ public:
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
     virtual TextureHandle uploadTexture(int width, int height, int channels,
                                         const uint8_t* data) = 0;
+    // Float (HDR) texture upload — e.g. equirectangular environment maps decoded
+    // from Radiance .hdr. `data` is linear RGB(A), `channels` 3 or 4. Stored as a
+    // half-float texture. Default no-op so non-HDR-capable backends stay valid.
+    virtual TextureHandle uploadTextureHDR(int /*width*/, int /*height*/,
+                                           int /*channels*/, const float* /*data*/) {
+        return TextureHandle{};
+    }
     virtual void removeTexture(TextureHandle handle) = 0;
+
+    // Bind an equirectangular HDR texture as the scene environment, driving the
+    // skybox and (via the reflection-probe bake) image-based lighting — see
+    // ADR-0016. An invalid handle restores the procedural sky. No-op by default.
+    virtual void setEnvironmentMap(TextureHandle /*equirect*/) {}
     virtual RenderStats getRenderStats() const = 0;
 
     virtual void beginFrame() = 0;

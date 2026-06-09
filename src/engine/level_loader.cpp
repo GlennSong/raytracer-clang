@@ -321,6 +321,20 @@ bool LevelLoader::load(const std::string& path,
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);
 
+    // Environment map (equirectangular .hdr) — bound before probes so the bake
+    // captures it for IBL (ADR-0016). Lives under the "environment" object as
+    // "hdr"; path is relative to the level file.
+    if (root.contains("environment") && root["environment"].is_object()) {
+        const auto& env = root["environment"];
+        if (env.contains("hdr")) {
+            std::string envPath = env["hdr"].get<std::string>();
+            if (!envPath.empty() && envPath[0] != '/')
+                envPath = levelDir + "/" + envPath;
+            renderer.setEnvironmentMap(
+                EnvironmentLoader::loadEnvironmentMap(envPath, renderer));
+        }
+    }
+
     if (root.contains("reflectionProbes")) {
         std::vector<ReflectionProbe> probes;
         for (auto& rp : root["reflectionProbes"]) {
