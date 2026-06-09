@@ -842,8 +842,14 @@ ship. AGENTS.md is updated to state the refined rule.
   sky path overlay clouds. Cloud parameters (coverage/density/scale/time) ride in
   `LightUniforms`; `DayNightSystem` drifts the phase and exposes ImGui controls.
   Clouds attach to the procedural sky only (a captured HDR carries its own).
-  *macOS/Metal verification pending.* Follow-ups: richer cloud lighting
-  (multi-layer, silver lining), and wiring HDR-mode sky into the composite path.
+  *macOS/Metal verification pending.* Follow-up: richer cloud lighting
+  (multi-layer, silver lining).
+- The **composite sky path now honors the active provider.** Direct-view sky
+  pixels (`depth >= 0.999`) are re-derived in `fragmentComposite`; previously
+  this always ran the procedural sky, so a bound HDR map showed in the skybox/IBL
+  but not where the sky was seen directly. The composite pass now takes the
+  equirect map (texture 6) + sampler and an `envMode` flag in `CompositeParams`,
+  and samples HDR vs. procedural+clouds to match `fragmentSkybox`.
 - Volumetric (raymarched) clouds are explicitly **out of scope** here — a
   Tier-4/5-sized effort, not a slot-in to this seam.
 

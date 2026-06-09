@@ -1751,19 +1751,25 @@ void MetalRenderer::endFrame() {
                                length:sizeof(CameraUniforms) atIndex:0];
         struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView;
                  float ssrBlendStrength; int32_t bloomEnabled; float bloomIntensity;
-                 float _pad[2]; } compositeParams;
+                 int32_t envMode; float _pad[1]; } compositeParams;
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams._pad[0] = 0; compositeParams._pad[1] = 0;
+        compositeParams.envMode = impl->environmentTexture ? 1 : 0;
+        compositeParams._pad[0] = 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
-        // Day/night procedural sky for sky pixels rendered in the composite pass.
+        // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
+        // HDR map is bound, the equirect environment — matching the skybox/IBL.
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+        [compEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
+                                                                   : impl->defaultWhiteTexture)
+                                atIndex:6];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
+        [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
         // Debug UI (ADR-0011) renders on top of the tone-mapped image.

@@ -1398,7 +1398,8 @@ struct CompositeParams {
     float ssrBlendStrength;
     int bloomEnabled;
     float bloomIntensity;
-    float _pad[2];
+    int envMode;        // 0=procedural sky (+clouds), 1=HDR equirect
+    float _pad[1];
 };
 
 struct CompositeOut {
@@ -1422,10 +1423,12 @@ fragment float4 fragmentComposite(
     depth2d<float> depthTex [[texture(3)]],
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
+    texture2d<float> envMap [[texture(6)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeParams& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
-    sampler smp [[sampler(0)]]
+    sampler smp [[sampler(0)]],
+    sampler envSampler [[sampler(1)]]
 ) {
     // Read depth at this fragment's pixel position (no sampler needed)
     float depth = depthTex.read(uint2(in.position.xy));
@@ -1458,13 +1461,18 @@ fragment float4 fragmentComposite(
     // --- Normal rendering ---
     float3 hdrColor;
     if (depth >= 0.999) {
-        // Sky pixel — render procedural sky directly in composite.
+        // Sky pixel — re-derive the active environment directly in composite.
         float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
         float4 nearWorld = camera.invViewProjection * float4(ndc, 0.0, 1.0);
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
-        hdrColor = sampleEnvironment(rayDir, lightData);
-        hdrColor = applyClouds(hdrColor, rayDir, lightData);
+        if (params.envMode == 1) {
+            // HDR equirect environment — matches the skybox/IBL provider.
+            hdrColor = sampleEquirect(envMap, envSampler, rayDir);
+        } else {
+            hdrColor = sampleEnvironment(rayDir, lightData);
+            hdrColor = applyClouds(hdrColor, rayDir, lightData);
+        }
         hdrColor *= 0.5;  // exposure
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);
