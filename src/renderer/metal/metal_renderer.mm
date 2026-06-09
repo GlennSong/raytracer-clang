@@ -156,8 +156,13 @@ struct MetalRenderer::Impl {
         float   _pad[2];
     };
     bool skyCloudsEnabled = true;  // mirrors SceneLighting::sky.cloudsEnabled
-    id<MTLTexture> environmentTexture;     // equirect RGBA16Float, nil if procedural
+    id<MTLTexture> environmentTexture;     // equirect RGBA16Float source, nil if procedural
+    id<MTLTexture> environmentCubemap;     // equirect baked to a cube (ADR-0016), nil if procedural
+    id<MTLTexture> defaultCubemap;         // 1×1 dummy cube for the procedural binding
+    id<MTLRenderPipelineState> equirectBakePipeline;  // equirect → cube face
     id<MTLSamplerState> equirectSampler;   // linear, wrap-U / clamp-V
+    static constexpr int ENV_CUBEMAP_SIZE = 1024;
+    void bakeEnvironmentCubemap();         // (re)bake environmentCubemap from environmentTexture
 
     // Post-processing: offscreen HDR target + G-buffer normals + composite pass
     id<MTLTexture> sceneColorTexture;
@@ -364,6 +369,19 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         skyDepthDesc.depthCompareFunction = MTLCompareFunctionAlways;
         skyDepthDesc.depthWriteEnabled = NO;
         impl->skyboxDepthState = [impl->device newDepthStencilStateWithDescriptor:skyDepthDesc];
+
+        // Equirect → cubemap bake pipeline: vertexSkybox + a raw-radiance frag,
+        // single color attachment, no depth/normal MRT (renders to one cube face).
+        id<MTLFunction> bakeFrag = [library newFunctionWithName:@"fragmentEquirectBake"];
+        if (bakeFrag) {
+            MTLRenderPipelineDescriptor* bakeDesc = [[MTLRenderPipelineDescriptor alloc] init];
+            bakeDesc.vertexFunction = skyVert;
+            bakeDesc.fragmentFunction = bakeFrag;
+            bakeDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->equirectBakePipeline = [impl->device newRenderPipelineStateWithDescriptor:bakeDesc
+                                                                                      error:&error];
+            if (!impl->equirectBakePipeline) NSLog(@"Equirect bake pipeline error: %@", error);
+        }
     }
 
     // Composite pipeline (fullscreen triangle, reads HDR scene texture, writes to drawable)
@@ -543,6 +561,20 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         dummyCubeDesc.usage = MTLTextureUsageShaderRead;
         dummyCubeDesc.storageMode = MTLStorageModePrivate;
         impl->probeCubemapArray = [impl->device newTextureWithDescriptor:dummyCubeDesc];
+    }
+
+    // Dummy 1×1 cubemap for the procedural-sky binding (env cube is sampled only
+    // when env.mode == 1, but a valid cube must always be bound to the skybox).
+    {
+        MTLTextureDescriptor* dc = [[MTLTextureDescriptor alloc] init];
+        dc.textureType = MTLTextureTypeCube;
+        dc.pixelFormat = MTLPixelFormatRGBA16Float;
+        dc.width = 1;
+        dc.height = 1;
+        dc.mipmapLevelCount = 1;
+        dc.usage = MTLTextureUsageShaderRead;
+        dc.storageMode = MTLStorageModePrivate;
+        impl->defaultCubemap = [impl->device newTextureWithDescriptor:dc];
     }
 
     // Instance data buffer
@@ -827,9 +859,99 @@ void MetalRenderer::removeTexture(TextureHandle handle) {
     impl->textures.erase(handle);
 }
 
+// Bake the equirect HDR into a mipmapped cubemap once at load, so the skybox,
+// composite, and probe bake do a cheap cube lookup instead of per-sample equirect
+// math (ADR-0016). Renders 6 faces with the probe bake's per-face cameras (the
+// verified cube convention), blits each into a cube slice, then builds the mips.
+void MetalRenderer::Impl::bakeEnvironmentCubemap() {
+    if (!environmentTexture || !equirectBakePipeline) {
+        environmentCubemap = nil;
+        return;
+    }
+    const int size = ENV_CUBEMAP_SIZE;
+    NSUInteger mipCount = 1;
+    for (int s = size; s > 1; s >>= 1) mipCount++;
+
+    MTLTextureDescriptor* cubeDesc = [[MTLTextureDescriptor alloc] init];
+    cubeDesc.textureType = MTLTextureTypeCube;
+    cubeDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+    cubeDesc.width = size;
+    cubeDesc.height = size;
+    cubeDesc.mipmapLevelCount = mipCount;
+    cubeDesc.usage = MTLTextureUsageShaderRead;
+    cubeDesc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> cube = [device newTextureWithDescriptor:cubeDesc];
+
+    // Per-face temp render target, blitted into the cube (mirrors the probe bake).
+    MTLTextureDescriptor* faceDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:size height:size mipmapped:NO];
+    faceDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    faceDesc.storageMode = MTLStorageModePrivate;
+
+    struct CubeFace { Vec3 target; Vec3 up; };
+    CubeFace faces[6] = {
+        {{1, 0, 0},  {0, -1, 0}},  {{-1, 0, 0}, {0, -1, 0}},
+        {{0, 1, 0},  {0, 0, 1}},   {{0, -1, 0}, {0, 0, -1}},
+        {{0, 0, 1},  {0, -1, 0}},  {{0, 0, -1}, {0, -1, 0}},
+    };
+    simd_float4x4 proj = toSimd(Mat4::perspective(degreesToRadians(90.0), 1.0, 0.1, 10.0));
+
+    for (int face = 0; face < 6; face++) {
+        id<MTLTexture> faceColor = [device newTextureWithDescriptor:faceDesc];
+
+        Vec3 eye(0, 0, 0);
+        simd_float4x4 view = toSimd(Mat4::lookAt(eye, faces[face].target, faces[face].up));
+        CameraUniforms cam = {};
+        cam.viewProjection = simd_mul(proj, view);
+        cam.invViewProjection = simd_inverse(cam.viewProjection);
+        cam.cameraPosition = toSimd3(eye);
+
+        id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = faceColor;
+        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+
+        id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:equirectBakePipeline];
+        [enc setVertexBytes:&cam length:sizeof(CameraUniforms) atIndex:1];
+        [enc setFragmentTexture:environmentTexture atIndex:0];
+        [enc setFragmentSamplerState:equirectSampler atIndex:0];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit copyFromTexture:faceColor
+                  sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(size, size, 1)
+                    toTexture:cube
+             destinationSlice:face destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+    }
+
+    // Mip chain so rough/distant lookups are cheap.
+    {
+        id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit generateMipmapsForTexture:cube];
+        [blit endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+    }
+
+    environmentCubemap = cube;
+}
+
 void MetalRenderer::setEnvironmentMap(TextureHandle equirect) {
     auto* tex = impl->textures.get(equirect);
     impl->environmentTexture = tex ? *tex : nil;
+    impl->bakeEnvironmentCubemap();   // builds environmentCubemap (or clears it)
 
     // If probes are already baked against the old environment, re-bake so IBL
     // tracks the new map (ADR-0016: the bake renders the skybox into the cubes).
@@ -1198,10 +1320,10 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
                     // cloudsEnabled = 0: clouds are never baked into probes.
-                    Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, 0, {0, 0}};
+                    Impl::EnvUniforms envU = {impl->environmentCubemap ? 1 : 0, 0, {0, 0}};
                     [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
-                    [enc setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
-                                                                       : impl->defaultWhiteTexture)
+                    [enc setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
+                                                                       : impl->defaultCubemap)
                                     atIndex:0];
                     [enc setFragmentSamplerState:impl->equirectSampler atIndex:0];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -1399,11 +1521,11 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0,
+        Impl::EnvUniforms envU = {impl->environmentCubemap ? 1 : 0,
                                   impl->skyCloudsEnabled ? 1 : 0, {0, 0}};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
-        [impl->currentEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
-                                                                            : impl->defaultWhiteTexture)
+        [impl->currentEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
+                                                                            : impl->defaultCubemap)
                                          atIndex:0];
         [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
@@ -1758,15 +1880,15 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams.envMode = impl->environmentTexture ? 1 : 0;
+        compositeParams.envMode = impl->environmentCubemap ? 1 : 0;
         compositeParams._pad[0] = 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
-        // HDR map is bound, the equirect environment — matching the skybox/IBL.
+        // HDR map is bound, the baked environment cubemap — matching the skybox/IBL.
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        [compEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
-                                                                   : impl->defaultWhiteTexture)
+        [compEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
+                                                                   : impl->defaultCubemap)
                                 atIndex:6];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];

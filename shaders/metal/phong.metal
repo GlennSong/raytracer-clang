@@ -236,11 +236,13 @@ fragment float4 fragmentSkybox(
     SkyboxOut in [[stage_in]],
     device const LightUniforms& lightData [[buffer(4)]],
     constant EnvUniforms& env [[buffer(5)]],
-    texture2d<float> envMap [[texture(0)]],
+    texturecube<float> envCube [[texture(0)]],
     sampler envSampler [[sampler(0)]]
 ) {
     float3 dir = normalize(in.viewDir);
-    float3 color = (env.mode == 1) ? sampleEquirect(envMap, envSampler, dir)
+    // HDR provider is pre-baked into a cubemap at load (ADR-0016) — a cheap cube
+    // lookup instead of per-sample equirect atan2/acos.
+    float3 color = (env.mode == 1) ? envCube.sample(envSampler, dir).rgb
                                    : sampleEnvironment(dir, lightData);
     // Clouds overlay the procedural sky only (a captured HDR has its own), and
     // are skipped during the probe bake (env.cloudsEnabled == 0).
@@ -248,6 +250,18 @@ fragment float4 fragmentSkybox(
         color = applyClouds(color, dir, lightData);
     color *= lightData.exposure;
     return float4(color, 1.0);  // linear HDR — tone mapping in composite pass
+}
+
+// Equirect → cubemap bake (ADR-0016): renders one cube face per draw, sampling
+// the equirect HDR by the reconstructed world direction. Reuses vertexSkybox and
+// the probe bake's per-face cameras, so the result matches how cubes are sampled.
+// Raw radiance only — no exposure or clouds, so a cube sample equals the equirect.
+fragment float4 fragmentEquirectBake(
+    SkyboxOut in [[stage_in]],
+    texture2d<float> equirect [[texture(0)]],
+    sampler equirectSampler [[sampler(0)]]
+) {
+    return float4(sampleEquirect(equirect, equirectSampler, normalize(in.viewDir)), 1.0);
 }
 
 // Checkerboard pattern based on world position
@@ -1423,7 +1437,7 @@ fragment float4 fragmentComposite(
     depth2d<float> depthTex [[texture(3)]],
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
-    texture2d<float> envMap [[texture(6)]],
+    texturecube<float> envCube [[texture(6)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeParams& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
@@ -1467,8 +1481,8 @@ fragment float4 fragmentComposite(
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
         if (params.envMode == 1) {
-            // HDR equirect environment — matches the skybox/IBL provider.
-            hdrColor = sampleEquirect(envMap, envSampler, rayDir);
+            // HDR environment, pre-baked to a cubemap — matches the skybox/IBL.
+            hdrColor = envCube.sample(envSampler, rayDir).rgb;
         } else {
             hdrColor = sampleEnvironment(rayDir, lightData);
             hdrColor = applyClouds(hdrColor, rayDir, lightData);

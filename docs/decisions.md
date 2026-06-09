@@ -818,9 +818,16 @@ ship. AGENTS.md is updated to state the refined rule.
 - A float-texture upload path is required; today's `uploadTexture` is RGBA8-only.
   Added as an HDR-specific entry point (`RGBA16Float` equirect 2D) rather than
   overloading the 8-bit path.
-- Equirect 2D sampling for the skybox is fine; **prefilter/probe bake still wants
-  a cubemap**, so a later step may bake the equirect into a cubemap once at load
-  for cheaper sampling. Deferred until measured.
+- **Equirect → cubemap bake is implemented.** The equirect HDR is baked once at
+  load (`setEnvironmentMap` → `Impl::bakeEnvironmentCubemap`) into a mipmapped
+  `MTLTextureTypeCube`: six faces rendered with the probe bake's per-face cameras
+  (the verified cube convention) by a small `fragmentEquirectBake` pass that emits
+  raw radiance, blitted into the cube slices, then mip-generated. The skybox,
+  composite, and probe-bake skybox now do a cheap `envCube.sample(dir)` instead of
+  per-sample `atan2`/`acos`; the equirect 2D texture is kept only as the bake
+  source. A 1×1 `defaultCubemap` keeps a valid binding in procedural mode.
+  *macOS/Metal verification pending.* Follow-up: GGX prefilter of the cube mips
+  (shared with the probe path, which still box-filters) for correct rough IBL.
 - Procedural **day–night is implemented** (step 2): a pure, unit-tested engine
   helper `DayNightCycle` (`src/engine/day_night_cycle.*`) maps a normalized
   time-of-day to a sun arc and a graded sky/light palette; a `DayNightSystem`
