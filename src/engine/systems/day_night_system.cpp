@@ -8,11 +8,19 @@ namespace engine {
 
 void DayNightSystem::onStart(FrameContext& ctx) {
     auto& s = ctx.settings;
-    enabled       = s.getBool("daynight.enabled", enabled);
+    enabled         = s.getBool("daynight.enabled", enabled);
     cycle.timeOfDay = s.getDouble("daynight.timeOfDay", cycle.timeOfDay);
     cycle.speed     = s.getDouble("daynight.speed", cycle.speed);
     cycle.paused    = s.getBool("daynight.paused", cycle.paused);
-    if (enabled) apply(ctx);
+
+    cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
+    cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
+    cloudDensity   = static_cast<float>(s.getDouble("clouds.density", cloudDensity));
+    cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
+    cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
+
+    if (enabled) applyLighting(ctx);
+    applyClouds(ctx);
 }
 
 void DayNightSystem::onStop(FrameContext& ctx) {
@@ -21,18 +29,28 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setDouble("daynight.timeOfDay", cycle.timeOfDay);
     s.setDouble("daynight.speed", cycle.speed);
     s.setBool("daynight.paused", cycle.paused);
+
+    s.setBool("clouds.enabled", cloudsEnabled);
+    s.setDouble("clouds.coverage", cloudCoverage);
+    s.setDouble("clouds.density", cloudDensity);
+    s.setDouble("clouds.scale", cloudScale);
+    s.setDouble("clouds.windSpeed", cloudWindSpeed);
+
     s.save("settings.json");
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
-    if (!enabled) return;
-    cycle.advance(ctx.frameDelta);
-    apply(ctx);
+    if (enabled) {
+        cycle.advance(ctx.frameDelta);
+        applyLighting(ctx);
+    }
+    if (cloudsEnabled) cloudPhase += ctx.frameDelta * cloudWindSpeed;
+    applyClouds(ctx);
 }
 
-// Push the current cycle state into both the procedural sky and the directional
-// sun so the rendered sky and the lighting agree.
-void DayNightSystem::apply(FrameContext& ctx) {
+// Push the current cycle state into both the procedural sky colors and the
+// directional sun so the rendered sky and the lighting agree.
+void DayNightSystem::applyLighting(FrameContext& ctx) {
     DayNightState st = cycle.evaluate();
     auto& lit = ctx.view.lighting;
 
@@ -40,14 +58,25 @@ void DayNightSystem::apply(FrameContext& ctx) {
     lit.sun.color     = st.sunColor;
     lit.sun.intensity = st.sunIntensity;
 
-    lit.sky.sunDirection   = st.sunDirection;
-    lit.sky.sunColor       = st.sunColor;
+    lit.sky.sunDirection     = st.sunDirection;
+    lit.sky.sunColor         = st.sunColor;
     lit.sky.sunDiscIntensity = st.skyDiscIntensity;
-    lit.sky.zenithColor    = st.zenithColor;
-    lit.sky.horizonColor   = st.horizonColor;
-    lit.sky.groundColor    = st.groundColor;
+    lit.sky.zenithColor      = st.zenithColor;
+    lit.sky.horizonColor     = st.horizonColor;
+    lit.sky.groundColor      = st.groundColor;
 
     lit.ambientMultiplier = st.ambient;
+}
+
+// Cloud parameters are independent of the day/night toggle; the shader shades
+// them against whatever sun state is active, so they work over a static sky too.
+void DayNightSystem::applyClouds(FrameContext& ctx) {
+    auto& sky = ctx.view.lighting.sky;
+    sky.cloudsEnabled = cloudsEnabled;
+    sky.cloudCoverage = cloudCoverage;
+    sky.cloudDensity  = cloudDensity;
+    sky.cloudScale    = cloudScale;
+    sky.cloudTime     = static_cast<float>(cloudPhase);
 }
 
 void DayNightSystem::render(FrameContext& ctx) {
@@ -57,7 +86,7 @@ void DayNightSystem::render(FrameContext& ctx) {
         float t = static_cast<float>(cycle.timeOfDay);
         if (ImGui::SliderFloat("Time of Day", &t, 0.0f, 1.0f, "%.3f")) {
             cycle.timeOfDay = t;
-            if (enabled) apply(ctx);
+            if (enabled) applyLighting(ctx);
         }
         ImGui::SameLine();
         ImGui::Checkbox("Pause", &cycle.paused);
@@ -68,6 +97,15 @@ void DayNightSystem::render(FrameContext& ctx) {
         // Readout: 24h clock derived from time-of-day (0.0 == midnight).
         int totalMin = static_cast<int>(cycle.timeOfDay * 24.0 * 60.0) % (24 * 60);
         ImGui::Text("Clock: %02d:%02d", totalMin / 60, totalMin % 60);
+    }
+
+    if (ImGui::CollapsingHeader("Clouds")) {
+        ImGui::Checkbox("Enabled##clouds", &cloudsEnabled);
+        ImGui::SliderFloat("Coverage", &cloudCoverage, 0.0f, 1.0f);
+        ImGui::SliderFloat("Density", &cloudDensity, 0.0f, 1.0f);
+        ImGui::SliderFloat("Scale", &cloudScale, 0.2f, 5.0f);
+        ImGui::SliderFloat("Wind Speed", &cloudWindSpeed, 0.0f, 5.0f);
+        applyClouds(ctx);  // reflect edits immediately, even while paused
     }
 #else
     (void)ctx;

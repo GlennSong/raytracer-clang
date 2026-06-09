@@ -77,6 +77,9 @@ struct LightUniforms {
     float3 skyZenith;     float _skp1;
     float3 skyHorizon;    float _skp2;
     float3 skyGround;     float _skp3;
+    // Procedural clouds (ADR-0016 step 3). time = drift phase in seconds.
+    float skyCloudCoverage; float skyCloudDensity;
+    float skyCloudScale;    float skyCloudTime;
 };
 
 struct SSRParams {
@@ -98,9 +101,13 @@ struct SSAOParams {
 };
 
 // Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR equirect.
+// cloudsEnabled gates the procedural cloud overlay so the reflection-probe bake
+// (which reuses this shader) can render a clouds-free sky — animated clouds are
+// a screen/SSR visual only, never baked into probes.
 struct EnvUniforms {
     int   mode;
-    float _pad[3];
+    int   cloudsEnabled;
+    float _pad[2];
 };
 
 // Sample an equirectangular (lat-long) environment map by world-space direction.
@@ -136,6 +143,66 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     col += sc * horizonGlow * 0.1 * disc;
 
     return col;
+}
+
+// --- Procedural clouds (ADR-0016 step 3) ---
+// An FBM noise layer painted on the sky dome — not volumetric, and never baked
+// into reflection probes (a screen/SSR visual only). Overlaid by the skybox and
+// composite passes on top of the day/night sky from sampleEnvironment().
+
+float cloudHash(float2 p) {
+    p = fract(p * float2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+
+float cloudNoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);                 // smoothstep interpolation
+    float a = cloudHash(i + float2(0.0, 0.0));
+    float b = cloudHash(i + float2(1.0, 0.0));
+    float c = cloudHash(i + float2(0.0, 1.0));
+    float d = cloudHash(i + float2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float cloudFbm(float2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 5; i++) {
+        sum += amp * cloudNoise(p);
+        p *= 2.02;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+// Overlay clouds onto a base sky color for a viewing direction.
+float3 applyClouds(float3 baseSky, float3 dir, device const LightUniforms& env) {
+    if (dir.y <= 0.02) return baseSky;           // below horizon: no clouds
+
+    // Planar projection of the dome onto a cloud plane: directions near the
+    // horizon stretch (parallax), overhead compresses. Drift the field over time.
+    float2 uv = dir.xz / (dir.y + 0.10);
+    float2 wind = float2(env.skyCloudTime * 0.02, env.skyCloudTime * 0.012);
+    float n = cloudFbm(uv * env.skyCloudScale + wind);
+
+    // Coverage threshold → soft cloud mask, faded near the horizon.
+    float cov = env.skyCloudCoverage;
+    float mask = smoothstep(cov, cov + 0.20, n) * env.skyCloudDensity;
+    mask *= smoothstep(0.02, 0.25, dir.y);
+    mask = saturate(mask);
+
+    // Shade: sunlit tops toward the sun, shadowed base away; whole layer tracks
+    // day/night brightness (≈0 at night → dark silhouettes) and the sun tint.
+    float sunAmt = max(dot(dir, env.skySunDir), 0.0);
+    float3 cloudLit  = env.skySunColor;
+    float3 cloudDark = float3(0.40, 0.42, 0.50);
+    float3 cloudColor = mix(cloudDark, cloudLit, pow(sunAmt, 1.5));
+    cloudColor *= (0.25 + 0.75 * env.skySunIntensity);
+
+    return mix(baseSky, cloudColor, mask);
 }
 
 // --- Skybox shaders ---
@@ -175,6 +242,10 @@ fragment float4 fragmentSkybox(
     float3 dir = normalize(in.viewDir);
     float3 color = (env.mode == 1) ? sampleEquirect(envMap, envSampler, dir)
                                    : sampleEnvironment(dir, lightData);
+    // Clouds overlay the procedural sky only (a captured HDR has its own), and
+    // are skipped during the probe bake (env.cloudsEnabled == 0).
+    if (env.mode == 0 && env.cloudsEnabled != 0)
+        color = applyClouds(color, dir, lightData);
     color *= lightData.exposure;
     return float4(color, 1.0);  // linear HDR — tone mapping in composite pass
 }
@@ -1393,6 +1464,7 @@ fragment float4 fragmentComposite(
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
         hdrColor = sampleEnvironment(rayDir, lightData);
+        hdrColor = applyClouds(hdrColor, rayDir, lightData);
         hdrColor *= 0.5;  // exposure
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);

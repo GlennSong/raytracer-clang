@@ -751,7 +751,7 @@ embedded/3rd-party `engine` symbol, revisit the name.
 ---
 
 ## ADR-0016 — An environment-provider seam; HDR via vendored `stb_image`
-**Status:** Accepted (provider seam + HDR path); procedural day/night **Implemented** (macOS verification pending); clouds **Pending** · **Date:** 2026-06-09
+**Status:** Accepted (provider seam + HDR path); procedural day/night **Implemented** + clouds **first pass** (macOS verification pending) · **Date:** 2026-06-09
 
 **Context.** The scene's environment is hardcoded: `sampleEnvironment(dir)` in
 `shaders/metal/phong.metal` is a fixed daytime-sky function (sun disc, horizon
@@ -832,7 +832,18 @@ ship. AGENTS.md is updated to state the refined rule.
   in `ProceduralSky` reproduce the original fixed daytime sky. *macOS/Metal
   verification pending* (Linux can't compile the backend); the time-of-day curve
   is covered by `tests/test_day_night.cpp`. A full analytic atmosphere
-  (Preetham/Hosek–Wilkie), and the FBM **clouds** layer (step 3), remain Pending.
+  (Preetham/Hosek–Wilkie) remains a possible refinement.
+- Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
+  sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
+  shaded against the active sun (sunlit tops, dark night silhouettes, warm at
+  dusk). It is a **screen/SSR visual only and is never baked into reflection
+  probes** — as the ADR requires: the probe bake reuses `fragmentSkybox` with a
+  new `EnvUniforms.cloudsEnabled = 0` gate, while the main pass and the composite
+  sky path overlay clouds. Cloud parameters (coverage/density/scale/time) ride in
+  `LightUniforms`; `DayNightSystem` drifts the phase and exposes ImGui controls.
+  Clouds attach to the procedural sky only (a captured HDR carries its own).
+  *macOS/Metal verification pending.* Follow-ups: richer cloud lighting
+  (multi-layer, silver lining), and wiring HDR-mode sky into the composite path.
 - Volumetric (raymarched) clouds are explicitly **out of scope** here — a
   Tier-4/5-sized effort, not a slot-in to this seam.
 

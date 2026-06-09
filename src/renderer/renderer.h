@@ -135,6 +135,14 @@ struct ProceduralSky {
     Vec3  zenithColor{0.25, 0.45, 0.85};
     Vec3  horizonColor{0.6, 0.75, 0.9};
     Vec3  groundColor{0.35, 0.3, 0.25};
+
+    // Procedural FBM clouds (ADR-0016 step 3). A sky-dome visual overlay, never
+    // baked into reflection probes. cloudTime is the drift phase in seconds.
+    bool  cloudsEnabled  = true;
+    float cloudCoverage  = 0.5f;   // higher = more open sky (threshold)
+    float cloudDensity   = 1.0f;   // overlay opacity
+    float cloudScale     = 1.5f;   // noise frequency
+    float cloudTime      = 0.0f;   // animation phase (advanced by the cycle)
 };
 
 struct SceneLighting {

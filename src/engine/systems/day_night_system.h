@@ -18,10 +18,19 @@ public:
     void onStop(FrameContext& ctx) override;
 
 private:
-    void apply(FrameContext& ctx);
+    void applyLighting(FrameContext& ctx);  // sun + sky colors from the cycle
+    void applyClouds(FrameContext& ctx);     // cloud params + drift phase
 
     DayNightCycle cycle;
     bool enabled = true;   // when off, the level's static sun/sky is left alone
+
+    // Procedural clouds (ADR-0016 step 3) — independent of the day/night toggle.
+    bool   cloudsEnabled  = true;
+    float  cloudCoverage  = 0.5f;
+    float  cloudDensity   = 1.0f;
+    float  cloudScale     = 1.5f;
+    float  cloudWindSpeed = 1.0f;
+    double cloudPhase     = 0.0;   // accumulated drift, seconds
 };
 
 }  // namespace engine

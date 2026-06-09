@@ -80,6 +80,9 @@ struct LightUniforms {
     simd_float3 skyZenith;   float _skp1;
     simd_float3 skyHorizon;  float _skp2;
     simd_float3 skyGround;   float _skp3;
+    // Procedural clouds (ADR-0016 step 3). Mirrors phong.metal LightUniforms.
+    float skyCloudCoverage; float skyCloudDensity;
+    float skyCloudScale;    float skyCloudTime;
 };
 
 struct GPUMesh {
@@ -149,8 +152,10 @@ struct MetalRenderer::Impl {
     // the shader (mode 0 = procedural, 1 = HDR equirect).
     struct EnvUniforms {
         int32_t mode;
-        float   _pad[3];
+        int32_t cloudsEnabled;  // 0 during the probe bake (clouds stay unbaked)
+        float   _pad[2];
     };
+    bool skyCloudsEnabled = true;  // mirrors SceneLighting::sky.cloudsEnabled
     id<MTLTexture> environmentTexture;     // equirect RGBA16Float, nil if procedural
     id<MTLSamplerState> equirectSampler;   // linear, wrap-U / clamp-V
 
@@ -1029,6 +1034,11 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyHorizon = toSimd3(sky.horizonColor);
     lu.skyGround = toSimd3(sky.groundColor);
     lu._skp0 = lu._skp1 = lu._skp2 = lu._skp3 = 0;
+    lu.skyCloudCoverage = sky.cloudCoverage;
+    lu.skyCloudDensity = sky.cloudDensity;
+    lu.skyCloudScale = sky.cloudScale;
+    lu.skyCloudTime = sky.cloudTime;
+    impl->skyCloudsEnabled = sky.cloudsEnabled;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
@@ -1187,7 +1197,8 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setDepthStencilState:impl->skyboxDepthState];
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-                    Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, {0, 0, 0}};
+                    // cloudsEnabled = 0: clouds are never baked into probes.
+                    Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, 0, {0, 0}};
                     [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
                     [enc setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
                                                                        : impl->defaultWhiteTexture)
@@ -1388,7 +1399,8 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0, {0, 0, 0}};
+        Impl::EnvUniforms envU = {impl->environmentTexture ? 1 : 0,
+                                  impl->skyCloudsEnabled ? 1 : 0, {0, 0}};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
         [impl->currentEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
                                                                             : impl->defaultWhiteTexture)
