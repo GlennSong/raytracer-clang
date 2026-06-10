@@ -900,12 +900,11 @@ void MetalRenderer::Impl::bakeEnvironmentCubemap() {
     for (int face = 0; face < 6; face++) {
         id<MTLTexture> faceColor = [device newTextureWithDescriptor:faceDesc];
 
-        Vec3 eye(0, 0, 0);
-        simd_float4x4 view = toSimd(Mat4::lookAt(eye, faces[face].target, faces[face].up));
+        simd_float4x4 view = toSimd(Mat4::lookAt(Vec3(0, 0, 0), faces[face].target, faces[face].up));
         CameraUniforms cam = {};
         cam.viewProjection = simd_mul(proj, view);
         cam.invViewProjection = simd_inverse(cam.viewProjection);
-        cam.cameraPosition = toSimd3(eye);
+        cam.cameraPosition = simd_make_float3(0.0f, 0.0f, 0.0f);  // env is position-independent
 
         id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
         MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
