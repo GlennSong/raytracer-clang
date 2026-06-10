@@ -197,7 +197,9 @@ add_executable(viewer
 )
 
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(viewer PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+# Vendored headers (tinygltf/stb/nlohmann) are SYSTEM so our strict warnings
+# apply only to our own code, not to libraries we don't maintain.
+target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_link_libraries(viewer PRIVATE glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 
@@ -254,7 +256,7 @@ if(RT_ENABLE_IMGUI)
             PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
     endif()
-    target_include_directories(viewer PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+    target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
     target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)
 endif()
 else()
