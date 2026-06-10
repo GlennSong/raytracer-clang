@@ -6,15 +6,22 @@
 namespace engine {
 
 void RenderSystem::onStart(FrameContext& ctx) {
-    exposure = static_cast<float>(ctx.settings.getDouble("exposure", 0.5));
-    ctx.view.lighting.exposure = exposure;
+    // Adopt the level's exposure (set by the level loader from JSON) rather than
+    // forcing our own value — other owners (level JSON, the ImGui slider) drive it.
+    exposure = ctx.view.lighting.exposure;
 }
 
 void RenderSystem::update(FrameContext& ctx) {
-    if (ctx.input.keyUp) exposure *= 1.0f + 2.0f * static_cast<float>(ctx.frameDelta);
-    if (ctx.input.keyDown) exposure *= 1.0f - 2.0f * static_cast<float>(ctx.frameDelta);
-    exposure = std::clamp(exposure, 0.05f, 20.0f);
-    ctx.view.lighting.exposure = exposure;
+    // Track the current exposure (the level JSON or the ImGui slider may have set
+    // it) so the Up/Down keys ramp from there. Only write back when a key is
+    // actually held, so we don't stomp the slider/JSON value every frame.
+    exposure = ctx.view.lighting.exposure;
+    if (ctx.input.keyUp || ctx.input.keyDown) {
+        if (ctx.input.keyUp)   exposure *= 1.0f + 2.0f * static_cast<float>(ctx.frameDelta);
+        if (ctx.input.keyDown) exposure *= 1.0f - 2.0f * static_cast<float>(ctx.frameDelta);
+        exposure = std::clamp(exposure, 0.05f, 20.0f);
+        ctx.view.lighting.exposure = exposure;
+    }
 }
 
 void RenderSystem::render(FrameContext& ctx) {
@@ -45,8 +52,10 @@ void RenderSystem::render(FrameContext& ctx) {
         });
 }
 
-void RenderSystem::onStop(FrameContext& ctx) {
-    ctx.settings.setDouble("exposure", exposure);
+void RenderSystem::onStop(FrameContext& /*ctx*/) {
+    // Exposure is owned by the level (cascade: defaults -> level -> runtime), so it
+    // is no longer persisted to settings.json — that key used to stomp the level on
+    // load. The Up/Down keys still ramp the live value within a session.
 }
 
 }  // namespace engine

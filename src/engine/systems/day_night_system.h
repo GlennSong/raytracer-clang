@@ -21,6 +21,10 @@ private:
     void applyLighting(FrameContext& ctx);  // sun + sky colors from the cycle
     void applyClouds(FrameContext& ctx);     // cloud params + drift phase
 
+    // True when an HDR environment is bound — it owns the lighting, so the cycle
+    // must not drive the sun/sky/ambient (see definition in the .cpp).
+    bool hdrEnvironmentActive(FrameContext& ctx) const;
+
     DayNightCycle cycle;
     bool enabled = true;   // when off, the level's static sun/sky is left alone
 

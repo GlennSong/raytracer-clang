@@ -8,6 +8,7 @@
 #include "model_importer.h"
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace engine {
@@ -149,6 +150,11 @@ ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
                     else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
                         renderMesh.indices[i] = *p;
                 }
+                // glTF front faces are CCW, but the renderer's front-facing winding
+                // is CW (MTLWindingClockwise + cull back). Reverse each triangle so
+                // imported meshes aren't backface-culled — i.e. don't render inside-out.
+                for (size_t i = 0; i + 2 < renderMesh.indices.size(); i += 3)
+                    std::swap(renderMesh.indices[i + 1], renderMesh.indices[i + 2]);
             }
 
             // Position (required)
@@ -200,11 +206,14 @@ ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
             if (!hasTangent && !renderMesh.indices.empty())
                 computeTangents(renderMesh.vertices, renderMesh.indices);
 
-            // No indices — generate trivial index buffer
+            // No indices — generate a trivial index buffer, emitting each triangle
+            // reversed to match the renderer's CW front-facing winding (glTF is CCW).
             if (renderMesh.indices.empty()) {
                 renderMesh.indices.resize(vertexCount);
                 for (size_t i = 0; i < vertexCount; i++)
                     renderMesh.indices[i] = static_cast<uint32_t>(i);
+                for (size_t i = 0; i + 2 < renderMesh.indices.size(); i += 3)
+                    std::swap(renderMesh.indices[i + 1], renderMesh.indices[i + 2]);
             }
 
             // Material
@@ -273,8 +282,23 @@ HdrImage EnvironmentLoader::loadHdr(const std::string& path) {
     out.height = h;
     out.pixels.assign(data, data + static_cast<size_t>(w) * h * 3);
     stbi_image_free(data);
+
+    // Log-average (geometric mean) luminance for auto-exposure. The log keeps the
+    // tiny, enormously-bright sun disc from dominating, so this tracks the sky/
+    // ground the eye actually adapts to. δ avoids log(0) on black pixels.
+    const size_t pixelCount = static_cast<size_t>(w) * h;
+    const float delta = 1e-4f;
+    double logSum = 0.0;
+    for (size_t i = 0; i < pixelCount; i++) {
+        const float* p = out.pixels.data() + i * 3;
+        float lum = 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2];
+        logSum += std::log(delta + std::max(lum, 0.0f));
+    }
+    out.avgLuminance = std::exp(static_cast<float>(logSum / static_cast<double>(pixelCount)));
+
     std::cout << "[INFO] Loaded HDR environment: " << path
-              << " (" << w << "x" << h << ")\n";
+              << " (" << w << "x" << h << "), avg luminance "
+              << out.avgLuminance << "\n";
     return out;
 }
 
@@ -282,6 +306,7 @@ TextureHandle EnvironmentLoader::loadEnvironmentMap(const std::string& path,
                                                     Renderer& renderer) {
     HdrImage img = loadHdr(path);
     if (!img.valid()) return TextureHandle{};
+    renderer.environmentAvgLuminance = img.avgLuminance;  // for auto-exposure
     return renderer.uploadTextureHDR(img.width, img.height, 3, img.pixels.data());
 }
 

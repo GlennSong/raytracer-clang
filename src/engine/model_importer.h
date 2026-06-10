@@ -34,6 +34,7 @@ struct HdrImage {
     int width = 0;
     int height = 0;
     std::vector<float> pixels;  // width*height*3, linear RGB
+    float avgLuminance = 0.0f;  // log-average luminance, for auto-exposure
     bool valid() const { return width > 0 && height > 0 && !pixels.empty(); }
 };
 

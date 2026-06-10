@@ -19,7 +19,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
     cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
 
-    if (enabled) applyLighting(ctx);
+    if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
 }
 
@@ -39,8 +39,15 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.save("settings.json");
 }
 
+// A bound HDR environment owns the sun/sky/ambient (its sun is baked into the
+// image at a fixed spot), so the day/night cycle must not drive lighting while
+// one is active — otherwise an animated analytic sun fights the fixed HDR.
+bool DayNightSystem::hdrEnvironmentActive(FrameContext& ctx) const {
+    return ctx.renderer.environmentAvgLuminance > 0.0f;
+}
+
 void DayNightSystem::update(FrameContext& ctx) {
-    if (enabled) {
+    if (enabled && !hdrEnvironmentActive(ctx)) {
         cycle.advance(ctx.frameDelta);
         applyLighting(ctx);
     }
@@ -82,6 +89,11 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
 void DayNightSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::CollapsingHeader("Day / Night")) {
+        bool hdrActive = hdrEnvironmentActive(ctx);
+        if (hdrActive) {
+            ImGui::TextDisabled("HDR environment active - cycle overridden");
+        }
+        ImGui::BeginDisabled(hdrActive);
         ImGui::Checkbox("Enabled##daynight", &enabled);
         float t = static_cast<float>(cycle.timeOfDay);
         if (ImGui::SliderFloat("Time of Day", &t, 0.0f, 1.0f, "%.3f")) {
@@ -97,6 +109,7 @@ void DayNightSystem::render(FrameContext& ctx) {
         // Readout: 24h clock derived from time-of-day (0.0 == midnight).
         int totalMin = static_cast<int>(cycle.timeOfDay * 24.0 * 60.0) % (24 * 60);
         ImGui::Text("Clock: %02d:%02d", totalMin / 60, totalMin % 60);
+        ImGui::EndDisabled();
     }
 
     if (ImGui::CollapsingHeader("Clouds")) {

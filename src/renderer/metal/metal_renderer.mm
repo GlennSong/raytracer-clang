@@ -234,6 +234,7 @@ struct MetalRenderer::Impl {
         float normalBias;
         float pcfRadius;
         int32_t shadowMapSize;
+        int32_t debugShadow;  // 1 = lit shaders output the sun shadow factor
     };
     ShadowUniforms shadowUniforms;
 
@@ -830,9 +831,11 @@ TextureHandle MetalRenderer::uploadTextureHDR(int width, int height, int channel
                                               const float* data) {
     if (!data || width <= 0 || height <= 0) return TextureHandle{};
 
+    // Mipmapped so the lit pass can sample blurred levels for HDR image-based
+    // lighting (roughness-scaled specular + a high mip approximating irradiance).
     MTLTextureDescriptor* desc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
-                                     width:width height:height mipmapped:NO];
+                                     width:width height:height mipmapped:YES];
     desc.usage = MTLTextureUsageShaderRead;
     desc.storageMode = MTLStorageModeShared;
     id<MTLTexture> texture = [impl->device newTextureWithDescriptor:desc];
@@ -851,6 +854,16 @@ TextureHandle MetalRenderer::uploadTextureHDR(int width, int height, int channel
                mipmapLevel:0
                  withBytes:rgba.data()
                bytesPerRow:static_cast<NSUInteger>(width) * 4 * sizeof(__fp16)];
+
+    // Build the mip chain for IBL roughness/irradiance lookups.
+    if (texture.mipmapLevelCount > 1) {
+        id<MTLCommandBuffer> cmd = [impl->commandQueue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit generateMipmapsForTexture:texture];
+        [blit endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+    }
 
     return impl->textures.insert(texture);
 }
@@ -1310,6 +1323,12 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 // Bind dummy textures for probe slots (shader expects them)
                 [enc setFragmentTexture:impl->brdfLUT atIndex:2];
                 [enc setFragmentSamplerState:impl->linearClampSampler atIndex:1];
+                // HDR IBL bindings (procedural mode during the bake — geometry in
+                // reflection probes isn't re-lit by the HDR; just bind so the
+                // shader's texture(8)/buffer(8) slots are satisfied).
+                Impl::EnvUniforms bakeEnv = {0, 0, {0, 0}};
+                [enc setFragmentBytes:&bakeEnv length:sizeof(bakeEnv) atIndex:8];
+                [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:8];
 
                 // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
                 // it into the cube faces is what makes IBL track the environment.
@@ -1485,6 +1504,7 @@ void MetalRenderer::endFrame() {
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
     // Bind shadow resources for the entire main pass
+    impl->shadowUniforms.debugShadow = debugView;  // lit shader branches: 5=shadow factor, 6=albedo
     if (impl->shadowEnabled) {
         [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
         [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
@@ -1513,6 +1533,16 @@ void MetalRenderer::endFrame() {
     [impl->currentEncoder setFragmentTexture:impl->brdfLUT atIndex:2];
     [impl->currentEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:1];
 
+    // HDR image-based lighting (ADR-0016): bind the equirect + env mode so the lit
+    // shader can source ambient/specular from the HDR instead of the procedural sky.
+    {
+        Impl::EnvUniforms litEnv = {impl->environmentTexture ? 1 : 0, 0, {0, 0}};
+        [impl->currentEncoder setFragmentBytes:&litEnv length:sizeof(litEnv) atIndex:8];
+        [impl->currentEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
+                                                                            : impl->defaultWhiteTexture)
+                                         atIndex:8];
+    }
+
     // Draw skybox first (behind everything, no depth write)
     if (impl->skyboxPipeline) {
         [impl->currentEncoder setRenderPipelineState:impl->skyboxPipeline];
@@ -1529,6 +1559,15 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                  vertexStart:0 vertexCount:3];
+
+        // The skybox just rebound texture(0)/sampler(0) to the environment cubemap
+        // and a non-comparison sampler. Restore the shadow map + comparison sampler
+        // so the lit object draws below can actually read shadows (texture 0 is
+        // shared between the skybox cube and the lit shaders' shadow map).
+        if (impl->shadowEnabled) {
+            [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
+            [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
+        }
     }
 
     RenderStats stats;
@@ -1879,7 +1918,7 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams.envMode = impl->environmentCubemap ? 1 : 0;
+        compositeParams.envMode = impl->environmentTexture ? 1 : 0;
         compositeParams._pad[0] = 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
@@ -1889,6 +1928,10 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
                                                                    : impl->defaultCubemap)
                                 atIndex:6];
+        // Equirect HDR sampled directly for the composite sky (bypasses the cube bake).
+        [compEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
+                                                                   : impl->defaultWhiteTexture)
+                                atIndex:7];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];

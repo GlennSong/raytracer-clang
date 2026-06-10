@@ -1,5 +1,7 @@
 #include "debug_overlay_system.h"
 
+#include <algorithm>
+
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
 #endif
@@ -24,9 +26,11 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ssr.stride        = static_cast<float>(s.getDouble("ssr.stride", ssr.stride));
     ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
 
-    lit.exposure          = static_cast<float>(s.getDouble("lighting.exposure", lit.exposure));
-    lit.ambientMultiplier = static_cast<float>(s.getDouble("lighting.ambient", lit.ambientMultiplier));
-    lit.sun.intensity     = static_cast<float>(s.getDouble("lighting.sunIntensity", lit.sun.intensity));
+    // NOTE: scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
+    // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
+    // / day-night). Persisting it here silently overrode the level on load, which
+    // caused stale exposure/ambient to fight the level. Sliders still edit it live.
+    (void)lit;
 
     auto& bloom = ctx.renderer.bloomParams;
     bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
@@ -55,9 +59,9 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssr.stride", ssr.stride);
     s.setDouble("ssr.blendStrength", ssr.blendStrength);
 
-    s.setDouble("lighting.exposure", lit.exposure);
-    s.setDouble("lighting.ambient", lit.ambientMultiplier);
-    s.setDouble("lighting.sunIntensity", lit.sun.intensity);
+    // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
+    // session's slider tweaks don't silently override the level on next launch.
+    (void)lit;
 
     auto& bloom = ctx.renderer.bloomParams;
     s.setDouble("bloom.threshold", bloom.threshold);
@@ -109,13 +113,24 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
 
     ImGui::Separator();
-    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals"};
-    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 5);
+    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals", "Shadow", "Albedo"};
+    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 7);
 
     if (ImGui::CollapsingHeader("Lighting")) {
         auto& lit = ctx.view.lighting;
         ImGui::SliderFloat("Sun Intensity", &lit.sun.intensity, 0.0f, 20.0f);
         ImGui::SliderFloat("Exposure", &lit.exposure, 0.01f, 5.0f);
+        // Auto-exposure: map the HDR's log-average luminance to middle grey (0.18).
+        // Only meaningful when an HDR environment is bound.
+        float avgLum = ctx.renderer.environmentAvgLuminance;
+        ImGui::BeginDisabled(avgLum <= 0.0f);
+        if (ImGui::Button("Auto Exposure") && avgLum > 0.0f)
+            lit.exposure = std::clamp(0.18f / avgLum, 0.01f, 5.0f);
+        ImGui::EndDisabled();
+        if (avgLum > 0.0f) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(avg lum %.3f)", avgLum);
+        }
         ImGui::SliderFloat("Ambient", &lit.ambientMultiplier, 0.0f, 1.0f);
     }
 

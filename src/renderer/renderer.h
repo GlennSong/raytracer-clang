@@ -260,6 +260,10 @@ public:
     // Frame rate cap (0 = uncapped, otherwise target FPS like 30 or 60)
     int targetFps = 0;
 
+    // Log-average luminance of the bound HDR environment (0 if none / procedural).
+    // Set by EnvironmentLoader at load; drives the debug "Auto Exposure" button.
+    float environmentAvgLuminance = 0.0f;
+
     // SSR tuning parameters
     struct SSRParams {
         float maxRayDist    = 20.0f;

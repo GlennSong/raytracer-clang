@@ -118,6 +118,15 @@ float3 sampleEquirect(texture2d<float> envMap, sampler s, float3 dir) {
     return envMap.sample(s, float2(u, v)).rgb;
 }
 
+// Equirect sample at an explicit mip level — used for HDR image-based lighting,
+// where a roughness-scaled LOD approximates prefiltered specular and a high LOD
+// approximates diffuse irradiance (cheap IBL without a separate convolution).
+float3 sampleEquirectLod(texture2d<float> envMap, sampler s, float3 dir, float lod) {
+    float u = atan2(dir.z, dir.x) * (0.5 / M_PI_F) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / M_PI_F);
+    return envMap.sample(s, float2(u, v), level(lod)).rgb;
+}
+
 // Procedural sky environment. Colors and the sun arc come from `env` (the day/
 // night state baked into LightUniforms), so dawn→day→dusk→night grade smoothly
 // and the disc fades out as the sun sets. The shader only interpolates; the
@@ -298,6 +307,7 @@ struct ShadowUniforms {
     float  normalBias;
     float  pcfRadius;
     int    shadowMapSize;
+    int    debugShadow;   // 1 = lit shaders output the sun shadow factor as grayscale
 };
 
 // Shadow depth-only vertex shaders (no fragment needed — Metal writes depth)
@@ -685,6 +695,7 @@ fragment GBufferOut fragmentMainInstanced(
     constant ShadowUniforms& shadowData [[buffer(5)]],
     constant ProbeUniforms& probeParams [[buffer(6)]],
     device const GPUReflectionProbe* probes [[buffer(7)]],
+    constant EnvUniforms& env [[buffer(8)]],
     depth2d<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
@@ -693,11 +704,31 @@ fragment GBufferOut fragmentMainInstanced(
     texture2d<float> normalMap [[texture(5)]],
     texture2d<float> aoMap [[texture(6)]],
     texture2d<float> emissiveMap [[texture(7)]],
+    texture2d<float> equirectEnv [[texture(8)]],
     sampler shadowSampler [[sampler(0)]],
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
+
+    // Shadow debug view: the sun's shadow factor as grayscale (white = lit,
+    // black = shadowed), to inspect the shadow path in isolation.
+    if (shadowData.debugShadow == 5) {
+        float s = 1.0;
+        for (uint i = 0; i < uint(lightData.lightCount); i++) {
+            if (lightData.lights[i].type == LightType_Directional &&
+                lightData.lights[i].shadowMapIndex >= 0) {
+                s = computeShadow(shadowMap, shadowSampler,
+                                  lightData.lights[i].lightViewProjection,
+                                  in.worldPosition, shadowTexelSize);
+                break;
+            }
+        }
+        GBufferOut dbg;
+        dbg.color = float4(s, s, s, 1.0);
+        dbg.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return dbg;
+    }
     float3 albedo = in.albedo;
     float mtl = in.metallic;
     float rough = in.roughness;
@@ -724,24 +755,50 @@ fragment GBufferOut fragmentMainInstanced(
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
+    // Albedo debug view: output the final material color (after texture + tint),
+    // before any lighting, to isolate material vs lighting issues.
+    if (shadowData.debugShadow == 6) {
+        GBufferOut dbg;
+        dbg.color = float4(albedo, 1.0);
+        dbg.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return dbg;
+    }
+
     float3 reflectDir = reflect(-viewDir, normal);
     float3 f0 = mix(float3(0.04), albedo, mtl);
 
     float3 envSpecular;
     float3 envReflection;
-    if (probeParams.probeCount > 0) {
+    float3 envDiffuse;   // environment irradiance for the ambient term
+    if (env.mode == 1) {
+        // HDR image-based lighting (ADR-0016): sample the equirect directly.
+        // Roughness selects the mip for a cheap prefiltered-specular look; a high
+        // mip approximates diffuse irradiance. This puts objects in the same
+        // radiance units as the HDR sky, so one exposure balances the whole frame.
+        float maxLod = float(equirectEnv.get_num_mip_levels() - 1);
+        envReflection = sampleEquirectLod(equirectEnv, envSampler, reflectDir, 0.0);
+        // Clamp the sampled HDR so the (very bright) sun disc can't blow out IBL.
+        float3 prefiltered = min(sampleEquirectLod(equirectEnv, envSampler, reflectDir, rough * maxLod), 10.0);
+        // Split-sum: the BRDF LUT weights specular by (NdotV, roughness) so grazing
+        // angles don't reflect the full environment and saturate to white.
+        float2 brdf = brdfLUT.sample(envSampler, float2(NdotV, rough)).rg;
+        envSpecular = (f0 * brdf.x + brdf.y) * prefiltered;
+        envDiffuse = min(sampleEquirectLod(equirectEnv, envSampler, normal, max(maxLod - 2.0, 0.0)), 10.0);
+    } else if (probeParams.probeCount > 0) {
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
                                               rough, normal, NdotV, f0,
                                               probes, probeParams,
                                               cubemapArray, brdfLUT, envSampler,
                                               lightData);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
+        envDiffuse = sampleEnvironment(normal, lightData);
     } else {
         envReflection = sampleEnvironment(reflectDir, lightData);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
         float mipBlur = rough * rough;
         float3 envBlurred = mix(envReflection, sampleEnvironment(normal, lightData), mipBlur);
         envSpecular = fresnel * envBlurred;
+        envDiffuse = sampleEnvironment(normal, lightData);
     }
 
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
@@ -751,7 +808,7 @@ fragment GBufferOut fragmentMainInstanced(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal, lightData) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 ambientDiffuse = albedo * envDiffuse * lightData.ambientMultiplier * (1.0 - mtl) * ao;
     float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = in.opacity;
@@ -761,7 +818,8 @@ fragment GBufferOut fragmentMainInstanced(
         color += envReflection * fresnelTerm * 0.8;
     }
 
-    color *= lightData.exposure;
+    // Exposure is applied once, uniformly, in the composite pass — sceneColor holds
+    // linear scene-referred radiance, so do NOT pre-expose here (was double-applied).
     float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
     GBufferOut out;
     out.color = float4(color, alpha);
@@ -793,6 +851,7 @@ fragment GBufferOut fragmentMain(
     constant ShadowUniforms& shadowData [[buffer(5)]],
     constant ProbeUniforms& probeParams [[buffer(6)]],
     device const GPUReflectionProbe* probes [[buffer(7)]],
+    constant EnvUniforms& env [[buffer(8)]],
     depth2d<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
@@ -801,11 +860,31 @@ fragment GBufferOut fragmentMain(
     texture2d<float> normalMap [[texture(5)]],
     texture2d<float> aoMap [[texture(6)]],
     texture2d<float> emissiveMap [[texture(7)]],
+    texture2d<float> equirectEnv [[texture(8)]],
     sampler shadowSampler [[sampler(0)]],
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
 ) {
     float shadowTexelSize = 1.0 / float(shadowData.shadowMapSize);
+
+    // Shadow debug view: the sun's shadow factor as grayscale (white = lit,
+    // black = shadowed), to inspect the shadow path in isolation.
+    if (shadowData.debugShadow == 5) {
+        float s = 1.0;
+        for (uint i = 0; i < uint(lightData.lightCount); i++) {
+            if (lightData.lights[i].type == LightType_Directional &&
+                lightData.lights[i].shadowMapIndex >= 0) {
+                s = computeShadow(shadowMap, shadowSampler,
+                                  lightData.lights[i].lightViewProjection,
+                                  in.worldPosition, shadowTexelSize);
+                break;
+            }
+        }
+        GBufferOut dbg;
+        dbg.color = float4(s, s, s, 1.0);
+        dbg.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return dbg;
+    }
     float3 albedo = material.albedo;
     float mtl = material.metallic;
     float rough = material.roughness;
@@ -832,24 +911,50 @@ fragment GBufferOut fragmentMain(
     float3 viewDir = normalize(camera.cameraPosition - in.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
+    // Albedo debug view: output the final material color (after texture + tint),
+    // before any lighting, to isolate material vs lighting issues.
+    if (shadowData.debugShadow == 6) {
+        GBufferOut dbg;
+        dbg.color = float4(albedo, 1.0);
+        dbg.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return dbg;
+    }
+
     float3 reflectDir = reflect(-viewDir, normal);
     float3 f0 = mix(float3(0.04), albedo, mtl);
 
     float3 envSpecular;
     float3 envReflection;
-    if (probeParams.probeCount > 0) {
+    float3 envDiffuse;   // environment irradiance for the ambient term
+    if (env.mode == 1) {
+        // HDR image-based lighting (ADR-0016): sample the equirect directly.
+        // Roughness selects the mip for a cheap prefiltered-specular look; a high
+        // mip approximates diffuse irradiance. This puts objects in the same
+        // radiance units as the HDR sky, so one exposure balances the whole frame.
+        float maxLod = float(equirectEnv.get_num_mip_levels() - 1);
+        envReflection = sampleEquirectLod(equirectEnv, envSampler, reflectDir, 0.0);
+        // Clamp the sampled HDR so the (very bright) sun disc can't blow out IBL.
+        float3 prefiltered = min(sampleEquirectLod(equirectEnv, envSampler, reflectDir, rough * maxLod), 10.0);
+        // Split-sum: the BRDF LUT weights specular by (NdotV, roughness) so grazing
+        // angles don't reflect the full environment and saturate to white.
+        float2 brdf = brdfLUT.sample(envSampler, float2(NdotV, rough)).rg;
+        envSpecular = (f0 * brdf.x + brdf.y) * prefiltered;
+        envDiffuse = min(sampleEquirectLod(equirectEnv, envSampler, normal, max(maxLod - 2.0, 0.0)), 10.0);
+    } else if (probeParams.probeCount > 0) {
         envSpecular = sampleReflectionProbes(in.worldPosition, reflectDir,
                                               rough, normal, NdotV, f0,
                                               probes, probeParams,
                                               cubemapArray, brdfLUT, envSampler,
                                               lightData);
         envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
+        envDiffuse = sampleEnvironment(normal, lightData);
     } else {
         envReflection = sampleEnvironment(reflectDir, lightData);
         float3 fresnel = fresnelSchlickVec(NdotV, f0);
         float mipBlur = rough * rough;
         float3 envBlurred = mix(envReflection, sampleEnvironment(normal, lightData), mipBlur);
         envSpecular = fresnel * envBlurred;
+        envDiffuse = sampleEnvironment(normal, lightData);
     }
 
     float3 fresnel = fresnelSchlickVec(NdotV, f0);
@@ -858,7 +963,7 @@ fragment GBufferOut fragmentMain(
                                            shadowMap, shadowSampler,
                                            shadowTexelSize);
 
-    float3 ambientDiffuse = albedo * sampleEnvironment(normal, lightData) * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 ambientDiffuse = albedo * envDiffuse * lightData.ambientMultiplier * (1.0 - mtl) * ao;
     float3 color = emit + directLight + ambientDiffuse + envSpecular;
 
     float alpha = material.opacity;
@@ -868,7 +973,8 @@ fragment GBufferOut fragmentMain(
         color += envReflection * fresnelTerm * 0.8;
     }
 
-    color *= lightData.exposure;
+    // Exposure is applied once, uniformly, in the composite pass — sceneColor holds
+    // linear scene-referred radiance, so do NOT pre-expose here (was double-applied).
     float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
     GBufferOut gout;
     gout.color = float4(color, alpha);
@@ -1438,6 +1544,7 @@ fragment float4 fragmentComposite(
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
     texturecube<float> envCube [[texture(6)]],
+    texture2d<float> equirectMap [[texture(7)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeParams& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
@@ -1471,6 +1578,19 @@ fragment float4 fragmentComposite(
         if (depth >= 0.999) return float4(0.5, 0.5, 1.0, 1.0);
         return float4(n, 1.0);
     }
+    if (params.debugView == 5) {
+        // Shadow factor (the lit pass wrote grayscale into sceneColor) — raw, no
+        // tone map. White = lit, black = shadowed. Sky shows mid-gray.
+        if (depth >= 0.999) return float4(0.3, 0.3, 0.3, 1.0);
+        return float4(sceneColor.sample(smp, in.uv).rgb, 1.0);
+    }
+    if (params.debugView == 6) {
+        // Albedo (the lit pass wrote raw material color into sceneColor) — no
+        // exposure or tone map, gamma only, so material color shows directly.
+        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        float3 a = sceneColor.sample(smp, in.uv).rgb;
+        return float4(pow(a, float3(1.0 / 2.2)), 1.0);
+    }
 
     // --- Normal rendering ---
     float3 hdrColor;
@@ -1481,13 +1601,15 @@ fragment float4 fragmentComposite(
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
         if (params.envMode == 1) {
-            // HDR environment, pre-baked to a cubemap — matches the skybox/IBL.
-            hdrColor = envCube.sample(envSampler, rayDir).rgb;
+            // HDR environment: sample the equirect directly by the (verified)
+            // composite rayDir. The equirect→cube bake used the broken vertexSkybox
+            // direction path, so the cube was mis-oriented; a direct lat-long lookup
+            // is cheap for a fullscreen pass and bypasses the bake entirely.
+            hdrColor = sampleEquirect(equirectMap, envSampler, rayDir);
         } else {
             hdrColor = sampleEnvironment(rayDir, lightData);
             hdrColor = applyClouds(hdrColor, rayDir, lightData);
         }
-        hdrColor *= 0.5;  // exposure
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);
 
@@ -1505,6 +1627,11 @@ fragment float4 fragmentComposite(
 
         hdrColor = hdr.rgb;
     }
+
+    // Camera exposure — a single scene-referred multiplier applied uniformly to
+    // sky and objects before tone mapping, so one knob balances the whole image
+    // (previously only the HDR sky was exposed, so objects never responded).
+    hdrColor *= lightData.exposure;
 
     // Add bloom
     if (params.bloomEnabled != 0) {
