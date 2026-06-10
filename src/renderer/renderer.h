@@ -227,7 +227,7 @@ public:
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
-    virtual void setReflectionProbes(const std::vector<ReflectionProbe>& probes) {}
+    virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
     virtual void endFrame() = 0;
 
     // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a
