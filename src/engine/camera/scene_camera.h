@@ -33,6 +33,10 @@ Quat orientationFromYawPitch(Real yawDegrees, Real pitchDegrees);
 // normalized). Zero-length input yields identity.
 Quat orientationFromForward(const Vec3& forward);
 
+// Inverse decomposition (fly convention: yaw 0 looks down -Z). Zero-length
+// input yields 0/0. Round-trips with orientationFromYawPitch.
+void yawPitchFromForward(const Vec3& forward, Real& yawDegrees, Real& pitchDegrees);
+
 // All entities carrying a Transform + SceneCamera, sorted by handle so the
 // cycling order is stable regardless of pool order.
 std::vector<Entity> collectCameras(World& world);

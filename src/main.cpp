@@ -7,6 +7,8 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <cstdlib>
+#include <string>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -50,15 +52,39 @@ Scene buildCornellBox() {
 
 void renderRow(const Scene& scene, const Camera& camera, Image& image,
                int y, std::atomic<int>& linesComplete) {
+    double ca = camera.lens.chromaticAberration;
     for (int x = 0; x < IMAGE_SIZE; x++) {
         Vec3 color(0, 0, 0);
         for (int s = 0; s < SAMPLES_PER_PIXEL; s++) {
             double u = (x + randomDouble()) / (IMAGE_SIZE - 1);
             double v = (IMAGE_SIZE - 1 - y + randomDouble()) / (IMAGE_SIZE - 1);
-            Ray ray = camera.generateRay(u, v);
-            color += scene.tracePath(ray, MAX_BOUNCES);
+            double lensU = randomDouble();
+            double lensV = randomDouble();
+            if (camera.hasChromaticAberration()) {
+                // Lateral CA: the channels image at slightly different radial
+                // scales, so trace one ray per channel through the same lens
+                // sample and keep each ray's own channel.
+                Vec3 r = scene.tracePath(
+                    camera.generateRay(u, v, lensU, lensV, 1.0 + ca), MAX_BOUNCES);
+                Vec3 g = scene.tracePath(
+                    camera.generateRay(u, v, lensU, lensV, 1.0), MAX_BOUNCES);
+                Vec3 b = scene.tracePath(
+                    camera.generateRay(u, v, lensU, lensV, 1.0 - ca), MAX_BOUNCES);
+                color += Vec3(r.x, g.y, b.z);
+            } else {
+                Ray ray = camera.generateRay(u, v, lensU, lensV);
+                color += scene.tracePath(ray, MAX_BOUNCES);
+            }
         }
         color = color / static_cast<double>(SAMPLES_PER_PIXEL);
+
+        // Stylized vignette: quadratic radial falloff scaled by the parameter.
+        if (camera.lens.vignette != 0.0) {
+            double sx = 2.0 * x / (IMAGE_SIZE - 1) - 1.0;
+            double sy = 2.0 * y / (IMAGE_SIZE - 1) - 1.0;
+            double fall = 1.0 - camera.lens.vignette * (sx * sx + sy * sy) * 0.5;
+            color = color * std::max(fall, 0.0);
+        }
 
         color = Vec3(std::sqrt(color.x), std::sqrt(color.y), std::sqrt(color.z));
         color = clampVec(color, 0.0, 1.0);
@@ -68,16 +94,45 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
     linesComplete.fetch_add(1);
 }
 
-int main() {
+// Lens flags (docs/virtual-camera-plan.md, Phase 3). The Cornell box is ~555
+// units across, so --scale 100 maps meter-scale optics onto it; with that,
+// try: ./raytracer --fstop 1.0 --focus 800 --scale 100
+LensParams parseLensFlags(int argc, char** argv, double& worldUnitsPerMeter) {
+    LensParams lens;
+    lens.fStop = 0.0;  // pinhole unless --fstop is given
+    lens.focusDistance = 800.0;
+    auto next = [&](int& i) { return std::atof(argv[++i]); };
+    for (int i = 1; i < argc - 1; i++) {
+        std::string flag = argv[i];
+        if (flag == "--fstop")         lens.fStop = next(i);
+        else if (flag == "--focal")    lens.focalLength = next(i);
+        else if (flag == "--focus")    lens.focusDistance = next(i);
+        else if (flag == "--k1")       lens.distortionK1 = next(i);
+        else if (flag == "--k2")       lens.distortionK2 = next(i);
+        else if (flag == "--ca")       lens.chromaticAberration = next(i);
+        else if (flag == "--vignette") lens.vignette = next(i);
+        else if (flag == "--scale")    worldUnitsPerMeter = next(i);
+    }
+    return lens;
+}
+
+int main(int argc, char** argv) {
     Image image(IMAGE_SIZE, IMAGE_SIZE);
 
+    double worldUnitsPerMeter = 100.0;
+    LensParams lens = parseLensFlags(argc, argv, worldUnitsPerMeter);
     Camera camera(
         Vec3(278, 278, -800),
         Vec3(278, 278, 0),
         Vec3(0, 1, 0),
         40.0,
-        1.0
+        1.0,
+        lens,
+        worldUnitsPerMeter
     );
+    if (lens.fStop > 0.0)
+        std::cerr << "Lens: f/" << lens.fStop << " @ " << lens.focalLength
+                  << "mm, focus " << lens.focusDistance << "\n";
 
     std::cerr << "Building scene...\n";
     Scene scene = buildCornellBox();

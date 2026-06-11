@@ -51,6 +51,8 @@ add_executable(run_tests
     tests/test_player_input.cpp
     tests/test_camera.cpp
     tests/test_scene_camera.cpp
+    tests/test_camera_store.cpp
+    tests/test_lens.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -64,7 +66,11 @@ add_executable(run_tests
     src/engine/camera/orbit_camera_controller.cpp
     src/engine/camera/fly_camera_controller.cpp
     src/engine/camera/scene_camera.cpp
+    src/engine/camera_store.cpp
+    src/camera.cpp
+    src/log.cpp
 )
+target_include_directories(run_tests SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE Threads::Threads)
 enable_testing()
@@ -155,6 +161,8 @@ set(VIEWER_SOURCES
     src/engine/camera/fly_camera_controller.cpp
     src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
+    src/engine/systems/camera_panel_system.cpp
+    src/engine/camera_store.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/dev_control_system.cpp

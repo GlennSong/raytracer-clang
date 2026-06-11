@@ -2,6 +2,7 @@
 
 #include "../components.h"
 #include "../mesh_builder.h"
+#include "../camera_store.h"
 #include "../../log.h"
 
 namespace engine {
@@ -74,6 +75,16 @@ void CameraSystem::onStart(FrameContext& ctx) {
     flyActive = ctx.settings.getString("cameraMode", "orbit") == "fly";
     active = flyActive ? static_cast<CameraController*>(&fly)
                        : static_cast<CameraController*>(&orbit);
+
+    // Saved placed cameras (sidecar JSON next to the level; the game state
+    // sets the path before systems start). Loaded entities need gizmos here —
+    // the store is renderer-free.
+    storePath = ctx.settings.getString("cameraStorePath", "");
+    if (!storePath.empty()) {
+        CameraStore::load(storePath, ctx.world);
+        placedCount = static_cast<int>(collectCameras(ctx.world).size());
+        ensureGizmos(ctx);
+    }
 }
 
 CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
@@ -171,6 +182,13 @@ void CameraSystem::update(FrameContext& ctx) {
     ctx.view.activeCameraEntity = activeCamera;
 }
 
+Entity CameraSystem::placeCameraAtView(FrameContext& ctx) {
+    float aspect = (ctx.framebufferHeight > 0)
+        ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
+        : 1.0f;
+    return placeCamera(ctx, aspect);
+}
+
 Entity CameraSystem::placeCamera(FrameContext& ctx, float aspect) {
     // Adopt the exact editor framing: position from the view, orientation from
     // its forward vector (roll-free, like the controllers themselves).
@@ -186,17 +204,7 @@ Entity CameraSystem::placeCamera(FrameContext& ctx, float aspect) {
     SceneCamera camera;
     camera.name = "Camera " + std::to_string(++placedCount);
     ctx.world.add<SceneCamera>(entity, camera);
-
-    if (!gizmoMesh.valid())
-        gizmoMesh = ctx.renderer.uploadMesh(MeshBuilder::box(Vec3(0.25, 0.3, 0.45)));
-    if (gizmoMesh.valid() && camera.showGizmo) {
-        Renderable gizmo;
-        gizmo.mesh = gizmoMesh;
-        gizmo.material.albedo = Vec3(0.15, 0.15, 0.18);
-        gizmo.material.metallic = 0.8f;
-        gizmo.material.roughness = 0.35f;
-        ctx.world.add<Renderable>(entity, gizmo);
-    }
+    ensureGizmos(ctx);
 
     LOG_INFO << "Placed " << camera.name << " at (" << transform.position.x
              << ", " << transform.position.y << ", " << transform.position.z
@@ -204,7 +212,32 @@ Entity CameraSystem::placeCamera(FrameContext& ctx, float aspect) {
     return entity;
 }
 
+void CameraSystem::ensureGizmos(FrameContext& ctx) {
+    std::vector<Entity> missing;
+    ctx.world.each<Transform, SceneCamera>(
+        [&](Entity e, Transform&, SceneCamera& cam) {
+            if (cam.showGizmo && !ctx.world.has<Renderable>(e))
+                missing.push_back(e);
+        });
+    if (missing.empty()) return;
+
+    if (!gizmoMesh.valid())
+        gizmoMesh = ctx.renderer.uploadMesh(MeshBuilder::box(Vec3(0.25, 0.3, 0.45)));
+    if (!gizmoMesh.valid()) return;
+
+    for (Entity e : missing) {
+        Renderable gizmo;
+        gizmo.mesh = gizmoMesh;
+        gizmo.material.albedo = Vec3(0.15, 0.15, 0.18);
+        gizmo.material.metallic = 0.8f;
+        gizmo.material.roughness = 0.35f;
+        ctx.world.add<Renderable>(e, gizmo);
+    }
+}
+
 void CameraSystem::onStop(FrameContext& ctx) {
+    if (!storePath.empty()) CameraStore::save(storePath, ctx.world);
+
     ctx.settings.setDouble("orbitTargetX", orbit.target.x);
     ctx.settings.setDouble("orbitTargetY", orbit.target.y);
     ctx.settings.setDouble("orbitTargetZ", orbit.target.z);

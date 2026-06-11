@@ -27,10 +27,17 @@ public:
     FlyCameraController& flyController() { return fly; }
     Entity activeSceneCamera() const { return activeCamera; }
 
+    // For the camera panel (and future pose sources): request a view switch
+    // (validity is re-checked next update; an invalid handle means the editor)
+    // and place a camera at the current editor framing.
+    void setActiveSceneCamera(Entity camera) { activeCamera = camera; }
+    Entity placeCameraAtView(FrameContext& ctx);
+
 private:
     void registerBindings(InputMap& actions) const;
     CameraInput gatherInput(FrameContext& ctx) const;
     Entity placeCamera(FrameContext& ctx, float aspect);
+    void ensureGizmos(FrameContext& ctx);
 
     OrbitCameraController orbit;
     FlyCameraController fly;
@@ -40,6 +47,7 @@ private:
     Entity activeCamera;        // invalid => the editor controllers drive the view
     MeshHandle gizmoMesh;       // camera-body mesh, uploaded on first placement
     int placedCount = 0;        // for default names ("Camera 1", ...)
+    std::string storePath;      // camera persistence sidecar; empty = no store
 
     Real mouseSensitivity = 0.3;   // degrees per pixel
     Real stickLookSpeed = 120.0;   // degrees/sec at full stick deflection

@@ -29,10 +29,20 @@ Quat orientationFromYawPitch(Real yawDegrees, Real pitchDegrees) {
 
 Quat orientationFromForward(const Vec3& forward) {
     if (forward.lengthSquared() <= 0.0) return Quat::identity();
-    Vec3 f = normalize(forward);
-    Real yaw = radiansToDegrees(std::atan2(f.x, -f.z));
-    Real pitch = radiansToDegrees(std::asin(std::clamp(f.y, Real(-1.0), Real(1.0))));
+    Real yaw, pitch;
+    yawPitchFromForward(forward, yaw, pitch);
     return orientationFromYawPitch(yaw, pitch);
+}
+
+void yawPitchFromForward(const Vec3& forward, Real& yawDegrees, Real& pitchDegrees) {
+    if (forward.lengthSquared() <= 0.0) {
+        yawDegrees = 0.0;
+        pitchDegrees = 0.0;
+        return;
+    }
+    Vec3 f = normalize(forward);
+    yawDegrees = radiansToDegrees(std::atan2(f.x, -f.z));
+    pitchDegrees = radiansToDegrees(std::asin(std::clamp(f.y, Real(-1.0), Real(1.0))));
 }
 
 std::vector<Entity> collectCameras(World& world) {

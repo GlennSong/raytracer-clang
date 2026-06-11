@@ -5,6 +5,7 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/render_system.h"
+#include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
@@ -28,11 +29,15 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<MotionSystem>();
     addSystem<DayNightSystem>();
     addSystem<RenderSystem>();
+    addSystem<CameraPanelSystem>(camSys);
 }
 
 void ArenaState::onEnter(FrameContext& ctx) {
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
+    // Placed cameras persist in a sidecar next to the level; CameraSystem
+    // loads/saves it (must be set before PlayingState::onEnter starts systems).
+    ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
     PlayingState::onEnter(ctx);
 }
