@@ -34,6 +34,7 @@ set(CORE_SOURCES
 # ============================================================
 add_executable(raytracer
     src/main.cpp
+    src/engine/model_importer.cpp   # EnvironmentLoader (HDR decode, stb TU)
     ${CORE_SOURCES}
 )
 target_include_directories(raytracer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
@@ -57,6 +58,7 @@ add_executable(run_tests
     tests/test_camera_store.cpp
     tests/test_lens.cpp
     tests/test_level_scene.cpp
+    tests/test_pbr_lighting.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp

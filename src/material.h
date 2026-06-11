@@ -9,7 +9,8 @@ enum class MaterialType {
     DIFFUSE,
     METAL,
     EMISSIVE,
-    GLASS
+    GLASS,
+    PBR     // metallic/roughness, evaluated with the viewer's GGX model
 };
 
 struct Material {
@@ -18,15 +19,29 @@ struct Material {
     Vec3 emission;
     double roughness;
     double ior;
+    double metallic;
+    bool checkerboard;   // world-space albedo checker (viewer material flag)
 
     Material()
         : type(MaterialType::DIFFUSE), albedo(0.8, 0.8, 0.8),
-          emission(0, 0, 0), roughness(0), ior(1.5) {}
+          emission(0, 0, 0), roughness(0), ior(1.5), metallic(0),
+          checkerboard(false) {}
 
     static Material diffuse(const Vec3& color) {
         Material mat;
         mat.type = MaterialType::DIFFUSE;
         mat.albedo = color;
+        return mat;
+    }
+
+    // Mirrors the realtime renderer's surface model (lighting.metal): albedo +
+    // perceptual roughness + metallic, f0 = lerp(0.04, albedo, metallic).
+    static Material pbr(const Vec3& color, double metallic, double roughness) {
+        Material mat;
+        mat.type = MaterialType::PBR;
+        mat.albedo = color;
+        mat.metallic = metallic;
+        mat.roughness = roughness;
         return mat;
     }
 

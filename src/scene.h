@@ -10,19 +10,53 @@
 
 namespace engine {
 
-// Sky + sun for rays that leave the scene. Disabled by default, which returns
-// black — exactly the tracer's historical miss behavior, so existing scenes
-// (the Cornell box) render unchanged. Imported levels enable it: outdoor
-// scenes have no emissive ceiling panel to light them.
+// A delta light, sampled explicitly with shadow rays (next-event estimation).
+// Types, units, and falloff mirror the realtime renderer (lighting.metal):
+// directional intensity is illuminance; point/spot color*intensity is the
+// illuminance at 1m with inverse-square falloff windowed to zero at `range`.
+// Directional `direction` points TOWARD the light (engine convention).
+struct SceneLight {
+    enum class Type { Directional, Point, Spot };
+    Type type = Type::Directional;
+    Vec3 direction{0.5, 0.7, -0.3};   // toward the light / spot aim (toward target)
+    Vec3 position;
+    Vec3 color{1, 1, 1};
+    double intensity = 1.0;
+    double range = 25.0;
+    double innerConeAngle = 0.3;      // radians (spot)
+    double outerConeAngle = 0.5;
+    double angularRadius = 0.03;      // radians; directional soft-shadow size
+};
+
+// Decoded equirectangular HDR environment (linear RGB), sampled on ray miss —
+// the path-traced equivalent of the viewer's image-based lighting (ADR-0016).
+struct EnvironmentMap {
+    int width = 0;
+    int height = 0;
+    std::vector<float> pixels;   // width*height*3
+
+    bool valid() const { return width > 0 && height > 0 && !pixels.empty(); }
+    Vec3 sample(const Vec3& unitDir) const;   // bilinear, equirect mapping
+
+    // When the dominant light is extracted into an explicit SceneLight
+    // (mirroring ADR-0017's HDR-drives-the-sun), the disc must come out of the
+    // map or sunlit surfaces count it twice. Disc texels (>= half the peak
+    // luminance, the extraction's own threshold) are replaced with the average
+    // of the circumsolar ring around them.
+    void suppressSunDisc();
+};
+
+// Sky for rays that leave the scene. Disabled by default, which returns black —
+// exactly the tracer's historical miss behavior, so existing scenes (the
+// Cornell box) render unchanged. Imported levels enable it: the HDR map when
+// the level has one, a horizon/zenith gradient otherwise. The sun is NOT part
+// of this — it is an explicit SceneLight, sampled with shadow rays.
 struct EnvironmentLight {
     bool enabled = false;
     Vec3 skyHorizon{0.5, 0.6, 0.7};
     Vec3 skyZenith{0.15, 0.3, 0.55};
     double skyIntensity = 1.0;
-    Vec3 sunDirection{0.35, -0.8, 0.25};   // direction the light travels
-    Vec3 sunColor{1.0, 0.95, 0.85};
-    double sunIntensity = 0.0;             // illuminance-style scale
-    double sunAngularRadius = 0.06;        // radians; padded to cut variance
+    EnvironmentMap map;   // when valid, replaces the gradient
 
     Vec3 radiance(const Vec3& unitDir) const;
 };
@@ -35,6 +69,7 @@ public:
     std::vector<Material> materials;
     KdTree kdTree;
     EnvironmentLight environment;
+    std::vector<SceneLight> lights;
 
     int addMaterial(const Material& mat);
     void addSphere(const Vec3& center, double radius, int matIdx);
@@ -46,6 +81,13 @@ public:
     void buildAccelerator();
     bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
     Vec3 tracePath(const Ray& ray, int maxBounces) const;
+
+    // Direct light at a surface point: one light sampled uniformly, BRDF
+    // evaluated with the viewer's GGX model, occlusion by shadow ray. Returns
+    // black with no lights (the Cornell box), keeping legacy renders identical.
+    Vec3 sampleDirectLight(const Vec3& point, const Vec3& normal,
+                           const Vec3& viewDir, const Vec3& albedo,
+                           double metallic, double roughness) const;
 };
 
 

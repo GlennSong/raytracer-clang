@@ -3,6 +3,7 @@
 #include "camera.h"
 #include "scene.h"
 #include "level_scene.h"
+#include "engine/model_importer.h"   // EnvironmentLoader: HDR decode + sun extraction
 #include "job_system.h"
 #include <iostream>
 #include <thread>
@@ -89,8 +90,14 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
             color = color * std::max(fall, 0.0);
         }
 
-        color = Vec3(std::sqrt(color.x), std::sqrt(color.y), std::sqrt(color.z));
-        color = clampVec(color, 0.0, 1.0);
+        // The viewer's display transform (post.metal composite): exposure
+        // above, then ACES filmic, then 2.2 gamma — so offline renders match
+        // the realtime look instead of the old sqrt gamma.
+        auto aces = [](double v) {
+            v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14);
+            return std::pow(std::clamp(v, 0.0, 1.0), 1.0 / 2.2);
+        };
+        color = Vec3(aces(color.x), aces(color.y), aces(color.z));
 
         image.setPixel(x, y, color);
     }
@@ -170,7 +177,44 @@ int main(int argc, char** argv) {
     double scale = opt.worldUnitsPerMeter;
 
     if (!opt.level.empty()) {
-        if (!LevelScene::load(opt.level, scene)) return 1;
+        std::string hdrPath;
+        if (!LevelScene::load(opt.level, scene, &hdrPath)) return 1;
+
+        // Parallel the viewer's environment path (ADR-0016/0017): the HDR is
+        // the sky, and its dominant light becomes the shadow-casting sun. The
+        // disc is patched out of the map afterwards so the explicit sun isn't
+        // counted twice.
+        if (!hdrPath.empty()) {
+            HdrImage hdrImage = EnvironmentLoader::loadHdr(hdrPath);
+            if (hdrImage.valid()) {
+                scene.environment.map.width = hdrImage.width;
+                scene.environment.map.height = hdrImage.height;
+                scene.environment.map.pixels = std::move(hdrImage.pixels);
+                if (hdrImage.hasSun) {
+                    SceneLight sun;
+                    sun.type = SceneLight::Type::Directional;
+                    sun.direction = hdrImage.sunDirection;
+                    sun.color = hdrImage.sunColor;
+                    sun.intensity = hdrImage.sunIntensity;
+                    scene.lights.push_back(sun);
+                    scene.environment.map.suppressSunDisc();
+                }
+            }
+            // A declared HDR suppresses the importer's default sun (the map
+            // is expected to light the scene) — if the file failed to load,
+            // fall back so the level isn't left in the dark. A valid map with
+            // no sun peak is simply overcast: the sky alone is correct.
+            if (!scene.environment.map.valid()) {
+                std::cerr << "HDR missing/unreadable (" << hdrPath
+                          << "); adding the default noon sun\n";
+                SceneLight noon;
+                noon.direction = Vec3(0.35, 0.8, 0.25);
+                noon.color = Vec3(1.0, 0.95, 0.85);
+                noon.intensity = 4.0;
+                scene.lights.push_back(noon);
+            }
+        }
+
         SidecarCamera cam;
         if (!loadSidecarCamera(opt.level, opt.cameraName, cam)) return 1;
         lookFrom = cam.position;

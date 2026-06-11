@@ -50,17 +50,23 @@ TEST_CASE(level_scene_imports_shapes_and_materials) {
     CHECK(scene.spheres.size() == 2);
     CHECK(scene.materials.size() == 3);
 
-    CHECK(scene.materials[0].type == MaterialType::DIFFUSE);
-    CHECK(scene.materials[1].type == MaterialType::METAL);
+    // Materials keep full PBR parameters (viewer GGX parity).
+    CHECK(scene.materials[0].type == MaterialType::PBR);
+    CHECK_APPROX(scene.materials[0].metallic, 0.0, 1e-9);
+    CHECK_APPROX(scene.materials[0].roughness, 0.8, 1e-9);
+    CHECK(scene.materials[1].type == MaterialType::PBR);
+    CHECK_APPROX(scene.materials[1].metallic, 1.0, 1e-9);
     CHECK_APPROX(scene.materials[1].roughness, 0.1, 1e-9);
     CHECK(scene.materials[2].type == MaterialType::EMISSIVE);
     CHECK_APPROX(scene.materials[2].emission.x, 4.0, 1e-9);
 
     // Outdoor lighting is on, tinted by the level's sky, with the default sun
-    // (the level declares none).
+    // as an explicitly sampled light (the level declares none, no HDR).
     CHECK(scene.environment.enabled);
     CHECK_APPROX(scene.environment.skyHorizon.y, 0.3, 1e-9);
-    CHECK(scene.environment.sunIntensity > 0.0);
+    CHECK(scene.lights.size() == 1);
+    CHECK(scene.lights[0].type == SceneLight::Type::Directional);
+    CHECK(scene.lights[0].intensity > 0.0);
 
     // A ray straight down from above the floor (clear of the spheres) hits its
     // top face (geometry is in world space and the KD-tree was built).

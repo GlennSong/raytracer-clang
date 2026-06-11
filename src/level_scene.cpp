@@ -27,18 +27,23 @@ int importMaterial(const json& ent, Scene& scene) {
     Vec3 albedo(0.8, 0.8, 0.8);
     double roughness = 0.5, metallic = 0.0;
     Vec3 emission(0, 0, 0);
+    bool checkerboard = false;
     if (ent.contains("material")) {
         const auto& m = ent["material"];
         albedo = parseVec3(m.value("albedo", json()), albedo);
         roughness = m.value("roughness", roughness);
         metallic = m.value("metallic", metallic);
         emission = parseVec3(m.value("emission", json()), emission);
+        if (m.contains("flags"))
+            for (const auto& f : m["flags"])
+                checkerboard |= (f == "checkerboard");
     }
     if (emission.lengthSquared() > 0.0)
         return scene.addMaterial(Material::emissive(emission, 1.0));
-    if (metallic >= 0.5)
-        return scene.addMaterial(Material::metal(albedo, roughness));
-    return scene.addMaterial(Material::diffuse(albedo));
+    // Full PBR parameters, shaded with the viewer's GGX model in tracePath.
+    Material mat = Material::pbr(albedo, metallic, roughness);
+    mat.checkerboard = checkerboard;
+    return scene.addMaterial(mat);
 }
 
 // Tessellated shape -> world-space triangles. The entity transform is applied
@@ -64,7 +69,8 @@ bool isIdentity(const Quat& q) {
 
 }  // namespace
 
-bool LevelScene::load(const std::string& levelPath, Scene& scene) {
+bool LevelScene::load(const std::string& levelPath, Scene& scene,
+                      std::string* outHdrPath) {
     std::ifstream file(levelPath);
     if (!file.is_open()) {
         LOG_ERROR << "Cannot open level: " << levelPath;
@@ -141,28 +147,68 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene) {
                  << (skipped == 1 ? "y" : "ies") << " (e.g. glTF models)";
 
     // Outdoor lighting: levels are lit by sun + sky, not emissive geometry.
+    // This parallels the viewer's light pass (ADR-0017): the same sun/point/
+    // spot lights, sampled explicitly with shadow rays instead of shadow maps.
     scene.environment.enabled = true;
+    std::string hdr;
     if (root.contains("environment") && root["environment"].is_object()) {
-        Vec3 sky = parseVec3(root["environment"].value("skyColor", json()),
+        const auto& env = root["environment"];
+        Vec3 sky = parseVec3(env.value("skyColor", json()),
                              scene.environment.skyHorizon);
         scene.environment.skyHorizon = sky;
         scene.environment.skyZenith = sky;
+        hdr = env.value("hdr", std::string());
+        if (!hdr.empty() && outHdrPath) {
+            // Resolve relative to the level file, like the viewer's loader.
+            std::string dir = levelPath;
+            std::size_t slash = dir.find_last_of("/\\");
+            dir = (slash == std::string::npos) ? "" : dir.substr(0, slash + 1);
+            *outHdrPath = dir + hdr;
+        }
     }
+
+    const json lighting = root.value("lighting", json::object());
     bool hasSun = false;
-    if (root.contains("lighting") && root["lighting"].contains("sun")) {
-        const auto& sun = root["lighting"]["sun"];
-        scene.environment.sunDirection =
-            parseVec3(sun.value("direction", json()),
-                      scene.environment.sunDirection);
-        scene.environment.sunColor =
-            parseVec3(sun.value("color", json()), scene.environment.sunColor);
-        scene.environment.sunIntensity = sun.value("intensity", 4.0);
+    if (lighting.contains("sun")) {
+        const auto& sun = lighting["sun"];
+        SceneLight l;
+        l.type = SceneLight::Type::Directional;
+        l.direction = parseVec3(sun.value("direction", json()), l.direction);
+        l.color = parseVec3(sun.value("color", json()), l.color);
+        l.intensity = sun.value("intensity", 4.0);
+        scene.lights.push_back(l);
         hasSun = true;
     }
-    if (!hasSun) {
+    for (const auto& pl : lighting.value("pointLights", json::array())) {
+        SceneLight l;
+        l.type = SceneLight::Type::Point;
+        l.position = parseVec3(pl.value("position", json()));
+        l.color = parseVec3(pl.value("color", json()), l.color);
+        l.intensity = pl.value("intensity", 1.0);
+        l.range = pl.value("range", 25.0);
+        scene.lights.push_back(l);
+    }
+    for (const auto& sl : lighting.value("spotLights", json::array())) {
+        SceneLight l;
+        l.type = SceneLight::Type::Spot;
+        l.position = parseVec3(sl.value("position", json()));
+        l.direction = parseVec3(sl.value("direction", json()), Vec3(0, -1, 0));
+        l.color = parseVec3(sl.value("color", json()), l.color);
+        l.intensity = sl.value("intensity", 1.0);
+        l.range = sl.value("range", 25.0);
+        l.innerConeAngle = sl.value("innerConeAngle", 0.3);
+        l.outerConeAngle = sl.value("outerConeAngle", 0.5);
+        scene.lights.push_back(l);
+    }
+    if (!hasSun && hdr.empty()) {
         // The viewer derives its sun from the HDR / day-night cycle, neither
-        // of which exists offline — light with a default noon sun instead.
-        scene.environment.sunIntensity = 4.0;
+        // of which exists here — light with a default noon sun instead. With
+        // an HDR, the caller extracts the dominant light from the map itself.
+        SceneLight noon;
+        noon.direction = Vec3(0.35, 0.8, 0.25);
+        noon.color = Vec3(1.0, 0.95, 0.85);
+        noon.intensity = 4.0;
+        scene.lights.push_back(noon);
         LOG_INFO << "Level has no explicit sun; using a default noon sun";
     }
 

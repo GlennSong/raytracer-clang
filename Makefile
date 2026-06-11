@@ -21,7 +21,8 @@ SRCS = \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/kdtree.cpp \
 	$(SRC_DIR)/level_scene.cpp \
-	$(SRC_DIR)/engine/mesh_builder.cpp
+	$(SRC_DIR)/engine/mesh_builder.cpp \
+	$(SRC_DIR)/engine/model_importer.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -42,6 +43,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_camera_store.cpp \
 	$(TEST_DIR)/test_lens.cpp \
 	$(TEST_DIR)/test_level_scene.cpp \
+	$(TEST_DIR)/test_pbr_lighting.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
