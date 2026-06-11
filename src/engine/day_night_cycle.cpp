@@ -63,7 +63,9 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt) {
     DayNightState s;
     s.sunDirection     = sunDir;
     s.sunColor         = sunColor;
-    s.sunIntensity     = static_cast<float>(1.6 * day);
+    // Illuminance-scale units (ADR-0017 Phase 1): the Lambert 1/π in the shader
+    // means ~π × the old Blinn-Phong value preserves the same noon brightness.
+    s.sunIntensity     = static_cast<float>(5.0 * day);
     s.skyDiscIntensity = static_cast<float>(smoothstep(-0.04, 0.10, elev));
     s.zenithColor      = zenith;
     s.horizonColor     = horizon;

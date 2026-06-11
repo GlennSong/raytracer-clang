@@ -259,6 +259,7 @@ static void loadLighting(const json& lighting, RenderView& view) {
             p.position  = parseVec3(pl["position"]);
             p.color     = parseVec3(pl["color"], Vec3(1, 1, 1));
             p.intensity = pl.value("intensity", 1.0f);
+            p.range     = pl.value("range", p.range);
             l.pointLights.push_back(p);
         }
     }
@@ -271,11 +272,25 @@ static void loadLighting(const json& lighting, RenderView& view) {
             s.direction      = parseVec3(sl["direction"]);
             s.color          = parseVec3(sl["color"], Vec3(1, 1, 1));
             s.intensity      = sl.value("intensity", 1.0f);
+            s.range          = sl.value("range", s.range);
             s.innerConeAngle = sl.value("innerConeAngle", 0.3f);
             s.outerConeAngle = sl.value("outerConeAngle", 0.5f);
             s.castsShadow    = sl.value("castsShadow", false);
             l.spotLights.push_back(s);
         }
+    }
+
+    if (lighting.contains("shadow")) {
+        auto& sh = lighting["shadow"];
+        l.shadow.enabled    = sh.value("enabled", l.shadow.enabled);
+        l.shadow.bias       = sh.value("bias", l.shadow.bias);
+        l.shadow.normalBias = sh.value("normalBias", l.shadow.normalBias);
+        l.shadow.pcfRadius  = sh.value("pcfRadius", l.shadow.pcfRadius);
+        // Artistic response (ADR-0017 Phase 2)
+        l.shadowArtistic.strength        = sh.value("strength", l.shadowArtistic.strength);
+        l.shadowArtistic.ambientStrength = sh.value("ambientStrength", l.shadowArtistic.ambientStrength);
+        if (sh.contains("tint"))
+            l.shadowArtistic.tint = parseVec3(sh["tint"], l.shadowArtistic.tint);
     }
 
     l.exposure          = lighting.value("exposure", l.exposure);
@@ -330,8 +345,12 @@ bool LevelLoader::load(const std::string& path,
             std::string envPath = env["hdr"].get<std::string>();
             if (!envPath.empty() && envPath[0] != '/')
                 envPath = levelDir + "/" + envPath;
-            renderer.setEnvironmentMap(
-                EnvironmentLoader::loadEnvironmentMap(envPath, renderer));
+            // The HDR's dominant light drives the shadow-casting sun (ADR-0017
+            // Phase 2) so shadows match the sun baked into the image; set
+            // "driveSun": false to keep the level's authored sun instead.
+            bool driveSun = env.value("driveSun", true);
+            renderer.setEnvironmentMap(EnvironmentLoader::loadEnvironmentMap(
+                envPath, renderer, driveSun ? &view.lighting.sun : nullptr));
         }
     }
 

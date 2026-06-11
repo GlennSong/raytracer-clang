@@ -71,10 +71,14 @@ struct RenderMesh {
     RenderMesh() : materialIndex(0) {}
 };
 
+// Light units (ADR-0017 Phase 1): for the sun, color * intensity is the
+// illuminance arriving from its direction. For point/spot lights it is the
+// illuminance at 1 m; falloff is inverse-square, windowed to zero at `range`.
 struct PointLight {
     Vec3 position;
     Vec3 color;
     float intensity;
+    float range = 25.0f;    // falloff window radius (world units)
 
     PointLight() : color(1, 1, 1), intensity(1.0f) {}
     PointLight(const Vec3& pos, const Vec3& col, float intensity)
@@ -101,6 +105,7 @@ struct SpotLight {
     Vec3 direction;     // toward target
     Vec3 color;
     float intensity;
+    float range = 25.0f;    // falloff window radius (world units)
     float innerConeAngle;   // radians
     float outerConeAngle;   // radians
     bool castsShadow;
@@ -118,10 +123,23 @@ struct SpotLight {
 };
 
 struct ShadowConfig {
-    float bias = 0.005f;
-    float normalBias = 0.02f;
+    float bias = 0.005f;        // rasterization depth bias (shadow pass encoder)
+    float normalBias = 0.02f;   // world-space lookup offset along the normal
+    float pcfRadius = 1.0f;     // PCF tap spread in shadow-map texels
     int resolution = 2048;
     bool enabled = true;
+};
+
+// Artistic shadow response (ADR-0017 Phase 2). Shadow visibility becomes a
+// color: occluded regions lerp toward `tint` (a deep blue reads richer than
+// black), `strength` scales how dark full shadow gets on direct light, and
+// `ambientStrength` is how much shadow also occludes the environment/IBL
+// terms — the knob that makes shadows read under an HDR sky, whose energy
+// otherwise arrives entirely through the unshadowed ambient path.
+struct ShadowArtistic {
+    float strength = 1.0f;
+    Vec3 tint{0, 0, 0};
+    float ambientStrength = 0.5f;
 };
 
 // Procedural sky parameters (ADR-0016). Drive the analytic skybox and, via the
@@ -150,6 +168,7 @@ struct SceneLighting {
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;
+    ShadowArtistic shadowArtistic;
     ProceduralSky sky;
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
@@ -278,6 +297,7 @@ public:
         float radius    = 1.5f;
         float intensity = 0.8f;
         float bias      = 0.05f;
+        float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
         int directions  = 4;
         int steps       = 4;
     } ssaoParams;

@@ -1,8 +1,7 @@
 {
   "version": 1,
   "environment": {
-    "skyColor": [0.05, 0.05, 0.08],
-    "hdr": "../env/tree_lined_driveway_1k.hdr"
+    "skyColor": [0.05, 0.05, 0.08]
   },
   "entities": [
     {
@@ -154,20 +153,21 @@
     "sun": {
       "direction": [0.5, 0.7, -0.4],
       "color": [1.0, 0.93, 0.80],
-      "intensity": 3.0,
+      "intensity": 9.5,
       "castsShadow": true
     },
     "pointLights": [
-      { "position": [0, 12, 0],     "color": [1.0, 0.95, 0.9], "intensity": 6 },
-      { "position": [-15, 8, -15],  "color": [0.4, 0.5, 1.0],  "intensity": 4 },
-      { "position": [15, 8, 15],    "color": [1.0, 0.7, 0.3],  "intensity": 4 }
+      { "position": [0, 12, 0],     "color": [1.0, 0.95, 0.9], "intensity": 450, "range": 30 },
+      { "position": [-15, 8, -15],  "color": [0.4, 0.5, 1.0],  "intensity": 240, "range": 25 },
+      { "position": [15, 8, 15],    "color": [1.0, 0.7, 0.3],  "intensity": 240, "range": 25 }
     ],
     "spotLights": [
       {
         "position": [0, 10, 0],
         "direction": [0, -1, 0],
         "color": [1.0, 0.9, 0.8],
-        "intensity": 8,
+        "intensity": 520,
+        "range": 20,
         "innerConeAngle": 0.3,
         "outerConeAngle": 0.5
       }

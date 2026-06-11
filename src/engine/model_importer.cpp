@@ -296,17 +296,74 @@ HdrImage EnvironmentLoader::loadHdr(const std::string& path) {
     }
     out.avgLuminance = std::exp(static_cast<float>(logSum / static_cast<double>(pixelCount)));
 
+    // Dominant-light extraction (ADR-0017 Phase 2): find the brightest texel,
+    // then integrate direction, chromaticity, and illuminance over its
+    // luminance neighborhood (≥ half the peak — the sun disc, in practice).
+    // An equirect texel at row y subtends solid angle (2π/W)(π/H)·sin(θ), so
+    // Σ luminance·ω over the disc is the illuminance it delivers — directly
+    // the directional-light intensity in the renderer's units.
+    float maxLum = 0.0f;
+    for (size_t i = 0; i < pixelCount; i++) {
+        const float* p = out.pixels.data() + i * 3;
+        float lum = 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2];
+        if (lum > maxLum) maxLum = lum;
+    }
+    // Gate: a real sun is far brighter than the sky around it. Maps with no
+    // clear peak (overcast) keep hasSun = false and the level's authored sun.
+    if (maxLum > 10.0f && maxLum > 50.0f * out.avgLuminance) {
+        const float discThreshold = 0.5f * maxLum;
+        const double texelBase = (2.0 * M_PI / w) * (M_PI / h);
+        Vec3 dirSum, colorSum;
+        double illum = 0.0;
+        for (int y = 0; y < h; y++) {
+            // Inverse of the shader's equirect mapping: v = acos(dir.y)/π,
+            // u = atan2(dir.z, dir.x)/2π + 0.5.
+            double theta = (y + 0.5) / h * M_PI;
+            double sinT = std::sin(theta), cosT = std::cos(theta);
+            double omega = texelBase * sinT;
+            for (int x = 0; x < w; x++) {
+                const float* p = out.pixels.data() + (static_cast<size_t>(y) * w + x) * 3;
+                float lum = 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2];
+                if (lum < discThreshold) continue;
+                double phi = ((x + 0.5) / w - 0.5) * 2.0 * M_PI;
+                Vec3 dir(sinT * std::cos(phi), cosT, sinT * std::sin(phi));
+                double e = lum * omega;
+                dirSum   += dir * e;
+                colorSum += Vec3(p[0], p[1], p[2]) * omega;
+                illum    += e;
+            }
+        }
+        if (illum > 0.0) {
+            out.hasSun = true;
+            out.sunDirection = normalize(dirSum);
+            out.sunIntensity = static_cast<float>(illum);
+            Real colorLum = 0.2126 * colorSum.x + 0.7152 * colorSum.y + 0.0722 * colorSum.z;
+            out.sunColor = (colorLum > 0.0) ? colorSum / colorLum : Vec3(1, 1, 1);
+        }
+    }
+
     std::cout << "[INFO] Loaded HDR environment: " << path
               << " (" << w << "x" << h << "), avg luminance "
               << out.avgLuminance << "\n";
+    if (out.hasSun) {
+        std::cout << "[INFO] HDR sun extracted: dir (" << out.sunDirection.x
+                  << ", " << out.sunDirection.y << ", " << out.sunDirection.z
+                  << "), intensity " << out.sunIntensity << "\n";
+    }
     return out;
 }
 
 TextureHandle EnvironmentLoader::loadEnvironmentMap(const std::string& path,
-                                                    Renderer& renderer) {
+                                                    Renderer& renderer,
+                                                    DirectionalLight* outSun) {
     HdrImage img = loadHdr(path);
     if (!img.valid()) return TextureHandle{};
     renderer.environmentAvgLuminance = img.avgLuminance;  // for auto-exposure
+    if (outSun && img.hasSun) {
+        outSun->direction = img.sunDirection;
+        outSun->color = img.sunColor;
+        outSun->intensity = img.sunIntensity;
+    }
     return renderer.uploadTextureHDR(img.width, img.height, 3, img.pixels.data());
 }
 
