@@ -10,15 +10,6 @@ float3 sampleEquirect(texture2d<float> envMap, sampler s, float3 dir) {
     return envMap.sample(s, float2(u, v)).rgb;
 }
 
-// Equirect sample at an explicit mip level — used for HDR image-based lighting,
-// where a roughness-scaled LOD approximates prefiltered specular and a high LOD
-// approximates diffuse irradiance (cheap IBL without a separate convolution).
-float3 sampleEquirectLod(texture2d<float> envMap, sampler s, float3 dir, float lod) {
-    float u = atan2(dir.z, dir.x) * (0.5 / M_PI_F) + 0.5;
-    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / M_PI_F);
-    return envMap.sample(s, float2(u, v), level(lod)).rgb;
-}
-
 // Procedural sky environment. Colors and the sun arc come from `env` (the day/
 // night state baked into LightUniforms), so dawn→day→dusk→night grade smoothly
 // and the disc fades out as the sun sets. The shader only interpolates; the
@@ -125,11 +116,14 @@ vertex SkyboxOut vertexSkybox(
     SkyboxOut out;
     out.position = clipPos;
 
-    // Reconstruct world-space view direction via inverse view-projection.
-    // This correctly accounts for FOV and aspect ratio so the sky matches
-    // the scene perspective.
+    // Reconstruct the world-space view ray via inverse view-projection.
+    // CRITICAL: do NOT normalize here. Far-plane offsets are affine in NDC, so
+    // their interpolation across the triangle is exact; normalizing at the
+    // vertices warps every interior pixel (up to ~25° with this oversized
+    // triangle) — that warp was the historic "mis-oriented cube bake".
+    // The fragment shaders normalize per pixel.
     float4 worldPos = camera.invViewProjection * float4(clipPos.xy, 1.0, 1.0);
-    out.viewDir = normalize(worldPos.xyz / worldPos.w - camera.cameraPosition);
+    out.viewDir = worldPos.xyz / worldPos.w - camera.cameraPosition;
     return out;
 }
 
@@ -244,8 +238,23 @@ kernel void integrateBRDF(
     lut.write(float4(A, B, 0, 1), gid);
 }
 
-// --- Cubemap pre-filter compute shader (GGX importance sampling per mip level) ---
+// --- Cubemap pre-filter + irradiance compute shaders ---
 
+// Texel (uv in [-1,1], v down) → sample direction for a cube face. The MSL
+// twin of cubeFaceDirection in src/renderer/cube_faces.h — the convention is
+// unit-tested there (tests/test_cube_faces.cpp).
+float3 cubeFaceDir(int face, float2 uv) {
+    switch (face) {
+        case 0: return float3( 1, -uv.y, -uv.x);  // +X
+        case 1: return float3(-1, -uv.y,  uv.x);  // -X
+        case 2: return float3( uv.x,  1,  uv.y);  // +Y
+        case 3: return float3( uv.x, -1, -uv.y);  // -Y
+        case 4: return float3( uv.x, -uv.y,  1);  // +Z
+        default: return float3(-uv.x, -uv.y, -1); // -Z
+    }
+}
+
+// GGX importance-sampled radiance prefilter, one (mip, face) per dispatch.
 kernel void prefilterEnvMap(
     texturecube<float> inputCube [[texture(0)]],
     texturecube<float, access::write> outputFace [[texture(1)]],
@@ -257,19 +266,8 @@ kernel void prefilterEnvMap(
     uint size = outputFace.get_width();
     if (gid.x >= size || gid.y >= size) return;
 
-    // Convert pixel to cubemap direction
     float2 uv = (float2(gid) + 0.5) / float(size) * 2.0 - 1.0;
-
-    float3 dir;
-    switch (faceIndex) {
-        case 0: dir = float3( 1, -uv.y, -uv.x); break; // +X
-        case 1: dir = float3(-1, -uv.y,  uv.x); break; // -X
-        case 2: dir = float3( uv.x,  1,  uv.y); break; // +Y
-        case 3: dir = float3( uv.x, -1, -uv.y); break; // -Y
-        case 4: dir = float3( uv.x, -uv.y,  1); break; // +Z
-        case 5: dir = float3(-uv.x, -uv.y, -1); break; // -Z
-    }
-    float3 N = normalize(dir);
+    float3 N = normalize(cubeFaceDir(faceIndex, uv));
 
     if (roughness < 0.01) {
         // No filtering needed for mip 0
@@ -283,6 +281,10 @@ kernel void prefilterEnvMap(
     float totalWeight = 0.0;
     const uint SAMPLES = 512u;
 
+    // Sample a blurred source mip as the lobe widens — without this, a tiny
+    // very-bright sun disc aliases into fireflies at finite sample counts.
+    float srcLod = roughness * 4.0;
+
     for (uint i = 0u; i < SAMPLES; i++) {
         float2 Xi = hammersley(i, SAMPLES);
         float3 H = importanceSampleGGX(Xi, N, roughness);
@@ -290,11 +292,65 @@ kernel void prefilterEnvMap(
 
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL > 0.0) {
-            prefilteredColor += inputCube.sample(envSampler, L).rgb * NdotL;
+            prefilteredColor += inputCube.sample(envSampler, L, level(srcLod)).rgb * NdotL;
             totalWeight += NdotL;
         }
     }
 
     prefilteredColor /= max(totalWeight, 0.001);
     outputFace.write(float4(prefilteredColor, 1.0), gid, faceIndex);
+}
+
+// Validation probe (load-time diagnostics): writes the reconstructed bake
+// direction as color so the CPU can verify the rasterizer/invVP link of the
+// chain numerically.
+fragment float4 fragmentDirectionDebug(SkyboxOut in [[stage_in]]) {
+    return float4(normalize(in.viewDir) * 0.5 + 0.5, 1.0);
+}
+
+// Validation probe (load-time diagnostics): hardware-sample the cube along
+// supplied directions so the CPU can verify the full bake→sample chain.
+kernel void sampleCubeForValidation(
+    texturecube<float> cube [[texture(0)]],
+    device const float4* dirs [[buffer(0)]],
+    device float4* results [[buffer(1)]],
+    sampler s [[sampler(0)]],
+    uint i [[thread_position_in_grid]]
+) {
+    results[i] = cube.sample(s, normalize(dirs[i].xyz), level(4.0));
+}
+
+// Cosine-convolved irradiance, one face per dispatch. Stores the cosine-
+// weighted average radiance E(n)/π — the value that multiplies albedo
+// directly in the ambient term (the Lambert 1/π is already folded in).
+kernel void convolveIrradiance(
+    texturecube<float> inputCube [[texture(0)]],
+    texturecube<float, access::write> outputFace [[texture(1)]],
+    constant int& faceIndex [[buffer(0)]],
+    sampler envSampler [[sampler(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint size = outputFace.get_width();
+    if (gid.x >= size || gid.y >= size) return;
+
+    float2 uv = (float2(gid) + 0.5) / float(size) * 2.0 - 1.0;
+    float3 N = normalize(cubeFaceDir(faceIndex, uv));
+
+    float3 up = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 T = normalize(cross(up, N));
+    float3 B = cross(N, T);
+
+    // Cosine-weighted hemisphere sampling; a blurred source mip stands in for
+    // the many more samples a tiny sun disc would otherwise need.
+    const uint SAMPLES = 256u;
+    float3 sum = float3(0.0);
+    for (uint i = 0u; i < SAMPLES; i++) {
+        float2 Xi = hammersley(i, SAMPLES);
+        float phi = 2.0 * M_PI_F * Xi.x;
+        float cosTheta = sqrt(1.0 - Xi.y);
+        float sinTheta = sqrt(Xi.y);
+        float3 l = T * (cos(phi) * sinTheta) + B * (sin(phi) * sinTheta) + N * cosTheta;
+        sum += inputCube.sample(envSampler, l, level(4.0)).rgb;
+    }
+    outputFace.write(float4(sum / float(SAMPLES), 1.0), gid, faceIndex);
 }

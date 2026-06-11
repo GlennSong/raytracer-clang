@@ -132,6 +132,11 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             ImGui::TextDisabled("(avg lum %.3f)", avgLum);
         }
         ImGui::SliderFloat("Ambient", &lit.ambientMultiplier, 0.0f, 1.0f);
+        float ambTint[3] = {static_cast<float>(lit.ambientTint.x),
+                            static_cast<float>(lit.ambientTint.y),
+                            static_cast<float>(lit.ambientTint.z)};
+        if (ImGui::ColorEdit3("Ambient Tint", ambTint))
+            lit.ambientTint = Vec3(ambTint[0], ambTint[1], ambTint[2]);
 
         // Artistic shadow response (ADR-0017 Phase 2)
         ImGui::SeparatorText("Shadows");

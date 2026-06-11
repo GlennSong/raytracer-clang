@@ -295,6 +295,8 @@ static void loadLighting(const json& lighting, RenderView& view) {
 
     l.exposure          = lighting.value("exposure", l.exposure);
     l.ambientMultiplier = lighting.value("ambientMultiplier", l.ambientMultiplier);
+    if (lighting.contains("ambientTint"))
+        l.ambientTint = parseVec3(lighting["ambientTint"], l.ambientTint);
 }
 
 bool LevelLoader::load(const std::string& path,

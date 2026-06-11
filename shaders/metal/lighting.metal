@@ -2,6 +2,35 @@
 // shared shadeSurface() used by both the single-draw and instanced fragment
 // entry points (ADR-0017 Phase 0 — previously two ~150-line duplicates).
 
+// --- Unified environment sampling (ADR-0017 Phase 3) ---
+// One provider interface for both environments: HDR mode samples the baked
+// irradiance / GGX-prefiltered cubes; procedural mode evaluates the analytic
+// sky (cheap, low-frequency — baking it per-frame as the day/night cycle
+// animates is a deferred optimization, noted in the ADR).
+
+// Cosine-convolved incoming light for the diffuse/ambient term (already
+// divided by π — multiplies albedo directly).
+float3 envIrradiance(float3 n, constant EnvUniforms& env,
+                     texturecube<float> irradianceEnv, sampler s,
+                     device const LightUniforms& lightData) {
+    return (env.mode == 1) ? irradianceEnv.sample(s, n).rgb
+                           : sampleEnvironment(n, lightData);
+}
+
+// Prefiltered specular radiance along `dir`; mips are linear in roughness.
+// The procedural fallback approximates the blur by lerping toward the
+// normal-direction radiance.
+float3 envPrefilteredRadiance(float3 dir, float3 n, float rough,
+                              constant EnvUniforms& env,
+                              texturecube<float> prefilteredEnv, sampler s,
+                              device const LightUniforms& lightData) {
+    if (env.mode == 1)
+        return prefilteredEnv.sample(s, dir, level(rough * float(env.envMaxMip))).rgb;
+    float mipBlur = rough * rough;
+    return mix(sampleEnvironment(dir, lightData),
+               sampleEnvironment(n, lightData), mipBlur);
+}
+
 // --- Reflection probes ---
 
 // Parallax-corrected box projection for cubemap sampling
@@ -15,13 +44,16 @@ float3 boxProjectReflection(float3 reflectDir, float3 worldPos,
     return intersectPos - probePos;
 }
 
-// Sample reflection from probes with distance-based blending, fallback to procedural sky
+// Sample reflection from probes with distance-based blending; falls back to
+// the active environment (HDR prefiltered cube or procedural sky).
 float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughness,
                                float3 normal, float NdotV, float3 f0,
                                device const GPUReflectionProbe* probes,
                                constant ProbeUniforms& probeParams,
                                texturecube_array<float> cubemapArray,
                                texture2d<float> brdfLUT,
+                               texturecube<float> prefilteredEnv,
+                               constant EnvUniforms& envSel,
                                sampler envSampler,
                                device const LightUniforms& env) {
     // Perceptual roughness-to-mip mapping — square the roughness for smoother
@@ -57,11 +89,12 @@ float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughnes
 
     float totalWeight = bestWeight[0] + bestWeight[1];
     if (totalWeight < 0.001) {
-        // Outside all probes — fall back to procedural sky
-        float3 envColor = sampleEnvironment(reflectDir, env);
-        float mipBlur = roughness * roughness * roughness;  // smooth falloff
-        envColor = mix(envColor, sampleEnvironment(normal, env), mipBlur);
-        return fresnelSchlickVec(NdotV, f0) * envColor;
+        // Outside all probes — fall back to the active environment, with the
+        // same split-sum weighting as everywhere else.
+        float3 envColor = envPrefilteredRadiance(reflectDir, normal, roughness,
+                                                 envSel, prefilteredEnv,
+                                                 envSampler, env);
+        return fresnel * envColor;
     }
 
     float3 probeColor = float3(0.0);
@@ -77,12 +110,12 @@ float3 sampleReflectionProbes(float3 worldPos, float3 reflectDir, float roughnes
         probeColor += sample * (bestWeight[j] / totalWeight);
     }
 
-    // Blend remaining weight to procedural sky fallback
+    // Blend remaining weight to the environment fallback
     float skyWeight = 1.0 - saturate(totalWeight);
     if (skyWeight > 0.001) {
-        float3 skyColor = sampleEnvironment(reflectDir, env);
-        float mipBlur = roughness * roughness;
-        skyColor = mix(skyColor, sampleEnvironment(normal, env), mipBlur);
+        float3 skyColor = envPrefilteredRadiance(reflectDir, normal, roughness,
+                                                 envSel, prefilteredEnv,
+                                                 envSampler, env);
         probeColor = mix(probeColor, skyColor, skyWeight);
     }
 
@@ -216,7 +249,8 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
                          texture2d<float> normalMap,
                          texture2d<float> aoMap,
                          texture2d<float> emissiveMap,
-                         texture2d<float> equirectEnv,
+                         texturecube<float> prefilteredEnv,
+                         texturecube<float> irradianceEnv,
                          sampler shadowSampler,
                          sampler envSampler,
                          sampler texSampler) {
@@ -297,45 +331,36 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float3 reflectDir = reflect(-viewDir, normal);
     float3 f0 = mix(float3(0.04), albedo, mtl);
 
+    // Unified environment path (ADR-0017 Phase 3): irradiance for ambient,
+    // GGX-prefiltered radiance weighted by the split-sum BRDF LUT for
+    // specular, with local reflection probes blended on top when present.
+    float3 envDiffuse = envIrradiance(normal, env, irradianceEnv, envSampler,
+                                      lightData);
+    float3 envReflection = envPrefilteredRadiance(reflectDir, normal, 0.0, env,
+                                                  prefilteredEnv, envSampler,
+                                                  lightData);
     float3 envSpecular;
-    float3 envReflection;
-    float3 envDiffuse;   // environment irradiance for the ambient term
-    if (env.mode == 1) {
-        // HDR image-based lighting (ADR-0016): sample the equirect directly.
-        // Roughness selects the mip for a cheap prefiltered-specular look; a high
-        // mip approximates diffuse irradiance. This puts objects in the same
-        // radiance units as the HDR sky, so one exposure balances the whole frame.
-        float maxLod = float(equirectEnv.get_num_mip_levels() - 1);
-        envReflection = sampleEquirectLod(equirectEnv, envSampler, reflectDir, 0.0);
-        // Clamp the sampled HDR so the (very bright) sun disc can't blow out IBL.
-        float3 prefiltered = min(sampleEquirectLod(equirectEnv, envSampler, reflectDir, rough * maxLod), 10.0);
-        // Split-sum: the BRDF LUT weights specular by (NdotV, roughness) so grazing
-        // angles don't reflect the full environment and saturate to white.
-        float2 brdf = brdfLUT.sample(envSampler, float2(NdotV, rough)).rg;
-        envSpecular = (f0 * brdf.x + brdf.y) * prefiltered;
-        envDiffuse = min(sampleEquirectLod(equirectEnv, envSampler, normal, max(maxLod - 2.0, 0.0)), 10.0);
-    } else if (probeParams.probeCount > 0) {
+    if (probeParams.probeCount > 0) {
         envSpecular = sampleReflectionProbes(geom.worldPosition, reflectDir,
                                               rough, normal, NdotV, f0,
                                               probes, probeParams,
-                                              cubemapArray, brdfLUT, envSampler,
+                                              cubemapArray, brdfLUT,
+                                              prefilteredEnv, env, envSampler,
                                               lightData);
-        envReflection = cubemapArray.sample(envSampler, reflectDir, 0, level(0.0)).rgb;
-        envDiffuse = sampleEnvironment(normal, lightData);
     } else {
-        envReflection = sampleEnvironment(reflectDir, lightData);
-        float3 fresnel = fresnelSchlickVec(NdotV, f0);
-        float mipBlur = rough * rough;
-        float3 envBlurred = mix(envReflection, sampleEnvironment(normal, lightData), mipBlur);
-        envSpecular = fresnel * envBlurred;
-        envDiffuse = sampleEnvironment(normal, lightData);
+        float2 brdf = brdfLUT.sample(envSampler, float2(NdotV, rough)).rg;
+        float3 prefiltered = envPrefilteredRadiance(reflectDir, normal, rough,
+                                                    env, prefilteredEnv,
+                                                    envSampler, lightData);
+        envSpecular = (f0 * brdf.x + brdf.y) * prefiltered;
     }
 
     float3 directLight = evaluateLighting(geom.worldPosition, normal, viewDir,
                                            albedo, mtl, rough,
                                            f0, lightData, directShadow);
 
-    float3 ambientDiffuse = albedo * envDiffuse * lightData.ambientMultiplier * (1.0 - mtl) * ao;
+    float3 ambientDiffuse = albedo * envDiffuse * lightData.ambientTint
+                          * lightData.ambientMultiplier * (1.0 - mtl) * ao;
     float3 color = emit + directLight
                  + (ambientDiffuse + envSpecular) * ambientShadow;
 
@@ -415,7 +440,8 @@ fragment GBufferOut fragmentMain(
     texture2d<float> normalMap [[texture(5)]],
     texture2d<float> aoMap [[texture(6)]],
     texture2d<float> emissiveMap [[texture(7)]],
-    texture2d<float> equirectEnv [[texture(8)]],
+    texturecube<float> prefilteredEnv [[texture(8)]],
+    texturecube<float> irradianceEnv [[texture(9)]],
     sampler shadowSampler [[sampler(0)]],
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
@@ -430,7 +456,7 @@ fragment GBufferOut fragmentMain(
                         probeParams, probes, env,
                         shadowMap, cubemapArray, brdfLUT,
                         albedoMap, metalRoughMap, normalMap, aoMap,
-                        emissiveMap, equirectEnv,
+                        emissiveMap, prefilteredEnv, irradianceEnv,
                         shadowSampler, envSampler, texSampler);
 }
 
@@ -450,7 +476,8 @@ fragment GBufferOut fragmentMainInstanced(
     texture2d<float> normalMap [[texture(5)]],
     texture2d<float> aoMap [[texture(6)]],
     texture2d<float> emissiveMap [[texture(7)]],
-    texture2d<float> equirectEnv [[texture(8)]],
+    texturecube<float> prefilteredEnv [[texture(8)]],
+    texturecube<float> irradianceEnv [[texture(9)]],
     sampler shadowSampler [[sampler(0)]],
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
@@ -463,6 +490,6 @@ fragment GBufferOut fragmentMainInstanced(
                         probeParams, probes, env,
                         shadowMap, cubemapArray, brdfLUT,
                         albedoMap, metalRoughMap, normalMap, aoMap,
-                        emissiveMap, equirectEnv,
+                        emissiveMap, prefilteredEnv, irradianceEnv,
                         shadowSampler, envSampler, texSampler);
 }

@@ -105,6 +105,8 @@ struct LightUniforms {
     // Procedural clouds (ADR-0016 step 3). time = drift phase in seconds.
     float skyCloudCoverage; float skyCloudDensity;
     float skyCloudScale;    float skyCloudTime;
+    // Grading (ADR-0017 Phase 3): tints the ambient/irradiance term only.
+    simd_float3 ambientTint; float _grad0;
 };
 
 // Per-frame shadow sampling parameters. The rasterization depth bias is NOT
@@ -122,14 +124,16 @@ struct ShadowUniforms {
     float   _pad[2];
 };
 
-// Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR equirect.
+// Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR cube.
 // cloudsEnabled gates the procedural cloud overlay so the reflection-probe bake
 // (which reuses the skybox shader) can render a clouds-free sky — animated
-// clouds are a screen/SSR visual only, never baked into probes.
+// clouds are a screen/SSR visual only, never baked into probes. envMaxMip is
+// the top mip of the GGX-prefiltered environment cube (ADR-0017 Phase 3).
 struct EnvUniforms {
     int32_t mode;
     int32_t cloudsEnabled;
-    float   _pad[2];
+    int32_t envMaxMip;
+    float   _pad[1];
 };
 
 struct GPUReflectionProbe {

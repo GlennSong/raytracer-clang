@@ -172,6 +172,7 @@ struct SceneLighting {
     ProceduralSky sky;
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
+    Vec3 ambientTint{1, 1, 1};   // grades the ambient/irradiance term only
 };
 
 struct ReflectionProbe {

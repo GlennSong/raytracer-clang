@@ -540,7 +540,6 @@ fragment float4 fragmentComposite(
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
     texturecube<float> envCube [[texture(6)]],
-    texture2d<float> equirectMap [[texture(7)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeUniforms& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
@@ -597,11 +596,10 @@ fragment float4 fragmentComposite(
         float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
         if (params.envMode == 1) {
-            // HDR environment: sample the equirect directly by the (verified)
-            // composite rayDir. The equirect→cube bake used the broken vertexSkybox
-            // direction path, so the cube was mis-oriented; a direct lat-long lookup
-            // is cheap for a fullscreen pass and bypasses the bake entirely.
-            hdrColor = sampleEquirect(equirectMap, envSampler, rayDir);
+            // HDR environment: a cheap cube lookup. The bake's orientation is
+            // proven by tests/test_cube_faces.cpp (ADR-0017 Phase 3), so the
+            // old per-pixel equirect workaround is gone.
+            hdrColor = envCube.sample(envSampler, rayDir).rgb;
         } else {
             hdrColor = sampleEnvironment(rayDir, lightData);
             hdrColor = applyClouds(hdrColor, rayDir, lightData);

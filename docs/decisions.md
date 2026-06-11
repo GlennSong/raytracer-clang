@@ -868,7 +868,7 @@ enough that the uniform-selected branch wants to become real polymorphism.
 ---
 
 ## ADR-0017 — Unified physically based lighting with an artistic-control and shading-model seam
-**Status:** Accepted; Phases 0–2 (consolidation, BRDF unification, shadow artistic controls + camera-following shadow volume + HDR sun extraction) **implemented**, macOS-verified headless (runtime shader compile + ctest; on-screen visual retune pass pending) · **Date:** 2026-06-10
+**Status:** Accepted; Phases 0–3 **implemented** (consolidation; BRDF unification; shadow artistic controls + camera-following shadow volume + HDR sun extraction — shadows visually verified; environment unification: cube-bake orientation proven by `tests/test_cube_faces.cpp`, GGX-prefiltered + irradiance cubes, one shader env path, composite equirect workaround removed). Phase 3 note: the procedural sky stays analytic behind the same provider interface — baking it per-frame as day/night animates is a deferred optimization. Phase 4 (gather/respond shading-model seam) is next. · **Date:** 2026-06-10
 
 **Context.** The lit path is two mismatched halves. Indirect lighting (HDR IBL,
 reflection probes) is proper GGX split-sum PBR (BRDF LUT, prefiltered mips), but
@@ -989,6 +989,19 @@ renderer.
   composite apply with a tunable floor. Decided per-measurement in Phase 2.
 - The concatenating shader loader is itself interim — if/when shaders are
   precompiled to a `.metallib`, real `#include` replaces it.
+- **Root cause of the historic "mis-oriented cube bake" (found in Phase 3):**
+  not face orientation at all. `vertexSkybox` normalized the reconstructed
+  view ray *at the vertices*; far-plane offsets are affine in NDC (their
+  interpolation is exact), but interpolating *normalized* rays warps interior
+  pixels — up to ~25° with the oversized fullscreen triangle. Every consumer
+  (env bake, probe bakes, main-pass skybox) was warped; the composite looked
+  right only because it reconstructs per pixel. The CPU unit test passed
+  because the math was right — the GPU link wasn't. Found via load-time GPU
+  validation, which stays in as a canary: an orientation readback check, a
+  direction-reconstruction probe, and a prefilter NaN/firefly scan, plus
+  headless visual tools (`RT_FRAME_DUMP=<png>` one-frame capture,
+  `RT_DUMP_ENV=<dir>` cube-face/equirect dumps). Lesson recorded: math-level
+  unit tests validate intent; only GPU readback validates the chain.
 
 **Revisit trigger.** A second renderer backend (the gather/respond split and
 function-constant variants must re-prove themselves behind the RHI seam,
