@@ -39,7 +39,8 @@ void RenderSystem::render(FrameContext& ctx) {
 
     Real alpha = ctx.interpolation;
     ctx.world.each<Transform, PrevTransform, Renderable>(
-        [&](Entity, Transform& t, PrevTransform& prev, Renderable& r) {
+        [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
+            if (entity == ctx.view.activeCameraEntity) return;
             Mat4 model = lerp(prev.value, t, alpha).matrix();
             BoundingSphere bounds = ctx.renderer.getMeshBounds(r.mesh);
             Vec3 worldCenter = model.transformPoint(bounds.center);

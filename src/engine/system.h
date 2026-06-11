@@ -19,6 +19,10 @@ namespace engine {
 struct RenderView {
     CameraState camera;
     SceneLighting lighting;
+    // The placed camera the view is rendered through, if any (invalid when the
+    // editor controllers drive it). Lets the render system hide that entity's
+    // gizmo — you don't draw the camera you are inside of.
+    Entity activeCameraEntity;
 };
 
 // Services and per-frame data handed to every system hook. Field validity by

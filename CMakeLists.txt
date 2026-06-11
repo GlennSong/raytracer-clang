@@ -50,6 +50,7 @@ add_executable(run_tests
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
+    tests/test_scene_camera.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -61,6 +62,7 @@ add_executable(run_tests
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp
     src/engine/camera/fly_camera_controller.cpp
+    src/engine/camera/scene_camera.cpp
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE Threads::Threads)
@@ -150,6 +152,7 @@ set(VIEWER_SOURCES
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp
     src/engine/camera/fly_camera_controller.cpp
+    src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp

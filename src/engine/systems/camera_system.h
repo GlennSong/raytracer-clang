@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../camera/orbit_camera_controller.h"
 #include "../camera/fly_camera_controller.h"
+#include "../camera/scene_camera.h"
 
 namespace engine {
 
@@ -11,6 +12,12 @@ namespace engine {
 // and gamepad) each frame and publishes the resulting view into the RenderView.
 // Holds both an orbit and a fly controller and toggles between them at runtime
 // (ROADMAP 2.2). Loads/saves pose and mode via Settings.
+//
+// Also the view selector for placed SceneCamera entities
+// (docs/virtual-camera-plan.md): C spawns a camera at the current editor view,
+// V/B cycle editor -> cam1 -> ... -> editor, Backspace (or Tab) returns to the
+// editor. While a placed camera is active the controllers receive no input —
+// placed cameras are stationary.
 class CameraSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
@@ -18,15 +25,21 @@ public:
     void onStop(FrameContext& ctx) override;
 
     FlyCameraController& flyController() { return fly; }
+    Entity activeSceneCamera() const { return activeCamera; }
 
 private:
     void registerBindings(InputMap& actions) const;
     CameraInput gatherInput(FrameContext& ctx) const;
+    Entity placeCamera(FrameContext& ctx, float aspect);
 
     OrbitCameraController orbit;
     FlyCameraController fly;
     CameraController* active = &orbit;
     bool flyActive = false;
+
+    Entity activeCamera;        // invalid => the editor controllers drive the view
+    MeshHandle gizmoMesh;       // camera-body mesh, uploaded on first placement
+    int placedCount = 0;        // for default names ("Camera 1", ...)
 
     Real mouseSensitivity = 0.3;   // degrees per pixel
     Real stickLookSpeed = 120.0;   // degrees/sec at full stick deflection

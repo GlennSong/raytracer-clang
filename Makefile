@@ -36,6 +36,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
+	$(TEST_DIR)/test_scene_camera.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp
@@ -47,7 +48,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/input/input_map.cpp \
 	$(SRC_DIR)/engine/input/player_input.cpp \
 	$(SRC_DIR)/engine/camera/orbit_camera_controller.cpp \
-	$(SRC_DIR)/engine/camera/fly_camera_controller.cpp
+	$(SRC_DIR)/engine/camera/fly_camera_controller.cpp \
+	$(SRC_DIR)/engine/camera/scene_camera.cpp
 TEST_TARGET = run_tests
 
 .PHONY: all release test clean

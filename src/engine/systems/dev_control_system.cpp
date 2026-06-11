@@ -44,6 +44,7 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  Up/Down=exposure, Esc=quit\n"
               << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
               << "  P=toggle perspective/orthographic camera\n"
+              << "  C=place camera here, V/B=cycle viewports, Backspace=editor view\n"
               << "  (keys configurable via bind.<action> in settings)\n";
 }
 
