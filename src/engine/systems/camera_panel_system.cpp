@@ -52,17 +52,34 @@ void CameraPanelSystem::drawFramingOverlay() const {
 void CameraPanelSystem::render(FrameContext& ctx) {
     drawFramingOverlay();
 
-    ImGui::Begin("Cameras");
+    // Appends into the same window as DebugOverlaySystem ("Debug"), so the
+    // debug UI is one window with sections instead of a window per system.
+    ImGui::Begin("Debug");
+    if (!ImGui::CollapsingHeader("Cameras", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::End();
+        return;
+    }
 
     Entity viewing = cameras.activeSceneCamera();
 
     ImGui::BeginDisabled(viewing.valid());
-    if (ImGui::Button("Place Camera Here"))
+    if (ImGui::Button("Place Camera Here")) {
         selected = cameras.placeCameraAtView(ctx);
+        if (preview) cameras.setActiveSceneCamera(selected);
+    }
     ImGui::EndDisabled();
     if (viewing.valid()) {
         ImGui::SameLine();
         if (ImGui::Button("Back To Editor"))
+            cameras.setActiveSceneCamera(Entity{});
+    }
+    // Live preview: selecting a camera looks through it, so the transform and
+    // lens controls below adjust the picture you are watching.
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Preview", &preview)) {
+        if (preview && ctx.world.alive(selected))
+            cameras.setActiveSceneCamera(selected);
+        else if (!preview && viewing == selected)
             cameras.setActiveSceneCamera(Entity{});
     }
 
@@ -76,7 +93,10 @@ void CameraPanelSystem::render(FrameContext& ctx) {
         char label[96];
         std::snprintf(label, sizeof(label), "%s%s", cam->name.c_str(),
                       (e == viewing) ? "  [viewing]" : "");
-        if (ImGui::Selectable(label, e == selected)) selected = e;
+        if (ImGui::Selectable(label, e == selected)) {
+            selected = e;
+            if (preview) cameras.setActiveSceneCamera(e);
+        }
         ImGui::PopID();
     }
 
@@ -230,6 +250,7 @@ void CameraPanelSystem::render(FrameContext& ctx) {
     (void)ctx;
     (void)cameras;
     (void)selected;
+    (void)preview;
     (void)showThirds;
     (void)letterbox;
 }

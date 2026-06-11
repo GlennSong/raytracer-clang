@@ -43,6 +43,7 @@ private:
     FlyCameraController fly;
     CameraController* active = &orbit;
     bool flyActive = false;
+    bool freeLook = false;      // detached freecam: mouse looks without a button
 
     Entity activeCamera;        // invalid => the editor controllers drive the view
     MeshHandle gizmoMesh;       // camera-body mesh, uploaded on first placement

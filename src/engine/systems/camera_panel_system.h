@@ -22,6 +22,7 @@ private:
 
     CameraSystem& cameras;
     Entity selected;
+    bool preview = true;   // selecting a camera looks through it (live editing)
     bool showThirds = false;
     int letterbox = 0;   // 0 = off, 1 = 2.39:1, 2 = 1.85:1, 3 = 16:9
 };

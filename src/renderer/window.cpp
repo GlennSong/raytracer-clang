@@ -343,6 +343,11 @@ void Window::pollEvents() {
     impl->lastFrameTime = now;
 
     newDebugUiFrame();   // ImGui GLFW new-frame (no-op without RT_ENABLE_IMGUI)
+
+#ifdef RT_ENABLE_IMGUI
+    // After the UI new-frame so hover/drag state is current for this frame.
+    impl->input.uiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+#endif
 }
 
 void Window::getSize(int& width, int& height) const {

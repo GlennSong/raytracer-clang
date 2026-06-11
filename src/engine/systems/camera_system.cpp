@@ -94,8 +94,12 @@ CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
     in.moveUp = ctx.actions.axis("cam_up");
     in.boost = ctx.actions.held("cam_boost");
 
-    bool mouseLook = flyActive ? (fly.positionLocked || ctx.input.mouseRightDown)
-                               : ctx.input.mouseLeftDown;
+    // Fly looks freely when pinned first-person OR detached (freeLook) — no
+    // button to hold — but never while the pointer is over a debug panel, so
+    // dragging a slider doesn't spin the view.
+    bool mouseLook = !ctx.input.uiWantsMouse &&
+        (flyActive ? (fly.positionLocked || freeLook || ctx.input.mouseRightDown)
+                   : ctx.input.mouseLeftDown);
     Real mouseYaw = mouseLook ? -ctx.input.mouseDeltaX * mouseSensitivity : 0.0;
     Real mousePitch = mouseLook ? -ctx.input.mouseDeltaY * mouseSensitivity : 0.0;
 
@@ -119,11 +123,12 @@ void CameraSystem::update(FrameContext& ctx) {
     // freecam is immediately steerable.
     if (ctx.actions.pressed("cam_detach")) {
         fly.positionLocked = !fly.positionLocked;
+        freeLook = !fly.positionLocked;
         if (!fly.positionLocked) {
             flyActive = true;
             active = &fly;
-            LOG_INFO << "Camera detached: free-fly (WASD/QE moves, "
-                        "right-drag looks, F re-attaches)";
+            LOG_INFO << "Camera detached: free-fly (mouse looks, WASD/QE "
+                        "moves, F re-attaches)";
         } else {
             LOG_INFO << "Camera attached";
         }
@@ -212,6 +217,25 @@ Entity CameraSystem::placeCamera(FrameContext& ctx, float aspect) {
     return entity;
 }
 
+// Camera-body gizmo: a box with a cone "lens" on the front face, so which way
+// a placed camera points reads at a glance. MeshBuilder's cone points +Y;
+// rotate it onto -Z (the camera's forward) and seat its base on the box front.
+static RenderMesh cameraGizmoMesh() {
+    RenderMesh body = MeshBuilder::box(Vec3(0.22, 0.28, 0.4));
+    RenderMesh snout = MeshBuilder::cone(0.1f, 0.18f);
+
+    const uint32_t base = static_cast<uint32_t>(body.vertices.size());
+    for (Vertex v : snout.vertices) {
+        // +Y -> -Z is (x, y, z) -> (x, z, -y); base lands at z = -0.2.
+        v.position = Vec3(v.position.x, v.position.z, -v.position.y - 0.29);
+        v.normal = Vec3(v.normal.x, v.normal.z, -v.normal.y);
+        v.tangent = Vec3(v.tangent.x, v.tangent.z, -v.tangent.y);
+        body.vertices.push_back(v);
+    }
+    for (uint32_t i : snout.indices) body.indices.push_back(base + i);
+    return body;
+}
+
 void CameraSystem::ensureGizmos(FrameContext& ctx) {
     std::vector<Entity> missing;
     ctx.world.each<Transform, SceneCamera>(
@@ -222,14 +246,14 @@ void CameraSystem::ensureGizmos(FrameContext& ctx) {
     if (missing.empty()) return;
 
     if (!gizmoMesh.valid())
-        gizmoMesh = ctx.renderer.uploadMesh(MeshBuilder::box(Vec3(0.25, 0.3, 0.45)));
+        gizmoMesh = ctx.renderer.uploadMesh(cameraGizmoMesh());
     if (!gizmoMesh.valid()) return;
 
     for (Entity e : missing) {
         Renderable gizmo;
         gizmo.mesh = gizmoMesh;
-        gizmo.material.albedo = Vec3(0.15, 0.15, 0.18);
-        gizmo.material.metallic = 0.8f;
+        gizmo.material.albedo = Vec3(0.35, 0.35, 0.4);
+        gizmo.material.metallic = 0.7f;
         gizmo.material.roughness = 0.35f;
         ctx.world.add<Renderable>(e, gizmo);
     }

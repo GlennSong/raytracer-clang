@@ -21,13 +21,17 @@ struct InputState {
     bool keyW, keyA, keyS, keyD, keyQ, keyE;
     bool keyShift;
     bool keyUp, keyDown;
+    // True while the debug UI (ImGui) owns the pointer — hovering or dragging
+    // a panel. Mouse-driven camera/gameplay input should yield (always false
+    // without RT_ENABLE_IMGUI).
+    bool uiWantsMouse;
 
     InputState()
         : mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0),
           scrollDelta(0), mouseLeftDown(false), mouseRightDown(false),
           keyW(false), keyA(false), keyS(false), keyD(false),
           keyQ(false), keyE(false), keyShift(false),
-          keyUp(false), keyDown(false) {}
+          keyUp(false), keyDown(false), uiWantsMouse(false) {}
 };
 
 // The windowing/input seam. All GLFW (and any other backend) state is hidden in
