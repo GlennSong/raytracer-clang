@@ -1,7 +1,10 @@
 #include "camera_panel_system.h"
 
 #include "../components.h"
+#include "../camera_store.h"
+#include "../../log.h"
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -178,6 +181,33 @@ void CameraPanelSystem::render(FrameContext& ctx) {
                 if (ImGui::SliderFloat("Vignette", &vig, 0.0f, 1.0f))
                     lens.vignette = vig;
                 ImGui::TreePop();
+            }
+
+            ImGui::SeparatorText("Offline Render");
+            if (ImGui::Button("Render In Path Tracer")) {
+                std::string level = ctx.settings.getString("levelPath", "");
+                std::string store = ctx.settings.getString("cameraStorePath", "");
+                if (level.empty() || store.empty()) {
+                    LOG_WARN << "No level path known — offline render unavailable";
+                } else {
+                    // Save first so the tracer renders the camera as edited,
+                    // then launch detached; the shell returns immediately.
+                    CameraStore::save(store, ctx.world);
+                    std::string out = cam->name + ".ppm";
+                    std::string cmd = "./raytracer --level \"" + level +
+                                      "\" --camera \"" + cam->name +
+                                      "\" --out \"" + out + "\"";
+                    LOG_INFO << "Launching: " << cmd;
+                    int rc = std::system(
+                        (cmd + " > offline_render.log 2>&1 &").c_str());
+                    if (rc != 0)
+                        LOG_WARN << "Could not launch the offline tracer "
+                                    "(is ./raytracer built? try `make release`)";
+                    else
+                        LOG_INFO << "Offline render running in the background "
+                                 << "-> " << out
+                                 << " (progress: offline_render.log)";
+                }
             }
         }
     }

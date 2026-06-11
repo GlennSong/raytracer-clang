@@ -2,6 +2,25 @@
 
 namespace engine {
 
+Vec3 EnvironmentLight::radiance(const Vec3& unitDir) const {
+    // Simple gradient sky: horizon -> zenith on the upward half, horizon color
+    // mirrored below (ground bounce stand-in).
+    double t = std::max(unitDir.y, 0.0);
+    Vec3 sky = ((1.0 - t) * skyHorizon + t * skyZenith) * skyIntensity;
+
+    if (sunIntensity > 0.0) {
+        // The disc's radiance is the sun's total strength spread over its
+        // solid angle, so ground-plane irradiance tracks sunIntensity
+        // regardless of the padded disc size.
+        double cosSun = dot(unitDir, -normalize(sunDirection));
+        if (cosSun > std::cos(sunAngularRadius)) {
+            double solidAngle = PI * sunAngularRadius * sunAngularRadius;
+            sky += sunColor * (sunIntensity / solidAngle);
+        }
+    }
+    return sky;
+}
+
 int Scene::addMaterial(const Material& mat) {
     materials.push_back(mat);
     return static_cast<int>(materials.size()) - 1;
@@ -105,6 +124,9 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
     for (int bounce = 0; bounce < maxBounces; bounce++) {
         HitRecord rec;
         if (!intersect(currentRay, 0.001, 1e20, rec)) {
+            if (environment.enabled)
+                radiance += throughput *
+                            environment.radiance(normalize(currentRay.direction));
             break;
         }
 

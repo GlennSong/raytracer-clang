@@ -2,6 +2,7 @@
 #include "image.h"
 #include "camera.h"
 #include "scene.h"
+#include "level_scene.h"
 #include "job_system.h"
 #include <iostream>
 #include <thread>
@@ -9,11 +10,12 @@
 #include <atomic>
 #include <cstdlib>
 #include <string>
+#include <algorithm>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
-const int IMAGE_SIZE = 512;
-const int SAMPLES_PER_PIXEL = 128;
+int IMAGE_SIZE = 512;          // --size
+int SAMPLES_PER_PIXEL = 128;   // --spp
 const int MAX_BOUNCES = 10;
 
 Scene buildCornellBox() {
@@ -94,51 +96,100 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
     linesComplete.fetch_add(1);
 }
 
-// Lens flags (docs/virtual-camera-plan.md, Phase 3). The Cornell box is ~555
-// units across, so --scale 100 maps meter-scale optics onto it; with that,
-// try: ./raytracer --fstop 1.0 --focus 800 --scale 100
-LensParams parseLensFlags(int argc, char** argv, double& worldUnitsPerMeter) {
+// CLI (docs/virtual-camera-plan.md, Phases 3 + 5). Two modes:
+//   Cornell box (default): lens flags apply directly. The box is ~555 units
+//   across, so --scale 100 maps meter-scale optics onto it; try:
+//     ./raytracer --fstop 1.0 --focus 800 --scale 100
+//   Level mode: renders a viewer level through a camera placed interactively
+//   (the sidecar written on viewer quit / by the Cameras panel):
+//     ./raytracer --level assets/levels/arena.json --camera "Camera 1"
+struct CliOptions {
+    std::string level;        // empty = Cornell box
+    std::string cameraName;   // empty = first camera in the sidecar
+    std::string outFile = "output.ppm";
+    double worldUnitsPerMeter = 0.0;   // 0 = mode default (1 level, 100 Cornell)
     LensParams lens;
-    lens.fStop = 0.0;  // pinhole unless --fstop is given
-    lens.focusDistance = 800.0;
+    bool showHelp = false;
+};
+
+CliOptions parseCli(int argc, char** argv) {
+    CliOptions opt;
+    opt.lens.fStop = 0.0;  // pinhole unless --fstop is given
+    opt.lens.focusDistance = 800.0;
     auto next = [&](int& i) { return std::atof(argv[++i]); };
-    for (int i = 1; i < argc - 1; i++) {
+    for (int i = 1; i < argc; i++) {
         std::string flag = argv[i];
-        if (flag == "--fstop")         lens.fStop = next(i);
-        else if (flag == "--focal")    lens.focalLength = next(i);
-        else if (flag == "--focus")    lens.focusDistance = next(i);
-        else if (flag == "--k1")       lens.distortionK1 = next(i);
-        else if (flag == "--k2")       lens.distortionK2 = next(i);
-        else if (flag == "--ca")       lens.chromaticAberration = next(i);
-        else if (flag == "--vignette") lens.vignette = next(i);
-        else if (flag == "--scale")    worldUnitsPerMeter = next(i);
+        bool hasValue = i < argc - 1;
+        if (flag == "--help" || flag == "-h")     opt.showHelp = true;
+        else if (!hasValue)                       continue;
+        else if (flag == "--level")    opt.level = argv[++i];
+        else if (flag == "--camera")   opt.cameraName = argv[++i];
+        else if (flag == "--out")      opt.outFile = argv[++i];
+        else if (flag == "--size")     IMAGE_SIZE = std::max(16, atoi(argv[++i]));
+        else if (flag == "--spp")      SAMPLES_PER_PIXEL = std::max(1, atoi(argv[++i]));
+        else if (flag == "--fstop")    opt.lens.fStop = next(i);
+        else if (flag == "--focal")    opt.lens.focalLength = next(i);
+        else if (flag == "--focus")    opt.lens.focusDistance = next(i);
+        else if (flag == "--k1")       opt.lens.distortionK1 = next(i);
+        else if (flag == "--k2")       opt.lens.distortionK2 = next(i);
+        else if (flag == "--ca")       opt.lens.chromaticAberration = next(i);
+        else if (flag == "--vignette") opt.lens.vignette = next(i);
+        else if (flag == "--scale")    opt.worldUnitsPerMeter = next(i);
     }
-    return lens;
+    return opt;
+}
+
+void printUsage() {
+    std::cerr <<
+        "Usage: raytracer [options]\n"
+        "  --level <file>    render a viewer level instead of the Cornell box\n"
+        "  --camera <name>   placed camera from <level>.cameras.json (default: first)\n"
+        "  --out <file>      output image (default output.ppm)\n"
+        "  --size N          image size (default 512)\n"
+        "  --spp N           samples per pixel (default 128)\n"
+        "Lens (Cornell mode; level cameras carry their own lens):\n"
+        "  --fstop N --focal MM --focus D --k1 K --k2 K --ca C --vignette V\n"
+        "  --scale U         world units per meter (default: 1 level, 100 Cornell)\n";
 }
 
 int main(int argc, char** argv) {
-    Image image(IMAGE_SIZE, IMAGE_SIZE);
+    CliOptions opt = parseCli(argc, argv);
+    if (opt.showHelp) {
+        printUsage();
+        return 0;
+    }
 
-    double worldUnitsPerMeter = 100.0;
-    LensParams lens = parseLensFlags(argc, argv, worldUnitsPerMeter);
-    Camera camera(
-        Vec3(278, 278, -800),
-        Vec3(278, 278, 0),
-        Vec3(0, 1, 0),
-        40.0,
-        1.0,
-        lens,
-        worldUnitsPerMeter
-    );
+    Scene scene;
+    Vec3 lookFrom(278, 278, -800), lookAt(278, 278, 0);
+    double fovDegrees = 40.0;
+    LensParams lens = opt.lens;
+    double scale = opt.worldUnitsPerMeter;
+
+    if (!opt.level.empty()) {
+        if (!LevelScene::load(opt.level, scene)) return 1;
+        SidecarCamera cam;
+        if (!loadSidecarCamera(opt.level, opt.cameraName, cam)) return 1;
+        lookFrom = cam.position;
+        lookAt = cam.position + cam.forward;
+        lens = cam.lens;                       // the placed camera's lens wins
+        fovDegrees = lens.verticalFovDegrees();
+        if (scale <= 0.0) scale = 1.0;         // levels are meter-scale
+        std::cerr << "Rendering \"" << cam.name << "\" in " << opt.level << "\n";
+    } else {
+        std::cerr << "Building scene...\n";
+        scene = buildCornellBox();
+        if (scale <= 0.0) scale = 100.0;       // Cornell is ~555 units across
+    }
+
+    Image image(IMAGE_SIZE, IMAGE_SIZE);
+    Camera camera(lookFrom, lookAt, Vec3(0, 1, 0), fovDegrees, 1.0, lens, scale);
     if (lens.fStop > 0.0)
         std::cerr << "Lens: f/" << lens.fStop << " @ " << lens.focalLength
                   << "mm, focus " << lens.focusDistance << "\n";
 
-    std::cerr << "Building scene...\n";
-    Scene scene = buildCornellBox();
-    std::cerr << "  Triangles: " << scene.triangles.size() << "\n";
-    std::cerr << "  Quads: " << scene.quads.size() << "\n";
-    std::cerr << "  Spheres: " << scene.spheres.size() << "\n";
+    std::cerr << "  Triangles: " << scene.triangles.size()
+              << ", quads: " << scene.quads.size()
+              << ", spheres: " << scene.spheres.size() << "\n";
 
     JobSystem jobs;  // one shared pool owns the threads; rows are the tasks
     std::cerr << "Rendering with " << jobs.workerCount() << " worker threads, "
@@ -165,13 +216,10 @@ int main(int argc, char** argv) {
     std::cerr << "\r  Progress: 100%                \n";
     std::cerr << "Done rendering.\n";
 
-    image.writePpm("output_raw.ppm");
-    std::cout << "Wrote output_raw.ppm (unfiltered)\n";
-
     std::cerr << "Applying bilateral filter...\n";
     Image denoised = image.bilateralFilter(5, 3.0, 0.1);
-    denoised.writePpm("output.ppm");
-    std::cout << "Wrote output.ppm (denoised, " << IMAGE_SIZE << "x" << IMAGE_SIZE
-              << ", " << SAMPLES_PER_PIXEL << " spp)\n";
+    denoised.writePpm(opt.outFile);
+    std::cout << "Wrote " << opt.outFile << " (denoised, " << IMAGE_SIZE << "x"
+              << IMAGE_SIZE << ", " << SAMPLES_PER_PIXEL << " spp)\n";
     return 0;
 }

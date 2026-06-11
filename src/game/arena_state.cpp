@@ -38,6 +38,8 @@ void ArenaState::onEnter(FrameContext& ctx) {
     }
     // Placed cameras persist in a sidecar next to the level; CameraSystem
     // loads/saves it (must be set before PlayingState::onEnter starts systems).
+    // The level path itself feeds the panel's offline-render button.
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
+    ctx.settings.setString("levelPath", levelFile);
     PlayingState::onEnter(ctx);
 }

@@ -25,6 +25,8 @@ set(CORE_SOURCES
     src/material.cpp
     src/scene.cpp
     src/kdtree.cpp
+    src/level_scene.cpp
+    src/engine/mesh_builder.cpp
 )
 
 # ============================================================
@@ -34,6 +36,7 @@ add_executable(raytracer
     src/main.cpp
     ${CORE_SOURCES}
 )
+target_include_directories(raytracer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(raytracer PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(raytracer PRIVATE Threads::Threads)
 
@@ -53,6 +56,7 @@ add_executable(run_tests
     tests/test_scene_camera.cpp
     tests/test_camera_store.cpp
     tests/test_lens.cpp
+    tests/test_level_scene.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -67,8 +71,14 @@ add_executable(run_tests
     src/engine/camera/fly_camera_controller.cpp
     src/engine/camera/scene_camera.cpp
     src/engine/camera_store.cpp
+    src/engine/mesh_builder.cpp
     src/camera.cpp
     src/log.cpp
+    src/level_scene.cpp
+    src/scene.cpp
+    src/geometry.cpp
+    src/kdtree.cpp
+    src/rt_math.cpp
 )
 target_include_directories(run_tests SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

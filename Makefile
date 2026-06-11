@@ -1,5 +1,5 @@
 CXX = clang++
-CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread
+CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -isystem third_party
 DEBUG_FLAGS = -g -O0
 RELEASE_FLAGS = -O2
 
@@ -19,7 +19,9 @@ SRCS = \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/material.cpp \
 	$(SRC_DIR)/scene.cpp \
-	$(SRC_DIR)/kdtree.cpp
+	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/engine/mesh_builder.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -39,6 +41,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_scene_camera.cpp \
 	$(TEST_DIR)/test_camera_store.cpp \
 	$(TEST_DIR)/test_lens.cpp \
+	$(TEST_DIR)/test_level_scene.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
@@ -55,7 +58,13 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/camera/fly_camera_controller.cpp \
 	$(SRC_DIR)/engine/camera/scene_camera.cpp \
 	$(SRC_DIR)/engine/camera_store.cpp \
-	$(SRC_DIR)/camera.cpp
+	$(SRC_DIR)/engine/mesh_builder.cpp \
+	$(SRC_DIR)/camera.cpp \
+	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/scene.cpp \
+	$(SRC_DIR)/geometry.cpp \
+	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/rt_math.cpp
 TEST_TARGET = run_tests
 
 .PHONY: all release test clean
@@ -70,6 +79,7 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR):
@@ -80,7 +90,7 @@ test: $(TEST_TARGET)
 	./$(TEST_TARGET)
 
 $(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS)
-	$(CXX) $(CXXFLAGS) -isystem third_party -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET)
