@@ -16,6 +16,7 @@ using namespace engine;  // namespace migration (ADR-0015)
 
 int IMAGE_SIZE = 512;          // --size
 int SAMPLES_PER_PIXEL = 128;   // --spp
+double EXPOSURE = 1.0;         // --exposure (linear scale before gamma)
 const int MAX_BOUNCES = 10;
 
 Scene buildCornellBox() {
@@ -78,7 +79,7 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
                 color += scene.tracePath(ray, MAX_BOUNCES);
             }
         }
-        color = color / static_cast<double>(SAMPLES_PER_PIXEL);
+        color = (color / static_cast<double>(SAMPLES_PER_PIXEL)) * EXPOSURE;
 
         // Stylized vignette: quadratic radial falloff scaled by the parameter.
         if (camera.lens.vignette != 0.0) {
@@ -127,6 +128,7 @@ CliOptions parseCli(int argc, char** argv) {
         else if (flag == "--out")      opt.outFile = argv[++i];
         else if (flag == "--size")     IMAGE_SIZE = std::max(16, atoi(argv[++i]));
         else if (flag == "--spp")      SAMPLES_PER_PIXEL = std::max(1, atoi(argv[++i]));
+        else if (flag == "--exposure") EXPOSURE = next(i);
         else if (flag == "--fstop")    opt.lens.fStop = next(i);
         else if (flag == "--focal")    opt.lens.focalLength = next(i);
         else if (flag == "--focus")    opt.lens.focusDistance = next(i);
@@ -147,6 +149,8 @@ void printUsage() {
         "  --out <file>      output image (default output.ppm)\n"
         "  --size N          image size (default 512)\n"
         "  --spp N           samples per pixel (default 128)\n"
+        "  --exposure E      linear brightness scale (default 1; HDR-lit levels\n"
+        "                    read dark offline — try 2-4)\n"
         "Lens (Cornell mode; level cameras carry their own lens):\n"
         "  --fstop N --focal MM --focus D --k1 K --k2 K --ca C --vignette V\n"
         "  --scale U         world units per meter (default: 1 level, 100 Cornell)\n";
