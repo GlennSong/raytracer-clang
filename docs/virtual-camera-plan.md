@@ -11,6 +11,14 @@ This is a planning document; each phase should land with its own ADR(s) in
 `docs/decisions.md` where it makes a real architectural choice. Roadmap
 cross-reference: Tier 3.4.
 
+**Status:** Phases 1-3 implemented: placement/switching plus a freecam detach
+key (F), persistence via a JSON *sidecar* next to the level (not the level
+file itself), the ImGui camera panel with framing overlays, and offline
+thin-lens DOF/distortion/CA behind CLI flags. Phase 4 (Metal lens-warp + DOF
+passes) is written but **not yet verified on-device**; DOF defaults off.
+Phase 5 partially done (overlays). Placed-camera -> offline-tracer export and
+Phase 6 (external poses) not started.
+
 ---
 
 ## Goals
