@@ -2,6 +2,7 @@
 
 #include "../components.h"
 #include "../mesh_builder.h"
+#include "../../log.h"
 
 namespace engine {
 
@@ -40,8 +41,14 @@ void CameraSystem::registerBindings(InputMap& actions) const {
     actions.bindButton("cam_cycle_next", GamepadButton::DpadRight);
     actions.bindButton("cam_cycle_prev", KeyCode::B);
     actions.bindButton("cam_cycle_prev", GamepadButton::DpadLeft);
+    actions.bindButton("cam_view_editor", KeyCode::X);
     actions.bindButton("cam_view_editor", KeyCode::Backspace);
     actions.bindButton("cam_view_editor", GamepadButton::DpadDown);
+
+    // Detach the fly camera from whatever pins it (the first-person player in
+    // game states) to roam freely — e.g. to place a camera up high.
+    actions.bindButton("cam_detach", KeyCode::F);
+    actions.bindButton("cam_detach", GamepadButton::RightThumb);
 }
 
 void CameraSystem::onStart(FrameContext& ctx) {
@@ -94,6 +101,23 @@ void CameraSystem::update(FrameContext& ctx) {
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
 
+    Entity viewBefore = activeCamera;
+
+    // Detach/re-attach the fly camera (game states pin it to the player via
+    // positionLocked; see PlayerSystem). Detaching switches to fly so the
+    // freecam is immediately steerable.
+    if (ctx.actions.pressed("cam_detach")) {
+        fly.positionLocked = !fly.positionLocked;
+        if (!fly.positionLocked) {
+            flyActive = true;
+            active = &fly;
+            LOG_INFO << "Camera detached: free-fly (WASD/QE moves, "
+                        "right-drag looks, F re-attaches)";
+        } else {
+            LOG_INFO << "Camera attached";
+        }
+    }
+
     // A destroyed (or stripped) active camera falls back to the editor view —
     // the generation check makes stale handles detectable rather than silent.
     if (activeCamera.valid() &&
@@ -125,6 +149,13 @@ void CameraSystem::update(FrameContext& ctx) {
     }
     if (ctx.actions.pressed("cam_toggle_projection"))
         active->setOrthographic(!active->isOrthographic());
+
+    if (viewBefore != activeCamera) {
+        if (activeCamera.valid())
+            LOG_INFO << "Viewport: " << ctx.world.get<SceneCamera>(activeCamera)->name;
+        else
+            LOG_INFO << "Viewport: editor (" << (flyActive ? "fly" : "orbit") << ")";
+    }
 
     if (activeCamera.valid()) {
         // Stationary by design: the controllers receive no input, the view is
@@ -166,6 +197,10 @@ Entity CameraSystem::placeCamera(FrameContext& ctx, float aspect) {
         gizmo.material.roughness = 0.35f;
         ctx.world.add<Renderable>(entity, gizmo);
     }
+
+    LOG_INFO << "Placed " << camera.name << " at (" << transform.position.x
+             << ", " << transform.position.y << ", " << transform.position.z
+             << ") — V/B cycle viewports, X returns to the editor";
     return entity;
 }
 

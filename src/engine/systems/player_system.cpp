@@ -9,6 +9,10 @@ void PlayerSystem::onStart(FrameContext&) {
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
+    // Detached freecam (cam_detach): the movement axes drive the fly camera,
+    // not the player — otherwise WASD would walk the player while you fly.
+    if (!camera.positionLocked) return;
+
     ctx.world.each<Transform, RigidBody, ControlledBy>(
         [&](Entity e, Transform&, RigidBody& rb, ControlledBy&) {
             playerEntity = e;
@@ -35,11 +39,18 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
+    // Detached freecam: CameraSystem's fly view stands as-is.
+    if (!camera.positionLocked) return;
+
     if (!ctx.world.alive(playerEntity)) return;
     auto* t = ctx.world.get<Transform>(playerEntity);
     if (!t) return;
 
     camera.eye = t->position + Vec3(0, eyeHeight, 0);
+
+    // A placed SceneCamera owns the view this frame; keep the eye pinned above
+    // so returning to first person is seamless, but don't write over it.
+    if (ctx.view.activeCameraEntity.valid()) return;
 
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
