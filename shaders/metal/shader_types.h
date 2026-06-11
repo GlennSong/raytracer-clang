@@ -190,6 +190,30 @@ struct CompositeUniforms {
     float   aoFloor;        // darkest the AO multiply can go
 };
 
+// Final lens-warp pass (virtual-camera plan Phase 4): Brown radial distortion,
+// lateral chromatic aberration, and vignette in one resample of the composited
+// image. All zero = exact passthrough, in which case the pass is skipped.
+struct LensPostUniforms {
+    float k1;                   // Brown radial terms (LensParams::distortionK1/K2)
+    float k2;
+    float chromaticAberration;  // ~0.01 = clearly visible fringe
+    float vignette;             // fraction of darkening reached at the corners
+    float aspect;               // width / height — keeps the warp radius circular
+    float _pad[3];
+};
+
+// Depth-of-field gather (virtual-camera plan Phase 4). Distances in meters;
+// cocScale converts sensor-plane CoC (meters) to pixels, maxCocPixels clamps
+// the gather radius to the tap budget.
+struct DOFUniforms {
+    float focusDistance;
+    float focalLength;      // meters (LensParams stores mm)
+    float aperture;         // diameter, meters; 0 = pinhole (pass skipped)
+    float cocScale;
+    float maxCocPixels;
+    float _pad[3];
+};
+
 #ifndef __METAL_VERSION__
 }  // namespace engine
 #endif

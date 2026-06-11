@@ -126,6 +126,15 @@ struct MetalRenderer::Impl {
     id<MTLComputePipelineState> bloomDownsamplePipeline;
     id<MTLComputePipelineState> bloomUpsamplePipeline;
 
+    // Lens effects (virtual-camera plan Phase 4): final image-space warp
+    // (distortion + CA + vignette) and depth-of-field gather, driven by the
+    // active camera's LensParams via setCamera.
+    id<MTLRenderPipelineState> lensWarpPipeline;
+    id<MTLTexture> postLDRTexture;     // BGRA8Unorm — composite target when the warp runs
+    id<MTLComputePipelineState> dofPipeline;
+    id<MTLTexture> dofTexture;         // RGBA16Float — DOF gather output
+    LensParams currentLens;
+
     // Screen-space ambient occlusion (SSAO/GTAO)
     id<MTLTexture> aoTexture;          // R16Float — full-res AO result
     id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong
@@ -346,6 +355,23 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         if (!impl->compositePipeline) NSLog(@"Composite pipeline error: %@", error);
     }
 
+    // Lens-warp pipeline (virtual-camera plan Phase 4): fullscreen resample of
+    // the composited LDR image (distortion + CA + vignette), writes the drawable.
+    {
+        id<MTLFunction> lensVert = [library newFunctionWithName:@"vertexComposite"];
+        id<MTLFunction> lensFrag = [library newFunctionWithName:@"fragmentLensWarp"];
+        if (lensVert && lensFrag) {
+            MTLRenderPipelineDescriptor* lensDesc = [[MTLRenderPipelineDescriptor alloc] init];
+            lensDesc.vertexFunction = lensVert;
+            lensDesc.fragmentFunction = lensFrag;
+            lensDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+            // No depth attachment, same as the composite pass
+            impl->lensWarpPipeline = [impl->device newRenderPipelineStateWithDescriptor:lensDesc
+                                                                                   error:&error];
+            if (!impl->lensWarpPipeline) NSLog(@"Lens warp pipeline error: %@", error);
+        }
+    }
+
     // Linear clamp sampler (for post-processing texture reads)
     {
         MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
@@ -501,6 +527,16 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             impl->bloomUpsamplePipeline = [impl->device newComputePipelineStateWithFunction:upFunc
                                                                                        error:&error];
             if (!impl->bloomUpsamplePipeline) NSLog(@"Bloom upsample pipeline error: %@", error);
+        }
+    }
+
+    // DOF gather compute pipeline (virtual-camera plan Phase 4)
+    {
+        id<MTLFunction> dofFunc = [library newFunctionWithName:@"dofGather"];
+        if (dofFunc) {
+            impl->dofPipeline = [impl->device newComputePipelineStateWithFunction:dofFunc
+                                                                            error:&error];
+            if (!impl->dofPipeline) NSLog(@"DOF pipeline error: %@", error);
         }
     }
 
@@ -723,6 +759,28 @@ void MetalRenderer::resize(int width, int height) {
             mipW = std::max(mipW / 2, 1);
             mipH = std::max(mipH / 2, 1);
         }
+    }
+
+    // Lens effects (virtual-camera plan Phase 4): composite target for frames
+    // where the lens-warp pass owns the drawable, + DOF gather output.
+    {
+        MTLTextureDescriptor* postDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:width
+                                        height:height
+                                     mipmapped:NO];
+        postDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        postDesc.storageMode = MTLStorageModePrivate;
+        impl->postLDRTexture = [impl->device newTextureWithDescriptor:postDesc];
+
+        MTLTextureDescriptor* dofDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:width
+                                        height:height
+                                     mipmapped:NO];
+        dofDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        dofDesc.storageMode = MTLStorageModePrivate;
+        impl->dofTexture = [impl->device newTextureWithDescriptor:dofDesc];
     }
 }
 
@@ -1421,6 +1479,7 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     impl->cameraUniforms.nearPlane = static_cast<float>(camera.nearPlane);
     impl->cameraUniforms.farPlane = static_cast<float>(camera.farPlane);
     impl->currentCameraPos = camera.position;
+    impl->currentLens = camera.lens;   // drives the lens-warp + DOF passes
 }
 
 static simd_float3 toSimd3(const Vec3& v) {
@@ -2147,13 +2206,27 @@ void MetalRenderer::endFrame() {
 
     [impl->currentEncoder endEncoding];
 
+    // Lens effects (virtual-camera plan Phase 4). Both passes are skipped
+    // entirely — zero GPU cost — when toggled off or visually inert (no
+    // aberrations / pinhole aperture). Debug views show raw buffers, so they
+    // bypass both as well.
+    const LensParams& lens = impl->currentLens;
+    bool lensWarpActive = lensEffectsEnabled && lens.hasAberrations()
+                       && impl->lensWarpPipeline && impl->postLDRTexture
+                       && debugView == 0;
+    bool dofActive = dofEnabled && lens.apertureDiameter() > 0.0
+                  && lens.sensorHeight > 0.0
+                  && impl->dofPipeline && impl->dofTexture
+                  && debugView == 0;
+
     // --- Post-processing compute passes (single encoder) ---
     // Batching SSAO, SSR, and bloom into one compute encoder eliminates
     // per-encoder CPU overhead (~15 encoder create/destroy → 1).
     bool needsCompute = (impl->aoPipeline && impl->aoTexture && ssaoEnabled)
                      || (impl->ssrPipeline && impl->ssrTexture && ssrEnabled)
                      || (bloomEnabled && impl->bloomDownsamplePipeline
-                         && impl->bloomUpsamplePipeline && impl->bloomMips[0]);
+                         && impl->bloomUpsamplePipeline && impl->bloomMips[0])
+                     || dofActive;
 
     if (needsCompute) {
         id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
@@ -2279,15 +2352,48 @@ void MetalRenderer::endFrame() {
             }
         }
 
+        // --- Depth of field (virtual-camera plan Phase 4) ---
+        // CoC-driven gather from the HDR scene; the composite pass then reads
+        // dofTexture in place of sceneColorTexture. Runs after SSR/bloom so
+        // both keep sampling the sharp scene.
+        if (dofActive) {
+            [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+            [enc setComputePipelineState:impl->dofPipeline];
+            [enc setTexture:impl->sceneColorTexture atIndex:0];
+            [enc setTexture:impl->depthTexture atIndex:1];
+            [enc setTexture:impl->dofTexture atIndex:2];
+            [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            DOFUniforms dofP = {
+                static_cast<float>(lens.focusDistance),
+                static_cast<float>(lens.focalLength / 1000.0),    // mm → meters
+                static_cast<float>(lens.apertureDiameter()),
+                // Sensor-plane meters → pixels (sensorHeight is mm)
+                static_cast<float>(impl->framebufferHeight * 1000.0 / lens.sensorHeight),
+                16.0f,   // max CoC radius in pixels — matches the 24-tap budget
+                {}
+            };
+            [enc setBytes:&dofP length:sizeof(dofP) atIndex:1];
+            MTLSize dofGrid = MTLSizeMake(impl->framebufferWidth,
+                                          impl->framebufferHeight, 1);
+            [enc dispatchThreads:dofGrid threadsPerThreadgroup:group];
+        }
+
         [enc endEncoding];
     }
 
     // --- Composite pass: tone map HDR scene to LDR drawable ---
     if (impl->compositePipeline && impl->compositePassDesc) {
+        // When the lens warp runs, composite renders into an intermediate of
+        // the same BGRA8Unorm format and the warp pass owns the drawable.
+        if (lensWarpActive) {
+            impl->compositePassDesc.colorAttachments[0].texture = impl->postLDRTexture;
+        }
         id<MTLRenderCommandEncoder> compEncoder = [impl->currentCommandBuffer
             renderCommandEncoderWithDescriptor:impl->compositePassDesc];
         [compEncoder setRenderPipelineState:impl->compositePipeline];
-        [compEncoder setFragmentTexture:impl->sceneColorTexture atIndex:0];
+        [compEncoder setFragmentTexture:(dofActive ? impl->dofTexture
+                                                   : impl->sceneColorTexture)
+                                atIndex:0];
         [compEncoder setFragmentTexture:impl->ssrTexture atIndex:1];
         [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
         [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
@@ -2319,17 +2425,51 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
+        // --- Lens-warp pass (virtual-camera plan Phase 4) ---
+        // The LAST image-space pass: distortion + chromatic aberration +
+        // vignette resampling of the composited image into the drawable. The
+        // debug UI draws after it, into whichever encoder owns the drawable,
+        // so ImGui/HUD stay undistorted.
+        id<MTLRenderCommandEncoder> uiEncoder = compEncoder;
+        if (lensWarpActive) {
+            [compEncoder endEncoding];
+
+            MTLRenderPassDescriptor* lensPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+            lensPassDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+            lensPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+            lensPassDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+            id<MTLRenderCommandEncoder> lensEncoder = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:lensPassDesc];
+            [lensEncoder setRenderPipelineState:impl->lensWarpPipeline];
+            [lensEncoder setFragmentTexture:impl->postLDRTexture atIndex:0];
+            LensPostUniforms lensP = {
+                static_cast<float>(lens.distortionK1),
+                static_cast<float>(lens.distortionK2),
+                static_cast<float>(lens.chromaticAberration),
+                static_cast<float>(lens.vignette),
+                impl->framebufferHeight > 0
+                    ? static_cast<float>(impl->framebufferWidth) / impl->framebufferHeight
+                    : 1.0f,
+                {}
+            };
+            [lensEncoder setFragmentBytes:&lensP length:sizeof(lensP) atIndex:0];
+            [lensEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
+            [lensEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            uiEncoder = lensEncoder;
+        }
+
         // Debug UI (ADR-0011) renders on top of the tone-mapped image.
 #ifdef RT_ENABLE_IMGUI
         if (impl->imguiInitialized) {
             ImGui::Render();
             ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
                                            impl->currentCommandBuffer,
-                                           compEncoder);
+                                           uiEncoder);
         }
 #endif
 
-        [compEncoder endEncoding];
+        [uiEncoder endEncoding];
     }
 
     // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
