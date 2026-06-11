@@ -279,6 +279,26 @@ for constructing vertex/index buffers programmatically.
 
 **Depends on:** Asset system (3.1).
 
+### 3.4 Virtual camera system
+**Status:** Planned — see `docs/virtual-camera-plan.md` for the full phased plan.
+**Why:** Placeable camera entities (ECS) with switchable viewports and a
+physical lens model (focal length, aperture/DOF, distortion, chromatic
+aberration) turn the engine into a virtual-filming tool: frame a shot with the
+fly camera, place a camera there, look through it live, and render it offline
+for ground truth. Late-stage milestone: drive a camera's pose from an iPhone
+(ARKit) through an external pose seam.
+
+**Scope (summary):**
+- `SceneCamera` + `LensParams` components; pose from the entity's `Transform`.
+- `CameraSystem` view-source selection: editor controllers vs. placed cameras,
+  with cycling, place-at-current-view, and ImGui camera panel.
+- Thin-lens DOF/distortion/CA in the offline tracer; post-process
+  approximations in the Metal viewer.
+- Level JSON persistence for placed cameras.
+
+**Depends on:** Nothing hard; ImGui (1.1) for the panel, level format (2.3-era
+loader) for persistence.
+
 ---
 
 ## Tier 4 — Procedural Generation
