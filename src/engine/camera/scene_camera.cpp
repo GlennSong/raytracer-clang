@@ -5,16 +5,6 @@
 
 namespace engine {
 
-Real LensParams::verticalFovDegrees() const {
-    if (focalLength <= 0.0) return 60.0;  // degenerate lens; nominal default
-    return radiansToDegrees(2.0 * std::atan(sensorHeight / (2.0 * focalLength)));
-}
-
-Real LensParams::apertureDiameter() const {
-    if (fStop <= 0.0) return 0.0;
-    return (focalLength / fStop) / 1000.0;  // mm -> world units (meters)
-}
-
 CameraState sceneCameraState(const Transform& transform, const SceneCamera& camera,
                              float aspect) {
     CameraState state;
@@ -26,6 +16,7 @@ CameraState sceneCameraState(const Transform& transform, const SceneCamera& came
     state.aspectRatio = aspect;
     state.nearPlane = static_cast<float>(camera.lens.nearPlane);
     state.farPlane = static_cast<float>(camera.lens.farPlane);
+    state.lens = camera.lens;
     return state;
 }
 

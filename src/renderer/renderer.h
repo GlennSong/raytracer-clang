@@ -3,6 +3,7 @@
 
 #include "../rt_math.h"
 #include "../handle.h"
+#include "../lens_params.h"
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -206,6 +207,11 @@ struct CameraState {
     float nearPlane;
     float farPlane;
 
+    // Physical lens parameters of the view (docs/virtual-camera-plan.md).
+    // Backends approximate them in post (DOF, distortion, CA, vignette); the
+    // defaults are visually inert, so views that never touch this lose nothing.
+    LensParams lens;
+
     CameraState()
         : position(0, 0, 3), target(0, 0, 0), up(0, 1, 0),
           fovDegrees(60.0f), orthoHeight(10.0f), aspectRatio(1.0f),
@@ -265,6 +271,13 @@ public:
 
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
     int debugView = 0;
+
+    // Lens effects of the active view's LensParams (docs/virtual-camera-plan.md):
+    // a final image-space warp pass (distortion + chromatic aberration +
+    // vignette) and a depth-based depth-of-field pass. DOF defaults off until
+    // verified on-device.
+    bool lensEffectsEnabled = true;
+    bool dofEnabled = false;
 
     // Bloom
     bool bloomEnabled = true;

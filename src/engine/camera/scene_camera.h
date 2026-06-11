@@ -3,34 +3,11 @@
 
 #include "../components.h"
 #include "../world.h"
+#include "../../lens_params.h"
 #include <string>
 #include <vector>
 
 namespace engine {
-
-// Physical lens parameterization for a placeable camera
-// (docs/virtual-camera-plan.md). Framing is expressed the way a real camera is
-// set up — focal length + sensor size — and FOV is derived, never stored. The
-// aberration fields are carried from the start so both render paths read one
-// parameter set; they take effect in later phases (thin-lens sampling in the
-// offline tracer, post-process passes in the viewer).
-struct LensParams {
-    Real focalLength = 50.0;    // mm
-    Real sensorHeight = 24.0;   // mm (full-frame 36x24 default)
-    Real fStop = 8.0;           // aperture f-number
-    Real focusDistance = 10.0;  // world units
-    Real nearPlane = 0.1;
-    Real farPlane = 1000.0;
-
-    // Image-forming aberrations; 0 = ideal lens.
-    Real distortionK1 = 0.0;          // Brown radial terms
-    Real distortionK2 = 0.0;
-    Real chromaticAberration = 0.0;   // lateral CA strength
-    Real vignette = 0.0;
-
-    Real verticalFovDegrees() const;
-    Real apertureDiameter() const;    // world units; 0 = pinhole (fStop <= 0)
-};
 
 // A placeable, stationary camera. Pose comes from the entity's Transform:
 // forward is the orientation's -Z, up its +Y (the engine's right-handed
