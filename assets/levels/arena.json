@@ -1,7 +1,8 @@
 {
   "version": 1,
   "environment": {
-    "skyColor": [0.05, 0.05, 0.08]
+    "skyColor": [0.05, 0.05, 0.08],
+    "hdr": "../env/tree_lined_driveway_1k.hdr"
   },
   "entities": [
     {
