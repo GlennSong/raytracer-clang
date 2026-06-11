@@ -16,8 +16,11 @@ key (F), persistence via a JSON *sidecar* next to the level (not the level
 file itself), the ImGui camera panel with framing overlays, and offline
 thin-lens DOF/distortion/CA behind CLI flags. Phase 4 (Metal lens-warp + DOF
 passes) is written but **not yet verified on-device**; DOF defaults off.
-Phase 5 partially done (overlays). Placed-camera -> offline-tracer export and
-Phase 6 (external poses) not started.
+Phase 5 partially done (overlays). Placed-camera -> offline-tracer export is
+done (panel button + --level/--camera CLI), and the tracer now parallels the
+realtime light model (ADR-0017): GGX PBR materials, explicitly sampled
+sun/point/spot lights with shadow rays, HDR environment IBL with dominant-sun
+extraction, ACES display transform. Phase 6 (external poses) not started.
 
 ---
 
