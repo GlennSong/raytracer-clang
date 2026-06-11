@@ -867,6 +867,150 @@ enough that the uniform-selected branch wants to become real polymorphism.
 
 ---
 
+## ADR-0017 — Unified physically based lighting with an artistic-control and shading-model seam
+**Status:** Accepted; Phases 0–3 **implemented** (consolidation; BRDF unification; shadow artistic controls + camera-following shadow volume + HDR sun extraction — shadows visually verified; environment unification: cube-bake orientation proven by `tests/test_cube_faces.cpp`, GGX-prefiltered + irradiance cubes, one shader env path, composite equirect workaround removed). Phase 3 note: the procedural sky stays analytic behind the same provider interface — baking it per-frame as day/night animates is a deferred optimization. Phase 4 (gather/respond shading-model seam) is next. · **Date:** 2026-06-10
+
+**Context.** The lit path is two mismatched halves. Indirect lighting (HDR IBL,
+reflection probes) is proper GGX split-sum PBR (BRDF LUT, prefiltered mips), but
+direct lighting in `evaluateLighting` is still Blinn-Phong: a `shininess =
+mix(16, 512, 1-roughness)` remap with `(s+8)/8π` normalization, a diffuse term
+missing the 1/π Lambert factor (≈3× too hot relative to IBL), and the old
+LearnOpenGL `1/(1 + 0.09d + 0.032d²)` point/spot falloff instead of inverse
+square. Roughness therefore means different things to the sun and the sky, and
+direct vs. indirect light are not in the same energy units — which is why
+balancing a sun against an HDR environment never converges.
+
+That mismatch also explains the headline visual complaint: **shadows are faint
+under an HDR environment**. The shadow factor multiplies only each light's
+direct term; the ambient/IBL terms (`ambientDiffuse`, `envSpecular`) are never
+shadowed, and under an HDR they carry most of the energy — a fully shadowed
+pixel keeps ~80% of its brightness. There are no artistic controls to push back
+with: no shadow strength, no shadow tint, just the single `ambientMultiplier`
+scalar.
+
+Accumulated cruft compounds it: `fragmentMain` and `fragmentMainInstanced` are
+~150-line near-duplicates; the three-way environment branch (HDR / probes /
+procedural) is duplicated in both and partially again in
+`sampleReflectionProbes`, each copy with slightly different Fresnel/energy
+treatment; everything lives in one 1,650-line `phong.metal`; uniform structs are
+hand-mirrored between `metal_renderer.mm` and MSL with manual padding;
+`ShadowConfig.bias`/`normalBias`/`pcfRadius` flow from level JSON to the GPU and
+are never read (the real bias is hard-coded on the encoder); the shadow ortho
+volume is a fixed 30-unit box anchored at the world origin; the skybox pass
+pre-multiplies exposure that composite multiplies again (sky seen through SSR is
+double-exposed); and composite re-derives sky pixels per-fragment to work around
+a mis-oriented equirect→cube bake. Separately, the engine should eventually
+support **NPR (toon) shading** and per-feature toggles without forking the
+renderer.
+
+**Decision — a phased refactor with two commitments.**
+
+1. **One BRDF, one set of units.** Direct lighting moves to Cook-Torrance GGX
+   (GGX NDF, height-correlated Smith visibility, Schlick Fresnel) with
+   Lambert/π diffuse, sharing roughness semantics with the existing
+   split-sum/prefilter path. Point/spot lights get inverse-square falloff with a
+   windowed radius. After this, sun-vs-environment balance is a single exposure
+   decision, and every artistic control sits on predictable ground.
+
+2. **Shading is split into *gather* and *respond*, with artistic controls in the
+   gather.** Gather produces, per surface point: each light's direction,
+   radiance, and visibility-as-color (shadow), plus indirect irradiance and
+   prefiltered specular. Respond is the BRDF that turns those into outgoing
+   radiance. Artistic shadow controls live in gather as a small struct on
+   `SceneLighting`:
+
+   ```cpp
+   struct ShadowArtistic {
+       float strength = 1.0f;        // 0 = shadows off, 1 = full direct occlusion
+       Vec3  tint{0, 0, 0};          // shadowed regions lerp toward this color
+       float ambientStrength = 0.5f; // how much shadow also darkens IBL/ambient
+   };
+   ```
+
+   `tint` gives "deep blue, not black" shadows; `ambientStrength` is what makes
+   shadows *dark under an HDR* (it occludes the environment terms, which today
+   ignore shadowing entirely). Because visibility is a color computed in gather,
+   every response model — PBR or toon — inherits the same shadows, lights, and
+   probes. NPR becomes a per-material `ShadingModel` (Standard, Toon, Unlit)
+   selected via Metal **function constants** compiled as cached pipeline
+   variants; feature toggles (shadows, IBL, clouds) use the same mechanism
+   instead of runtime branches.
+
+**Phases** (each shippable and verifiable on its own):
+
+- **Phase 0 — Consolidate (no intended visual change).** Shared
+  `shader_types.h` included by both C++ and MSL (simd types) replaces the
+  hand-mirrored uniform structs; `phong.metal` splits into focused modules
+  concatenated at load (runtime `newLibraryWithSource` has no include paths);
+  the two fragment shaders merge into one `shadeSurface()`; the dead shadow
+  uniforms get wired (bias → encoder depth bias, normalBias → world-space
+  offset, pcfRadius → PCF kernel); exposure is applied exactly once (composite).
+- **Phase 1 — Unify the BRDF** (commitment 1).
+- **Phase 2 — Shadows: reach, response, artistic control.** `ShadowArtistic`
+  (above) in shader + level JSON + ImGui; shadow ortho volume fit to the camera
+  frustum ∩ scene bounds instead of the origin-anchored box; **HDR sun
+  extraction** — `EnvironmentLoader` finds the dominant bright direction/color
+  and drives the shadow-casting directional sun, so a skybox-lit scene gets
+  crisp shadows that match its sun; SSAO moves to darken indirect light only.
+- **Phase 3 — One environment path.** Both providers (HDR and procedural sky)
+  bake into the same cubemap + prefiltered mips + irradiance; the three-way
+  fragment branch collapses to irradiance(N) / prefiltered(R, rough) / BRDF LUT
+  with probes blended on top; the mis-oriented equirect→cube bake is fixed and
+  the composite per-pixel sky workaround removed; radiance clamps and divergent
+  Fresnel paths disappear. Ambient tint / ground-bounce grading lands here.
+- **Phase 4 — The shading-model seam** (commitment 2): gather/respond split,
+  function-constant pipeline variants, Toon model, `SceneLighting` split into
+  `Lights`/`Shadows`/`Environment`/`Grading` sub-structs with JSON + ImGui.
+- **Phase 5 — Later polish:** CSM, spot/point shadow maps, PCSS, auto-exposure
+  adaptation.
+
+**Alternatives considered.**
+- **Keep Blinn-Phong and only add shadow controls** — rejected: tint/strength
+  knobs on top of mismatched units fight the exposure knob; every HDR swap
+  re-breaks the balance. The BRDF unification is what makes the controls stick.
+- **Full deferred shading** — rejected for now: the forward pass with a small
+  G-buffer (color + view normals) already feeds SSR/SSAO; deferred is a much
+  bigger migration and not required for any planned feature. Revisit with
+  many-light scenes (Tier 4 procedural cities).
+- **Uber-shader runtime branches for NPR/toggles** — rejected: the lit shader
+  is already branch-heavy; function constants give dead-code elimination per
+  variant and a natural pipeline-cache key.
+- **Shader subclass/polymorphism for shading models** — rejected: same
+  reasoning as ADR-0016's provider seam; variant count is small and enumerable.
+
+**Consequences / tech debt.**
+- Visual output will shift at Phase 1 (energy renormalization) — levels'
+  `exposure`/`ambientMultiplier`/light intensities need a one-time retune.
+  Acceptable: today's values encode the wrong units.
+- Pipeline variants (Phase 4) multiply PSO count; mitigated by lazy creation +
+  cache keyed on the function-constant set.
+- The SSAO indirect-only fix wants ambient available at AO-apply time; the
+  honest route is a Z-prepass (also useful later), the interim route keeps the
+  composite apply with a tunable floor. Decided per-measurement in Phase 2.
+- The concatenating shader loader is itself interim — if/when shaders are
+  precompiled to a `.metallib`, real `#include` replaces it.
+- **Root cause of the historic "mis-oriented cube bake" (found in Phase 3):**
+  not face orientation at all. `vertexSkybox` normalized the reconstructed
+  view ray *at the vertices*; far-plane offsets are affine in NDC (their
+  interpolation is exact), but interpolating *normalized* rays warps interior
+  pixels — up to ~25° with the oversized fullscreen triangle. Every consumer
+  (env bake, probe bakes, main-pass skybox) was warped; the composite looked
+  right only because it reconstructs per pixel. The CPU unit test passed
+  because the math was right — the GPU link wasn't. Found via load-time GPU
+  validation, which stays in as a canary: an orientation readback check, a
+  direction-reconstruction probe, and a prefilter NaN/firefly scan, plus
+  headless visual tools (`RT_FRAME_DUMP=<png>` one-frame capture,
+  `RT_DUMP_ENV=<dir>` cube-face/equirect dumps). Lesson recorded: math-level
+  unit tests validate intent; only GPU readback validates the chain.
+
+**Revisit trigger.** A second renderer backend (the gather/respond split and
+function-constant variants must re-prove themselves behind the RHI seam,
+ADR-0001); many-light scenes making forward lighting the frame's hot spot (→
+deferred or clustered); NPR needs outgrowing per-material models (e.g.
+full-screen stylization passes).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

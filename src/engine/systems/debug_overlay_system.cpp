@@ -80,7 +80,7 @@ void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {
     ctx.renderer.bloomParams = Renderer::BloomParams{};
     ctx.view.lighting.exposure = 1.0f;
     ctx.view.lighting.ambientMultiplier = 0.3f;
-    ctx.view.lighting.sun.intensity = 1.5f;
+    ctx.view.lighting.sun.intensity = 4.7f;  // illuminance units (ADR-0017 Phase 1)
     ctx.renderer.targetFps = 0;
 }
 
@@ -132,6 +132,22 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             ImGui::TextDisabled("(avg lum %.3f)", avgLum);
         }
         ImGui::SliderFloat("Ambient", &lit.ambientMultiplier, 0.0f, 1.0f);
+        float ambTint[3] = {static_cast<float>(lit.ambientTint.x),
+                            static_cast<float>(lit.ambientTint.y),
+                            static_cast<float>(lit.ambientTint.z)};
+        if (ImGui::ColorEdit3("Ambient Tint", ambTint))
+            lit.ambientTint = Vec3(ambTint[0], ambTint[1], ambTint[2]);
+
+        // Artistic shadow response (ADR-0017 Phase 2)
+        ImGui::SeparatorText("Shadows");
+        auto& sa = lit.shadowArtistic;
+        ImGui::SliderFloat("Strength##shadow", &sa.strength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Ambient Occl.##shadow", &sa.ambientStrength, 0.0f, 1.0f);
+        float tint[3] = {static_cast<float>(sa.tint.x),
+                         static_cast<float>(sa.tint.y),
+                         static_cast<float>(sa.tint.z)};
+        if (ImGui::ColorEdit3("Tint##shadow", tint))
+            sa.tint = Vec3(tint[0], tint[1], tint[2]);
     }
 
     if (ImGui::CollapsingHeader("SSAO")) {
@@ -140,6 +156,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Radius##ao", &ao.radius, 0.1f, 5.0f);
         ImGui::SliderFloat("Intensity##ao", &ao.intensity, 0.0f, 3.0f);
         ImGui::SliderFloat("Bias##ao", &ao.bias, 0.0f, 0.3f);
+        ImGui::SliderFloat("Floor##ao", &ao.aoFloor, 0.0f, 1.0f);
         ImGui::SliderInt("Directions", &ao.directions, 1, 8);
         ImGui::SliderInt("Steps", &ao.steps, 1, 8);
     }

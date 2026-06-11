@@ -35,6 +35,16 @@ struct HdrImage {
     int height = 0;
     std::vector<float> pixels;  // width*height*3, linear RGB
     float avgLuminance = 0.0f;  // log-average luminance, for auto-exposure
+
+    // Dominant light ("sun") extracted from the brightest region of the map
+    // (ADR-0017 Phase 2), so a shadow-casting directional light can match the
+    // sun baked into the image. hasSun stays false when no clear peak exists
+    // (e.g. an overcast capture).
+    bool hasSun = false;
+    Vec3 sunDirection;          // toward the sun, world space
+    Vec3 sunColor{1, 1, 1};     // chromaticity, normalized to luminance 1
+    float sunIntensity = 0.0f;  // illuminance from the sun region (lighting units)
+
     bool valid() const { return width > 0 && height > 0 && !pixels.empty(); }
 };
 
@@ -47,8 +57,11 @@ public:
     static HdrImage loadHdr(const std::string& path);
 
     // Decode + upload as a float environment texture. Invalid handle on failure.
+    // If outSun is given and the map has a clear dominant light, the extracted
+    // direction/color/intensity overwrite it (castsShadow is left as-is).
     static TextureHandle loadEnvironmentMap(const std::string& path,
-                                            Renderer& renderer);
+                                            Renderer& renderer,
+                                            DirectionalLight* outSun = nullptr);
 };
 
 }  // namespace engine

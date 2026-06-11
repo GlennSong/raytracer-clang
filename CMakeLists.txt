@@ -54,6 +54,7 @@ add_executable(run_tests
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
+    tests/test_cube_faces.cpp
     src/job_system.cpp
     src/engine/day_night_cycle.cpp
     src/engine/world.cpp

@@ -6,8 +6,18 @@
 #import <AppKit/AppKit.h>
 #import <simd/simd.h>
 #include "../../slot_map.h"
+#include "../cube_faces.h"
 #include <vector>
 #include <algorithm>
+#include <cstdlib>
+
+// Headless frame capture (declaration only — the implementation is compiled
+// into model_importer.cpp alongside the glTF importer's stb usage).
+#include "../../../third_party/tinygltf/stb_image_write.h"
+
+// GPU-shared struct layouts (CameraUniforms, LightUniforms, …) — one header
+// included by both this file and the MSL source (ADR-0017 Phase 0).
+#include "../../../shaders/metal/shader_types.h"
 
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
@@ -16,94 +26,12 @@
 
 namespace engine {
 
-// Uniform structs must match Metal shader layout exactly.
-// simd_float3 is 16 bytes on Apple — no manual padding between float3 fields.
-
-struct CameraUniforms {
-    simd_float4x4 viewProjection;
-    simd_float4x4 view;
-    simd_float3 cameraPosition;
-    float _camPad0;
-    simd_float4x4 invViewProjection;
-    simd_float4x4 projection;
-    simd_float4x4 invProjection;
-    simd_float2 screenSize;
-    float nearPlane;
-    float farPlane;
-};
-
-struct ModelUniforms {
-    simd_float4x4 model;
-    simd_float4x4 normalMatrix;
-};
-
-struct MaterialUniforms {
-    simd_float3 albedo;
-    float metallic;
-    float roughness;
-    float opacity;
-    float flags;
-    uint32_t textureFlags;
-    simd_float3 emission;
-};
-
-enum GPULightType : int32_t {
-    LightType_Point       = 0,
-    LightType_Directional = 1,
-    LightType_Spot        = 2,
-};
-
-struct alignas(16) GPULight {
-    simd_float3   position;       // point/spot
-    float         intensity;
-    simd_float3   direction;      // directional/spot
-    float         innerCosAngle;  // spot (cos of inner cone)
-    simd_float3   color;
-    float         outerCosAngle;  // spot (cos of outer cone)
-    simd_float4x4 lightViewProjection; // shadow matrix
-    int32_t       type;           // GPULightType
-    int32_t       shadowMapIndex; // -1 = no shadow
-    float         _pad[2];
-};
-
-struct LightUniforms {
-    GPULight lights[32];
-    int32_t  lightCount;
-    float    exposure;
-    float    ambientMultiplier;
-    float    _pad[1];
-    // Procedural sky (ADR-0016, day/night). Mirrors `LightUniforms` in
-    // phong.metal — each simd_float3 packs with its trailing scalar into 16
-    // bytes, matching MSL's float3 layout (as GPULight above already does).
-    simd_float3 skySunDir;   float skySunIntensity;
-    simd_float3 skySunColor; float _skp0;
-    simd_float3 skyZenith;   float _skp1;
-    simd_float3 skyHorizon;  float _skp2;
-    simd_float3 skyGround;   float _skp3;
-    // Procedural clouds (ADR-0016 step 3). Mirrors phong.metal LightUniforms.
-    float skyCloudCoverage; float skyCloudDensity;
-    float skyCloudScale;    float skyCloudTime;
-};
-
 struct GPUMesh {
     id<MTLBuffer> vertexBuffer;
     id<MTLBuffer> indexBuffer;
     uint32_t indexCount;
     int materialIndex;
     BoundingSphere bounds;
-};
-
-struct alignas(16) GPUInstanceData {
-    simd_float4x4 model;
-    simd_float4x4 normalMatrix;
-    simd_float4 albedo;     // w unused
-    float metallic;
-    float roughness;
-    float opacity;
-    float flags;
-    simd_float4 emission;   // w unused
-    uint32_t textureFlags;
-    float _instPad[3];
 };
 
 static constexpr uint32_t MAX_INSTANCES = 4096;
@@ -148,13 +76,7 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> skyboxDepthState;
 
     // Environment (ADR-0016): an equirectangular HDR map drives the skybox and,
-    // via the probe bake, IBL. nil => procedural sky. Mirrors `EnvUniforms` in
-    // the shader (mode 0 = procedural, 1 = HDR equirect).
-    struct EnvUniforms {
-        int32_t mode;
-        int32_t cloudsEnabled;  // 0 during the probe bake (clouds stay unbaked)
-        float   _pad[2];
-    };
+    // via the probe bake, IBL. nil => procedural sky.
     bool skyCloudsEnabled = true;  // mirrors SceneLighting::sky.cloudsEnabled
     id<MTLTexture> environmentTexture;     // equirect RGBA16Float source, nil if procedural
     id<MTLTexture> environmentCubemap;     // equirect baked to a cube (ADR-0016), nil if procedural
@@ -163,6 +85,26 @@ struct MetalRenderer::Impl {
     id<MTLSamplerState> equirectSampler;   // linear, wrap-U / clamp-V
     static constexpr int ENV_CUBEMAP_SIZE = 1024;
     void bakeEnvironmentCubemap();         // (re)bake environmentCubemap from environmentTexture
+
+    // IBL cubes derived from the environment cube (ADR-0017 Phase 3):
+    // GGX-prefiltered radiance (mips linear in roughness) + cosine-convolved
+    // irradiance. nil in procedural mode (the shader evaluates the analytic
+    // sky instead).
+    id<MTLTexture> envPrefilteredCube;
+    id<MTLTexture> envIrradianceCube;
+    id<MTLComputePipelineState> irradiancePipeline;
+    id<MTLSamplerState> mipClampSampler;   // linear min/mag/MIP — level() lookups
+    static constexpr int ENV_PREFILTER_SIZE = 128;
+    static constexpr int ENV_PREFILTER_MIPS = 5;   // roughness 0..1 → mip 0..4
+    static constexpr int ENV_IRRADIANCE_SIZE = 32;
+    void bakeEnvironmentIBL();             // (re)build both from environmentCubemap
+    // Hardware ground truth for the bake: read faces back and compare against
+    // CPU-sampled equirect under eight orientation hypotheses, then hardware-
+    // sample the cube along known directions — together they pin down whether
+    // a mismatch lives in the bake or in the sampler convention.
+    id<MTLComputePipelineState> cubeValidatePipeline;
+    id<MTLRenderPipelineState> dirDebugPipeline;
+    void validateBakedCube(id<MTLTexture> cube);
 
     // Post-processing: offscreen HDR target + G-buffer normals + composite pass
     id<MTLTexture> sceneColorTexture;
@@ -192,19 +134,6 @@ struct MetalRenderer::Impl {
     id<MTLComputePipelineState> aoBlurVPipeline;
 
     // Reflection probes (cubemap-based IBL)
-    struct alignas(16) GPUReflectionProbe {
-        simd_float3 position;
-        float influenceRadius;
-        simd_float3 boxMin;
-        float _pad0;
-        simd_float3 boxMax;
-        int32_t probeIndex;
-    };
-    struct ProbeUniforms {
-        int32_t probeCount;
-        int32_t maxMipLevel;
-        float _pad[2];
-    };
     id<MTLTexture> probeCubemapArray;      // texturecube_array, RGBA16Float
     id<MTLTexture> brdfLUT;                // 256×256 RG16Float
     id<MTLBuffer> probeBuffer;             // GPUReflectionProbe[]
@@ -228,15 +157,16 @@ struct MetalRenderer::Impl {
     int shadowMapSize = 2048;
     bool shadowEnabled = false;
     CameraUniforms shadowCameraUniforms;  // light VP for shadow pass
-
-    struct ShadowUniforms {
-        float shadowBias;
-        float normalBias;
-        float pcfRadius;
-        int32_t shadowMapSize;
-        int32_t debugShadow;  // 1 = lit shaders output the sun shadow factor
-    };
     ShadowUniforms shadowUniforms;
+    // Rasterization-side depth bias for the shadow pass encoder, from
+    // ShadowConfig::bias (the lookup-side controls ride in shadowUniforms).
+    float shadowDepthBias = 0.005f;
+
+    // Headless visual verification: RT_FRAME_DUMP=<path.png> writes one
+    // composited frame to disk (~frame 90, after probes bake and physics
+    // settle) — eyes on the renderer without window capture permissions.
+    const char* frameDumpPath = nullptr;
+    int frameDumpCounter = 0;
 
     id<CAMetalDrawable> currentDrawable;
     id<MTLCommandBuffer> currentCommandBuffer;
@@ -277,22 +207,39 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     impl->metalLayer = [CAMetalLayer layer];
     impl->metalLayer.device = impl->device;
     impl->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    impl->metalLayer.framebufferOnly = YES;
+    // framebufferOnly drawables can't be blitted from; relax it only when a
+    // frame dump was requested (RT_FRAME_DUMP=<path.png>).
+    impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
     impl->metalLayer.contentsScale = nsWindow.backingScaleFactor;
 
     nsWindow.contentView.wantsLayer = YES;
     nsWindow.contentView.layer = impl->metalLayer;
     impl->nsWindow = nsWindow;
 
-    // Load shaders
+    // Load shaders. Runtime newLibraryWithSource has no include paths, so the
+    // modules are concatenated in dependency order; #line directives keep
+    // compile diagnostics pointing at the right file (ADR-0017 Phase 0).
     NSError* error = nil;
-    NSString* shaderPath = @"shaders/metal/phong.metal";
-    NSString* shaderSource = [NSString stringWithContentsOfFile:shaderPath
-                                                      encoding:NSUTF8StringEncoding
-                                                         error:&error];
-    if (!shaderSource) {
-        NSLog(@"Failed to load shader: %@", error);
-        return false;
+    NSArray<NSString*>* shaderFiles = @[
+        @"shaders/metal/shader_types.h",   // GPU structs shared with C++
+        @"shaders/metal/common.metal",     // vertex layouts, BRDF helpers
+        @"shaders/metal/environment.metal",// sky/HDR providers, IBL precompute
+        @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
+        @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
+        @"shaders/metal/post.metal",       // SSR, GTAO, bloom, composite
+    ];
+    NSMutableString* shaderSource = [NSMutableString string];
+    for (NSString* path in shaderFiles) {
+        NSString* chunk = [NSString stringWithContentsOfFile:path
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:&error];
+        if (!chunk) {
+            NSLog(@"Failed to load shader %@: %@", path, error);
+            return false;
+        }
+        [shaderSource appendFormat:@"#line 1 \"%@\"\n%@\n",
+                                   [path lastPathComponent], chunk];
     }
 
     MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
@@ -409,6 +356,19 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->linearClampSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
     }
 
+    // Mip-filtering clamp sampler for IBL level() lookups (prefiltered env,
+    // probe roughness mips). Without a mip filter, level() clamps to mip 0 —
+    // which is why probe roughness blur silently never worked.
+    {
+        MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
+        sampDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        sampDesc.mipFilter = MTLSamplerMipFilterLinear;
+        sampDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        sampDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        impl->mipClampSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
+    }
+
     // Linear wrap sampler (for material textures)
     {
         MTLSamplerDescriptor* sampDesc = [[MTLSamplerDescriptor alloc] init];
@@ -458,6 +418,29 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             impl->prefilterPipeline = [impl->device newComputePipelineStateWithFunction:prefilterFunc
                                                                                   error:&error];
             if (!impl->prefilterPipeline) NSLog(@"Prefilter pipeline error: %@", error);
+        }
+        id<MTLFunction> irradianceFunc = [library newFunctionWithName:@"convolveIrradiance"];
+        if (irradianceFunc) {
+            impl->irradiancePipeline = [impl->device newComputePipelineStateWithFunction:irradianceFunc
+                                                                                   error:&error];
+            if (!impl->irradiancePipeline) NSLog(@"Irradiance pipeline error: %@", error);
+        }
+        id<MTLFunction> validateFunc = [library newFunctionWithName:@"sampleCubeForValidation"];
+        if (validateFunc) {
+            impl->cubeValidatePipeline = [impl->device newComputePipelineStateWithFunction:validateFunc
+                                                                                     error:&error];
+            if (!impl->cubeValidatePipeline) NSLog(@"Cube validation pipeline error: %@", error);
+        }
+        id<MTLFunction> skyVertForDebug = [library newFunctionWithName:@"vertexSkybox"];
+        id<MTLFunction> dirDebugFunc = [library newFunctionWithName:@"fragmentDirectionDebug"];
+        if (skyVertForDebug && dirDebugFunc) {
+            MTLRenderPipelineDescriptor* dd = [[MTLRenderPipelineDescriptor alloc] init];
+            dd.vertexFunction = skyVertForDebug;
+            dd.fragmentFunction = dirDebugFunc;
+            dd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->dirDebugPipeline = [impl->device newRenderPipelineStateWithDescriptor:dd
+                                                                                  error:&error];
+            if (!impl->dirDebugPipeline) NSLog(@"Direction debug pipeline error: %@", error);
         }
     }
 
@@ -547,7 +530,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     }
 
     // Probe buffer (GPU-side probe metadata)
-    impl->probeBuffer = [impl->device newBufferWithLength:Impl::MAX_PROBES * sizeof(Impl::GPUReflectionProbe)
+    impl->probeBuffer = [impl->device newBufferWithLength:Impl::MAX_PROBES * sizeof(GPUReflectionProbe)
                                                   options:MTLResourceStorageModeShared];
 
     // Dummy 1×1 cubemap array for when no probes are baked (shader requires valid binding)
@@ -643,7 +626,8 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->shadowSampler = [impl->device newSamplerStateWithDescriptor:samplerDesc];
     }
 
-    impl->shadowUniforms = {0.005f, 0.02f, 1.0f, impl->shadowMapSize};
+    impl->shadowUniforms = {0.02f, 1.0f, impl->shadowMapSize, 0,
+                            {0, 0, 0}, 1.0f, 0.5f, {0, 0}};
 
     // Depth states
     MTLDepthStencilDescriptor* depthDesc = [[MTLDepthStencilDescriptor alloc] init];
@@ -902,20 +886,13 @@ void MetalRenderer::Impl::bakeEnvironmentCubemap() {
     faceDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     faceDesc.storageMode = MTLStorageModePrivate;
 
-    struct CubeFace { Vec3 target; Vec3 up; };
-    CubeFace faces[6] = {
-        {{1, 0, 0},  {0, -1, 0}},  {{-1, 0, 0}, {0, -1, 0}},
-        {{0, 1, 0},  {0, 0, 1}},   {{0, -1, 0}, {0, 0, -1}},
-        {{0, 0, 1},  {0, -1, 0}},  {{0, 0, -1}, {0, -1, 0}},
-    };
-    simd_float4x4 proj = toSimd(Mat4::perspective(degreesToRadians(90.0), 1.0, 0.1, 10.0));
-
     for (int face = 0; face < 6; face++) {
         id<MTLTexture> faceColor = [device newTextureWithDescriptor:faceDesc];
 
-        simd_float4x4 view = toSimd(Mat4::lookAt(Vec3(0, 0, 0), faces[face].target, faces[face].up));
+        // Face cameras from the unit-tested convention helper (ADR-0017
+        // Phase 3) — the previous lookAt-only table produced mirrored faces.
         CameraUniforms cam = {};
-        cam.viewProjection = simd_mul(proj, view);
+        cam.viewProjection = toSimd(cubeFaceViewProjection(face, Vec3(0, 0, 0), 0.1, 10.0));
         cam.invViewProjection = simd_inverse(cam.viewProjection);
         cam.cameraPosition = simd_make_float3(0.0f, 0.0f, 0.0f);  // env is position-independent
 
@@ -957,13 +934,397 @@ void MetalRenderer::Impl::bakeEnvironmentCubemap() {
         [cmd waitUntilCompleted];
     }
 
+    validateBakedCube(cube);
     environmentCubemap = cube;
+}
+
+void MetalRenderer::Impl::validateBakedCube(id<MTLTexture> cube) {
+    const int size = ENV_CUBEMAP_SIZE;
+    const int ew = static_cast<int>(environmentTexture.width);
+    const int eh = static_cast<int>(environmentTexture.height);
+
+    // CPU copy of the equirect source (uploaded with shared storage).
+    std::vector<__fp16> equirect(static_cast<size_t>(ew) * eh * 4);
+    [environmentTexture getBytes:equirect.data()
+                     bytesPerRow:static_cast<NSUInteger>(ew) * 4 * sizeof(__fp16)
+                      fromRegion:MTLRegionMake2D(0, 0, ew, eh)
+                     mipmapLevel:0];
+
+    auto equirectLum = [&](const Vec3& d) -> double {
+        double u = std::atan2(d.z, d.x) / (2.0 * M_PI) + 0.5;
+        double v = std::acos(std::clamp(d.y, Real(-1), Real(1))) / M_PI;
+        int x = std::clamp(static_cast<int>(u * ew), 0, ew - 1);
+        int y = std::clamp(static_cast<int>(v * eh), 0, eh - 1);
+        const __fp16* p = &equirect[(static_cast<size_t>(y) * ew + x) * 4];
+        return 0.2126 * static_cast<float>(p[0]) + 0.7152 * static_cast<float>(p[1])
+             + 0.0722 * static_cast<float>(p[2]);
+    };
+
+    // Compare at low frequency: a deep cube mip vs jitter-averaged equirect,
+    // so filtering differences don't drown the orientation signal. Test all
+    // eight axis-aligned orientations (flips and transposes).
+    const int MIP = 4;
+    const int faceSize = size >> MIP;
+    MTLTextureDescriptor* stageDesc = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:faceSize height:faceSize mipmapped:NO];
+    stageDesc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> staging = [device newTextureWithDescriptor:stageDesc];
+    std::vector<__fp16> faceData(static_cast<size_t>(faceSize) * faceSize * 4);
+
+    // Jitter-averaged equirect luminance around a face texel's footprint.
+    auto expectedLum = [&](int face, double u, double v) -> double {
+        double sum = 0.0;
+        const int J = 4;
+        for (int jy = 0; jy < J; jy++)
+            for (int jx = 0; jx < J; jx++) {
+                double uu = u + ((jx + 0.5) / J - 0.5) / faceSize;
+                double vv = v + ((jy + 0.5) / J - 0.5) / faceSize;
+                sum += equirectLum(cubeFaceDirection(face, uu, vv));
+            }
+        return sum / (J * J);
+    };
+
+    static const char* HYP[8] = {"identity", "u-flip", "v-flip", "uv-flip (180)",
+                                 "transpose", "rot90", "rot270", "anti-transpose"};
+    bool allOk = true;
+    for (int face = 0; face < 6; face++) {
+        id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit copyFromTexture:cube
+                  sourceSlice:static_cast<NSUInteger>(face) sourceLevel:MIP
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(faceSize, faceSize, 1)
+                    toTexture:staging
+             destinationSlice:0 destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        [staging getBytes:faceData.data()
+              bytesPerRow:static_cast<NSUInteger>(faceSize) * 4 * sizeof(__fp16)
+               fromRegion:MTLRegionMake2D(0, 0, faceSize, faceSize)
+              mipmapLevel:0];
+
+        double err[8] = {};
+        for (int ty = 0; ty < faceSize; ty += 4) {
+            for (int tx = 0; tx < faceSize; tx += 4) {
+                double u = (tx + 0.5) / faceSize;
+                double v = (ty + 0.5) / faceSize;
+                const __fp16* p = &faceData[(static_cast<size_t>(ty) * faceSize + tx) * 4];
+                double baked = 0.2126 * static_cast<float>(p[0])
+                             + 0.7152 * static_cast<float>(p[1])
+                             + 0.0722 * static_cast<float>(p[2]);
+                for (int h = 0; h < 8; h++) {
+                    double uu = u, vv = v;
+                    if (h & 4) std::swap(uu, vv);
+                    if (h & 1) uu = 1.0 - uu;
+                    if (h & 2) vv = 1.0 - vv;
+                    double expected = expectedLum(face, uu, vv);
+                    err[h] += std::abs(baked - expected) / (expected + 0.05);
+                }
+            }
+        }
+        int best = 0;
+        for (int h = 1; h < 8; h++)
+            if (err[h] < err[best]) best = h;
+        NSLog(@"[ENV BAKE] face %d: best=%s  errs id=%.2f uf=%.2f vf=%.2f 180=%.2f tr=%.2f r90=%.2f r270=%.2f at=%.2f",
+              face, HYP[best], err[0], err[1], err[2], err[3], err[4], err[5], err[6], err[7]);
+        if (best != 0) allOk = false;
+    }
+    if (allOk) {
+        NSLog(@"[ENV BAKE] all 6 cube faces match the sampling convention");
+    }
+
+    // RT_DUMP_ENV=<dir>: write tone-mapped PNGs of each face (mip 2) and the
+    // equirect source for direct visual comparison.
+    if (const char* dumpDir = std::getenv("RT_DUMP_ENV")) {
+        auto tonemap8 = [](float x) -> unsigned char {
+            float t = x / (1.0f + x);
+            float g = std::pow(std::max(t, 0.0f), 1.0f / 2.2f);
+            return static_cast<unsigned char>(std::min(g, 1.0f) * 255.0f + 0.5f);
+        };
+        const int DM = 2;                  // mip 2 → 256² faces
+        const int ds = size >> DM;
+        MTLTextureDescriptor* dDesc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:ds height:ds mipmapped:NO];
+        dDesc.storageMode = MTLStorageModeShared;
+        id<MTLTexture> dStage = [device newTextureWithDescriptor:dDesc];
+        std::vector<__fp16> dData(static_cast<size_t>(ds) * ds * 4);
+        std::vector<unsigned char> png(static_cast<size_t>(ds) * ds * 3);
+        for (int face = 0; face < 6; face++) {
+            id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+            [blit copyFromTexture:cube
+                      sourceSlice:static_cast<NSUInteger>(face) sourceLevel:DM
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake(ds, ds, 1)
+                        toTexture:dStage
+                 destinationSlice:0 destinationLevel:0
+                destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [blit endEncoding];
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            [dStage getBytes:dData.data()
+                 bytesPerRow:static_cast<NSUInteger>(ds) * 4 * sizeof(__fp16)
+                  fromRegion:MTLRegionMake2D(0, 0, ds, ds)
+                 mipmapLevel:0];
+            for (size_t i = 0, j = 0; i < dData.size(); i += 4, j += 3) {
+                png[j]     = tonemap8(dData[i]);
+                png[j + 1] = tonemap8(dData[i + 1]);
+                png[j + 2] = tonemap8(dData[i + 2]);
+            }
+            char path[512];
+            snprintf(path, sizeof(path), "%s/cube_face_%d.png", dumpDir, face);
+            stbi_write_png(path, ds, ds, 3, png.data(), ds * 3);
+        }
+        // Equirect source, downsampled 2× for a manageable PNG.
+        const int qw = ew / 2, qh = eh / 2;
+        std::vector<unsigned char> eq(static_cast<size_t>(qw) * qh * 3);
+        for (int y = 0; y < qh; y++)
+            for (int x = 0; x < qw; x++) {
+                const __fp16* p = &equirect[(static_cast<size_t>(y) * 2 * ew + x * 2) * 4];
+                size_t j = (static_cast<size_t>(y) * qw + x) * 3;
+                eq[j]     = tonemap8(p[0]);
+                eq[j + 1] = tonemap8(p[1]);
+                eq[j + 2] = tonemap8(p[2]);
+            }
+        char path[512];
+        snprintf(path, sizeof(path), "%s/equirect.png", dumpDir);
+        stbi_write_png(path, qw, qh, 3, eq.data(), qw * 3);
+        NSLog(@"[ENV DUMP] wrote cube faces + equirect to %s", dumpDir);
+    }
+
+    // Link probe: GPU direction reconstruction. Renders each face writing the
+    // reconstructed direction as color; compares numerically against the
+    // convention table. Isolates rasterizer/invVP from equirect sampling.
+    if (dirDebugPipeline) {
+        const int DS = 32;
+        MTLTextureDescriptor* dd = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:DS height:DS mipmapped:NO];
+        dd.usage = MTLTextureUsageRenderTarget;
+        dd.storageMode = MTLStorageModeShared;
+        id<MTLTexture> dirTex = [device newTextureWithDescriptor:dd];
+        std::vector<__fp16> dirData(static_cast<size_t>(DS) * DS * 4);
+        for (int face = 0; face < 6; face++) {
+            CameraUniforms cam = {};
+            cam.viewProjection = toSimd(cubeFaceViewProjection(face, Vec3(0, 0, 0), 0.1, 10.0));
+            cam.invViewProjection = simd_inverse(cam.viewProjection);
+            cam.cameraPosition = simd_make_float3(0, 0, 0);
+
+            id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture = dirTex;
+            rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+            [enc setRenderPipelineState:dirDebugPipeline];
+            [enc setVertexBytes:&cam length:sizeof(CameraUniforms) atIndex:1];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [enc endEncoding];
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            [dirTex getBytes:dirData.data()
+                 bytesPerRow:static_cast<NSUInteger>(DS) * 4 * sizeof(__fp16)
+                  fromRegion:MTLRegionMake2D(0, 0, DS, DS)
+                 mipmapLevel:0];
+
+            double maxAngErr = 0.0;
+            for (int ty = 0; ty < DS; ty++)
+                for (int tx = 0; tx < DS; tx++) {
+                    const __fp16* p = &dirData[(static_cast<size_t>(ty) * DS + tx) * 4];
+                    Vec3 gpuDir(static_cast<float>(p[0]) * 2.0f - 1.0f,
+                                static_cast<float>(p[1]) * 2.0f - 1.0f,
+                                static_cast<float>(p[2]) * 2.0f - 1.0f);
+                    gpuDir = normalize(gpuDir);
+                    Vec3 want = cubeFaceDirection(face, (tx + 0.5) / DS, (ty + 0.5) / DS);
+                    double d = std::clamp(dot(gpuDir, want), Real(-1), Real(1));
+                    maxAngErr = std::max(maxAngErr, std::acos(d) * 180.0 / M_PI);
+                }
+            NSLog(@"[ENV DIR] face %d: max GPU-vs-expected direction error %.2f deg",
+                  face, maxAngErr);
+        }
+    }
+
+    // Second link: the hardware sampler. Sample the cube along directions from
+    // the convention table and compare against the (jitter-averaged) equirect.
+    if (cubeValidatePipeline) {
+        const int GRID = 8;
+        const int N = 6 * GRID * GRID;
+        std::vector<simd_float4> dirs(N);
+        int idx = 0;
+        for (int face = 0; face < 6; face++)
+            for (int gy = 0; gy < GRID; gy++)
+                for (int gx = 0; gx < GRID; gx++) {
+                    Vec3 d = cubeFaceDirection(face, (gx + 0.5) / GRID,
+                                               (gy + 0.5) / GRID);
+                    dirs[idx++] = simd_make_float4(static_cast<float>(d.x),
+                                                   static_cast<float>(d.y),
+                                                   static_cast<float>(d.z), 0);
+                }
+        id<MTLBuffer> dirBuf = [device newBufferWithBytes:dirs.data()
+                                                   length:N * sizeof(simd_float4)
+                                                  options:MTLResourceStorageModeShared];
+        id<MTLBuffer> resBuf = [device newBufferWithLength:N * sizeof(simd_float4)
+                                                   options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:cubeValidatePipeline];
+        [enc setTexture:cube atIndex:0];
+        [enc setBuffer:dirBuf offset:0 atIndex:0];
+        [enc setBuffer:resBuf offset:0 atIndex:1];
+        [enc setSamplerState:mipClampSampler atIndex:0];
+        [enc dispatchThreads:MTLSizeMake(N, 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        [enc endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+
+        const simd_float4* res = static_cast<const simd_float4*>([resBuf contents]);
+        idx = 0;
+        for (int face = 0; face < 6; face++) {
+            double errSum = 0.0;
+            for (int g = 0; g < GRID * GRID; g++, idx++) {
+                double sampled = 0.2126 * res[idx].x + 0.7152 * res[idx].y
+                               + 0.0722 * res[idx].z;
+                double u = (g % GRID + 0.5) / GRID;
+                double v = (g / GRID + 0.5) / GRID;
+                double expected = expectedLum(face, u, v);
+                errSum += std::abs(sampled - expected) / (expected + 0.05);
+            }
+            NSLog(@"[ENV SAMPLE] face %d hardware-sample mean rel err %.3f",
+                  face, errSum / (GRID * GRID));
+        }
+    }
+}
+
+// Build the IBL cubes from the baked environment cube (ADR-0017 Phase 3):
+// GGX-prefilter each mip (roughness = mip / maxMip) and cosine-convolve a
+// small irradiance cube. One command buffer; the kernels only read the source
+// cube, so no inter-dispatch barriers are needed.
+void MetalRenderer::Impl::bakeEnvironmentIBL() {
+    if (!environmentCubemap || !prefilterPipeline || !irradiancePipeline) {
+        envPrefilteredCube = nil;
+        envIrradianceCube = nil;
+        return;
+    }
+
+    MTLTextureDescriptor* preDesc = [[MTLTextureDescriptor alloc] init];
+    preDesc.textureType = MTLTextureTypeCube;
+    preDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+    preDesc.width = ENV_PREFILTER_SIZE;
+    preDesc.height = ENV_PREFILTER_SIZE;
+    preDesc.mipmapLevelCount = ENV_PREFILTER_MIPS;
+    preDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    preDesc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> prefiltered = [device newTextureWithDescriptor:preDesc];
+
+    MTLTextureDescriptor* irrDesc = [[MTLTextureDescriptor alloc] init];
+    irrDesc.textureType = MTLTextureTypeCube;
+    irrDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+    irrDesc.width = ENV_IRRADIANCE_SIZE;
+    irrDesc.height = ENV_IRRADIANCE_SIZE;
+    irrDesc.mipmapLevelCount = 1;
+    irrDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    irrDesc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> irradiance = [device newTextureWithDescriptor:irrDesc];
+
+    id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    MTLSize group = MTLSizeMake(8, 8, 1);
+
+    [enc setComputePipelineState:prefilterPipeline];
+    [enc setTexture:environmentCubemap atIndex:0];
+    [enc setSamplerState:mipClampSampler atIndex:0];
+    for (int mip = 0; mip < ENV_PREFILTER_MIPS; mip++) {
+        id<MTLTexture> mipView =
+            [prefiltered newTextureViewWithPixelFormat:MTLPixelFormatRGBA16Float
+                                           textureType:MTLTextureTypeCube
+                                                levels:NSMakeRange(mip, 1)
+                                                slices:NSMakeRange(0, 6)];
+        float roughness = static_cast<float>(mip) / (ENV_PREFILTER_MIPS - 1);
+        int mipSize = ENV_PREFILTER_SIZE >> mip;
+        MTLSize grid = MTLSizeMake(mipSize, mipSize, 1);
+        [enc setTexture:mipView atIndex:1];
+        [enc setBytes:&roughness length:sizeof(roughness) atIndex:0];
+        for (int face = 0; face < 6; face++) {
+            [enc setBytes:&face length:sizeof(face) atIndex:1];
+            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+        }
+    }
+
+    [enc setComputePipelineState:irradiancePipeline];
+    [enc setTexture:environmentCubemap atIndex:0];
+    [enc setTexture:irradiance atIndex:1];
+    [enc setSamplerState:mipClampSampler atIndex:0];
+    MTLSize irrGrid = MTLSizeMake(ENV_IRRADIANCE_SIZE, ENV_IRRADIANCE_SIZE, 1);
+    for (int face = 0; face < 6; face++) {
+        [enc setBytes:&face length:sizeof(face) atIndex:0];
+        [enc dispatchThreads:irrGrid threadsPerThreadgroup:group];
+    }
+
+    [enc endEncoding];
+    [cmd commit];
+    [cmd waitUntilCompleted];
+
+    // Diagnostic scan: non-finite texels mean a kernel bug; an extreme max
+    // luminance means the source sun is aliasing into fireflies.
+    {
+        std::vector<__fp16> texels;
+        for (int mip = 0; mip < ENV_PREFILTER_MIPS; mip++) {
+            int mipSize = ENV_PREFILTER_SIZE >> mip;
+            MTLTextureDescriptor* stageDesc = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                             width:mipSize height:mipSize mipmapped:NO];
+            stageDesc.storageMode = MTLStorageModeShared;
+            id<MTLTexture> staging = [device newTextureWithDescriptor:stageDesc];
+            texels.resize(static_cast<size_t>(mipSize) * mipSize * 4);
+            int badCount = 0;
+            float maxLum = 0;
+            for (int face = 0; face < 6; face++) {
+                id<MTLCommandBuffer> scanCmd = [commandQueue commandBuffer];
+                id<MTLBlitCommandEncoder> blit = [scanCmd blitCommandEncoder];
+                [blit copyFromTexture:prefiltered
+                          sourceSlice:static_cast<NSUInteger>(face) sourceLevel:static_cast<NSUInteger>(mip)
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(mipSize, mipSize, 1)
+                            toTexture:staging
+                     destinationSlice:0 destinationLevel:0
+                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit endEncoding];
+                [scanCmd commit];
+                [scanCmd waitUntilCompleted];
+                [staging getBytes:texels.data()
+                      bytesPerRow:static_cast<NSUInteger>(mipSize) * 4 * sizeof(__fp16)
+                       fromRegion:MTLRegionMake2D(0, 0, mipSize, mipSize)
+                      mipmapLevel:0];
+                for (size_t i = 0; i < texels.size(); i += 4) {
+                    float r = texels[i], g = texels[i + 1], b = texels[i + 2];
+                    if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b)) {
+                        badCount++;
+                        continue;
+                    }
+                    maxLum = std::max(maxLum, 0.2126f * r + 0.7152f * g + 0.0722f * b);
+                }
+            }
+            if (badCount > 0)
+                NSLog(@"[ENV IBL] prefiltered mip %d: %d non-finite texels!", mip, badCount);
+            else
+                NSLog(@"[ENV IBL] prefiltered mip %d ok, max luminance %.1f", mip, maxLum);
+        }
+    }
+
+    envPrefilteredCube = prefiltered;
+    envIrradianceCube = irradiance;
 }
 
 void MetalRenderer::setEnvironmentMap(TextureHandle equirect) {
     auto* tex = impl->textures.get(equirect);
     impl->environmentTexture = tex ? *tex : nil;
     impl->bakeEnvironmentCubemap();   // builds environmentCubemap (or clears it)
+    impl->bakeEnvironmentIBL();       // prefiltered + irradiance cubes (or clears)
 
     // If probes are already baked against the old environment, re-bake so IBL
     // tracks the new map (ADR-0016: the bake renders the skybox into the cubes).
@@ -1085,12 +1446,25 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
         g.outerCosAngle = 0;
 
         if (lighting.sun.castsShadow && lighting.shadow.enabled) {
-            // Compute light VP for shadow mapping
+            // Compute light VP for shadow mapping. The ortho volume follows the
+            // camera (ADR-0017 Phase 2) instead of anchoring at the world
+            // origin, so shadows exist wherever the player is. Snapped to
+            // shadow-map texels in light space so edges don't swim as the
+            // camera moves. Frustum-fitting / cascades remain Phase 5.
             Real sceneBound = 30.0;
-            Vec3 sceneCenter(0, 0, 0);
-            Vec3 lightPos = sceneCenter + sunDir * sceneBound;
             // Avoid degenerate up vector when light is nearly vertical
             Vec3 up = (std::abs(sunDir.y) > 0.99) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+
+            Vec3 sceneCenter = impl->currentCameraPos;
+            Mat4 snapView = Mat4::lookAt(sceneCenter + sunDir * sceneBound,
+                                         sceneCenter, up);
+            Real texelWorld = (sceneBound * 2.0) / impl->shadowMapSize;
+            Vec3 centerLS = snapView.transformPoint(sceneCenter);
+            centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
+            centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
+            sceneCenter = snapView.inverse().transformPoint(centerLS);
+
+            Vec3 lightPos = sceneCenter + sunDir * sceneBound;
             Mat4 lightView = Mat4::lookAt(lightPos, sceneCenter, up);
             Mat4 lightProj = Mat4::orthographic(sceneBound * 2.0, 1.0, 0.1, sceneBound * 2.0);
             Mat4 lightVP = lightProj * lightView;
@@ -1103,8 +1477,9 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             impl->shadowEnabled = true;
 
             g.shadowMapIndex = 0;
-            impl->shadowUniforms.shadowBias = lighting.shadow.bias;
+            impl->shadowDepthBias = lighting.shadow.bias;
             impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
+            impl->shadowUniforms.pcfRadius = lighting.shadow.pcfRadius;
             impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
         } else {
             g.lightViewProjection = simd_matrix_from_rows(
@@ -1114,7 +1489,8 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
         }
 
         g.type = LightType_Directional;
-        g._pad[0] = g._pad[1] = 0;
+        g.range = 0;
+        g._pad[0] = 0;
         idx++;
     }
 
@@ -1133,7 +1509,8 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             simd_make_float4(0,0,1,0), simd_make_float4(0,0,0,1));
         g.type = LightType_Point;
         g.shadowMapIndex = -1;
-        g._pad[0] = g._pad[1] = 0;
+        g.range = pl.range;
+        g._pad[0] = 0;
     }
 
     // Spot lights
@@ -1151,13 +1528,19 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             simd_make_float4(0,0,1,0), simd_make_float4(0,0,0,1));
         g.type = LightType_Spot;
         g.shadowMapIndex = -1;
-        g._pad[0] = g._pad[1] = 0;
+        g.range = sl.range;
+        g._pad[0] = 0;
     }
 
     lu.lightCount = idx;
     lu.exposure = lighting.exposure;
     lu.ambientMultiplier = lighting.ambientMultiplier;
     lu._pad[0] = 0;
+
+    // Artistic shadow response (ADR-0017 Phase 2)
+    impl->shadowUniforms.shadowTint = toSimd3(lighting.shadowArtistic.tint);
+    impl->shadowUniforms.shadowStrength = lighting.shadowArtistic.strength;
+    impl->shadowUniforms.ambientStrength = lighting.shadowArtistic.ambientStrength;
 
     // Procedural sky (ADR-0016): the analytic skybox and IBL fallback read these.
     const ProceduralSky& sky = lighting.sky;
@@ -1172,6 +1555,8 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyCloudDensity = sky.cloudDensity;
     lu.skyCloudScale = sky.cloudScale;
     lu.skyCloudTime = sky.cloudTime;
+    lu.ambientTint = toSimd3(lighting.ambientTint);
+    lu._grad0 = 0;
     impl->skyCloudsEnabled = sky.cloudsEnabled;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
@@ -1211,7 +1596,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
     }
 
     // Upload probe metadata
-    auto* gpuProbes = static_cast<Impl::GPUReflectionProbe*>([impl->probeBuffer contents]);
+    auto* gpuProbes = static_cast<GPUReflectionProbe*>([impl->probeBuffer contents]);
     for (int i = 0; i < count; i++) {
         gpuProbes[i].position = toSimd3(probes[i].position);
         gpuProbes[i].influenceRadius = probes[i].influenceRadius;
@@ -1257,36 +1642,20 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
         faceNormalDesc.storageMode = MTLStorageModePrivate;
         id<MTLTexture> faceNormal = [impl->device newTextureWithDescriptor:faceNormalDesc];
 
-        // Face directions for cubemap rendering
-        struct CubeFace {
-            Vec3 target;
-            Vec3 up;
-        };
-        CubeFace faces[6] = {
-            {{1, 0, 0},  {0, -1, 0}},  // +X
-            {{-1, 0, 0}, {0, -1, 0}},  // -X
-            {{0, 1, 0},  {0, 0, 1}},   // +Y
-            {{0, -1, 0}, {0, 0, -1}},  // -Y
-            {{0, 0, 1},  {0, -1, 0}},  // +Z
-            {{0, 0, -1}, {0, -1, 0}},  // -Z
-        };
-
-        Real fovRad = degreesToRadians(90.0);
-        Mat4 projMat = Mat4::perspective(fovRad, 1.0, 0.1, 200.0);
-        simd_float4x4 proj = toSimd(projMat);
-
         for (int pi = 0; pi < count; pi++) {
             id<MTLTexture> faceColor = [impl->device newTextureWithDescriptor:faceDesc];
 
             for (int face = 0; face < 6; face++) {
                 Vec3 eye = probes[pi].position;
-                Vec3 target = eye + faces[face].target;
-                Mat4 viewMat = Mat4::lookAt(eye, target, faces[face].up);
-                simd_float4x4 view = toSimd(viewMat);
+                // Face cameras from the unit-tested convention helper
+                // (ADR-0017 Phase 3). The mirrored projection flips winding,
+                // so this pass culls with counterclockwise front faces.
+                CubeFaceBasis basis = cubeFaceBasis(face);
+                Mat4 viewMat = Mat4::lookAt(eye, eye + basis.forward, basis.up);
 
                 CameraUniforms faceCam = {};
-                faceCam.viewProjection = simd_mul(proj, view);
-                faceCam.view = view;
+                faceCam.viewProjection = toSimd(cubeFaceViewProjection(face, eye, 0.1, 200.0));
+                faceCam.view = toSimd(viewMat);
                 faceCam.cameraPosition = toSimd3(eye);
 
                 // Render scene to face
@@ -1306,29 +1675,34 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 rpDesc.depthAttachment.clearDepth = 1.0;
 
                 id<MTLRenderCommandEncoder> enc = [cmdBuf renderCommandEncoderWithDescriptor:rpDesc];
-                [enc setFrontFacingWinding:MTLWindingClockwise];
+                // Counterclockwise: the X-mirrored face projection flips the
+                // winding of the scene's (clockwise-authored) triangles.
+                [enc setFrontFacingWinding:MTLWindingCounterClockwise];
                 [enc setCullMode:MTLCullModeBack];
                 [enc setDepthStencilState:impl->depthStateOpaque];
 
                 // Bind shadow resources (lights won't have shadows in probes, but shader expects bindings)
                 [enc setFragmentTexture:impl->shadowMap atIndex:0];
                 [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
-                Impl::ShadowUniforms noShadow = {0, 0, 0, impl->shadowMapSize};
-                [enc setFragmentBytes:&noShadow length:sizeof(Impl::ShadowUniforms) atIndex:5];
+                // strength/ambientStrength 0: probes bake unshadowed, as before
+                ShadowUniforms noShadow = {0.0f, 1.0f, impl->shadowMapSize, 0,
+                                           {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+                [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
 
                 // Bind empty probe data (no recursion)
-                Impl::ProbeUniforms noProbes = {0, 0, {0, 0}};
-                [enc setFragmentBytes:&noProbes length:sizeof(Impl::ProbeUniforms) atIndex:6];
+                ProbeUniforms noProbes = {0, 0, {0, 0}};
+                [enc setFragmentBytes:&noProbes length:sizeof(ProbeUniforms) atIndex:6];
                 [enc setFragmentBuffer:impl->probeBuffer offset:0 atIndex:7];
                 // Bind dummy textures for probe slots (shader expects them)
                 [enc setFragmentTexture:impl->brdfLUT atIndex:2];
-                [enc setFragmentSamplerState:impl->linearClampSampler atIndex:1];
-                // HDR IBL bindings (procedural mode during the bake — geometry in
-                // reflection probes isn't re-lit by the HDR; just bind so the
-                // shader's texture(8)/buffer(8) slots are satisfied).
-                Impl::EnvUniforms bakeEnv = {0, 0, {0, 0}};
+                [enc setFragmentSamplerState:impl->mipClampSampler atIndex:1];
+                // IBL bindings (procedural mode during the bake — geometry in
+                // reflection probes isn't re-lit by the env cubes; just bind so
+                // the shader's texture(8/9)/buffer(8) slots are satisfied).
+                EnvUniforms bakeEnv = {0, 0, 0, {0}};
                 [enc setFragmentBytes:&bakeEnv length:sizeof(bakeEnv) atIndex:8];
-                [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:8];
+                [enc setFragmentTexture:impl->defaultCubemap atIndex:8];
+                [enc setFragmentTexture:impl->defaultCubemap atIndex:9];
 
                 // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
                 // it into the cube faces is what makes IBL track the environment.
@@ -1338,13 +1712,21 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
                     // cloudsEnabled = 0: clouds are never baked into probes.
-                    Impl::EnvUniforms envU = {impl->environmentCubemap ? 1 : 0, 0, {0, 0}};
+                    EnvUniforms envU = {impl->environmentCubemap ? 1 : 0, 0, 0, {0}};
                     [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
                     [enc setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
                                                                        : impl->defaultCubemap)
                                     atIndex:0];
                     [enc setFragmentSamplerState:impl->equirectSampler atIndex:0];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+
+                    // Restore the shadow bindings the skybox clobbered
+                    // (texture/sampler 0 and fragment buffer 5) before the
+                    // lit geometry draws — same shared-slot hazard as the
+                    // main pass.
+                    [enc setFragmentTexture:impl->shadowMap atIndex:0];
+                    [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
+                    [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
                 }
 
                 // Draw opaque scene geometry
@@ -1469,7 +1851,7 @@ void MetalRenderer::endFrame() {
         [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
         [shadowEncoder setCullMode:MTLCullModeBack];
         [shadowEncoder setDepthStencilState:impl->shadowDepthState];
-        [shadowEncoder setDepthBias:0.005 slopeScale:1.5 clamp:0.01];
+        [shadowEncoder setDepthBias:impl->shadowDepthBias slopeScale:1.5 clamp:0.01];
 
         // Render all opaque draw calls from light's perspective
         for (auto& dc : impl->opaqueDrawCalls) {
@@ -1503,44 +1885,46 @@ void MetalRenderer::endFrame() {
     [impl->currentEncoder setFrontFacingWinding:MTLWindingClockwise];
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
-    // Bind shadow resources for the entire main pass
+    // Bind shadow resources for the entire main pass. activeShadowU outlives
+    // the skybox draw below, which clobbers these bindings and needs them
+    // restored (texture/sampler 0 and fragment buffer 5 are shared slots).
     impl->shadowUniforms.debugShadow = debugView;  // lit shader branches: 5=shadow factor, 6=albedo
-    if (impl->shadowEnabled) {
-        [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
-        [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
-        [impl->currentEncoder setFragmentBytes:&impl->shadowUniforms
-                                        length:sizeof(Impl::ShadowUniforms) atIndex:5];
-    } else {
-        // Still need to bind something so the shader doesn't crash
-        [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
-        [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
-        Impl::ShadowUniforms noShadow = {0, 0, 0, impl->shadowMapSize};
-        [impl->currentEncoder setFragmentBytes:&noShadow
-                                        length:sizeof(Impl::ShadowUniforms) atIndex:5];
-    }
+    ShadowUniforms activeShadowU = impl->shadowEnabled
+        ? impl->shadowUniforms
+        : ShadowUniforms{0.0f, 1.0f, impl->shadowMapSize, debugView,
+                         {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+    [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
+    [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
+    [impl->currentEncoder setFragmentBytes:&activeShadowU
+                                    length:sizeof(ShadowUniforms) atIndex:5];
 
     // Bind reflection probe resources for the entire main pass
-    Impl::ProbeUniforms activeProbeUniforms = impl->probeUniforms;
+    ProbeUniforms activeProbeUniforms = impl->probeUniforms;
     if (!reflectionProbesEnabled) {
         activeProbeUniforms.probeCount = 0;
     }
     [impl->currentEncoder setFragmentBytes:&activeProbeUniforms
-                                    length:sizeof(Impl::ProbeUniforms) atIndex:6];
+                                    length:sizeof(ProbeUniforms) atIndex:6];
     [impl->currentEncoder setFragmentBuffer:impl->probeBuffer offset:0 atIndex:7];
     if (impl->probeCubemapArray) {
         [impl->currentEncoder setFragmentTexture:impl->probeCubemapArray atIndex:1];
     }
     [impl->currentEncoder setFragmentTexture:impl->brdfLUT atIndex:2];
-    [impl->currentEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:1];
+    [impl->currentEncoder setFragmentSamplerState:impl->mipClampSampler atIndex:1];
 
-    // HDR image-based lighting (ADR-0016): bind the equirect + env mode so the lit
-    // shader can source ambient/specular from the HDR instead of the procedural sky.
+    // Image-based lighting (ADR-0017 Phase 3): the prefiltered radiance and
+    // irradiance cubes drive ambient/specular when an HDR is bound; in
+    // procedural mode the shader evaluates the analytic sky instead.
     {
-        Impl::EnvUniforms litEnv = {impl->environmentTexture ? 1 : 0, 0, {0, 0}};
+        bool hasIBL = impl->envPrefilteredCube && impl->envIrradianceCube;
+        EnvUniforms litEnv = {hasIBL ? 1 : 0, 0, Impl::ENV_PREFILTER_MIPS - 1, {0}};
         [impl->currentEncoder setFragmentBytes:&litEnv length:sizeof(litEnv) atIndex:8];
-        [impl->currentEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
-                                                                            : impl->defaultWhiteTexture)
+        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envPrefilteredCube
+                                                         : impl->defaultCubemap)
                                          atIndex:8];
+        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envIrradianceCube
+                                                         : impl->defaultCubemap)
+                                         atIndex:9];
     }
 
     // Draw skybox first (behind everything, no depth write)
@@ -1550,8 +1934,8 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        Impl::EnvUniforms envU = {impl->environmentCubemap ? 1 : 0,
-                                  impl->skyCloudsEnabled ? 1 : 0, {0, 0}};
+        EnvUniforms envU = {impl->environmentCubemap ? 1 : 0,
+                            impl->skyCloudsEnabled ? 1 : 0, 0, {0}};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
         [impl->currentEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
                                                                             : impl->defaultCubemap)
@@ -1560,14 +1944,16 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                  vertexStart:0 vertexCount:3];
 
-        // The skybox just rebound texture(0)/sampler(0) to the environment cubemap
-        // and a non-comparison sampler. Restore the shadow map + comparison sampler
-        // so the lit object draws below can actually read shadows (texture 0 is
-        // shared between the skybox cube and the lit shaders' shadow map).
-        if (impl->shadowEnabled) {
-            [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
-            [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
-        }
+        // The skybox just rebound texture(0)/sampler(0) to the environment
+        // cubemap + a non-comparison sampler, AND fragment buffer(5) to its
+        // EnvUniforms — the same slot the lit shaders read ShadowUniforms
+        // from. Restore all three, unconditionally: a stale buffer(5) left
+        // the lit pass reading env data as shadow params (shadowMapSize 0 →
+        // infinite texel size, NaN PCF offsets), which broke shadows entirely.
+        [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
+        [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
+        [impl->currentEncoder setFragmentBytes:&activeShadowU
+                                        length:sizeof(ShadowUniforms) atIndex:5];
     }
 
     RenderStats stats;
@@ -1716,8 +2102,10 @@ void MetalRenderer::endFrame() {
                                           atIndex:2];
             [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
                                             length:sizeof(CameraUniforms) atIndex:1];
-            [impl->currentEncoder setFragmentBytes:&impl->lightUniforms
-                                            length:sizeof(LightUniforms) atIndex:4];
+            // LightUniforms exceeds the 4KB setBytes limit (32 lights + sky) —
+            // bind the persistent light buffer, as the single-draw path does.
+            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer
+                                             offset:0 atIndex:4];
 
             bindMaterialTextures(drawCalls[batchStart].material,
                                 computeTextureFlags(drawCalls[batchStart].material));
@@ -1781,7 +2169,7 @@ void MetalRenderer::endFrame() {
             [enc setTexture:impl->depthTexture atIndex:0];
             [enc setTexture:impl->aoTexture atIndex:1];
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-            struct { float radius, intensity, bias; int dirs, steps; float _p[3]; } aoP = {
+            SSAOUniforms aoP = {
                 ssaoParams.radius, ssaoParams.intensity, ssaoParams.bias,
                 ssaoParams.directions, ssaoParams.steps, {}
             };
@@ -1818,7 +2206,7 @@ void MetalRenderer::endFrame() {
             [enc setTexture:impl->ssrTexture atIndex:2];
             [enc setTexture:impl->viewNormalTexture atIndex:3];
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-            struct { float maxRayDist, thickness, thicknessFar, stride, blendStrength; float _p[3]; } ssrP = {
+            SSRUniforms ssrP = {
                 ssrParams.maxRayDist, ssrParams.thickness, ssrParams.thicknessFar,
                 ssrParams.stride, ssrParams.blendStrength, {}
             };
@@ -1853,9 +2241,9 @@ void MetalRenderer::endFrame() {
                 id<MTLTexture> src = (m == 0) ? impl->sceneColorTexture : impl->bloomMips[m - 1];
                 id<MTLTexture> dst = impl->bloomMips[m];
 
-                struct { float threshold, knee, intensity; int srcW, srcH; float _p[3]; } bp = {
+                BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int>(src.width), static_cast<int>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
                 };
 
                 [enc setComputePipelineState:impl->bloomDownsamplePipeline];
@@ -1876,9 +2264,9 @@ void MetalRenderer::endFrame() {
                 id<MTLTexture> higher = impl->bloomMips[m];
                 id<MTLTexture> dst = impl->bloomUpsampleMips[m];
 
-                struct { float threshold, knee, intensity; int srcW, srcH; float _p[3]; } bp = {
+                BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int>(src.width), static_cast<int>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
                 };
 
                 [enc setComputePipelineState:impl->bloomUpsamplePipeline];
@@ -1909,29 +2297,24 @@ void MetalRenderer::endFrame() {
         }
         [compEncoder setFragmentBytes:&impl->cameraUniforms
                                length:sizeof(CameraUniforms) atIndex:0];
-        struct { int32_t ssaoEnabled; int32_t ssrEnabled; int32_t debugView;
-                 float ssrBlendStrength; int32_t bloomEnabled; float bloomIntensity;
-                 int32_t envMode; float _pad[1]; } compositeParams;
+        CompositeUniforms compositeParams;
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams.envMode = impl->environmentTexture ? 1 : 0;
-        compositeParams._pad[0] = 0;
+        compositeParams.envMode = impl->environmentCubemap ? 1 : 0;
+        compositeParams.aoFloor = ssaoParams.aoFloor;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
         // HDR map is bound, the baked environment cubemap — matching the skybox/IBL.
+        // (Cube orientation is unit-tested; the old equirect workaround is gone.)
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
         [compEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
                                                                    : impl->defaultCubemap)
                                 atIndex:6];
-        // Equirect HDR sampled directly for the composite sky (bypasses the cube bake).
-        [compEncoder setFragmentTexture:(impl->environmentTexture ? impl->environmentTexture
-                                                                   : impl->defaultWhiteTexture)
-                                atIndex:7];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -1949,8 +2332,48 @@ void MetalRenderer::endFrame() {
         [compEncoder endEncoding];
     }
 
+    // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
+    // before present, then write it out once the GPU finishes.
+    id<MTLTexture> dumpStaging = nil;
+    bool dumpThisFrame = impl->frameDumpPath && ++impl->frameDumpCounter == 90;
+    if (dumpThisFrame) {
+        id<MTLTexture> drawableTex = impl->currentDrawable.texture;
+        MTLTextureDescriptor* d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:drawableTex.pixelFormat
+                                         width:drawableTex.width
+                                        height:drawableTex.height
+                                     mipmapped:NO];
+        d.storageMode = MTLStorageModeShared;
+        dumpStaging = [impl->device newTextureWithDescriptor:d];
+        id<MTLBlitCommandEncoder> blit = [impl->currentCommandBuffer blitCommandEncoder];
+        [blit copyFromTexture:drawableTex
+                  sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(drawableTex.width, drawableTex.height, 1)
+                    toTexture:dumpStaging
+             destinationSlice:0 destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+    }
+
     [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];
     [impl->currentCommandBuffer commit];
+
+    if (dumpThisFrame) {
+        [impl->currentCommandBuffer waitUntilCompleted];
+        const int w = static_cast<int>(dumpStaging.width);
+        const int h = static_cast<int>(dumpStaging.height);
+        std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+        [dumpStaging getBytes:pixels.data()
+                  bytesPerRow:static_cast<NSUInteger>(w) * 4
+                   fromRegion:MTLRegionMake2D(0, 0, w, h)
+                  mipmapLevel:0];
+        for (size_t i = 0; i < pixels.size(); i += 4)
+            std::swap(pixels[i], pixels[i + 2]);   // BGRA → RGBA
+        stbi_write_png(impl->frameDumpPath, w, h, 4, pixels.data(), w * 4);
+        NSLog(@"[FRAME DUMP] wrote %s (%dx%d)", impl->frameDumpPath, w, h);
+        impl->frameDumpPath = nullptr;
+    }
 }
 
 void MetalRenderer::initDebugUi(void* /*windowHandle*/) {

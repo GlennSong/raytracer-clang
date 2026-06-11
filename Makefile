@@ -39,7 +39,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_scene_camera.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
-	$(TEST_DIR)/test_day_night.cpp
+	$(TEST_DIR)/test_day_night.cpp \
+	$(TEST_DIR)/test_cube_faces.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/engine/day_night_cycle.cpp \
