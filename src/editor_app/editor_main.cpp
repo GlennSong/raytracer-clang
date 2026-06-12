@@ -408,7 +408,8 @@ int main(int argc, char** argv) {
     });
     deleteAction->setShortcut(QKeySequence::Delete);
     mainWindow.statusBar()->showMessage(
-        "Click selects | 1/2/3 move/rotate/scale | F free-fly | C place camera");
+        "Click selects | 1/2/3 move/rotate/scale | Shift-drag snaps | "
+        "F frames selection");
 
     // Realize the native view BEFORE the renderer binds to it.
     mainWindow.show();

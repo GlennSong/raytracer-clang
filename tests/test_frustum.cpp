@@ -98,3 +98,25 @@ TEST_CASE(handle_less_than) {
     CHECK(a < c);
     CHECK(!(a < a));
 }
+
+TEST_CASE(unproject_depth_convention_near_is_zero) {
+    // The pick ray (EditorSystem) unprojects NDC z=0 as the near plane and
+    // z=1 as far. Regression: with these swapped the ray starts on the FAR
+    // plane looking back at the camera, so overlapping objects pick
+    // furthest-first.
+    Vec3 eye(0, 0, 10);
+    Mat4 view = Mat4::lookAt(eye, Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60.0), 1.0, 0.1, 100.0);
+    Mat4 invVP = (proj * view).inverse();
+
+    Vec3 nearP = invVP.transformPoint(Vec3(0, 0, 0.0));
+    Vec3 farP = invVP.transformPoint(Vec3(0, 0, 1.0));
+
+    CHECK((nearP - eye).length() < 1.0);    // next to the eye (near = 0.1)
+    CHECK((farP - eye).length() > 50.0);    // out at the far plane
+
+    // The center-pixel ray points the way the camera looks (-Z here): the
+    // nearest of two objects along it has the smaller t.
+    Vec3 dir = normalize(farP - nearP);
+    CHECK(dir.z < -0.9);
+}

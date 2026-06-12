@@ -23,8 +23,11 @@ namespace engine {
 
 namespace {
 
-// Mouse (window coords) -> world-space pick ray. NDC depth follows ADR-0009:
-// near plane maps to 1, far to 0, so the ray runs from z=1 toward z=0.
+// Mouse (window coords) -> world-space pick ray. NDC depth follows the
+// projection's [0,1] convention (ADR-0009): the near plane unprojects at
+// z = 0 and the far plane at z = 1, so the ray runs eye -> scene. (Getting
+// this backwards puts the origin on the FAR plane looking back at the
+// camera, which selects the furthest of any overlapping objects.)
 struct PickRay {
     Vec3 origin;
     Vec3 direction;
@@ -45,8 +48,8 @@ PickRay rayThroughCursor(const FrameContext& ctx) {
     double ndcX = 2.0 * ctx.input.mouseX / w - 1.0;
     double ndcY = 1.0 - 2.0 * ctx.input.mouseY / h;
 
-    Vec3 nearP = invVP.transformPoint(Vec3(ndcX, ndcY, 1.0));
-    Vec3 farP = invVP.transformPoint(Vec3(ndcX, ndcY, 0.0));
+    Vec3 nearP = invVP.transformPoint(Vec3(ndcX, ndcY, 0.0));
+    Vec3 farP = invVP.transformPoint(Vec3(ndcX, ndcY, 1.0));
     return {nearP, normalize(farP - nearP)};
 }
 
@@ -541,7 +544,23 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     ImGuizmo::OPERATION op = (gizmoOp == 1)   ? ImGuizmo::ROTATE
                              : (gizmoOp == 2) ? ImGuizmo::SCALE
                                               : ImGuizmo::TRANSLATE;
-    ImGuizmo::Manipulate(viewF, projF, op, ImGuizmo::WORLD, modelF);
+
+    // Shift-drag snaps (Unity-style): translate to a grid step, rotate in
+    // whole increments, scale in ticks. Steps overridable via settings.
+    float snapValues[3] = {0, 0, 0};
+    const float* snap = nullptr;
+    if (ctx.input.keyShift) {
+        double step = (op == ImGuizmo::ROTATE)
+                          ? ctx.settings.getDouble("editor.snapRotateDeg", 15.0)
+                      : (op == ImGuizmo::SCALE)
+                          ? ctx.settings.getDouble("editor.snapScale", 0.1)
+                          : ctx.settings.getDouble("editor.snapTranslate", 0.5);
+        snapValues[0] = snapValues[1] = snapValues[2] =
+            static_cast<float>(step);
+        snap = snapValues;
+    }
+    ImGuizmo::Manipulate(viewF, projF, op, ImGuizmo::WORLD, modelF, nullptr,
+                         snap);
     gizmoBusy = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
 
     bool usingNow = ImGuizmo::IsUsing();
