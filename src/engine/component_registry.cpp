@@ -20,8 +20,32 @@ void registerEngineComponents(ComponentRegistry& registry) {
     registry.allowAddRemove<SceneCamera>(registry.add<SceneCamera>("Camera"));
     registry.allowAddRemove<PlayerSpawn>(
         registry.addMarker<PlayerSpawn>("Player Spawn"));
-    // Deliberately absent: PrevTransform (interpolation plumbing), RigidBody/
-    // Collider (runtime physics state; authored via SourceSpec's block).
+
+    // Runtime-state rows, for WATCHING a playtest through the observer
+    // bridge: never present on document entities, never authored here
+    // (physics is authored via SourceSpec's block; locked fields are
+    // display-only and the JSON read visitor skips them by contract).
+    registry.add<Velocity>("Velocity");
+    registry.addWithAccessor<RigidBody>(
+        "Rigid Body", [](RigidBody& rb, PropertyVisitor& v) {
+            // Transient lvalues are fine: visitors only hold references for
+            // the duration of the visit.
+            std::string motion = rb.motion == BodyMotion::Dynamic ? "dynamic"
+                                 : rb.motion == BodyMotion::Kinematic
+                                     ? "kinematic"
+                                     : "static";
+            v.field(FieldMeta("Motion").id("motion").locked(), motion);
+            bool lockRotation = rb.lockRotation;
+            v.field(FieldMeta("Lock Rotation").id("lockRotation").locked(),
+                    lockRotation);
+        });
+    registry.addWithAccessor<ControlledBy>(
+        "Controlled By", [](ControlledBy& c, PropertyVisitor& v) {
+            Real player = c.playerIndex;
+            v.field(FieldMeta("Player").id("player").locked(), player);
+        });
+    // Deliberately absent: PrevTransform (interpolation plumbing), Collider
+    // (runtime physics state; authored via SourceSpec's block).
 }
 
 }  // namespace engine

@@ -82,4 +82,11 @@ void describeProperties(SourceSpec& spec, PropertyVisitor& v) {
             spec.restitution);
 }
 
+void describeProperties(Velocity& vel, PropertyVisitor& v) {
+    // Runtime motion state — interesting to WATCH during a playtest
+    // (observer mode shows it live); document entities never carry it.
+    v.field(FieldMeta("Linear").id("linear").increment(0.1), vel.linear);
+    v.field(FieldMeta("Angular").id("angular").increment(0.1), vel.angular);
+}
+
 }  // namespace engine

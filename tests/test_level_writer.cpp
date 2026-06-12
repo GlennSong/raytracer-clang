@@ -5,6 +5,7 @@
 #include "../src/engine/editor_bridge.h"
 #include "../src/engine/camera/scene_camera.h"
 #include "../src/engine/model_importer.h"
+#include "../src/engine/property_json.h"
 #include "../src/log.h"
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -259,8 +260,54 @@ TEST_CASE(editor_bridge_observer_mode_is_read_only) {
     CHECK(bridge.undoStack() == nullptr);
     CHECK(!bridge.documentDirty());
 
+    // The one deliberate observer write: bake the live world over the
+    // document — what physics did becomes the level.
+    world.get<Transform>(box)->position = Vec3(9, 0.5, -2);   // "settled"
+    CHECK(bridge.bakePlaytestToDocument());
+    {
+        std::ifstream f(TMP_PATH);
+        json root = json::parse(f);
+        CHECK(root["entities"].size() == 1);   // the player never leaks in
+        CHECK_APPROX(root["entities"][0]["position"][0].get<double>(), 9.0,
+                     1e-9);
+    }
+
     bridge.detach();
     CHECK(!bridge.attached());
+    CHECK(!bridge.bakePlaytestToDocument());   // detached: refused
+}
+
+TEST_CASE(registry_runtime_rows_are_display_only) {
+    World world;
+    Entity e = world.create();
+    world.add<Transform>(e);
+    world.add<Velocity>(e, {Vec3(1, 2, 3), Vec3()});
+    RigidBody rb;
+    rb.motion = BodyMotion::Dynamic;
+    world.add<RigidBody>(e, rb);
+    world.add<ControlledBy>(e, ControlledBy{0});
+
+    ComponentRegistry registry;
+    registerEngineComponents(registry);
+
+    // The playtest rows enumerate and walk...
+    int present = 0;
+    for (const auto& entry : registry.entries()) {
+        if (!entry.has(world, e)) continue;
+        present++;
+        nlohmann::json j;
+        JsonWriteVisitor writer(j);
+        entry.visit(world, e, writer);
+        if (entry.name == "Velocity")
+            CHECK_APPROX(j["linear"][0].get<double>(), 1.0, 1e-9);
+        if (entry.name == "Rigid Body") CHECK(j["motion"] == "dynamic");
+    }
+    CHECK(present == 4);   // Transform, Velocity, Rigid Body, Controlled By
+
+    // ...and none of them are authorable from the menu.
+    CHECK(!registry.find("Velocity")->addTo);
+    CHECK(!registry.find("Rigid Body")->addTo);
+    CHECK(!registry.find("Controlled By")->removeFrom);
 }
 
 TEST_CASE(editor_bridge_notifies_shell_of_state_changes) {

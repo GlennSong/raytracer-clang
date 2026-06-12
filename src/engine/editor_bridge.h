@@ -70,6 +70,14 @@ public:
     bool saveDocument();
     void deleteEntity(Entity entity);
 
+    // The one observer-mode write, and it is deliberately explicit: bake the
+    // LIVE playtest over the document — settled physics stacks, pushed
+    // props. Serializes exactly what saveDocument would (SourceSpec-bearing
+    // entities + cameras; runtime spawns lack SourceSpec and never leak in).
+    // Whole-world by design: entities have no stable ids yet, so a
+    // per-component "apply this back" cannot find its document counterpart.
+    bool bakePlaytestToDocument();
+
     // Creation requests, queued onto the editor and applied next frame (the
     // spawn point comes from the live view, which only the engine holds).
     void addPrimitive(const std::string& shape);

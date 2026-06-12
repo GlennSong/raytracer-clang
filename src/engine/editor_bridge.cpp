@@ -100,6 +100,14 @@ bool EditorBridge::saveDocument() {
     return ok;
 }
 
+bool EditorBridge::bakePlaytestToDocument() {
+    if (!attached() || !observerMode) return false;
+    bool ok = LevelWriter::save(levelFile, *worldPtr);
+    ok &= CameraStore::save(levelFile + ".cameras.json", *worldPtr);
+    if (ok) notify(EditorNotice::DocumentSaved);
+    return ok;
+}
+
 void EditorBridge::addPrimitive(const std::string& shape) {
     if (editorPtr && worldPtr) editorPtr->requestAddPrimitive(shape);
 }

@@ -535,6 +535,30 @@ int main(int argc, char** argv) {
         app.simClock().requestStep();
     });
 
+    // Physics as a level-design tool: while playing, overwrite the document
+    // with the live world (settled stacks, pushed props). Stop then reloads
+    // the baked result. Destructive, hence the confirmation.
+    auto* bakeAction = toolbar->addAction("Bake", [&]() {
+        if (bridge.editable() || !bridge.attached()) return;
+        const auto choice = QMessageBox::question(
+            &mainWindow, "Bake Play State",
+            "Overwrite the level with the current play state?\n"
+            "(Object positions as physics left them.)");
+        if (choice != QMessageBox::Yes) return;
+        bool ok = bridge.bakePlaytestToDocument();
+        mainWindow.statusBar()->showMessage(
+            ok ? "Baked play state into the document"
+               : "Bake failed (see console)",
+            4000);
+    });
+
+    // Ground-grid toggle; EditorSystem reads the setting every frame.
+    auto* gridAction = toolbar->addAction("Grid", [&](bool on) {
+        app.settings().setBool("editorGrid", on);
+    });
+    gridAction->setCheckable(true);
+    gridAction->setChecked(app.settings().getBool("editorGrid", true));
+
     // Add: place primitives / cameras from native UI (the in-viewport ImGui
     // Add panel is suppressed while the shell hosts the engine). Creation is
     // queued onto the editor — the spawn point comes from the live view.
@@ -582,6 +606,7 @@ int main(int argc, char** argv) {
         pauseAction->setEnabled(!editing);
         pauseAction->setChecked(!editing && app.simClock().paused());
         stepAction->setEnabled(!editing && app.simClock().paused());
+        bakeAction->setEnabled(!editing && bridge.attached());
         undoAction->setEnabled(bridge.canUndo());
         redoAction->setEnabled(bridge.canRedo());
         duplicateAction->setEnabled(editing);

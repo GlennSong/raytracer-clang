@@ -155,18 +155,20 @@ hooks, and the property layer's component-JSON snapshots. Ideas that build
 on them, roughly by payoff-per-effort:
 
 1. ~~**Play From Here**~~ — DONE (toolbar + in-viewport buttons).
-2. **Inspect during play** — first slice DONE (read-only observer attach,
-   live hierarchy/inspector, "Player (live)" row). Remaining: registry
-   entries for runtime state shown read-only (velocity, physics motion),
-   and "apply this component back to the document" — the property layer's
-   JSON snapshots make that diff nearly free.
+2. ~~**Inspect during play**~~ — DONE: read-only observer attach with live
+   hierarchy/inspector + "Player (live)" row; runtime registry rows
+   (Velocity, Rigid Body, Controlled By — display-only, never authorable);
+   and "Bake" (toolbar, confirm dialog) writes the LIVE play world over the
+   document — physics as a level-design tool. Whole-world by design:
+   per-component apply needs stable entity ids first.
 3. ~~**Engine -> shell notifications**~~ — DONE: EditorNotice queue on the
    bridge (ModeChanged / SelectionChanged / DocumentSaved) drained per
    frame for instant chrome+panel refresh; `logging::setSink` feeds a Qt
    Console dock (tabbed with Assets, thread-safe, bounded); status bar
    shows EDITING / PLAYING / PAUSED.
-4. **Gizmo snap settings**: Shift-drag snap landed (editor.snap* settings);
-   remaining: expose the increments + grid toggle as Qt toolbar fields.
+4. **Gizmo snap settings**: Shift-drag snap landed (editor.snap* settings)
+   and the Grid toolbar toggle; remaining: snap-increment fields in the
+   shell.
 5. **Selection feedback in-viewport**: hover highlight; per-type gizmos for
    the selected entity (camera frustum, spawn capsule, collider bounds).
 6. **Restart playtest** button (re-enter the play state without bouncing
