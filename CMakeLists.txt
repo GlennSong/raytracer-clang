@@ -342,6 +342,10 @@ if(Qt6_FOUND)
             src/engine/systems/shooting_system.cpp
         )
         target_link_libraries(editor_app PRIVATE Jolt)
+        # arena_state.cpp gates its physics/player systems on this define;
+        # without it the editor's Play mode silently loses the first-person
+        # controller (the viewer always had it — see the viewer block above).
+        target_compile_definitions(editor_app PRIVATE RT_ENABLE_PHYSICS=1)
     endif()
 
     if(APPLE)
