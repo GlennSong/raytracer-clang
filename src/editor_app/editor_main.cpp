@@ -534,6 +534,14 @@ int main(int argc, char** argv) {
     auto* stepAction = toolbar->addAction("Step", [&]() {
         app.simClock().requestStep();
     });
+    // Re-run the playtest from the document spawn (the document can't have
+    // changed mid-play; nothing to re-save).
+    auto* restartAction = toolbar->addAction("Restart", [&]() {
+        if (bridge.editable() || !bridge.attached()) return;
+        app.simClock().setPaused(false);
+        app.requestState(makePlay());
+        viewport->setFocus();
+    });
 
     // Physics as a level-design tool: while playing, overwrite the document
     // with the live world (settled stacks, pushed props). Stop then reloads
@@ -607,6 +615,7 @@ int main(int argc, char** argv) {
         pauseAction->setChecked(!editing && app.simClock().paused());
         stepAction->setEnabled(!editing && app.simClock().paused());
         bakeAction->setEnabled(!editing && bridge.attached());
+        restartAction->setEnabled(!editing && bridge.attached());
         undoAction->setEnabled(bridge.canUndo());
         redoAction->setEnabled(bridge.canRedo());
         duplicateAction->setEnabled(editing);
