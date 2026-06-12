@@ -88,6 +88,14 @@ public:
     // (conservative: undoing back to the saved state still reads dirty).
     bool documentDirty();
 
+    // The level's HDR environment is DOCUMENT state, not an entity: these
+    // edit the level JSON's environment block directly (saving entities
+    // first). Path is level-relative ("../env/x.hdr"); empty removes the
+    // HDR so the procedural sky + day/night cycle take over. The shell
+    // reloads the editor state afterwards — environment swaps re-cook IBL.
+    std::string environmentHdr();
+    bool setEnvironmentHdr(const std::string& hdrPath);
+
     // Notification queue: engine side pushes, shell drains each frame and
     // refreshes immediately when anything arrived.
     void notify(EditorNotice notice) { notices.push_back(notice); }

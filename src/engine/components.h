@@ -55,6 +55,7 @@ struct ControlledBy {
 // entities carrying it back to the level JSON. Runtime-spawned entities
 // (bullets, gizmos) lack it and are never saved — by construction.
 struct SourceSpec {
+    std::string name;            // optional display name ("name" in JSON)
     std::string shape = "box";   // MeshBuilder shape; empty when meshFile is set
     Vec3 size{1, 1, 1};
     std::string meshFile;        // glTF path, level-relative ("mesh" in JSON)

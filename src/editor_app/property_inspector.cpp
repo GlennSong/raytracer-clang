@@ -144,6 +144,9 @@ private:
         spin->setDecimals(3);
         spin->setKeyboardTracking(false);
         if (meta.unit[0]) spin->setSuffix(QString(" %1").arg(meta.unit));
+        // Vec3 rows put three of these side by side; without a tight floor
+        // the spin boxes' size hints balloon the whole dock.
+        spin->setMinimumWidth(56);
         return spin;
     }
     void connectSpin(QDoubleSpinBox* spin) {
@@ -153,6 +156,10 @@ private:
     }
     void addRow(const FieldMeta& meta, QWidget* widget, FieldRow& row) {
         form->addRow(meta.label, widget);
+        // One label-column width across every component box keeps the
+        // value columns lined up section to section.
+        if (QWidget* label = form->labelForField(widget))
+            label->setMinimumWidth(84);
         rows.push_back(row);
     }
 
@@ -324,7 +331,12 @@ void PropertyInspector::rebuild(engine::Entity entity) {
         if (!entries[i].has(*world, entity)) continue;
 
         auto* box = new QGroupBox(QString::fromStdString(entries[i].name));
+        box->setFlat(true);
         auto* form = new QFormLayout(box);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setHorizontalSpacing(8);
+        form->setVerticalSpacing(3);
+        form->setContentsMargins(8, 4, 8, 6);
 
         Impl::Section section;
         section.entryIndex = static_cast<int>(i);

@@ -21,7 +21,10 @@ public:
     }
     void removeMesh(MeshHandle) override {}
     BoundingSphere getMeshBounds(MeshHandle) const override {
-        return BoundingSphere{Vec3(0, 0, 0), 1.0f};
+        // Unit-ish bounds so headless picking/culling code has something
+        // real to test against.
+        return BoundingSphere{Vec3(0, 0, 0), 1.0f, Vec3(-1, -1, -1),
+                              Vec3(1, 1, 1)};
     }
     TextureHandle uploadTexture(int, int, int, const uint8_t*) override {
         return TextureHandle{};

@@ -120,3 +120,22 @@ TEST_CASE(unproject_depth_convention_near_is_zero) {
     Vec3 dir = normalize(farP - nearP);
     CHECK(dir.z < -0.9);
 }
+
+TEST_CASE(bounding_volume_carries_model_space_box) {
+    // The picker's slab test needs the tight box, not just the sphere — a
+    // flat plane's sphere covers a disc of the whole scene, its box doesn't.
+    Vertex verts[4] = {
+        Vertex(Vec3(-2, 0, -3), Vec3(0, 1, 0), Vec3(1, 0, 0), 0, 0),
+        Vertex(Vec3(2, 0, -3), Vec3(0, 1, 0), Vec3(1, 0, 0), 0, 0),
+        Vertex(Vec3(-2, 0, 3), Vec3(0, 1, 0), Vec3(1, 0, 0), 0, 0),
+        Vertex(Vec3(2, 0, 3), Vec3(0, 1, 0), Vec3(1, 0, 0), 0, 0),
+    };
+    BoundingSphere b = computeBoundingSphere(verts, 4);
+    CHECK_APPROX(b.boxMin.x, -2.0, 1e-9);
+    CHECK_APPROX(b.boxMax.x, 2.0, 1e-9);
+    CHECK_APPROX(b.boxMin.y, 0.0, 1e-9);
+    CHECK_APPROX(b.boxMax.y, 0.0, 1e-9);   // genuinely flat
+    CHECK_APPROX(b.boxMin.z, -3.0, 1e-9);
+    CHECK_APPROX(b.boxMax.z, 3.0, 1e-9);
+    CHECK(b.radius > 3.0);                 // the sphere is much fatter
+}

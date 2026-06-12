@@ -31,6 +31,7 @@
 #include <QFileSystemModel>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
@@ -377,10 +378,10 @@ int main(int argc, char** argv) {
     });
 
     Panels panels(bridge);
-    mainWindow.addDockWidget(Qt::LeftDockWidgetArea,
-                             panels.buildHierarchyDock(&mainWindow));
-    mainWindow.addDockWidget(Qt::RightDockWidgetArea,
-                             panels.buildInspectorDock(&mainWindow));
+    QDockWidget* hierarchyDock = panels.buildHierarchyDock(&mainWindow);
+    QDockWidget* inspectorDock = panels.buildInspectorDock(&mainWindow);
+    mainWindow.addDockWidget(Qt::LeftDockWidgetArea, hierarchyDock);
+    mainWindow.addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
 
     // Asset browser: a filesystem view of assets/; double-clicking a level
     // opens it (Play/Stop and open both go through Application::requestState).
@@ -467,6 +468,10 @@ int main(int argc, char** argv) {
 
     // Realize the native view BEFORE the renderer binds to it.
     mainWindow.show();
+    // Side panels start narrow; the viewport is the star. (resizeDocks only
+    // takes effect once the window is realized.)
+    mainWindow.resizeDocks({hierarchyDock, inspectorDock}, {200, 330},
+                           Qt::Horizontal);
     hosted->setNativeHandle(reinterpret_cast<void*>(viewport->winId()));
     {
         const qreal scale = viewport->devicePixelRatioF();
@@ -497,19 +502,62 @@ int main(int argc, char** argv) {
                                             levelPath, makeEditor, &bridge);
     };
 
-    // Toolbar: the document loop (save / play / stop) from native UI.
+    // Level menu: document-level properties (they belong to the level, not
+    // to any entity in the hierarchy). The environment HDR is the first.
+    // Built here, after the state factories exist (its action reloads).
+    auto* levelMenu = mainWindow.menuBar()->addMenu("&Level");
+    levelMenu->addAction("&Environment...", [&]() {
+        if (!bridge.editable()) return;
+        QStringList options{"(procedural sky + day/night)"};
+        const QFileInfoList hdrs =
+            QDir("assets/env").entryInfoList({"*.hdr"}, QDir::Files);
+        for (const QFileInfo& f : hdrs) options << f.fileName();
+
+        // Preselect whatever the document uses now.
+        const QString current =
+            QFileInfo(QString::fromStdString(bridge.environmentHdr()))
+                .fileName();
+        int currentIndex =
+            std::max(0, static_cast<int>(options.indexOf(current)));
+
+        bool ok = false;
+        const QString pick = QInputDialog::getItem(
+            &mainWindow, "Level Environment",
+            "HDR environment (owns sun + sky while set; the first entry\n"
+            "removes it so the procedural sky and day/night cycle drive):",
+            options, currentIndex, false, &ok);
+        if (!ok) return;
+        const std::string rel =
+            (pick == options[0]) ? "" : ("../env/" + pick).toStdString();
+        if (bridge.setEnvironmentHdr(rel)) {
+            app.requestState(makeEditor());   // reload re-cooks IBL + sun
+            viewport->setFocus();
+        }
+    });
+
+    // Toolbar, in three groups: document | transport (video-player order) |
+    // editing tools. Standard style icons keep it native without shipping
+    // an icon set.
+    const QStyle* style = mainWindow.style();
     auto* toolbar = mainWindow.addToolBar("Main");
-    toolbar->addAction("Save", [&]() {
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+    toolbar->addAction(style->standardIcon(QStyle::SP_DialogSaveButton),
+                       "Save", [&]() {
         if (bridge.editable()) bridge.saveDocument();
     });
-    auto* playAction = toolbar->addAction("Play", [&]() {
+    toolbar->addSeparator();
+
+    auto* playAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_MediaPlay), "Play", [&]() {
         if (!bridge.editable()) return;     // already playing
         bridge.saveDocument();              // Play = compile + run
         app.simClock().setPaused(false);    // a fresh playtest always runs
         app.requestState(makePlay());
         viewport->setFocus();               // WASD goes to the game, not Qt
     });
-    auto* playHereAction = toolbar->addAction("Play Here", [&]() {
+    auto* playHereAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_MediaSkipForward), "Play Here", [&]() {
         if (!bridge.editable()) return;
         bridge.saveDocument();
         app.settings().setBool("playFromHere", true);   // one-shot override
@@ -517,31 +565,63 @@ int main(int argc, char** argv) {
         app.requestState(makePlay());
         viewport->setFocus();
     });
-    auto* stopAction = toolbar->addAction("Stop", [&]() {
-        if (bridge.editable()) return;      // already editing
-        app.requestState(makeEditor());
-        viewport->setFocus();
-    });
-
-    // Transport controls during play: the same pause switch Space toggles
-    // in-game, plus fixed-step frame advance — editor-shell hooks into the
-    // engine's clock (Application::simClock).
-    auto* pauseAction = toolbar->addAction("Pause", [&]() {
+    // Transport during play: the same pause switch Space toggles in-game,
+    // plus fixed-step frame advance (Application::simClock is the hook).
+    auto* pauseAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_MediaPause), "Pause", [&]() {
         app.simClock().setPaused(!app.simClock().paused());
         viewport->setFocus();
     });
     pauseAction->setCheckable(true);
-    auto* stepAction = toolbar->addAction("Step", [&]() {
+    auto* stepAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_MediaSeekForward), "Step", [&]() {
         app.simClock().requestStep();
+    });
+    auto* stopAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_MediaStop), "Stop", [&]() {
+        if (bridge.editable()) return;      // already editing
+        app.requestState(makeEditor());
+        viewport->setFocus();
     });
     // Re-run the playtest from the document spawn (the document can't have
     // changed mid-play; nothing to re-save).
-    auto* restartAction = toolbar->addAction("Restart", [&]() {
+    auto* restartAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_BrowserReload), "Restart", [&]() {
         if (bridge.editable() || !bridge.attached()) return;
         app.simClock().setPaused(false);
         app.requestState(makePlay());
         viewport->setFocus();
     });
+    toolbar->addSeparator();
+
+    // Add: place primitives / cameras from native UI (the in-viewport ImGui
+    // Add panel is suppressed while the shell hosts the engine). Creation is
+    // queued onto the editor — the spawn point comes from the live view.
+    auto* addButton = new QToolButton(toolbar);
+    addButton->setText("Add");
+    addButton->setIcon(style->standardIcon(QStyle::SP_FileDialogNewFolder));
+    addButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    addButton->setPopupMode(QToolButton::InstantPopup);
+    auto* addShapeMenu = new QMenu(addButton);
+    static const char* SHAPES[] = {"box", "sphere", "cylinder", "plane",
+                                   "cone", "wedge", "torus", "capsule"};
+    for (const char* shape : SHAPES)
+        addShapeMenu->addAction(shape, [&bridge, shape]() {
+            if (bridge.attached()) bridge.addPrimitive(shape);
+        });
+    addShapeMenu->addSeparator();
+    addShapeMenu->addAction("camera", [&bridge]() {
+        if (bridge.attached()) bridge.placeCamera();
+    });
+    addButton->setMenu(addShapeMenu);
+    toolbar->addWidget(addButton);
+
+    // Ground-grid toggle; EditorSystem reads the setting every frame.
+    auto* gridAction = toolbar->addAction("Grid", [&](bool on) {
+        app.settings().setBool("editorGrid", on);
+    });
+    gridAction->setCheckable(true);
+    gridAction->setChecked(app.settings().getBool("editorGrid", true));
 
     // Physics as a level-design tool: while playing, overwrite the document
     // with the live world (settled stacks, pushed props). Stop then reloads
@@ -559,33 +639,6 @@ int main(int argc, char** argv) {
                : "Bake failed (see console)",
             4000);
     });
-
-    // Ground-grid toggle; EditorSystem reads the setting every frame.
-    auto* gridAction = toolbar->addAction("Grid", [&](bool on) {
-        app.settings().setBool("editorGrid", on);
-    });
-    gridAction->setCheckable(true);
-    gridAction->setChecked(app.settings().getBool("editorGrid", true));
-
-    // Add: place primitives / cameras from native UI (the in-viewport ImGui
-    // Add panel is suppressed while the shell hosts the engine). Creation is
-    // queued onto the editor — the spawn point comes from the live view.
-    auto* addButton = new QToolButton(toolbar);
-    addButton->setText("Add");
-    addButton->setPopupMode(QToolButton::InstantPopup);
-    auto* addShapeMenu = new QMenu(addButton);
-    static const char* SHAPES[] = {"box", "sphere", "cylinder", "plane",
-                                   "cone", "wedge", "torus", "capsule"};
-    for (const char* shape : SHAPES)
-        addShapeMenu->addAction(shape, [&bridge, shape]() {
-            if (bridge.attached()) bridge.addPrimitive(shape);
-        });
-    addShapeMenu->addSeparator();
-    addShapeMenu->addAction("camera", [&bridge]() {
-        if (bridge.attached()) bridge.placeCamera();
-    });
-    addButton->setMenu(addShapeMenu);
-    toolbar->addWidget(addButton);
 
     // Open a level from the asset browser.
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {

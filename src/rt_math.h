@@ -463,11 +463,15 @@ inline Mat4 Mat4::trs(const Vec3& translation, const Quat& rotation,
     return m;
 }
 
-// Minimal bounding volume for frustum culling. Center is in model space;
-// radius is the max distance from center to any vertex.
+// Minimal bounding volume for frustum culling and editor picking. Center is
+// in model space; radius is the max distance from center to any vertex. The
+// axis-aligned box (also model space) gives pickers a tight slab test — a
+// ground plane's sphere swallows half the scene, its box doesn't.
 struct BoundingSphere {
     Vec3 center;
     Real radius = 0;
+    Vec3 boxMin;
+    Vec3 boxMax;
 };
 
 struct Frustum {

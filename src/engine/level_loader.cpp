@@ -139,6 +139,7 @@ static void addPhysics(Entity e, const json& ent, const std::string& shape,
 // Authoring provenance for the editor's LevelWriter (docs/edit-mode-plan.md).
 static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     SourceSpec spec;
+    spec.name = ent.value("name", std::string());
     spec.shape = shape;
     spec.size = parseVec3(ent.value("size", json()), Vec3(1, 1, 1));
     if (ent.contains("physics")) {

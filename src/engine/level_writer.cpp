@@ -30,6 +30,7 @@ static json materialToJson(RenderMaterial& m) {
 static json entityToJson(const Transform& t, const SourceSpec& spec,
                          RenderMaterial* material) {
     json ent;
+    if (!spec.name.empty()) ent["name"] = spec.name;
     if (!spec.meshFile.empty()) {
         ent["mesh"] = spec.meshFile;
     } else {

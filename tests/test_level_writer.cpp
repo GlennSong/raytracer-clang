@@ -168,6 +168,81 @@ TEST_CASE(level_writer_preserves_unowned_sections) {
     CHECK(root["version"] == 1);
 }
 
+TEST_CASE(level_writer_serializes_entity_names) {
+    TmpFile cleanup;
+    World world;
+    Entity box = addBox(world, Vec3(0, 0, 0));
+    world.get<SourceSpec>(box)->name = "Crate A";
+    addBox(world, Vec3(1, 0, 0));   // unnamed: no "name" key written
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    bool sawNamed = false, sawAnonymous = false;
+    for (const auto& ent : root["entities"]) {
+        if (ent.contains("name"))
+            sawNamed = (ent["name"] == "Crate A");
+        else
+            sawAnonymous = true;
+    }
+    CHECK(sawNamed);
+    CHECK(sawAnonymous);
+
+    // Named entities stand alone in the hierarchy; unnamed keep shape #id.
+    EditorBridge bridge;
+    bridge.attach(&world, nullptr, TMP_PATH);
+    bool labelled = false, fallback = false;
+    for (const auto& info : bridge.listEntities()) {
+        labelled |= info.label == "Crate A";
+        fallback |= info.label.find("box #") == 0;
+    }
+    CHECK(labelled);
+    CHECK(fallback);
+}
+
+TEST_CASE(editor_bridge_swaps_environment_hdr) {
+    TmpFile cleanup;
+    {
+        std::ofstream f(TMP_PATH);
+        f << R"({ "version": 1,
+                  "environment": { "skyColor": [0.1, 0.2, 0.3] },
+                  "entities": [] })";
+    }
+    World world;
+    addBox(world, Vec3(0, 0, 0));
+
+    EditorBridge bridge;
+    bridge.attach(&world, nullptr, TMP_PATH);
+    CHECK(bridge.environmentHdr().empty());
+
+    CHECK(bridge.setEnvironmentHdr("../env/studio.hdr"));
+    CHECK(bridge.environmentHdr() == "../env/studio.hdr");
+    {
+        std::ifstream f(TMP_PATH);
+        json root = json::parse(f);
+        CHECK(root["environment"]["hdr"] == "../env/studio.hdr");
+        // The rest of the environment block survives the edit.
+        CHECK_APPROX(root["environment"]["skyColor"][2].get<double>(), 0.3,
+                     1e-9);
+        CHECK(root["entities"].size() == 1);   // entities were saved first
+    }
+
+    // Removing the HDR hands lighting back to the procedural sky.
+    CHECK(bridge.setEnvironmentHdr(""));
+    CHECK(bridge.environmentHdr().empty());
+    {
+        std::ifstream f(TMP_PATH);
+        json root = json::parse(f);
+        CHECK(!root["environment"].contains("hdr"));
+        CHECK_APPROX(root["environment"]["skyColor"][0].get<double>(), 0.1,
+                     1e-9);
+    }
+
+    // Observer mode may not touch the document's environment either.
+    bridge.attachObserver(&world, TMP_PATH);
+    CHECK(!bridge.setEnvironmentHdr("../env/other.hdr"));
+}
+
 TEST_CASE(level_writer_round_trips_mesh_entities) {
     TmpFile cleanup;
     World world;

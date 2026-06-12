@@ -33,14 +33,20 @@ struct Vertex {
 inline BoundingSphere computeBoundingSphere(const Vertex* vertices, size_t count) {
     if (count == 0) return {};
     Vec3 center;
-    for (size_t i = 0; i < count; i++) center += vertices[i].position;
+    Vec3 lo = vertices[0].position, hi = vertices[0].position;
+    for (size_t i = 0; i < count; i++) {
+        const Vec3& p = vertices[i].position;
+        center += p;
+        lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+        hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+    }
     center /= static_cast<Real>(count);
     Real maxDistSq = 0;
     for (size_t i = 0; i < count; i++) {
         Real dSq = (vertices[i].position - center).lengthSquared();
         if (dSq > maxDistSq) maxDistSq = dSq;
     }
-    return {center, std::sqrt(maxDistSq)};
+    return {center, std::sqrt(maxDistSq), lo, hi};
 }
 
 struct RenderMaterial {

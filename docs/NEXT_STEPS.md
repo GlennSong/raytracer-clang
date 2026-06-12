@@ -107,7 +107,23 @@ session.
   pinned by a regression test. Shift-drag gizmo snapping (editor.snap*
   settings). Engine->shell notifications: EditorNotice queue on the bridge
   + `logging::setSink` -> Console dock + EDITING/PLAYING/PAUSED indicator.
-- **Tests**: 174 engine cases (`make test` / ctest) + physics + the Qt
+- **Editor feel pass (sixth round, from on-device feedback)**:
+  - *Precision picking*: BoundingSphere now carries the model-space AABB
+    (computed at upload, all backends); the editor picks sphere-broad-phase
+    then a local-space slab test — flat things (planes) are only clickable
+    where they actually are, and overlap ordering is by true hit distance.
+  - *Entity names*: SourceSpec.name ("name" in level JSON, described as the
+    Shape section's first field, editable in both inspectors, undo-aware);
+    the hierarchy shows it in place of "shape #id".
+  - *Environment as document state*: Level > Environment... menu swaps or
+    removes the HDR (bridge edits ONLY environment.hdr in the level JSON,
+    preserving skyColor etc., then the shell reloads to re-cook IBL/sun).
+    Removing it hands lighting back to the procedural sky + day/night.
+  - *Shell polish*: toolbar reorganized into document | transport | tools
+    groups with standard media icons (video-player order: Play, Play Here,
+    Pause, Step, Stop, Restart); inspector dock starts at ~330px with an
+    aligned label column, flat group boxes, tighter spacing.
+- **Tests**: 178 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so
@@ -145,6 +161,26 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
 5. **Vulkan backend** (Tier 5): the seam + [0,1] depth are ready; the real
    decision is shader strategy (dual-source vs SPIRV-Cross/slang
    single-source) — decide before writing.
+
+## Next big engine feature: grouping / transform hierarchy (+ stable ids)
+
+Requested from use: null objects to parent things under, moved as one.
+This is the transform-hierarchy feature the engine has deliberately not had
+(the glTF multi-mesh limitation is the same gap). Rough shape when picked
+up:
+- **Stable entity ids first** (document-level, written to JSON): parenting
+  references ("parent": id), per-component apply-back, and undo across
+  reloads all need them. Small, self-contained, prerequisite.
+- A `Parent` component + world-matrix composition (Transform stays local;
+  systems that consume matrices compose up the chain — render, picking,
+  gizmo). Gizmo manipulates in world space, writes back through the
+  parent's inverse.
+- Null objects = entities with SourceSpec shape "" and no Renderable
+  (pickable via children's bounds or a small editor marker); LevelWriter
+  nests or flattens with parent ids.
+- Hierarchy panel becomes a tree (QTreeWidget), drag to reparent —
+  recorded on the undo log as a Parent-field edit.
+Multi-mesh glTF then lands naturally: sub-meshes parent under one root.
 
 ## Editor <-> engine connections — QoL backlog
 

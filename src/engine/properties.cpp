@@ -62,6 +62,7 @@ void describeProperties(SceneCamera& cam, PropertyVisitor& v) {
 }
 
 void describeProperties(SourceSpec& spec, PropertyVisitor& v) {
+    v.field(FieldMeta("Name").id("name"), spec.name);
     if (!spec.meshFile.empty()) {
         v.field(FieldMeta("Mesh").id("mesh").locked(), spec.meshFile);
     } else {

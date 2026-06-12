@@ -65,6 +65,39 @@ double raySphere(const PickRay& ray, const Vec3& center, double radius) {
     return t;
 }
 
+// Ray vs the mesh's model-space box (slab test in local space — the full
+// inverse handles rotation and non-uniform scale). Direction is NOT
+// re-normalized after the transform, so t stays the world-space parameter
+// and is comparable across entities. Negative on miss. The sphere stays as
+// the broad phase; this is what makes flat things (planes!) pickable only
+// where they actually are.
+double rayBox(const PickRay& ray, const Mat4& model, const BoundingSphere& b) {
+    Mat4 inv = model.inverse();
+    Vec3 o = inv.transformPoint(ray.origin);
+    Vec3 d = inv.transformDirection(ray.direction);
+
+    const double pad = 0.02;   // grace for zero-thickness shapes
+    const double lo[3] = {b.boxMin.x - pad, b.boxMin.y - pad, b.boxMin.z - pad};
+    const double hi[3] = {b.boxMax.x + pad, b.boxMax.y + pad, b.boxMax.z + pad};
+    const double orig[3] = {o.x, o.y, o.z};
+    const double dir[3] = {d.x, d.y, d.z};
+
+    double tmin = 0.0, tmax = 1e30;
+    for (int axis = 0; axis < 3; axis++) {
+        if (std::abs(dir[axis]) < 1e-12) {
+            if (orig[axis] < lo[axis] || orig[axis] > hi[axis]) return -1.0;
+            continue;
+        }
+        double t1 = (lo[axis] - orig[axis]) / dir[axis];
+        double t2 = (hi[axis] - orig[axis]) / dir[axis];
+        if (t1 > t2) std::swap(t1, t2);
+        tmin = std::max(tmin, t1);
+        tmax = std::min(tmax, t2);
+        if (tmin > tmax) return -1.0;
+    }
+    return tmin > 0.0 ? tmin : (tmax > 0.0 ? tmax : -1.0);
+}
+
 #ifdef RT_ENABLE_IMGUI
 // Our Mat4 is row-major with column-vector convention; ImGuizmo wants
 // GL-style float16 column-major. The conversion is a transpose.
@@ -227,7 +260,9 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
             Vec3 center = t.matrix().transformPoint(bounds.center);
             Real maxScale = std::max({std::abs(t.scale.x), std::abs(t.scale.y),
                                       std::abs(t.scale.z)});
-            double hit = raySphere(ray, center, bounds.radius * maxScale);
+            // Broad phase: cheap sphere reject. Narrow: tight box hit.
+            if (raySphere(ray, center, bounds.radius * maxScale) <= 0.0) return;
+            double hit = rayBox(ray, t.matrix(), bounds);
             if (hit > 0.0 && hit < bestT) {
                 bestT = hit;
                 best = e;
