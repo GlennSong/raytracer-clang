@@ -14,11 +14,53 @@ find_package(Threads REQUIRED)
 set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
     PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
-# Shared math/core sources (used by both targets)
-set(CORE_SOURCES
+# ============================================================
+# engine_core — the platform-free engine library (editor-app plan, Phase A1).
+# ECS, systems, cameras, the level document, input: one library linked by
+# every host (viewer/runtime, the future editor application, tests, tracer),
+# so the editor viewport and the game are the same code by construction.
+# Excluded on purpose: window/render *backends* (each host brings its own,
+# ADR-0001) and Jolt-coupled systems (hosts that enable physics add them).
+# ============================================================
+add_library(engine_core STATIC
     src/rt_math.cpp
-    src/job_system.cpp
     src/log.cpp
+    src/job_system.cpp
+    src/renderer/settings.cpp
+    src/engine/clock.cpp
+    src/engine/world.cpp
+    src/engine/components.cpp
+    src/engine/application.cpp
+    src/engine/state_stack.cpp
+    src/engine/states/playing_state.cpp
+    src/engine/states/debug_overlay_state.cpp
+    src/engine/states/editor_state.cpp
+    src/engine/mesh_builder.cpp
+    src/engine/level_loader.cpp
+    src/engine/level_writer.cpp
+    src/engine/model_importer.cpp
+    src/engine/camera_store.cpp
+    src/engine/day_night_cycle.cpp
+    src/engine/input/input_map.cpp
+    src/engine/input/player_input.cpp
+    src/engine/camera/orbit_camera_controller.cpp
+    src/engine/camera/fly_camera_controller.cpp
+    src/engine/camera/scene_camera.cpp
+    src/engine/systems/camera_system.cpp
+    src/engine/systems/camera_panel_system.cpp
+    src/engine/systems/editor_system.cpp
+    src/engine/systems/motion_system.cpp
+    src/engine/systems/render_system.cpp
+    src/engine/systems/dev_control_system.cpp
+    src/engine/systems/debug_overlay_system.cpp
+    src/engine/systems/day_night_system.cpp
+)
+target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
+target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(engine_core PUBLIC Threads::Threads)
+
+# Offline path-tracer sources (the tracer's own scene/camera/image stack).
+set(CORE_SOURCES
     src/image.cpp
     src/camera.cpp
     src/geometry.cpp
@@ -26,7 +68,6 @@ set(CORE_SOURCES
     src/scene.cpp
     src/kdtree.cpp
     src/level_scene.cpp
-    src/engine/mesh_builder.cpp
 )
 
 # ============================================================
@@ -34,12 +75,10 @@ set(CORE_SOURCES
 # ============================================================
 add_executable(raytracer
     src/main.cpp
-    src/engine/model_importer.cpp   # EnvironmentLoader (HDR decode, stb TU)
     ${CORE_SOURCES}
 )
-target_include_directories(raytracer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(raytracer PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(raytracer PRIVATE Threads::Threads)
+target_link_libraries(raytracer PRIVATE engine_core)
 
 # ============================================================
 # Unit tests (no GPU dependencies)
@@ -64,29 +103,10 @@ add_executable(run_tests
     tests/test_frustum.cpp
     tests/test_day_night.cpp
     tests/test_cube_faces.cpp
-    src/job_system.cpp
-    src/engine/day_night_cycle.cpp
-    src/engine/world.cpp
-    src/engine/clock.cpp
-    src/engine/input/input_map.cpp
-    src/engine/input/player_input.cpp
-    src/engine/camera/orbit_camera_controller.cpp
-    src/engine/camera/fly_camera_controller.cpp
-    src/engine/camera/scene_camera.cpp
-    src/engine/camera_store.cpp
-    src/engine/level_writer.cpp
-    src/engine/mesh_builder.cpp
-    src/camera.cpp
-    src/log.cpp
-    src/level_scene.cpp
-    src/scene.cpp
-    src/geometry.cpp
-    src/kdtree.cpp
-    src/rt_math.cpp
+    ${CORE_SOURCES}
 )
-target_include_directories(run_tests SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(run_tests PRIVATE Threads::Threads)
+target_link_libraries(run_tests PRIVATE engine_core)
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
 
@@ -153,38 +173,12 @@ endif()
 # ============================================================
 find_package(glfw3 QUIET)
 if(glfw3_FOUND)
+# Host-side only: the GLFW window backend, the game, and (per-platform) the
+# render backend. Everything engine lives in engine_core.
 set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
-    src/renderer/settings.cpp
-    src/engine/clock.cpp
-    src/engine/world.cpp
-    src/engine/components.cpp
-    src/engine/application.cpp
-    src/engine/state_stack.cpp
-    src/engine/states/playing_state.cpp
-    src/engine/states/debug_overlay_state.cpp
-    src/engine/mesh_builder.cpp
-    src/engine/level_loader.cpp
-    src/engine/model_importer.cpp
-    src/engine/day_night_cycle.cpp
     src/game/arena_state.cpp
-    src/engine/input/input_map.cpp
-    src/engine/input/player_input.cpp
-    src/engine/camera/orbit_camera_controller.cpp
-    src/engine/camera/fly_camera_controller.cpp
-    src/engine/camera/scene_camera.cpp
-    src/engine/systems/camera_system.cpp
-    src/engine/systems/camera_panel_system.cpp
-    src/engine/systems/editor_system.cpp
-    src/engine/states/editor_state.cpp
-    src/engine/camera_store.cpp
-    src/engine/level_writer.cpp
-    src/engine/systems/motion_system.cpp
-    src/engine/systems/render_system.cpp
-    src/engine/systems/dev_control_system.cpp
-    src/engine/systems/debug_overlay_system.cpp
-    src/engine/systems/day_night_system.cpp
 )
 
 if(RT_ENABLE_PHYSICS)
@@ -222,14 +216,13 @@ endif()
 
 add_executable(viewer
     ${VIEWER_SOURCES}
-    ${CORE_SOURCES}
 )
 
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 # Vendored headers (tinygltf/stb/nlohmann) are SYSTEM so our strict warnings
 # apply only to our own code, not to libraries we don't maintain.
 target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
-target_link_libraries(viewer PRIVATE glfw Threads::Threads ${PLATFORM_LIBS})
+target_link_libraries(viewer PRIVATE engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 
 if(RT_ENABLE_PHYSICS)
@@ -289,12 +282,18 @@ if(RT_ENABLE_IMGUI)
     if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_sources(viewer PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_include_directories(viewer SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+        target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
     else()
         message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
                         "run: git submodule update --init third_party/ImGuizmo")
     endif()
     target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
     target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)
+    # The ImGui panels (debug overlay, cameras, editor) compile inside
+    # engine_core — it must see the same ImGui configuration, or they would
+    # silently become no-ops while the host expects them.
+    target_include_directories(engine_core SYSTEM PRIVATE ${IMGUI_DIR})
+    target_compile_definitions(engine_core PRIVATE RT_ENABLE_IMGUI=1)
 endif()
 else()
     message(STATUS "glfw3 not found — skipping the interactive viewer target")

@@ -15,6 +15,11 @@ Successor to `docs/edit-mode-plan.md` (whose document model, SourceSpec/
 LevelWriter, picking, and gizmos all carry forward — they become the engine
 half of this application). Roadmap cross-reference: Tier 3.6.
 
+**Status:** Shell decided: **Qt 6** (cross-platform is a requirement — a
+Vulkan backend for PC/Linux is the stated direction). A1 is underway: the
+`engine_core` static library exists and all hosts (viewer, tests, tracer)
+link it; the `HostedWindow` embedded-window seam is next.
+
 ---
 
 ## Architecture
@@ -75,24 +80,39 @@ After this, "the application uses the engine as a window" is literally true:
 The shell needs docking/split panes, tree views (hierarchy), a file-ish
 browser (assets), and property panels. Options:
 
-- **Native macOS, Objective-C++ + AppKit (recommended).** The engine is
-  already macOS-only at the render layer (Metal), so going native adds no new
-  platform constraint. Obj-C++ (.mm) calls the C++ engine directly — no
-  bridge layer, no bindings to maintain. NSOutlineView/NSSplitView/
-  NSCollectionView are exactly hierarchy/docking/asset-browser, free. The
-  precedent already exists in-repo: `metal_renderer.mm`, `gamepad_gc.mm`.
-  Cost: this code can only be compiled/iterated on the Mac (like the Metal
-  work — written here, verified there).
-- **Qt.** The cross-platform answer, and the industry one (Maya, Houdini).
-  Right call *if* a second platform backend (Vulkan/D3D, ROADMAP Tier 5) is
-  ever serious. Heavy dependency, its own build system gravity, LGPL care.
-- **Grow the in-engine custom UI kit into an IDE.** Rejected: docking, tree
-  views, text editing, and file dialogs are years of toolkit work that AppKit
-  and Qt give away free. (A custom *game* UI kit for HUD/menus remains a
-  separate, worthwhile item — that's runtime UI, not tooling.)
+**DECIDED: Qt 6.** The engine is cross-platform by intent — a Vulkan render
+backend for PC/Linux is on the roadmap (Tier 5, now firmer) — so the editor
+shell must be too. Qt is the industry answer for exactly this (Maya, Houdini,
+countless engine tools): native-enough widgets everywhere, QDockWidget/
+QTreeView/QFileSystemModel are the docking/hierarchy/asset-browser, and the
+viewport embeds via a native window handle per platform (CAMetalLayer on
+macOS today, a Vulkan surface later) — the same opaque-handle seam the
+renderer already uses. LGPL via dynamic linking; installed via
+Homebrew/distro packages and found with find_package(Qt6), NOT vendored (it
+is the one dependency too big for the submodule pattern).
 
-**Recommendation: AppKit/Obj-C++.** Decide before Phase A2; Phase A1 is
-identical under any choice.
+Rejected alternatives, for the record: AppKit/Obj-C++ (clean on macOS, but a
+dead end against the cross-platform requirement — it would mean a second
+shell later); growing the in-engine UI kit into an IDE (docking, tree views,
+text editing, file dialogs are years of toolkit work Qt gives away free — a
+custom *game* UI kit for HUD/menus remains a separate, worthwhile runtime
+item).
+
+### Cross-platform implications beyond the shell
+
+- **Render backends:** the `Renderer` seam was built for this (ADR-0001); a
+  `vulkan_renderer.cpp` slot is even stubbed in CMakeLists. Helpfully,
+  ADR-0009 chose [0,1] depth — *Vulkan's* convention — so the projection
+  math and frustum tests port unchanged.
+- **Shaders are the real cross-platform debt:** everything is MSL today. The
+  eventual choice is dual-source (MSL + GLSL/HLSL, drift risk) vs a single
+  source cross-compiled (HLSL/GLSL -> SPIR-V -> MSL via SPIRV-Cross, or
+  slang). Decide when the Vulkan backend starts; until then keep shader
+  *logic* well-factored (the common/lighting/post split already helps).
+- **Already portable:** GLFW (runtime windowing), Jolt, the entire
+  engine_core, the offline tracer, and the test suite (Linux CI is the proof).
+  The macOS-only pieces are exactly the Metal backend and gamepad_gc.mm
+  (which has a GLFW fallback by design, ADR-0013).
 
 ### Selection and edits flow both ways
 
@@ -138,12 +158,14 @@ unit tests; `Renderer::initialize` accepts a view handle. Today's viewer
 re-targets onto the library unchanged. Framework-agnostic — this phase is
 identical whether the shell ends up AppKit or Qt.
 
-### A2 — Shell skeleton (Mac iterations begin)
-AppKit app: window, menu bar, NSSplitView with an engine viewport view
-(CAMetalLayer hosted, HostedWindow event forwarding), toolbar with Save /
+### A2 — Shell skeleton (Qt; buildable wherever Qt6 is installed)
+Qt app: QMainWindow, menu bar, dock layout with an engine viewport widget
+(native window handle handed to the renderer — CAMetalLayer on macOS;
+HostedWindow event forwarding from Qt events), toolbar with Save /
 Play-in-viewport / Play-standalone. Exit criteria: the full existing editor
 (picking, gizmos, ImGui quick panels) runs inside the app's viewport pane and
-Play works both ways.
+Play works both ways. Rendering verification still needs the Mac (Metal is
+the only backend), but the Qt code itself compiles on Linux.
 
 ### A3 — Native panels via EditorBridge
 Hierarchy outline (entities + cameras, rename, two-way selection sync with
@@ -162,10 +184,12 @@ project settings panel.
 
 ## Risks / honesty
 
-- **The shell can't be compiled in the remote environment** (AppKit needs the
-  macOS SDK). Pattern as with the Metal passes: written carefully here,
-  verified in your Mac sessions — expect a real iteration loop on A2,
-  budget for it. Everything in A1 and the EditorBridge is Linux-verifiable.
+- **Shell compilation:** Qt6 dev packages may be installable in the remote
+  environment (unlike the macOS SDK), which would make the shell itself
+  Linux-compilable — only the Metal *rendering* inside the viewport needs
+  your Mac. If not installable remotely, the AppKit-era caveat applies:
+  written here, verified there. Everything in A1 and the EditorBridge is
+  Linux-verifiable regardless.
 - **Two windowing stacks** (GLFW for the standalone runtime, hosted for the
   editor) share the `Window` seam; input parity bugs are possible — the
   headless event-translation tests are the mitigation.

@@ -321,8 +321,9 @@ panels around an engine-rendered viewport, Play running the game in-viewport
 or as a separate process — makes level building comfortable. 1:1 fidelity by
 construction: one `engine_core` library, two hosts. Phase A1 (engine-as-
 library + an embedded-window seam) is framework-agnostic and Linux-testable;
-the recommended shell is Obj-C++/AppKit (the engine is Metal/macOS-only
-already; .mm precedent in-repo).
+the shell is **Qt 6** — the engine is cross-platform by intent (Vulkan
+backend for PC/Linux planned, Tier 5), so the editor must be too. A1's
+engine_core library is in place.
 
 **Depends on:** Edit mode (3.5) — its document model, picking, and gizmos are
 the engine half of this application. Feeds the asset system (3.1): import +
