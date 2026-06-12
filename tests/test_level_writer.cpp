@@ -17,7 +17,11 @@ namespace {
 const char* TMP_PATH = "test_level_writer_tmp.json";
 
 struct TmpFile {
-    ~TmpFile() { std::remove(TMP_PATH); }
+    ~TmpFile() {
+        std::remove(TMP_PATH);
+        // saveDocument also writes the camera sidecar next to the level.
+        std::remove((std::string(TMP_PATH) + ".cameras.json").c_str());
+    }
 };
 
 Entity addBox(World& world, const Vec3& pos) {
