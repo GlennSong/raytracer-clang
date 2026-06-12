@@ -46,12 +46,19 @@ bool DayNightSystem::hdrEnvironmentActive(FrameContext& ctx) const {
     return ctx.renderer.environmentAvgLuminance > 0.0f;
 }
 
+void DayNightSystem::fixedUpdate(FrameContext& ctx) {
+    // Simulation time, not wall time: pausing the clock freezes the sun and
+    // the clouds, Step advances them one tick with the rest of the world,
+    // and slow-mo slows them. (The cycle's own Pause checkbox remains the
+    // artistic "hold this time of day while the game runs" control.)
+    if (enabled && !hdrEnvironmentActive(ctx)) cycle.advance(ctx.clock.fixedStep());
+    if (cloudsEnabled) cloudPhase += ctx.clock.fixedStep() * cloudWindSpeed;
+}
+
 void DayNightSystem::update(FrameContext& ctx) {
-    if (enabled && !hdrEnvironmentActive(ctx)) {
-        cycle.advance(ctx.frameDelta);
-        applyLighting(ctx);
-    }
-    if (cloudsEnabled) cloudPhase += ctx.frameDelta * cloudWindSpeed;
+    // Pushing current state into the view every frame (cheap) keeps panel
+    // edits live even while the simulation is paused.
+    if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
 }
 
@@ -88,6 +95,12 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
 
 void DayNightSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
+    if (ImGui::GetCurrentContext() == nullptr) return;
+    // Debug-mode only (backtick), and into the shared "Debug" window — the
+    // headers used to land in ImGui's implicit fallback window, which is why
+    // they floated over plain play.
+    if (!ctx.debugOverlayActive) return;
+    ImGui::Begin("Debug");
     if (ImGui::CollapsingHeader("Day / Night")) {
         bool hdrActive = hdrEnvironmentActive(ctx);
         if (hdrActive) {
@@ -120,6 +133,7 @@ void DayNightSystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Wind Speed", &cloudWindSpeed, 0.0f, 5.0f);
         applyClouds(ctx);  // reflect edits immediately, even while paused
     }
+    ImGui::End();
 #else
     (void)ctx;
 #endif

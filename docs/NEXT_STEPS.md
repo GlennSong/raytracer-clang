@@ -82,6 +82,14 @@ session.
     the Qt shell's new Pause/Step toolbar buttons drive one switch
     (`Application::simClock()` is the shell hook). Play always starts
     unpaused.
+  - Day/night + clouds run on SIMULATION time now (fixedUpdate, was
+    frameDelta): sim pause freezes the sun and cloud drift, Step advances
+    them one tick, slow-mo scales them. Their panel (which used to float in
+    ImGui's implicit fallback window over plain play) joined the gated
+    Debug window; edits there still apply instantly while paused, because
+    state is pushed into the view every frame. That's the debug-panel rule
+    going forward: knobs apply in update/render (real time), integration
+    happens in fixedUpdate (sim time).
 - **Play From Here + observe-while-playing (fourth pass)**:
   - *Play From Here* (Qt toolbar + in-viewport button): saves, sets a
     one-shot `playFromHere` settings flag, and ArenaState spawns the player
