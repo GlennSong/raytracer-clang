@@ -39,6 +39,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QTimer>
@@ -49,6 +50,9 @@
 #include <QWidget>
 
 #include <cstring>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -193,6 +197,46 @@ private:
     HostedWindow& hosted;
     bool captured = false;
     bool resyncCapture = false;
+};
+
+// Engine log -> console dock. The sink fires on whatever thread logged
+// (physics jobs included), so lines land in a locked buffer; the UI timer
+// drains them on the Qt thread. Bounded by the view's max block count.
+struct LogConsole {
+    QPlainTextEdit* view = nullptr;
+    std::mutex mutex;
+    std::vector<std::pair<engine::logging::Level, QString>> pending;
+
+    QDockWidget* buildDock(QMainWindow* main) {
+        auto* dock = new QDockWidget("Console", main);
+        view = new QPlainTextEdit(dock);
+        view->setReadOnly(true);
+        view->setMaximumBlockCount(2000);
+        dock->setWidget(view);
+
+        engine::logging::setSink(
+            [this](engine::logging::Level level, const std::string& line) {
+                std::lock_guard<std::mutex> lock(mutex);
+                pending.emplace_back(level, QString::fromStdString(line));
+            });
+        return dock;
+    }
+
+    ~LogConsole() { engine::logging::setSink(nullptr); }
+
+    void drain() {
+        std::vector<std::pair<engine::logging::Level, QString>> lines;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            lines.swap(pending);
+        }
+        for (const auto& [level, text] : lines) {
+            const char* tag = level == engine::logging::Level::Error ? "[ERROR] "
+                              : level == engine::logging::Level::Warn ? "[WARN] "
+                                                                      : "";
+            view->appendPlainText(tag + text);
+        }
+    }
 };
 
 // Main window with a save prompt on close when the document is dirty.
@@ -351,6 +395,13 @@ int main(int argc, char** argv) {
     assetsDock->setWidget(assetsView);
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
 
+    // Engine log console, tabbed with the asset browser.
+    LogConsole console;
+    QDockWidget* consoleDock = console.buildDock(&mainWindow);
+    mainWindow.addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
+    mainWindow.tabifyDockWidget(assetsDock, consoleDock);
+    assetsDock->raise();
+
     auto* fileMenu = mainWindow.menuBar()->addMenu("&File");
     // Import = validate, then copy into the project's asset tree (asset
     // cooking grows behind this action — editor-app plan A4). The assets dock
@@ -410,6 +461,9 @@ int main(int argc, char** argv) {
     mainWindow.statusBar()->showMessage(
         "Click selects | 1/2/3 move/rotate/scale | Shift-drag snaps | "
         "F frames selection");
+    // Mode indicator, pinned right: EDITING / PLAYING / PAUSED.
+    auto* modeLabel = new QLabel("EDITING");
+    mainWindow.statusBar()->addPermanentWidget(modeLabel);
 
     // Realize the native view BEFORE the renderer binds to it.
     mainWindow.show();
@@ -516,21 +570,10 @@ int main(int argc, char** argv) {
     app.pushState(makeEditor());
     app.begin();
 
-    // Qt owns the loop; the engine steps per timer tick, panels poll slower.
-    QTimer frameTimer;
-    QObject::connect(&frameTimer, &QTimer::timeout, [&]() {
-        if (!app.running()) {
-            qtApp.quit();
-            return;
-        }
-        viewport->pollCapturedMouse();   // relative look while playing
-        app.runFrame();
-    });
-    frameTimer.start(16);
-
-    QTimer panelTimer;
-    QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
-        panels.refresh();
+    // Window chrome that mirrors engine state: action enables, dirty title,
+    // mode indicator. Run on the slow poll AND immediately when a bridge
+    // notice arrives, so mode/selection flips don't wait out the timer.
+    auto refreshChrome = [&]() {
         const bool editing = bridge.editable();
         playAction->setEnabled(editing);
         playHereAction->setEnabled(editing);
@@ -546,6 +589,36 @@ int main(int argc, char** argv) {
         const QString title =
             bridge.documentDirty() ? baseTitle + " *" : baseTitle;
         if (mainWindow.windowTitle() != title) mainWindow.setWindowTitle(title);
+        modeLabel->setText(editing            ? "EDITING"
+                           : bridge.attached() ? (app.simClock().paused()
+                                                      ? "PAUSED"
+                                                      : "PLAYING")
+                                               : "...");
+    };
+
+    // Qt owns the loop; the engine steps per timer tick, panels poll slower
+    // — except when the engine notifies (mode/selection/save), which
+    // refreshes on the very next frame.
+    QTimer frameTimer;
+    QObject::connect(&frameTimer, &QTimer::timeout, [&]() {
+        if (!app.running()) {
+            qtApp.quit();
+            return;
+        }
+        viewport->pollCapturedMouse();   // relative look while playing
+        app.runFrame();
+        console.drain();
+        if (!bridge.drainNotices().empty()) {
+            panels.refresh();
+            refreshChrome();
+        }
+    });
+    frameTimer.start(16);
+
+    QTimer panelTimer;
+    QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
+        panels.refresh();
+        refreshChrome();
     });
     panelTimer.start(150);
 

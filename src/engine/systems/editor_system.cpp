@@ -186,6 +186,13 @@ void EditorSystem::update(FrameContext& ctx) {
     processShellRequests(ctx);
 
     if (!ctx.world.alive(selected)) selected = Entity{};
+
+    // One chokepoint catches every way selection moves (pick, hierarchy,
+    // undo, delete): the shell reacts on its next drain instead of polling.
+    if (bridge && !(selected == lastNoticedSelection)) {
+        lastNoticedSelection = selected;
+        bridge->notify(EditorNotice::SelectionChanged);
+    }
 }
 
 void EditorSystem::processShellRequests(FrameContext& ctx) {

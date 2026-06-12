@@ -93,6 +93,7 @@ private:
     std::unique_ptr<UndoStack> undo;
 
     Entity selected;
+    Entity lastNoticedSelection;   // edge detection for SelectionChanged
     bool prevMouseLeft = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
     bool gizmoWasUsing = false; // drag-edge detection for undo recording

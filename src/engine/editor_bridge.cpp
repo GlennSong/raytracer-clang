@@ -18,6 +18,7 @@ void EditorBridge::attach(World* world, EditorSystem* editor,
     savedRevision = editor && editor->undoStack()
                         ? editor->undoStack()->revision()
                         : 0;
+    notify(EditorNotice::ModeChanged);
 }
 
 void EditorBridge::attachObserver(World* world, std::string level) {
@@ -26,6 +27,7 @@ void EditorBridge::attachObserver(World* world, std::string level) {
     observerMode = true;
     observerSelection = Entity{};
     levelFile = std::move(level);
+    notify(EditorNotice::ModeChanged);
 }
 
 void EditorBridge::detach() {
@@ -33,6 +35,7 @@ void EditorBridge::detach() {
     editorPtr = nullptr;
     observerMode = false;
     observerSelection = Entity{};
+    notify(EditorNotice::ModeChanged);
 }
 
 Entity EditorBridge::selected() const {
@@ -41,9 +44,11 @@ Entity EditorBridge::selected() const {
 
 void EditorBridge::select(Entity entity) {
     if (editorPtr)
-        editorPtr->setSelected(entity);
-    else
+        editorPtr->setSelected(entity);   // EditorSystem notices the change
+    else if (!(observerSelection == entity)) {
         observerSelection = entity;
+        notify(EditorNotice::SelectionChanged);
+    }
 }
 
 std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
@@ -88,8 +93,10 @@ bool EditorBridge::saveDocument() {
     if (!editable()) return false;
     bool ok = LevelWriter::save(levelFile, *worldPtr);
     ok &= CameraStore::save(levelFile + ".cameras.json", *worldPtr);
-    if (ok)
+    if (ok) {
         if (UndoStack* undo = undoStack()) savedRevision = undo->revision();
+        notify(EditorNotice::DocumentSaved);
+    }
     return ok;
 }
 

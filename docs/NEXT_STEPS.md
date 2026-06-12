@@ -101,7 +101,13 @@ session.
     stays navigable during a playtest — including a "Player (live)" row —
     and the inspector keeps syncing live values with its widgets grayed.
     Pairs with Pause/Step: freeze a moment, click around, read state.
-- **Tests**: 171 engine cases (`make test` / ctest) + physics + the Qt
+- **Pick fix + shell reactivity (fifth pass)**: the editor pick ray had its
+  near/far unprojection swapped (origin sat ON the far plane looking back,
+  so overlapping objects selected furthest-first) — fixed, convention
+  pinned by a regression test. Shift-drag gizmo snapping (editor.snap*
+  settings). Engine->shell notifications: EditorNotice queue on the bridge
+  + `logging::setSink` -> Console dock + EDITING/PLAYING/PAUSED indicator.
+- **Tests**: 174 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so
@@ -154,12 +160,13 @@ on them, roughly by payoff-per-effort:
    entries for runtime state shown read-only (velocity, physics motion),
    and "apply this component back to the document" — the property layer's
    JSON snapshots make that diff nearly free.
-3. **Engine -> shell notifications**: the panels poll at 150ms; a small
-   event queue on the bridge (selectionChanged, modeChanged, logLine) gives
-   instant refresh, a Qt console dock for the engine log, and a status bar
-   mode indicator (EDITING / PLAYING / PAUSED).
-4. **Gizmo snap settings**: ImGuizmo supports translate/rotate snap
-   natively; expose snap increments + grid toggle as Qt toolbar fields.
+3. ~~**Engine -> shell notifications**~~ — DONE: EditorNotice queue on the
+   bridge (ModeChanged / SelectionChanged / DocumentSaved) drained per
+   frame for instant chrome+panel refresh; `logging::setSink` feeds a Qt
+   Console dock (tabbed with Assets, thread-safe, bounded); status bar
+   shows EDITING / PLAYING / PAUSED.
+4. **Gizmo snap settings**: Shift-drag snap landed (editor.snap* settings);
+   remaining: expose the increments + grid toggle as Qt toolbar fields.
 5. **Selection feedback in-viewport**: hover highlight; per-type gizmos for
    the selected entity (camera frustum, spawn capsule, collider bounds).
 6. **Restart playtest** button (re-enter the play state without bouncing

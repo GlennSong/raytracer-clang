@@ -11,6 +11,15 @@ namespace engine {
 class EditorSystem;
 class UndoStack;
 
+// Engine -> shell notifications: things the panels should react to NOW
+// instead of discovering on their next poll. Same-thread by construction
+// (like the bridge itself); the shell drains the queue once per frame.
+enum class EditorNotice {
+    ModeChanged,        // attach / attachObserver / detach (edit <-> play)
+    SelectionChanged,   // viewport pick, hierarchy click, undo, delete
+    DocumentSaved,      // dirty flag cleared
+};
+
 // The single conduit between a native shell (the Qt editor) and the engine
 // (editor-app plan, Phase A3). The shell owns the bridge for the application's
 // lifetime; the engine attaches while an EditorState is active and detaches
@@ -71,6 +80,15 @@ public:
     // (conservative: undoing back to the saved state still reads dirty).
     bool documentDirty();
 
+    // Notification queue: engine side pushes, shell drains each frame and
+    // refreshes immediately when anything arrived.
+    void notify(EditorNotice notice) { notices.push_back(notice); }
+    std::vector<EditorNotice> drainNotices() {
+        std::vector<EditorNotice> out;
+        out.swap(notices);
+        return out;
+    }
+
     // Component menu actions, routed through the registry's thunks; both are
     // recorded on the editor's command log.
     void addComponent(Entity entity, const std::string& componentName);
@@ -92,6 +110,7 @@ private:
     Entity observerSelection;     // panel selection while no editor owns one
     std::string levelFile;
     uint64_t savedRevision = 0;   // command-log revision at the last save
+    std::vector<EditorNotice> notices;
 };
 
 }  // namespace engine

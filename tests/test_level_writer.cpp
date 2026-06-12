@@ -5,6 +5,7 @@
 #include "../src/engine/editor_bridge.h"
 #include "../src/engine/camera/scene_camera.h"
 #include "../src/engine/model_importer.h"
+#include "../src/log.h"
 #include <nlohmann/json.hpp>
 #include <cstdio>
 #include <fstream>
@@ -256,6 +257,49 @@ TEST_CASE(editor_bridge_observer_mode_is_read_only) {
 
     bridge.detach();
     CHECK(!bridge.attached());
+}
+
+TEST_CASE(editor_bridge_notifies_shell_of_state_changes) {
+    TmpFile cleanup;
+    World world;
+    Entity box = addBox(world, Vec3(0, 0, 0));
+
+    EditorBridge bridge;
+    bridge.attach(&world, nullptr, TMP_PATH);
+
+    // Attach queued a mode change; draining empties the queue.
+    auto notices = bridge.drainNotices();
+    bool sawMode = false;
+    for (EditorNotice n : notices) sawMode |= (n == EditorNotice::ModeChanged);
+    CHECK(sawMode);
+    CHECK(bridge.drainNotices().empty());
+
+    bridge.select(box);
+    notices = bridge.drainNotices();
+    CHECK(notices.size() == 1);
+    CHECK(notices[0] == EditorNotice::SelectionChanged);
+    bridge.select(box);   // no change, no notice
+    CHECK(bridge.drainNotices().empty());
+
+    CHECK(bridge.saveDocument());
+    notices = bridge.drainNotices();
+    CHECK(notices.size() == 1);
+    CHECK(notices[0] == EditorNotice::DocumentSaved);
+}
+
+TEST_CASE(log_sink_receives_each_line) {
+    std::vector<std::string> lines;
+    engine::logging::setSink(
+        [&](engine::logging::Level level, const std::string& text) {
+            if (level == engine::logging::Level::Warn) lines.push_back(text);
+        });
+    LOG_WARN << "sink" << 42;
+    LOG_INFO << "filtered by the test sink";
+    engine::logging::setSink(nullptr);
+    LOG_WARN << "after clear: not captured";
+
+    CHECK(lines.size() == 1);
+    CHECK(lines[0] == "sink42");
 }
 
 TEST_CASE(model_importer_validate_checks_gltf) {
