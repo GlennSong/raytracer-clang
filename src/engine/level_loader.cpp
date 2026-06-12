@@ -317,7 +317,8 @@ static void loadPlayerSpawn(const json& player, World& world,
 }
 
 bool LevelLoader::load(const std::string& path,
-                       World& world, Renderer& renderer, RenderView& view) {
+                       World& world, Renderer& renderer, RenderView& view,
+                       bool editorMode) {
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;
