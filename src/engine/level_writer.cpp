@@ -1,6 +1,7 @@
 #include "level_writer.h"
 
 #include "components.h"
+#include "property_json.h"
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -16,21 +17,18 @@ static bool approxOne(const Vec3& v) {
            std::abs(v.z - 1.0) < 1e-9;
 }
 
-static json materialToJson(const RenderMaterial& m) {
+// The property layer is the format: every described material field, keyed by
+// its FieldMeta id — the same walk the inspectors use, so UI and persistence
+// cannot drift. (LevelLoader::parseMaterial is the JsonReadVisitor mirror.)
+static json materialToJson(RenderMaterial& m) {
     json mat;
-    mat["albedo"] = json::array({m.albedo.x, m.albedo.y, m.albedo.z});
-    mat["roughness"] = m.roughness;
-    mat["metallic"] = m.metallic;
-    if (m.opacity != 1.0f) mat["opacity"] = m.opacity;
-    if (m.emission.lengthSquared() > 0.0)
-        mat["emission"] = vec3ToJson(m.emission);
-    if (m.flags & RenderMaterial::FLAG_CHECKERBOARD)
-        mat["flags"] = json::array({"checkerboard"});
+    JsonWriteVisitor writer(mat);
+    describeProperties(m, writer);
     return mat;
 }
 
 static json entityToJson(const Transform& t, const SourceSpec& spec,
-                         const RenderMaterial* material) {
+                         RenderMaterial* material) {
     json ent;
     if (!spec.meshFile.empty()) {
         ent["mesh"] = spec.meshFile;

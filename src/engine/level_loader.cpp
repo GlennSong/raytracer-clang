@@ -2,6 +2,7 @@
 #include "mesh_builder.h"
 #include "model_importer.h"
 #include "components.h"
+#include "property_json.h"
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -17,19 +18,25 @@ static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
     return Vec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>());
 }
 
-static RenderMaterial parseMaterial(const json& j) {
-    RenderMaterial mat;
-    if (j.contains("albedo"))    mat.albedo    = parseVec3(j["albedo"], mat.albedo);
-    if (j.contains("roughness")) mat.roughness = j["roughness"].get<float>();
-    if (j.contains("metallic"))  mat.metallic  = j["metallic"].get<float>();
-    if (j.contains("opacity"))   mat.opacity   = j["opacity"].get<float>();
-    if (j.contains("emission"))  mat.emission  = parseVec3(j["emission"]);
+// Applies a material block onto `mat` through the property layer: described
+// fields only, missing keys leave values untouched (so a partial block acts
+// as an override, e.g. on a glTF's imported materials). Levels written before
+// the JSON-visitor migration spelled the checkerboard as a "flags" array —
+// keep reading that form.
+static void applyMaterial(const json& j, RenderMaterial& mat) {
+    JsonReadVisitor reader(j);
+    describeProperties(mat, reader);
     if (j.contains("flags")) {
         for (auto& flag : j["flags"]) {
             if (flag.get<std::string>() == "checkerboard")
                 mat.flags |= RenderMaterial::FLAG_CHECKERBOARD;
         }
     }
+}
+
+static RenderMaterial parseMaterial(const json& j) {
+    RenderMaterial mat;
+    applyMaterial(j, mat);
     return mat;
 }
 
@@ -165,17 +172,10 @@ static void loadEntities(const json& entities, World& world, Renderer& renderer,
                 Renderable r;
                 r.mesh = model.meshes[i].meshHandle;
                 r.material = model.meshes[i].material;
-                if (ent.contains("material")) {
-                    auto overrides = parseMaterial(ent["material"]);
-                    if (ent["material"].contains("albedo"))
-                        r.material.albedo = overrides.albedo;
-                    if (ent["material"].contains("roughness"))
-                        r.material.roughness = overrides.roughness;
-                    if (ent["material"].contains("metallic"))
-                        r.material.metallic = overrides.metallic;
-                    if (ent["material"].contains("opacity"))
-                        r.material.opacity = overrides.opacity;
-                }
+                // Present keys override the imported material; absent ones
+                // keep it (JsonReadVisitor's missing-key semantics).
+                if (ent.contains("material"))
+                    applyMaterial(ent["material"], r.material);
                 world.add<Renderable>(e, r);
 
                 if (i == 0) {

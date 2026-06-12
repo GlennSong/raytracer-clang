@@ -2,6 +2,7 @@
 
 #include "../components.h"
 #include "../camera_store.h"
+#include "../imgui_properties.h"
 #include "../../log.h"
 #include <cstdio>
 #include <cstdlib>
@@ -107,11 +108,6 @@ void CameraPanelSystem::render(FrameContext& ctx) {
     if (cam && t) {
         ImGui::Separator();
 
-        char nameBuf[64];
-        std::snprintf(nameBuf, sizeof(nameBuf), "%s", cam->name.c_str());
-        if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
-            cam->name = nameBuf;
-
         if (selected == viewing) {
             if (ImGui::Button("Stop Looking Through"))
                 cameras.setActiveSceneCamera(Entity{});
@@ -163,12 +159,8 @@ void CameraPanelSystem::render(FrameContext& ctx) {
             if (auto* prev = ctx.world.get<PrevTransform>(selected))
                 prev->value = *t;
 
-            ImGui::SeparatorText("Lens");
+            ImGui::SeparatorText("Camera");
             auto& lens = cam->lens;
-            float focal = static_cast<float>(lens.focalLength);
-            if (ImGui::SliderFloat("Focal (mm)", &focal, 8.0f, 300.0f, "%.0f",
-                                   ImGuiSliderFlags_Logarithmic))
-                lens.focalLength = focal;
             const float presets[] = {24, 35, 50, 85};
             for (float p : presets) {
                 char b[8];
@@ -178,32 +170,13 @@ void CameraPanelSystem::render(FrameContext& ctx) {
             }
             ImGui::NewLine();
 
-            float fStop = static_cast<float>(lens.fStop);
-            if (ImGui::SliderFloat("f-stop", &fStop, 0.7f, 22.0f, "f/%.1f",
-                                   ImGuiSliderFlags_Logarithmic))
-                lens.fStop = fStop;
-            float focus = static_cast<float>(lens.focusDistance);
-            if (ImGui::DragFloat("Focus (m)", &focus, 0.05f, 0.1f, 1000.0f))
-                lens.focusDistance = focus;
+            // Name + every lens field, generated from describeProperties —
+            // ranges, log scaling, and units all come from the FieldMeta.
+            ImGuiPropertyVisitor lensUi;
+            describeProperties(*cam, lensUi);
             ImGui::Text("FOV %.1f deg, aperture %.2f mm",
                         lens.verticalFovDegrees(),
                         lens.apertureDiameter() * 1000.0);
-
-            if (ImGui::TreeNode("Aberrations")) {
-                float k1 = static_cast<float>(lens.distortionK1);
-                float k2 = static_cast<float>(lens.distortionK2);
-                float ca = static_cast<float>(lens.chromaticAberration);
-                float vig = static_cast<float>(lens.vignette);
-                if (ImGui::SliderFloat("Distortion K1", &k1, -0.5f, 0.5f))
-                    lens.distortionK1 = k1;
-                if (ImGui::SliderFloat("Distortion K2", &k2, -0.5f, 0.5f))
-                    lens.distortionK2 = k2;
-                if (ImGui::SliderFloat("Chromatic Ab.", &ca, 0.0f, 0.05f, "%.4f"))
-                    lens.chromaticAberration = ca;
-                if (ImGui::SliderFloat("Vignette", &vig, 0.0f, 1.0f))
-                    lens.vignette = vig;
-                ImGui::TreePop();
-            }
 
             ImGui::SeparatorText("Offline Render");
             if (ImGui::Button("Render In Path Tracer")) {

@@ -9,6 +9,7 @@
 namespace engine {
 
 class EditorSystem;
+class UndoStack;
 
 // The single conduit between a native shell (the Qt editor) and the engine
 // (editor-app plan, Phase A3). The shell owns the bridge for the application's
@@ -51,6 +52,19 @@ public:
     // step the in-viewport Play uses).
     bool saveDocument();
     void deleteEntity(Entity entity);
+
+    // Component menu actions, routed through the registry's thunks; both are
+    // recorded on the editor's command log.
+    void addComponent(Entity entity, const std::string& componentName);
+    void removeComponent(Entity entity, const std::string& componentName);
+
+    // The edit session's command log (null while detached). Shell panels use
+    // it to record their own edits; undo()/redo() apply and re-select.
+    UndoStack* undoStack();
+    bool canUndo();
+    bool canRedo();
+    void undo();
+    void redo();
 
 private:
     ComponentRegistry registry_;

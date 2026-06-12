@@ -1,6 +1,7 @@
 #include "property_inspector.h"
 
 #include "../engine/components.h"
+#include "../engine/undo_stack.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -10,6 +11,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -224,10 +227,15 @@ private:
 };
 
 // One widget -> engine, addressed by field index within the component.
+// `editedLabel()` reports which described field the write landed on (null if
+// the target was out of range or read-only) — the key for post-edit hooks
+// and the undo log.
 class WriteVisitor : public PropertyVisitor {
 public:
     WriteVisitor(std::vector<FieldRow>& rows, int target)
         : rows(rows), target(target) {}
+
+    const char* editedLabel() const { return edited; }
 
     void field(const FieldMeta& meta, Real& value) override {
         if (FieldRow* row = match(meta))
@@ -264,14 +272,15 @@ private:
     FieldRow* match(const FieldMeta& meta) {
         int index = cursor++;
         if (index != target || meta.readOnly) return nullptr;
-        return static_cast<std::size_t>(index) < rows.size()
-                   ? &rows[index]
-                   : nullptr;
+        if (static_cast<std::size_t>(index) >= rows.size()) return nullptr;
+        edited = meta.label;   // FieldMeta labels are string literals
+        return &rows[index];
     }
 
     std::vector<FieldRow>& rows;
     int target;
     int cursor = 0;
+    const char* edited = nullptr;
 };
 
 }  // namespace
@@ -283,7 +292,11 @@ struct PropertyInspector::Impl {
         std::vector<FieldRow> rows;
     };
     std::vector<Section> sections;
-    bool muted = false;   // suppress write-back while syncing
+    bool muted = false;            // suppress write-back while syncing
+    // Add/remove component happened (menu click, or engine-side/undo): the
+    // section list is stale. Rebuilt on the NEXT refresh — never mid-signal,
+    // so a button's own click can't delete it.
+    bool structureDirty = false;
 };
 
 PropertyInspector::PropertyInspector(engine::EditorBridge& bridge)
@@ -323,7 +336,39 @@ void PropertyInspector::rebuild(engine::Entity entity) {
                                  writeField(componentIndex, fieldIndex);
                              });
         entries[i].visit(*world, entity, builder);
+
+        if (entries[i].removeFrom) {
+            auto* removeButton = new QPushButton("Remove Component");
+            QObject::connect(removeButton, &QPushButton::clicked,
+                             [this, name = entries[i].name]() {
+                                 if (!bridge.attached()) return;
+                                 bridge.removeComponent(bridge.selected(), name);
+                                 impl->structureDirty = true;
+                             });
+            form->addRow(QString(), removeButton);
+        }
         sectionsLayout->addWidget(box);
+    }
+
+    // Add Component: registered types the entity lacks that allow menu
+    // attachment (the registry's addTo thunks).
+    auto* addMenu = new QMenu;
+    for (const auto& entry : entries) {
+        if (!entry.addTo || entry.has(*world, entity)) continue;
+        addMenu->addAction(QString::fromStdString(entry.name),
+                           [this, name = entry.name]() {
+                               if (!bridge.attached()) return;
+                               bridge.addComponent(bridge.selected(), name);
+                               impl->structureDirty = true;
+                           });
+    }
+    if (addMenu->isEmpty()) {
+        delete addMenu;
+    } else {
+        auto* addButton = new QPushButton("Add Component");
+        addMenu->setParent(addButton);
+        addButton->setMenu(addMenu);
+        sectionsLayout->addWidget(addButton);
     }
 }
 
@@ -338,8 +383,25 @@ void PropertyInspector::writeField(int componentIndex, int fieldIndex) {
 
     auto& section = impl->sections[componentIndex];
     const auto& entries = bridge.registry().entries();
+    const auto& entry = entries[section.entryIndex];
+
+    UndoStack* undo = bridge.undoStack();
+    nlohmann::json before;
+    if (undo) before = undo->componentState(*world, entity, entry.name);
+
     WriteVisitor writer(section.rows, fieldIndex);
-    entries[section.entryIndex].visit(*world, entity, writer);
+    entry.visit(*world, entity, writer);
+
+    if (const char* label = writer.editedLabel()) {
+        // Post-edit hook (e.g. Shape size -> mesh rebuild), then the undo
+        // log: one command per committed widget edit, consecutive edits to
+        // the same field coalesced by the stack.
+        if (entry.onEdited) entry.onEdited(*world, entity, label);
+        if (undo)
+            undo->recordFieldEdit(
+                entity, entry.name, label, std::move(before),
+                undo->componentState(*world, entity, entry.name));
+    }
 
     // Editor objects are stationary: keep the interpolation pair in step so
     // edits don't smear across frames.
@@ -355,10 +417,34 @@ void PropertyInspector::refresh() {
     Entity selected = bridge.selected();
     if (!(selected == shown) ||
         (shown.valid() && !bridge.world()->alive(shown))) {
+        impl->structureDirty = false;
         rebuild(selected);
         return;
     }
     if (!shown.valid()) return;
+
+    // The entity's component set can change under us — the Add Component
+    // menu, the in-viewport inspector, or an undo. Compare what's present
+    // against the sections we built and rebuild on mismatch.
+    if (!impl->structureDirty) {
+        const auto& entries = bridge.registry().entries();
+        std::size_t sectionCursor = 0;
+        for (std::size_t i = 0; i < entries.size(); i++) {
+            if (!entries[i].has(*bridge.world(), shown)) continue;
+            if (sectionCursor >= impl->sections.size() ||
+                impl->sections[sectionCursor].entryIndex != static_cast<int>(i)) {
+                impl->structureDirty = true;
+                break;
+            }
+            sectionCursor++;
+        }
+        if (sectionCursor != impl->sections.size()) impl->structureDirty = true;
+    }
+    if (impl->structureDirty) {
+        impl->structureDirty = false;
+        rebuild(shown);
+        return;
+    }
 
     impl->muted = true;
     World* world = bridge.world();

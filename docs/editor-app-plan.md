@@ -54,11 +54,19 @@ from it — Unity-style group-box sections per component (Transform, Shape,
 Material, Camera lens, Player Spawn), built/synced/written via three visitor
 passes that re-resolve through the registry every time (no stored references
 into sparse-set storage). Adding a component = struct + describe + one
-registration line; it appears everywhere. Remaining on this thread: Add
-Component menu (registry add/remove thunks), an ImGui visitor to regenerate
-the in-viewport panels, migrating LevelWriter's material block onto the JSON
-visitors, post-edit hooks (SourceSpec size -> mesh rebuild), undo (a
-field-write log at the writeField chokepoint).
+registration line; it appears everywhere. The follow-on thread landed too
+(June 2026): registry add/remove thunks drive Add/Remove Component in both
+inspectors; `ImGuiPropertyVisitor` regenerates the in-viewport panels (the
+hand-written field code in EditorSystem and CameraPanelSystem's lens section
+is gone); the LevelWriter material block, the loaders' material parsing, and
+CameraStore's lens block run through the JSON visitors — FieldMeta ids ARE
+the file format (legacy "flags" arrays still load); registry post-edit hooks
+make SourceSpec.size editable from every inspector (the editor wires
+Size -> mesh rebuild at onStart, where it has the renderer); and undo/redo
+is in — an `UndoStack` command log on EditorSystem fed from the
+writeField/ImGui-visitor chokepoints, gizmo drag ends, add/duplicate/delete,
+and component add/remove, applied back through the property layer.
+docs/NEXT_STEPS.md has the details and remaining gaps.
 
 ---
 

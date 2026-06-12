@@ -13,8 +13,13 @@ void registerEngineComponents(ComponentRegistry& registry) {
         "Material", [](Renderable& r, PropertyVisitor& v) {
             describeProperties(r.material, v);
         });
-    registry.add<SceneCamera>("Camera");
-    registry.addMarker<PlayerSpawn>("Player Spawn");
+    // Add/remove is offered only where attach/detach is safe without extra
+    // services: a camera or spawn marker on any entity. Transform and Shape
+    // are the document's identity; Material rides on Renderable (needs a
+    // mesh) — none of those make sense to toggle from a menu.
+    registry.allowAddRemove<SceneCamera>(registry.add<SceneCamera>("Camera"));
+    registry.allowAddRemove<PlayerSpawn>(
+        registry.addMarker<PlayerSpawn>("Player Spawn"));
     // Deliberately absent: PrevTransform (interpolation plumbing), RigidBody/
     // Collider (runtime physics state; authored via SourceSpec's block).
 }

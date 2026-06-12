@@ -1,11 +1,13 @@
 #include "editor_system.h"
 
 #include "../components.h"
+#include "../imgui_properties.h"
 #include "../mesh_builder.h"
 #include "../level_writer.h"
 #include "../model_importer.h"
 #include "../../log.h"
 #include <cstdio>
+#include <cstring>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -121,6 +123,26 @@ void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("gizmo_scale", KeyCode::Num3);
     ctx.actions.bindButton("editor_frame", KeyCode::F);   // detach is disabled here
     if (bridge) bridge->attach(&ctx.world, this, levelFile);
+
+    ComponentRegistry& registry = componentRegistry();
+    undoStack();   // session log exists before any panel asks for it
+
+    // Post-edit hook: a Size (or bulk/undo) write to a shape rebuilds its
+    // mesh — what makes Size editable from EVERY inspector, not just the one
+    // that knows the renderer. (The replaced upload leaks; see the mesh-cache
+    // item in docs/TECH_DEBT.md.) The renderer outlives editor states, so the
+    // captured pointer stays valid across sessions.
+    Renderer* renderer = &ctx.renderer;
+    if (ComponentRegistry::Entry* shape = registry.find("Shape")) {
+        shape->onEdited = [renderer](World& world, Entity e, const char* label) {
+            if (label && std::strcmp(label, "Size") != 0) return;
+            SourceSpec* spec = world.get<SourceSpec>(e);
+            Renderable* r = world.get<Renderable>(e);
+            if (!spec || !r || !spec->meshFile.empty()) return;
+            RenderMesh mesh = MeshBuilder::shape(spec->shape, spec->size);
+            if (!mesh.vertices.empty()) r->mesh = renderer->uploadMesh(mesh);
+        };
+    }
 }
 
 void EditorSystem::frameSelected(FrameContext& ctx) {
@@ -255,15 +277,36 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", levelFile.c_str());
 
+    // Undo/redo: buttons plus the universal chords (Ctrl+Z / Ctrl+Shift+Z).
+    const ImGuiIO& io = ImGui::GetIO();
+    bool wantUndo = io.KeyCtrl && !io.KeyShift &&
+                    ImGui::IsKeyPressed(ImGuiKey_Z) && !io.WantTextInput;
+    bool wantRedo = io.KeyCtrl && io.KeyShift &&
+                    ImGui::IsKeyPressed(ImGuiKey_Z) && !io.WantTextInput;
+    ImGui::BeginDisabled(!undo || !undo->canUndo());
+    wantUndo |= ImGui::Button("Undo");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!undo || !undo->canRedo());
+    wantRedo |= ImGui::Button("Redo");
+    ImGui::EndDisabled();
+    if (undo && wantUndo && undo->canUndo()) selected = undo->undo(ctx.world);
+    if (undo && wantRedo && undo->canRedo()) selected = undo->redo(ctx.world);
+
     ImGui::SeparatorText("Add");
     static const char* SHAPES[] = {"box", "sphere", "cylinder", "plane",
                                    "cone", "wedge", "torus", "capsule"};
     for (int i = 0; i < 8; i++) {
-        if (ImGui::Button(SHAPES[i])) selected = addPrimitive(ctx, SHAPES[i]);
+        if (ImGui::Button(SHAPES[i])) {
+            selected = addPrimitive(ctx, SHAPES[i]);
+            if (undo && selected.valid()) undo->recordCreate(selected);
+        }
         if (i % 4 != 3) ImGui::SameLine();
     }
-    if (ImGui::Button("camera"))
+    if (ImGui::Button("camera")) {
         selected = cameras.placeCameraAtView(ctx);
+        if (undo && selected.valid()) undo->recordCreate(selected);
+    }
 
     ImGui::SetNextItemWidth(180);
     ImGui::InputText("##gltf", modelPath, sizeof(modelPath));
@@ -293,6 +336,9 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
                     spec.meshFile = modelPath;
                     ctx.world.add<SourceSpec>(e, spec);
                     selected = e;
+                    // Undo covers the document entity (the first sub-mesh);
+                    // sibling sub-meshes share the known multi-mesh limits.
+                    if (undo) undo->recordCreate(e);
                 }
             }
         }
@@ -310,74 +356,87 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
 
 void EditorSystem::drawInspector(FrameContext& ctx) {
     Transform* t = ctx.world.get<Transform>(selected);
-    if (!t) return;
+    if (!t) {
+        pendingEdit.active = false;
+        return;
+    }
 
     ImGui::Begin("Editor");
     ImGui::SeparatorText("Selected");
 
-    SourceSpec* spec = ctx.world.get<SourceSpec>(selected);
-    SceneCamera* cam = ctx.world.get<SceneCamera>(selected);
-    if (cam)
-        ImGui::Text("Camera: %s (lens in Debug > Cameras)", cam->name.c_str());
-    else if (spec)
+    if (SceneCamera* cam = ctx.world.get<SceneCamera>(selected))
+        ImGui::Text("Camera: %s", cam->name.c_str());
+    else if (SourceSpec* spec = ctx.world.get<SourceSpec>(selected))
         ImGui::Text("%s", spec->meshFile.empty() ? spec->shape.c_str()
                                                  : spec->meshFile.c_str());
 
-    float pos[3] = {static_cast<float>(t->position.x),
-                    static_cast<float>(t->position.y),
-                    static_cast<float>(t->position.z)};
-    if (ImGui::DragFloat3("Position", pos, 0.05f))
-        t->position = Vec3(pos[0], pos[1], pos[2]);
-    float scl[3] = {static_cast<float>(t->scale.x),
-                    static_cast<float>(t->scale.y),
-                    static_cast<float>(t->scale.z)};
-    if (ImGui::DragFloat3("Scale", scl, 0.02f, 0.01f, 100.0f))
-        t->scale = Vec3(scl[0], scl[1], scl[2]);
+    // Every section below is generated from describeProperties via the
+    // registry — the same single source the Qt inspector renders from.
+    ComponentRegistry& registry = componentRegistry();
+    const auto& entries = registry.entries();
+    for (std::size_t i = 0; i < entries.size(); i++) {
+        const ComponentRegistry::Entry& entry = entries[i];
+        if (!entry.has(ctx.world, selected)) continue;
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::SeparatorText(entry.name.c_str());
 
-    Renderable* r = ctx.world.get<Renderable>(selected);
-    if (r && !cam) {
-        auto& m = r->material;
-        float albedo[3] = {static_cast<float>(m.albedo.x),
-                           static_cast<float>(m.albedo.y),
-                           static_cast<float>(m.albedo.z)};
-        if (ImGui::ColorEdit3("Albedo", albedo))
-            m.albedo = Vec3(albedo[0], albedo[1], albedo[2]);
-        ImGui::SliderFloat("Metallic", &m.metallic, 0.0f, 1.0f);
-        ImGui::SliderFloat("Roughness", &m.roughness, 0.02f, 1.0f);
-        bool checker = (m.flags & RenderMaterial::FLAG_CHECKERBOARD) != 0;
-        if (ImGui::Checkbox("Checkerboard", &checker))
-            m.flags = checker ? (m.flags | RenderMaterial::FLAG_CHECKERBOARD)
-                              : (m.flags & ~RenderMaterial::FLAG_CHECKERBOARD);
-    }
+        nlohmann::json preVisit =
+            undo ? undo->componentState(ctx.world, selected, entry.name)
+                 : nlohmann::json();
 
-    if (spec && spec->meshFile.empty() && !cam) {
-        float size[3] = {static_cast<float>(spec->size.x),
-                         static_cast<float>(spec->size.y),
-                         static_cast<float>(spec->size.z)};
-        if (ImGui::DragFloat3("Size", size, 0.05f, 0.05f, 100.0f)) {
-            spec->size = Vec3(size[0], size[1], size[2]);
-            // Rebuild the mesh at the new size (the old upload leaks — see
-            // docs/TECH_DEBT.md mesh-cache item).
-            RenderMesh mesh = MeshBuilder::shape(spec->shape, spec->size);
-            if (!mesh.vertices.empty() && r)
-                r->mesh = ctx.renderer.uploadMesh(mesh);
+        ImGuiPropertyVisitor ui;
+        entry.visit(ctx.world, selected, ui);
+
+        if (ui.edited() && entry.onEdited)
+            entry.onEdited(ctx.world, selected, ui.editedLabel());
+
+        // Undo brackets one continuous interaction: state at activation,
+        // recorded when the widget commits (drag release, typing done).
+        if (undo) {
+            if (ui.interactionStarted()) {
+                pendingEdit = {true, selected, entry.name, std::move(preVisit)};
+            }
+            if (ui.interactionFinished() && pendingEdit.active &&
+                pendingEdit.entity == selected &&
+                pendingEdit.component == entry.name) {
+                undo->recordFieldEdit(
+                    selected, entry.name, ui.editedLabel(),
+                    std::move(pendingEdit.before),
+                    undo->componentState(ctx.world, selected, entry.name));
+                pendingEdit.active = false;
+            }
         }
-    }
 
-    if (spec) {
-        const char* MOTIONS[] = {"none", "static", "dynamic", "kinematic"};
-        int motion = !spec->hasPhysics ? 0
-                     : spec->motion == "dynamic"   ? 2
-                     : spec->motion == "kinematic" ? 3 : 1;
-        if (ImGui::Combo("Physics", &motion, MOTIONS, 4)) {
-            spec->hasPhysics = motion != 0;
-            if (motion != 0) spec->motion = MOTIONS[motion];
+        if (entry.removeFrom && ImGui::SmallButton("Remove")) {
+            if (undo) undo->recordComponentRemove(ctx.world, selected, entry.name);
+            entry.removeFrom(ctx.world, selected);
         }
+        ImGui::PopID();
     }
 
-    if (ImGui::Button("Duplicate")) selected = duplicateSelected(ctx);
+    // Add Component: every registered type the entity lacks and that allows
+    // menu attachment.
+    if (ImGui::Button("Add Component..."))
+        ImGui::OpenPopup("editor_add_component");
+    if (ImGui::BeginPopup("editor_add_component")) {
+        for (const auto& entry : entries) {
+            if (!entry.addTo || entry.has(ctx.world, selected)) continue;
+            if (ImGui::Selectable(entry.name.c_str())) {
+                entry.addTo(ctx.world, selected);
+                if (undo)
+                    undo->recordComponentAdd(ctx.world, selected, entry.name);
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::Button("Duplicate")) {
+        selected = duplicateSelected(ctx);
+        if (undo && selected.valid()) undo->recordCreate(selected);
+    }
     ImGui::SameLine();
     if (ImGui::Button("Delete")) {
+        if (undo) undo->recordDelete(ctx.world, selected);
         ctx.world.destroy(selected);
         selected = Entity{};
     }
@@ -400,6 +459,7 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     Transform* t = ctx.world.get<Transform>(selected);
     if (!t) {
         gizmoBusy = false;
+        gizmoWasUsing = false;
         return;
     }
 
@@ -423,11 +483,17 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     ImGuizmo::Manipulate(viewF, projF, op, ImGuizmo::WORLD, modelF);
     gizmoBusy = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
 
-    if (ImGuizmo::IsUsing()) {
+    bool usingNow = ImGuizmo::IsUsing();
+    if (usingNow) {
+        if (!gizmoWasUsing) gizmoDragStart = *t;   // drag begins this frame
         matrixToTransform(fromGizmo(modelF), *t);
         if (auto* prev = ctx.world.get<PrevTransform>(selected))
             prev->value = *t;
+    } else if (gizmoWasUsing && undo) {
+        // Drag ended: one undo entry spanning the whole manipulation.
+        undo->recordTransformEdit(selected, gizmoDragStart, *t);
     }
+    gizmoWasUsing = usingNow;
 #endif
 }
 
@@ -473,6 +539,9 @@ void EditorSystem::render(FrameContext& ctx) {
     (void)cameras;
     (void)gizmoOp;
     (void)modelPath;
+    (void)gizmoWasUsing;
+    (void)gizmoDragStart;
+    (void)pendingEdit;
 }
 void EditorSystem::drawToolbar(FrameContext&) {}
 void EditorSystem::drawInspector(FrameContext&) {}

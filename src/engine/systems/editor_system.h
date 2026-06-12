@@ -5,7 +5,9 @@
 #include "camera_system.h"
 #include "../app_state.h"
 #include "../editor_bridge.h"
+#include "../undo_stack.h"
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace engine {
@@ -36,6 +38,25 @@ public:
     void setGizmoOp(int op) { gizmoOp = op; }
     int gizmoOpMode() const { return gizmoOp; }
 
+    // The edit session's command log (created on first use, lives until the
+    // state ends). The Qt shell reaches it through the bridge. Inline, like
+    // every member the bridge calls: pulling editor_system.o into renderer-
+    // less hosts (run_tests) would drag the whole state stack with it.
+    UndoStack* undoStack() {
+        if (!undo) undo = std::make_unique<UndoStack>(componentRegistry());
+        return undo.get();
+    }
+    // The component vocabulary the inspector renders from: the bridge's
+    // registry when a shell is connected, a private one otherwise.
+    ComponentRegistry& componentRegistry() {
+        if (bridge) return bridge->registry();
+        if (!fallbackRegistry) {
+            fallbackRegistry = std::make_unique<ComponentRegistry>();
+            registerEngineComponents(*fallbackRegistry);
+        }
+        return *fallbackRegistry;
+    }
+
 private:
     void pickAtCursor(FrameContext& ctx);
     void frameSelected(FrameContext& ctx);
@@ -53,9 +74,24 @@ private:
     PlayFactory makePlayState;
     EditorBridge* bridge = nullptr;
 
+    // Declared before `undo`, which holds a reference into whichever
+    // registry componentRegistry() picked.
+    std::unique_ptr<ComponentRegistry> fallbackRegistry;
+    std::unique_ptr<UndoStack> undo;
+
     Entity selected;
     bool prevMouseLeft = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
+    bool gizmoWasUsing = false; // drag-edge detection for undo recording
+    Transform gizmoDragStart;
+    // One continuous inspector interaction (drag/typing) being bracketed for
+    // undo: component state at activation, committed on release.
+    struct PendingEdit {
+        bool active = false;
+        Entity entity;
+        std::string component;
+        nlohmann::json before;
+    } pendingEdit;
     int gizmoOp = 0;            // 0 translate, 1 rotate, 2 scale
     char modelPath[256] = "assets/models/";
 };

@@ -45,6 +45,8 @@ add_library(engine_core STATIC
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
+    src/engine/imgui_properties.cpp
+    src/engine/undo_stack.cpp
     src/engine/day_night_cycle.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
@@ -145,6 +147,7 @@ add_executable(run_tests
     tests/test_level_writer.cpp
     tests/test_hosted_window.cpp
     tests/test_properties.cpp
+    tests/test_undo.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp

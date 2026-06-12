@@ -1,6 +1,7 @@
 #include "camera_store.h"
 
 #include "components.h"
+#include "property_json.h"
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -37,19 +38,11 @@ bool CameraStore::load(const std::string& path, World& world) {
 
         SceneCamera cam;
         cam.name = c.value("name", std::string("Camera"));
+        // The lens block is the property layer's JSON form (FieldMeta ids
+        // match this file's historical keys); missing keys keep defaults.
         if (c.contains("lens")) {
-            const auto& l = c["lens"];
-            cam.lens.focalLength = l.value("focalLength", cam.lens.focalLength);
-            cam.lens.sensorHeight = l.value("sensorHeight", cam.lens.sensorHeight);
-            cam.lens.fStop = l.value("fStop", cam.lens.fStop);
-            cam.lens.focusDistance = l.value("focusDistance", cam.lens.focusDistance);
-            cam.lens.nearPlane = l.value("near", cam.lens.nearPlane);
-            cam.lens.farPlane = l.value("far", cam.lens.farPlane);
-            cam.lens.distortionK1 = l.value("k1", cam.lens.distortionK1);
-            cam.lens.distortionK2 = l.value("k2", cam.lens.distortionK2);
-            cam.lens.chromaticAberration =
-                l.value("chromaticAberration", cam.lens.chromaticAberration);
-            cam.lens.vignette = l.value("vignette", cam.lens.vignette);
+            JsonReadVisitor reader(c["lens"]);
+            describeProperties(cam.lens, reader);
         }
 
         Entity e = world.create();
@@ -71,18 +64,10 @@ bool CameraStore::save(const std::string& path, World& world) {
             c["name"] = cam.name;
             c["position"] = vec3ToJson(t.position);
             c["forward"] = vec3ToJson(t.orientation.rotate(Vec3(0, 0, -1)));
-            c["lens"] = {
-                {"focalLength", cam.lens.focalLength},
-                {"sensorHeight", cam.lens.sensorHeight},
-                {"fStop", cam.lens.fStop},
-                {"focusDistance", cam.lens.focusDistance},
-                {"near", cam.lens.nearPlane},
-                {"far", cam.lens.farPlane},
-                {"k1", cam.lens.distortionK1},
-                {"k2", cam.lens.distortionK2},
-                {"chromaticAberration", cam.lens.chromaticAberration},
-                {"vignette", cam.lens.vignette},
-            };
+            json lens;
+            JsonWriteVisitor writer(lens);
+            describeProperties(cam.lens, writer);
+            c["lens"] = std::move(lens);
             cameras.push_back(c);
         });
 

@@ -47,6 +47,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_level_writer.cpp \
 	$(TEST_DIR)/test_hosted_window.cpp \
 	$(TEST_DIR)/test_properties.cpp \
+	$(TEST_DIR)/test_undo.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
@@ -69,6 +70,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/properties.cpp \
 	$(SRC_DIR)/engine/component_registry.cpp \
 	$(SRC_DIR)/engine/property_json.cpp \
+	$(SRC_DIR)/engine/undo_stack.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/camera.cpp \

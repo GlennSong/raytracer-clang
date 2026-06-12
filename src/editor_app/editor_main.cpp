@@ -300,6 +300,14 @@ int main(int argc, char** argv) {
     });
     fileMenu->addSeparator();
     fileMenu->addAction("&Quit", &qtApp, &QApplication::quit);
+
+    // Edit menu: the engine-side command log, reachable with the native
+    // chords. Enabled state mirrors the bridge on the panel timer below.
+    auto* editMenu = mainWindow.menuBar()->addMenu("&Edit");
+    auto* undoAction = editMenu->addAction("&Undo", [&]() { bridge.undo(); });
+    undoAction->setShortcut(QKeySequence::Undo);
+    auto* redoAction = editMenu->addAction("&Redo", [&]() { bridge.redo(); });
+    redoAction->setShortcut(QKeySequence::Redo);
     mainWindow.statusBar()->showMessage(
         "Click selects | 1/2/3 move/rotate/scale | F free-fly | C place camera");
 
@@ -377,6 +385,8 @@ int main(int argc, char** argv) {
         panels.refresh();
         playAction->setEnabled(bridge.attached());
         stopAction->setEnabled(!bridge.attached());
+        undoAction->setEnabled(bridge.canUndo());
+        redoAction->setEnabled(bridge.canRedo());
     });
     panelTimer.start(150);
 

@@ -126,7 +126,9 @@ TEST_CASE(level_writer_serializes_document_entities_only) {
     CHECK_APPROX(ent["orientation"]["axis"][1].get<double>(), 1.0, 1e-9);
     CHECK_APPROX(ent["material"]["albedo"][0].get<double>(), 0.9, 1e-6);
     CHECK_APPROX(ent["material"]["metallic"].get<double>(), 0.5, 1e-6);
-    CHECK(ent["material"]["flags"][0] == "checkerboard");
+    // Property-layer JSON spells flags as bools (the loaders also still read
+    // the pre-migration "flags" array form).
+    CHECK(ent["material"]["checkerboard"].get<bool>());
     CHECK(ent["physics"]["motion"] == "dynamic");
     CHECK_APPROX(ent["physics"]["friction"].get<double>(), 0.7, 1e-9);
 }

@@ -69,7 +69,55 @@ bool EditorBridge::saveDocument() {
 void EditorBridge::deleteEntity(Entity entity) {
     if (!worldPtr || !worldPtr->alive(entity)) return;
     if (selected() == entity) select(Entity{});
+    if (UndoStack* undo = undoStack()) undo->recordDelete(*worldPtr, entity);
     worldPtr->destroy(entity);
+}
+
+void EditorBridge::addComponent(Entity entity, const std::string& componentName) {
+    ComponentRegistry::Entry* entry = registry_.find(componentName);
+    if (!worldPtr || !worldPtr->alive(entity) || !entry || !entry->addTo ||
+        entry->has(*worldPtr, entity))
+        return;
+    entry->addTo(*worldPtr, entity);
+    if (UndoStack* undo = undoStack())
+        undo->recordComponentAdd(*worldPtr, entity, componentName);
+}
+
+void EditorBridge::removeComponent(Entity entity,
+                                   const std::string& componentName) {
+    ComponentRegistry::Entry* entry = registry_.find(componentName);
+    if (!worldPtr || !worldPtr->alive(entity) || !entry || !entry->removeFrom ||
+        !entry->has(*worldPtr, entity))
+        return;
+    if (UndoStack* undo = undoStack())
+        undo->recordComponentRemove(*worldPtr, entity, componentName);
+    entry->removeFrom(*worldPtr, entity);
+}
+
+UndoStack* EditorBridge::undoStack() {
+    return editorPtr ? editorPtr->undoStack() : nullptr;
+}
+
+bool EditorBridge::canUndo() {
+    UndoStack* undo = undoStack();
+    return undo && undo->canUndo();
+}
+
+bool EditorBridge::canRedo() {
+    UndoStack* undo = undoStack();
+    return undo && undo->canRedo();
+}
+
+void EditorBridge::undo() {
+    UndoStack* undo = undoStack();
+    if (!undo || !worldPtr) return;
+    select(undo->undo(*worldPtr));
+}
+
+void EditorBridge::redo() {
+    UndoStack* undo = undoStack();
+    if (!undo || !worldPtr) return;
+    select(undo->redo(*worldPtr));
 }
 
 }  // namespace engine
