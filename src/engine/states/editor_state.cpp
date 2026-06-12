@@ -28,12 +28,16 @@ void EditorState::onEnter(FrameContext& ctx) {
     // (play-session spawns, physics aftermath) and load fresh.
     ctx.world.destroyAll();
 
-    // Editor camera: free-fly with buttonless mouse look, never player-pinned.
+    // Editor camera: scene-view style — right-drag looks, WASD/QE fly,
+    // scroll dollies, left click is selection. (Buttonless free-look is the
+    // in-game freecam's behavior, not the editor's: it fights the mouse.)
     ctx.settings.setString("cameraMode", "fly");
-    ctx.settings.setBool("cameraFreeLook", true);
+    ctx.settings.setBool("cameraFreeLook", false);
+    ctx.settings.setBool("cameraDetachEnabled", false);   // F = frame selected
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
 
-    if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view)) {
+    if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view,
+                           /*editorMode=*/true)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
     PlayingState::onEnter(ctx);

@@ -35,6 +35,10 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     eye += f * (input.moveForward * speed);
     eye += r * (input.moveRight * speed);
     eye += worldUp * (input.moveUp * speed);
+
+    // Scroll dollies along the view direction (editor scene-view feel; the
+    // wheel was previously unused in fly mode).
+    eye += f * (input.zoomDelta * 0.8);
 }
 
 CameraState FlyCameraController::cameraState(float aspect) const {

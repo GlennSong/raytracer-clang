@@ -35,8 +35,20 @@ native Inspector (position/scale spin boxes, delete), an Assets dock
 (QFileSystemModel over assets/, double-click a .json opens that level), and
 a toolbar with Save / Play / Stop driving the document loop through
 Application::requestState. Panels poll the bridge (150ms) and gray out while
-playing. Next: A4 (asset import + first cooking step) and inspector depth
-(material/lens editing native-side); undo's chokepoint is the bridge.
+playing. A4's first slice (Import Asset with glTF/HDR validation) is in.
+
+Arena-building pass: the player is now a placeable **PlayerSpawn** entity in
+the editor (green capsule gizmo, pickable, in the hierarchy); LevelWriter
+syncs its Transform into the level's "player" block, which the game loader
+consumes unchanged — move the capsule, hit Play, start there. Editor camera
+is scene-view style (right-drag looks, WASD/QE fly, scroll dollies, F frames
+the selection; buttonless free-look stays a game-freecam behavior; the F
+detach toggle is disabled in editor states via cameraDetachEnabled).
+
+Next: the describe-function/visitor property layer (single source of truth
+for inspectors + serialization), then the component registry for Unity-style
+per-entity component sections and Add Component. Undo's chokepoint is the
+bridge.
 
 ---
 

@@ -45,6 +45,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // Always start from the document (edit mode may have just rewritten it).
     ctx.world.destroyAll();
     ctx.settings.setBool("cameraFreeLook", false);
+    ctx.settings.setBool("cameraDetachEnabled", true);
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }

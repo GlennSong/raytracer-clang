@@ -65,6 +65,11 @@ struct SourceSpec {
     bool lockRotation = false;
 };
 
+// Where the player starts (editor-app plan): in the editor the spawn is a
+// real, pickable, gizmo-movable entity; LevelWriter syncs its Transform back
+// into the level's "player" block, which the game loader consumes unchanged.
+struct PlayerSpawn {};
+
 enum class ColliderShape { Box, Sphere, Capsule };
 struct Collider {
     ColliderShape shape = ColliderShape::Box;

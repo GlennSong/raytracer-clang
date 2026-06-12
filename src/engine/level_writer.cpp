@@ -92,6 +92,12 @@ bool LevelWriter::save(const std::string& path, World& world) {
         });
     root["entities"] = entities;
 
+    // The editor's PlayerSpawn entity writes back into the "player" block the
+    // game loader reads — moving the green capsule moves where you start.
+    world.each<Transform, PlayerSpawn>([&](Entity, Transform& t, PlayerSpawn&) {
+        root["player"]["position"] = vec3ToJson(t.position);
+    });
+
     std::ofstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Cannot write level: " << path;

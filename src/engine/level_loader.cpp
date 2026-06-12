@@ -299,6 +299,23 @@ static void loadLighting(const json& lighting, RenderView& view) {
         l.ambientTint = parseVec3(lighting["ambientTint"], l.ambientTint);
 }
 
+static void loadPlayerSpawn(const json& player, World& world,
+                            Renderer& renderer) {
+    Entity e = world.create();
+    Transform t;
+    if (player.contains("position"))
+        t.position = parseVec3(player["position"]);
+    world.add<Transform>(e, t);
+    world.add<PrevTransform>(e, PrevTransform{t});
+    world.add<PlayerSpawn>(e);
+
+    Renderable gizmo;
+    gizmo.mesh = renderer.uploadMesh(MeshBuilder::capsule(0.3f, 0.8f));
+    gizmo.material.albedo = Vec3(0.2, 0.8, 0.3);   // green = "you start here"
+    gizmo.material.roughness = 0.5f;
+    world.add<Renderable>(e, gizmo);
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view) {
     std::ifstream file(path);
@@ -333,7 +350,8 @@ bool LevelLoader::load(const std::string& path,
         loadEntities(root["entities"], world, renderer, levelDir);
 
     if (root.contains("player"))
-        loadPlayer(root["player"], world);
+        (editorMode ? loadPlayerSpawn(root["player"], world, renderer)
+                    : loadPlayer(root["player"], world));
 
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);

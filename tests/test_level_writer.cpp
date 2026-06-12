@@ -232,3 +232,28 @@ TEST_CASE(model_importer_validate_checks_gltf) {
     std::remove(path);
     CHECK(ok);
 }
+
+TEST_CASE(level_writer_syncs_player_spawn_into_player_block) {
+    TmpFile cleanup;
+    {
+        std::ofstream f(TMP_PATH);
+        f << R"({ "version": 1,
+                  "player": { "position": [0, 1, 0], "collider": { "radius": 0.3 } },
+                  "entities": [] })";
+    }
+
+    World world;
+    Entity spawn = world.create();
+    Transform t;
+    t.position = Vec3(7, 2, -3);
+    world.add<Transform>(spawn, t);
+    world.add<PlayerSpawn>(spawn);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    // Position follows the moved spawn entity; the rest of the block survives.
+    CHECK_APPROX(root["player"]["position"][0].get<double>(), 7.0, 1e-9);
+    CHECK_APPROX(root["player"]["position"][2].get<double>(), -3.0, 1e-9);
+    CHECK_APPROX(root["player"]["collider"]["radius"].get<double>(), 0.3, 1e-9);
+}

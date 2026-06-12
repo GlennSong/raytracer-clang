@@ -142,3 +142,18 @@ TEST_CASE(orbit_projection_toggle) {
     // ortho height tracks the orbit distance for matched framing.
     CHECK(s.orthoHeight > 0.0f);
 }
+
+TEST_CASE(fly_scroll_dollies_along_view) {
+    FlyCameraController fly;
+    fly.eye = Vec3(0, 0, 0);
+
+    CameraInput in;
+    in.zoomDelta = 2.0;          // two wheel notches forward
+    fly.update(in, 0.016);
+    CHECK(fly.eye.z < -1.0);     // moved along -Z (the view direction)
+
+    fly.positionLocked = true;   // pinned first-person: scroll must not move it
+    Vec3 before = fly.eye;
+    fly.update(in, 0.016);
+    CHECK_APPROX(fly.eye.z, before.z, 1e-12);
+}

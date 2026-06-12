@@ -79,6 +79,7 @@ void CameraSystem::onStart(FrameContext& ctx) {
     // Editor-style states opt into buttonless mouse look (the F detach toggle
     // flips it at runtime either way).
     freeLook = ctx.settings.getBool("cameraFreeLook", false);
+    detachEnabled = ctx.settings.getBool("cameraDetachEnabled", true);
 
     // Saved placed cameras (sidecar JSON next to the level; the game state
     // sets the path before systems start). Loaded entities need gizmos here —
@@ -125,7 +126,7 @@ void CameraSystem::update(FrameContext& ctx) {
     // Detach/re-attach the fly camera (game states pin it to the player via
     // positionLocked; see PlayerSystem). Detaching switches to fly so the
     // freecam is immediately steerable.
-    if (ctx.actions.pressed("cam_detach")) {
+    if (detachEnabled && ctx.actions.pressed("cam_detach")) {
         fly.positionLocked = !fly.positionLocked;
         freeLook = !fly.positionLocked;
         if (!fly.positionLocked) {

@@ -52,6 +52,10 @@ std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
         [&](Entity e, Transform&, SceneCamera& cam) {
             out.push_back({e, cam.name, true});
         });
+    worldPtr->each<Transform, PlayerSpawn>(
+        [&](Entity e, Transform&, PlayerSpawn&) {
+            out.push_back({e, "Player Spawn", false});
+        });
     return out;
 }
 

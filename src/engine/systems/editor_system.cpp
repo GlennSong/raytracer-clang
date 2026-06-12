@@ -119,7 +119,24 @@ void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("gizmo_translate", KeyCode::Num1);
     ctx.actions.bindButton("gizmo_rotate", KeyCode::Num2);
     ctx.actions.bindButton("gizmo_scale", KeyCode::Num3);
+    ctx.actions.bindButton("editor_frame", KeyCode::F);   // detach is disabled here
     if (bridge) bridge->attach(&ctx.world, this, levelFile);
+}
+
+void EditorSystem::frameSelected(FrameContext& ctx) {
+    Transform* t = ctx.world.get<Transform>(selected);
+    if (!t) return;
+    Renderable* r = ctx.world.get<Renderable>(selected);
+    Real radius = 1.0;
+    if (r) {
+        BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
+        Real maxScale = std::max({std::abs(t->scale.x), std::abs(t->scale.y),
+                                  std::abs(t->scale.z)});
+        radius = std::max(bounds.radius * maxScale, Real(0.5));
+    }
+    // Keep the current view direction; back off far enough to see the object.
+    FlyCameraController& fly = cameras.flyController();
+    fly.eye = t->position - fly.forward() * (radius * 3.5);
 }
 
 void EditorSystem::onStop(FrameContext&) {
@@ -132,6 +149,9 @@ void EditorSystem::update(FrameContext& ctx) {
     if (ctx.actions.pressed("gizmo_translate")) gizmoOp = 0;
     if (ctx.actions.pressed("gizmo_rotate")) gizmoOp = 1;
     if (ctx.actions.pressed("gizmo_scale")) gizmoOp = 2;
+
+    if (ctx.actions.pressed("editor_frame") && ctx.world.alive(selected))
+        frameSelected(ctx);
 
     bool click = ctx.input.mouseLeftDown && !prevMouseLeft;
     prevMouseLeft = ctx.input.mouseLeftDown;
