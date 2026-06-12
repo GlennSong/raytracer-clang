@@ -299,6 +299,20 @@ for ground truth. Late-stage milestone: drive a camera's pose from an iPhone
 **Depends on:** Nothing hard; ImGui (1.1) for the panel, level format (2.3-era
 loader) for persistence.
 
+### 3.5 Edit mode (in-engine level editor)
+**Status:** Planned — see `docs/edit-mode-plan.md` for the full phased plan.
+**Why:** A Blender-style editing loop — simulation stopped, free editor view,
+click-to-select, transform gizmos, an Add menu (primitives / glTF / cameras),
+then a Play button straight into the running game. The level JSON becomes the
+document: Play saves-then-loads it, so every playtest starts from exactly what
+was built. Most infrastructure exists (state stack, editor cameras, MeshBuilder,
+glTF import, inspector pattern, JSON persistence); the genuinely new pieces are
+a level writer + authoring metadata, mouse picking, and gizmos (vendored
+ImGuizmo behind the ADR-0011 pattern).
+
+**Depends on:** ImGui (1.1), level format. Unblocks comfortable authoring for
+procgen tiers (placing generators, tuning scenes).
+
 ---
 
 ## Tier 4 — Procedural Generation
