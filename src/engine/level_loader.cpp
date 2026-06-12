@@ -62,29 +62,8 @@ static MeshHandle getOrCreateMesh(
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
 
-    RenderMesh mesh;
-    if (shape == "box") {
-        mesh = MeshBuilder::box(sz);
-    } else if (shape == "sphere") {
-        mesh = MeshBuilder::sphere(static_cast<float>(sz.x));
-    } else if (shape == "cylinder") {
-        mesh = MeshBuilder::cylinder(static_cast<float>(sz.x),
-                                     static_cast<float>(sz.y));
-    } else if (shape == "plane") {
-        mesh = MeshBuilder::plane(static_cast<float>(sz.x),
-                                  static_cast<float>(sz.y));
-    } else if (shape == "cone") {
-        mesh = MeshBuilder::cone(static_cast<float>(sz.x),
-                                 static_cast<float>(sz.y));
-    } else if (shape == "wedge") {
-        mesh = MeshBuilder::wedge(sz);
-    } else if (shape == "torus") {
-        mesh = MeshBuilder::torus(static_cast<float>(sz.x),
-                                  static_cast<float>(sz.y));
-    } else if (shape == "capsule") {
-        mesh = MeshBuilder::capsule(static_cast<float>(sz.x),
-                                    static_cast<float>(sz.y));
-    } else {
+    RenderMesh mesh = MeshBuilder::shape(shape, sz);
+    if (mesh.vertices.empty()) {
         LOG_ERROR << "Unknown shape: " << shape;
         return MeshHandle{};
     }
@@ -150,6 +129,22 @@ static void addPhysics(Entity e, const json& ent, const std::string& shape,
     world.add<RigidBody>(e, rb);
 }
 
+// Authoring provenance for the editor's LevelWriter (docs/edit-mode-plan.md).
+static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
+    SourceSpec spec;
+    spec.shape = shape;
+    spec.size = parseVec3(ent.value("size", json()), Vec3(1, 1, 1));
+    if (ent.contains("physics")) {
+        const auto& phys = ent["physics"];
+        spec.hasPhysics = true;
+        spec.motion = phys.value("motion", "static");
+        spec.friction = phys.value("friction", 0.5);
+        spec.restitution = phys.value("restitution", 0.0);
+        spec.lockRotation = phys.value("lockRotation", false);
+    }
+    return spec;
+}
+
 static void loadEntities(const json& entities, World& world, Renderer& renderer,
                          const std::string& levelDir) {
     std::unordered_map<MeshKey, MeshHandle, MeshKeyHash> meshCache;
@@ -183,8 +178,12 @@ static void loadEntities(const json& entities, World& world, Renderer& renderer,
                 }
                 world.add<Renderable>(e, r);
 
-                if (i == 0)
+                if (i == 0) {
                     addPhysics(e, ent, "box", world);
+                    SourceSpec spec = buildSourceSpec(ent, "");
+                    spec.meshFile = ent["mesh"].get<std::string>();
+                    world.add<SourceSpec>(e, spec);
+                }
             }
             continue;
         }
@@ -194,6 +193,7 @@ static void loadEntities(const json& entities, World& world, Renderer& renderer,
 
         Entity e = world.create();
         createEntityCommon(e, ent, world);
+        world.add<SourceSpec>(e, buildSourceSpec(ent, shape));
 
         MeshHandle meshHandle = getOrCreateMesh(shape, sizeJ, renderer, meshCache);
         Renderable r;

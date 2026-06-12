@@ -5,6 +5,12 @@
 
 namespace engine {
 
+StateTransition::StateTransition() = default;
+StateTransition::~StateTransition() = default;
+void StateTransition::replaceWith(std::unique_ptr<AppState> state) {
+    next = std::move(state);
+}
+
 Application::Application() = default;
 Application::~Application() = default;
 
@@ -43,11 +49,13 @@ void Application::popState() {
 }
 
 FrameContext Application::makeContext() {
+    int winW = 0, winH = 0;
+    window.getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, view, clock, settingsStore, jobs,
         window.getInput(), inputMap, playerInputs,
-        framebufferWidth, framebufferHeight,
-        frameDelta, interpolation, quit
+        framebufferWidth, framebufferHeight, winW, winH,
+        frameDelta, interpolation, quit, transitionRequest
     };
 }
 
@@ -135,6 +143,14 @@ void Application::run() {
         {
             FrameContext ctx = makeContext();
             stateStack.applyPending(ctx);
+
+            // A requested state swap (editor Play / game Stop) runs as
+            // pop-then-push so onExit/onEnter bracket the switch cleanly.
+            if (transitionRequest.pending()) {
+                stateStack.popState();
+                stateStack.pushState(std::move(transitionRequest.next));
+                stateStack.applyPending(ctx);
+            }
         }
     }
 

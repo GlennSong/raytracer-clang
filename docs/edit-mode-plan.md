@@ -7,6 +7,17 @@ entity — and a **Play** button that drops straight into the running game.
 Companion to `docs/virtual-camera-plan.md` (the camera workflow becomes one
 citizen of this editor). Roadmap cross-reference: Tier 3.5.
 
+**Status:** E1-E5 implemented in one pass: EditorState + StateTransition
+(Play saves the document and swaps to the game; Esc swaps back),
+SourceSpec + LevelWriter (entities-array patch, round-trip tested),
+bounding-sphere picking with a screen-space selection ring, the inspector
+(transform/material/size/physics, duplicate/delete), the Add menu
+(primitives, glTF by path, cameras), and ImGuizmo gizmos (vendored submodule,
+1/2/3 = move/rotate/scale, gracefully absent if the submodule isn't fetched).
+**Needs on-device verification on macOS** — especially ImGuizmo's matrix
+conventions and retina mouse-pick coordinates. E6 (undo, grid, multi-select)
+not started.
+
 ---
 
 ## The core architectural decision: the level file is the document

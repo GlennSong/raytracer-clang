@@ -16,10 +16,13 @@
 using namespace engine;
 
 ArenaState::ArenaState(Window& window, Renderer& renderer,
-                       const std::string& levelFile)
-    : PlayingState(window), arenaRenderer(renderer), levelFile(levelFile)
+                       const std::string& levelFile,
+                       EditorFactory makeEditorState)
+    : PlayingState(window), arenaRenderer(renderer), levelFile(levelFile),
+      makeEditorState(std::move(makeEditorState))
 {
-    addSystem<DevControlSystem>();
+    // With an editor to return to, Esc stops the playtest instead of quitting.
+    addSystem<DevControlSystem>(this->makeEditorState == nullptr);
     auto& camSys = addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = addSystem<PhysicsSystem>();
@@ -32,7 +35,16 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<CameraPanelSystem>(camSys);
 }
 
+void ArenaState::update(FrameContext& ctx) {
+    PlayingState::update(ctx);
+    if (makeEditorState && ctx.actions.pressed("quit"))
+        ctx.transition.replaceWith(makeEditorState());
+}
+
 void ArenaState::onEnter(FrameContext& ctx) {
+    // Always start from the document (edit mode may have just rewritten it).
+    ctx.world.destroyAll();
+    ctx.settings.setBool("cameraFreeLook", false);
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }

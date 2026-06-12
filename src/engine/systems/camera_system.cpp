@@ -76,6 +76,10 @@ void CameraSystem::onStart(FrameContext& ctx) {
     active = flyActive ? static_cast<CameraController*>(&fly)
                        : static_cast<CameraController*>(&orbit);
 
+    // Editor-style states opt into buttonless mouse look (the F detach toggle
+    // flips it at runtime either way).
+    freeLook = ctx.settings.getBool("cameraFreeLook", false);
+
     // Saved placed cameras (sidecar JSON next to the level; the game state
     // sets the path before systems start). Loaded entities need gizmos here —
     // the store is renderer-free.

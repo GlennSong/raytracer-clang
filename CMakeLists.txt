@@ -59,6 +59,7 @@ add_executable(run_tests
     tests/test_lens.cpp
     tests/test_level_scene.cpp
     tests/test_pbr_lighting.cpp
+    tests/test_level_writer.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -73,6 +74,7 @@ add_executable(run_tests
     src/engine/camera/fly_camera_controller.cpp
     src/engine/camera/scene_camera.cpp
     src/engine/camera_store.cpp
+    src/engine/level_writer.cpp
     src/engine/mesh_builder.cpp
     src/camera.cpp
     src/log.cpp
@@ -174,7 +176,10 @@ set(VIEWER_SOURCES
     src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/camera_panel_system.cpp
+    src/engine/systems/editor_system.cpp
+    src/engine/states/editor_state.cpp
     src/engine/camera_store.cpp
+    src/engine/level_writer.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -279,6 +284,14 @@ if(RT_ENABLE_IMGUI)
             ${IMGUI_DIR}/backends/imgui_impl_metal.mm
             PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
+    endif()
+    set(IMGUIZMO_DIR ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
+    if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
+        target_sources(viewer PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
+        target_include_directories(viewer SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+    else()
+        message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
+                        "run: git submodule update --init third_party/ImGuizmo")
     endif()
     target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
     target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)

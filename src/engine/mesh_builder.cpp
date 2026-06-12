@@ -3,6 +3,20 @@
 
 namespace engine {
 
+RenderMesh MeshBuilder::shape(const std::string& name, Vec3 size) {
+    float x = static_cast<float>(size.x);
+    float y = static_cast<float>(size.y);
+    if (name == "box")      return box(size);
+    if (name == "sphere")   return sphere(x);
+    if (name == "cylinder") return cylinder(x, y);
+    if (name == "plane")    return plane(x, y);
+    if (name == "cone")     return cone(x, y);
+    if (name == "wedge")    return wedge(size);
+    if (name == "torus")    return torus(x, y);
+    if (name == "capsule")  return capsule(x, y);
+    return RenderMesh{};
+}
+
 RenderMesh MeshBuilder::box(Vec3 size) {
     RenderMesh mesh;
     float hx = static_cast<float>(size.x * 0.5);

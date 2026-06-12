@@ -67,6 +67,7 @@ private:
     double frameDelta = 0.0;
     double interpolation = 0.0;
     bool quit = false;
+    StateTransition transitionRequest;
 };
 
 

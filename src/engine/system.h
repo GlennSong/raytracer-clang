@@ -10,8 +10,24 @@
 #include "../renderer/settings.h"
 #include "../job_system.h"
 #include <vector>
+#include <memory>
 
 namespace engine {
+
+// End-of-frame request to swap the active app state (e.g. the editor's Play
+// button, the game's Stop). Application pops the current state and pushes
+// `next` after applyPending — states never touch the stack directly.
+class AppState;
+struct StateTransition {
+    std::unique_ptr<AppState> next;
+
+    // Special members live in application.cpp, where AppState is complete —
+    // this header is included from places that never see app_state.h.
+    StateTransition();
+    ~StateTransition();
+    void replaceWith(std::unique_ptr<AppState> state);
+    bool pending() const { return next != nullptr; }
+};
 
 // Shared "what to render this frame" resource. Systems that produce view data
 // (camera, lighting, exposure) write it; the render system reads it. A minimal
@@ -40,9 +56,14 @@ struct FrameContext {
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)
     int framebufferWidth;
     int framebufferHeight;
+    // Logical window size — mouse coordinates live in this space (it differs
+    // from the framebuffer by the DPI scale on retina displays).
+    int windowWidth;
+    int windowHeight;
     double frameDelta;
     double interpolation;
     bool& quit;
+    StateTransition& transition;   // end-of-frame state swap (editor <-> play)
 };
 
 // A unit of engine behaviour, ticked by Application each frame. Override only

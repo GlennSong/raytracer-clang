@@ -86,6 +86,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
 
     int skipped = 0;
     for (const auto& ent : root.value("entities", json::array())) {
+        if (ent.contains("mesh")) {
+            skipped++;   // glTF models aren't tessellated offline yet
+            continue;
+        }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",
                                           "cone", "wedge", "torus", "capsule"};
         std::string shape = ent.value("shape", "box");

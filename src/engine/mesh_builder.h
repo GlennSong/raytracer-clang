@@ -2,10 +2,16 @@
 #define RAYTRACER_ENGINE_MESH_BUILDER_H
 
 #include "../renderer/renderer.h"
+#include <string>
 
 namespace engine {
 
 struct MeshBuilder {
+    // Level-format shape names ("box", "sphere", ...) -> mesh, with the same
+    // size semantics as the level loader (x = radius for sphere/cylinder/...,
+    // y = height where applicable). Empty mesh for unknown names.
+    static RenderMesh shape(const std::string& name, Vec3 size);
+
     static RenderMesh box(Vec3 size);
     static RenderMesh sphere(float radius, int stacks = 32, int slices = 64);
     static RenderMesh cylinder(float radius, float height, int slices = 32);

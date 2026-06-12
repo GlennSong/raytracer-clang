@@ -320,6 +320,47 @@ struct Quat {
         return Quat(n.x * s, n.y * s, n.z * s, std::cos(half));
     }
 
+    // Orientation from the (orthonormal) upper-3x3 of a column-vector-
+    // convention matrix — e.g. a gizmo-manipulated transform with the scale
+    // divided out. Shepperd's method: pick the largest diagonal pivot for
+    // numerical stability.
+    static Quat fromRotationMatrix(const Mat4& m) {
+        Real trace = m.m[0][0] + m.m[1][1] + m.m[2][2];
+        Quat q;
+        if (trace > 0.0) {
+            Real s = std::sqrt(trace + 1.0) * 2.0;
+            q = Quat((m.m[2][1] - m.m[1][2]) / s, (m.m[0][2] - m.m[2][0]) / s,
+                     (m.m[1][0] - m.m[0][1]) / s, 0.25 * s);
+        } else if (m.m[0][0] > m.m[1][1] && m.m[0][0] > m.m[2][2]) {
+            Real s = std::sqrt(1.0 + m.m[0][0] - m.m[1][1] - m.m[2][2]) * 2.0;
+            q = Quat(0.25 * s, (m.m[0][1] + m.m[1][0]) / s,
+                     (m.m[0][2] + m.m[2][0]) / s, (m.m[2][1] - m.m[1][2]) / s);
+        } else if (m.m[1][1] > m.m[2][2]) {
+            Real s = std::sqrt(1.0 + m.m[1][1] - m.m[0][0] - m.m[2][2]) * 2.0;
+            q = Quat((m.m[0][1] + m.m[1][0]) / s, 0.25 * s,
+                     (m.m[1][2] + m.m[2][1]) / s, (m.m[0][2] - m.m[2][0]) / s);
+        } else {
+            Real s = std::sqrt(1.0 + m.m[2][2] - m.m[0][0] - m.m[1][1]) * 2.0;
+            q = Quat((m.m[0][2] + m.m[2][0]) / s, (m.m[1][2] + m.m[2][1]) / s,
+                     0.25 * s, (m.m[1][0] - m.m[0][1]) / s);
+        }
+        return q.normalized();
+    }
+
+    // Inverse of fromAxisAngle (for serialization). Identity yields the +Y
+    // axis with angle 0 so the output is always a valid axis.
+    void toAxisAngle(Vec3& axis, Real& radians) const {
+        Quat q = normalized();
+        Real s = std::sqrt(std::max(1.0 - q.w * q.w, 0.0));
+        if (s < 1e-9) {
+            axis = Vec3(0, 1, 0);
+            radians = 0.0;
+            return;
+        }
+        axis = Vec3(q.x / s, q.y / s, q.z / s);
+        radians = 2.0 * std::acos(std::clamp(q.w, Real(-1.0), Real(1.0)));
+    }
+
     // Euler radians applied X then Y then Z, matching the old Transform matrix
     // order (rotateZ * rotateY * rotateX), so existing poses round-trip.
     static Quat fromEuler(Real ex, Real ey, Real ez) {
