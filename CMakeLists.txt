@@ -354,6 +354,17 @@ if(Qt6_FOUND)
     else()
         target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
     endif()
+    # Headless widget-interaction tests for the generated inspector (the
+    # path that once crashed via a dangling visitor capture). Offscreen Qt.
+    add_executable(editor_qt_tests
+        tests/test_property_inspector_qt.cpp
+        src/editor_app/property_inspector.cpp
+        src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
+    )
+    target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)
+    target_link_libraries(editor_qt_tests PRIVATE engine_core Qt6::Widgets Threads::Threads)
+    add_test(NAME editor_qt_tests COMMAND editor_qt_tests)
+
     message(STATUS "Qt6 found — building the editor application")
 else()
     message(STATUS "Qt6 not found — skipping the editor application")

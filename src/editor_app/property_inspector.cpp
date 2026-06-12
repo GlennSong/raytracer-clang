@@ -75,9 +75,9 @@ public:
         row.check = new QCheckBox;
         row.check->setChecked(value);
         row.check->setEnabled(!meta.readOnly);
-        int index = static_cast<int>(rows.size());
+        auto fire = edit(static_cast<int>(rows.size()));
         QObject::connect(row.check, &QCheckBox::toggled,
-                         [this, index](bool) { onEdit(index); });
+                         [fire](bool) { fire(); });
         addRow(meta, row.check, row);
     }
     void field(const FieldMeta& meta, std::string& value) override {
@@ -90,13 +90,15 @@ public:
             for (const char* opt : meta.choices)
                 row.combo->addItem(opt);
             row.combo->setCurrentText(QString::fromStdString(value));
+            auto fire = edit(index);
             QObject::connect(row.combo, &QComboBox::currentTextChanged,
-                             [this, index](const QString&) { onEdit(index); });
+                             [fire](const QString&) { fire(); });
             addRow(meta, row.combo, row);
         } else {
             row.text = new QLineEdit(QString::fromStdString(value));
+            auto fire = edit(index);
             QObject::connect(row.text, &QLineEdit::editingFinished,
-                             [this, index]() { onEdit(index); });
+                             [fire]() { fire(); });
             addRow(meta, row.text, row);
         }
     }
@@ -122,6 +124,14 @@ private:
         row.lockedLabel->setStyleSheet("color: gray");
         addRow(meta, row.lockedLabel, row);
     }
+    // The connected lambdas MUST NOT capture this visitor — it's stack-local
+    // to rebuild() and long dead by the time a widget fires. They capture a
+    // copy of the callback (which holds the long-lived PropertyInspector).
+    std::function<void()> edit(int index) const {
+        auto fn = onEdit;
+        return [fn, index]() { fn(index); };
+    }
+
     QDoubleSpinBox* makeSpin(const FieldMeta& meta) const {
         auto* spin = new QDoubleSpinBox;
         bool bounded = meta.minValue != 0.0 || meta.maxValue != 0.0;
@@ -134,9 +144,9 @@ private:
         return spin;
     }
     void connectSpin(QDoubleSpinBox* spin) {
-        int index = static_cast<int>(rows.size());
+        auto fire = edit(static_cast<int>(rows.size()));
         QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged),
-                         [this, index](double) { onEdit(index); });
+                         [fire](double) { fire(); });
     }
     void addRow(const FieldMeta& meta, QWidget* widget, FieldRow& row) {
         form->addRow(meta.label, widget);
@@ -343,7 +353,8 @@ void PropertyInspector::refresh() {
         return;
     }
     Entity selected = bridge.selected();
-    if (!(selected == shown) || !bridge.world()->alive(shown)) {
+    if (!(selected == shown) ||
+        (shown.valid() && !bridge.world()->alive(shown))) {
         rebuild(selected);
         return;
     }
