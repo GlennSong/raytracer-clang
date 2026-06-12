@@ -70,17 +70,29 @@ session.
     queued through the bridge and spawned by the editor at the live view),
     Edit > Duplicate (Ctrl+D) / Delete, dirty-document title asterisk +
     save prompt on close (UndoStack revision vs revision-at-last-save).
-- **Tests**: 169 engine cases (`make test` / ctest) + physics + the Qt
+- **Game-clean presentation + transport controls (third pass)**:
+  - Plain play looks like the shipped game: the always-registered debug
+    panels (Debug > Cameras) draw only while the backtick overlay is up
+    (`FrameContext::debugOverlayActive`, set by Application). The framing
+    overlay (thirds/letterbox) stays — it's opted into, not debug chrome.
+  - The viewer boots straight into play now (`--edit` starts in the editor;
+    `--play` accepted for compatibility). Esc still swaps play <-> editor.
+  - Pause moved onto SimClock itself (`setPaused`, orthogonal to timeScale,
+    plus `requestStep` for single fixed-step advance), so Space in-game and
+    the Qt shell's new Pause/Step toolbar buttons drive one switch
+    (`Application::simClock()` is the shell hook). Play always starts
+    unpaused.
+- **Tests**: 170 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
-  hosted-window tests cover the relative-mouse capture mode). GLFW + Qt6 dev
-  packages install in the remote env, so everything except Metal compiles
-  and smoke-runs on Linux.
+  hosted-window tests cover the relative-mouse capture mode; clock tests
+  cover pause/step). GLFW + Qt6 dev packages install in the remote env, so
+  everything except Metal compiles and smoke-runs on Linux.
 
 Build on a Mac: `brew install qt`, `git submodule update --init --recursive`
 (JoltPhysics, imgui, ImGuizmo), then
 `cmake -B build -DRT_ENABLE_IMGUI=ON && cmake --build build`.
-Targets: `editor_app` (the editor), `viewer` (runtime; `--play` skips the
-editor state), `raytracer` (offline), `run_tests`.
+Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
+`--edit` starts in the editor), `raytracer` (offline), `run_tests`.
 
 ## Next steps, in rough priority
 
@@ -109,6 +121,42 @@ editor state), `raytracer` (offline), `run_tests`.
    decision is shader strategy (dual-source vs SPIRV-Cross/slang
    single-source) — decide before writing.
 
+## Editor <-> engine connections — QoL backlog
+
+The seams that exist today: EditorBridge (selection, document, undo,
+creation requests), `FrameContext::debugOverlayActive`,
+`Application::simClock()` (the pause/step pattern), registry post-edit
+hooks, and the property layer's component-JSON snapshots. Ideas that build
+on them, roughly by payoff-per-effort:
+
+1. **Play From Here**: spawn the player at the editor camera instead of the
+   PlayerSpawn entity (toolbar button next to Play; pass a spawn override
+   into ArenaState). The single biggest iteration-loop win.
+2. **Inspect during play**: keep the bridge attached in play as READ-ONLY —
+   hierarchy + inspector show live values (transform, physics motion).
+   Pairs naturally with Pause/Step: freeze a moment, click around, read
+   state. Later: "apply this component back to the document" — the property
+   layer's JSON snapshots make that diff nearly free.
+3. **Engine -> shell notifications**: the panels poll at 150ms; a small
+   event queue on the bridge (selectionChanged, modeChanged, logLine) gives
+   instant refresh, a Qt console dock for the engine log, and a status bar
+   mode indicator (EDITING / PLAYING / PAUSED).
+4. **Gizmo snap settings**: ImGuizmo supports translate/rotate snap
+   natively; expose snap increments + grid toggle as Qt toolbar fields.
+5. **Selection feedback in-viewport**: hover highlight; per-type gizmos for
+   the selected entity (camera frustum, spawn capsule, collider bounds).
+6. **Restart playtest** button (re-enter the play state without bouncing
+   through the editor), and a slow-mo dropdown next to Pause (the clock's
+   timeScale knob is already shell-reachable).
+7. **Camera bookmarks**: number-keyed editor viewpoints, saved per level.
+8. **Eject/possess surfaced in the shell**: the F-detach freecam exists;
+   give it a toolbar toggle during play, plus "select what I'm aiming at"
+   to feed the play-inspector above.
+9. **Runtime stats in the shell**: renderer stats (draws, culled) on the Qt
+   status bar via the bridge, replacing the ImGui HUD inside the editor.
+10. **Asset hot-reload**: bridge.reimport(path) -> engine swaps the
+    mesh/texture in place; belongs with the A4 cook step.
+
 ## Known sharp edges
 
 - Metal lens-warp/DOF passes and the whole editor viewport are written but
@@ -125,7 +173,6 @@ editor state), `raytracer` (offline), `run_tests`.
   trigger; same fix covers it.
 - settings.json carries some cross-mode camera state; harmless but worth
   folding into the document model eventually.
-- The Debug > Cameras ImGui panel still draws inside the hosted viewport
-  (edit AND play) — it carries tools the shell doesn't replicate yet
-  (preview/look-through, offline render). If it proves intrusive, fold those
-  into the Qt shell next and suppress it like the Editor window.
+- The Debug > Cameras panel now lives behind the backtick overlay; the
+  tools it carries that the shell doesn't replicate yet (look-through
+  preview, offline render button) are candidates for Qt-side homes.

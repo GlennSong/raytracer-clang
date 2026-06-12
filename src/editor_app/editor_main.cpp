@@ -431,6 +431,7 @@ int main(int argc, char** argv) {
     auto* playAction = toolbar->addAction("Play", [&]() {
         if (!bridge.attached()) return;     // already playing
         bridge.saveDocument();              // Play = compile + run
+        app.simClock().setPaused(false);    // a fresh playtest always runs
         app.requestState(makePlay());
         viewport->setFocus();               // WASD goes to the game, not Qt
     });
@@ -438,6 +439,18 @@ int main(int argc, char** argv) {
         if (bridge.attached()) return;      // already editing
         app.requestState(makeEditor());
         viewport->setFocus();
+    });
+
+    // Transport controls during play: the same pause switch Space toggles
+    // in-game, plus fixed-step frame advance — editor-shell hooks into the
+    // engine's clock (Application::simClock).
+    auto* pauseAction = toolbar->addAction("Pause", [&]() {
+        app.simClock().setPaused(!app.simClock().paused());
+        viewport->setFocus();
+    });
+    pauseAction->setCheckable(true);
+    auto* stepAction = toolbar->addAction("Step", [&]() {
+        app.simClock().requestStep();
     });
 
     // Add: place primitives / cameras from native UI (the in-viewport ImGui
@@ -493,6 +506,9 @@ int main(int argc, char** argv) {
         playAction->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);
+        pauseAction->setEnabled(!editing);
+        pauseAction->setChecked(!editing && app.simClock().paused());
+        stepAction->setEnabled(!editing && app.simClock().paused());
         undoAction->setEnabled(bridge.canUndo());
         redoAction->setEnabled(bridge.canRedo());
         duplicateAction->setEnabled(editing);

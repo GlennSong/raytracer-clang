@@ -22,8 +22,7 @@ public:
 
 private:
     bool ownsQuit = true;
-    double simSpeed = 1.0;   // time scale applied when not paused
-    bool paused = false;
+    double simSpeed = 1.0;   // time scale (pause is the clock's own switch)
 };
 
 

@@ -53,7 +53,10 @@ void CameraPanelSystem::drawFramingOverlay() const {
 void CameraPanelSystem::render(FrameContext& ctx) {
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
     if (ImGui::GetCurrentContext() == nullptr) return;
-    drawFramingOverlay();
+    drawFramingOverlay();   // an opted-into creative overlay, not debug UI
+
+    // Debug-mode only (backtick): plain play looks like the shipped game.
+    if (!ctx.debugOverlayActive) return;
 
     // Appends into the same window as DebugOverlaySystem ("Debug"), so the
     // debug UI is one window with sections instead of a window per system.

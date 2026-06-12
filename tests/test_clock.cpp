@@ -67,3 +67,34 @@ TEST_CASE(clock_set_fixed_step_rejects_nonpositive) {
     clock.setFixedStep(1.0 / 30.0);
     CHECK_APPROX(clock.fixedStep(), 1.0 / 30.0, EPS);
 }
+
+TEST_CASE(clock_pause_switch_and_single_step) {
+    SimClock clock(1.0 / 60.0);
+
+    // Pause is its own switch, independent of the speed knob — a shell's
+    // Pause button and a system's setTimeScale(speed) don't fight.
+    clock.setPaused(true);
+    clock.setTimeScale(1.0);
+    CHECK(clock.paused());
+    CHECK(clock.advance(1.0) == 0);          // time stands still
+    CHECK_APPROX(clock.simulatedTime(), 0.0, 1e-12);
+
+    // While paused, a requested step runs exactly one fixed step, fully
+    // rendered (alpha 1), and does not repeat.
+    clock.requestStep();
+    CHECK(clock.advance(0.016) == 1);
+    CHECK_APPROX(clock.simulatedTime(), 1.0 / 60.0, 1e-12);
+    CHECK_APPROX(clock.interpolationAlpha(), 1.0, 1e-12);
+    CHECK(clock.advance(0.016) == 0);
+
+    // Unpausing resumes normal accumulation.
+    clock.setPaused(false);
+    CHECK(!clock.paused());
+    CHECK(clock.advance(2.0 / 60.0) == 2);
+
+    // A stale step request from the paused era never fires while running.
+    clock.requestStep();
+    clock.advance(0.0);
+    clock.setPaused(true);
+    CHECK(clock.advance(1.0) == 0);
+}

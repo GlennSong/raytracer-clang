@@ -58,7 +58,8 @@ FrameContext Application::makeContext() {
         worldState, *rendererPtr, view, clock, settingsStore, jobs,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
-        frameDelta, interpolation, quit, transitionRequest
+        frameDelta, interpolation, quit, transitionRequest,
+        debugOverlayActive
     };
 }
 
