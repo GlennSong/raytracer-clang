@@ -108,20 +108,46 @@ public:
 
     QPaintEngine* paintEngine() const override { return nullptr; }
 
-    // First-person capture (engine CursorMode::Disabled, e.g. Play): hide
-    // the cursor and report relative motion, warping back to the viewport
-    // center after each move — the toolkit-side half of pointer lock.
+    // First-person capture (engine CursorMode::Disabled, e.g. Play). The
+    // toolkit half of pointer lock, done WITHOUT grabMouse or move events:
+    // both are unreliable on macOS (grabs need the cursor already inside
+    // the widget; warping suppresses the events it would produce). Instead
+    // the host's frame loop calls pollCapturedMouse(): read the global
+    // cursor, inject the offset from the viewport center as a delta, warp
+    // back to center. A global override cursor keeps it hidden wherever
+    // the (pinned) pointer happens to sit.
     void setCaptured(bool on) {
         if (captured == on) return;
         captured = on;
         if (on) {
             setFocus();
-            setCursor(Qt::BlankCursor);
-            grabMouse();   // motion must arrive even before the first warp
-            firstCapturedMove = true;   // sync to center without a delta spike
+            QGuiApplication::setOverrideCursor(Qt::BlankCursor);
+            resyncCapture = true;   // first poll centers without a spike
         } else {
-            releaseMouse();
-            unsetCursor();
+            QGuiApplication::restoreOverrideCursor();
+        }
+    }
+
+    // Once per host frame, before the engine consumes input.
+    void pollCapturedMouse() {
+        if (!captured || !isVisible() || width() <= 0 || height() <= 0)
+            return;
+        // Don't fight the OS cursor while another window/app is in front
+        // (cmd-tab, the save dialog); re-sync when we come back.
+        if (!window()->isActiveWindow()) {
+            resyncCapture = true;
+            return;
+        }
+        const QPoint center = mapToGlobal(QPoint(width() / 2, height() / 2));
+        if (resyncCapture) {
+            resyncCapture = false;
+            QCursor::setPos(center);
+            return;
+        }
+        const QPoint delta = QCursor::pos() - center;
+        if (delta.x() != 0 || delta.y() != 0) {
+            hosted.injectMouseDelta(delta.x(), delta.y());
+            QCursor::setPos(center);
         }
     }
 
@@ -133,19 +159,7 @@ protected:
                         static_cast<int>(height() * scale));
     }
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (captured) {
-            if (!hasFocus()) return;   // alt-tabbed away: leave the cursor be
-            QPoint center(width() / 2, height() / 2);
-            double dx = e->position().x() - center.x();
-            double dy = e->position().y() - center.y();
-            if (firstCapturedMove) {
-                firstCapturedMove = false;   // swallow the pre-warp position
-            } else if (dx != 0.0 || dy != 0.0) {
-                hosted.injectMouseDelta(dx, dy);
-            }
-            if (dx != 0.0 || dy != 0.0) QCursor::setPos(mapToGlobal(center));
-            return;
-        }
+        if (captured) return;   // relative motion comes from the poll pump
         hosted.injectMouseMove(e->position().x(), e->position().y());
     }
     void mousePressEvent(QMouseEvent* e) override {
@@ -178,7 +192,7 @@ protected:
 private:
     HostedWindow& hosted;
     bool captured = false;
-    bool firstCapturedMove = false;
+    bool resyncCapture = false;
 };
 
 // Main window with a save prompt on close when the document is dirty.
@@ -508,6 +522,7 @@ int main(int argc, char** argv) {
             qtApp.quit();
             return;
         }
+        viewport->pollCapturedMouse();   // relative look while playing
         app.runFrame();
     });
     frameTimer.start(16);
