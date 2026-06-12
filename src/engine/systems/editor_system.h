@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "camera_system.h"
 #include "../app_state.h"
+#include "../editor_bridge.h"
 #include <functional>
 #include <string>
 
@@ -19,12 +20,21 @@ class EditorSystem : public System {
 public:
     using PlayFactory = std::function<std::unique_ptr<AppState>()>;
 
+    // `bridge`, when given, connects this system to a native shell (the Qt
+    // editor): selection is shared and the shell's panels read the world
+    // through it while the editor state is active.
     EditorSystem(CameraSystem& cameras, std::string levelFile,
-                 PlayFactory makePlayState);
+                 PlayFactory makePlayState, EditorBridge* bridge = nullptr);
 
     void onStart(FrameContext& ctx) override;
+    void onStop(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
+
+    Entity selectedEntity() const { return selected; }
+    void setSelected(Entity entity) { selected = entity; }
+    void setGizmoOp(int op) { gizmoOp = op; }
+    int gizmoOpMode() const { return gizmoOp; }
 
 private:
     void pickAtCursor(FrameContext& ctx);
@@ -40,6 +50,7 @@ private:
     CameraSystem& cameras;
     std::string levelFile;
     PlayFactory makePlayState;
+    EditorBridge* bridge = nullptr;
 
     Entity selected;
     bool prevMouseLeft = false;

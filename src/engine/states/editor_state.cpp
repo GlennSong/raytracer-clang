@@ -11,14 +11,16 @@ namespace engine {
 
 EditorState::EditorState(Window& window, Renderer& renderer,
                          std::string levelFile,
-                         EditorSystem::PlayFactory makePlayState)
+                         EditorSystem::PlayFactory makePlayState,
+                         EditorBridge* bridge)
     : PlayingState(window), editorRenderer(renderer),
       levelFile(std::move(levelFile)) {
     addSystem<DevControlSystem>();   // Esc quits the app from the editor
     auto& camSys = addSystem<CameraSystem>();
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
-    addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState));
+    addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),
+                            bridge);
 }
 
 void EditorState::onEnter(FrameContext& ctx) {

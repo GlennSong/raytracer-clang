@@ -48,6 +48,12 @@ public:
     void pushState(std::unique_ptr<AppState> state);
     void popState();
 
+    // Shell-initiated state swap (the editor's toolbar Play/Stop, opening a
+    // different level): same deferred pop-then-push as in-engine requests.
+    void requestState(std::unique_ptr<AppState> state) {
+        transitionRequest.replaceWith(std::move(state));
+    }
+
     World& world() { return worldState; }
     Renderer& renderer() { return *rendererPtr; }
     RenderView& renderView() { return view; }

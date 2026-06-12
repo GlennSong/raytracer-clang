@@ -2,6 +2,8 @@
 
 #include "../src/engine/level_writer.h"
 #include "../src/engine/components.h"
+#include "../src/engine/editor_bridge.h"
+#include "../src/engine/camera/scene_camera.h"
 #include <nlohmann/json.hpp>
 #include <cstdio>
 #include <fstream>
@@ -172,4 +174,43 @@ TEST_CASE(level_writer_round_trips_mesh_entities) {
     json root = json::parse(f);
     CHECK(root["entities"][0]["mesh"] == "models/crate.gltf");
     CHECK(!root["entities"][0].contains("shape"));
+}
+
+TEST_CASE(editor_bridge_lists_and_selects) {
+    World world;
+    Entity box = addBox(world, Vec3(0, 0, 0));
+    Entity cam = world.create();
+    world.add<Transform>(cam);
+    SceneCamera sc;
+    sc.name = "Crane";
+    world.add<SceneCamera>(cam, sc);
+
+    EditorBridge bridge;
+    CHECK(!bridge.attached());
+    CHECK(bridge.listEntities().empty());   // detached: inert, not crashing
+
+    bridge.attach(&world, nullptr, "level.json");
+    auto list = bridge.listEntities();
+    CHECK(list.size() == 2);
+    bool sawBox = false, sawCam = false;
+    for (const auto& info : list) {
+        if (info.entity == box) {
+            sawBox = true;
+            CHECK(info.label.find("box") != std::string::npos);
+            CHECK(!info.isCamera);
+        }
+        if (info.entity == cam) {
+            sawCam = true;
+            CHECK(info.label == "Crane");
+            CHECK(info.isCamera);
+        }
+    }
+    CHECK(sawBox && sawCam);
+
+    bridge.deleteEntity(box);
+    CHECK(!world.alive(box));
+    CHECK(bridge.listEntities().size() == 1);
+
+    bridge.detach();
+    CHECK(!bridge.attached());
 }

@@ -111,14 +111,21 @@ Vec3 defaultShapeSize(const std::string& shape) {
 }  // namespace
 
 EditorSystem::EditorSystem(CameraSystem& cameras, std::string levelFile,
-                           PlayFactory makePlayState)
+                           PlayFactory makePlayState, EditorBridge* bridge)
     : cameras(cameras), levelFile(std::move(levelFile)),
-      makePlayState(std::move(makePlayState)) {}
+      makePlayState(std::move(makePlayState)), bridge(bridge) {}
 
 void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("gizmo_translate", KeyCode::Num1);
     ctx.actions.bindButton("gizmo_rotate", KeyCode::Num2);
     ctx.actions.bindButton("gizmo_scale", KeyCode::Num3);
+    if (bridge) bridge->attach(&ctx.world, this, levelFile);
+}
+
+void EditorSystem::onStop(FrameContext&) {
+    // Play (or app shutdown) tears the editor state down: the shell's panels
+    // see a detached bridge and gray out rather than touching gameplay state.
+    if (bridge) bridge->detach();
 }
 
 void EditorSystem::update(FrameContext& ctx) {

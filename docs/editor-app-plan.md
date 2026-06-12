@@ -26,8 +26,17 @@ with the GLFW implementation behind `createPlatformWindow()`; `HostedWindow`
 Play/Esc working in-viewport) — built AND smoke-run headless on Linux. The
 Metal backend now accepts an NSView handle (Qt's winId) as well as an
 NSWindow. **Mac verification pending:** the viewport rendering path
-(NSView + CAMetalLayer + retina scale) and input feel. A3 (EditorBridge +
-native panels) is next.
+(NSView + CAMetalLayer + retina scale) and input feel.
+
+A3 landed too: `EditorBridge` (engine-side, headless-tested) attaches while
+an EditorState is active and detaches during Play; the Qt shell now has a
+Hierarchy dock (two-way selection sync with the viewport ring/gizmo), a
+native Inspector (position/scale spin boxes, delete), an Assets dock
+(QFileSystemModel over assets/, double-click a .json opens that level), and
+a toolbar with Save / Play / Stop driving the document loop through
+Application::requestState. Panels poll the bridge (150ms) and gray out while
+playing. Next: A4 (asset import + first cooking step) and inspector depth
+(material/lens editing native-side); undo's chokepoint is the bridge.
 
 ---
 

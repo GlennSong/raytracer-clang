@@ -41,6 +41,7 @@ add_library(engine_core STATIC
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
+    src/engine/editor_bridge.cpp
     src/engine/day_night_cycle.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp

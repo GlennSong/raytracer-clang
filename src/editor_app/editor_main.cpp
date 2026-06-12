@@ -1,29 +1,41 @@
-// The editor application shell (editor-app plan, Phase A2 skeleton): a Qt
-// window whose central widget hosts the engine through the HostedWindow seam.
-// The engine inside is the exact EditorState/ArenaState stack the standalone
-// viewer runs — picking, gizmos, the in-viewport ImGui tools, and the
-// Play/Esc loop all work unchanged; Qt owns the OS window and the event loop
-// and forwards input. Native panels (hierarchy, inspector, asset browser)
-// arrive with Phase A3's EditorBridge.
+// The editor application shell (editor-app plan, Phase A2+A3): a Qt window
+// hosting the engine viewport through the HostedWindow seam, with native
+// panels — hierarchy, inspector, asset browser, toolbar — talking to the
+// engine through the EditorBridge. The engine inside is the exact
+// EditorState/ArenaState stack the standalone viewer runs, so the viewport
+// behaves 1:1 with the game.
 //
-// Deliberately Q_OBJECT-free (no moc): event handling overrides + lambda
-// connects only.
+// Panels poll the bridge on a UI timer and rewrite widgets only when content
+// changed; while playing (bridge detached) they gray out. Deliberately
+// Q_OBJECT-free (no moc): event overrides + lambda connects only.
 
 #include "../engine/application.h"
+#include "../engine/components.h"
+#include "../engine/editor_bridge.h"
 #include "../engine/states/editor_state.h"
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
 #include "../log.h"
 
 #include <QApplication>
+#include <QDockWidget>
+#include <QDoubleSpinBox>
+#include <QFileSystemModel>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMenuBar>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QTimer>
-#include <QWidget>
-#include <QMouseEvent>
-#include <QKeyEvent>
+#include <QToolBar>
+#include <QTreeView>
 #include <QWheelEvent>
+#include <QWidget>
 
 #include <cstring>
 
@@ -67,10 +79,10 @@ MouseButton mapQtButton(Qt::MouseButton b) {
     return MouseButton::Left;
 }
 
-// The engine's viewport pane: a native widget whose window handle the
-// renderer binds to (NSView* on macOS), forwarding Qt input through the
-// HostedWindow seam. Qt must not paint over the Metal layer, hence the
-// paint-engine opt-outs.
+// The engine's viewport pane: a native widget whose window handle the renderer
+// binds to (NSView* on macOS), forwarding Qt input through the HostedWindow
+// seam. Qt must not paint over the Metal layer, hence the paint-engine
+// opt-outs.
 class EngineViewport : public QWidget {
 public:
     explicit EngineViewport(HostedWindow& hosted) : hosted(hosted) {
@@ -126,6 +138,143 @@ private:
     HostedWindow& hosted;
 };
 
+// Hierarchy + inspector, refreshed by polling the bridge (cheap at editor
+// entity counts; avoids engine-side notification plumbing).
+struct Panels {
+    EditorBridge& bridge;
+    QListWidget* hierarchy = nullptr;
+    QWidget* inspectorBody = nullptr;
+    QLabel* inspectorTitle = nullptr;
+    QDoubleSpinBox* pos[3] = {};
+    QDoubleSpinBox* scale[3] = {};
+    QPushButton* deleteButton = nullptr;
+
+    std::vector<EditorBridge::EntityInfo> lastList;
+    Entity lastSelected;
+    bool applyingUi = false;   // guard: spin-box writes vs refresh loop
+
+    explicit Panels(EditorBridge& bridge) : bridge(bridge) {}
+
+    QDockWidget* buildHierarchyDock(QMainWindow* main) {
+        auto* dock = new QDockWidget("Hierarchy", main);
+        hierarchy = new QListWidget(dock);
+        dock->setWidget(hierarchy);
+        QObject::connect(hierarchy, &QListWidget::currentRowChanged, [this](int row) {
+            if (applyingUi || !bridge.attached()) return;
+            if (row >= 0 && row < static_cast<int>(lastList.size()))
+                bridge.select(lastList[row].entity);
+        });
+        return dock;
+    }
+
+    QDockWidget* buildInspectorDock(QMainWindow* main) {
+        auto* dock = new QDockWidget("Inspector", main);
+        inspectorBody = new QWidget(dock);
+        auto* form = new QFormLayout(inspectorBody);
+        inspectorTitle = new QLabel("Nothing selected");
+        form->addRow(inspectorTitle);
+
+        auto makeRow = [&](const char* label, QDoubleSpinBox* (&boxes)[3],
+                           double minV, double maxV, double step) {
+            auto* rowWidget = new QWidget(inspectorBody);
+            auto* row = new QHBoxLayout(rowWidget);
+            row->setContentsMargins(0, 0, 0, 0);
+            for (int i = 0; i < 3; i++) {
+                boxes[i] = new QDoubleSpinBox(rowWidget);
+                boxes[i]->setRange(minV, maxV);
+                boxes[i]->setDecimals(3);
+                boxes[i]->setSingleStep(step);
+                boxes[i]->setKeyboardTracking(false);
+                row->addWidget(boxes[i]);
+                QObject::connect(boxes[i],
+                                 qOverload<double>(&QDoubleSpinBox::valueChanged),
+                                 [this](double) { writeTransform(); });
+            }
+            form->addRow(label, rowWidget);
+        };
+        makeRow("Position", pos, -10000.0, 10000.0, 0.1);
+        makeRow("Scale", scale, 0.01, 1000.0, 0.1);
+
+        deleteButton = new QPushButton("Delete", inspectorBody);
+        QObject::connect(deleteButton, &QPushButton::clicked, [this]() {
+            if (bridge.attached()) bridge.deleteEntity(bridge.selected());
+        });
+        form->addRow(deleteButton);
+
+        dock->setWidget(inspectorBody);
+        return dock;
+    }
+
+    void writeTransform() {
+        if (applyingUi || !bridge.attached()) return;
+        World* world = bridge.world();
+        Transform* t = world->get<Transform>(bridge.selected());
+        if (!t) return;
+        t->position = Vec3(pos[0]->value(), pos[1]->value(), pos[2]->value());
+        t->scale = Vec3(scale[0]->value(), scale[1]->value(), scale[2]->value());
+        if (auto* prev = world->get<PrevTransform>(bridge.selected()))
+            prev->value = *t;
+    }
+
+    // Called on a UI timer: mirror engine state into the widgets.
+    void refresh() {
+        const bool live = bridge.attached();
+        hierarchy->setEnabled(live);
+        inspectorBody->setEnabled(live);
+        if (!live) {
+            inspectorTitle->setText("Playing — Esc stops");
+            return;
+        }
+
+        applyingUi = true;
+
+        auto list = bridge.listEntities();
+        bool sameList = list.size() == lastList.size();
+        for (size_t i = 0; sameList && i < list.size(); i++)
+            sameList = list[i].entity == lastList[i].entity &&
+                       list[i].label == lastList[i].label;
+        if (!sameList) {
+            lastList = list;
+            hierarchy->clear();
+            for (const auto& info : lastList)
+                hierarchy->addItem(QString::fromStdString(
+                    (info.isCamera ? "[cam] " : "") + info.label));
+        }
+
+        Entity selected = bridge.selected();
+        int row = -1;
+        for (size_t i = 0; i < lastList.size(); i++)
+            if (lastList[i].entity == selected) row = static_cast<int>(i);
+        if (hierarchy->currentRow() != row) hierarchy->setCurrentRow(row);
+
+        World* world = bridge.world();
+        Transform* t = world->get<Transform>(selected);
+        if (t) {
+            if (!(selected == lastSelected))
+                inspectorTitle->setText(QString::fromStdString(
+                    row >= 0 ? lastList[row].label : "entity"));
+            // Don't fight an in-progress edit.
+            if (!pos[0]->hasFocus() && !pos[1]->hasFocus() && !pos[2]->hasFocus()) {
+                pos[0]->setValue(t->position.x);
+                pos[1]->setValue(t->position.y);
+                pos[2]->setValue(t->position.z);
+            }
+            if (!scale[0]->hasFocus() && !scale[1]->hasFocus() && !scale[2]->hasFocus()) {
+                scale[0]->setValue(t->scale.x);
+                scale[1]->setValue(t->scale.y);
+                scale[2]->setValue(t->scale.z);
+            }
+            inspectorBody->setEnabled(true);
+        } else {
+            inspectorTitle->setText("Nothing selected");
+            inspectorBody->setEnabled(false);
+        }
+        lastSelected = selected;
+
+        applyingUi = false;
+    }
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -135,21 +284,39 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++)
         if (argv[i][0] != '-') levelPath = argv[i];
 
-    // The hosted window outlives Application (which owns it); keep a borrowed
-    // pointer for event forwarding.
     auto hostedOwned = std::make_unique<engine::HostedWindow>();
     engine::HostedWindow* hosted = hostedOwned.get();
+    engine::EditorBridge bridge;
 
     QMainWindow mainWindow;
     mainWindow.setWindowTitle("Raytracer Editor");
     auto* viewport = new EngineViewport(*hosted);
     mainWindow.setCentralWidget(viewport);
-    mainWindow.resize(1440, 900);
+    mainWindow.resize(1560, 960);
+
+    Panels panels(bridge);
+    mainWindow.addDockWidget(Qt::LeftDockWidgetArea,
+                             panels.buildHierarchyDock(&mainWindow));
+    mainWindow.addDockWidget(Qt::RightDockWidgetArea,
+                             panels.buildInspectorDock(&mainWindow));
+
+    // Asset browser: a filesystem view of assets/; double-clicking a level
+    // opens it (Play/Stop and open both go through Application::requestState).
+    auto* assetsDock = new QDockWidget("Assets", &mainWindow);
+    auto* assetsModel = new QFileSystemModel(assetsDock);
+    assetsModel->setRootPath("assets");
+    auto* assetsView = new QTreeView(assetsDock);
+    assetsView->setModel(assetsModel);
+    assetsView->setRootIndex(assetsModel->index("assets"));
+    assetsView->setColumnHidden(2, true);   // type
+    assetsView->setColumnHidden(3, true);   // date
+    assetsDock->setWidget(assetsView);
+    mainWindow.addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
 
     auto* fileMenu = mainWindow.menuBar()->addMenu("&File");
     fileMenu->addAction("&Quit", &qtApp, &QApplication::quit);
     mainWindow.statusBar()->showMessage(
-        "Click selects | 1/2/3 move/rotate/scale | in-viewport panels: Save/Play");
+        "Click selects | 1/2/3 move/rotate/scale | F free-fly | C place camera");
 
     // Realize the native view BEFORE the renderer binds to it.
     mainWindow.show();
@@ -168,23 +335,48 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Same factory wiring as the standalone viewer: editor <-> play states
-    // swap inside the viewport.
+    // Same factory wiring as the standalone viewer; the bridge rides along so
+    // panels attach whenever an editor state is active.
     std::function<std::unique_ptr<engine::AppState>()> makePlay;
     std::function<std::unique_ptr<engine::AppState>()> makeEditor;
-    makeEditor = [&app, levelPath, &makePlay]() -> std::unique_ptr<engine::AppState> {
-        return std::make_unique<engine::EditorState>(app.windowRef(), app.renderer(),
-                                                     levelPath, makePlay);
+    makeEditor = [&]() -> std::unique_ptr<engine::AppState> {
+        return std::make_unique<engine::EditorState>(
+            app.windowRef(), app.renderer(), levelPath, makePlay, &bridge);
     };
-    makePlay = [&app, levelPath, &makeEditor]() -> std::unique_ptr<engine::AppState> {
+    makePlay = [&]() -> std::unique_ptr<engine::AppState> {
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
                                             levelPath, makeEditor);
     };
+
+    // Toolbar: the document loop (save / play / stop) from native UI.
+    auto* toolbar = mainWindow.addToolBar("Main");
+    toolbar->addAction("Save", [&]() {
+        if (bridge.attached()) bridge.saveDocument();
+    });
+    auto* playAction = toolbar->addAction("Play", [&]() {
+        if (!bridge.attached()) return;     // already playing
+        bridge.saveDocument();              // Play = compile + run
+        app.requestState(makePlay());
+    });
+    auto* stopAction = toolbar->addAction("Stop", [&]() {
+        if (bridge.attached()) return;      // already editing
+        app.requestState(makeEditor());
+    });
+
+    // Open a level from the asset browser.
+    QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
+        QString path = assetsModel->filePath(idx);
+        if (!path.endsWith(".json")) return;
+        levelPath = path.toStdString();
+        mainWindow.setWindowTitle(QString("Raytracer Editor — %1").arg(path));
+        app.requestState(makeEditor());
+    });
+
     app.settings().setString("cameraMode", "fly");
     app.pushState(makeEditor());
     app.begin();
 
-    // Qt owns the loop; the engine steps one frame per timer tick.
+    // Qt owns the loop; the engine steps per timer tick, panels poll slower.
     QTimer frameTimer;
     QObject::connect(&frameTimer, &QTimer::timeout, [&]() {
         if (!app.running()) {
@@ -194,6 +386,14 @@ int main(int argc, char** argv) {
         app.runFrame();
     });
     frameTimer.start(16);
+
+    QTimer panelTimer;
+    QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
+        panels.refresh();
+        playAction->setEnabled(bridge.attached());
+        stopAction->setEnabled(!bridge.attached());
+    });
+    panelTimer.start(150);
 
     int result = qtApp.exec();
     app.end();
