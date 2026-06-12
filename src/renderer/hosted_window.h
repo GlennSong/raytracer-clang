@@ -3,6 +3,7 @@
 
 #include "window.h"
 #include <chrono>
+#include <functional>
 
 namespace engine {
 
@@ -29,7 +30,11 @@ public:
     const GamepadSet& getGamepads() const override { return gamepads; }
     double getDeltaTime() const override { return deltaTime; }
     void setDrawCallback(std::function<void()>) override {}   // host paints
-    void setCursorMode(CursorMode) override {}                // host's cursor
+    // CursorMode::Disabled = first-person capture. The host owns the real
+    // cursor, so this forwards to its callback (hide + warp, toolkit-side)
+    // and flips the input layer into relative mode: deltas come from
+    // injectMouseDelta instead of being derived from absolute positions.
+    void setCursorMode(CursorMode mode) override;
     void resetMouseDelta() override;
     void initDebugUi() override {}
     void newDebugUiFrame() override;
@@ -46,11 +51,21 @@ public:
     // Input, translated by the host from its toolkit's events. Effective at
     // the next pollEvents(), mirroring the platform window's batching.
     void injectMouseMove(double x, double y);
+    // Relative motion while captured (the host warps its cursor back to the
+    // viewport center and reports only the difference).
+    void injectMouseDelta(double dx, double dy);
     void injectMouseButton(MouseButton button, bool down, double x, double y);
     void injectScroll(double delta);
     void injectKey(KeyCode key, bool down, bool repeat = false);
     void injectEvent(const Event& event);   // anything else (focus, resize...)
     void requestClose() { closeRequested = true; }
+
+    // How the host reacts to engine cursor-mode changes (capture/release the
+    // pointer on its toolkit). Invoked from setCursorMode.
+    void setCursorModeCallback(std::function<void(CursorMode)> callback) {
+        cursorModeCallback = std::move(callback);
+    }
+    bool relativeMouseMode() const { return relativeMode; }
 
 private:
     void* nativeHandle = nullptr;
@@ -66,6 +81,10 @@ private:
     double pendingScroll = 0.0;
     double lastMouseX = 0.0, lastMouseY = 0.0;
     bool firstMouse = true;
+
+    bool relativeMode = false;
+    double pendingDeltaX = 0.0, pendingDeltaY = 0.0;
+    std::function<void(CursorMode)> cursorModeCallback;
 
     double deltaTime = 0.0;
     bool firstPoll = true;

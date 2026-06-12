@@ -1,5 +1,6 @@
 #include "editor_state.h"
 
+#include "../../renderer/window.h"
 #include "../level_loader.h"
 #include "../systems/dev_control_system.h"
 #include "../systems/camera_system.h"
@@ -41,8 +42,16 @@ void EditorState::onEnter(FrameContext& ctx) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
     PlayingState::onEnter(ctx);
+    // PlayingState captures the pointer for first-person play; the editor is
+    // a pointing UI — picking, gizmos, panels — so the cursor stays visible.
+    window.setCursorMode(CursorMode::Normal);
     LOG_INFO << "Edit mode: click selects, 1/2/3 move/rotate/scale, "
                 "Play runs the level";
+}
+
+void EditorState::onResume(FrameContext& ctx) {
+    PlayingState::onResume(ctx);
+    window.setCursorMode(CursorMode::Normal);   // see onEnter
 }
 
 }  // namespace engine

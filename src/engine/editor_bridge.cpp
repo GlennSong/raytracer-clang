@@ -13,6 +13,10 @@ void EditorBridge::attach(World* world, EditorSystem* editor,
     worldPtr = world;
     editorPtr = editor;
     levelFile = std::move(level);
+    // A session begins on a freshly loaded (or just-saved) document.
+    savedRevision = editor && editor->undoStack()
+                        ? editor->undoStack()->revision()
+                        : 0;
 }
 
 void EditorBridge::detach() {
@@ -63,7 +67,26 @@ bool EditorBridge::saveDocument() {
     if (!worldPtr) return false;
     bool ok = LevelWriter::save(levelFile, *worldPtr);
     ok &= CameraStore::save(levelFile + ".cameras.json", *worldPtr);
+    if (ok)
+        if (UndoStack* undo = undoStack()) savedRevision = undo->revision();
     return ok;
+}
+
+void EditorBridge::addPrimitive(const std::string& shape) {
+    if (editorPtr && worldPtr) editorPtr->requestAddPrimitive(shape);
+}
+
+void EditorBridge::placeCamera() {
+    if (editorPtr && worldPtr) editorPtr->requestPlaceCamera();
+}
+
+void EditorBridge::duplicateSelected() {
+    if (editorPtr && worldPtr) editorPtr->requestDuplicate();
+}
+
+bool EditorBridge::documentDirty() {
+    UndoStack* undo = undoStack();
+    return attached() && undo && undo->revision() != savedRevision;
 }
 
 void EditorBridge::deleteEntity(Entity entity) {

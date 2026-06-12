@@ -26,6 +26,7 @@ void UndoStack::recordFieldEdit(Entity e, const std::string& component,
             else
                 top.after = std::move(after);
             redoList.clear();
+            revision_++;
             return;
         }
     }
@@ -89,6 +90,7 @@ void UndoStack::push(Command cmd) {
     undoList.push_back(std::move(cmd));
     redoList.clear();
     if (undoList.size() > MAX_DEPTH) undoList.pop_front();
+    revision_++;
 }
 
 Entity UndoStack::undo(World& world) {
@@ -97,6 +99,7 @@ Entity UndoStack::undo(World& world) {
     undoList.pop_back();
     Entity affected = apply(cmd, world, /*forward=*/false);
     redoList.push_back(std::move(cmd));
+    revision_++;
     return affected;
 }
 
@@ -106,6 +109,7 @@ Entity UndoStack::redo(World& world) {
     redoList.pop_back();
     Entity affected = apply(cmd, world, /*forward=*/true);
     undoList.push_back(std::move(cmd));
+    revision_++;
     return affected;
 }
 

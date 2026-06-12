@@ -20,6 +20,8 @@
 #include "property_inspector.h"
 
 #include <QApplication>
+#include <QCloseEvent>
+#include <QCursor>
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -33,12 +35,15 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeView>
 #include <QWheelEvent>
 #include <QWidget>
@@ -103,6 +108,23 @@ public:
 
     QPaintEngine* paintEngine() const override { return nullptr; }
 
+    // First-person capture (engine CursorMode::Disabled, e.g. Play): hide
+    // the cursor and report relative motion, warping back to the viewport
+    // center after each move — the toolkit-side half of pointer lock.
+    void setCaptured(bool on) {
+        if (captured == on) return;
+        captured = on;
+        if (on) {
+            setFocus();
+            setCursor(Qt::BlankCursor);
+            grabMouse();   // motion must arrive even before the first warp
+            firstCapturedMove = true;   // sync to center without a delta spike
+        } else {
+            releaseMouse();
+            unsetCursor();
+        }
+    }
+
 protected:
     void resizeEvent(QResizeEvent*) override {
         const qreal scale = devicePixelRatioF();
@@ -111,6 +133,19 @@ protected:
                         static_cast<int>(height() * scale));
     }
     void mouseMoveEvent(QMouseEvent* e) override {
+        if (captured) {
+            if (!hasFocus()) return;   // alt-tabbed away: leave the cursor be
+            QPoint center(width() / 2, height() / 2);
+            double dx = e->position().x() - center.x();
+            double dy = e->position().y() - center.y();
+            if (firstCapturedMove) {
+                firstCapturedMove = false;   // swallow the pre-warp position
+            } else if (dx != 0.0 || dy != 0.0) {
+                hosted.injectMouseDelta(dx, dy);
+            }
+            if (dx != 0.0 || dy != 0.0) QCursor::setPos(mapToGlobal(center));
+            return;
+        }
         hosted.injectMouseMove(e->position().x(), e->position().y());
     }
     void mousePressEvent(QMouseEvent* e) override {
@@ -142,6 +177,33 @@ protected:
 
 private:
     HostedWindow& hosted;
+    bool captured = false;
+    bool firstCapturedMove = false;
+};
+
+// Main window with a save prompt on close when the document is dirty.
+class EditorWindow : public QMainWindow {
+public:
+    std::function<bool()> isDirty;    // wired once the bridge exists
+    std::function<void()> saveNow;
+
+protected:
+    void closeEvent(QCloseEvent* event) override {
+        if (!isDirty || !isDirty()) {
+            event->accept();
+            return;
+        }
+        const auto choice = QMessageBox::warning(
+            this, "Unsaved Changes", "The level has unsaved changes.",
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+        if (choice == QMessageBox::Cancel) {
+            event->ignore();
+            return;
+        }
+        if (choice == QMessageBox::Save && saveNow) saveNow();
+        event->accept();
+    }
 };
 
 // Hierarchy + inspector, refreshed by polling the bridge (cheap at editor
@@ -236,11 +298,22 @@ int main(int argc, char** argv) {
     engine::HostedWindow* hosted = hostedOwned.get();
     engine::EditorBridge bridge;
 
-    QMainWindow mainWindow;
-    mainWindow.setWindowTitle("Raytracer Editor");
+    EditorWindow mainWindow;
+    QString baseTitle = "Raytracer Editor";
+    mainWindow.setWindowTitle(baseTitle);
     auto* viewport = new EngineViewport(*hosted);
     mainWindow.setCentralWidget(viewport);
     mainWindow.resize(1560, 960);
+
+    mainWindow.isDirty = [&bridge]() { return bridge.documentDirty(); };
+    mainWindow.saveNow = [&bridge]() {
+        if (bridge.attached()) bridge.saveDocument();
+    };
+    // Engine cursor modes drive the viewport's pointer capture (play mode
+    // locks the pointer for first-person look; the editor releases it).
+    hosted->setCursorModeCallback([viewport](engine::CursorMode mode) {
+        viewport->setCaptured(mode == engine::CursorMode::Disabled);
+    });
 
     Panels panels(bridge);
     mainWindow.addDockWidget(Qt::LeftDockWidgetArea,
@@ -308,6 +381,15 @@ int main(int argc, char** argv) {
     undoAction->setShortcut(QKeySequence::Undo);
     auto* redoAction = editMenu->addAction("&Redo", [&]() { bridge.redo(); });
     redoAction->setShortcut(QKeySequence::Redo);
+    editMenu->addSeparator();
+    auto* duplicateAction = editMenu->addAction("&Duplicate", [&]() {
+        if (bridge.attached()) bridge.duplicateSelected();
+    });
+    duplicateAction->setShortcut(QKeySequence("Ctrl+D"));
+    auto* deleteAction = editMenu->addAction("De&lete", [&]() {
+        if (bridge.attached()) bridge.deleteEntity(bridge.selected());
+    });
+    deleteAction->setShortcut(QKeySequence::Delete);
     mainWindow.statusBar()->showMessage(
         "Click selects | 1/2/3 move/rotate/scale | F free-fly | C place camera");
 
@@ -350,19 +432,43 @@ int main(int argc, char** argv) {
         if (!bridge.attached()) return;     // already playing
         bridge.saveDocument();              // Play = compile + run
         app.requestState(makePlay());
+        viewport->setFocus();               // WASD goes to the game, not Qt
     });
     auto* stopAction = toolbar->addAction("Stop", [&]() {
         if (bridge.attached()) return;      // already editing
         app.requestState(makeEditor());
+        viewport->setFocus();
     });
+
+    // Add: place primitives / cameras from native UI (the in-viewport ImGui
+    // Add panel is suppressed while the shell hosts the engine). Creation is
+    // queued onto the editor — the spawn point comes from the live view.
+    auto* addButton = new QToolButton(toolbar);
+    addButton->setText("Add");
+    addButton->setPopupMode(QToolButton::InstantPopup);
+    auto* addShapeMenu = new QMenu(addButton);
+    static const char* SHAPES[] = {"box", "sphere", "cylinder", "plane",
+                                   "cone", "wedge", "torus", "capsule"};
+    for (const char* shape : SHAPES)
+        addShapeMenu->addAction(shape, [&bridge, shape]() {
+            if (bridge.attached()) bridge.addPrimitive(shape);
+        });
+    addShapeMenu->addSeparator();
+    addShapeMenu->addAction("camera", [&bridge]() {
+        if (bridge.attached()) bridge.placeCamera();
+    });
+    addButton->setMenu(addShapeMenu);
+    toolbar->addWidget(addButton);
 
     // Open a level from the asset browser.
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
         QString path = assetsModel->filePath(idx);
         if (!path.endsWith(".json")) return;
         levelPath = path.toStdString();
-        mainWindow.setWindowTitle(QString("Raytracer Editor — %1").arg(path));
+        baseTitle = QString("Raytracer Editor — %1").arg(path);
+        mainWindow.setWindowTitle(baseTitle);
         app.requestState(makeEditor());
+        viewport->setFocus();
     });
 
     app.settings().setString("cameraMode", "fly");
@@ -383,10 +489,17 @@ int main(int argc, char** argv) {
     QTimer panelTimer;
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
         panels.refresh();
-        playAction->setEnabled(bridge.attached());
-        stopAction->setEnabled(!bridge.attached());
+        const bool editing = bridge.attached();
+        playAction->setEnabled(editing);
+        stopAction->setEnabled(!editing);
+        addButton->setEnabled(editing);
         undoAction->setEnabled(bridge.canUndo());
         redoAction->setEnabled(bridge.canRedo());
+        duplicateAction->setEnabled(editing);
+        deleteAction->setEnabled(editing);
+        const QString title =
+            bridge.documentDirty() ? baseTitle + " *" : baseTitle;
+        if (mainWindow.windowTitle() != title) mainWindow.setWindowTitle(title);
     });
     panelTimer.start(150);
 

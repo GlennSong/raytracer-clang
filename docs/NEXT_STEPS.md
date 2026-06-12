@@ -50,10 +50,31 @@ session.
     edits (gizmo drag = one entry), create/delete with full component
     snapshots (delete-undo recreates under a fresh handle and remaps the
     rest of the log), component add/remove. Capped at 256 entries.
-- **Tests**: 167 engine cases (`make test` / ctest) + physics + the Qt
-  interaction test (now also covers undo via bridge and the Add/Remove
-  Component flow). GLFW + Qt6 dev packages install in the remote env, so
-  everything except Metal compiles and smoke-runs on Linux.
+- **Play-in-editor + shell polish (second pass, same session arc)**:
+  - *Playable Play*: the Qt viewport now implements pointer capture —
+    `HostedWindow` grew a relative-mouse mode (`injectMouseDelta` +
+    cursor-mode callback); `EngineViewport` hides/grabs/warps the Qt cursor
+    while the engine asks for `CursorMode::Disabled`. Play/Stop/open also
+    return keyboard focus to the viewport (clicking the toolbar used to
+    strand WASD in the Qt shell — the "can't move in play mode" bug).
+    `EditorState` now explicitly requests a visible cursor (it inherited
+    play-mode capture from PlayingState; harmless before only because
+    HostedWindow ignored cursor modes).
+  - *In-viewport editor UI is shell-aware*: when a bridge is connected the
+    ImGui Editor window (Add buttons + inspector) no longer draws — the Qt
+    panels own those duties (hosted mode never bridged ImGui keyboard input
+    anyway). Gizmo, selection ring, and the new ground grid
+    (ImGuizmo::DrawGrid, `editorGrid` setting) still draw. The standalone
+    GLFW viewer keeps the full ImGui editor.
+  - *Qt additions*: toolbar "Add" dropdown (primitives + camera; creation is
+    queued through the bridge and spawned by the editor at the live view),
+    Edit > Duplicate (Ctrl+D) / Delete, dirty-document title asterisk +
+    save prompt on close (UndoStack revision vs revision-at-last-save).
+- **Tests**: 169 engine cases (`make test` / ctest) + physics + the Qt
+  interaction test (undo via bridge, Add/Remove Component, dirty tracking;
+  hosted-window tests cover the relative-mouse capture mode). GLFW + Qt6 dev
+  packages install in the remote env, so everything except Metal compiles
+  and smoke-runs on Linux.
 
 Build on a Mac: `brew install qt`, `git submodule update --init --recursive`
 (JoltPhysics, imgui, ImGuizmo), then
@@ -67,15 +88,17 @@ editor state), `raytracer` (offline), `run_tests`.
    - `editor_app` viewport: NSView + CAMetalLayer path, retina scale, input
      feel, ImGuizmo matrix conventions (transpose bridge in
      editor_system.cpp), pick accuracy.
-   - New this round: the regenerated ImGui inspector (slider/drag feel,
-     ColorEdit3 popup commit-on-close behavior for undo), undo chords inside
-     the viewport vs Qt shortcut routing, drag-undo granularity.
+   - New this round: play-in-editor end to end — pointer capture feel on
+     macOS (QCursor::setPos/grabMouse behavior), WASD focus after Play,
+     Esc back to edit; the regenerated ImGui inspector in the standalone
+     viewer (slider/drag feel, ColorEdit3 popup commit for undo); the
+     ground grid; Qt shortcut routing (Ctrl+Z/D, Del) vs viewport keys.
    - Tech debt with on-device pointers in docs/TECH_DEBT.md: realtime DOF
      (dofGather), the ~20fps dip (bisect via Debug-panel pass toggles +
      Xcode GPU capture).
-2. **Editor quality of life**: editor grid/axes, multi-select, duplicate
-   shortcut, save prompts on dirty document (the undo stack's depth at last
-   save is a ready-made dirty signal), camera frustum gizmos.
+2. **Editor quality of life, remaining**: multi-select, camera frustum
+   gizmos, axes indicator (grid landed; duplicate shortcut and dirty-save
+   prompts landed in the Qt shell).
 3. **Asset pipeline (A4 continuation / ROADMAP 3.1)**: cook HDR -> prebaked
    cubemap + extracted sun at import (also cuts load time); asset manifest.
 4. **Phase 6 — iPhone virtual camera**: needs a research/planning pass first
@@ -102,3 +125,7 @@ editor state), `raytracer` (offline), `run_tests`.
   trigger; same fix covers it.
 - settings.json carries some cross-mode camera state; harmless but worth
   folding into the document model eventually.
+- The Debug > Cameras ImGui panel still draws inside the hosted viewport
+  (edit AND play) — it carries tools the shell doesn't replicate yet
+  (preview/look-through, offline render). If it proves intrusive, fold those
+  into the Qt shell next and suppress it like the Editor window.

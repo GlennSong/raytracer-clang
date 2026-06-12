@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -46,6 +47,16 @@ public:
         if (!undo) undo = std::make_unique<UndoStack>(componentRegistry());
         return undo.get();
     }
+    // --- shell requests (via EditorBridge) ---------------------------------
+    // Entity creation needs the frame context (renderer, spawn point from the
+    // live view), which the shell doesn't hold; requests queue here and the
+    // next update() applies them — selected + recorded on the command log.
+    void requestAddPrimitive(const std::string& shape) {
+        pendingAdds.push_back(shape);
+    }
+    void requestPlaceCamera() { pendingAdds.push_back("camera"); }
+    void requestDuplicate() { pendingDuplicate = true; }
+
     // The component vocabulary the inspector renders from: the bridge's
     // registry when a shell is connected, a private one otherwise.
     ComponentRegistry& componentRegistry() {
@@ -63,10 +74,12 @@ private:
     Entity addPrimitive(FrameContext& ctx, const std::string& shape);
     Entity duplicateSelected(FrameContext& ctx);
     Vec3 spawnPoint(FrameContext& ctx) const;
+    void processShellRequests(FrameContext& ctx);
 
     void drawToolbar(FrameContext& ctx);
     void drawInspector(FrameContext& ctx);
     void drawGizmo(FrameContext& ctx);
+    void drawGrid(FrameContext& ctx) const;
     void drawSelectionMarker(FrameContext& ctx) const;
 
     CameraSystem& cameras;
@@ -94,6 +107,8 @@ private:
     } pendingEdit;
     int gizmoOp = 0;            // 0 translate, 1 rotate, 2 scale
     char modelPath[256] = "assets/models/";
+    std::vector<std::string> pendingAdds;   // shape names; "camera" places one
+    bool pendingDuplicate = false;
 };
 
 }  // namespace engine

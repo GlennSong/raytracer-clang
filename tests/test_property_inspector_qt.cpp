@@ -132,6 +132,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Dirty tracking: the command log moved since attach, so the document
+    // reads dirty until a save captures the current revision.
+    REQUIRE(bridge.documentDirty());
+    REQUIRE(bridge.saveDocument());
+    REQUIRE(!bridge.documentDirty());
+    bridge.redo();   // any further change dirties it again
+    REQUIRE(bridge.documentDirty());
+
     // Selection cleared -> sections torn down; deleting the entity while
     // shown must degrade gracefully on the next refresh.
     bridge.select(Entity{});
@@ -140,6 +148,9 @@ int main(int argc, char** argv) {
     inspector.refresh();
     world.destroy(e);
     inspector.refresh();
+
+    std::remove("test.json");                // saveDocument artifacts
+    std::remove("test.json.cameras.json");
 
     std::printf(failures == 0 ? "inspector qt test: OK\n"
                               : "inspector qt test: %d FAILURES\n",

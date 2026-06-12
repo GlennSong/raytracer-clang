@@ -57,6 +57,10 @@ public:
     void clear();
     std::size_t depth() const { return undoList.size(); }
 
+    // Bumped on every recorded or applied change — compare against the value
+    // captured at the last save for a (conservative) document-dirty signal.
+    uint64_t revision() const { return revision_; }
+
     // One component's described state as JSON — the snapshot inspectors take
     // around a write. Null JSON when the component is absent.
     nlohmann::json componentState(World& world, Entity e,
@@ -100,6 +104,7 @@ private:
     ComponentRegistry& registry;
     std::deque<Command> undoList;
     std::deque<Command> redoList;
+    uint64_t revision_ = 0;
 };
 
 }  // namespace engine

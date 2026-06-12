@@ -180,7 +180,30 @@ void EditorSystem::update(FrameContext& ctx) {
     if (click && !ctx.input.uiWantsMouse && !gizmoBusy)
         pickAtCursor(ctx);
 
+    processShellRequests(ctx);
+
     if (!ctx.world.alive(selected)) selected = Entity{};
+}
+
+void EditorSystem::processShellRequests(FrameContext& ctx) {
+    for (const std::string& what : pendingAdds) {
+        Entity e = (what == "camera") ? cameras.placeCameraAtView(ctx)
+                                      : addPrimitive(ctx, what);
+        if (e.valid()) {
+            selected = e;
+            undoStack()->recordCreate(e);
+        }
+    }
+    pendingAdds.clear();
+
+    if (pendingDuplicate) {
+        pendingDuplicate = false;
+        Entity copy = duplicateSelected(ctx);
+        if (copy.valid()) {
+            selected = copy;
+            undoStack()->recordCreate(copy);
+        }
+    }
 }
 
 void EditorSystem::pickAtCursor(FrameContext& ctx) {
@@ -257,10 +280,40 @@ void EditorSystem::render(FrameContext& ctx) {
 #ifdef RT_HAS_IMGUIZMO
     ImGuizmo::BeginFrame();
 #endif
-    drawToolbar(ctx);
-    drawInspector(ctx);
+    drawGrid(ctx);
+    // Inside the Qt shell its panels carry the toolbar/inspector duties (and
+    // hosted mode doesn't bridge ImGui keyboard input anyway) — only the
+    // viewport overlays draw: grid, gizmo, selection ring.
+    if (!bridge) {
+        drawToolbar(ctx);
+        drawInspector(ctx);
+    }
     drawGizmo(ctx);
     drawSelectionMarker(ctx);
+}
+
+void EditorSystem::drawGrid(FrameContext& ctx) const {
+#ifndef RT_HAS_IMGUIZMO
+    (void)ctx;
+#else
+    if (!ctx.settings.getBool("editorGrid", true)) return;
+
+    const CameraState& cam = ctx.view.camera;
+    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
+                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    float viewF[16], projF[16];
+    toGizmo(view, viewF);
+    toGizmo(proj, projF);
+    static const float IDENTITY[16] = {1, 0, 0, 0, 0, 1, 0, 0,
+                                       0, 0, 1, 0, 0, 0, 0, 1};
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuizmo::SetOrthographic(false);
+    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+    // Ground-plane reference (y = 0), drawn into ImGuizmo's overlay window —
+    // over the scene, under every panel.
+    ImGuizmo::DrawGrid(viewF, projF, IDENTITY, 24.0f);
+#endif
 }
 
 void EditorSystem::drawToolbar(FrameContext& ctx) {
@@ -546,6 +599,7 @@ void EditorSystem::render(FrameContext& ctx) {
 void EditorSystem::drawToolbar(FrameContext&) {}
 void EditorSystem::drawInspector(FrameContext&) {}
 void EditorSystem::drawGizmo(FrameContext&) {}
+void EditorSystem::drawGrid(FrameContext&) const {}
 void EditorSystem::drawSelectionMarker(FrameContext&) const {}
 
 #endif

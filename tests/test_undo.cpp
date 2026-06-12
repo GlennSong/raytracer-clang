@@ -230,6 +230,35 @@ TEST_CASE(undo_field_edit_fires_post_edit_hook_on_restore) {
     CHECK(hookLabel == nullptr);
 }
 
+TEST_CASE(undo_revision_tracks_every_change) {
+    Fixture f;
+    Entity e = f.makeBox();
+    RenderMaterial& mat = f.world.get<Renderable>(e)->material;
+    CHECK(f.undo.revision() == 0);
+
+    json before = f.materialState(e);
+    mat.metallic = 0.5f;
+    f.undo.recordFieldEdit(e, "Material", "Metallic", before,
+                           f.materialState(e));
+    uint64_t afterEdit = f.undo.revision();
+    CHECK(afterEdit > 0);
+
+    // Undo and redo both move the document away from whatever was saved, so
+    // they bump the revision too (the dirty flag is conservative).
+    f.undo.undo(f.world);
+    CHECK(f.undo.revision() > afterEdit);
+    uint64_t afterUndo = f.undo.revision();
+    f.undo.redo(f.world);
+    CHECK(f.undo.revision() > afterUndo);
+
+    // Coalesced edits also count as changes.
+    uint64_t beforeCoalesce = f.undo.revision();
+    json b2 = f.materialState(e);
+    mat.metallic = 0.6f;
+    f.undo.recordFieldEdit(e, "Material", "Metallic", b2, f.materialState(e));
+    CHECK(f.undo.revision() > beforeCoalesce);
+}
+
 TEST_CASE(undo_survives_stale_entities_and_empty_stacks) {
     Fixture f;
     CHECK(!f.undo.canUndo());

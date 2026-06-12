@@ -53,6 +53,16 @@ public:
     bool saveDocument();
     void deleteEntity(Entity entity);
 
+    // Creation requests, queued onto the editor and applied next frame (the
+    // spawn point comes from the live view, which only the engine holds).
+    void addPrimitive(const std::string& shape);
+    void placeCamera();
+    void duplicateSelected();
+
+    // Anything recorded on the command log since the last saveDocument()
+    // (conservative: undoing back to the saved state still reads dirty).
+    bool documentDirty();
+
     // Component menu actions, routed through the registry's thunks; both are
     // recorded on the editor's command log.
     void addComponent(Entity entity, const std::string& componentName);
@@ -71,6 +81,7 @@ private:
     World* worldPtr = nullptr;
     EditorSystem* editorPtr = nullptr;
     std::string levelFile;
+    uint64_t savedRevision = 0;   // command-log revision at the last save
 };
 
 }  // namespace engine
