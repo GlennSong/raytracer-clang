@@ -4,6 +4,7 @@
 #include "../src/engine/components.h"
 #include "../src/engine/editor_bridge.h"
 #include "../src/engine/camera/scene_camera.h"
+#include "../src/engine/model_importer.h"
 #include <nlohmann/json.hpp>
 #include <cstdio>
 #include <fstream>
@@ -213,4 +214,21 @@ TEST_CASE(editor_bridge_lists_and_selects) {
 
     bridge.detach();
     CHECK(!bridge.attached());
+}
+
+TEST_CASE(model_importer_validate_checks_gltf) {
+    std::string error;
+    CHECK(!ModelImporter::validate("does_not_exist.gltf", error));
+    CHECK(!error.empty());
+
+    // A minimal but valid glTF 2.0 document parses clean.
+    const char* path = "test_minimal_tmp.gltf";
+    {
+        std::ofstream f(path);
+        f << R"({ "asset": { "version": "2.0" } })";
+    }
+    error.clear();
+    bool ok = ModelImporter::validate(path, error);
+    std::remove(path);
+    CHECK(ok);
 }

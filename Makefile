@@ -65,6 +65,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/level_writer.cpp \
 	$(SRC_DIR)/renderer/hosted_window.cpp \
 	$(SRC_DIR)/engine/editor_bridge.cpp \
+	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \

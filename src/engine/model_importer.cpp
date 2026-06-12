@@ -102,6 +102,17 @@ static void computeTangents(std::vector<Vertex>& vertices,
     }
 }
 
+bool ModelImporter::validate(const std::string& path, std::string& error) {
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model model;
+    std::string err, warn;
+    bool binary = path.size() > 4 && path.substr(path.size() - 4) == ".glb";
+    bool ok = binary ? loader.LoadBinaryFromFile(&model, &err, &warn, path)
+                     : loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    if (!ok) error = err.empty() ? "unparseable glTF" : err;
+    return ok;
+}
+
 ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
     auto cached = cache.find(path);
     if (cached != cache.end()) return cached->second;

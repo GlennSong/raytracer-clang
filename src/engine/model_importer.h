@@ -21,6 +21,10 @@ class ModelImporter {
 public:
     static ImportedModel load(const std::string& path, Renderer& renderer);
 
+    // Parse-only check (no GPU upload) — the editor's asset import validates
+    // files before copying them into the project. False fills `error`.
+    static bool validate(const std::string& path, std::string& error);
+
     static ImportedModel* getCached(const std::string& path);
 
     static void clearCache();

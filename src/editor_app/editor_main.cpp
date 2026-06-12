@@ -12,14 +12,19 @@
 #include "../engine/application.h"
 #include "../engine/components.h"
 #include "../engine/editor_bridge.h"
+#include "../engine/model_importer.h"
 #include "../engine/states/editor_state.h"
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
 #include "../log.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFileSystemModel>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -314,6 +319,43 @@ int main(int argc, char** argv) {
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
 
     auto* fileMenu = mainWindow.menuBar()->addMenu("&File");
+    // Import = validate, then copy into the project's asset tree (asset
+    // cooking grows behind this action — editor-app plan A4). The assets dock
+    // refreshes itself (QFileSystemModel watches the directory).
+    fileMenu->addAction("&Import Asset...", [&mainWindow]() {
+        QString src = QFileDialog::getOpenFileName(
+            &mainWindow, "Import Asset", QString(),
+            "Assets (*.gltf *.glb *.hdr)");
+        if (src.isEmpty()) return;
+
+        QFileInfo info(src);
+        QString kind = info.suffix().toLower();
+        if (kind == "gltf" || kind == "glb") {
+            std::string error;
+            if (!engine::ModelImporter::validate(src.toStdString(), error)) {
+                mainWindow.statusBar()->showMessage(
+                    QString("Import failed: %1").arg(error.c_str()), 6000);
+                return;
+            }
+        } else if (kind == "hdr") {
+            if (!engine::EnvironmentLoader::loadHdr(src.toStdString()).valid()) {
+                mainWindow.statusBar()->showMessage(
+                    "Import failed: unreadable HDR", 6000);
+                return;
+            }
+        }
+
+        QString destDir = (kind == "hdr") ? "assets/env" : "assets/models";
+        QDir().mkpath(destDir);
+        QString dest = destDir + "/" + info.fileName();
+        if (QFile::exists(dest)) QFile::remove(dest);
+        bool copied = QFile::copy(src, dest);
+        mainWindow.statusBar()->showMessage(
+            copied ? QString("Imported %1").arg(dest)
+                   : QString("Import failed: cannot copy to %1").arg(dest),
+            6000);
+    });
+    fileMenu->addSeparator();
     fileMenu->addAction("&Quit", &qtApp, &QApplication::quit);
     mainWindow.statusBar()->showMessage(
         "Click selects | 1/2/3 move/rotate/scale | F free-fly | C place camera");
