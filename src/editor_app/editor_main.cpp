@@ -253,12 +253,15 @@ struct Panels {
         return dock;
     }
 
-    // Called on a UI timer: mirror engine state into the widgets.
+    // Called on a UI timer: mirror engine state into the widgets. During a
+    // playtest the bridge is attached read-only (observer mode): the
+    // hierarchy stays navigable and the inspector keeps syncing live values,
+    // but its widgets gray out — watch, don't touch.
     void refresh() {
         const bool live = bridge.attached();
         hierarchy->setEnabled(live);
-        inspector->setEnabled(live);
-        deleteButton->setEnabled(live);
+        inspector->setEnabled(bridge.editable());
+        deleteButton->setEnabled(bridge.editable());
         inspector->refresh();
         if (!live) return;
 
@@ -419,24 +422,34 @@ int main(int argc, char** argv) {
             app.windowRef(), app.renderer(), levelPath, makePlay, &bridge);
     };
     makePlay = [&]() -> std::unique_ptr<engine::AppState> {
+        // The bridge rides into play too — observer mode: live panels,
+        // editing off (ArenaState attaches it read-only).
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
-                                            levelPath, makeEditor);
+                                            levelPath, makeEditor, &bridge);
     };
 
     // Toolbar: the document loop (save / play / stop) from native UI.
     auto* toolbar = mainWindow.addToolBar("Main");
     toolbar->addAction("Save", [&]() {
-        if (bridge.attached()) bridge.saveDocument();
+        if (bridge.editable()) bridge.saveDocument();
     });
     auto* playAction = toolbar->addAction("Play", [&]() {
-        if (!bridge.attached()) return;     // already playing
+        if (!bridge.editable()) return;     // already playing
         bridge.saveDocument();              // Play = compile + run
         app.simClock().setPaused(false);    // a fresh playtest always runs
         app.requestState(makePlay());
         viewport->setFocus();               // WASD goes to the game, not Qt
     });
+    auto* playHereAction = toolbar->addAction("Play Here", [&]() {
+        if (!bridge.editable()) return;
+        bridge.saveDocument();
+        app.settings().setBool("playFromHere", true);   // one-shot override
+        app.simClock().setPaused(false);
+        app.requestState(makePlay());
+        viewport->setFocus();
+    });
     auto* stopAction = toolbar->addAction("Stop", [&]() {
-        if (bridge.attached()) return;      // already editing
+        if (bridge.editable()) return;      // already editing
         app.requestState(makeEditor());
         viewport->setFocus();
     });
@@ -502,8 +515,9 @@ int main(int argc, char** argv) {
     QTimer panelTimer;
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
         panels.refresh();
-        const bool editing = bridge.attached();
+        const bool editing = bridge.editable();
         playAction->setEnabled(editing);
+        playHereAction->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);
         pauseAction->setEnabled(!editing);

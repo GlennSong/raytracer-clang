@@ -218,6 +218,46 @@ TEST_CASE(editor_bridge_lists_and_selects) {
     CHECK(!bridge.attached());
 }
 
+TEST_CASE(editor_bridge_observer_mode_is_read_only) {
+    TmpFile cleanup;
+    World world;
+    Entity box = addBox(world, Vec3(1, 2, 3));
+    // A play-style entity: the live player (no SourceSpec).
+    Entity player = world.create();
+    world.add<Transform>(player);
+    world.add<ControlledBy>(player);
+
+    EditorBridge bridge;
+    bridge.attachObserver(&world, TMP_PATH);
+    CHECK(bridge.attached());
+    CHECK(!bridge.editable());
+
+    // Panels can look: the hierarchy lists document entities AND the player.
+    auto list = bridge.listEntities();
+    bool sawPlayer = false;
+    for (const auto& info : list)
+        if (info.entity == player) sawPlayer = true;
+    CHECK(sawPlayer);
+    CHECK(list.size() == 2);
+
+    // Selection is bridge-held (no editor system owns one during play).
+    bridge.select(box);
+    CHECK(bridge.selected() == box);
+
+    // ...but nothing touches: document writes refused, mutations no-ops,
+    // and there is no command log to record onto.
+    CHECK(!bridge.saveDocument());
+    bridge.deleteEntity(box);
+    CHECK(world.alive(box));
+    bridge.addComponent(box, "Camera");
+    CHECK(!world.has<SceneCamera>(box));
+    CHECK(bridge.undoStack() == nullptr);
+    CHECK(!bridge.documentDirty());
+
+    bridge.detach();
+    CHECK(!bridge.attached());
+}
+
 TEST_CASE(model_importer_validate_checks_gltf) {
     std::string error;
     CHECK(!ModelImporter::validate("does_not_exist.gltf", error));

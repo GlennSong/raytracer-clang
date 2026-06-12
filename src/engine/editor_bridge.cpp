@@ -12,6 +12,7 @@ void EditorBridge::attach(World* world, EditorSystem* editor,
                           std::string level) {
     worldPtr = world;
     editorPtr = editor;
+    observerMode = false;
     levelFile = std::move(level);
     // A session begins on a freshly loaded (or just-saved) document.
     savedRevision = editor && editor->undoStack()
@@ -19,17 +20,30 @@ void EditorBridge::attach(World* world, EditorSystem* editor,
                         : 0;
 }
 
+void EditorBridge::attachObserver(World* world, std::string level) {
+    worldPtr = world;
+    editorPtr = nullptr;
+    observerMode = true;
+    observerSelection = Entity{};
+    levelFile = std::move(level);
+}
+
 void EditorBridge::detach() {
     worldPtr = nullptr;
     editorPtr = nullptr;
+    observerMode = false;
+    observerSelection = Entity{};
 }
 
 Entity EditorBridge::selected() const {
-    return editorPtr ? editorPtr->selectedEntity() : Entity{};
+    return editorPtr ? editorPtr->selectedEntity() : observerSelection;
 }
 
 void EditorBridge::select(Entity entity) {
-    if (editorPtr) editorPtr->setSelected(entity);
+    if (editorPtr)
+        editorPtr->setSelected(entity);
+    else
+        observerSelection = entity;
 }
 
 std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
@@ -60,11 +74,18 @@ std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
         [&](Entity e, Transform&, PlayerSpawn&) {
             out.push_back({e, "Player Spawn", false});
         });
+    // During a playtest (observer mode) the live player is the entity worth
+    // watching; it carries no SourceSpec, so list it explicitly.
+    worldPtr->each<Transform, ControlledBy>(
+        [&](Entity e, Transform&, ControlledBy&) {
+            out.push_back({e, "Player (live)", false});
+        });
     return out;
 }
 
 bool EditorBridge::saveDocument() {
-    if (!worldPtr) return false;
+    // Observer mode must never compile a live playtest over the document.
+    if (!editable()) return false;
     bool ok = LevelWriter::save(levelFile, *worldPtr);
     ok &= CameraStore::save(levelFile + ".cameras.json", *worldPtr);
     if (ok)
@@ -90,7 +111,7 @@ bool EditorBridge::documentDirty() {
 }
 
 void EditorBridge::deleteEntity(Entity entity) {
-    if (!worldPtr || !worldPtr->alive(entity)) return;
+    if (!editable() || !worldPtr->alive(entity)) return;
     if (selected() == entity) select(Entity{});
     if (UndoStack* undo = undoStack()) undo->recordDelete(*worldPtr, entity);
     worldPtr->destroy(entity);
@@ -98,7 +119,7 @@ void EditorBridge::deleteEntity(Entity entity) {
 
 void EditorBridge::addComponent(Entity entity, const std::string& componentName) {
     ComponentRegistry::Entry* entry = registry_.find(componentName);
-    if (!worldPtr || !worldPtr->alive(entity) || !entry || !entry->addTo ||
+    if (!editable() || !worldPtr->alive(entity) || !entry || !entry->addTo ||
         entry->has(*worldPtr, entity))
         return;
     entry->addTo(*worldPtr, entity);
@@ -109,7 +130,7 @@ void EditorBridge::addComponent(Entity entity, const std::string& componentName)
 void EditorBridge::removeComponent(Entity entity,
                                    const std::string& componentName) {
     ComponentRegistry::Entry* entry = registry_.find(componentName);
-    if (!worldPtr || !worldPtr->alive(entity) || !entry || !entry->removeFrom ||
+    if (!editable() || !worldPtr->alive(entity) || !entry || !entry->removeFrom ||
         !entry->has(*worldPtr, entity))
         return;
     if (UndoStack* undo = undoStack())

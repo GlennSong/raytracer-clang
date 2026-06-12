@@ -337,7 +337,7 @@ void PropertyInspector::rebuild(engine::Entity entity) {
                              });
         entries[i].visit(*world, entity, builder);
 
-        if (entries[i].removeFrom) {
+        if (bridge.editable() && entries[i].removeFrom) {
             auto* removeButton = new QPushButton("Remove Component");
             QObject::connect(removeButton, &QPushButton::clicked,
                              [this, name = entries[i].name]() {
@@ -351,7 +351,9 @@ void PropertyInspector::rebuild(engine::Entity entity) {
     }
 
     // Add Component: registered types the entity lacks that allow menu
-    // attachment (the registry's addTo thunks).
+    // attachment (the registry's addTo thunks). Observer mode shows none —
+    // the panel is a window into the playtest, not an editor.
+    if (!bridge.editable()) return;
     auto* addMenu = new QMenu;
     for (const auto& entry : entries) {
         if (!entry.addTo || entry.has(*world, entity)) continue;
@@ -373,7 +375,9 @@ void PropertyInspector::rebuild(engine::Entity entity) {
 }
 
 void PropertyInspector::writeField(int componentIndex, int fieldIndex) {
-    if (impl->muted || !bridge.attached()) return;
+    // editable(): observer mode (play) syncs values INTO widgets but never
+    // writes back, even if a stray signal fires while disabled.
+    if (impl->muted || !bridge.editable()) return;
     World* world = bridge.world();
     Entity entity = bridge.selected();
     if (!world || !world->alive(entity)) return;

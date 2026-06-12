@@ -28,14 +28,22 @@ public:
 
     // --- engine side (EditorSystem) ---------------------------------------
     void attach(World* world, EditorSystem* editor, std::string levelFile);
+    // Observer mode (play states): panels see the live world — hierarchy and
+    // inspector values update in real time — but nothing edits: no editor,
+    // no undo log, document writes refused. editable() distinguishes.
+    void attachObserver(World* world, std::string levelFile);
     void detach();
 
     // --- shell side --------------------------------------------------------
     bool attached() const { return worldPtr != nullptr; }
+    // Editing rights come from HOW the engine attached (attach vs
+    // attachObserver), not from which pointers happen to be set.
+    bool editable() const { return worldPtr != nullptr && !observerMode; }
     World* world() { return worldPtr; }
     const std::string& levelPath() const { return levelFile; }
 
-    // Selection is shared with EditorSystem (viewport ring + gizmo follow).
+    // Selection is shared with EditorSystem (viewport ring + gizmo follow)
+    // while editing; in observer mode the bridge holds it for the panels.
     Entity selected() const;
     void select(Entity entity);
 
@@ -80,6 +88,8 @@ private:
     ComponentRegistry registry_;
     World* worldPtr = nullptr;
     EditorSystem* editorPtr = nullptr;
+    bool observerMode = false;
+    Entity observerSelection;     // panel selection while no editor owns one
     std::string levelFile;
     uint64_t savedRevision = 0;   // command-log revision at the last save
 };

@@ -82,7 +82,18 @@ session.
     the Qt shell's new Pause/Step toolbar buttons drive one switch
     (`Application::simClock()` is the shell hook). Play always starts
     unpaused.
-- **Tests**: 170 engine cases (`make test` / ctest) + physics + the Qt
+- **Play From Here + observe-while-playing (fourth pass)**:
+  - *Play From Here* (Qt toolbar + in-viewport button): saves, sets a
+    one-shot `playFromHere` settings flag, and ArenaState spawns the player
+    at the editor camera (position from the flyEye* settings the camera
+    already persists on state exit; facing carries over the same way).
+  - *Observer mode*: the bridge now rides into play — ArenaState attaches
+    it via `attachObserver` (read-only: `editable()` false, document writes
+    refused, no command log, selection held bridge-side). The Qt hierarchy
+    stays navigable during a playtest — including a "Player (live)" row —
+    and the inspector keeps syncing live values with its widgets grayed.
+    Pairs with Pause/Step: freeze a moment, click around, read state.
+- **Tests**: 171 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so
@@ -129,14 +140,12 @@ creation requests), `FrameContext::debugOverlayActive`,
 hooks, and the property layer's component-JSON snapshots. Ideas that build
 on them, roughly by payoff-per-effort:
 
-1. **Play From Here**: spawn the player at the editor camera instead of the
-   PlayerSpawn entity (toolbar button next to Play; pass a spawn override
-   into ArenaState). The single biggest iteration-loop win.
-2. **Inspect during play**: keep the bridge attached in play as READ-ONLY —
-   hierarchy + inspector show live values (transform, physics motion).
-   Pairs naturally with Pause/Step: freeze a moment, click around, read
-   state. Later: "apply this component back to the document" — the property
-   layer's JSON snapshots make that diff nearly free.
+1. ~~**Play From Here**~~ — DONE (toolbar + in-viewport buttons).
+2. **Inspect during play** — first slice DONE (read-only observer attach,
+   live hierarchy/inspector, "Player (live)" row). Remaining: registry
+   entries for runtime state shown read-only (velocity, physics motion),
+   and "apply this component back to the document" — the property layer's
+   JSON snapshots make that diff nearly free.
 3. **Engine -> shell notifications**: the panels poll at 150ms; a small
    event queue on the bridge (selectionChanged, modeChanged, logLine) gives
    instant refresh, a Qt console dock for the engine log, and a status bar

@@ -326,6 +326,14 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
         ctx.transition.replaceWith(makePlayState());
     }
     ImGui::SameLine();
+    if (ImGui::Button("Play Here")) {
+        // Same loop, but spawn the player at this view (one-shot flag the
+        // play state consumes) — skip the walk from the level's spawn point.
+        LevelWriter::save(levelFile, ctx.world);
+        ctx.settings.setBool("playFromHere", true);
+        ctx.transition.replaceWith(makePlayState());
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Save")) LevelWriter::save(levelFile, ctx.world);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", levelFile.c_str());
