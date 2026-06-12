@@ -313,6 +313,21 @@ ImGuizmo behind the ADR-0011 pattern).
 **Depends on:** ImGui (1.1), level format. Unblocks comfortable authoring for
 procgen tiers (placing generators, tuning scenes).
 
+### 3.6 Editor application (native shell around the engine)
+**Status:** Planned — see `docs/editor-app-plan.md`.
+**Why:** ImGui is right for in-engine tooling but wrong as the authoring
+surface. A Unity/Blender-style application — native hierarchy/inspector/asset
+panels around an engine-rendered viewport, Play running the game in-viewport
+or as a separate process — makes level building comfortable. 1:1 fidelity by
+construction: one `engine_core` library, two hosts. Phase A1 (engine-as-
+library + an embedded-window seam) is framework-agnostic and Linux-testable;
+the recommended shell is Obj-C++/AppKit (the engine is Metal/macOS-only
+already; .mm precedent in-repo).
+
+**Depends on:** Edit mode (3.5) — its document model, picking, and gizmos are
+the engine half of this application. Feeds the asset system (3.1): import +
+cooking live in the editor's asset browser.
+
 ---
 
 ## Tier 4 — Procedural Generation
