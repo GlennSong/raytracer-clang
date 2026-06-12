@@ -206,7 +206,22 @@ MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
 MetalRenderer::~MetalRenderer() { shutdown(); }
 
 bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
-    NSWindow* nsWindow = (__bridge NSWindow*)windowHandle;
+    // The handle is opaque (ADR-0001): the GLFW runtime passes an NSWindow*;
+    // a host application embedding the engine (the Qt editor) passes the
+    // NSView* of its viewport widget. Attach the layer to whichever view we
+    // end up with.
+    NSObject* handleObj = (__bridge NSObject*)windowHandle;
+    NSWindow* nsWindow = nil;
+    NSView* hostView = nil;
+    if ([handleObj isKindOfClass:[NSWindow class]]) {
+        nsWindow = (NSWindow*)handleObj;
+        hostView = nsWindow.contentView;
+    } else if ([handleObj isKindOfClass:[NSView class]]) {
+        hostView = (NSView*)handleObj;
+        nsWindow = hostView.window;   // may be nil before the host shows it
+    } else {
+        return false;
+    }
 
     impl->device = MTLCreateSystemDefaultDevice();
     if (!impl->device) return false;
@@ -220,10 +235,11 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
     impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
-    impl->metalLayer.contentsScale = nsWindow.backingScaleFactor;
+    impl->metalLayer.contentsScale =
+        nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
 
-    nsWindow.contentView.wantsLayer = YES;
-    nsWindow.contentView.layer = impl->metalLayer;
+    hostView.wantsLayer = YES;
+    hostView.layer = impl->metalLayer;
     impl->nsWindow = nsWindow;
 
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
@@ -686,7 +702,8 @@ void MetalRenderer::shutdown() {
 void MetalRenderer::resize(int width, int height) {
     impl->framebufferWidth = width;
     impl->framebufferHeight = height;
-    impl->metalLayer.contentsScale = impl->nsWindow.backingScaleFactor;
+    if (impl->nsWindow)   // hosted mode: keep the scale set at initialize
+        impl->metalLayer.contentsScale = impl->nsWindow.backingScaleFactor;
     impl->metalLayer.drawableSize = CGSizeMake(width, height);
 
     MTLTextureDescriptor* depthDesc = [MTLTextureDescriptor

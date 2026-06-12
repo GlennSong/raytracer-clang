@@ -34,56 +34,55 @@ struct InputState {
           keyUp(false), keyDown(false), uiWantsMouse(false) {}
 };
 
-// The windowing/input seam. All GLFW (and any other backend) state is hidden in
-// the .cpp-only Impl, so this header carries no windowing-library types — engine
-// and app code depend only on backend-neutral InputState / Event.
+// The windowing/input seam — now an interface (editor-app plan, Phase A1).
+// Two implementations exist: the GLFW-backed platform window (window.cpp,
+// behind createPlatformWindow) used by the standalone runtime, and
+// HostedWindow (hosted_window.h), where a host application (the Qt editor)
+// owns the real window and injects events. Engine and app code depend only on
+// this interface and the backend-neutral InputState / Event types.
 class Window {
 public:
-    Window();
-    ~Window();
+    virtual ~Window() = default;
 
-    bool initialize(int width, int height, const std::string& title);
-    void shutdown();
-    bool shouldClose() const;
-    void pollEvents();
-    void getSize(int& width, int& height) const;
-    void getFramebufferSize(int& width, int& height) const;
+    virtual bool initialize(int width, int height, const std::string& title) = 0;
+    virtual void shutdown() = 0;
+    virtual bool shouldClose() const = 0;
+    virtual void pollEvents() = 0;
+    virtual void getSize(int& width, int& height) const = 0;
+    virtual void getFramebufferSize(int& width, int& height) const = 0;
 
-    // Opaque native OS window pointer (NSWindow* on macOS, HWND on Windows...)
+    // Opaque native OS handle (NSWindow*/NSView* on macOS, HWND on Windows...)
     // for the renderer to bind its surface to. The only seam through which a
-    // platform handle crosses into the renderer; keeps GLFW out of the backend.
-    void* nativeWindowHandle() const;
+    // platform handle crosses into the renderer.
+    virtual void* nativeWindowHandle() const = 0;
 
-    const InputState& getInput() const;
-    const std::vector<Event>& getEvents() const;
+    virtual const InputState& getInput() const = 0;
+    virtual const std::vector<Event>& getEvents() const = 0;
     // Polled gamepad snapshots, indexed by device id. Refreshed by pollEvents;
     // connect/disconnect also surface as events in getEvents().
-    const GamepadSet& getGamepads() const;
-    double getDeltaTime() const;
+    virtual const GamepadSet& getGamepads() const = 0;
+    virtual double getDeltaTime() const = 0;
 
     // Invoked to redraw a frame. The platform calls this both from the normal
     // loop and during a modal resize (when pollEvents blocks), so the window
-    // keeps painting instead of freezing while the user drags its edge.
-    void setDrawCallback(std::function<void()> callback);
+    // keeps painting instead of freezing while the user drags its edge. Hosted
+    // windows ignore it — the host drives painting.
+    virtual void setDrawCallback(std::function<void()> callback) = 0;
 
-    // Debug-UI (Dear ImGui) GLFW-backend hooks — see ADR-0011. No-ops unless
-    // the build defines RT_ENABLE_IMGUI. newDebugUiFrame() is called from
+    virtual void setCursorMode(CursorMode mode) = 0;
+    virtual void resetMouseDelta() = 0;
+
+    // Debug-UI (Dear ImGui) platform hooks — see ADR-0011. No-ops unless the
+    // build defines RT_ENABLE_IMGUI. newDebugUiFrame() is called from
     // pollEvents; init/shutdown bracket the app lifetime.
-    void setCursorMode(CursorMode mode);
-    void resetMouseDelta();
-
-    void initDebugUi();
-    void newDebugUiFrame();
-    void shutdownDebugUi();
-
-    // Opaque implementation, defined in window.cpp. Public only so the
-    // file-local platform callbacks there can name the type; its members and
-    // the impl pointer below remain implementation details.
-    struct Impl;
-
-private:
-    std::unique_ptr<Impl> impl;
+    virtual void initDebugUi() = 0;
+    virtual void newDebugUiFrame() = 0;
+    virtual void shutdownDebugUi() = 0;
 };
+
+// The GLFW-backed platform window (the standalone runtime's default).
+// Defined in window.cpp; the one place GLFW types exist.
+std::unique_ptr<Window> createPlatformWindow();
 
 
 }  // namespace engine

@@ -27,6 +27,7 @@ add_library(engine_core STATIC
     src/log.cpp
     src/job_system.cpp
     src/renderer/settings.cpp
+    src/renderer/hosted_window.cpp
     src/engine/clock.cpp
     src/engine/world.cpp
     src/engine/components.cpp
@@ -58,6 +59,45 @@ add_library(engine_core STATIC
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
+
+# Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
+# panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
+option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" OFF)
+if(RT_ENABLE_IMGUI)
+    set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "Dear ImGui submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+                        third_party/imgui
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+        message(FATAL_ERROR
+            "Dear ImGui submodule not found at third_party/imgui.\n"
+            "Fetch it with:  git submodule update --init --recursive")
+    endif()
+    target_sources(engine_core PRIVATE
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+    )
+    target_include_directories(engine_core SYSTEM PUBLIC ${IMGUI_DIR})
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_IMGUI=1)
+
+    set(IMGUIZMO_DIR ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
+    if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
+        target_sources(engine_core PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
+        target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+    else()
+        message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
+                        "run: git submodule update --init third_party/ImGuizmo")
+    endif()
+endif()
 
 # Offline path-tracer sources (the tracer's own scene/camera/image stack).
 set(CORE_SOURCES
@@ -99,6 +139,7 @@ add_executable(run_tests
     tests/test_level_scene.cpp
     tests/test_pbr_lighting.cpp
     tests/test_level_writer.cpp
+    tests/test_hosted_window.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -207,11 +248,14 @@ if(APPLE)
         "-framework GameController"
     )
     set(PLATFORM_DEFINES USE_METAL=1)
-# elseif(WIN32 OR UNIX)
-#     find_package(Vulkan REQUIRED)
-#     list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
-#     set(PLATFORM_LIBS Vulkan::Vulkan)
-#     set(PLATFORM_DEFINES USE_VULKAN=1)
+else()
+    # No GPU backend on this platform yet (Vulkan is the planned one):
+    # NullRenderer keeps the targets linking, e.g. for Linux CI/development.
+    # When Vulkan lands:
+    #     find_package(Vulkan REQUIRED)
+    #     list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
+    #     set(PLATFORM_LIBS Vulkan::Vulkan)
+    list(APPEND VIEWER_SOURCES src/renderer/null_renderer.cpp)
 endif()
 
 add_executable(viewer
@@ -245,30 +289,11 @@ endif()
 # glfw/metal backends, and define RT_ENABLE_IMGUI. The seam in window.cpp /
 # metal_renderer.mm / DebugOverlaySystem lights up; off, they are no-ops.
 # ============================================================
-option(RT_ENABLE_IMGUI "Build the viewer with Dear ImGui debug UI" OFF)
 if(RT_ENABLE_IMGUI)
-    set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
-    # Fetch the submodule if a plain clone/branch sync left it empty.
-    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
-        find_package(Git QUIET)
-        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
-            message(STATUS "Dear ImGui submodule missing — running 'git submodule update --init'")
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
-                        third_party/imgui
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-        endif()
-    endif()
-    if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
-        message(FATAL_ERROR
-            "Dear ImGui submodule not found at third_party/imgui.\n"
-            "Fetch it with:  git submodule update --init --recursive")
-    endif()
+    # Platform backends for the standalone viewer (GLFW + Metal). The hosted
+    # editor needs neither: HostedWindow feeds ImGui's io directly and the
+    # Metal backend submits the draw data either way.
     target_sources(viewer PRIVATE
-        ${IMGUI_DIR}/imgui.cpp
-        ${IMGUI_DIR}/imgui_draw.cpp
-        ${IMGUI_DIR}/imgui_tables.cpp
-        ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     )
     if(APPLE)
@@ -278,23 +303,52 @@ if(RT_ENABLE_IMGUI)
             PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
     endif()
-    set(IMGUIZMO_DIR ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
-    if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
-        target_sources(viewer PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
-        target_include_directories(viewer SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
-        target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
-    else()
-        message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
-                        "run: git submodule update --init third_party/ImGuizmo")
-    endif()
-    target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-    target_compile_definitions(viewer PRIVATE RT_ENABLE_IMGUI=1)
-    # The ImGui panels (debug overlay, cameras, editor) compile inside
-    # engine_core — it must see the same ImGui configuration, or they would
-    # silently become no-ops while the host expects them.
-    target_include_directories(engine_core SYSTEM PRIVATE ${IMGUI_DIR})
-    target_compile_definitions(engine_core PRIVATE RT_ENABLE_IMGUI=1)
+    target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR}/backends)
 endif()
 else()
     message(STATUS "glfw3 not found — skipping the interactive viewer target")
+endif()
+
+# ============================================================
+# Editor application (editor-app plan, Phase A2): a Qt shell hosting the
+# engine through the HostedWindow seam. Builds wherever Qt6 is installed;
+# the viewport renders on platforms with a GPU backend (Metal today) and is
+# a NullRenderer elsewhere (UI still runs, e.g. for Linux development).
+# ============================================================
+find_package(Qt6 COMPONENTS Widgets QUIET)
+if(Qt6_FOUND)
+    add_executable(editor_app
+        src/editor_app/editor_main.cpp
+        src/game/arena_state.cpp
+    )
+    target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(editor_app PRIVATE engine_core Qt6::Widgets Threads::Threads)
+
+    if(RT_ENABLE_PHYSICS)
+        target_sources(editor_app PRIVATE
+            src/engine/physics/physics_world.cpp
+            src/engine/physics/jolt_job_adapter.cpp
+            src/engine/systems/physics_system.cpp
+            src/engine/systems/player_system.cpp
+            src/engine/systems/shooting_system.cpp
+        )
+        target_link_libraries(editor_app PRIVATE Jolt)
+    endif()
+
+    if(APPLE)
+        target_sources(editor_app PRIVATE
+            src/renderer/metal/metal_renderer.mm
+            src/renderer/gamepad_gc.mm
+        )
+        target_link_libraries(editor_app PRIVATE ${PLATFORM_LIBS})
+        if(RT_ENABLE_IMGUI)
+            # The Metal backend submits ImGui draw data; no GLFW backend here.
+            target_sources(editor_app PRIVATE ${IMGUI_DIR}/backends/imgui_impl_metal.mm)
+        endif()
+    else()
+        target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
+    endif()
+    message(STATUS "Qt6 found — building the editor application")
+else()
+    message(STATUS "Qt6 not found — skipping the editor application")
 endif()

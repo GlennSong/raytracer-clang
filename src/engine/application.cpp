@@ -14,27 +14,30 @@ void StateTransition::replaceWith(std::unique_ptr<AppState> state) {
 Application::Application() = default;
 Application::~Application() = default;
 
-bool Application::initialize(const Config& config) {
+bool Application::initialize(const Config& config,
+                             std::unique_ptr<Window> appWindow) {
     settingsFile = config.settingsFile;
     settingsStore.load(settingsFile);
 
     int winWidth = static_cast<int>(settingsStore.getDouble("windowWidth", config.width));
     int winHeight = static_cast<int>(settingsStore.getDouble("windowHeight", config.height));
 
-    if (!window.initialize(winWidth, winHeight, config.title)) return false;
+    window = std::move(appWindow);
+    if (!window || !window->initialize(winWidth, winHeight, config.title))
+        return false;
 
-    window.getFramebufferSize(framebufferWidth, framebufferHeight);
+    window->getFramebufferSize(framebufferWidth, framebufferHeight);
 
     rendererPtr = Renderer::create();
-    if (!rendererPtr->initialize(window.nativeWindowHandle(),
+    if (!rendererPtr->initialize(window->nativeWindowHandle(),
                                  framebufferWidth, framebufferHeight)) {
         return false;
     }
 
     // Debug UI (ADR-0011): renderer creates the ImGui context, then the window
-    // attaches its GLFW backend. Both no-ops without RT_ENABLE_IMGUI.
-    rendererPtr->initDebugUi(window.nativeWindowHandle());
-    window.initDebugUi();
+    // attaches its platform backend. Both no-ops without RT_ENABLE_IMGUI.
+    rendererPtr->initDebugUi(window->nativeWindowHandle());
+    window->initDebugUi();
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
     return true;
@@ -50,10 +53,10 @@ void Application::popState() {
 
 FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
-    window.getSize(winW, winH);
+    window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, view, clock, settingsStore, jobs,
-        window.getInput(), inputMap, playerInputs,
+        window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest
     };
@@ -61,7 +64,7 @@ FrameContext Application::makeContext() {
 
 void Application::reconcileFramebuffer() {
     int w, h;
-    window.getFramebufferSize(w, h);
+    window->getFramebufferSize(w, h);
     if (w != framebufferWidth || h != framebufferHeight) {
         framebufferWidth = w;
         framebufferHeight = h;
@@ -77,98 +80,110 @@ void Application::renderFrame() {
     rendererPtr->endFrame();
 }
 
-void Application::run() {
+void Application::begin() {
     {
         FrameContext ctx = makeContext();
         stateStack.onStart(ctx);
     }
-
     // Render through the window so it keeps painting during a modal resize,
-    // when pollEvents blocks and the loop below is suspended.
-    window.setDrawCallback([this]() { renderFrame(); });
+    // when pollEvents blocks and the loop is suspended. (Hosted windows
+    // ignore this — the host paints by calling runFrame.)
+    window->setDrawCallback([this]() { renderFrame(); });
+}
 
-    while (!window.shouldClose() && !quit) {
-        window.pollEvents();
-        frameDelta = window.getDeltaTime();
-        reconcileFramebuffer();
+bool Application::running() const {
+    return !window->shouldClose() && !quit;
+}
 
-        {
-            FrameContext ctx = makeContext();
-            inputMap.beginFrame();
-            playerInputs.beginFrame();
-            for (const Event& event : window.getEvents()) {
-                inputMap.processEvent(event);
-                playerInputs.routeEvent(event);
-                if (event.type == EventType::WindowCloseRequested) quit = true;
+void Application::runFrame() {
+    window->pollEvents();
+    frameDelta = window->getDeltaTime();
+    reconcileFramebuffer();
 
-                // Backtick toggles debug overlay
-                if (event.type == EventType::KeyPressed
-                    && event.key == KeyCode::GraveAccent
-                    && !event.repeat) {
-                    if (debugOverlayActive) {
-                        stateStack.popState();
-                        debugOverlayActive = false;
-                    } else {
-                        stateStack.pushState(
-                            std::make_unique<DebugOverlayState>(window));
-                        debugOverlayActive = true;
-                    }
+    {
+        FrameContext ctx = makeContext();
+        inputMap.beginFrame();
+        playerInputs.beginFrame();
+        for (const Event& event : window->getEvents()) {
+            inputMap.processEvent(event);
+            playerInputs.routeEvent(event);
+            if (event.type == EventType::WindowCloseRequested) quit = true;
+
+            // Backtick toggles debug overlay
+            if (event.type == EventType::KeyPressed
+                && event.key == KeyCode::GraveAccent
+                && !event.repeat) {
+                if (debugOverlayActive) {
+                    stateStack.popState();
+                    debugOverlayActive = false;
                 } else {
-                    stateStack.onEvent(event, ctx);
+                    stateStack.pushState(
+                        std::make_unique<DebugOverlayState>(*window));
+                    debugOverlayActive = true;
                 }
-            }
-            playerInputs.updateGamepads(window.getGamepads());
-            inputMap.updateGamepad(window.getGamepads()[0]);
-            stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
-        }
-
-        int steps = clock.advance(frameDelta);
-        interpolation = clock.interpolationAlpha();
-        {
-            FrameContext ctx = makeContext();
-            for (int i = 0; i < steps; i++)
-                stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
-        }
-
-        auto frameStart = std::chrono::steady_clock::now();
-        renderFrame();
-
-        if (rendererPtr->targetFps > 0) {
-            auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
-            auto elapsed = std::chrono::steady_clock::now() - frameStart;
-            if (elapsed < targetDuration)
-                std::this_thread::sleep_for(targetDuration - elapsed);
-        }
-
-        {
-            FrameContext ctx = makeContext();
-            stateStack.applyPending(ctx);
-
-            // A requested state swap (editor Play / game Stop) runs as
-            // pop-then-push so onExit/onEnter bracket the switch cleanly.
-            if (transitionRequest.pending()) {
-                stateStack.popState();
-                stateStack.pushState(std::move(transitionRequest.next));
-                stateStack.applyPending(ctx);
+            } else {
+                stateStack.onEvent(event, ctx);
             }
         }
+        playerInputs.updateGamepads(window->getGamepads());
+        inputMap.updateGamepad(window->getGamepads()[0]);
+        stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
     }
 
+    int steps = clock.advance(frameDelta);
+    interpolation = clock.interpolationAlpha();
+    {
+        FrameContext ctx = makeContext();
+        for (int i = 0; i < steps; i++)
+            stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
+    }
+
+    auto frameStart = std::chrono::steady_clock::now();
+    renderFrame();
+
+    if (rendererPtr->targetFps > 0) {
+        auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
+        auto elapsed = std::chrono::steady_clock::now() - frameStart;
+        if (elapsed < targetDuration)
+            std::this_thread::sleep_for(targetDuration - elapsed);
+    }
+
+    {
+        FrameContext ctx = makeContext();
+        stateStack.applyPending(ctx);
+
+        // A requested state swap (editor Play / game Stop) runs as
+        // pop-then-push so onExit/onEnter bracket the switch cleanly.
+        if (transitionRequest.pending()) {
+            stateStack.popState();
+            stateStack.pushState(std::move(transitionRequest.next));
+            stateStack.applyPending(ctx);
+        }
+    }
+}
+
+void Application::end() {
     {
         FrameContext ctx = makeContext();
         stateStack.onStop(ctx);
     }
 
     int winWidth, winHeight;
-    window.getSize(winWidth, winHeight);
+    window->getSize(winWidth, winHeight);
     settingsStore.setDouble("windowWidth", winWidth);
     settingsStore.setDouble("windowHeight", winHeight);
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
-    window.shutdownDebugUi();
+    window->shutdownDebugUi();
     rendererPtr->shutdownDebugUi();
     rendererPtr->shutdown();
+}
+
+void Application::run() {
+    begin();
+    while (running()) runFrame();
+    end();
 }
 
 }  // namespace engine

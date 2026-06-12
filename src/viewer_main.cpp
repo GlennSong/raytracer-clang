@@ -8,7 +8,8 @@ using namespace engine;
 
 int main(int argc, char** argv) {
     Application app;
-    if (!app.initialize({1280, 720, "FPS Arena", "settings.json"})) {
+    if (!app.initialize({1280, 720, "FPS Arena", "settings.json"},
+                        createPlatformWindow())) {
         LOG_ERROR << "Failed to initialize application";
         return 1;
     }

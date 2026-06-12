@@ -45,6 +45,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_level_scene.cpp \
 	$(TEST_DIR)/test_pbr_lighting.cpp \
 	$(TEST_DIR)/test_level_writer.cpp \
+	$(TEST_DIR)/test_hosted_window.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
@@ -62,6 +63,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/camera/scene_camera.cpp \
 	$(SRC_DIR)/engine/camera_store.cpp \
 	$(SRC_DIR)/engine/level_writer.cpp \
+	$(SRC_DIR)/renderer/hosted_window.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \

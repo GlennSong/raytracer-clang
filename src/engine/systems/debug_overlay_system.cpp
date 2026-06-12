@@ -94,6 +94,8 @@ void DebugOverlaySystem::onStop(FrameContext& ctx) {
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
+    // No ImGui context (e.g. a backend without debug-UI support): stay inert.
+    if (ImGui::GetCurrentContext() == nullptr) return;
     ImGui::Begin("Debug");
 
     ImGui::Checkbox("Show HUD", &ctx.renderer.showHud);

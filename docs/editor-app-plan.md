@@ -15,10 +15,19 @@ Successor to `docs/edit-mode-plan.md` (whose document model, SourceSpec/
 LevelWriter, picking, and gizmos all carry forward — they become the engine
 half of this application). Roadmap cross-reference: Tier 3.6.
 
-**Status:** Shell decided: **Qt 6** (cross-platform is a requirement — a
-Vulkan backend for PC/Linux is the stated direction). A1 is underway: the
-`engine_core` static library exists and all hosts (viewer, tests, tracer)
-link it; the `HostedWindow` embedded-window seam is next.
+**Status:** A1 done, A2 skeleton done. Shell: **Qt 6** (cross-platform is a
+requirement; Vulkan backend for PC/Linux is the direction). Landed: the
+`engine_core` static library (all hosts link it); the abstract `Window` seam
+with the GLFW implementation behind `createPlatformWindow()`; `HostedWindow`
+(event injection, headless-tested) with a minimal ImGui platform layer;
+`Application::begin/runFrame/end` so a host event loop can drive frames; a
+`NullRenderer` for backend-less platforms; and the Qt shell itself
+(`editor_app`: viewport widget forwarding Qt input, QTimer-driven frames,
+Play/Esc working in-viewport) — built AND smoke-run headless on Linux. The
+Metal backend now accepts an NSView handle (Qt's winId) as well as an
+NSWindow. **Mac verification pending:** the viewport rendering path
+(NSView + CAMetalLayer + retina scale) and input feel. A3 (EditorBridge +
+native panels) is next.
 
 ---
 

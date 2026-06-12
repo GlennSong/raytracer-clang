@@ -50,6 +50,8 @@ void CameraPanelSystem::drawFramingOverlay() const {
 }
 
 void CameraPanelSystem::render(FrameContext& ctx) {
+    // No ImGui context (e.g. a backend without debug-UI support): stay inert.
+    if (ImGui::GetCurrentContext() == nullptr) return;
     drawFramingOverlay();
 
     // Appends into the same window as DebugOverlaySystem ("Debug"), so the

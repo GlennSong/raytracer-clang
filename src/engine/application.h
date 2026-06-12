@@ -30,8 +30,20 @@ public:
     Application();
     ~Application();
 
-    bool initialize(const Config& config);
+    // The host chooses the window implementation: createPlatformWindow()
+    // (GLFW) for the standalone runtime, a HostedWindow for embedding inside
+    // an application shell (the Qt editor). Keeping the choice host-side
+    // keeps engine_core free of any windowing-library linkage.
+    bool initialize(const Config& config, std::unique_ptr<Window> appWindow);
+
+    // The standalone loop: begin(); while (running()) runFrame(); end().
     void run();
+
+    // Host-driven mode (editor): same lifecycle, one frame at a time.
+    void begin();        // states' onStart + draw-callback hookup
+    void runFrame();     // one full frame: events, update, fixed steps, render
+    bool running() const;
+    void end();          // states' onStop, settings persistence, shutdowns
 
     void pushState(std::unique_ptr<AppState> state);
     void popState();
@@ -39,7 +51,7 @@ public:
     World& world() { return worldState; }
     Renderer& renderer() { return *rendererPtr; }
     RenderView& renderView() { return view; }
-    Window& windowRef() { return window; }
+    Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
 
 private:
@@ -47,7 +59,7 @@ private:
     void renderFrame();
     FrameContext makeContext();
 
-    Window window;
+    std::unique_ptr<Window> window;
     std::unique_ptr<Renderer> rendererPtr;
     World worldState;
     SimClock clock;

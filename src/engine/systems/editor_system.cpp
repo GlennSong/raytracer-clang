@@ -203,6 +203,8 @@ Entity EditorSystem::duplicateSelected(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
 
 void EditorSystem::render(FrameContext& ctx) {
+    // No ImGui context (e.g. a backend without debug-UI support): stay inert.
+    if (ImGui::GetCurrentContext() == nullptr) return;
 #ifdef RT_HAS_IMGUIZMO
     ImGuizmo::BeginFrame();
 #endif
