@@ -10,6 +10,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #endif
 
+namespace engine {
+
 class MetalRenderer : public Renderer {
 public:
     MetalRenderer();
@@ -21,12 +23,21 @@ public:
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override;
     void removeMesh(MeshHandle handle) override;
+    BoundingSphere getMeshBounds(MeshHandle handle) const override;
+    TextureHandle uploadTexture(int width, int height, int channels,
+                                const uint8_t* data) override;
+    TextureHandle uploadTextureHDR(int width, int height, int channels,
+                                   const float* data) override;
+    void removeTexture(TextureHandle handle) override;
+    void setEnvironmentMap(TextureHandle equirect) override;
+    RenderStats getRenderStats() const override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
-    void setLights(const std::vector<PointLight>& lights, float exposure = 1.0f) override;
+    void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
+    void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
     void endFrame() override;
 
     void initDebugUi(void* windowHandle) override;
@@ -36,6 +47,8 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
+
+}  // namespace engine
 
 #endif // __APPLE__
 #endif

@@ -3,6 +3,8 @@
 
 #include "../system.h"
 
+namespace engine {
+
 // Scripted kinematic motion: advances entities by their Velocity each fixed
 // step, with no forces or collisions. This is NOT a placeholder for physics —
 // it is the deliberate tool for cheap, exact, collision-free movement (visual
@@ -16,5 +18,8 @@ public:
     void fixedUpdate(FrameContext& ctx) override;
     void integrate(World& world, Real dt);
 };
+
+
+}  // namespace engine
 
 #endif

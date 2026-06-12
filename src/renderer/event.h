@@ -1,6 +1,8 @@
 #ifndef RAYTRACER_EVENT_H
 #define RAYTRACER_EVENT_H
 
+namespace engine {
+
 // Window/input events, produced by the platform window layer and consumed by
 // the application. These types are deliberately independent of any windowing
 // library: KeyCode values do NOT mirror GLFW (or any backend) constants, so
@@ -34,6 +36,7 @@ enum class KeyCode {
     Escape, Space, Enter, Tab, Backspace,
     LeftShift, RightShift, LeftControl, RightControl, LeftAlt, RightAlt,
     Comma, Period, Slash, Semicolon, Minus, Equal,
+    GraveAccent,
 };
 
 enum class MouseButton {
@@ -60,5 +63,8 @@ struct Event {
 
     explicit Event(EventType type) : type(type) {}
 };
+
+
+}  // namespace engine
 
 #endif

@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_APPLICATION_H
 
 #include "system.h"
+#include "state_stack.h"
 #include "world.h"
 #include "clock.h"
 #include "../renderer/renderer.h"
@@ -11,6 +12,8 @@
 #include <string>
 #include <vector>
 #include <utility>
+
+namespace engine {
 
 // Owns the window, renderer, world, clock, and the set of Systems, and drives
 // the fixed-timestep frame loop that ticks them. Pure mechanism: all
@@ -27,21 +30,34 @@ public:
     Application();
     ~Application();
 
-    bool initialize(const Config& config);
+    // The host chooses the window implementation: createPlatformWindow()
+    // (GLFW) for the standalone runtime, a HostedWindow for embedding inside
+    // an application shell (the Qt editor). Keeping the choice host-side
+    // keeps engine_core free of any windowing-library linkage.
+    bool initialize(const Config& config, std::unique_ptr<Window> appWindow);
+
+    // The standalone loop: begin(); while (running()) runFrame(); end().
     void run();
 
-    // Systems run in registration order across every phase.
-    template <typename T, typename... Args>
-    T& addSystem(Args&&... args) {
-        auto system = std::make_unique<T>(std::forward<Args>(args)...);
-        T& ref = *system;
-        systems.push_back(std::move(system));
-        return ref;
+    // Host-driven mode (editor): same lifecycle, one frame at a time.
+    void begin();        // states' onStart + draw-callback hookup
+    void runFrame();     // one full frame: events, update, fixed steps, render
+    bool running() const;
+    void end();          // states' onStop, settings persistence, shutdowns
+
+    void pushState(std::unique_ptr<AppState> state);
+    void popState();
+
+    // Shell-initiated state swap (the editor's toolbar Play/Stop, opening a
+    // different level): same deferred pop-then-push as in-engine requests.
+    void requestState(std::unique_ptr<AppState> state) {
+        transitionRequest.replaceWith(std::move(state));
     }
 
     World& world() { return worldState; }
     Renderer& renderer() { return *rendererPtr; }
     RenderView& renderView() { return view; }
+    Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
 
 private:
@@ -49,15 +65,19 @@ private:
     void renderFrame();
     FrameContext makeContext();
 
-    Window window;
+    std::unique_ptr<Window> window;
     std::unique_ptr<Renderer> rendererPtr;
     World worldState;
     SimClock clock;
     Settings settingsStore;
+    // The one shared thread pool (ADR-0014). Declared before `systems` so it
+    // outlives them — a system (e.g. physics) may hold work referencing it.
+    JobSystem jobs;
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;
-    std::vector<std::unique_ptr<System>> systems;
+    StateStack stateStack;
+    bool debugOverlayActive = false;
 
     std::string settingsFile;
     int framebufferWidth = 0;
@@ -65,6 +85,10 @@ private:
     double frameDelta = 0.0;
     double interpolation = 0.0;
     bool quit = false;
+    StateTransition transitionRequest;
 };
+
+
+}  // namespace engine
 
 #endif

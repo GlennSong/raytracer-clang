@@ -2,6 +2,8 @@
 
 #include "../src/engine/clock.h"
 
+using namespace engine;  // namespace migration (ADR-0015)
+
 namespace {
 constexpr double STEP = 1.0 / 60.0;
 constexpr double EPS = 1e-9;

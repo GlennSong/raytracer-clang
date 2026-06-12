@@ -5,6 +5,8 @@
 #include <vector>
 #include <string>
 
+namespace engine {
+
 class Image {
 public:
     int width;
@@ -19,5 +21,8 @@ public:
 
     Image bilateralFilter(int radius, double sigmaSpatial, double sigmaColor) const;
 };
+
+
+}  // namespace engine
 
 #endif

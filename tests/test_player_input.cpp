@@ -2,6 +2,8 @@
 
 #include "../src/engine/input/player_input.h"
 
+using namespace engine;  // namespace migration (ADR-0015)
+
 namespace {
 
 Event keyDown(KeyCode key) {

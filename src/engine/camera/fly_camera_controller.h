@@ -3,6 +3,8 @@
 
 #include "camera_controller.h"
 
+namespace engine {
+
 // Free-fly / FPS camera: the camera is a free agent in space. Look deltas rotate
 // the view (yaw/pitch); move axes translate along the facing direction (forward/
 // strafe) and world up. The camera for traversing large/generated worlds
@@ -15,6 +17,7 @@ public:
     Real fovDegrees = 60.0;
     Real moveSpeed = 5.0;
     Real boostMultiplier = 4.0;
+    bool positionLocked = false;
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;
@@ -25,5 +28,8 @@ public:
 private:
     static constexpr Real PITCH_LIMIT = 89.0;
 };
+
+
+}  // namespace engine
 
 #endif

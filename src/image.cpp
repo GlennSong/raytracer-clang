@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+namespace engine {
+
 Image::Image(int width, int height)
     : width(width), height(height), pixels(width * height) {}
 
@@ -72,3 +74,6 @@ void Image::writePpm(const std::string& filename) const {
         }
     }
 }
+
+}  // namespace engine
+

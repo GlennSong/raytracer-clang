@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace engine {
+
 // Stable handles into recycling storage. insert() returns a Handle valid until
 // erase(); freed slots are reused by later inserts with a bumped generation, so
 // a handle to a freed (and possibly reused) slot is reported stale rather than
@@ -59,6 +61,14 @@ public:
     bool contains(HandleType handle) const { return slotFor(handle) != nullptr; }
     std::size_t size() const { return count; }
 
+    // Drop all elements. Existing handles become stale (their slots no longer
+    // exist), so access through them is reported null rather than aliasing.
+    void clear() {
+        slots.clear();
+        freeHead = NO_SLOT;
+        count = 0;
+    }
+
     // The live handle occupying a slot, or a null handle if the slot is empty.
     // Lets callers that track raw indices (e.g. an ECS) recover a full handle.
     HandleType handleAt(uint32_t index) const {
@@ -109,5 +119,7 @@ private:
     uint32_t freeHead = NO_SLOT;
     std::size_t count = 0;
 };
+
+}  // namespace engine
 
 #endif

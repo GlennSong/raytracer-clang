@@ -1,6 +1,9 @@
 #include "test_framework.h"
 
 #include "../src/engine/physics/physics_world.h"
+#include "../src/job_system.h"
+
+using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
 
@@ -100,5 +103,71 @@ TEST_CASE(physics_invalid_body_is_safe) {
     // Querying a bad handle must not crash and returns a default.
     CHECK(approxEqual(world.bodyPosition(INVALID_PHYSICS_BODY), Vec3()));
     world.removeBody(INVALID_PHYSICS_BODY);
+    world.shutdown();
+}
+
+// Run the same scene on our JobSystem (the JoltJobAdapter path) and confirm the
+// result matches the single-threaded path bit-for-bit, and is itself
+// repeatable. This exercises the adapter end-to-end and pins down that routing
+// Jolt's jobs through our pool changes nothing observable (ADR-0002 / ADR-0012).
+namespace {
+Vec3 dropAndSettle(PhysicsWorld& world) {
+    addFloor(world);
+    PhysicsBodyId sphere = world.addSphere(0.5, Vec3(0.1, 4, -0.2),
+                                           Quat::identity(), BodyMotion::Dynamic);
+    world.optimizeBroadPhase();
+    step(world, 120);
+    return world.bodyPosition(sphere);
+}
+}  // namespace
+
+TEST_CASE(physics_threaded_matches_single_threaded) {
+    Vec3 single;
+    {
+        PhysicsWorld world;
+        world.initialize();                 // single-threaded
+        single = dropAndSettle(world);
+        world.shutdown();
+    }
+
+    JobSystem pool(3);                       // 3 workers -> the adapter path
+    Vec3 threaded;
+    {
+        PhysicsWorld world;
+        world.initialize(&pool);
+        threaded = dropAndSettle(world);
+        world.shutdown();
+    }
+
+    // Same machine, same Jolt: multi-threaded simulation stays deterministic.
+    CHECK(approxEqual(single, threaded, 1e-6));
+}
+
+TEST_CASE(physics_threaded_is_repeatable) {
+    JobSystem pool(4);
+    auto run = [&]() {
+        PhysicsWorld world;
+        world.initialize(&pool);
+        Vec3 p = dropAndSettle(world);
+        world.shutdown();
+        return p;
+    };
+    CHECK(approxEqual(run(), run(), 1e-6));
+}
+
+// Synchronous pool (0 workers): the adapter must still run the sim correctly,
+// executing Jolt's jobs inline like the single-threaded system does.
+TEST_CASE(physics_synchronous_pool_runs_sim) {
+    JobSystem pool(0);
+    CHECK(pool.workerCount() == 0);
+
+    PhysicsWorld world;
+    world.initialize(&pool);
+    addFloor(world);
+    PhysicsBodyId sphere =
+        world.addSphere(0.5, Vec3(0, 5, 0), Quat::identity(), BodyMotion::Dynamic);
+    world.optimizeBroadPhase();
+    step(world, 240);
+    CHECK_APPROX(world.bodyPosition(sphere).y, 0.5, 0.05);
     world.shutdown();
 }

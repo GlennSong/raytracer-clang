@@ -2,6 +2,8 @@
 
 #include "../src/slot_map.h"
 
+using namespace engine;  // namespace migration (ADR-0015)
+
 namespace {
 struct Thing {
     int value;
@@ -83,4 +85,39 @@ TEST_CASE(slotmap_handle_at) {
     map.erase(handle);
     auto empty = map.handleAt(handle.index);
     CHECK(!empty.valid());
+}
+
+TEST_CASE(slotmap_clear_empties_and_staleness_holds) {
+    SlotMap<Thing> map;
+    auto a = map.insert(Thing{1});
+    auto b = map.insert(Thing{2});
+    CHECK(map.size() == 2);
+
+    map.clear();
+    CHECK(map.size() == 0);
+    // Handles from before the clear must not alias new storage.
+    CHECK(!map.contains(a));
+    CHECK(!map.contains(b));
+    CHECK(map.get(a) == nullptr);
+
+    // The map is reusable after clear().
+    auto fresh = map.insert(Thing{3});
+    CHECK(map.contains(fresh));
+    CHECK(map.size() == 1);
+}
+
+// Mirrors the renderer's usage (ADR-0007): a SlotMap keyed by a distinct Tag so
+// its HandleType is the engine-facing handle (e.g. MeshHandle = Handle<MeshTag>).
+TEST_CASE(slotmap_custom_tag_handle_type) {
+    struct ResourceTag {};
+    SlotMap<Thing, ResourceTag> resources;
+    Handle<ResourceTag> handle = resources.insert(Thing{5});
+    CHECK(handle.valid());
+    CHECK(resources.contains(handle));
+
+    resources.erase(handle);
+    auto reused = resources.insert(Thing{6});
+    CHECK(reused.index == handle.index);
+    CHECK(!resources.contains(handle));   // stale handle detected
+    CHECK(resources.contains(reused));
 }

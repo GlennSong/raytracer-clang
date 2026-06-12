@@ -6,6 +6,8 @@
 #include <vector>
 #include <memory>
 
+namespace engine {
+
 struct AABB {
     Vec3 min;
     Vec3 max;
@@ -48,5 +50,8 @@ private:
     bool intersectNode(const KdNode* node, const Ray& ray,
                        double tMin, double tMax, HitRecord& rec) const;
 };
+
+
+}  // namespace engine
 
 #endif

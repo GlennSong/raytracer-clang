@@ -22,10 +22,48 @@
 #include <GLFW/glfw3native.h>
 #endif
 
+namespace engine {
+
+// The GLFW implementation of the Window seam. File-local: hosts reach it only
+// through createPlatformWindow().
+class GlfwWindow final : public Window {
+public:
+    GlfwWindow();
+    ~GlfwWindow() override;
+
+    bool initialize(int width, int height, const std::string& title) override;
+    void shutdown() override;
+    bool shouldClose() const override;
+    void pollEvents() override;
+    void getSize(int& width, int& height) const override;
+    void getFramebufferSize(int& width, int& height) const override;
+    void* nativeWindowHandle() const override;
+    const InputState& getInput() const override;
+    const std::vector<Event>& getEvents() const override;
+    const GamepadSet& getGamepads() const override;
+    double getDeltaTime() const override;
+    void setDrawCallback(std::function<void()> callback) override;
+    void setCursorMode(CursorMode mode) override;
+    void resetMouseDelta() override;
+    void initDebugUi() override;
+    void newDebugUiFrame() override;
+    void shutdownDebugUi() override;
+
+    // Public so the file-local GLFW callbacks below can name the type.
+    struct Impl;
+
+private:
+    std::unique_ptr<Impl> impl;
+};
+
+std::unique_ptr<Window> createPlatformWindow() {
+    return std::make_unique<GlfwWindow>();
+}
+
 // All GLFW-typed state lives here, out of the public header. The GLFW user
 // pointer is set to this Impl, so the file-local callbacks below operate on it
 // directly without going back through Window.
-struct Window::Impl {
+struct GlfwWindow::Impl {
     GLFWwindow* window = nullptr;
     InputState input;
     std::vector<Event> events;
@@ -68,6 +106,7 @@ static KeyCode translateKey(int glfwKey) {
         case GLFW_KEY_SEMICOLON:     return KeyCode::Semicolon;
         case GLFW_KEY_MINUS:         return KeyCode::Minus;
         case GLFW_KEY_EQUAL:         return KeyCode::Equal;
+        case GLFW_KEY_GRAVE_ACCENT:  return KeyCode::GraveAccent;
         default:                     return KeyCode::Unknown;
     }
 }
@@ -80,8 +119,8 @@ static MouseButton translateButton(int glfwButton) {
     }
 }
 
-static Window::Impl* implOf(GLFWwindow* window) {
-    return static_cast<Window::Impl*>(glfwGetWindowUserPointer(window));
+static GlfwWindow::Impl* implOf(GLFWwindow* window) {
+    return static_cast<GlfwWindow::Impl*>(glfwGetWindowUserPointer(window));
 }
 
 // Translate GLFW's gamepad snapshot into our backend-neutral one. Our
@@ -200,13 +239,13 @@ static void onWindowRefresh(GLFWwindow* window) {
     if (impl->drawCallback) impl->drawCallback();
 }
 
-Window::Window() : impl(std::make_unique<Impl>()) {}
+GlfwWindow::GlfwWindow() : impl(std::make_unique<Impl>()) {}
 
-Window::~Window() {
+GlfwWindow::~GlfwWindow() {
     shutdown();
 }
 
-bool Window::initialize(int width, int height, const std::string& title) {
+bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     if (!glfwInit()) return false;
 
     {
@@ -247,7 +286,7 @@ bool Window::initialize(int width, int height, const std::string& title) {
     return true;
 }
 
-void Window::shutdown() {
+void GlfwWindow::shutdown() {
     if (impl->window) {
         glfwDestroyWindow(impl->window);
         impl->window = nullptr;
@@ -255,11 +294,23 @@ void Window::shutdown() {
     glfwTerminate();
 }
 
-bool Window::shouldClose() const {
+void GlfwWindow::setCursorMode(CursorMode mode) {
+    int glfwMode = (mode == CursorMode::Disabled) ? GLFW_CURSOR_DISABLED
+                                                  : GLFW_CURSOR_NORMAL;
+    glfwSetInputMode(impl->window, GLFW_CURSOR, glfwMode);
+}
+
+void GlfwWindow::resetMouseDelta() {
+    impl->firstMouse = true;
+    impl->input.mouseDeltaX = 0;
+    impl->input.mouseDeltaY = 0;
+}
+
+bool GlfwWindow::shouldClose() const {
     return glfwWindowShouldClose(impl->window);
 }
 
-void Window::pollEvents() {
+void GlfwWindow::pollEvents() {
     impl->input.mouseDeltaX = 0;
     impl->input.mouseDeltaY = 0;
     impl->input.scrollDelta = 0;
@@ -328,17 +379,22 @@ void Window::pollEvents() {
     impl->lastFrameTime = now;
 
     newDebugUiFrame();   // ImGui GLFW new-frame (no-op without RT_ENABLE_IMGUI)
+
+#ifdef RT_ENABLE_IMGUI
+    // After the UI new-frame so hover/drag state is current for this frame.
+    impl->input.uiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+#endif
 }
 
-void Window::getSize(int& width, int& height) const {
+void GlfwWindow::getSize(int& width, int& height) const {
     glfwGetWindowSize(impl->window, &width, &height);
 }
 
-void Window::getFramebufferSize(int& width, int& height) const {
+void GlfwWindow::getFramebufferSize(int& width, int& height) const {
     glfwGetFramebufferSize(impl->window, &width, &height);
 }
 
-void* Window::nativeWindowHandle() const {
+void* GlfwWindow::nativeWindowHandle() const {
 #if defined(__APPLE__)
     return glfwGetCocoaWindow(impl->window);
 #elif defined(_WIN32)
@@ -348,29 +404,29 @@ void* Window::nativeWindowHandle() const {
 #endif
 }
 
-const InputState& Window::getInput() const {
+const InputState& GlfwWindow::getInput() const {
     return impl->input;
 }
 
-const std::vector<Event>& Window::getEvents() const {
+const std::vector<Event>& GlfwWindow::getEvents() const {
     return impl->events;
 }
 
-const GamepadSet& Window::getGamepads() const {
+const GamepadSet& GlfwWindow::getGamepads() const {
     return impl->gamepads;
 }
 
-double Window::getDeltaTime() const {
+double GlfwWindow::getDeltaTime() const {
     return impl->deltaTime;
 }
 
-void Window::setDrawCallback(std::function<void()> callback) {
+void GlfwWindow::setDrawCallback(std::function<void()> callback) {
     impl->drawCallback = std::move(callback);
 }
 
 // Debug-UI GLFW backend (ADR-0011). The ImGui platform backend lives here, the
 // one file that owns the GLFWwindow*. No-op without ImGui.
-void Window::initDebugUi() {
+void GlfwWindow::initDebugUi() {
 #ifdef RT_ENABLE_IMGUI
     // The ImGui context already exists (Renderer::initDebugUi ran first).
     // InitForOther is the right entry point for a non-GL/Vulkan (Metal) backend;
@@ -379,14 +435,16 @@ void Window::initDebugUi() {
 #endif
 }
 
-void Window::newDebugUiFrame() {
+void GlfwWindow::newDebugUiFrame() {
 #ifdef RT_ENABLE_IMGUI
     ImGui_ImplGlfw_NewFrame();
 #endif
 }
 
-void Window::shutdownDebugUi() {
+void GlfwWindow::shutdownDebugUi() {
 #ifdef RT_ENABLE_IMGUI
     ImGui_ImplGlfw_Shutdown();
 #endif
 }
+
+}  // namespace engine

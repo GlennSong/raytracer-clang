@@ -1,6 +1,8 @@
 #include "motion_system.h"
 #include "../components.h"
 
+namespace engine {
+
 void MotionSystem::integrate(World& world, Real dt) {
     world.each<Transform, Velocity, PrevTransform>(
         [&world, dt](Entity e, Transform& t, Velocity& v, PrevTransform& prev) {
@@ -21,3 +23,6 @@ void MotionSystem::integrate(World& world, Real dt) {
 void MotionSystem::fixedUpdate(FrameContext& ctx) {
     integrate(ctx.world, ctx.clock.fixedStep());
 }
+
+}  // namespace engine
+

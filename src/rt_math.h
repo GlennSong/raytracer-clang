@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <random>
 
+namespace engine {
+
 // Scalar precision for all engine math. Centralized here so float/double is a
 // single switch point (see docs/decisions.md, ADR-0005). Defaults to double.
 using Real = double;
@@ -251,6 +253,52 @@ struct Mat4 {
             m[2][0] * d.x + m[2][1] * d.y + m[2][2] * d.z
         };
     }
+
+    Mat4 transpose() const {
+        Mat4 r;
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                r.m[i][j] = m[j][i];
+        return r;
+    }
+
+    // 4×4 matrix inverse via cofactor expansion. Returns identity if singular.
+    Mat4 inverse() const {
+        // Compute cofactors for each element of the result
+        Real c[16]; // cofactors laid out row-major
+        const Real* s = &m[0][0];
+
+        c[0]  =  s[5]*(s[10]*s[15]-s[11]*s[14]) - s[9]*(s[6]*s[15]-s[7]*s[14]) + s[13]*(s[6]*s[11]-s[7]*s[10]);
+        c[1]  = -(s[4]*(s[10]*s[15]-s[11]*s[14]) - s[8]*(s[6]*s[15]-s[7]*s[14]) + s[12]*(s[6]*s[11]-s[7]*s[10]));
+        c[2]  =  s[4]*(s[9]*s[15]-s[11]*s[13]) - s[8]*(s[5]*s[15]-s[7]*s[13]) + s[12]*(s[5]*s[11]-s[7]*s[9]);
+        c[3]  = -(s[4]*(s[9]*s[14]-s[10]*s[13]) - s[8]*(s[5]*s[14]-s[6]*s[13]) + s[12]*(s[5]*s[10]-s[6]*s[9]));
+
+        c[4]  = -(s[1]*(s[10]*s[15]-s[11]*s[14]) - s[9]*(s[2]*s[15]-s[3]*s[14]) + s[13]*(s[2]*s[11]-s[3]*s[10]));
+        c[5]  =  s[0]*(s[10]*s[15]-s[11]*s[14]) - s[8]*(s[2]*s[15]-s[3]*s[14]) + s[12]*(s[2]*s[11]-s[3]*s[10]);
+        c[6]  = -(s[0]*(s[9]*s[15]-s[11]*s[13]) - s[8]*(s[1]*s[15]-s[3]*s[13]) + s[12]*(s[1]*s[11]-s[3]*s[9]));
+        c[7]  =  s[0]*(s[9]*s[14]-s[10]*s[13]) - s[8]*(s[1]*s[14]-s[2]*s[13]) + s[12]*(s[1]*s[10]-s[2]*s[9]);
+
+        c[8]  =  s[1]*(s[6]*s[15]-s[7]*s[14]) - s[5]*(s[2]*s[15]-s[3]*s[14]) + s[13]*(s[2]*s[7]-s[3]*s[6]);
+        c[9]  = -(s[0]*(s[6]*s[15]-s[7]*s[14]) - s[4]*(s[2]*s[15]-s[3]*s[14]) + s[12]*(s[2]*s[7]-s[3]*s[6]));
+        c[10] =  s[0]*(s[5]*s[15]-s[7]*s[13]) - s[4]*(s[1]*s[15]-s[3]*s[13]) + s[12]*(s[1]*s[7]-s[3]*s[5]);
+        c[11] = -(s[0]*(s[5]*s[14]-s[6]*s[13]) - s[4]*(s[1]*s[14]-s[2]*s[13]) + s[12]*(s[1]*s[6]-s[2]*s[5]));
+
+        c[12] = -(s[1]*(s[6]*s[11]-s[7]*s[10]) - s[5]*(s[2]*s[11]-s[3]*s[10]) + s[9]*(s[2]*s[7]-s[3]*s[6]));
+        c[13] =  s[0]*(s[6]*s[11]-s[7]*s[10]) - s[4]*(s[2]*s[11]-s[3]*s[10]) + s[8]*(s[2]*s[7]-s[3]*s[6]);
+        c[14] = -(s[0]*(s[5]*s[11]-s[7]*s[9]) - s[4]*(s[1]*s[11]-s[3]*s[9]) + s[8]*(s[1]*s[7]-s[3]*s[5]));
+        c[15] =  s[0]*(s[5]*s[10]-s[6]*s[9]) - s[4]*(s[1]*s[10]-s[2]*s[9]) + s[8]*(s[1]*s[6]-s[2]*s[5]);
+
+        Real det = s[0]*c[0] + s[1]*c[1] + s[2]*c[2] + s[3]*c[3];
+        if (std::abs(det) < 1e-12) return Mat4(); // singular → identity
+
+        Real invDet = 1.0 / det;
+        Mat4 r;
+        // Transpose of cofactor matrix divided by determinant
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                r.m[j][i] = c[i * 4 + j] * invDet;
+        return r;
+    }
 };
 
 // Unit quaternion for rotations. Stored (x, y, z, w) with w the scalar part;
@@ -270,6 +318,47 @@ struct Quat {
         Real half = radians * 0.5;
         Real s = std::sin(half);
         return Quat(n.x * s, n.y * s, n.z * s, std::cos(half));
+    }
+
+    // Orientation from the (orthonormal) upper-3x3 of a column-vector-
+    // convention matrix — e.g. a gizmo-manipulated transform with the scale
+    // divided out. Shepperd's method: pick the largest diagonal pivot for
+    // numerical stability.
+    static Quat fromRotationMatrix(const Mat4& m) {
+        Real trace = m.m[0][0] + m.m[1][1] + m.m[2][2];
+        Quat q;
+        if (trace > 0.0) {
+            Real s = std::sqrt(trace + 1.0) * 2.0;
+            q = Quat((m.m[2][1] - m.m[1][2]) / s, (m.m[0][2] - m.m[2][0]) / s,
+                     (m.m[1][0] - m.m[0][1]) / s, 0.25 * s);
+        } else if (m.m[0][0] > m.m[1][1] && m.m[0][0] > m.m[2][2]) {
+            Real s = std::sqrt(1.0 + m.m[0][0] - m.m[1][1] - m.m[2][2]) * 2.0;
+            q = Quat(0.25 * s, (m.m[0][1] + m.m[1][0]) / s,
+                     (m.m[0][2] + m.m[2][0]) / s, (m.m[2][1] - m.m[1][2]) / s);
+        } else if (m.m[1][1] > m.m[2][2]) {
+            Real s = std::sqrt(1.0 + m.m[1][1] - m.m[0][0] - m.m[2][2]) * 2.0;
+            q = Quat((m.m[0][1] + m.m[1][0]) / s, 0.25 * s,
+                     (m.m[1][2] + m.m[2][1]) / s, (m.m[0][2] - m.m[2][0]) / s);
+        } else {
+            Real s = std::sqrt(1.0 + m.m[2][2] - m.m[0][0] - m.m[1][1]) * 2.0;
+            q = Quat((m.m[0][2] + m.m[2][0]) / s, (m.m[1][2] + m.m[2][1]) / s,
+                     0.25 * s, (m.m[1][0] - m.m[0][1]) / s);
+        }
+        return q.normalized();
+    }
+
+    // Inverse of fromAxisAngle (for serialization). Identity yields the +Y
+    // axis with angle 0 so the output is always a valid axis.
+    void toAxisAngle(Vec3& axis, Real& radians) const {
+        Quat q = normalized();
+        Real s = std::sqrt(std::max(1.0 - q.w * q.w, 0.0));
+        if (s < 1e-9) {
+            axis = Vec3(0, 1, 0);
+            radians = 0.0;
+            return;
+        }
+        axis = Vec3(q.x / s, q.y / s, q.z / s);
+        radians = 2.0 * std::acos(std::clamp(q.w, Real(-1.0), Real(1.0)));
     }
 
     // Euler radians applied X then Y then Z, matching the old Transform matrix
@@ -338,7 +427,7 @@ struct Quat {
     }
 
 private:
-    static Real dot3(const Vec3& a, const Vec3& b) { return ::dot(a, b); }
+    static Real dot3(const Vec3& a, const Vec3& b) { return engine::dot(a, b); }
 };
 
 inline Mat4 Quat::toMat4() const {
@@ -373,6 +462,21 @@ inline Mat4 Mat4::trs(const Vec3& translation, const Quat& rotation,
     m.m[2][3] = translation.z;
     return m;
 }
+
+// Minimal bounding volume for frustum culling. Center is in model space;
+// radius is the max distance from center to any vertex.
+struct BoundingSphere {
+    Vec3 center;
+    Real radius = 0;
+};
+
+struct Frustum {
+    Vec3 normals[6];
+    Real distances[6];
+
+    static Frustum fromViewProjection(const Mat4& vp);
+    bool containsSphere(const Vec3& center, Real radius) const;
+};
 
 constexpr Real PI = 3.14159265358979323846;
 
@@ -413,5 +517,54 @@ inline Vec3 randomCosineHemisphere(const Vec3& normal) {
     Vec3 dir = normalize(randomInUnitSphere() + normal);
     return dir;
 }
+
+// Gribb-Hartmann frustum plane extraction from a view-projection matrix.
+// Each plane's normal points inward; a point is inside when dot(n,p)+d >= 0.
+inline Frustum Frustum::fromViewProjection(const Mat4& vp) {
+    Frustum f;
+    // Row accessors: vp.m[row][col] (row-major)
+    auto extractPlane = [&](int index, Real r0, Real r1, Real r2, Real r3) {
+        Real len = Vec3(r0, r1, r2).length();
+        if (len > 0) {
+            f.normals[index] = Vec3(r0, r1, r2) / len;
+            f.distances[index] = r3 / len;
+        }
+    };
+    // Left:   row3 + row0
+    extractPlane(0,
+        vp.m[3][0] + vp.m[0][0], vp.m[3][1] + vp.m[0][1],
+        vp.m[3][2] + vp.m[0][2], vp.m[3][3] + vp.m[0][3]);
+    // Right:  row3 - row0
+    extractPlane(1,
+        vp.m[3][0] - vp.m[0][0], vp.m[3][1] - vp.m[0][1],
+        vp.m[3][2] - vp.m[0][2], vp.m[3][3] - vp.m[0][3]);
+    // Bottom: row3 + row1
+    extractPlane(2,
+        vp.m[3][0] + vp.m[1][0], vp.m[3][1] + vp.m[1][1],
+        vp.m[3][2] + vp.m[1][2], vp.m[3][3] + vp.m[1][3]);
+    // Top:    row3 - row1
+    extractPlane(3,
+        vp.m[3][0] - vp.m[1][0], vp.m[3][1] - vp.m[1][1],
+        vp.m[3][2] - vp.m[1][2], vp.m[3][3] - vp.m[1][3]);
+    // Near:   row3 + row2
+    extractPlane(4,
+        vp.m[3][0] + vp.m[2][0], vp.m[3][1] + vp.m[2][1],
+        vp.m[3][2] + vp.m[2][2], vp.m[3][3] + vp.m[2][3]);
+    // Far:    row3 - row2
+    extractPlane(5,
+        vp.m[3][0] - vp.m[2][0], vp.m[3][1] - vp.m[2][1],
+        vp.m[3][2] - vp.m[2][2], vp.m[3][3] - vp.m[2][3]);
+    return f;
+}
+
+inline bool Frustum::containsSphere(const Vec3& center, Real radius) const {
+    for (int i = 0; i < 6; i++) {
+        Real dist = dot(normals[i], center) + distances[i];
+        if (dist < -radius) return false;
+    }
+    return true;
+}
+
+}  // namespace engine
 
 #endif

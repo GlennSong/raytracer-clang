@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
+namespace engine {
+
 // Named input actions decoupled from physical keys. Systems ask for
 // "move_forward" or "pause" rather than KeyCode::W or KeyCode::Space, and the
 // bindings live in a data-driven table (settable from Settings/config). This
@@ -97,5 +99,8 @@ private:
 // keyCodeFromName returns KeyCode::Unknown if the name is unrecognized.
 KeyCode keyCodeFromName(const std::string& name);
 const char* keyCodeName(KeyCode key);
+
+
+}  // namespace engine
 
 #endif

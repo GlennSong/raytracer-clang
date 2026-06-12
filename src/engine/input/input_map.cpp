@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 namespace {
 
 // Mouse buttons and gamepad buttons share the encoded-source space with keys;
@@ -214,3 +216,6 @@ Real InputMap::axis(const std::string& name) const {
     }
     return std::clamp(value, Real(-1.0), Real(1.0));
 }
+
+}  // namespace engine
+

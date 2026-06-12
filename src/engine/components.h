@@ -4,6 +4,9 @@
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "physics/physics_world.h"
+#include <string>
+
+namespace engine {
 
 // Position / orientation / scale. Compose into a model matrix with matrix().
 struct Transform {
@@ -35,7 +38,7 @@ struct Velocity {
 
 // What to draw for an entity.
 struct Renderable {
-    MeshHandle mesh = 0;
+    MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
 };
 
@@ -47,12 +50,34 @@ struct ControlledBy {
     int playerIndex = 0;
 };
 
-// Collision shape for a physics body. (ADR-0012; box/sphere for now.)
-enum class ColliderShape { Box, Sphere };
+// Authoring provenance for level-document entities (docs/edit-mode-plan.md).
+// The level loader and the editor's Add menu fill it; LevelWriter serializes
+// entities carrying it back to the level JSON. Runtime-spawned entities
+// (bullets, gizmos) lack it and are never saved — by construction.
+struct SourceSpec {
+    std::string shape = "box";   // MeshBuilder shape; empty when meshFile is set
+    Vec3 size{1, 1, 1};
+    std::string meshFile;        // glTF path, level-relative ("mesh" in JSON)
+    bool hasPhysics = false;
+    std::string motion = "static";
+    Real friction = 0.5;
+    Real restitution = 0.0;
+    bool lockRotation = false;
+};
+
+// Where the player starts (editor-app plan): in the editor the spawn is a
+// real, pickable, gizmo-movable entity; LevelWriter syncs its Transform back
+// into the level's "player" block, which the game loader consumes unchanged.
+struct PlayerSpawn {};
+
+enum class ColliderShape { Box, Sphere, Capsule };
 struct Collider {
     ColliderShape shape = ColliderShape::Box;
-    Vec3 halfExtent{0.5, 0.5, 0.5};   // used when shape == Box
-    Real radius = 0.5;                // used when shape == Sphere
+    Vec3 halfExtent{0.5, 0.5, 0.5};   // Box
+    Real radius = 0.5;                // Sphere, Capsule
+    Real halfHeight = 0.5;            // Capsule (half of the cylinder segment)
+    Real restitution = 0.0;
+    Real friction = 0.2;
 };
 
 // Marks an entity as simulated by the PhysicsSystem (ADR-0012). The body is
@@ -63,6 +88,10 @@ struct Collider {
 struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
+    bool lockRotation = false;
 };
+
+
+}  // namespace engine
 
 #endif

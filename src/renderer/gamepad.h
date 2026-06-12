@@ -4,6 +4,8 @@
 #include <array>
 #include <cstddef>
 
+namespace engine {
+
 // Backend-neutral gamepad input. Like KeyCode/Event, these enums are the
 // engine's own — they do NOT mirror GLFW (or any backend) constants, so the
 // window seam is the only place that maps hardware to them (ADR-0001, ADR-0010).
@@ -51,5 +53,8 @@ struct GamepadState {
 
 // All tracked gamepads, indexed by device id [0, MAX_GAMEPADS).
 using GamepadSet = std::array<GamepadState, MAX_GAMEPADS>;
+
+
+}  // namespace engine
 
 #endif

@@ -216,12 +216,20 @@ Steps 3/5).
 **Alternatives considered.** Raw `uint32_t` handles (current `MeshHandle`) —
 rejected for entities/assets: no stale detection, no recycling safety.
 
-**Consequences / tech debt.** Two handle styles coexist until migration: the
+**Consequences / tech debt.** ~~Two handle styles coexist until migration: the
 new `Handle` and the legacy `uint32_t` `MeshHandle`/`BufferHandle` in
-`renderer.h`.
+`renderer.h`.~~ **Resolved.** `MeshHandle`/`BufferHandle` are now
+`Handle<MeshTag>` / `Handle<BufferTag>`, and the Metal backend stores meshes in
+a `SlotMap<GPUMesh, MeshTag>` (handing out generation-checked handles, dropping
+the old `uint32_t` counter + `unordered_map`). `Renderable.mesh` defaults to a
+null handle instead of `0`. Engine-side consumers (`components.*`,
+`render_system.cpp`, `viewer_main.cpp`) are headless syntax-verified; the Metal
+storage swap is macOS-only, so unverified in CI (the standing backend
+constraint). `SlotMap` gained a `clear()`. This is the first piece of the asset
+system (ROADMAP 3.1) landing ahead of the manager itself.
 
-**Revisit trigger.** Building the ECS and asset manager — migrate existing
-handle usages then.
+**Revisit trigger.** Building the asset manager — it owns these handles and adds
+async creation/destruction on top of the now-migrated `Handle`/`SlotMap` base.
 
 ---
 
@@ -350,9 +358,11 @@ System/menu controls (quit, pause) stay on a **global** `InputMap`
 **Consequences / tech debt.**
 - `FrameContext` grows a `PlayerInputs& players` alongside the global
   `actions`. Single-player is just the one-slot case.
-- The actual gamepad **polling lives in `window.cpp`** (GLFW), which is
-  macOS-only and not Linux-compilable — same constraint as the rest of the
-  window seam. The engine-side parts (`InputMap` gamepad logic, `PlayerInputs`,
+- The actual gamepad **polling lives in `window.cpp`** (GLFW) and
+  `gamepad_gc.mm` (GCController), both macOS-only and not Linux-compilable —
+  same constraint as the rest of the window seam. The GCController layer was
+  necessary because macOS 13+ DriverKit intercepts Xbox/PS controllers; see
+  ADR-0013. The engine-side parts (`InputMap` gamepad logic, `PlayerInputs`,
   deadzone) are unit-tested without a window.
 - No "drive the avatar from a player's axis" system is provided — that first
   touch of gameplay belongs to a game/demo layer, not the engine.
@@ -445,7 +455,7 @@ same `initDebugUi`/`shutdownDebugUi` treatment).
 ---
 
 ## ADR-0012 — Jolt physics, sealed behind a Jolt-free `PhysicsWorld`
-**Status:** Accepted (Steps A + C done — foundation + ECS `PhysicsSystem`) · **Date:** 2026-06-04
+**Status:** Accepted (Steps A + C done; step now runs on the shared pool, ADR-0014) · **Date:** 2026-06-04
 
 **Context.** The engine needs rigid bodies and collision (ROADMAP 2.3); Jolt was
 the chosen library. The questions for *how* to integrate: how to keep Jolt types
@@ -464,10 +474,16 @@ the object-layer scheme, the job system, and the precision bridge.
   between the lib and its consumers).
 - **Two object layers** (`NON_MOVING`/`MOVING`) with a 1:1 broadphase mapping —
   the standard minimal scheme so the static tree never rebuilds.
-- **Single-threaded job system** (`JobSystemSingleThreaded`). The engine is
-  single-threaded and workloads are tiny; this is deterministic and avoids
-  spinning a pool. Revisit with multithreading (ADR-0008) or when physics shows
-  in a profile.
+- ~~**Single-threaded job system** (`JobSystemSingleThreaded`).~~ **Updated.**
+  Jolt's step now runs on the engine's shared `JobSystem` (ADR-0014) via a
+  `JoltJobAdapter` (`engine/physics/jolt_job_adapter.*`) — a `JPH::JobSystem`
+  that forwards each ready Jolt job to `JobSystem::run` instead of spawning a
+  second pool. Jolt still owns the job *graph* (deps/barriers, via the
+  `JobSystemWithBarrier` base); we own the *threads*. `PhysicsWorld::initialize`
+  takes an optional `JobSystem*`; null keeps the deterministic
+  `JobSystemSingleThreaded` path (used by unit tests). Determinism holds —
+  same machine + Jolt, multi-threaded simulation is repeatable — and a test
+  pins the threaded result equal to single-threaded.
 - **Single precision** (`JPH_DOUBLE_PRECISION` off); the wrapper bridges our
   `double` to Jolt `float`. Consistent with the deferred precision choice
   (ADR-0005); revisit for large-world coordinates.
@@ -488,7 +504,10 @@ offline tracer, unit tests, and physics tests always configure.
   Jolt; the wrapper costs little and keeps the door open to swapping later.
 - Vendored copy instead of submodule — rejected: submodule keeps our tree clean
   and the version explicit.
-- Multi-threaded `JobSystemThreadPool` now — deferred: premature for our load.
+- ~~Multi-threaded `JobSystemThreadPool` now — deferred.~~ When we did thread the
+  step, the **adapter over our own pool** was chosen over Jolt's stock
+  `JobSystemThreadPool` precisely to avoid two competing pools on one machine —
+  one pool, with Jolt as a guest that brings its schedule but rents our threads.
 
 **Consequences / tech debt.**
 - Adds a real third-party dependency (engine/viewer scope; the offline tracer
@@ -497,12 +516,498 @@ offline tracer, unit tests, and physics tests always configure.
   `MotionSystem` repositioned (kinematic mover, yields to physics) rather than
   retired. Core logic is headless-tested.
 - **Collider debug-draw** needs a line/debug primitive (macOS/Metal) — deferred.
+- **`JoltJobAdapter` must be compiled `-fno-rtti`** (set per-source in CMake):
+  Jolt is built without RTTI, so a derived class with an out-of-line key function
+  would emit typeinfo referencing a base typeinfo symbol Jolt never produced
+  (link error). Also: inside a `JPH::JobSystem`-derived class the unqualified name
+  `JobSystem` resolves to the Jolt base, so our pool is spelled `::JobSystem`.
 - The wrapper currently exposes box/sphere shapes and basic body ops; capsule,
   mesh colliders, materials (friction/restitution), and contact events are
   follow-ups.
 
 **Revisit trigger.** Multithreading the sim (job pool); large-world precision
 (double); or a second physics need that the wrapper's surface doesn't cover.
+
+---
+
+## ADR-0013 — GCController gamepad backend for macOS
+**Status:** Accepted · **Date:** 2026-06-04
+
+**Context.** GLFW 3.4's IOKit-based joystick backend cannot read Xbox or
+PlayStation controllers on macOS 13+. Apple's DriverKit extension
+(`com.apple.gamecontroller.driver.XboxGamepad`) claims these devices at the USB
+level and re-presents them with a vendor-specific HID descriptor (usage page
+`0xFF00`). IOKit sees the device as present but reports 0 axes, 0 buttons, 0
+hats — regardless of permissions, gamepad mapping databases, or GLFW version.
+Steam works because it has its own HID driver layer bypassing IOKit entirely.
+
+The **only** reliable path on modern macOS is Apple's Game Controller framework
+(`GCController`), which speaks the vendor protocol natively.
+
+**Decision.** Add a GCController polling layer (`renderer/gamepad_gc.mm`) that
+runs alongside GLFW's existing IOKit path. Architecture:
+
+- **Callback-based.** A `valueChangedHandler` on each controller's
+  `GCExtendedGamepad` caches the latest input snapshot in a static
+  `GCCachedPad` array. Polling alone does not work — GCController delivers
+  input updates asynchronously through the Cocoa run loop, which GLFW's
+  `glfwPollEvents()` does not fully service.
+- **Run loop pump.** `gcPollGamepads()` explicitly services `NSRunLoop` each
+  frame (`runMode:beforeDate:`) so GCController's internal dispatch delivers
+  pending input events and connect/disconnect notifications.
+- **Notification-based connect/disconnect.** Listens for
+  `GCControllerDidConnectNotification` / `GCControllerDidDisconnectNotification`
+  rather than re-enumerating `[GCController controllers]` each frame. On
+  connect, a slot is assigned and the `valueChangedHandler` installed; on
+  disconnect, the slot is released.
+- **Overlay, not replacement.** `gcPollGamepads()` runs after GLFW's gamepad
+  loop in `Window::pollEvents()` and overwrites any slot where GCController has
+  data. Controllers that GLFW's IOKit path handles natively (non-Apple-claimed
+  devices, or future GLFW versions with GCController support) continue to work
+  unchanged. On non-Apple platforms, `gcPollGamepads` is an inline no-op.
+- **Y-axis negated** to match GLFW convention (stick-up = negative), so existing
+  camera bindings work without modification.
+- **`gamecontrollerdb.txt`** (SDL_GameControllerDB) loaded at init as a fallback
+  for GLFW's IOKit mapping path. Harmless and provides coverage for any
+  controller that IOKit *can* still see.
+
+Adheres to ADR-0001: `gamepad_gc.mm` is a platform-specific file behind the
+Window seam; the engine sees only `GamepadState`. The header (`gamepad_gc.h`)
+compiles to an inline no-op on non-Apple platforms.
+
+**Alternatives considered.**
+- Building GLFW from source with GCController support — rejected: GLFW 3.4
+  (including `main` branch) has no GCController backend; it is IOKit-only on
+  macOS.
+- Writing our own IOKit HID layer to parse the vendor-specific descriptor —
+  rejected: reverse-engineering Apple's proprietary protocol is fragile and
+  duplicates what GCController already does.
+- Using SDL2 for gamepad input — rejected: heavy dependency for a single
+  feature; GCController is ~100 lines of Obj-C++ and is the official Apple API.
+- Polling `gp.leftThumbstick.xAxis.value` directly without callbacks — tried
+  first; values always read 0 because the run loop was not servicing
+  GCController's internal dispatch. The callback approach solved this.
+
+**Consequences / tech debt.**
+- `gamepad_gc.mm` is Objective-C++ and macOS-only. It links
+  `GameController.framework`, added to `CMakeLists.txt` under the Apple
+  platform block.
+- The `GCCachedPad` cache is written from GCController's dispatch queue and
+  read from the main thread. `GamepadState` is small and reads happen between
+  frames, so a torn read produces at most one frame of mixed old/new data —
+  acceptable for input.
+- Controllers already plugged in at launch require a run loop pump during
+  `gcInit()` to deliver the pending connect notifications before enumeration.
+  If a controller is still not detected at launch, a physical reconnect
+  triggers the notification reliably.
+
+**Revisit trigger.** GLFW adding native GCController support (eliminating the
+need for this layer); targeting non-Apple platforms that need a similar
+workaround (→ consider SDL2 at that point); or Apple changing the DriverKit
+protocol (unlikely to break GCController, since it's their own framework).
+
+---
+
+## ADR-0014 — A minimal shared-queue `JobSystem` for parallelism
+**Status:** Accepted · **Date:** 2026-06-05
+
+**Context.** Parallelism was ad-hoc: the offline tracer hand-rolled
+`std::thread`-per-tile in `main.cpp`, and Jolt runs on its own single-threaded
+job system (ADR-0012). There was no shared place that owns threads. Every future
+parallel workload — parallel ECS systems (ADR-0004's revisit trigger), async
+asset loading, procgen fan-out (Tier 4) — would otherwise re-invent thread
+management. We wanted the foundational threading primitive *before* the asset
+system, since async loading is built on it. (`docs/ROADMAP.md` lists a job system
+under Tier 5; it was pulled forward as low-level foundation by user direction.)
+
+**Decision.** A `JobSystem` (core layer, `src/job_system.{h,cpp}`, std-lib only
+per AGENTS.md) owning a fixed pool of worker threads that drain **one shared,
+mutex-guarded queue**. Public surface kept deliberately small:
+- `parallelFor(begin, end, body, grainSize)` — splits a range into grain-sized
+  chunks, runs them across the pool, and blocks until done. The calling thread
+  helps drain while it waits, so no worker idles behind the caller.
+- `run(task, counter)` / `wait(counter)` — the lower-level async primitive
+  (counter-based completion) that async asset loads will sit on later.
+- `AUTO` worker count = `hardware_concurrency() - 1` (leave a core for the
+  caller); **0 workers = synchronous mode** (tasks run inline, no threads),
+  which keeps tests deterministic and single-core machines correct.
+
+The internals are intentionally simple: **no work stealing**, one queue. The API
+hides the queue so the internals can become per-worker deques later without
+touching callers — but only when a profile asks for it (ADR-0008: measure
+before optimizing).
+
+**Determinism (defends ADR-0002).** The scheduler must never change *results*.
+`parallelFor` is contracted as safe only over **independent** work (each index
+writes its own data; no order-dependent reductions). Fixed-step ECS systems stay
+serial unless a system explicitly opts into `parallelFor` over independent
+entities. The contract is documented, not enforced.
+
+**First consumer.** The offline tracer's per-tile `std::thread` loop was migrated
+onto `run()` + a completion counter (rows are tasks; the main thread reports
+progress, then `wait()`s). This deleted the hand-rolled threading and is the
+real, **headless/Linux-verifiable** proving ground — a full Cornell-box render
+matches the old output, with `user`≈`3×real` confirming the parallelism.
+
+**Alternatives considered.**
+- **Work-stealing deques now** — rejected: premature (ADR-0008); no measured
+  contention, and our workloads (image rows, future asset loads) are coarse
+  enough that one queue is fine. The API leaves the door open.
+- **Reuse Jolt's job system** — rejected: it's sealed behind `PhysicsWorld`
+  (ADR-0012) and tuned for physics jobs; coupling general engine parallelism to
+  the physics dependency is backwards. (Later we may *give* Jolt an adapter over
+  this pool — see revisit.)
+- **`std::async` / per-task `std::thread`** — rejected: no pool (thread churn),
+  no batching/`wait`, and exactly the ad-hoc style we're replacing.
+
+**Consequences / tech debt.**
+- Threads now link into the offline tracer + tests (`-pthread` / CMake
+  `Threads::Threads`). The std-lib-only rule holds — no new third-party dep.
+- **Does not make `SlotMap`/`SparseSet`/`World` thread-safe**, and does **not**
+  wire the pool into Jolt or into ECS system execution. Those are explicit
+  follow-ups; `parallelFor` bodies must not structurally mutate the ECS.
+- Single shared queue can become a contention point at high task rates — fine
+  for current coarse workloads, revisited by profile.
+
+**First external consumer.** Jolt's physics step now runs on this pool via a
+`JPH::JobSystem` adapter (ADR-0012) — `QueueJob` forwards each ready job to
+`run`. This validated the `run`/`wait` surface against a real, dependency-rich
+external scheduler.
+
+**Revisit trigger.** A profile showing queue contention or scheduling overhead
+(→ per-worker work-stealing deques); or parallelizing ECS systems (→ define core
+container thread-safety / a deferred command buffer, ADR-0006).
+
+---
+
+## ADR-0015 — Engine code lives in `namespace engine`
+**Status:** Accepted (migration complete) · **Date:** 2026-06-05
+
+**Context.** All of our types sat in the global namespace — `Vec3`, `Mat4`,
+`Handle`, `World`, `Entity`, `Renderer`, `JobSystem`, `Material`, `Scene`, … As
+third-party libraries arrived (Jolt, ImGui; asset/glTF loaders to come) this
+started to bite: wiring our pool into Jolt (ADR-0012) hit a real collision —
+inside a class deriving from `JPH::JobSystem`, the bare name `JobSystem` resolved
+to Jolt's, forcing a `::JobSystem` workaround. Global names only get more
+crowded as the surface grows. Engines namespace themselves for exactly this
+reason (Jolt `JPH::`, Godot `godot::`, Bullet `bt`).
+
+**Decision.** Put all our code in `namespace engine`. Macros stay global
+(`LOG_*`, `CHECK`, `ASSERT`) — they ignore namespaces and are already
+`UPPER_SNAKE`.
+
+Migrate **layer by layer, bottom-up (core first)** rather than in one sweep, to
+keep each step reviewable and to limit blast radius on the macOS-only backends
+that can't be compiled in CI. Between stages, each migrated header re-exports its
+public names at global scope with transitional `using engine::Name;`
+declarations, so un-migrated consumers keep compiling **unchanged**. The aliases
+are deleted in the final stage. (For the broad engine layer, enumerating ~50
+types across ~20 headers would be error-prone, so the equivalent shim there is a
+single `using namespace engine;` in each leaf consumer — test/`viewer_main`
+`.cpp` files only, never a header — rather than per-type aliases.) Order: **core math + identity (rt_math, handle,
+slot_map) → job_system + logging → engine (world/ECS/systems/cameras/physics) →
+renderer → offline tracer → drop the shims.**
+
+**Name.** `engine` (descriptive, unambiguous about intent). Considered `rt` (ties
+to the `rt_` file prefix; shorter) and `rtx`/`rte`; `engine` was chosen for
+clarity at call sites now that this is an engine, not just a tracer.
+
+**Alternatives considered.**
+- **One big-bang sweep** — rejected for now: a ~60-file mechanical diff that's
+  hard to review and would touch the unverifiable Metal/GLFW files all at once.
+- **A short prefix instead of a namespace** (`btScalar`-style) — rejected:
+  namespaces compose with `using`, support ADL, and are the modern idiom.
+- **Re-export via `using namespace engine;` in headers** — rejected: pollutes
+  every includer and, being a using-*directive*, doesn't satisfy qualified
+  (`::Name`) lookup, so it would break existing `::JobSystem`-style references.
+  Explicit `using engine::Name;` declarations do, so those are used.
+
+**Consequences / tech debt.**
+- A window of **transitional global aliases** exists until the migration
+  completes (tracked in the register). Each is a one-line `using` to delete.
+- **Forward-declared types** can't be shimmed transparently: a global
+  `using engine::JobSystem;` conflicts with a global `class JobSystem;` forward
+  declaration. `JobSystem` is forward-declared in three physics files, so it
+  migrates *with* the physics layer (its decls flip to `namespace engine { … }`),
+  not in the first core step.
+- **Operators need no alias** — found by ADL through their engine-typed operands.
+- Inside a `JPH::`-derived class, our names still need qualifying
+  (`engine::JobSystem`), since the base scope is searched first.
+
+**Outcome.** Migration completed in five staged commits (core → job_system/
+logging → engine → renderer → tracer + shim removal). All of `src/` now lives in
+`namespace engine`; every transitional alias is gone. The only global-scope
+namespace references left are a `using namespace engine;` in the leaf
+consumers (`main.cpp`, `viewer_main.cpp`, and the test `.cpp`s) and `int main()`
+itself. The macOS-only backends (`metal_renderer.mm`, `window.cpp`,
+`gamepad_gc.mm`) were wrapped with the namespace placed outside any ObjC
+construct and after all (incl. conditional) includes; **confirmed building and
+running on macOS** (viewer), closing the usual can't-compile-in-CI gap for this
+change.
+
+**Revisit trigger.** If `engine` proves too generic against a future
+embedded/3rd-party `engine` symbol, revisit the name.
+
+---
+
+## ADR-0016 — An environment-provider seam; HDR via vendored `stb_image`
+**Status:** Accepted (provider seam + HDR path); procedural day/night **Implemented** + clouds **first pass** (macOS verification pending) · **Date:** 2026-06-09
+
+**Context.** The scene's environment is hardcoded: `sampleEnvironment(dir)` in
+`shaders/metal/phong.metal` is a fixed daytime-sky function (sun disc, horizon
+blend, ground tint). Everything downstream samples *that one function* — the
+skybox pass, the per-pixel ambient/diffuse term, and the reflection-probe bake
+(ADR for probes lives in the post-processing work). There is no way to feed in a
+captured environment, and no axis for time-of-day. We want three things, not one:
+a **captured HDR** environment for realism and image-based lighting; a **richer
+procedural sky** with a real sun direction / day–night cycle; and, later,
+**clouds**. These should coexist and be swappable, not fork the renderer.
+
+A decode question rode along: an HDR equirect map is Radiance RGBE, which needs a
+decoder. The project's standing rule (AGENTS.md) is "no external dependencies."
+
+**Decision — two parts.**
+
+1. **Environment-provider seam.** Model the environment as *one question*: given
+   a world-space direction, what radiance arrives? Both consumers that exist
+   today (skybox fragment shader, probe bake) already funnel through
+   `sampleEnvironment(dir)`, so the seam lives at that function plus a small
+   uniform selecting the active provider. Planned providers:
+   - **HDR** — sample a vendored equirect float texture (`dir → spherical UV`).
+   - **Procedural** — the analytic sky, to be promoted from today's fixed tint to
+     a sun-direction / turbidity model (day–night) driven by ImGui controls.
+   - **Composited** — procedural atmosphere with a clouds layer on top.
+
+   The provider is a *render-side* concept selected by a uniform/flag, not a new
+   class hierarchy in the shader; the C++ side owns which provider is bound and
+   its parameters. Because the probe bake renders the skybox into cubemap faces,
+   IBL tracks whichever provider is active **for free** — bake the HDR (or the
+   static procedural sky) and reflections/ambient follow. Animated clouds are a
+   sky-dome *visual* layer and are **not** baked into probes (a stale snapshot at
+   most); a captured HDR already contains its own clouds, so the clouds layer is
+   procedural-only.
+
+2. **HDR decode reuses vendored `stb_image`.** `third_party/tinygltf/stb_image.h`
+   is already in the tree and already compiled into the build via the glTF
+   importer (`src/engine/model_importer.cpp`). `stbi_loadf()` decodes `.hdr`
+   (Radiance RGBE) to linear `float` RGB in one call — and PNG/JPG/TGA besides.
+   Use it rather than hand-rolling an RGBE decoder.
+
+**Dependency-rule clarification.** AGENTS.md's "no external dependencies" is
+reinterpreted, not broken: it now means **no new third-party dependencies**.
+Single-header libraries already vendored and built — `stb_image`/`stb_image_write`
+(via tinygltf), tinygltf itself, Dear ImGui, Jolt — are accepted; using
+`stb_image` for HDR adds no new dependency, no new submodule, no new build edge,
+and matches how glTF textures are already decoded. The from-scratch RGBE decoder
+(~60 lines, a stable format) was a defensible alternative but only adds
+maintained surface area for strictly less coverage than the decoder we already
+ship. AGENTS.md is updated to state the refined rule.
+
+**Alternatives considered.**
+- **HDR replaces the procedural sky** — rejected: loses day–night authoring and
+  the clouds path; the provider seam keeps both as first-class.
+- **Hand-written RGBE decoder** — rejected (see above): small but redundant
+  against vendored `stb_image`, which also covers LDR formats we'll want anyway.
+- **A new third-party HDR/IBL library** (e.g. a dedicated loader/baker) —
+  rejected: heavier than the need; `stbi_loadf` + the existing probe bake suffice.
+- **Provider as a shader subclass / function-pointer table** — rejected: a
+  uniform-selected branch is simpler and the consumer count is small (skybox +
+  bake); revisit if provider count or per-provider cost grows.
+
+**Consequences / tech debt.**
+- A float-texture upload path is required; today's `uploadTexture` is RGBA8-only.
+  Added as an HDR-specific entry point (`RGBA16Float` equirect 2D) rather than
+  overloading the 8-bit path.
+- **Equirect → cubemap bake is implemented.** The equirect HDR is baked once at
+  load (`setEnvironmentMap` → `Impl::bakeEnvironmentCubemap`) into a mipmapped
+  `MTLTextureTypeCube`: six faces rendered with the probe bake's per-face cameras
+  (the verified cube convention) by a small `fragmentEquirectBake` pass that emits
+  raw radiance, blitted into the cube slices, then mip-generated. The skybox,
+  composite, and probe-bake skybox now do a cheap `envCube.sample(dir)` instead of
+  per-sample `atan2`/`acos`; the equirect 2D texture is kept only as the bake
+  source. A 1×1 `defaultCubemap` keeps a valid binding in procedural mode.
+  *macOS/Metal verification pending.* Follow-up: GGX prefilter of the cube mips
+  (shared with the probe path, which still box-filters) for correct rough IBL.
+- Procedural **day–night is implemented** (step 2): a pure, unit-tested engine
+  helper `DayNightCycle` (`src/engine/day_night_cycle.*`) maps a normalized
+  time-of-day to a sun arc and a graded sky/light palette; a `DayNightSystem`
+  advances it each frame and drives **both** the procedural sky and the scene's
+  directional sun, so shading and shadows track the sky. The sky parameters ride
+  in `LightUniforms` (already bound everywhere `sampleEnvironment` is sampled),
+  so no new shader buffer was threaded; `sampleEnvironment(dir, env)` now reads
+  sun direction/colors from that uniform instead of hardcoded constants. Defaults
+  in `ProceduralSky` reproduce the original fixed daytime sky. *macOS/Metal
+  verification pending* (Linux can't compile the backend); the time-of-day curve
+  is covered by `tests/test_day_night.cpp`. A full analytic atmosphere
+  (Preetham/Hosek–Wilkie) remains a possible refinement.
+- Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
+  sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
+  shaded against the active sun (sunlit tops, dark night silhouettes, warm at
+  dusk). It is a **screen/SSR visual only and is never baked into reflection
+  probes** — as the ADR requires: the probe bake reuses `fragmentSkybox` with a
+  new `EnvUniforms.cloudsEnabled = 0` gate, while the main pass and the composite
+  sky path overlay clouds. Cloud parameters (coverage/density/scale/time) ride in
+  `LightUniforms`; `DayNightSystem` drifts the phase and exposes ImGui controls.
+  Clouds attach to the procedural sky only (a captured HDR carries its own).
+  *macOS/Metal verification pending.* Follow-up: richer cloud lighting
+  (multi-layer, silver lining).
+- The **composite sky path now honors the active provider.** Direct-view sky
+  pixels (`depth >= 0.999`) are re-derived in `fragmentComposite`; previously
+  this always ran the procedural sky, so a bound HDR map showed in the skybox/IBL
+  but not where the sky was seen directly. The composite pass now takes the
+  equirect map (texture 6) + sampler and an `envMode` flag in `CompositeParams`,
+  and samples HDR vs. procedural+clouds to match `fragmentSkybox`.
+- Volumetric (raymarched) clouds are explicitly **out of scope** here — a
+  Tier-4/5-sized effort, not a slot-in to this seam.
+
+**Revisit trigger.** Equirect sampling showing up hot in a GPU capture (→ bake to
+cubemap); adding a second renderer backend (the provider uniform/shader split
+must hold behind the RHI, ADR-0001); or provider count/per-provider state growing
+enough that the uniform-selected branch wants to become real polymorphism.
+
+---
+
+## ADR-0017 — Unified physically based lighting with an artistic-control and shading-model seam
+**Status:** Accepted; Phases 0–3 **implemented** (consolidation; BRDF unification; shadow artistic controls + camera-following shadow volume + HDR sun extraction — shadows visually verified; environment unification: cube-bake orientation proven by `tests/test_cube_faces.cpp`, GGX-prefiltered + irradiance cubes, one shader env path, composite equirect workaround removed). Phase 3 note: the procedural sky stays analytic behind the same provider interface — baking it per-frame as day/night animates is a deferred optimization. Phase 4 (gather/respond shading-model seam) is next. · **Date:** 2026-06-10
+
+**Context.** The lit path is two mismatched halves. Indirect lighting (HDR IBL,
+reflection probes) is proper GGX split-sum PBR (BRDF LUT, prefiltered mips), but
+direct lighting in `evaluateLighting` is still Blinn-Phong: a `shininess =
+mix(16, 512, 1-roughness)` remap with `(s+8)/8π` normalization, a diffuse term
+missing the 1/π Lambert factor (≈3× too hot relative to IBL), and the old
+LearnOpenGL `1/(1 + 0.09d + 0.032d²)` point/spot falloff instead of inverse
+square. Roughness therefore means different things to the sun and the sky, and
+direct vs. indirect light are not in the same energy units — which is why
+balancing a sun against an HDR environment never converges.
+
+That mismatch also explains the headline visual complaint: **shadows are faint
+under an HDR environment**. The shadow factor multiplies only each light's
+direct term; the ambient/IBL terms (`ambientDiffuse`, `envSpecular`) are never
+shadowed, and under an HDR they carry most of the energy — a fully shadowed
+pixel keeps ~80% of its brightness. There are no artistic controls to push back
+with: no shadow strength, no shadow tint, just the single `ambientMultiplier`
+scalar.
+
+Accumulated cruft compounds it: `fragmentMain` and `fragmentMainInstanced` are
+~150-line near-duplicates; the three-way environment branch (HDR / probes /
+procedural) is duplicated in both and partially again in
+`sampleReflectionProbes`, each copy with slightly different Fresnel/energy
+treatment; everything lives in one 1,650-line `phong.metal`; uniform structs are
+hand-mirrored between `metal_renderer.mm` and MSL with manual padding;
+`ShadowConfig.bias`/`normalBias`/`pcfRadius` flow from level JSON to the GPU and
+are never read (the real bias is hard-coded on the encoder); the shadow ortho
+volume is a fixed 30-unit box anchored at the world origin; the skybox pass
+pre-multiplies exposure that composite multiplies again (sky seen through SSR is
+double-exposed); and composite re-derives sky pixels per-fragment to work around
+a mis-oriented equirect→cube bake. Separately, the engine should eventually
+support **NPR (toon) shading** and per-feature toggles without forking the
+renderer.
+
+**Decision — a phased refactor with two commitments.**
+
+1. **One BRDF, one set of units.** Direct lighting moves to Cook-Torrance GGX
+   (GGX NDF, height-correlated Smith visibility, Schlick Fresnel) with
+   Lambert/π diffuse, sharing roughness semantics with the existing
+   split-sum/prefilter path. Point/spot lights get inverse-square falloff with a
+   windowed radius. After this, sun-vs-environment balance is a single exposure
+   decision, and every artistic control sits on predictable ground.
+
+2. **Shading is split into *gather* and *respond*, with artistic controls in the
+   gather.** Gather produces, per surface point: each light's direction,
+   radiance, and visibility-as-color (shadow), plus indirect irradiance and
+   prefiltered specular. Respond is the BRDF that turns those into outgoing
+   radiance. Artistic shadow controls live in gather as a small struct on
+   `SceneLighting`:
+
+   ```cpp
+   struct ShadowArtistic {
+       float strength = 1.0f;        // 0 = shadows off, 1 = full direct occlusion
+       Vec3  tint{0, 0, 0};          // shadowed regions lerp toward this color
+       float ambientStrength = 0.5f; // how much shadow also darkens IBL/ambient
+   };
+   ```
+
+   `tint` gives "deep blue, not black" shadows; `ambientStrength` is what makes
+   shadows *dark under an HDR* (it occludes the environment terms, which today
+   ignore shadowing entirely). Because visibility is a color computed in gather,
+   every response model — PBR or toon — inherits the same shadows, lights, and
+   probes. NPR becomes a per-material `ShadingModel` (Standard, Toon, Unlit)
+   selected via Metal **function constants** compiled as cached pipeline
+   variants; feature toggles (shadows, IBL, clouds) use the same mechanism
+   instead of runtime branches.
+
+**Phases** (each shippable and verifiable on its own):
+
+- **Phase 0 — Consolidate (no intended visual change).** Shared
+  `shader_types.h` included by both C++ and MSL (simd types) replaces the
+  hand-mirrored uniform structs; `phong.metal` splits into focused modules
+  concatenated at load (runtime `newLibraryWithSource` has no include paths);
+  the two fragment shaders merge into one `shadeSurface()`; the dead shadow
+  uniforms get wired (bias → encoder depth bias, normalBias → world-space
+  offset, pcfRadius → PCF kernel); exposure is applied exactly once (composite).
+- **Phase 1 — Unify the BRDF** (commitment 1).
+- **Phase 2 — Shadows: reach, response, artistic control.** `ShadowArtistic`
+  (above) in shader + level JSON + ImGui; shadow ortho volume fit to the camera
+  frustum ∩ scene bounds instead of the origin-anchored box; **HDR sun
+  extraction** — `EnvironmentLoader` finds the dominant bright direction/color
+  and drives the shadow-casting directional sun, so a skybox-lit scene gets
+  crisp shadows that match its sun; SSAO moves to darken indirect light only.
+- **Phase 3 — One environment path.** Both providers (HDR and procedural sky)
+  bake into the same cubemap + prefiltered mips + irradiance; the three-way
+  fragment branch collapses to irradiance(N) / prefiltered(R, rough) / BRDF LUT
+  with probes blended on top; the mis-oriented equirect→cube bake is fixed and
+  the composite per-pixel sky workaround removed; radiance clamps and divergent
+  Fresnel paths disappear. Ambient tint / ground-bounce grading lands here.
+- **Phase 4 — The shading-model seam** (commitment 2): gather/respond split,
+  function-constant pipeline variants, Toon model, `SceneLighting` split into
+  `Lights`/`Shadows`/`Environment`/`Grading` sub-structs with JSON + ImGui.
+- **Phase 5 — Later polish:** CSM, spot/point shadow maps, PCSS, auto-exposure
+  adaptation.
+
+**Alternatives considered.**
+- **Keep Blinn-Phong and only add shadow controls** — rejected: tint/strength
+  knobs on top of mismatched units fight the exposure knob; every HDR swap
+  re-breaks the balance. The BRDF unification is what makes the controls stick.
+- **Full deferred shading** — rejected for now: the forward pass with a small
+  G-buffer (color + view normals) already feeds SSR/SSAO; deferred is a much
+  bigger migration and not required for any planned feature. Revisit with
+  many-light scenes (Tier 4 procedural cities).
+- **Uber-shader runtime branches for NPR/toggles** — rejected: the lit shader
+  is already branch-heavy; function constants give dead-code elimination per
+  variant and a natural pipeline-cache key.
+- **Shader subclass/polymorphism for shading models** — rejected: same
+  reasoning as ADR-0016's provider seam; variant count is small and enumerable.
+
+**Consequences / tech debt.**
+- Visual output will shift at Phase 1 (energy renormalization) — levels'
+  `exposure`/`ambientMultiplier`/light intensities need a one-time retune.
+  Acceptable: today's values encode the wrong units.
+- Pipeline variants (Phase 4) multiply PSO count; mitigated by lazy creation +
+  cache keyed on the function-constant set.
+- The SSAO indirect-only fix wants ambient available at AO-apply time; the
+  honest route is a Z-prepass (also useful later), the interim route keeps the
+  composite apply with a tunable floor. Decided per-measurement in Phase 2.
+- The concatenating shader loader is itself interim — if/when shaders are
+  precompiled to a `.metallib`, real `#include` replaces it.
+- **Root cause of the historic "mis-oriented cube bake" (found in Phase 3):**
+  not face orientation at all. `vertexSkybox` normalized the reconstructed
+  view ray *at the vertices*; far-plane offsets are affine in NDC (their
+  interpolation is exact), but interpolating *normalized* rays warps interior
+  pixels — up to ~25° with the oversized fullscreen triangle. Every consumer
+  (env bake, probe bakes, main-pass skybox) was warped; the composite looked
+  right only because it reconstructs per pixel. The CPU unit test passed
+  because the math was right — the GPU link wasn't. Found via load-time GPU
+  validation, which stays in as a canary: an orientation readback check, a
+  direction-reconstruction probe, and a prefilter NaN/firefly scan, plus
+  headless visual tools (`RT_FRAME_DUMP=<png>` one-frame capture,
+  `RT_DUMP_ENV=<dir>` cube-face/equirect dumps). Lesson recorded: math-level
+  unit tests validate intent; only GPU readback validates the chain.
+
+**Revisit trigger.** A second renderer backend (the gather/respond split and
+function-constant variants must re-prove themselves behind the RHI seam,
+ADR-0001); many-light scenes making forward lighting the frame's hot spot (→
+deferred or clustered); NPR needs outgrowing per-material models (e.g.
+full-screen stylization passes).
 
 ---
 
@@ -518,10 +1023,12 @@ to be replaced; listed here so they stay visible.
 | ~~Hardcoded keybindings~~ | ~~`engine/systems/dev_control_system.cpp`~~ | *Resolved (ROADMAP 2.1, 2.2): named-action layer `InputMap` (`engine/input/`); `DevControlSystem` and `CameraSystem` (orbit + fly) drive entirely off actions, gamepad included.* | — |
 | Incremental logging adoption | various | Avoided a sweep | Migrate remaining `std::cerr` sites |
 | ~~No automated tests~~ | ~~repo-wide~~ | *Resolved (ROADMAP 1.3): `tests/` target, `make test` / CTest, 33 cases over `SlotMap`/`SparseSet`/`World`/math/`SimClock`.* | — |
-| Legacy `uint32_t` handles | `renderer.h` (`MeshHandle`) | Pre-`Handle` primitive | `Handle`/`SlotMap` (ADR-0007) once assets land |
-| macOS-only verification | `window.cpp`, `metal_renderer.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
+| ~~Legacy `uint32_t` handles~~ | ~~`renderer.h` (`MeshHandle`)~~ | *Resolved (ADR-0007): `MeshHandle`/`BufferHandle` are now `Handle<Tag>`; the Metal backend stores meshes in a `SlotMap<GPUMesh>`. First brick of the asset system.* | — |
+| macOS-only verification | `window.cpp`, `metal_renderer.mm`, `gamepad_gc.mm` | Only backend; not Linux-compilable | Second backend + CI that can build it |
 | Partial live-resize fix | `Window` draw callback | Repaints, but sim is frozen mid-drag | Refresh-driven redraw / resize-aware loop |
 | No custom allocators / memory tracking | repo-wide | Deferred (ADR-0008); `SlotMap` covers pooling | Frame arena when churn measured; allocators + tracking on data |
+| Core containers not thread-safe; `JobSystem` is single-queue | `slot_map.h`, `sparse_set.h`, `world.*`, `job_system.*` | `JobSystem` (ADR-0014) parallelizes independent work only; ECS/containers stay single-threaded | Container thread-safety / deferred command buffer when ECS systems parallelize; work-stealing when a profile demands it |
+| ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0015): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 

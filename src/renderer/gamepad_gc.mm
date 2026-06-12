@@ -17,6 +17,8 @@
 #import <GameController/GameController.h>
 #import <Foundation/Foundation.h>
 
+namespace engine {
+
 // Per-controller cached state, updated from GCController callbacks.
 struct GCCachedPad {
     GamepadState state;
@@ -174,3 +176,5 @@ void gcPollGamepads(GamepadSet& pads) {
         pads[i] = gcCache[i].state;
     }
 }
+
+}  // namespace engine

@@ -3,6 +3,8 @@
 
 #include "gamepad.h"
 
+namespace engine {
+
 // Apple Game Controller framework polling (macOS). On modern macOS the system's
 // DriverKit driver claims Xbox/PS controllers at the USB level and re-presents
 // them with a vendor-specific HID descriptor that IOKit-based libraries (GLFW)
@@ -20,5 +22,7 @@ void gcPollGamepads(GamepadSet& pads);
 #else
 inline void gcPollGamepads(GamepadSet&) {}   // no-op on other platforms
 #endif
+
+}  // namespace engine
 
 #endif

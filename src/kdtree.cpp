@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <numeric>
 
+namespace engine {
+
 void AABB::expand(const Vec3& point) {
     min.x = std::min(min.x, point.x);
     min.y = std::min(min.y, point.y);
@@ -128,3 +130,6 @@ bool KdTree::intersectNode(const KdNode* node, const Ray& ray,
 
     return hitLeft || hitRight;
 }
+
+}  // namespace engine
+

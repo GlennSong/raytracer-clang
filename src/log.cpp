@@ -2,6 +2,7 @@
 
 #include <iostream>
 
+namespace engine {
 namespace logging {
 
 LogLine::~LogLine() {
@@ -15,3 +16,4 @@ LogLine::~LogLine() {
 }
 
 }  // namespace logging
+}  // namespace engine

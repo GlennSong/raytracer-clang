@@ -3,6 +3,8 @@
 
 #include "../system.h"
 
+namespace engine {
+
 // Draws the world each frame using the RenderView's camera and lights, with
 // per-entity interpolation for smooth motion. Also ramps exposure from input.
 // Application brackets render() with begin/endFrame, so this only emits draws.
@@ -16,5 +18,8 @@ public:
 private:
     float exposure = 0.5f;
 };
+
+
+}  // namespace engine
 
 #endif

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
+namespace engine {
+
 namespace {
 
 // Default key for each action, overridable via a "bind.<action>" Settings entry
@@ -42,13 +44,15 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  Up/Down=exposure, Esc=quit\n"
               << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
               << "  P=toggle perspective/orthographic camera\n"
+              << "  F=detach/attach freecam (mouse looks, WASD/QE fly)\n"
+              << "  C=place camera here, V/B=cycle viewports, X=editor view\n"
               << "  (keys configurable via bind.<action> in settings)\n";
 }
 
 void DevControlSystem::update(FrameContext& ctx) {
     // Edge actions are consumed once per frame here (not per event), so a single
     // key press toggles exactly once regardless of how many events the frame saw.
-    if (ctx.actions.pressed("quit")) ctx.quit = true;
+    if (ownsQuit && ctx.actions.pressed("quit")) ctx.quit = true;
     if (ctx.actions.pressed("pause")) paused = !paused;
     if (ctx.actions.pressed("sim_slower"))
         simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
@@ -65,3 +69,6 @@ void DevControlSystem::update(FrameContext& ctx) {
 void DevControlSystem::onStop(FrameContext& ctx) {
     ctx.settings.setDouble("timeScale", simSpeed);
 }
+
+}  // namespace engine
+

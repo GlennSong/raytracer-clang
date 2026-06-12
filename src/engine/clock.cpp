@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 SimClock::SimClock(double fixedStepSeconds)
     : fixedStepSeconds(fixedStepSeconds > 0.0 ? fixedStepSeconds : 1.0 / 60.0),
       scale(1.0), accumulator(0.0), alpha(0.0), simTime(0.0) {}
@@ -35,3 +37,6 @@ void SimClock::setTimeScale(double newScale) {
 void SimClock::setFixedStep(double seconds) {
     if (seconds > 0.0) fixedStepSeconds = seconds;
 }
+
+}  // namespace engine
+

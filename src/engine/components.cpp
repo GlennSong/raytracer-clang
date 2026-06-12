@@ -1,5 +1,7 @@
 #include "components.h"
 
+namespace engine {
+
 Mat4 Transform::matrix() const {
     return Mat4::trs(position, orientation, scale);
 }
@@ -11,3 +13,6 @@ Transform lerp(const Transform& a, const Transform& b, Real t) {
     result.scale = lerp(a.scale, b.scale, t);
     return result;
 }
+
+}  // namespace engine
+

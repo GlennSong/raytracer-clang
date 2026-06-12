@@ -1,5 +1,7 @@
 #include "player_input.h"
 
+namespace engine {
+
 int PlayerInputs::addPlayer(InputDevice device) {
     players.push_back(std::make_unique<PlayerInput>());
     players.back()->assign(device);
@@ -67,3 +69,6 @@ void PlayerInputs::updateGamepads(const GamepadSet& pads) {
         p->actions().updateGamepad(pads[dev.gamepadId]);
     }
 }
+
+}  // namespace engine
+

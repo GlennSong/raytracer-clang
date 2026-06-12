@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstddef>
 
+namespace engine {
+
 struct EntityTag {};
 using Entity = Handle<EntityTag>;
 
@@ -21,6 +23,10 @@ public:
     Entity create();
     void destroy(Entity entity);
     bool alive(Entity entity) const;
+    // Destroy every live entity (e.g. before loading a different level).
+    // Goes through destroy() so generations bump: handles held across the
+    // clear are detectably stale, never silently reused.
+    void destroyAll();
     std::size_t entityCount() const { return entities.size(); }
 
     template <typename T>
@@ -108,5 +114,8 @@ private:
     SlotMap<EntityMeta, EntityTag> entities;
     std::unordered_map<ComponentId, std::unique_ptr<ISparseSet>> pools;
 };
+
+
+}  // namespace engine
 
 #endif

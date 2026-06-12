@@ -1,5 +1,8 @@
 #include "physics_world.h"
 
+#include "jolt_job_adapter.h"
+#include "../../job_system.h"
+
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Core/Factory.h>
@@ -8,12 +11,16 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <cstdarg>
 #include <cstdio>
+
+namespace engine {
 
 JPH_SUPPRESS_WARNINGS
 
@@ -137,7 +144,9 @@ struct PhysicsWorld::Impl {
     // Declared before physicsSystem so they outlive it (members destruct in
     // reverse order — physicsSystem references these interfaces).
     JPH::TempAllocatorImpl tempAllocator{10 * 1024 * 1024};
-    JPH::JobSystemSingleThreaded jobSystem{JPH::cMaxPhysicsJobs};
+    // Either a JoltJobAdapter over our pool, or a JobSystemSingleThreaded; chosen
+    // in initialize() once we know whether a pool was supplied.
+    std::unique_ptr<JPH::JobSystem> jobSystem;
     BPLayerInterfaceImpl broadPhaseLayers;
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhase;
     ObjectLayerPairFilterImpl objectVsObject;
@@ -152,10 +161,17 @@ struct PhysicsWorld::Impl {
 PhysicsWorld::PhysicsWorld() = default;
 PhysicsWorld::~PhysicsWorld() { shutdown(); }
 
-bool PhysicsWorld::initialize() {
+bool PhysicsWorld::initialize(engine::JobSystem* jobSystem) {
     if (impl) return true;
-    globalAcquire();
+    globalAcquire();   // registers Jolt's allocator, needed before the job pool
     impl = std::make_unique<Impl>();
+    if (jobSystem) {
+        impl->jobSystem = std::make_unique<JoltJobAdapter>(
+            *jobSystem, JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers);
+    } else {
+        impl->jobSystem =
+            std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    }
     impl->physicsSystem.Init(MAX_BODIES, 0, MAX_BODY_PAIRS, MAX_CONTACT_CONSTRAINTS,
                              impl->broadPhaseLayers, impl->objectVsBroadPhase,
                              impl->objectVsObject);
@@ -182,10 +198,18 @@ JPH::ObjectLayer toLayer(BodyMotion m) {
 
 PhysicsBodyId createBody(JPH::BodyInterface& bodies, const JPH::Shape* shape,
                          const Vec3& position, const Quat& orientation,
-                         BodyMotion motion) {
+                         BodyMotion motion, Real restitution, Real friction,
+                         bool lockRotation = false) {
     JPH::BodyCreationSettings settings(shape, toJoltR(position),
                                        toJolt(orientation), toMotionType(motion),
                                        toLayer(motion));
+    settings.mRestitution = static_cast<float>(restitution);
+    settings.mFriction = static_cast<float>(friction);
+    if (lockRotation) {
+        settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX |
+                                JPH::EAllowedDOFs::TranslationY |
+                                JPH::EAllowedDOFs::TranslationZ;
+    }
     JPH::EActivation activation = motion == BodyMotion::Static
                                       ? JPH::EActivation::DontActivate
                                       : JPH::EActivation::Activate;
@@ -195,21 +219,41 @@ PhysicsBodyId createBody(JPH::BodyInterface& bodies, const JPH::Shape* shape,
 }  // namespace
 
 PhysicsBodyId PhysicsWorld::addBox(const Vec3& halfExtent, const Vec3& position,
-                                   const Quat& orientation, BodyMotion motion) {
+                                   const Quat& orientation, BodyMotion motion,
+                                   Real restitution, Real friction,
+                                   bool lockRotation) {
     if (!impl) return INVALID_PHYSICS_BODY;
     JPH::BoxShapeSettings shapeSettings(toJolt(halfExtent));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) return INVALID_PHYSICS_BODY;
-    return createBody(impl->bodies(), result.Get(), position, orientation, motion);
+    return createBody(impl->bodies(), result.Get(), position, orientation, motion,
+                      restitution, friction, lockRotation);
 }
 
 PhysicsBodyId PhysicsWorld::addSphere(Real radius, const Vec3& position,
-                                      const Quat& orientation, BodyMotion motion) {
+                                      const Quat& orientation, BodyMotion motion,
+                                      Real restitution, Real friction,
+                                      bool lockRotation) {
     if (!impl) return INVALID_PHYSICS_BODY;
     JPH::SphereShapeSettings shapeSettings(static_cast<float>(radius));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) return INVALID_PHYSICS_BODY;
-    return createBody(impl->bodies(), result.Get(), position, orientation, motion);
+    return createBody(impl->bodies(), result.Get(), position, orientation, motion,
+                      restitution, friction, lockRotation);
+}
+
+PhysicsBodyId PhysicsWorld::addCapsule(Real halfHeight, Real radius,
+                                        const Vec3& position,
+                                        const Quat& orientation, BodyMotion motion,
+                                        Real restitution, Real friction,
+                                        bool lockRotation) {
+    if (!impl) return INVALID_PHYSICS_BODY;
+    JPH::CapsuleShapeSettings shapeSettings(static_cast<float>(halfHeight),
+                                             static_cast<float>(radius));
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) return INVALID_PHYSICS_BODY;
+    return createBody(impl->bodies(), result.Get(), position, orientation, motion,
+                      restitution, friction, lockRotation);
 }
 
 void PhysicsWorld::removeBody(PhysicsBodyId id) {
@@ -222,6 +266,11 @@ void PhysicsWorld::removeBody(PhysicsBodyId id) {
 void PhysicsWorld::setLinearVelocity(PhysicsBodyId id, const Vec3& velocity) {
     if (!impl || id == INVALID_PHYSICS_BODY) return;
     impl->bodies().SetLinearVelocity(JPH::BodyID(id), toJolt(velocity));
+}
+
+Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {
+    if (!impl || id == INVALID_PHYSICS_BODY) return Vec3();
+    return fromJolt(impl->bodies().GetLinearVelocity(JPH::BodyID(id)));
 }
 
 Vec3 PhysicsWorld::bodyPosition(PhysicsBodyId id) const {
@@ -245,6 +294,9 @@ void PhysicsWorld::optimizeBroadPhase() {
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
-                                   &impl->tempAllocator, &impl->jobSystem);
+                                   &impl->tempAllocator, impl->jobSystem.get());
     }
 }
+
+}  // namespace engine
+

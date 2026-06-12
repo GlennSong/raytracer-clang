@@ -184,9 +184,10 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
 for physics debug viz.
 
 ### 2.4 Gamepad & local-player input
-**Status:** Engine-side done (gamepad bindings, per-player input, `ControlledBy`);
-GLFW polling in `window.cpp` pending macOS verification with a real controller.
-See ADR-0010 for the engine/game boundary.
+**Status:** Done — engine input layer, GLFW polling, and GCController backend
+all verified on macOS 15.5 with an Xbox Series controller over USB.
+See ADR-0010 for the engine/game boundary, ADR-0013 for the GCController macOS
+gamepad backend.
 **Why:** Multiple controllers (e.g. four Xbox pads) and the foundation for local
 "couch" multiplayer. Built on the action layer (2.1).
 
@@ -201,8 +202,13 @@ See ADR-0010 for the engine/game boundary.
   controls stay on the global `ctx.actions`.
 - ✅ Generic `ControlledBy{ playerIndex }` component — the only engine bridge
   from a player slot to an entity (game adds its own components).
-- ⏳ `window.cpp` polls GLFW gamepads and emits connect/disconnect events —
-  written, but macOS-only, so unverified in the Linux sandbox.
+- ✅ `window.cpp` polls GLFW gamepads (IOKit path) and emits connect/disconnect
+  events; `gamepad_gc.mm` provides a GCController overlay for controllers that
+  macOS claims via DriverKit (Xbox/PS on macOS 13+). See ADR-0013.
+- ✅ `gamecontrollerdb.txt` (SDL_GameControllerDB) loaded at init for GLFW's
+  IOKit fallback path.
+- ✅ Verified on macOS 15.5 with Xbox Series controller (USB): left stick moves,
+  right stick looks, triggers up/down, bumper boosts, Back/Start toggle modes.
 
 **Deferred (ADR-0010):** networked multiplayer (transport, authority,
 replication, prediction/rollback) — premature; the deterministic sim (ADR-0002)
@@ -223,13 +229,18 @@ from disk" pipelines with procgen bolted on later. Every asset type should be
 constructible programmatically as a first-class path.
 
 ### 3.1 Asset / resource system
-**Status:** Not started (see tech-debt register: legacy uint32_t handles)
+**Status:** Started — handle migration done (`MeshHandle`/`BufferHandle` →
+`Handle`/`SlotMap`, ADR-0007); the `AssetManager` itself is not yet built and
+needs design discussion (formats, async loading, animation — a large
+undertaking).
 **Why:** The engine needs a unified way to create, own, and reference meshes,
 textures, and materials — whether loaded from disk or generated at runtime.
 
 **Scope:**
-- Migrate `MeshHandle` / `BufferHandle` from `uint32_t` to `Handle`/`SlotMap`
-  (ADR-0007).
+- ✅ Migrate `MeshHandle` / `BufferHandle` from `uint32_t` to `Handle`/`SlotMap`
+  (ADR-0007). Done: distinct-tag `Handle` types; the Metal backend stores meshes
+  in a `SlotMap<GPUMesh, MeshTag>` with generation-checked handles. Engine side
+  headless-verified; backend storage swap macOS-only.
 - An `AssetManager` that owns GPU resources, supports dynamic creation and
   destruction, and provides typed handles.
 - Async loading support (load from disk on a background thread, procgen on any
@@ -267,6 +278,56 @@ for constructing vertex/index buffers programmatically.
   loaded meshes.
 
 **Depends on:** Asset system (3.1).
+
+### 3.4 Virtual camera system
+**Status:** Planned — see `docs/virtual-camera-plan.md` for the full phased plan.
+**Why:** Placeable camera entities (ECS) with switchable viewports and a
+physical lens model (focal length, aperture/DOF, distortion, chromatic
+aberration) turn the engine into a virtual-filming tool: frame a shot with the
+fly camera, place a camera there, look through it live, and render it offline
+for ground truth. Late-stage milestone: drive a camera's pose from an iPhone
+(ARKit) through an external pose seam.
+
+**Scope (summary):**
+- `SceneCamera` + `LensParams` components; pose from the entity's `Transform`.
+- `CameraSystem` view-source selection: editor controllers vs. placed cameras,
+  with cycling, place-at-current-view, and ImGui camera panel.
+- Thin-lens DOF/distortion/CA in the offline tracer; post-process
+  approximations in the Metal viewer.
+- Level JSON persistence for placed cameras.
+
+**Depends on:** Nothing hard; ImGui (1.1) for the panel, level format (2.3-era
+loader) for persistence.
+
+### 3.5 Edit mode (in-engine level editor)
+**Status:** Planned — see `docs/edit-mode-plan.md` for the full phased plan.
+**Why:** A Blender-style editing loop — simulation stopped, free editor view,
+click-to-select, transform gizmos, an Add menu (primitives / glTF / cameras),
+then a Play button straight into the running game. The level JSON becomes the
+document: Play saves-then-loads it, so every playtest starts from exactly what
+was built. Most infrastructure exists (state stack, editor cameras, MeshBuilder,
+glTF import, inspector pattern, JSON persistence); the genuinely new pieces are
+a level writer + authoring metadata, mouse picking, and gizmos (vendored
+ImGuizmo behind the ADR-0011 pattern).
+
+**Depends on:** ImGui (1.1), level format. Unblocks comfortable authoring for
+procgen tiers (placing generators, tuning scenes).
+
+### 3.6 Editor application (native shell around the engine)
+**Status:** Planned — see `docs/editor-app-plan.md`.
+**Why:** ImGui is right for in-engine tooling but wrong as the authoring
+surface. A Unity/Blender-style application — native hierarchy/inspector/asset
+panels around an engine-rendered viewport, Play running the game in-viewport
+or as a separate process — makes level building comfortable. 1:1 fidelity by
+construction: one `engine_core` library, two hosts. Phase A1 (engine-as-
+library + an embedded-window seam) is framework-agnostic and Linux-testable;
+the shell is **Qt 6** — the engine is cross-platform by intent (Vulkan
+backend for PC/Linux planned, Tier 5), so the editor must be too. A1's
+engine_core library is in place.
+
+**Depends on:** Edit mode (3.5) — its document model, picking, and gizmos are
+the engine half of this application. Feeds the asset system (3.1): import +
+cooking live in the editor's asset browser.
 
 ---
 
@@ -322,7 +383,12 @@ Items that become relevant as the world grows large.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction
   (ADR-0001).
 - **Multithreaded systems** — parallel system execution, job system for
-  procgen workloads.
+  procgen workloads. *Foundation done: a minimal shared-queue `JobSystem`
+  (`src/job_system.*`, ADR-0014) — `parallelFor` + counter-based `run`/`wait`,
+  synchronous mode for tests; the offline tracer renders on it. Pulled forward
+  from Tier 5 as low-level foundation. **Jolt physics now steps on this pool**
+  via a `JoltJobAdapter` (ADR-0012). Remaining: parallel ECS system execution
+  (needs container thread-safety).*
 - **Custom allocators** — revisit ADR-0008 when allocation churn is measured.
 
 ---

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace engine {
+
 // A type-safe, recyclable identity into a SlotMap. The Tag parameter makes
 // Handle<Mesh> a distinct type from Handle<Entity> at compile time. A handle is
 // null when generation == 0; a non-null handle goes stale once its slot is
@@ -19,6 +21,12 @@ struct Handle {
         return index == other.index && generation == other.generation;
     }
     bool operator!=(const Handle& other) const { return !(*this == other); }
+    bool operator<(const Handle& other) const {
+        return index < other.index ||
+               (index == other.index && generation < other.generation);
+    }
 };
+
+}  // namespace engine
 
 #endif

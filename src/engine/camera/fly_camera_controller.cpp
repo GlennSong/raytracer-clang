@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+namespace engine {
+
 // Convention: yaw rotates about world Y, pitch about the camera's right axis.
 // At yaw = pitch = 0 the camera looks down -Z and right is +X.
 Vec3 FlyCameraController::forward() const {
@@ -23,6 +25,8 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     pitch += input.lookPitchDelta;
     pitch = std::clamp(pitch, -PITCH_LIMIT, PITCH_LIMIT);
 
+    if (positionLocked) return;
+
     Real speed = moveSpeed * dt * (input.boost ? boostMultiplier : Real(1.0));
     Vec3 f = forward();
     Vec3 r = right();
@@ -31,6 +35,10 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     eye += f * (input.moveForward * speed);
     eye += r * (input.moveRight * speed);
     eye += worldUp * (input.moveUp * speed);
+
+    // Scroll dollies along the view direction (editor scene-view feel; the
+    // wheel was previously unused in fly mode).
+    eye += f * (input.zoomDelta * 0.8);
 }
 
 CameraState FlyCameraController::cameraState(float aspect) const {
@@ -49,3 +57,6 @@ CameraState FlyCameraController::cameraState(float aspect) const {
     state.farPlane = 1000.0f;
     return state;
 }
+
+}  // namespace engine
+
