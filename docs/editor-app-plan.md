@@ -45,10 +45,20 @@ is scene-view style (right-drag looks, WASD/QE fly, scroll dollies, F frames
 the selection; buttonless free-look stays a game-freecam behavior; the F
 detach toggle is disabled in editor states via cameraDetachEnabled).
 
-Next: the describe-function/visitor property layer (single source of truth
-for inspectors + serialization), then the component registry for Unity-style
-per-entity component sections and Add Component. Undo's chokepoint is the
-bridge.
+The property layer is in: describeProperties(component, PropertyVisitor&)
+is the single source of truth (FieldMeta carries ranges/log/units/choices/
+read-only — semantics, never widgets); JSON read/write visitors round-trip
+any described component; a ComponentRegistry (one line per type) enumerates
+an entity's components at runtime. The Qt inspector is now fully generated
+from it — Unity-style group-box sections per component (Transform, Shape,
+Material, Camera lens, Player Spawn), built/synced/written via three visitor
+passes that re-resolve through the registry every time (no stored references
+into sparse-set storage). Adding a component = struct + describe + one
+registration line; it appears everywhere. Remaining on this thread: Add
+Component menu (registry add/remove thunks), an ImGui visitor to regenerate
+the in-viewport panels, migrating LevelWriter's material block onto the JSON
+visitors, post-edit hooks (SourceSpec size -> mesh rebuild), undo (a
+field-write log at the writeField chokepoint).
 
 ---
 

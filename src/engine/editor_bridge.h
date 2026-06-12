@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_EDITOR_BRIDGE_H
 #define RAYTRACER_ENGINE_EDITOR_BRIDGE_H
 
+#include "component_registry.h"
 #include "world.h"
 #include <string>
 #include <vector>
@@ -18,6 +19,12 @@ class EditorSystem;
 // between frames is safe.
 class EditorBridge {
 public:
+    EditorBridge() { registerEngineComponents(registry_); }
+
+    // The component vocabulary panels render from (engine components built
+    // in; game code may register more before the shell builds its UI).
+    ComponentRegistry& registry() { return registry_; }
+
     // --- engine side (EditorSystem) ---------------------------------------
     void attach(World* world, EditorSystem* editor, std::string levelFile);
     void detach();
@@ -46,6 +53,7 @@ public:
     void deleteEntity(Entity entity);
 
 private:
+    ComponentRegistry registry_;
     World* worldPtr = nullptr;
     EditorSystem* editorPtr = nullptr;
     std::string levelFile;

@@ -42,6 +42,9 @@ add_library(engine_core STATIC
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
+    src/engine/properties.cpp
+    src/engine/component_registry.cpp
+    src/engine/property_json.cpp
     src/engine/day_night_cycle.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
@@ -141,6 +144,7 @@ add_executable(run_tests
     tests/test_pbr_lighting.cpp
     tests/test_level_writer.cpp
     tests/test_hosted_window.cpp
+    tests/test_properties.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -320,6 +324,7 @@ find_package(Qt6 COMPONENTS Widgets QUIET)
 if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
+        src/editor_app/property_inspector.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)

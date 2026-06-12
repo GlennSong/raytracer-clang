@@ -17,6 +17,7 @@
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
 #include "../log.h"
+#include "property_inspector.h"
 
 #include <QApplication>
 #include <QDir>
@@ -148,15 +149,11 @@ private:
 struct Panels {
     EditorBridge& bridge;
     QListWidget* hierarchy = nullptr;
-    QWidget* inspectorBody = nullptr;
-    QLabel* inspectorTitle = nullptr;
-    QDoubleSpinBox* pos[3] = {};
-    QDoubleSpinBox* scale[3] = {};
+    PropertyInspector* inspector = nullptr;
     QPushButton* deleteButton = nullptr;
 
     std::vector<EditorBridge::EntityInfo> lastList;
-    Entity lastSelected;
-    bool applyingUi = false;   // guard: spin-box writes vs refresh loop
+    bool applyingUi = false;   // guard: list writes vs refresh loop
 
     explicit Panels(EditorBridge& bridge) : bridge(bridge) {}
 
@@ -174,65 +171,36 @@ struct Panels {
 
     QDockWidget* buildInspectorDock(QMainWindow* main) {
         auto* dock = new QDockWidget("Inspector", main);
-        inspectorBody = new QWidget(dock);
-        auto* form = new QFormLayout(inspectorBody);
-        inspectorTitle = new QLabel("Nothing selected");
-        form->addRow(inspectorTitle);
+        auto* body = new QWidget(dock);
+        auto* column = new QVBoxLayout(body);
 
-        auto makeRow = [&](const char* label, QDoubleSpinBox* (&boxes)[3],
-                           double minV, double maxV, double step) {
-            auto* rowWidget = new QWidget(inspectorBody);
-            auto* row = new QHBoxLayout(rowWidget);
-            row->setContentsMargins(0, 0, 0, 0);
-            for (int i = 0; i < 3; i++) {
-                boxes[i] = new QDoubleSpinBox(rowWidget);
-                boxes[i]->setRange(minV, maxV);
-                boxes[i]->setDecimals(3);
-                boxes[i]->setSingleStep(step);
-                boxes[i]->setKeyboardTracking(false);
-                row->addWidget(boxes[i]);
-                QObject::connect(boxes[i],
-                                 qOverload<double>(&QDoubleSpinBox::valueChanged),
-                                 [this](double) { writeTransform(); });
-            }
-            form->addRow(label, rowWidget);
-        };
-        makeRow("Position", pos, -10000.0, 10000.0, 0.1);
-        makeRow("Scale", scale, 0.01, 1000.0, 0.1);
+        // Every row below is generated from the engine's property
+        // descriptions — Unity-style sections per component, zero
+        // field-specific code on the Qt side.
+        inspector = new PropertyInspector(bridge);
+        column->addWidget(inspector);
 
-        deleteButton = new QPushButton("Delete", inspectorBody);
+        deleteButton = new QPushButton("Delete", body);
         QObject::connect(deleteButton, &QPushButton::clicked, [this]() {
             if (bridge.attached()) bridge.deleteEntity(bridge.selected());
         });
-        form->addRow(deleteButton);
+        column->addWidget(deleteButton);
+        column->addStretch();
 
-        dock->setWidget(inspectorBody);
+        dock->setWidget(body);
         return dock;
-    }
-
-    void writeTransform() {
-        if (applyingUi || !bridge.attached()) return;
-        World* world = bridge.world();
-        Transform* t = world->get<Transform>(bridge.selected());
-        if (!t) return;
-        t->position = Vec3(pos[0]->value(), pos[1]->value(), pos[2]->value());
-        t->scale = Vec3(scale[0]->value(), scale[1]->value(), scale[2]->value());
-        if (auto* prev = world->get<PrevTransform>(bridge.selected()))
-            prev->value = *t;
     }
 
     // Called on a UI timer: mirror engine state into the widgets.
     void refresh() {
         const bool live = bridge.attached();
         hierarchy->setEnabled(live);
-        inspectorBody->setEnabled(live);
-        if (!live) {
-            inspectorTitle->setText("Playing — Esc stops");
-            return;
-        }
+        inspector->setEnabled(live);
+        deleteButton->setEnabled(live);
+        inspector->refresh();
+        if (!live) return;
 
         applyingUi = true;
-
         auto list = bridge.listEntities();
         bool sameList = list.size() == lastList.size();
         for (size_t i = 0; sameList && i < list.size(); i++)
@@ -251,31 +219,6 @@ struct Panels {
         for (size_t i = 0; i < lastList.size(); i++)
             if (lastList[i].entity == selected) row = static_cast<int>(i);
         if (hierarchy->currentRow() != row) hierarchy->setCurrentRow(row);
-
-        World* world = bridge.world();
-        Transform* t = world->get<Transform>(selected);
-        if (t) {
-            if (!(selected == lastSelected))
-                inspectorTitle->setText(QString::fromStdString(
-                    row >= 0 ? lastList[row].label : "entity"));
-            // Don't fight an in-progress edit.
-            if (!pos[0]->hasFocus() && !pos[1]->hasFocus() && !pos[2]->hasFocus()) {
-                pos[0]->setValue(t->position.x);
-                pos[1]->setValue(t->position.y);
-                pos[2]->setValue(t->position.z);
-            }
-            if (!scale[0]->hasFocus() && !scale[1]->hasFocus() && !scale[2]->hasFocus()) {
-                scale[0]->setValue(t->scale.x);
-                scale[1]->setValue(t->scale.y);
-                scale[2]->setValue(t->scale.z);
-            }
-            inspectorBody->setEnabled(true);
-        } else {
-            inspectorTitle->setText("Nothing selected");
-            inspectorBody->setEnabled(false);
-        }
-        lastSelected = selected;
-
         applyingUi = false;
     }
 };
