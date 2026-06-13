@@ -369,7 +369,12 @@ meshable.
   smooth-min; mesh a field to a `Mesh` (marching cubes first, dual contouring
   later for sharp features). The in-house, robust analog to a Plasticity/
   Parasolid B-rep kernel (ADR-0021) — and the basis for organic shapes,
-  terrain, and clouds.
+  terrain, and clouds. **Prioritized (June 2026 feedback):** it is the clean fix
+  for *welded* organic geometry — kit-bashed L-system cylinders are disjoint and
+  self-intersecting; skinning branches as smooth-min'd capsules and meshing the
+  field yields one continuous surface. It is also the heart of "a rock is a
+  generator graph": a rock becomes a few SDF ops with tunable params, not
+  rock.cpp.
 
 ### Phase B — Three generators, one substrate
 Implement one of each paradigm on the shared value types, to surface what they

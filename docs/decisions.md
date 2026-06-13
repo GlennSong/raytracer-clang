@@ -1216,6 +1216,64 @@ driven by what the generators actually share. Revisit B-rep only if exact-CAD
 
 ---
 
+## ADR-0022 — Procedural objects: generators as data, and the realness spectrum
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** The first generators (terrain, L-system trees, rocks, scatter) are
+hand-written C++ (`rock.cpp`, `lsystem.cpp`, ...). The intent (ADR-0021) is that
+these become *data* — node graphs / scripts an author composes from the mesh +
+noise + SDF tools — so "a rock is a generator graph, not a rock.cpp file", and
+the same generator can fill a level at runtime or be baked to a static asset.
+Two things need pinning down: how generators are structured so they can evolve
+into data, and how "real" a procedural object is (today they don't appear in the
+editor and can't be selected/edited).
+
+**Decision.**
+1. **A generator is a uniform `(params, seed) -> Mesh (+ Material)` producer**
+   over the tool library (mesh builder, noise, and SDF when it lands). The C++
+   generators are the *bootstrap*: they define the vocabulary of operations a
+   later node-graph evaluator (ADR-0021 Phase C) will expose as data. The same
+   substrate evaluates a hand-written C++ generator and a graph asset, so code
+   today migrates to data later without changing consumers.
+2. **Generators live under `src/engine/procgen/`** (terrain, lsystem, rock,
+   scatter, noise as the field primitive), separate from general tools the rest
+   of the engine uses (mesh builder stays in `engine/`).
+3. **Realness spectrum** — a procedural thing takes one of three forms, chosen
+   per use, all driven by the *same* generator:
+   - **Runtime-procedural**: regenerated from a recipe every load; not a
+     document entity; not editable; cheap space-filling (today's terrain +
+     scattered vegetation).
+   - **Baked static asset**: the generator runs offline → a mesh + material on
+     disk → placed/edited/collided like any authored asset; fixed geometry,
+     reusable.
+   - **Editable procedural instance** (future): a generator instance in the
+     document with tunable params, pickable and re-runnable in the editor —
+     needs the node graph + editor authoring UI.
+4. **A coherent level is a mix**: authored entities + runtime-procedural recipes
+   (fill/scatter) + baked assets. The recipe-vs-bake choice is per-object,
+   driven by whether it must be edited, collided precisely, or reused exactly.
+
+**Alternatives considered.**
+- *Keep generators as bespoke C++ indefinitely* — rejected: every new content
+  type would be a code change; the author can never compose new things without a
+  programmer. The node-graph-as-data path is the whole point (ADR-0021).
+- *Make procedural objects full editable document entities now* — rejected:
+  premature; needs the node graph and stable per-instance identity first. They
+  stay runtime-regenerated until then (tech-debt item below).
+
+**Consequences / tech debt.**
+- Procedural objects (terrain, vegetation) are intentionally **not shown or
+  editable in the editor** — they carry no `SourceSpec`, so they're regenerated
+  runtime objects, not document entities. Tracked in the register; the "which
+  realness tier" decision per content type is deferred.
+- No baking pipeline or node graph yet; the C++ generators are the stand-in.
+
+**Revisit trigger.** When the node-graph evaluator (ADR-0021 Phase C) lands,
+generators become authorable data — revisit editor authoring of generator
+instances and the bake-to-static-asset pipeline then.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
