@@ -114,7 +114,7 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
 struct CliOptions {
     std::string level;        // empty = Cornell box
     std::string cameraName;   // empty = first camera in the sidecar
-    std::string outFile = "output.ppm";
+    std::string outFile = "output.png";
     double worldUnitsPerMeter = 0.0;   // 0 = mode default (1 level, 100 Cornell)
     LensParams lens;
     bool showHelp = false;
@@ -153,7 +153,8 @@ void printUsage() {
         "Usage: raytracer [options]\n"
         "  --level <file>    render a viewer level instead of the Cornell box\n"
         "  --camera <name>   placed camera from <level>.cameras.json (default: first)\n"
-        "  --out <file>      output image (default output.ppm)\n"
+        "  --out <file>      output image; .ppm writes P3, anything else PNG\n"
+        "                    (default output.png)\n"
         "  --size N          image size (default 512)\n"
         "  --spp N           samples per pixel (default 128)\n"
         "  --exposure E      linear brightness scale (default 1; HDR-lit levels\n"
@@ -266,7 +267,16 @@ int main(int argc, char** argv) {
 
     std::cerr << "Applying bilateral filter...\n";
     Image denoised = image.bilateralFilter(5, 3.0, 0.1);
-    denoised.writePpm(opt.outFile);
+    // Format by extension: explicit .ppm keeps the legacy P3 writer; everything
+    // else (the default) is PNG via stb_image_write — smaller and viewable.
+    auto hasSuffix = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() &&
+               s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    if (hasSuffix(opt.outFile, ".ppm"))
+        denoised.writePpm(opt.outFile);
+    else
+        denoised.writePng(opt.outFile);
     std::cout << "Wrote " << opt.outFile << " (denoised, " << IMAGE_SIZE << "x"
               << IMAGE_SIZE << ", " << SAMPLES_PER_PIXEL << " spp)\n";
     return 0;

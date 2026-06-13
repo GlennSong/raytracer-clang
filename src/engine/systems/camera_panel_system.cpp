@@ -191,13 +191,17 @@ void CameraPanelSystem::render(FrameContext& ctx) {
                     // Save first so the tracer renders the camera as edited,
                     // then launch detached; the shell returns immediately.
                     CameraStore::save(store, ctx.world);
-                    std::string out = cam->name + ".ppm";
+                    std::string out = cam->name + ".png";
                     std::string cmd = "./raytracer --level \"" + level +
                                       "\" --camera \"" + cam->name +
                                       "\" --out \"" + out + "\"";
                     LOG_INFO << "Launching: " << cmd;
+                    // Run detached; on success open the result in the OS viewer
+                    // (the whole subshell is backgrounded, so the editor never
+                    // blocks). `open` is the macOS opener — the editor's home.
                     int rc = std::system(
-                        (cmd + " > offline_render.log 2>&1 &").c_str());
+                        ("(" + cmd + " > offline_render.log 2>&1 && open \"" +
+                         out + "\") &").c_str());
                     if (rc != 0)
                         LOG_WARN << "Could not launch the offline tracer "
                                     "(is ./raytracer built? try `make release`)";

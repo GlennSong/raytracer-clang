@@ -6,7 +6,7 @@
 make            # debug build (offline path tracer)
 make release    # optimized build
 make clean      # remove build artifacts
-./raytracer     # renders to output.ppm
+./raytracer     # renders to output.png (PNG via stb_image_write; --out x.ppm for P3)
 make test       # Jolt-free unit tests (math, ECS, input, camera)
 ```
 
