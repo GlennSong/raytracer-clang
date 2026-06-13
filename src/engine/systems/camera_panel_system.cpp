@@ -6,12 +6,26 @@
 #include "../../log.h"
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
 #endif
 
 namespace engine {
+
+#ifdef RT_ENABLE_IMGUI
+namespace {
+// Read the integer percentage the tracer wrote to its --progress sidecar.
+// Returns -1 if the file isn't there yet or hasn't a parseable value (a poll
+// that races a write just keeps the previous bar value).
+int readProgressPercent(const std::string& path) {
+    std::ifstream f(path);
+    int pct = -1;
+    return (f >> pct) ? pct : -1;
+}
+}  // namespace
+#endif
 
 #ifdef RT_ENABLE_IMGUI
 
@@ -182,6 +196,9 @@ void CameraPanelSystem::render(FrameContext& ctx) {
                         lens.apertureDiameter() * 1000.0);
 
             ImGui::SeparatorText("Offline Render");
+            // The button is disabled while a render is in flight (the tracer
+            // is a single detached subprocess — one at a time).
+            ImGui::BeginDisabled(offlineRendering);
             if (ImGui::Button("Render In Path Tracer")) {
                 std::string level = ctx.settings.getString("levelPath", "");
                 std::string store = ctx.settings.getString("cameraStorePath", "");
@@ -192,9 +209,14 @@ void CameraPanelSystem::render(FrameContext& ctx) {
                     // then launch detached; the shell returns immediately.
                     CameraStore::save(store, ctx.world);
                     std::string out = cam->name + ".png";
+                    offlineProgressPath = "offline_render.progress";
+                    // Clear any stale sidecar so the first poll can't read a
+                    // previous run's 100 before the tracer resets it.
+                    std::remove(offlineProgressPath.c_str());
                     std::string cmd = "./raytracer --level \"" + level +
                                       "\" --camera \"" + cam->name +
-                                      "\" --out \"" + out + "\"";
+                                      "\" --out \"" + out +
+                                      "\" --progress \"" + offlineProgressPath + "\"";
                     LOG_INFO << "Launching: " << cmd;
                     // Run detached; on success open the result in the OS viewer
                     // (the whole subshell is backgrounded, so the editor never
@@ -202,13 +224,28 @@ void CameraPanelSystem::render(FrameContext& ctx) {
                     int rc = std::system(
                         ("(" + cmd + " > offline_render.log 2>&1 && open \"" +
                          out + "\") &").c_str());
-                    if (rc != 0)
+                    if (rc != 0) {
                         LOG_WARN << "Could not launch the offline tracer "
                                     "(is ./raytracer built? try `make release`)";
-                    else
-                        LOG_INFO << "Offline render running in the background "
-                                 << "-> " << out
-                                 << " (progress: offline_render.log)";
+                    } else {
+                        offlineRendering = true;
+                        offlineProgress = 0.0f;
+                        offlineOutput = out;
+                        LOG_INFO << "Offline render running -> " << out;
+                    }
+                }
+            }
+            ImGui::EndDisabled();
+
+            // Poll the sidecar each frame while a render runs and show a bar.
+            if (offlineRendering) {
+                int pct = readProgressPercent(offlineProgressPath);
+                if (pct >= 0) offlineProgress = pct / 100.0f;
+                ImGui::ProgressBar(offlineProgress, ImVec2(-1.0f, 0.0f));
+                ImGui::Text("Rendering %s...", offlineOutput.c_str());
+                if (pct >= 100) {
+                    offlineRendering = false;   // the subshell opens the PNG
+                    LOG_INFO << "Offline render complete -> " << offlineOutput;
                 }
             }
         }
