@@ -396,12 +396,23 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         std::string kind = s.value("kind", "tree");
         RenderMesh mesh;
         if (kind == "rock") {
-            RockParams rp;
-            rp.radius       = s.value("radius", rp.radius);
-            rp.displacement = s.value("displacement", rp.displacement);
-            rp.noiseScale   = s.value("noiseScale", rp.noiseScale);
-            rp.octaves      = s.value("octaves", rp.octaves);
-            mesh = generateRock(rp, Noise(vegSeed + 100u + speciesIndex));
+            if (s.value("skin", std::string("displaced")) == "sdf") {
+                RockSdfParams rp;
+                rp.baseRadius  = s.value("radius", rp.baseRadius);
+                rp.lumps       = s.value("lumps", rp.lumps);
+                rp.cuts        = s.value("cuts", rp.cuts);
+                rp.lumpScale   = s.value("lumpScale", rp.lumpScale);
+                rp.smoothness  = s.value("smoothness", rp.smoothness);
+                rp.resolution  = s.value("sdfResolution", rp.resolution);
+                mesh = generateRockSdf(rp, vegSeed + 200u + speciesIndex);
+            } else {
+                RockParams rp;
+                rp.radius       = s.value("radius", rp.radius);
+                rp.displacement = s.value("displacement", rp.displacement);
+                rp.noiseScale   = s.value("noiseScale", rp.noiseScale);
+                rp.octaves      = s.value("octaves", rp.octaves);
+                mesh = generateRock(rp, Noise(vegSeed + 100u + speciesIndex));
+            }
         } else {  // "tree"
             LSystem sys;
             if (s.contains("rules"))

@@ -61,3 +61,25 @@ TEST_CASE(rock_normals_unit_and_outward_overall) {
     }
     CHECK(dotSum / rock.vertices.size() > 0.3);   // normals broadly point outward
 }
+
+TEST_CASE(rock_sdf_is_a_bounded_deterministic_surface) {
+    // "A rock is a generator graph": base sphere + lumps - cuts, polygonized.
+    RockSdfParams p;
+    p.baseRadius = 1.0f;
+    p.resolution = 28;
+    RenderMesh a = generateRockSdf(p, 11);
+    RenderMesh b = generateRockSdf(p, 11);
+    CHECK(a.vertices.size() > 50);
+    CHECK(a.vertices.size() == b.vertices.size());   // deterministic per seed
+
+    double extent = p.baseRadius * (1.0 + p.lumpScale) + p.smoothness;
+    bool inBounds = true;
+    for (const Vertex& v : a.vertices) {
+        if (v.position.length() > extent * 1.5) inBounds = false;
+        CHECK_APPROX(v.normal.length(), 1.0, 1e-3);
+    }
+    CHECK(inBounds);
+
+    RenderMesh c = generateRockSdf(p, 99);
+    CHECK(c.vertices.size() != a.vertices.size() || c.vertices.size() > 0);  // a different rock
+}

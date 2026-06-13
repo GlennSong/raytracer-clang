@@ -21,6 +21,21 @@ struct RockParams {
 
 RenderMesh generateRock(const RockParams& params, const Noise& noise);
 
+// A rock as an SDF *graph* (ADR-0022 "a rock is a generator, not rock.cpp"):
+// a base sphere smooth-unioned with seeded lumps and minus a few subtracted
+// facets, polygonized. The same handful of composable ops a node graph would
+// expose — tunable to make rocks of any character. Deterministic per seed.
+struct RockSdfParams {
+    float baseRadius = 1.0f;
+    int lumps = 6;            // extra spheres smooth-unioned on for bumps
+    int cuts = 2;             // spheres subtracted for flat facets
+    float lumpScale = 0.5f;   // lump radius as a fraction of baseRadius
+    double smoothness = 0.3;  // blend radius of the smooth-union
+    int resolution = 40;      // polygonization grid cells per axis
+};
+
+RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed);
+
 }  // namespace engine
 
 #endif

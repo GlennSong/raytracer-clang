@@ -39,10 +39,13 @@
       },
       {
         "kind": "rock",
+        "skin": "sdf",
         "radius": 0.7,
-        "displacement": 0.45,
-        "noiseScale": 2.5,
-        "octaves": 3,
+        "lumps": 7,
+        "cuts": 3,
+        "lumpScale": 0.55,
+        "smoothness": 0.18,
+        "sdfResolution": 36,
         "material": { "albedo": [0.5, 0.5, 0.53], "roughness": 0.85 }
       }
     ]
