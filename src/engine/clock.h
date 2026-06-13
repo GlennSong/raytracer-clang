@@ -26,7 +26,16 @@ public:
 
     void setTimeScale(double scale);
     double timeScale() const { return scale; }
-    bool paused() const { return scale == 0.0; }
+
+    // Pause is its own switch, orthogonal to timeScale, so any owner (the
+    // Space key via DevControlSystem, the editor shell's Pause button) can
+    // flip it without fighting whoever drives the speed. timeScale 0 still
+    // reads as paused for callers that only know the old knob.
+    void setPaused(bool paused) { isPaused = paused; }
+    bool paused() const { return isPaused || scale == 0.0; }
+    // Run exactly one fixed step on the next advance() while paused — the
+    // frame-step debugging control.
+    void requestStep() { stepRequested = true; }
 
     void setFixedStep(double seconds);
     double fixedStep() const { return fixedStepSeconds; }
@@ -37,6 +46,8 @@ private:
     double accumulator;
     double alpha;
     double simTime;
+    bool isPaused = false;
+    bool stepRequested = false;
 
     // After a long stall (debugger pause, window drag) the accumulator must not
     // grow without bound, or the sim tries to "catch up" forever — the spiral

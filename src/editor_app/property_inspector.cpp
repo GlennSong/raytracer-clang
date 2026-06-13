@@ -1,20 +1,91 @@
 #include "property_inspector.h"
 
 #include "../engine/components.h"
+#include "../engine/camera/scene_camera.h"
+#include "../engine/undo_stack.h"
 
 #include <QCheckBox>
+#include <QColor>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QPushButton>
+#include <QStyle>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <cstring>
 
 using namespace engine;
+
+namespace {
+
+QColor toQColor(const Vec3& c) {
+    auto clamp01 = [](Real v) { return std::max(0.0, std::min(1.0, v)); };
+    return QColor::fromRgbF(clamp01(c.x), clamp01(c.y), clamp01(c.z));
+}
+Vec3 fromQColor(const QColor& c) {
+    return Vec3(c.redF(), c.greenF(), c.blueF());
+}
+void paintSwatch(QPushButton* swatch, const Vec3& color) {
+    QColor q = toQColor(color);
+    swatch->setStyleSheet(
+        QString("background-color: %1; border: 1px solid #555;").arg(q.name()));
+}
+
+// The entity's display name (user name, else a sensible default) and a human
+// "kind" for the inspector header — computed from its components, since the
+// inspector already knows the world.
+struct EntityHeader {
+    QString name;
+    QString kind;
+};
+EntityHeader describeEntity(World* world, Entity e) {
+    if (SceneCamera* cam = world->get<SceneCamera>(e))
+        return {cam->name.empty() ? "Camera"
+                                  : QString::fromStdString(cam->name),
+                "Camera"};
+    if (world->has<PlayerSpawn>(e)) return {"Player Spawn", "Player Spawn"};
+    if (SourceSpec* spec = world->get<SourceSpec>(e)) {
+        QString kind, def;
+        if (spec->isGroup()) {
+            kind = "Group";
+            def = QString("Group #%1").arg(e.index);
+        } else if (!spec->meshFile.empty()) {
+            kind = "Mesh";
+            std::size_t slash = spec->meshFile.find_last_of("/\\");
+            def = QString::fromStdString(slash == std::string::npos
+                                             ? spec->meshFile
+                                             : spec->meshFile.substr(slash + 1));
+        } else {
+            QString shape = QString::fromStdString(spec->shape);
+            kind = shape.isEmpty() ? "Object"
+                                   : shape.left(1).toUpper() + shape.mid(1);
+            def = QString("%1 #%2").arg(shape).arg(e.index);
+        }
+        QString name =
+            spec->name.empty() ? def : QString::fromStdString(spec->name);
+        return {name, kind};
+    }
+    if (world->has<ControlledBy>(e)) return {"Player (live)", "Player"};
+    return {QString("Entity #%1").arg(e.index), "Entity"};
+}
+
+// The fallback name shown as Name-field placeholder when the user hasn't
+// named the entity.
+QString defaultEntityName(World* world, Entity e) {
+    return describeEntity(world, e).name;
+}
+
+}  // namespace
 
 namespace {
 
@@ -28,6 +99,8 @@ struct FieldRow {
     QLineEdit* text = nullptr;      // string
     QComboBox* combo = nullptr;     // string with choices
     QLabel* lockedLabel = nullptr;  // read-only display
+    QPushButton* swatch = nullptr;  // color Vec3: a swatch opening a picker
+    Vec3 colorValue;                // backing value for the swatch
 
     bool hasFocus() const {
         for (auto* n : nums)
@@ -46,8 +119,9 @@ QString vecToText(const Vec3& v) {
 class BuildVisitor : public PropertyVisitor {
 public:
     BuildVisitor(QFormLayout* form, std::vector<FieldRow>& rows,
-                 std::function<void(int)> onEdit)
-        : form(form), rows(rows), onEdit(std::move(onEdit)) {}
+                 std::function<void(int)> onEdit, QString defaultName)
+        : form(form), rows(rows), onEdit(std::move(onEdit)),
+          defaultName(std::move(defaultName)) {}
 
     void field(const FieldMeta& meta, Real& value) override {
         scalarRow(meta, value);
@@ -57,6 +131,7 @@ public:
     }
     void field(const FieldMeta& meta, Vec3& value) override {
         if (meta.readOnly) return lockedRow(meta, vecToText(value));
+        if (meta.color) return colorRow(meta, value);
         FieldRow row;
         auto* holder = new QWidget;
         auto* h = new QHBoxLayout(holder);
@@ -96,6 +171,10 @@ public:
             addRow(meta, row.combo, row);
         } else {
             row.text = new QLineEdit(QString::fromStdString(value));
+            // The Name field shows the entity's default name as placeholder
+            // when the user hasn't set one, so it's never blank-and-mysterious.
+            if (std::strcmp(meta.label, "Name") == 0)
+                row.text->setPlaceholderText(defaultName);
             auto fire = edit(index);
             QObject::connect(row.text, &QLineEdit::editingFinished,
                              [fire]() { fire(); });
@@ -124,6 +203,30 @@ private:
         row.lockedLabel->setStyleSheet("color: gray");
         addRow(meta, row.lockedLabel, row);
     }
+    // A color Vec3: a clickable swatch that opens the OS color picker, instead
+    // of three raw spin boxes.
+    void colorRow(const FieldMeta& meta, const Vec3& value) {
+        FieldRow row;
+        row.colorValue = value;
+        row.swatch = new QPushButton;
+        row.swatch->setFixedHeight(20);
+        row.swatch->setCursor(Qt::PointingHandCursor);
+        paintSwatch(row.swatch, value);
+        int index = static_cast<int>(rows.size());
+        auto fire = edit(index);
+        std::vector<FieldRow>& rowsRef = rows;
+        QPushButton* swatch = row.swatch;
+        QObject::connect(swatch, &QPushButton::clicked, [=, &rowsRef]() {
+            if (index >= static_cast<int>(rowsRef.size())) return;
+            QColor picked = QColorDialog::getColor(
+                toQColor(rowsRef[index].colorValue), swatch, "Pick Color");
+            if (!picked.isValid()) return;
+            rowsRef[index].colorValue = fromQColor(picked);
+            paintSwatch(swatch, rowsRef[index].colorValue);
+            fire();
+        });
+        addRow(meta, row.swatch, row);
+    }
     // The connected lambdas MUST NOT capture this visitor — it's stack-local
     // to rebuild() and long dead by the time a widget fires. They capture a
     // copy of the callback (which holds the long-lived PropertyInspector).
@@ -141,6 +244,9 @@ private:
         spin->setDecimals(3);
         spin->setKeyboardTracking(false);
         if (meta.unit[0]) spin->setSuffix(QString(" %1").arg(meta.unit));
+        // Vec3 rows put three of these side by side; without a tight floor
+        // the spin boxes' size hints balloon the whole dock.
+        spin->setMinimumWidth(56);
         return spin;
     }
     void connectSpin(QDoubleSpinBox* spin) {
@@ -150,12 +256,17 @@ private:
     }
     void addRow(const FieldMeta& meta, QWidget* widget, FieldRow& row) {
         form->addRow(meta.label, widget);
+        // One label-column width across every component box keeps the
+        // value columns lined up section to section.
+        if (QWidget* label = form->labelForField(widget))
+            label->setMinimumWidth(84);
         rows.push_back(row);
     }
 
     QFormLayout* form;
     std::vector<FieldRow>& rows;
     std::function<void(int)> onEdit;
+    QString defaultName;
 };
 
 // Engine -> widgets, same field order as the build pass. Focused widgets are
@@ -175,6 +286,11 @@ public:
         if (!row || row->hasFocus()) return;
         if (row->readOnly) {
             if (row->lockedLabel) row->lockedLabel->setText(vecToText(value));
+            return;
+        }
+        if (row->swatch) {   // color: repaint the swatch from the live value
+            row->colorValue = value;
+            paintSwatch(row->swatch, value);
             return;
         }
         const Real parts[3] = {value.x, value.y, value.z};
@@ -224,10 +340,15 @@ private:
 };
 
 // One widget -> engine, addressed by field index within the component.
+// `editedLabel()` reports which described field the write landed on (null if
+// the target was out of range or read-only) — the key for post-edit hooks
+// and the undo log.
 class WriteVisitor : public PropertyVisitor {
 public:
     WriteVisitor(std::vector<FieldRow>& rows, int target)
         : rows(rows), target(target) {}
+
+    const char* editedLabel() const { return edited; }
 
     void field(const FieldMeta& meta, Real& value) override {
         if (FieldRow* row = match(meta))
@@ -238,10 +359,14 @@ public:
             if (row->nums[0]) value = static_cast<float>(row->nums[0]->value());
     }
     void field(const FieldMeta& meta, Vec3& value) override {
-        if (FieldRow* row = match(meta))
-            if (row->nums[0] && row->nums[1] && row->nums[2])
+        if (FieldRow* row = match(meta)) {
+            if (row->swatch) {
+                value = row->colorValue;
+            } else if (row->nums[0] && row->nums[1] && row->nums[2]) {
                 value = Vec3(row->nums[0]->value(), row->nums[1]->value(),
                              row->nums[2]->value());
+            }
+        }
     }
     void field(const FieldMeta& meta, bool& value) override {
         if (FieldRow* row = match(meta))
@@ -264,14 +389,15 @@ private:
     FieldRow* match(const FieldMeta& meta) {
         int index = cursor++;
         if (index != target || meta.readOnly) return nullptr;
-        return static_cast<std::size_t>(index) < rows.size()
-                   ? &rows[index]
-                   : nullptr;
+        if (static_cast<std::size_t>(index) >= rows.size()) return nullptr;
+        edited = meta.label;   // FieldMeta labels are string literals
+        return &rows[index];
     }
 
     std::vector<FieldRow>& rows;
     int target;
     int cursor = 0;
+    const char* edited = nullptr;
 };
 
 }  // namespace
@@ -283,7 +409,11 @@ struct PropertyInspector::Impl {
         std::vector<FieldRow> rows;
     };
     std::vector<Section> sections;
-    bool muted = false;   // suppress write-back while syncing
+    bool muted = false;            // suppress write-back while syncing
+    // Add/remove component happened (menu click, or engine-side/undo): the
+    // section list is stale. Rebuilt on the NEXT refresh — never mid-signal,
+    // so a button's own click can't delete it.
+    bool structureDirty = false;
 };
 
 PropertyInspector::PropertyInspector(engine::EditorBridge& bridge)
@@ -306,12 +436,52 @@ void PropertyInspector::rebuild(engine::Entity entity) {
     World* world = bridge.world();
     if (!world || !world->alive(entity)) return;
 
+    // Header: the object's name (bold) and kind (dim), with a small trash
+    // button to the right — so "what is this and how do I remove it" is
+    // answered at the top instead of via a big button at the bottom.
+    EntityHeader head = describeEntity(world, entity);
+    auto* headerWidget = new QWidget;
+    auto* headerLayout = new QHBoxLayout(headerWidget);
+    headerLayout->setContentsMargins(6, 2, 4, 2);
+    auto* title = new QLabel(
+        QString("<b>%1</b>&nbsp;&nbsp;<span style='color:gray'>%2</span>")
+            .arg(head.name.toHtmlEscaped(), head.kind));
+    headerLayout->addWidget(title);
+    headerLayout->addStretch();
+    if (bridge.editable()) {
+        auto* trash = new QToolButton;
+        trash->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
+        trash->setAutoRaise(true);
+        trash->setToolTip("Delete this object (Del)");
+        QObject::connect(trash, &QToolButton::clicked, [this]() {
+            if (bridge.editable()) bridge.deleteSelection();
+        });
+        headerLayout->addWidget(trash);
+    }
+    sectionsLayout->addWidget(headerWidget);
+
     const auto& entries = bridge.registry().entries();
+    QString defaultName = defaultEntityName(world, entity);
+    bool firstSection = true;
     for (std::size_t i = 0; i < entries.size(); i++) {
         if (!entries[i].has(*world, entity)) continue;
 
+        // A separator line between component sections (not before the first).
+        if (!firstSection) {
+            auto* line = new QFrame;
+            line->setFrameShape(QFrame::HLine);
+            line->setFrameShadow(QFrame::Sunken);
+            sectionsLayout->addWidget(line);
+        }
+        firstSection = false;
+
         auto* box = new QGroupBox(QString::fromStdString(entries[i].name));
+        box->setFlat(true);
         auto* form = new QFormLayout(box);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setHorizontalSpacing(8);
+        form->setVerticalSpacing(3);
+        form->setContentsMargins(8, 4, 8, 6);
 
         Impl::Section section;
         section.entryIndex = static_cast<int>(i);
@@ -321,14 +491,55 @@ void PropertyInspector::rebuild(engine::Entity entity) {
         BuildVisitor builder(form, impl->sections.back().rows,
                              [this, componentIndex](int fieldIndex) {
                                  writeField(componentIndex, fieldIndex);
-                             });
+                             },
+                             defaultName);
         entries[i].visit(*world, entity, builder);
+
+        if (bridge.editable() && entries[i].removeFrom) {
+            auto* removeButton = new QPushButton("Remove Component");
+            QObject::connect(removeButton, &QPushButton::clicked,
+                             [this, name = entries[i].name]() {
+                                 if (!bridge.attached()) return;
+                                 bridge.removeComponent(bridge.selected(), name);
+                                 impl->structureDirty = true;
+                             });
+            form->addRow(QString(), removeButton);
+        }
         sectionsLayout->addWidget(box);
+    }
+
+    // Add Component: attach a registry type the entity lacks (camera, player
+    // spawn, ...). Observer mode shows none — the panel is a window into the
+    // playtest, not an editor.
+    if (!bridge.editable()) return;
+    auto* addMenu = new QMenu;
+    for (const auto& entry : entries) {
+        if (!entry.addTo || entry.has(*world, entity)) continue;
+        addMenu->addAction(QString::fromStdString(entry.name),
+                           [this, name = entry.name]() {
+                               if (!bridge.attached()) return;
+                               bridge.addComponent(bridge.selected(), name);
+                               impl->structureDirty = true;
+                           });
+    }
+    if (addMenu->isEmpty()) {
+        delete addMenu;
+    } else {
+        auto* addButton = new QPushButton(
+            style()->standardIcon(QStyle::SP_FileDialogNewFolder),
+            " Add Component");
+        addButton->setToolTip(
+            "Attach a component (Camera, Player Spawn, ...) to this object");
+        addMenu->setParent(addButton);
+        addButton->setMenu(addMenu);
+        sectionsLayout->addWidget(addButton);
     }
 }
 
 void PropertyInspector::writeField(int componentIndex, int fieldIndex) {
-    if (impl->muted || !bridge.attached()) return;
+    // editable(): observer mode (play) syncs values INTO widgets but never
+    // writes back, even if a stray signal fires while disabled.
+    if (impl->muted || !bridge.editable()) return;
     World* world = bridge.world();
     Entity entity = bridge.selected();
     if (!world || !world->alive(entity)) return;
@@ -338,8 +549,25 @@ void PropertyInspector::writeField(int componentIndex, int fieldIndex) {
 
     auto& section = impl->sections[componentIndex];
     const auto& entries = bridge.registry().entries();
+    const auto& entry = entries[section.entryIndex];
+
+    UndoStack* undo = bridge.undoStack();
+    nlohmann::json before;
+    if (undo) before = undo->componentState(*world, entity, entry.name);
+
     WriteVisitor writer(section.rows, fieldIndex);
-    entries[section.entryIndex].visit(*world, entity, writer);
+    entry.visit(*world, entity, writer);
+
+    if (const char* label = writer.editedLabel()) {
+        // Post-edit hook (e.g. Shape size -> mesh rebuild), then the undo
+        // log: one command per committed widget edit, consecutive edits to
+        // the same field coalesced by the stack.
+        if (entry.onEdited) entry.onEdited(*world, entity, label);
+        if (undo)
+            undo->recordFieldEdit(
+                entity, entry.name, label, std::move(before),
+                undo->componentState(*world, entity, entry.name));
+    }
 
     // Editor objects are stationary: keep the interpolation pair in step so
     // edits don't smear across frames.
@@ -355,10 +583,34 @@ void PropertyInspector::refresh() {
     Entity selected = bridge.selected();
     if (!(selected == shown) ||
         (shown.valid() && !bridge.world()->alive(shown))) {
+        impl->structureDirty = false;
         rebuild(selected);
         return;
     }
     if (!shown.valid()) return;
+
+    // The entity's component set can change under us — the Add Component
+    // menu, the in-viewport inspector, or an undo. Compare what's present
+    // against the sections we built and rebuild on mismatch.
+    if (!impl->structureDirty) {
+        const auto& entries = bridge.registry().entries();
+        std::size_t sectionCursor = 0;
+        for (std::size_t i = 0; i < entries.size(); i++) {
+            if (!entries[i].has(*bridge.world(), shown)) continue;
+            if (sectionCursor >= impl->sections.size() ||
+                impl->sections[sectionCursor].entryIndex != static_cast<int>(i)) {
+                impl->structureDirty = true;
+                break;
+            }
+            sectionCursor++;
+        }
+        if (sectionCursor != impl->sections.size()) impl->structureDirty = true;
+    }
+    if (impl->structureDirty) {
+        impl->structureDirty = false;
+        rebuild(shown);
+        return;
+    }
 
     impl->muted = true;
     World* world = bridge.world();

@@ -18,7 +18,7 @@ submodule; CMake also tries to auto-init them):
 git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui}
 cmake -S . -B build && cmake --build build
 ctest --test-dir build                      # runs unit + physics tests
-./build/viewer                              # interactive viewer (where GLFW exists)
+./build/viewer                              # the game (boots into play; --edit for edit mode)
 ```
 
 The viewer target builds only where GLFW is found (e.g. macOS); physics

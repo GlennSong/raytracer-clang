@@ -47,6 +47,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_level_writer.cpp \
 	$(TEST_DIR)/test_hosted_window.cpp \
 	$(TEST_DIR)/test_properties.cpp \
+	$(TEST_DIR)/test_undo.cpp \
+	$(TEST_DIR)/test_hierarchy.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
@@ -56,6 +58,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/log.cpp \
 	$(SRC_DIR)/engine/day_night_cycle.cpp \
 	$(SRC_DIR)/engine/world.cpp \
+	$(SRC_DIR)/engine/components.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
 	$(SRC_DIR)/engine/input/input_map.cpp \
 	$(SRC_DIR)/engine/input/player_input.cpp \
@@ -69,6 +72,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/properties.cpp \
 	$(SRC_DIR)/engine/component_registry.cpp \
 	$(SRC_DIR)/engine/property_json.cpp \
+	$(SRC_DIR)/engine/undo_stack.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/camera.cpp \

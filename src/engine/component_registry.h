@@ -21,21 +21,31 @@ public:
         std::string name;
         std::function<bool(World&, Entity)> has;
         std::function<void(World&, Entity, PropertyVisitor&)> visit;
+        // Optional thunks; null means the operation isn't offered in UIs.
+        // `addTo` default-constructs the component; `removeFrom` detaches it.
+        std::function<void(World&, Entity)> addTo;
+        std::function<void(World&, Entity)> removeFrom;
+        // Post-edit hook, invoked by inspectors AFTER a field write goes
+        // through. `label` is the edited FieldMeta label, or nullptr when the
+        // whole component was restored at once (undo, paste). Installed by
+        // whoever owns the needed services (e.g. the editor wires a mesh
+        // rebuild for Shape size — registration time has no renderer).
+        std::function<void(World&, Entity, const char* label)> onEdited;
     };
 
     // T must have a describeProperties(T&, PropertyVisitor&) overload (or
     // pass a custom accessor for components whose editable data is nested,
     // e.g. Renderable -> its material).
     template <typename T>
-    void add(std::string name) {
-        addWithAccessor<T>(std::move(name),
-                           [](T& component, PropertyVisitor& v) {
-                               describeProperties(component, v);
-                           });
+    Entry& add(std::string name) {
+        return addWithAccessor<T>(std::move(name),
+                                  [](T& component, PropertyVisitor& v) {
+                                      describeProperties(component, v);
+                                  });
     }
 
     template <typename T, typename Fn>
-    void addWithAccessor(std::string name, Fn accessor) {
+    Entry& addWithAccessor(std::string name, Fn accessor) {
         Entry entry;
         entry.name = std::move(name);
         entry.has = [](World& world, Entity e) { return world.has<T>(e); };
@@ -43,15 +53,32 @@ public:
             if (T* component = world.get<T>(e)) accessor(*component, v);
         };
         entries_.push_back(std::move(entry));
+        return entries_.back();
     }
 
     // Marker components (PlayerSpawn): present in the list, nothing to edit.
     template <typename T>
-    void addMarker(std::string name) {
-        addWithAccessor<T>(std::move(name), [](T&, PropertyVisitor&) {});
+    Entry& addMarker(std::string name) {
+        return addWithAccessor<T>(std::move(name), [](T&, PropertyVisitor&) {});
+    }
+
+    // Default add/remove thunks for components an "Add Component" menu may
+    // attach or detach freely (no construction-time services needed).
+    template <typename T>
+    Entry& allowAddRemove(Entry& entry) {
+        entry.addTo = [](World& world, Entity e) {
+            if (!world.has<T>(e)) world.add<T>(e);
+        };
+        entry.removeFrom = [](World& world, Entity e) { world.remove<T>(e); };
+        return entry;
     }
 
     const std::vector<Entry>& entries() const { return entries_; }
+    Entry* find(const std::string& name) {
+        for (Entry& e : entries_)
+            if (e.name == name) return &e;
+        return nullptr;
+    }
 
 private:
     std::vector<Entry> entries_;

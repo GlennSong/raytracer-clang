@@ -39,6 +39,15 @@ void HostedWindow::getFramebufferSize(int& width, int& height) const {
     height = framebufferHeight;
 }
 
+void HostedWindow::setCursorMode(CursorMode mode) {
+    bool wantRelative = (mode == CursorMode::Disabled);
+    if (wantRelative != relativeMode) {
+        relativeMode = wantRelative;
+        resetMouseDelta();
+    }
+    if (cursorModeCallback) cursorModeCallback(mode);
+}
+
 void HostedWindow::injectMouseMove(double x, double y) {
     input.mouseX = x;
     input.mouseY = y;
@@ -46,6 +55,11 @@ void HostedWindow::injectMouseMove(double x, double y) {
     moved.x = x;
     moved.y = y;
     pendingEvents.push_back(moved);
+}
+
+void HostedWindow::injectMouseDelta(double dx, double dy) {
+    pendingDeltaX += dx;
+    pendingDeltaY += dy;
 }
 
 void HostedWindow::injectMouseButton(MouseButton button, bool down,
@@ -96,6 +110,8 @@ void HostedWindow::injectEvent(const Event& event) {
 void HostedWindow::resetMouseDelta() {
     input.mouseDeltaX = 0.0;
     input.mouseDeltaY = 0.0;
+    pendingDeltaX = 0.0;
+    pendingDeltaY = 0.0;
     firstMouse = true;
 }
 
@@ -112,8 +128,16 @@ void HostedWindow::pollEvents() {
 
     // Per-frame derived state, matching the platform window's semantics: the
     // delta is position movement since last poll (suppressed on the first
-    // sample so focus changes don't spike the camera).
-    if (firstMouse) {
+    // sample so focus changes don't spike the camera). While captured, the
+    // host reports pure deltas instead (its cursor is pinned to the viewport
+    // center, so absolute positions carry no motion).
+    if (relativeMode) {
+        input.mouseDeltaX = pendingDeltaX;
+        input.mouseDeltaY = pendingDeltaY;
+        pendingDeltaX = 0.0;
+        pendingDeltaY = 0.0;
+        firstMouse = true;   // no absolute-position spike on release
+    } else if (firstMouse) {
         input.mouseDeltaX = 0.0;
         input.mouseDeltaY = 0.0;
         firstMouse = false;

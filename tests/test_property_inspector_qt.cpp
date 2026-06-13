@@ -5,11 +5,15 @@
 
 #include "../src/editor_app/property_inspector.h"
 #include "../src/engine/components.h"
+#include "../src/engine/camera/scene_camera.h"
 #include "../src/engine/systems/editor_system.h"
+#include "../src/engine/undo_stack.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QMenu>
+#include <QPushButton>
 #include <cstdio>
 
 using namespace engine;
@@ -37,11 +41,26 @@ int main(int argc, char** argv) {
     world.add<PrevTransform>(e, {t});
     world.add<Renderable>(e);
 
+    // A second entity, to exercise multi-selection.
+    Entity e2 = world.create();
+    world.add<Transform>(e2);
+    world.add<PrevTransform>(e2);
+    world.add<Renderable>(e2);
+
     EditorBridge bridge;
     CameraSystem cameras;
     EditorSystem editor(cameras, "test.json", nullptr, &bridge);
     bridge.attach(&world, &editor, "test.json");
+
+    // Multi-selection: the set carries both, the primary is what the
+    // inspector shows; setSelected collapses to a single.
+    bridge.setSelection({e, e2}, e2);
+    REQUIRE(bridge.selectionList().size() == 2);
+    REQUIRE(bridge.selected() == e2);
+    REQUIRE(editor.isSelected(e));
     bridge.select(e);
+    REQUIRE(bridge.selectionList().size() == 1);
+    REQUIRE(bridge.selected() == e);
 
     PropertyInspector inspector(bridge);
     inspector.refresh();   // selection changed -> builds sections
@@ -76,6 +95,66 @@ int main(int argc, char** argv) {
     inspector.refresh();
     REQUIRE(world.get<Transform>(e)->position.x == 42.5);
 
+    // Every widget edit above landed on the command log; undo through the
+    // bridge walks them back (the checkbox toggle, then the spin edit).
+    REQUIRE(bridge.canUndo());
+    bridge.undo();
+    bridge.undo();
+    REQUIRE(world.get<Transform>(e)->position.x == 1.0);
+    REQUIRE(bridge.canRedo());
+    bridge.redo();
+    REQUIRE(world.get<Transform>(e)->position.x == 42.5);
+    bridge.undo();   // back again so later checks see the original pose
+    REQUIRE(world.get<Transform>(e)->position.x == 1.0);
+
+    // Add Component: the menu lists registry types the entity lacks; adding
+    // a camera through the bridge rebuilds the inspector with a new section.
+    inspector.refresh();
+    auto buttons = inspector.findChildren<QPushButton*>();
+    QPushButton* addButton = nullptr;
+    for (auto* b : buttons)
+        if (b->text().contains("Add Component")) addButton = b;
+    REQUIRE(addButton != nullptr);
+    if (addButton) {
+        QMenu* menu = addButton->menu();
+        REQUIRE(menu && !menu->actions().isEmpty());
+        QAction* cameraAction = nullptr;
+        for (QAction* a : menu->actions())
+            if (a->text() == "Camera") cameraAction = a;
+        REQUIRE(cameraAction != nullptr);
+        if (cameraAction) {
+            cameraAction->trigger();
+            REQUIRE(world.has<SceneCamera>(e));
+            inspector.refresh();   // structureDirty -> rebuild with Camera
+
+            // The section's Remove Component button detaches it again...
+            QPushButton* removeButton = nullptr;
+            for (auto* b : inspector.findChildren<QPushButton*>())
+                if (b->text() == "Remove Component") removeButton = b;
+            REQUIRE(removeButton != nullptr);
+            if (removeButton) {
+                removeButton->click();
+                REQUIRE(!world.has<SceneCamera>(e));
+                inspector.refresh();
+            }
+
+            // ...and both menu actions are one undo step each.
+            bridge.undo();
+            REQUIRE(world.has<SceneCamera>(e));
+            bridge.undo();
+            REQUIRE(!world.has<SceneCamera>(e));
+            inspector.refresh();
+        }
+    }
+
+    // Dirty tracking: the command log moved since attach, so the document
+    // reads dirty until a save captures the current revision.
+    REQUIRE(bridge.documentDirty());
+    REQUIRE(bridge.saveDocument());
+    REQUIRE(!bridge.documentDirty());
+    bridge.redo();   // any further change dirties it again
+    REQUIRE(bridge.documentDirty());
+
     // Selection cleared -> sections torn down; deleting the entity while
     // shown must degrade gracefully on the next refresh.
     bridge.select(Entity{});
@@ -84,6 +163,9 @@ int main(int argc, char** argv) {
     inspector.refresh();
     world.destroy(e);
     inspector.refresh();
+
+    std::remove("test.json");                // saveDocument artifacts
+    std::remove("test.json.cameras.json");
 
     std::printf(failures == 0 ? "inspector qt test: OK\n"
                               : "inspector qt test: %d FAILURES\n",

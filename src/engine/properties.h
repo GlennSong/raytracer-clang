@@ -13,6 +13,7 @@ struct RenderMaterial;
 struct LensParams;
 struct SceneCamera;
 struct SourceSpec;
+struct Velocity;
 
 // The property layer (editor-app plan): each component describes its editable
 // fields ONCE — label, value reference, and editing semantics (range, scale,
@@ -25,6 +26,7 @@ struct SourceSpec;
 // plus this metadata, nothing else crosses the seam.
 struct FieldMeta {
     const char* label = "";
+    const char* key = nullptr;      // serialization key; defaults to the label
     Real minValue = 0.0;            // min == max == 0 -> unbounded
     Real maxValue = 0.0;
     Real step = 0.1;                // suggested increment for steppers
@@ -35,6 +37,10 @@ struct FieldMeta {
     std::vector<const char*> choices;   // string fields: closed option set
 
     FieldMeta(const char* label) : label(label) {}
+    // What JSON visitors key the field by — the document format's name
+    // (camelCase, e.g. "focalLength"), decoupled from the display label.
+    FieldMeta& id(const char* k) { key = k; return *this; }
+    const char* serialKey() const { return key ? key : label; }
     FieldMeta& range(Real lo, Real hi) { minValue = lo; maxValue = hi; return *this; }
     FieldMeta& increment(Real s) { step = s; return *this; }
     FieldMeta& log() { logScale = true; return *this; }
@@ -72,6 +78,7 @@ void describeProperties(RenderMaterial& m, PropertyVisitor& v);
 void describeProperties(LensParams& lens, PropertyVisitor& v);
 void describeProperties(SceneCamera& cam, PropertyVisitor& v);
 void describeProperties(SourceSpec& spec, PropertyVisitor& v);
+void describeProperties(Velocity& vel, PropertyVisitor& v);
 
 }  // namespace engine
 

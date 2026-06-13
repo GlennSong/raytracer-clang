@@ -6,14 +6,19 @@
 
 namespace engine {
 
-// Advances a DayNightCycle each frame and writes its state into the RenderView's
-// lighting: the procedural sky (skybox + IBL) and the directional sun light stay
-// locked to one time-of-day, so shadows and shading track the sky (ADR-0016).
-// Settings persist time/speed/enabled; ImGui exposes them under "Day / Night".
+// Advances a DayNightCycle on SIMULATION time and writes its state into the
+// RenderView's lighting: the procedural sky (skybox + IBL) and the directional
+// sun light stay locked to one time-of-day, so shadows and shading track the
+// sky (ADR-0016). Sun motion and cloud drift integrate in fixedUpdate, so they
+// pause, slow-mo, and single-step with the clock like everything simulated;
+// the panel's edits still apply instantly while paused (update pushes the
+// current state into the view every frame). Settings persist
+// time/speed/enabled; ImGui exposes them under "Day / Night" in debug mode.
 class DayNightSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
+    void fixedUpdate(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 

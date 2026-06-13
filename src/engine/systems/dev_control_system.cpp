@@ -53,17 +53,19 @@ void DevControlSystem::update(FrameContext& ctx) {
     // Edge actions are consumed once per frame here (not per event), so a single
     // key press toggles exactly once regardless of how many events the frame saw.
     if (ownsQuit && ctx.actions.pressed("quit")) ctx.quit = true;
-    if (ctx.actions.pressed("pause")) paused = !paused;
+    if (ctx.actions.pressed("pause")) ctx.clock.setPaused(!ctx.clock.paused());
     if (ctx.actions.pressed("sim_slower"))
         simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
     if (ctx.actions.pressed("sim_faster"))
         simSpeed = std::clamp(simSpeed * 2.0, 0.0625, 16.0);
     if (ctx.actions.pressed("sim_reset")) {
         simSpeed = 1.0;
-        paused = false;
+        ctx.clock.setPaused(false);
     }
 
-    ctx.clock.setTimeScale(paused ? 0.0 : simSpeed);
+    // Pause lives on the clock itself (shared with the editor shell's Pause
+    // button); this system owns only the speed.
+    ctx.clock.setTimeScale(simSpeed);
 }
 
 void DevControlSystem::onStop(FrameContext& ctx) {

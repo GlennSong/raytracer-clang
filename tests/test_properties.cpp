@@ -34,8 +34,9 @@ TEST_CASE(properties_json_round_trips_a_lens) {
     json j;
     JsonWriteVisitor writer(j);
     describeProperties(lens, writer);
-    CHECK_APPROX(j["Focal Length"].get<double>(), 35.0, 1e-9);
-    CHECK_APPROX(j["f-stop"].get<double>(), 2.8, 1e-9);
+    // Keys are the FieldMeta serialization ids — the camera-store format.
+    CHECK_APPROX(j["focalLength"].get<double>(), 35.0, 1e-9);
+    CHECK_APPROX(j["fStop"].get<double>(), 2.8, 1e-9);
 
     LensParams restored;   // defaults differ from lens
     JsonReadVisitor reader(j);
@@ -53,8 +54,8 @@ TEST_CASE(properties_json_handles_colors_flags_and_readonly) {
     json j;
     JsonWriteVisitor writer(j);
     describeProperties(mat, writer);
-    CHECK(j["Checkerboard"].get<bool>());
-    CHECK_APPROX(j["Albedo"][0].get<double>(), 0.9, 1e-6);
+    CHECK(j["checkerboard"].get<bool>());
+    CHECK_APPROX(j["albedo"][0].get<double>(), 0.9, 1e-6);
 
     RenderMaterial restored;
     JsonReadVisitor reader(j);
@@ -69,7 +70,7 @@ TEST_CASE(properties_json_handles_colors_flags_and_readonly) {
     json sj;
     JsonWriteVisitor specWriter(sj);
     describeProperties(spec, specWriter);
-    sj["Shape"] = "torus";   // hostile/hand-edited input
+    sj["shape"] = "torus";   // hostile/hand-edited input
     SourceSpec specRestored;
     JsonReadVisitor specReader(sj);
     describeProperties(specRestored, specReader);
@@ -106,6 +107,61 @@ TEST_CASE(component_registry_enumerates_an_entity) {
         json j;
         JsonWriteVisitor writer(j);
         entry.visit(world, e, writer);
-        CHECK(j["Name"] == "Crane");
+        CHECK(j["name"] == "Crane");
     }
+}
+
+TEST_CASE(component_registry_add_remove_thunks) {
+    World world;
+    Entity e = world.create();
+    world.add<Transform>(e);
+    world.add<Renderable>(e);
+
+    ComponentRegistry registry;
+    registerEngineComponents(registry);
+
+    // Policy: cameras and spawn markers attach/detach from the menu;
+    // structural components (Transform, Material) offer no thunks.
+    ComponentRegistry::Entry* camera = registry.find("Camera");
+    ComponentRegistry::Entry* transform = registry.find("Transform");
+    ComponentRegistry::Entry* material = registry.find("Material");
+    CHECK(camera && camera->addTo && camera->removeFrom);
+    CHECK(transform && !transform->addTo && !transform->removeFrom);
+    CHECK(material && !material->addTo && !material->removeFrom);
+
+    CHECK(!world.has<SceneCamera>(e));
+    camera->addTo(world, e);
+    CHECK(world.has<SceneCamera>(e));
+    camera->addTo(world, e);   // idempotent: no double-insert
+    camera->removeFrom(world, e);
+    CHECK(!world.has<SceneCamera>(e));
+
+    ComponentRegistry::Entry* spawn = registry.find("Player Spawn");
+    CHECK(spawn && spawn->addTo && spawn->removeFrom);
+    spawn->addTo(world, e);
+    CHECK(world.has<PlayerSpawn>(e));
+}
+
+TEST_CASE(component_registry_post_edit_hook_dispatch) {
+    World world;
+    Entity e = world.create();
+    world.add<Transform>(e);
+    world.add<SourceSpec>(e);
+
+    ComponentRegistry registry;
+    registerEngineComponents(registry);
+
+    // Hooks are installed by whoever owns the services (the editor wires a
+    // mesh rebuild); here we only verify the dispatch contract.
+    int calls = 0;
+    const char* lastLabel = nullptr;
+    ComponentRegistry::Entry* shape = registry.find("Shape");
+    CHECK(shape != nullptr);
+    shape->onEdited = [&](World&, Entity, const char* label) {
+        calls++;
+        lastLabel = label;
+    };
+    shape->onEdited(world, e, "Size");
+    CHECK(calls == 1);
+    CHECK(lastLabel && std::string(lastLabel) == "Size");
 }

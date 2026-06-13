@@ -12,6 +12,21 @@ int SimClock::advance(double realDeltaSeconds) {
     if (realDeltaSeconds < 0.0) realDeltaSeconds = 0.0;
     if (realDeltaSeconds > MAX_FRAME_SECONDS) realDeltaSeconds = MAX_FRAME_SECONDS;
 
+    if (paused()) {
+        // Time stands still (the accumulator neither grows nor drains, so
+        // the interpolation alpha freezes the frame where it is) — unless a
+        // single step was requested, which advances exactly one fixed step
+        // and renders it fully (alpha 1).
+        if (stepRequested) {
+            stepRequested = false;
+            simTime += fixedStepSeconds;
+            alpha = 1.0;
+            return 1;
+        }
+        return 0;
+    }
+    stepRequested = false;   // running normally: nothing pending
+
     accumulator += realDeltaSeconds * scale;
 
     int steps = 0;

@@ -4,6 +4,8 @@
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "physics/physics_world.h"
+#include "world.h"
+#include <cstdint>
 #include <string>
 
 namespace engine {
@@ -22,6 +24,12 @@ struct Transform {
 // Interpolated for smooth rendering between fixed steps: position/scale linearly,
 // orientation via slerp (no Euler wobble — see ADR-0006).
 Transform lerp(const Transform& a, const Transform& b, Real t);
+
+// Decompose a model matrix (assumed M = T*R*S) back into a Transform: the
+// translation is the last column, scale the rotation columns' lengths, the
+// orientation the normalized rotation part. Used to flatten parented
+// transforms and to read manipulated gizmo matrices back.
+Transform transformFromMatrix(const Mat4& m);
 
 // Previous step's transform, kept so rendering can interpolate to the current
 // step. Present on every renderable; only moving entities have it updated.
@@ -55,6 +63,13 @@ struct ControlledBy {
 // entities carrying it back to the level JSON. Runtime-spawned entities
 // (bullets, gizmos) lack it and are never saved — by construction.
 struct SourceSpec {
+    // Stable document id: survives save/load so parenting (and future
+    // cross-references) can name an entity independently of its runtime
+    // Handle, which is reminted every load. 0 = unassigned (the loader and
+    // editor fill these in). `parentId` is another entity's id, 0 = root.
+    uint32_t id = 0;
+    uint32_t parentId = 0;
+    std::string name;            // optional display name ("name" in JSON)
     std::string shape = "box";   // MeshBuilder shape; empty when meshFile is set
     Vec3 size{1, 1, 1};
     std::string meshFile;        // glTF path, level-relative ("mesh" in JSON)
@@ -63,6 +78,10 @@ struct SourceSpec {
     Real friction = 0.5;
     Real restitution = 0.0;
     bool lockRotation = false;
+
+    // A group/null object: no mesh of its own, just a named transform other
+    // entities parent under. Shape is empty AND no glTF mesh is set.
+    bool isGroup() const { return shape.empty() && meshFile.empty(); }
 };
 
 // Where the player starts (editor-app plan): in the editor the spawn is a
@@ -90,6 +109,33 @@ struct RigidBody {
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
     bool lockRotation = false;
 };
+
+// --- Document hierarchy (stable ids + parenting) --------------------------
+// Document entities (those carrying a SourceSpec) reference one another by
+// stable id, not by runtime Handle. These helpers index and compose that
+// graph; the editor owns it, and PLAY flattens it into world transforms at
+// load (so the runtime never walks a hierarchy — see level_loader).
+
+// The largest SourceSpec.id in the world (0 if none): nextDocumentId is +1.
+uint32_t maxDocumentId(World& world);
+uint32_t nextDocumentId(World& world);
+
+// Give every SourceSpec with id == 0 a fresh unique id (e.g. a hand-authored
+// level with no ids yet). Stable across a single load: assigned in iteration
+// order from maxDocumentId+1.
+void assignMissingDocumentIds(World& world);
+
+// The document entity with this id, or an invalid Entity. id 0 never matches.
+Entity findByDocumentId(World& world, uint32_t id);
+
+// Local-to-world matrix for `e`, composing its local Transform with its
+// ancestors' (SourceSpec.parentId chain). Unparented entities return their
+// own Transform::matrix(). Cycles and missing parents terminate the walk.
+Mat4 worldMatrix(World& world, Entity e);
+
+// True if making `child` a child of `parent` would form a cycle (parent is
+// child itself, or a descendant of child). Reparenting guards with this.
+bool wouldCreateCycle(World& world, Entity child, Entity parent);
 
 
 }  // namespace engine

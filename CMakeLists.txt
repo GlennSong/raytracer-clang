@@ -45,6 +45,8 @@ add_library(engine_core STATIC
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
+    src/engine/imgui_properties.cpp
+    src/engine/undo_stack.cpp
     src/engine/day_night_cycle.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
@@ -145,6 +147,8 @@ add_executable(run_tests
     tests/test_level_writer.cpp
     tests/test_hosted_window.cpp
     tests/test_properties.cpp
+    tests/test_undo.cpp
+    tests/test_hierarchy.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
@@ -339,6 +343,10 @@ if(Qt6_FOUND)
             src/engine/systems/shooting_system.cpp
         )
         target_link_libraries(editor_app PRIVATE Jolt)
+        # arena_state.cpp gates its physics/player systems on this define;
+        # without it the editor's Play mode silently loses the first-person
+        # controller (the viewer always had it — see the viewer block above).
+        target_compile_definitions(editor_app PRIVATE RT_ENABLE_PHYSICS=1)
     endif()
 
     if(APPLE)

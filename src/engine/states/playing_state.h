@@ -33,8 +33,10 @@ public:
     void fixedUpdate(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
 
+protected:
+    Window& window;   // states tune cursor mode (editor wants it visible)
+
 private:
-    Window& window;
     std::vector<std::unique_ptr<System>> systems;
 };
 

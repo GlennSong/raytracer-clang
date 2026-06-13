@@ -64,6 +64,10 @@ struct FrameContext {
     double interpolation;
     bool& quit;
     StateTransition& transition;   // end-of-frame state swap (editor <-> play)
+    // The backtick debug overlay is up. Systems with always-registered debug
+    // panels (Debug > Cameras) draw them only then, so plain play looks like
+    // the shipped game.
+    bool debugOverlayActive = false;
 };
 
 // A unit of engine behaviour, ticked by Application each frame. Override only

@@ -41,12 +41,22 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.world.each<Transform, PrevTransform, Renderable>(
         [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
             if (entity == ctx.view.activeCameraEntity) return;
+            // Interpolated local matrix, then composed through any parent
+            // chain (editor only — PLAY flattens parenting at load, so there
+            // parentId is 0 and this is just the interpolated local).
             Mat4 model = lerp(prev.value, t, alpha).matrix();
+            SourceSpec* s = ctx.world.get<SourceSpec>(entity);
+            if (s && s->parentId != 0) {
+                Entity parent = findByDocumentId(ctx.world, s->parentId);
+                if (parent.valid())
+                    model = worldMatrix(ctx.world, parent) * model;
+            }
             BoundingSphere bounds = ctx.renderer.getMeshBounds(r.mesh);
             Vec3 worldCenter = model.transformPoint(bounds.center);
-            Real maxScale = std::max({std::abs(t.scale.x),
-                                      std::abs(t.scale.y),
-                                      std::abs(t.scale.z)});
+            Vec3 cx(model.m[0][0], model.m[1][0], model.m[2][0]);
+            Vec3 cy(model.m[0][1], model.m[1][1], model.m[2][1]);
+            Vec3 cz(model.m[0][2], model.m[1][2], model.m[2][2]);
+            Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
             if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
                 return;
             ctx.renderer.drawMesh(r.mesh, model, r.material);

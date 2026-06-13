@@ -34,6 +34,9 @@ int importMaterial(const json& ent, Scene& scene) {
         roughness = m.value("roughness", roughness);
         metallic = m.value("metallic", metallic);
         emission = parseVec3(m.value("emission", json()), emission);
+        // Current documents spell the flag as a bool (property-layer JSON);
+        // pre-migration ones used a "flags" array. Read both.
+        checkerboard = m.value("checkerboard", false);
         if (m.contains("flags"))
             for (const auto& f : m["flags"])
                 checkerboard |= (f == "checkerboard");

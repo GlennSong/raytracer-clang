@@ -92,3 +92,46 @@ TEST_CASE(hosted_window_state_and_geometry) {
     win.requestClose();
     CHECK(win.shouldClose());
 }
+
+TEST_CASE(hosted_window_relative_mouse_mode_for_capture) {
+    HostedWindow win;
+    win.initialize(800, 600, "test");
+
+    // The host learns about engine cursor-mode changes through its callback
+    // (it hides/warps the toolkit cursor in response).
+    CursorMode seen = CursorMode::Normal;
+    win.setCursorModeCallback([&](CursorMode mode) { seen = mode; });
+
+    // Establish an absolute position first (editor mode).
+    win.injectMouseMove(400, 300);
+    win.pollEvents();
+
+    win.setCursorMode(CursorMode::Disabled);   // play: first-person capture
+    CHECK(seen == CursorMode::Disabled);
+    CHECK(win.relativeMouseMode());
+
+    // While captured, motion arrives as deltas and accumulates per poll;
+    // absolute positions carry no motion (the host pins its cursor).
+    win.injectMouseDelta(4.0, -2.0);
+    win.injectMouseDelta(1.0, 0.5);
+    win.pollEvents();
+    CHECK_APPROX(win.getInput().mouseDeltaX, 5.0, 1e-9);
+    CHECK_APPROX(win.getInput().mouseDeltaY, -1.5, 1e-9);
+
+    // Deltas are per-frame, not sticky.
+    win.pollEvents();
+    CHECK_APPROX(win.getInput().mouseDeltaX, 0.0, 1e-9);
+
+    // Release (back to the editor): no spike from the absolute position the
+    // cursor was parked at, then absolute deltas resume.
+    win.setCursorMode(CursorMode::Normal);
+    CHECK(seen == CursorMode::Normal);
+    CHECK(!win.relativeMouseMode());
+    win.injectMouseMove(100, 100);
+    win.pollEvents();
+    CHECK_APPROX(win.getInput().mouseDeltaX, 0.0, 1e-9);
+    win.injectMouseMove(105, 104);
+    win.pollEvents();
+    CHECK_APPROX(win.getInput().mouseDeltaX, 5.0, 1e-9);
+    CHECK_APPROX(win.getInput().mouseDeltaY, 4.0, 1e-9);
+}

@@ -19,6 +19,7 @@ public:
                 EditorBridge* bridge = nullptr);
 
     void onEnter(FrameContext& ctx) override;
+    void onResume(FrameContext& ctx) override;
 
 private:
     Renderer& editorRenderer;

@@ -14,12 +14,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Optional level path as the first arg; --play starts straight in the
-    // game (the editor's Play button and the game's Esc swap between them).
+    // Optional level path as the first arg. The viewer IS the game: it boots
+    // straight into play (no editor or debug chrome — backtick opens the
+    // debug overlay, Esc returns to edit mode). --edit starts in the editor;
+    // --play is accepted for compatibility (it is the default now).
     std::string levelPath = "assets/levels/arena.json";
-    bool startInPlay = false;
+    bool startInPlay = true;
     for (int i = 1; i < argc; i++) {
-        if (std::strcmp(argv[i], "--play") == 0) startInPlay = true;
+        if (std::strcmp(argv[i], "--edit") == 0) startInPlay = false;
+        else if (std::strcmp(argv[i], "--play") == 0) startInPlay = true;
         else levelPath = argv[i];
     }
 
