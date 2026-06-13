@@ -42,6 +42,7 @@ add_library(engine_core STATIC
     src/engine/terrain.cpp
     src/engine/lsystem.cpp
     src/engine/rock.cpp
+    src/engine/scatter.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -166,6 +167,7 @@ add_executable(run_tests
     tests/test_terrain.cpp
     tests/test_lsystem.cpp
     tests/test_rock.cpp
+    tests/test_scatter.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

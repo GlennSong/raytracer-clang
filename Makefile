@@ -60,7 +60,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
 	$(TEST_DIR)/test_lsystem.cpp \
-	$(TEST_DIR)/test_rock.cpp
+	$(TEST_DIR)/test_rock.cpp \
+	$(TEST_DIR)/test_scatter.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -88,6 +89,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/terrain.cpp \
 	$(SRC_DIR)/engine/lsystem.cpp \
 	$(SRC_DIR)/engine/rock.cpp \
+	$(SRC_DIR)/engine/scatter.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \
