@@ -2,7 +2,11 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "terrain.h"
+#include "lsystem.h"
+#include "rock.h"
+#include "scatter.h"
 #include "model_importer.h"
+#include <random>
 #include "components.h"
 #include "property_json.h"
 #include "../log.h"
@@ -327,13 +331,7 @@ static void loadPlayerSpawn(const json& player, World& world,
     world.add<Renderable>(e, gizmo);
 }
 
-// Procedural terrain (ADR-0021 persistence: the document stores the recipe —
-// seed + params — and the engine regenerates the mesh at load, rather than
-// serializing the geometry). The terrain entity carries no SourceSpec, so the
-// LevelWriter never writes it back as a document entity (it stays a regenerated
-// runtime object); its GPU mesh is owned by the AssetManager and freed on the
-// next clear(). Terrain collision is deferred (fly the editor camera to view).
-static void loadTerrain(const json& t, World& world, AssetManager& assets) {
+static TerrainParams parseTerrainParams(const json& t) {
     TerrainParams p;
     p.size        = t.value("size", p.size);
     p.resolution  = t.value("resolution", p.resolution);
@@ -341,8 +339,17 @@ static void loadTerrain(const json& t, World& world, AssetManager& assets) {
     p.noiseScale  = t.value("noiseScale", p.noiseScale);
     p.octaves     = t.value("octaves", p.octaves);
     p.warp        = t.value("warp", p.warp);
-    Noise noise(t.value("seed", 0u));
+    return p;
+}
 
+// Procedural terrain (ADR-0021 persistence: the document stores the recipe —
+// seed + params — and the engine regenerates the mesh at load, rather than
+// serializing the geometry). The terrain entity carries no SourceSpec, so the
+// LevelWriter never writes it back as a document entity (it stays a regenerated
+// runtime object); its GPU mesh is owned by the AssetManager and freed on the
+// next clear().
+static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& t,
+                        World& world, AssetManager& assets) {
     Entity e = world.create();
     Transform tr;   // generated directly in world space
     world.add<Transform>(e, tr);
@@ -357,6 +364,87 @@ static void loadTerrain(const json& t, World& world, AssetManager& assets) {
         r.material.roughness = 0.95f;
     }
     world.add<Renderable>(e, r);
+}
+
+// Vegetation: generate a few "species" meshes (L-system trees, noise rocks)
+// once, then scatter them across the terrain as individual entities sharing
+// each species' GPU mesh (AssetManager dedup). Per-entity rendering for now —
+// instancing (the thousands-scale path) comes later. Carries no SourceSpec, so
+// these are regenerated runtime objects, not document entities.
+static void loadVegetation(const json& veg, const TerrainParams& terrain,
+                           const Noise& terrainNoise, World& world,
+                           AssetManager& assets) {
+    if (!veg.contains("species") || !veg["species"].is_array()) return;
+
+    struct Species { MeshHandle mesh; RenderMaterial material; };
+    std::vector<Species> species;
+    uint32_t vegSeed = veg.value("seed", 0u);
+
+    int speciesIndex = 0;
+    for (const auto& s : veg["species"]) {
+        std::string kind = s.value("kind", "tree");
+        RenderMesh mesh;
+        if (kind == "rock") {
+            RockParams rp;
+            rp.radius       = s.value("radius", rp.radius);
+            rp.displacement = s.value("displacement", rp.displacement);
+            rp.noiseScale   = s.value("noiseScale", rp.noiseScale);
+            rp.octaves      = s.value("octaves", rp.octaves);
+            mesh = generateRock(rp, Noise(vegSeed + 100u + speciesIndex));
+        } else {  // "tree"
+            LSystem sys;
+            if (s.contains("rules"))
+                for (auto it = s["rules"].begin(); it != s["rules"].end(); ++it)
+                    if (!it.key().empty())
+                        sys.rules[it.key()[0]] = it.value().get<std::string>();
+            TurtleParams tp;
+            tp.length       = s.value("length", tp.length);
+            tp.radius       = s.value("radius", tp.radius);
+            tp.radiusTaper  = s.value("radiusTaper", tp.radiusTaper);
+            tp.angleDeg     = s.value("angleDeg", tp.angleDeg);
+            tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
+            mesh = generateTree(sys, s.value("axiom", std::string("F")),
+                                s.value("iterations", 3), tp);
+        }
+        if (mesh.vertices.empty()) { speciesIndex++; continue; }
+
+        Species sp;
+        sp.mesh = assets.acquireMesh(mesh, "veg:" + std::to_string(speciesIndex));
+        if (s.contains("material")) applyMaterial(s["material"], sp.material);
+        species.push_back(sp);
+        speciesIndex++;
+    }
+    if (species.empty()) return;
+
+    ScatterParams scatter;
+    scatter.regionSize       = veg.value("region", 70.0f);
+    scatter.count            = veg.value("count", 80);
+    scatter.maxSlopeDeg      = veg.value("maxSlopeDeg", 40.0f);
+    scatter.minScale         = veg.value("minScale", 0.7f);
+    scatter.maxScale         = veg.value("maxScale", 1.3f);
+    scatter.densityScale     = veg.value("densityScale", 0.05);
+    scatter.densityThreshold = veg.value("densityThreshold", -0.2f);
+    scatter.seed             = vegSeed;
+
+    std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
+
+    // A separate stream picks which species each placement gets (deterministic).
+    std::mt19937 pick(vegSeed + 7u);
+    std::uniform_int_distribution<size_t> speciesPick(0, species.size() - 1);
+    for (const Placement& pl : placements) {
+        const Species& sp = species[speciesPick(pick)];
+        Entity e = world.create();
+        Transform t;
+        t.position = pl.position;
+        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), pl.yaw);
+        t.scale = Vec3(pl.scale, pl.scale, pl.scale);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.mesh = sp.mesh;
+        r.material = sp.material;
+        world.add<Renderable>(e, r);
+    }
 }
 
 bool LevelLoader::load(const std::string& path,
@@ -390,8 +478,15 @@ bool LevelLoader::load(const std::string& path,
     else
         levelDir = ".";
 
-    if (root.contains("terrain"))
-        loadTerrain(root["terrain"], world, assets);
+    // Terrain is parsed once into params + noise so vegetation can scatter on
+    // the same surface it generates.
+    if (root.contains("terrain")) {
+        TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
+        Noise terrainNoise(root["terrain"].value("seed", 0u));
+        loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
+        if (root.contains("vegetation"))
+            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets);
+    }
 
     if (root.contains("entities"))
         loadEntities(root["entities"], world, renderer, assets, levelDir, editorMode);

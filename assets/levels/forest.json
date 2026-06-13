@@ -1,82 +1,64 @@
 {
   "version": 1,
   "environment": {
-    "skyColor": [0.45, 0.62, 0.85]
+    "skyColor": [0.46, 0.64, 0.86]
   },
   "terrain": {
     "seed": 1337,
-    "size": 200,
-    "resolution": 160,
-    "heightScale": 16,
-    "noiseScale": 0.012,
-    "octaves": 6,
-    "warp": 0.5,
-    "material": { "albedo": [0.36, 0.46, 0.28], "roughness": 0.95 }
+    "size": 80,
+    "resolution": 96,
+    "heightScale": 8,
+    "noiseScale": 0.03,
+    "octaves": 5,
+    "warp": 0.3,
+    "material": { "albedo": [0.34, 0.44, 0.26], "roughness": 0.95 }
   },
-  "entities": [
-    {
-      "name": "boulder a",
-      "shape": "box", "size": [2, 2, 2], "position": [0, 1.0, 0],
-      "material": { "albedo": [0.55, 0.52, 0.5], "roughness": 0.8 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "boulder b",
-      "shape": "box", "size": [2, 2, 2], "position": [-25, 2.62, -10],
-      "material": { "albedo": [0.55, 0.52, 0.5], "roughness": 0.8 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "boulder c",
-      "shape": "box", "size": [2, 2, 2], "position": [-40, -0.07, 25],
-      "material": { "albedo": [0.55, 0.52, 0.5], "roughness": 0.8 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "boulder d",
-      "shape": "box", "size": [2, 2, 2], "position": [-15, 1.54, 40],
-      "material": { "albedo": [0.55, 0.52, 0.5], "roughness": 0.8 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "boulder e",
-      "shape": "box", "size": [2, 2, 2], "position": [45, -6.91, 40],
-      "material": { "albedo": [0.55, 0.52, 0.5], "roughness": 0.8 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "marker red",
-      "shape": "sphere", "size": [1.5, 1.5, 1.5], "position": [20, -1.64, 15],
-      "material": { "albedo": [0.85, 0.2, 0.2], "roughness": 0.4 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "marker blue",
-      "shape": "sphere", "size": [1.5, 1.5, 1.5], "position": [35, -3.56, -30],
-      "material": { "albedo": [0.2, 0.4, 0.9], "roughness": 0.4 },
-      "physics": { "motion": "static" }
-    },
-    {
-      "name": "marker gold",
-      "shape": "sphere", "size": [1.5, 1.5, 1.5], "position": [10, 0.57, -45],
-      "material": { "albedo": [0.9, 0.75, 0.15], "roughness": 0.35, "metallic": 0.4 },
-      "physics": { "motion": "static" }
-    }
-  ],
+  "vegetation": {
+    "seed": 24,
+    "region": 64,
+    "count": 90,
+    "maxSlopeDeg": 38,
+    "minScale": 0.7,
+    "maxScale": 1.4,
+    "densityScale": 0.06,
+    "densityThreshold": -0.25,
+    "species": [
+      {
+        "kind": "tree",
+        "axiom": "F",
+        "rules": { "F": "FF-[-F+F+F]+[+F-F-F]" },
+        "iterations": 2,
+        "length": 0.7,
+        "radius": 0.12,
+        "radiusTaper": 0.78,
+        "angleDeg": 26,
+        "segmentSlices": 6,
+        "material": { "albedo": [0.33, 0.24, 0.14], "roughness": 0.9 }
+      },
+      {
+        "kind": "rock",
+        "radius": 0.7,
+        "displacement": 0.45,
+        "noiseScale": 2.5,
+        "octaves": 3,
+        "material": { "albedo": [0.5, 0.5, 0.53], "roughness": 0.85 }
+      }
+    ]
+  },
   "player": {
-    "position": [0, 4, 14],
+    "position": [0, 6, 12],
     "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
     "friction": 0.5
   },
   "lighting": {
     "sun": {
-      "direction": [0.4, 0.8, 0.3],
+      "direction": [0.4, 0.85, 0.3],
       "color": [1.0, 0.96, 0.86],
-      "intensity": 7.5,
+      "intensity": 7.0,
       "castsShadow": true
     },
     "pointLights": [
-      { "position": [0, 25, 0], "color": [1.0, 0.95, 0.9], "intensity": 300, "range": 80 }
+      { "position": [0, 20, 0], "color": [1.0, 0.95, 0.9], "intensity": 220, "range": 60 }
     ],
     "exposure": 1.0,
     "ambientMultiplier": 0.6
