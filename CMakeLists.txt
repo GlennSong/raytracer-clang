@@ -43,6 +43,7 @@ add_library(engine_core STATIC
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
+    src/engine/procgen/sdf.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -168,6 +169,7 @@ add_executable(run_tests
     tests/test_lsystem.cpp
     tests/test_rock.cpp
     tests/test_scatter.cpp
+    tests/test_sdf.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
