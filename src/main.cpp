@@ -7,11 +7,29 @@
 #include "engine/model_importer.h"   // EnvironmentLoader: HDR decode + sun extraction
 #include "job_system.h"
 #include <iostream>
+#include <fstream>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <algorithm>
 
 using namespace engine;  // namespace migration (ADR-0015)
+
+// Write the integer percentage to a sidecar a host (the editor) polls for a
+// progress bar. Write-to-temp then rename so a reader never sees a half-written
+// value (rename is atomic on POSIX). Best-effort: a failed write is silent —
+// progress reporting must never abort a render.
+namespace {
+void writeProgressFile(const std::string& path, int pct) {
+    if (path.empty()) return;
+    const std::string tmp = path + ".tmp";
+    std::ofstream f(tmp, std::ios::trunc);
+    if (!f) return;
+    f << pct << "\n";
+    f.close();
+    std::rename(tmp.c_str(), path.c_str());
+}
+}  // namespace
 
 int IMAGE_SIZE = 512;          // --size
 int SAMPLES_PER_PIXEL = 128;   // --spp
@@ -62,6 +80,7 @@ struct CliOptions {
     std::string level;        // empty = Cornell box
     std::string cameraName;   // empty = first camera in the sidecar
     std::string outFile = "output.png";
+    std::string progressFile;          // empty = no sidecar (CLI default)
     double worldUnitsPerMeter = 0.0;   // 0 = mode default (1 level, 100 Cornell)
     LensParams lens;
     bool showHelp = false;
@@ -80,6 +99,7 @@ CliOptions parseCli(int argc, char** argv) {
         else if (flag == "--level")    opt.level = argv[++i];
         else if (flag == "--camera")   opt.cameraName = argv[++i];
         else if (flag == "--out")      opt.outFile = argv[++i];
+        else if (flag == "--progress") opt.progressFile = argv[++i];
         else if (flag == "--size")     IMAGE_SIZE = std::max(16, atoi(argv[++i]));
         else if (flag == "--spp")      SAMPLES_PER_PIXEL = std::max(1, atoi(argv[++i]));
         else if (flag == "--exposure") EXPOSURE = next(i);
@@ -102,6 +122,7 @@ void printUsage() {
         "  --camera <name>   placed camera from <level>.cameras.json (default: first)\n"
         "  --out <file>      output image; .ppm writes P3, anything else PNG\n"
         "                    (default output.png)\n"
+        "  --progress <file> write render %% (0-100) to <file> for a host to poll\n"
         "  --size N          image size (default 512)\n"
         "  --spp N           samples per pixel (default 128)\n"
         "  --exposure E      linear brightness scale (default 1; HDR-lit levels\n"
@@ -191,9 +212,12 @@ int main(int argc, char** argv) {
               << SAMPLES_PER_PIXEL << " spp...\n";
 
     RenderConfig config{IMAGE_SIZE, SAMPLES_PER_PIXEL, EXPOSURE};
-    Image image = renderImage(scene, camera, config, jobs, [](float frac) {
-        std::cerr << "\r  Progress: " << static_cast<int>(frac * 100) << "%   "
-                  << std::flush;
+    writeProgressFile(opt.progressFile, 0);   // reset any stale sidecar up front
+    Image image = renderImage(scene, camera, config, jobs,
+                              [&opt](float frac) {
+        int pct = static_cast<int>(frac * 100);
+        std::cerr << "\r  Progress: " << pct << "%   " << std::flush;
+        writeProgressFile(opt.progressFile, pct);
     });
     std::cerr << "\r  Progress: 100%                \n";
     std::cerr << "Done rendering.\n";
