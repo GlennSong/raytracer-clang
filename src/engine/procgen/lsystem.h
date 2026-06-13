@@ -29,6 +29,7 @@ struct LSystem {
 // 3D turtle interpretation parameters. The turtle grows along its local +Y;
 // branches taper as they nest. Standard symbols, interpreted by buildTurtleMesh:
 //   F      draw a branch segment forward (a cylinder), advance
+//   L      drop a leaf blob (a sphere of leafRadius) at the current point
 //   + -    yaw   (rotate about local Z by +/- angle)
 //   & ^    pitch (rotate about local X)
 //   / \    roll  (rotate about local Y)
@@ -39,6 +40,7 @@ struct TurtleParams {
     float radiusTaper = 0.8f;   // radius *= taper on each push (thinner branches)
     float angleDeg = 25.0f;     // turn angle for the yaw/pitch/roll symbols
     int   segmentSlices = 6;    // cylinder resolution
+    float leafRadius = 0.0f;    // leaf-blob radius for L (0 = no leaves)
 };
 
 // Interpret an already-expanded L-system string into a branch mesh of

@@ -420,6 +420,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         tp.radiusTaper   = s.value("radiusTaper", tp.radiusTaper);
         tp.angleDeg      = s.value("angleDeg", tp.angleDeg);
         tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
+        tp.leafRadius    = s.value("leafRadius", tp.leafRadius);
         std::string axiom = s.value("axiom", std::string("F"));
         int iterations = s.value("iterations", 3);
         bool treeSdf = s.value("skin", std::string("cylinder")) == "sdf";

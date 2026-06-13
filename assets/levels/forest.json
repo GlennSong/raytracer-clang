@@ -16,7 +16,7 @@
   "vegetation": {
     "seed": 24,
     "region": 72,
-    "count": 1000,
+    "count": 700,
     "maxSlopeDeg": 38,
     "minScale": 0.7,
     "maxScale": 1.4,
@@ -27,21 +27,22 @@
         "kind": "tree",
         "skin": "sdf",
         "variants": 3,
-        "smoothness": 0.30,
-        "sdfResolution": 50,
+        "smoothness": 0.35,
+        "sdfResolution": 52,
         "axiom": "F",
         "rules": { "F": [
-          { "to": "F[&+F]F[&-F]F", "weight": 1 },
-          { "to": "FF[&-F][&/+F]", "weight": 1 },
-          { "to": "F[&+F][&^-F]F", "weight": 1 }
+          { "to": "F[&+FL][&-FL]FL", "weight": 1 },
+          { "to": "FF[&-FL][&/+FL]L", "weight": 1 },
+          { "to": "F[&+FL][&^-FL]FL", "weight": 1 }
         ] },
         "iterations": 2,
         "length": 1.4,
         "radius": 0.22,
         "radiusTaper": 0.72,
         "angleDeg": 32,
-        "trunkColor": [0.30, 0.22, 0.12],
-        "leafColor": [0.20, 0.42, 0.16],
+        "leafRadius": 0.55,
+        "trunkColor": [0.28, 0.20, 0.11],
+        "leafColor": [0.18, 0.42, 0.15],
         "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
       },
       {

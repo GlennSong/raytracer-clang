@@ -49,10 +49,11 @@ namespace {
 
 // The turtle state machine, shared by every interpretation. `onForward` is
 // called for each F with the segment's start position, the turtle orientation
-// (local +Y is the heading), and the current branch radius; the caller turns
-// that into geometry (a cylinder, a capsule SDF, a collected segment).
+// (local +Y is the heading), the radius to use, and whether this is a leaf
+// blob (a sphere, no advance) vs a branch segment (a capsule, advances). The
+// caller turns that into geometry.
 template <typename Fn>
-void walkTurtle(const std::string& symbols, const TurtleParams& params, Fn onForward) {
+void walkTurtle(const std::string& symbols, const TurtleParams& params, Fn onElement) {
     struct State {
         Vec3 position;
         Mat4 orientation;   // rotates local +Y onto the heading
@@ -65,11 +66,15 @@ void walkTurtle(const std::string& symbols, const TurtleParams& params, Fn onFor
     for (char c : symbols) {
         switch (c) {
             case 'F': {
-                onForward(st.position, st.orientation, st.radius);
+                onElement(st.position, st.orientation, st.radius, /*isLeaf=*/false);
                 Vec3 heading = st.orientation.transformDirection(Vec3(0, 1, 0));
                 st.position = st.position + heading * params.length;
                 break;
             }
+            case 'L':   // a leaf blob at the current position (no advance)
+                if (params.leafRadius > 0.0f)
+                    onElement(st.position, st.orientation, params.leafRadius, /*isLeaf=*/true);
+                break;
             case '+': st.orientation = st.orientation * Mat4::rotateZ(angle);  break;
             case '-': st.orientation = st.orientation * Mat4::rotateZ(-angle); break;
             case '&': st.orientation = st.orientation * Mat4::rotateX(angle);  break;
@@ -87,7 +92,14 @@ void walkTurtle(const std::string& symbols, const TurtleParams& params, Fn onFor
 
 RenderMesh buildTurtleMesh(const std::string& symbols, const TurtleParams& params) {
     RenderMesh mesh;
-    walkTurtle(symbols, params, [&](const Vec3& pos, const Mat4& orient, float radius) {
+    walkTurtle(symbols, params, [&](const Vec3& pos, const Mat4& orient, float radius,
+                                    bool isLeaf) {
+        if (isLeaf) {
+            RenderMesh blob = MeshBuilder::sphere(radius, 6, 8);
+            MeshBuilder::transform(blob, Mat4::translate(pos.x, pos.y, pos.z));
+            MeshBuilder::append(mesh, blob);
+            return;
+        }
         // A cylinder is centered on its local Y over [-h/2, h/2]; place its
         // center half a length along the heading so the segment runs from pos to
         // pos + heading*length.
@@ -103,7 +115,12 @@ RenderMesh buildTurtleMesh(const std::string& symbols, const TurtleParams& param
 std::vector<BranchSegment> turtleSegments(const std::string& symbols,
                                           const TurtleParams& params) {
     std::vector<BranchSegment> segments;
-    walkTurtle(symbols, params, [&](const Vec3& pos, const Mat4& orient, float radius) {
+    walkTurtle(symbols, params, [&](const Vec3& pos, const Mat4& orient, float radius,
+                                    bool isLeaf) {
+        if (isLeaf) {
+            segments.push_back({pos, pos, radius});   // a==b capsule = sphere blob
+            return;
+        }
         Vec3 heading = orient.transformDirection(Vec3(0, 1, 0));
         segments.push_back({pos, pos + heading * params.length, radius});
     });

@@ -107,3 +107,18 @@ TEST_CASE(lsystem_single_production_ignores_seed) {
     sys.rule('F', "FF");
     CHECK(sys.expand("F", 3, 1) == sys.expand("F", 3, 99));   // no choice = deterministic
 }
+
+TEST_CASE(turtle_leaf_symbol_adds_blob_geometry) {
+    TurtleParams p;
+    p.leafRadius = 0.5f;
+    // 'L' emits a leaf sphere (a==b capsule) without advancing; "FL" = one
+    // branch + one leaf blob, more segments than "F" alone.
+    CHECK(turtleSegments("F", p).size() == 1);
+    CHECK(turtleSegments("FL", p).size() == 2);
+    auto segs = turtleSegments("FL", p);
+    CHECK((segs[1].a - segs[1].b).lengthSquared() < 1e-12);   // leaf is a sphere
+    CHECK_APPROX(segs[1].radius, 0.5, 1e-6);
+    // With leafRadius 0, L is skipped.
+    p.leafRadius = 0.0f;
+    CHECK(turtleSegments("FL", p).size() == 1);
+}
