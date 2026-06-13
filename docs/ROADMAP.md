@@ -410,7 +410,9 @@ is headless/CI-testable; only the final render needs macOS.
 Only after Phase B. A **node-graph evaluator** over the value types
 (`Mesh`/`Field`/`Frame`/attributes) — the engine's "geometry nodes"; an
 optional text DSL is sugar on top. Built *from* what the Phase B generators
-shared, per ADR-0021.
+shared, per ADR-0021. **Planned: `docs/node-graph-plan.md`** (graph engine
+headless-first, then the editor UI) — the trigger is met (four generators
+exist).
 
 ### Phase D — Applications (by appetite)
 Each composes Phases A–C:
