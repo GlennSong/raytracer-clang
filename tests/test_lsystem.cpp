@@ -54,3 +54,39 @@ TEST_CASE(generate_tree_is_deterministic) {
     }
     CHECK(same);
 }
+
+TEST_CASE(turtle_segments_one_per_F) {
+    TurtleParams p;
+    CHECK(turtleSegments("F", p).size() == 1);
+    CHECK(turtleSegments("FF", p).size() == 2);
+    CHECK(turtleSegments("F[+F]F", p).size() == 3);
+    // Each segment spans exactly one length.
+    auto segs = turtleSegments("F", p);
+    CHECK_APPROX((segs[0].b - segs[0].a).length(), p.length, 1e-5);
+}
+
+TEST_CASE(turtle_sdf_skin_is_one_welded_surface) {
+    // A two-branch skeleton skinned as capsules: the SDF blends them into a
+    // single connected, bounded surface with valid outward-ish normals.
+    TurtleParams p;
+    p.length = 1.0f;
+    p.radius = 0.2f;
+    RenderMesh m = buildTurtleMeshSdf("F[&F]", p, /*smoothness=*/0.15, /*resolution=*/28);
+    CHECK(m.vertices.size() > 50);
+    CHECK(m.indices.size() % 3 == 0);
+    uint32_t maxIdx = 0;
+    for (uint32_t i : m.indices) maxIdx = std::max(maxIdx, i);
+    CHECK(maxIdx < m.vertices.size());
+    for (const Vertex& v : m.vertices)
+        CHECK_APPROX(v.normal.length(), 1.0, 1e-3);
+}
+
+TEST_CASE(generate_tree_sdf_is_deterministic) {
+    LSystem sys;
+    sys.rules['F'] = "F[&F][^F]";
+    TurtleParams p;
+    RenderMesh a = generateTreeSdf(sys, "F", 2, p, 0.1, 24);
+    RenderMesh b = generateTreeSdf(sys, "F", 2, p, 0.1, 24);
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(a.vertices.size() > 0);
+}

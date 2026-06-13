@@ -4,6 +4,7 @@
 #include "../../renderer/renderer.h"   // RenderMesh
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace engine {
 
@@ -30,12 +31,34 @@ struct TurtleParams {
     int   segmentSlices = 6;    // cylinder resolution
 };
 
-// Interpret an already-expanded L-system string into a branch mesh.
+// Interpret an already-expanded L-system string into a branch mesh of
+// kit-bashed cylinders (fast, but disjoint and self-intersecting at joints).
 RenderMesh buildTurtleMesh(const std::string& symbols, const TurtleParams& params);
 
 // Convenience: expand `axiom` by `system` for `iterations`, then interpret.
 RenderMesh generateTree(const LSystem& system, const std::string& axiom,
                         int iterations, const TurtleParams& params);
+
+// A branch as a capsule segment (for SDF skinning).
+struct BranchSegment {
+    Vec3 a, b;
+    float radius;
+};
+
+// The turtle's branches as capsule segments (no meshing) — the input to SDF
+// skinning, or to physics/analysis.
+std::vector<BranchSegment> turtleSegments(const std::string& symbols,
+                                          const TurtleParams& params);
+
+// Interpret the string as a single *welded* surface: each branch is a capsule,
+// smooth-union'd (smoothness = blend radius) and polygonized at `resolution`
+// (grid cells per axis). One continuous, fillet-jointed mesh — no disjoint or
+// self-intersecting segments. Heavier than buildTurtleMesh; generate once per
+// species. (ROADMAP Phase A.1 / B.1.)
+RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& params,
+                              double smoothness, int resolution);
+RenderMesh generateTreeSdf(const LSystem& system, const std::string& axiom, int iterations,
+                           const TurtleParams& params, double smoothness, int resolution);
 
 }  // namespace engine
 

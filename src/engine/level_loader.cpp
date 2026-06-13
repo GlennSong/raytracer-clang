@@ -414,8 +414,16 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             tp.radiusTaper  = s.value("radiusTaper", tp.radiusTaper);
             tp.angleDeg     = s.value("angleDeg", tp.angleDeg);
             tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
-            mesh = generateTree(sys, s.value("axiom", std::string("F")),
-                                s.value("iterations", 3), tp);
+            std::string axiom = s.value("axiom", std::string("F"));
+            int iterations = s.value("iterations", 3);
+            // "skin":"sdf" welds the branches into one surface (smooth-union of
+            // capsules, polygonized); default is fast kit-bashed cylinders.
+            if (s.value("skin", std::string("cylinder")) == "sdf")
+                mesh = generateTreeSdf(sys, axiom, iterations, tp,
+                                       s.value("smoothness", 0.12),
+                                       s.value("sdfResolution", 40));
+            else
+                mesh = generateTree(sys, axiom, iterations, tp);
         }
         if (mesh.vertices.empty()) { speciesIndex++; continue; }
 
