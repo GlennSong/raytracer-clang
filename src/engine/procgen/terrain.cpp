@@ -5,6 +5,32 @@
 
 namespace engine {
 
+namespace {
+double clamp01(double x) { return x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x); }
+double smoothstep(double e0, double e1, double x) {
+    double t = clamp01((x - e0) / (e1 - e0));
+    return t * t * (3.0 - 2.0 * t);
+}
+Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
+}  // namespace
+
+Vec3 terrainColor(double height, double normalUp, double noiseValue) {
+    const Vec3 grass(0.28, 0.42, 0.18);
+    const Vec3 dirt(0.40, 0.31, 0.20);
+    const Vec3 rock(0.40, 0.39, 0.37);
+
+    // Steep ground reads as rock; gentle ground as grass over a dirt underlayer.
+    double slope = 1.0 - clamp01(normalUp);              // 0 flat .. 1 vertical
+    double rockFactor = smoothstep(0.30, 0.55, slope);
+    double dirtFactor = smoothstep(-2.0, 2.0, -height);  // a touch more dirt lower down
+    Vec3 ground = mixv(grass, dirt, 0.35 * dirtFactor);
+    Vec3 c = mixv(ground, rock, rockFactor);
+
+    // Break up the bands with the noise term, then clamp to valid color.
+    c = c * (0.85 + 0.30 * (0.5 * noiseValue + 0.5));
+    return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
+}
+
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
@@ -49,6 +75,13 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     MeshBuilder::recomputeNormals(mesh);
     // UVs span [0,1] across the patch (offset by half, scaled by 1/size).
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / params.size);
+
+    // Bake height/slope coloration into per-vertex colors (a low-frequency
+    // noise term varies it). The shader multiplies these with the material.
+    for (Vertex& v : mesh.vertices) {
+        double nv = noise.noise2(v.position.x * 0.15, v.position.z * 0.15);
+        v.color = terrainColor(v.position.y, v.normal.y, nv);
+    }
     return mesh;
 }
 

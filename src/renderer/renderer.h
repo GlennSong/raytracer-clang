@@ -22,6 +22,10 @@ struct Vertex {
     Vec3 normal;
     Vec3 tangent;
     float u, v;
+    // Per-vertex tint, multiplied with the material albedo in the shader.
+    // Default white = no tint, so existing meshes are unaffected. Generators
+    // bake it (e.g. terrain height/slope coloration).
+    Vec3 color{1, 1, 1};
 
     Vertex() : u(0), v(0) {}
     Vertex(const Vec3& pos, const Vec3& norm, float u = 0, float v = 0)

@@ -395,6 +395,7 @@ vertex VertexOut vertexMain(
     out.worldNormal = normalize((model.normalMatrix * float4(vertices[vid].normal, 0.0)).xyz);
     out.worldTangent = normalize((model.model * float4(float3(vertices[vid].tangent), 0.0)).xyz);
     out.texcoord = vertices[vid].texcoord;
+    out.vertexColor = vertices[vid].color;
     return out;
 }
 
@@ -413,6 +414,7 @@ vertex FragmentData vertexMainInstanced(
     out.worldNormal = normalize((inst.normalMatrix * float4(vertices[vid].normal, 0.0)).xyz);
     out.worldTangent = normalize((inst.model * float4(float3(vertices[vid].tangent), 0.0)).xyz);
     out.texcoord = vertices[vid].texcoord;
+    out.vertexColor = vertices[vid].color;
     out.albedo = inst.albedo.xyz;
     out.metallic = inst.metallic;
     out.roughness = inst.roughness;
@@ -448,7 +450,9 @@ fragment GBufferOut fragmentMain(
 ) {
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
-    SurfaceMaterial mat = {material.albedo, material.metallic,
+    // Per-vertex tint (default white) modulates the material albedo — this is
+    // the procedural coloration channel (e.g. terrain grass/rock by height/slope).
+    SurfaceMaterial mat = {material.albedo * in.vertexColor, material.metallic,
                            material.roughness, material.opacity,
                            material.flags, material.emission,
                            material.textureFlags};
@@ -484,8 +488,8 @@ fragment GBufferOut fragmentMainInstanced(
 ) {
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
-    SurfaceMaterial mat = {in.albedo, in.metallic, in.roughness, in.opacity,
-                           in.flags, in.emission, in.textureFlags};
+    SurfaceMaterial mat = {in.albedo * in.vertexColor, in.metallic, in.roughness,
+                           in.opacity, in.flags, in.emission, in.textureFlags};
     return shadeSurface(geom, mat, camera, lightData, shadowData,
                         probeParams, probes, env,
                         shadowMap, cubemapArray, brdfLUT,

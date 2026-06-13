@@ -69,3 +69,29 @@ TEST_CASE(terrain_height_bounded_by_scale) {
     }
     CHECK(maxAbs <= 12.0 * 1.05);
 }
+
+TEST_CASE(terrain_color_grass_on_flats_rock_on_slopes) {
+    Vec3 flat = terrainColor(0.0, 1.0, 0.0);    // flat ground -> grass
+    Vec3 steep = terrainColor(0.0, 0.0, 0.0);   // vertical -> rock
+    CHECK(flat.y > flat.x && flat.y > flat.z);            // grass is green-dominant
+    CHECK((flat.y - flat.x) > (steep.y - steep.x));       // flatter reads greener
+    for (const Vec3& c : {flat, steep}) {
+        CHECK(c.x >= 0.0 && c.x <= 1.0);
+        CHECK(c.y >= 0.0 && c.y <= 1.0);
+        CHECK(c.z >= 0.0 && c.z <= 1.0);
+    }
+}
+
+TEST_CASE(terrain_bakes_nonwhite_vertex_colors) {
+    TerrainParams p;
+    p.resolution = 16;
+    p.heightScale = 10.0f;
+    Noise n(2);
+    RenderMesh m = generateTerrain(p, n);
+    bool anyTinted = false;
+    for (const Vertex& v : m.vertices) {
+        if ((v.color - Vec3(1, 1, 1)).lengthSquared() > 1e-6) anyTinted = true;
+        CHECK(v.color.x >= 0.0 && v.color.y >= 0.0 && v.color.z >= 0.0);
+    }
+    CHECK(anyTinted);   // coloration was baked (not left default white)
+}

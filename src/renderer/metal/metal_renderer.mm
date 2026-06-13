@@ -805,11 +805,13 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     GPUMesh gpuMesh;
     gpuMesh.materialIndex = mesh.materialIndex;
 
+    // Layout must match `struct Vertex` in shaders/metal/common.metal.
     struct GPUVertex {
         float position[3];
         float normal[3];
         float tangent[3];
         float texcoord[2];
+        float color[3];
     };
 
     std::vector<GPUVertex> gpuVertices(mesh.vertices.size());
@@ -824,7 +826,10 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
             {static_cast<float>(mesh.vertices[i].tangent.x),
              static_cast<float>(mesh.vertices[i].tangent.y),
              static_cast<float>(mesh.vertices[i].tangent.z)},
-            {mesh.vertices[i].u, mesh.vertices[i].v}
+            {mesh.vertices[i].u, mesh.vertices[i].v},
+            {static_cast<float>(mesh.vertices[i].color.x),
+             static_cast<float>(mesh.vertices[i].color.y),
+             static_cast<float>(mesh.vertices[i].color.z)}
         };
     }
 

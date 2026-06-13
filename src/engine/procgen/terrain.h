@@ -24,8 +24,15 @@ struct TerrainParams {
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ);
 
+// Height/slope-based ground color (ROADMAP 4 Phase D): grass on low flats, rock
+// on steep or high ground, plus a noise term to break up the bands. `normalUp`
+// is the surface normal's y (1 flat, 0 vertical); `noiseValue` ~[-1,1] varies
+// it. Pure and testable; baked into the terrain's per-vertex colors.
+Vec3 terrainColor(double height, double normalUp, double noiseValue);
+
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
-// normals, and planar UVs spanning [0,1]. Centered on the origin.
+// normals, planar UVs spanning [0,1], and per-vertex height/slope coloration
+// (terrainColor) baked in. Centered on the origin.
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise);
 
 }  // namespace engine
