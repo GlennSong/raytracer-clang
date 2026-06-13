@@ -2,6 +2,8 @@
 
 #include "../src/engine/procgen/sdf.h"
 #include <cmath>
+#include <map>
+#include <utility>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -75,6 +77,33 @@ TEST_CASE(sdf_polygonize_is_deterministic) {
     RenderMesh c = polygonizeSdf(s, b, 16);
     CHECK(a.vertices.size() == c.vertices.size());
     CHECK(a.indices.size() == c.indices.size());
+}
+
+TEST_CASE(sdf_polygonize_is_consistently_wound_and_watertight) {
+    // The signature of the "stripey holes" bug was inconsistent winding: two
+    // triangles sharing a directed edge (both wound the same way) — half get
+    // backface-culled. A consistently wound, watertight surface has every
+    // directed edge appear exactly once, with its reverse present.
+    Sdf s = sdfSphere(Vec3(0, 0, 0), 1.0);
+    SdfBounds b{Vec3(-1.4, -1.4, -1.4), Vec3(1.4, 1.4, 1.4)};
+    RenderMesh m = polygonizeSdf(s, b, 24);
+
+    std::map<std::pair<uint32_t, uint32_t>, int> directed;
+    for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        uint32_t a = m.indices[i], b2 = m.indices[i + 1], c = m.indices[i + 2];
+        directed[{a, b2}]++;
+        directed[{b2, c}]++;
+        directed[{c, a}]++;
+    }
+    int sameDirDuplicates = 0, unmatched = 0, total = 0;
+    for (const auto& kv : directed) {
+        total++;
+        if (kv.second > 1) sameDirDuplicates++;                 // inconsistent winding
+        if (!directed.count({kv.first.second, kv.first.first})) unmatched++;  // a hole/boundary
+    }
+    CHECK(total > 0);
+    CHECK(sameDirDuplicates == 0);          // consistent winding (the bug)
+    CHECK(unmatched <= total / 20);         // watertight to within ~5%
 }
 
 TEST_CASE(sdf_smooth_union_welds_into_one_blob) {

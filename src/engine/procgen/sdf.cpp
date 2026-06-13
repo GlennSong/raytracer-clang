@@ -148,48 +148,49 @@ RenderMesh polygonizeSdf(const Sdf& field, const SdfBounds& bounds, int resoluti
             }
 
     // Stitch a quad across every grid edge whose endpoints differ in sign; the
-    // four cells around that edge own the four corners. Winding is chosen so the
-    // right-hand normal opposes the field gradient (the engine's clockwise-front
-    // convention — outward faces are the visible front).
-    auto emitQuad = [&](int i0, int i1, int i2, int i3, const Vec3& outward) {
+    // four cells around it own the corners. Winding must be GLOBALLY consistent
+    // (every shared edge traversed oppositely by its two quads) or adjacent
+    // triangles disagree and half get backface-culled — the stripey holes.
+    // Orienting each quad independently by a normal can't guarantee that, so we
+    // use a deterministic rule: each axis ring below is ordered with the same
+    // handedness (forward right-hand normal = +axis), and we flip purely by the
+    // edge's sign (`flip` when the lower corner is inside), giving the engine's
+    // clockwise-front orientation uniformly. Per-vertex normals (gradient) give
+    // the smooth shading regardless.
+    auto emitQuad = [&](int i0, int i1, int i2, int i3, bool flip) {
         if (i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0) return;
-        const Vec3& p0 = mesh.vertices[i0].position;
-        Vec3 rh = cross(mesh.vertices[i1].position - p0, mesh.vertices[i2].position - p0);
-        // If the ring's right-hand normal points outward, reverse so the engine
-        // (clockwise-front) treats the outward side as front.
-        if (dot(rh, outward) > 0.0) {
+        if (flip)
             mesh.indices.insert(mesh.indices.end(), {(uint32_t)i0,(uint32_t)i3,(uint32_t)i2,
                                                      (uint32_t)i0,(uint32_t)i2,(uint32_t)i1});
-        } else {
+        else
             mesh.indices.insert(mesh.indices.end(), {(uint32_t)i0,(uint32_t)i1,(uint32_t)i2,
                                                      (uint32_t)i0,(uint32_t)i2,(uint32_t)i3});
-        }
     };
 
     for (int z = 0; z < N; z++)
         for (int y = 0; y < N; y++)
             for (int x = 0; x < N; x++) {
                 double here = s[sIdx(x, y, z)];
-                // +X edge: ring of cells in the (y,z) plane around it.
-                if (x < res && y >= 1 && z >= 1 && (here < 0.0) != (s[sIdx(x+1,y,z)] < 0.0)) {
-                    Vec3 outward = sdfGradient(field, cornerPos(x, y, z));
-                    if (s[sIdx(x+1,y,z)] < here) outward = outward * -1.0;
+                bool flip = here < 0.0;   // lower corner inside -> reverse
+                // The 4 surrounding cells span the two perpendicular axes in
+                // [k-1, k], so all four exist only for those coords in [1,res-1].
+                // +X ring (in y,z): forward right-hand normal = +X.
+                if (x < res && y >= 1 && y < res && z >= 1 && z < res &&
+                    (here < 0.0) != (s[sIdx(x+1,y,z)] < 0.0)) {
                     emitQuad(cellVert[cIdx(x, y-1, z-1)], cellVert[cIdx(x, y, z-1)],
-                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x, y-1, z)], outward);
+                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x, y-1, z)], flip);
                 }
-                // +Y edge: ring in the (x,z) plane.
-                if (y < res && x >= 1 && z >= 1 && (here < 0.0) != (s[sIdx(x,y+1,z)] < 0.0)) {
-                    Vec3 outward = sdfGradient(field, cornerPos(x, y, z));
-                    if (s[sIdx(x,y+1,z)] < here) outward = outward * -1.0;
-                    emitQuad(cellVert[cIdx(x-1, y, z-1)], cellVert[cIdx(x, y, z-1)],
-                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x-1, y, z)], outward);
+                // +Y ring (in x,z): ordered z-then-x so forward RH normal = +Y.
+                if (y < res && x >= 1 && x < res && z >= 1 && z < res &&
+                    (here < 0.0) != (s[sIdx(x,y+1,z)] < 0.0)) {
+                    emitQuad(cellVert[cIdx(x-1, y, z-1)], cellVert[cIdx(x-1, y, z)],
+                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x, y, z-1)], flip);
                 }
-                // +Z edge: ring in the (x,y) plane.
-                if (z < res && x >= 1 && y >= 1 && (here < 0.0) != (s[sIdx(x,y,z+1)] < 0.0)) {
-                    Vec3 outward = sdfGradient(field, cornerPos(x, y, z));
-                    if (s[sIdx(x,y,z+1)] < here) outward = outward * -1.0;
+                // +Z ring (in x,y): forward RH normal = +Z.
+                if (z < res && x >= 1 && x < res && y >= 1 && y < res &&
+                    (here < 0.0) != (s[sIdx(x,y,z+1)] < 0.0)) {
                     emitQuad(cellVert[cIdx(x-1, y-1, z)], cellVert[cIdx(x, y-1, z)],
-                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x-1, y, z)], outward);
+                             cellVert[cIdx(x, y, z)],     cellVert[cIdx(x-1, y, z)], flip);
                 }
             }
 
