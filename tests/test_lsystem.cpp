@@ -8,7 +8,7 @@ using namespace engine;  // namespace migration (ADR-0015)
 
 TEST_CASE(lsystem_expands_rules) {
     LSystem sys;
-    sys.rules['F'] = "FF";
+    sys.rule('F', "FF");
     CHECK(sys.expand("F", 0) == "F");
     CHECK(sys.expand("F", 1) == "FF");
     CHECK(sys.expand("F", 2) == "FFFF");
@@ -17,7 +17,7 @@ TEST_CASE(lsystem_expands_rules) {
 
 TEST_CASE(lsystem_passes_through_symbols_without_rules) {
     LSystem sys;
-    sys.rules['F'] = "F+F";
+    sys.rule('F', "F+F");
     CHECK(sys.expand("F+", 1) == "F+F+");   // '+' has no rule, copied verbatim
 }
 
@@ -40,7 +40,7 @@ TEST_CASE(turtle_mesh_handles_unbalanced_pop) {
 
 TEST_CASE(generate_tree_is_deterministic) {
     LSystem sys;
-    sys.rules['F'] = "F[+F][-F]F";
+    sys.rule('F', "F[+F][-F]F");
     TurtleParams p;
     RenderMesh a = generateTree(sys, "F", 3, p);
     RenderMesh b = generateTree(sys, "F", 3, p);
@@ -83,10 +83,27 @@ TEST_CASE(turtle_sdf_skin_is_one_welded_surface) {
 
 TEST_CASE(generate_tree_sdf_is_deterministic) {
     LSystem sys;
-    sys.rules['F'] = "F[&F][^F]";
+    sys.rule('F', "F[&F][^F]");
     TurtleParams p;
     RenderMesh a = generateTreeSdf(sys, "F", 2, p, 0.1, 24);
     RenderMesh b = generateTreeSdf(sys, "F", 2, p, 0.1, 24);
     CHECK(a.vertices.size() == b.vertices.size());
     CHECK(a.vertices.size() > 0);
+}
+
+TEST_CASE(lsystem_stochastic_rules_vary_by_seed) {
+    LSystem sys;
+    sys.rule('F', "F[+F]");   // two productions for F -> stochastic
+    sys.rule('F', "F[-F]");
+    std::string a = sys.expand("F", 4, 1);
+    std::string b = sys.expand("F", 4, 1);
+    std::string c = sys.expand("F", 4, 2);
+    CHECK(a == b);            // deterministic per seed
+    CHECK(a != c);            // a different seed grows a different tree
+}
+
+TEST_CASE(lsystem_single_production_ignores_seed) {
+    LSystem sys;
+    sys.rule('F', "FF");
+    CHECK(sys.expand("F", 3, 1) == sys.expand("F", 3, 99));   // no choice = deterministic
 }

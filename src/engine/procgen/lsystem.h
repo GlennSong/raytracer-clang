@@ -8,12 +8,22 @@
 
 namespace engine {
 
-// A deterministic L-system (ROADMAP 4 Phase B.1): rewrite an axiom by the
-// production rules `iterations` times. Stochastic/parametric variants come
-// later; this is the grammar half of the procgen substrate (ADR-0021).
+// A parametric L-system (ROADMAP 4 Phase B.1): rewrite an axiom by the
+// production rules `iterations` times. Each symbol may have several weighted
+// productions — with one it is deterministic, with several expand() picks per
+// application from a seeded RNG, so different seeds grow different trees.
 struct LSystem {
-    std::unordered_map<char, std::string> rules;
-    std::string expand(const std::string& axiom, int iterations) const;
+    struct Production {
+        std::string text;
+        double weight = 1.0;
+    };
+    std::unordered_map<char, std::vector<Production>> rules;
+
+    // Add a production for `symbol`; call repeatedly to make it stochastic.
+    void rule(char symbol, const std::string& replacement, double weight = 1.0);
+
+    std::string expand(const std::string& axiom, int iterations,
+                       uint32_t seed = 0) const;
 };
 
 // 3D turtle interpretation parameters. The turtle grows along its local +Y;
@@ -35,9 +45,11 @@ struct TurtleParams {
 // kit-bashed cylinders (fast, but disjoint and self-intersecting at joints).
 RenderMesh buildTurtleMesh(const std::string& symbols, const TurtleParams& params);
 
-// Convenience: expand `axiom` by `system` for `iterations`, then interpret.
+// Convenience: expand `axiom` by `system` for `iterations` (seed selects the
+// stochastic variant), then interpret.
 RenderMesh generateTree(const LSystem& system, const std::string& axiom,
-                        int iterations, const TurtleParams& params);
+                        int iterations, const TurtleParams& params,
+                        uint32_t seed = 0);
 
 // A branch as a capsule segment (for SDF skinning).
 struct BranchSegment {
@@ -58,7 +70,8 @@ std::vector<BranchSegment> turtleSegments(const std::string& symbols,
 RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& params,
                               double smoothness, int resolution);
 RenderMesh generateTreeSdf(const LSystem& system, const std::string& axiom, int iterations,
-                           const TurtleParams& params, double smoothness, int resolution);
+                           const TurtleParams& params, double smoothness, int resolution,
+                           uint32_t seed = 0);
 
 }  // namespace engine
 

@@ -394,54 +394,74 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     int speciesIndex = 0;
     for (const auto& s : veg["species"]) {
         std::string kind = s.value("kind", "tree");
-        RenderMesh mesh;
-        if (kind == "rock") {
-            if (s.value("skin", std::string("displaced")) == "sdf") {
-                RockSdfParams rp;
-                rp.baseRadius  = s.value("radius", rp.baseRadius);
-                rp.lumps       = s.value("lumps", rp.lumps);
-                rp.cuts        = s.value("cuts", rp.cuts);
-                rp.lumpScale   = s.value("lumpScale", rp.lumpScale);
-                rp.smoothness  = s.value("smoothness", rp.smoothness);
-                rp.resolution  = s.value("sdfResolution", rp.resolution);
-                mesh = generateRockSdf(rp, vegSeed + 200u + speciesIndex);
-            } else {
-                RockParams rp;
-                rp.radius       = s.value("radius", rp.radius);
-                rp.displacement = s.value("displacement", rp.displacement);
-                rp.noiseScale   = s.value("noiseScale", rp.noiseScale);
-                rp.octaves      = s.value("octaves", rp.octaves);
-                mesh = generateRock(rp, Noise(vegSeed + 100u + speciesIndex));
-            }
-        } else {  // "tree"
-            LSystem sys;
-            if (s.contains("rules"))
-                for (auto it = s["rules"].begin(); it != s["rules"].end(); ++it)
-                    if (!it.key().empty())
-                        sys.rules[it.key()[0]] = it.value().get<std::string>();
-            TurtleParams tp;
-            tp.length       = s.value("length", tp.length);
-            tp.radius       = s.value("radius", tp.radius);
-            tp.radiusTaper  = s.value("radiusTaper", tp.radiusTaper);
-            tp.angleDeg     = s.value("angleDeg", tp.angleDeg);
-            tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
-            std::string axiom = s.value("axiom", std::string("F"));
-            int iterations = s.value("iterations", 3);
-            // "skin":"sdf" welds the branches into one surface (smooth-union of
-            // capsules, polygonized); default is fast kit-bashed cylinders.
-            if (s.value("skin", std::string("cylinder")) == "sdf")
-                mesh = generateTreeSdf(sys, axiom, iterations, tp,
-                                       s.value("smoothness", 0.12),
-                                       s.value("sdfResolution", 40));
-            else
-                mesh = generateTree(sys, axiom, iterations, tp);
-        }
-        if (mesh.vertices.empty()) { speciesIndex++; continue; }
+        // Each species can emit several distinct meshes ("variants"); scatter
+        // mixes them so the forest isn't one cloned model. For stochastic trees
+        // the per-variant seed grows a different tree; for rocks it reshapes the
+        // lumps/cuts. Each variant is one shared GPU mesh (instancing-friendly).
+        int variants = std::max(1, s.value("variants", 1));
 
-        Species sp;
-        sp.mesh = assets.acquireMesh(mesh, "veg:" + std::to_string(speciesIndex));
-        if (s.contains("material")) applyMaterial(s["material"], sp.material);
-        species.push_back(sp);
+        // Tree grammar + turtle params (parsed once; the seed varies expansion).
+        LSystem sys;
+        if (s.contains("rules"))
+            for (auto it = s["rules"].begin(); it != s["rules"].end(); ++it) {
+                if (it.key().empty()) continue;
+                char sym = it.key()[0];
+                const auto& val = it.value();
+                if (val.is_array())   // weighted: [{ "to": "...", "weight": w }, ...]
+                    for (const auto& prod : val)
+                        sys.rule(sym, prod.value("to", std::string()),
+                                 prod.value("weight", 1.0));
+                else
+                    sys.rule(sym, val.get<std::string>());
+            }
+        TurtleParams tp;
+        tp.length        = s.value("length", tp.length);
+        tp.radius        = s.value("radius", tp.radius);
+        tp.radiusTaper   = s.value("radiusTaper", tp.radiusTaper);
+        tp.angleDeg      = s.value("angleDeg", tp.angleDeg);
+        tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
+        std::string axiom = s.value("axiom", std::string("F"));
+        int iterations = s.value("iterations", 3);
+        bool treeSdf = s.value("skin", std::string("cylinder")) == "sdf";
+        double treeSmooth = s.value("smoothness", 0.12);
+        int treeRes = s.value("sdfResolution", 40);
+
+        // Rock params (parsed once).
+        bool rockSdf = s.value("skin", std::string("displaced")) == "sdf";
+        RockSdfParams rsp;
+        rsp.baseRadius = s.value("radius", rsp.baseRadius);
+        rsp.lumps      = s.value("lumps", rsp.lumps);
+        rsp.cuts       = s.value("cuts", rsp.cuts);
+        rsp.lumpScale  = s.value("lumpScale", rsp.lumpScale);
+        rsp.smoothness = s.value("smoothness", rsp.smoothness);
+        rsp.resolution = s.value("sdfResolution", rsp.resolution);
+        RockParams rp;
+        rp.radius       = s.value("radius", rp.radius);
+        rp.displacement = s.value("displacement", rp.displacement);
+        rp.noiseScale   = s.value("noiseScale", rp.noiseScale);
+        rp.octaves      = s.value("octaves", rp.octaves);
+
+        RenderMaterial material;
+        if (s.contains("material")) applyMaterial(s["material"], material);
+
+        for (int v = 0; v < variants; v++) {
+            uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
+            RenderMesh mesh;
+            if (kind == "rock") {
+                mesh = rockSdf ? generateRockSdf(rsp, seed)
+                               : generateRock(rp, Noise(seed));
+            } else {
+                mesh = treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
+                                                 treeSmooth, treeRes, seed)
+                               : generateTree(sys, axiom, iterations, tp, seed);
+            }
+            if (mesh.vertices.empty()) continue;
+            Species sp;
+            sp.mesh = assets.acquireMesh(
+                mesh, "veg:" + std::to_string(speciesIndex) + ":" + std::to_string(v));
+            sp.material = material;
+            species.push_back(sp);
+        }
         speciesIndex++;
     }
     if (species.empty()) return;

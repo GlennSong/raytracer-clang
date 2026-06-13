@@ -26,10 +26,15 @@
       {
         "kind": "tree",
         "skin": "sdf",
+        "variants": 3,
         "smoothness": 0.30,
-        "sdfResolution": 60,
+        "sdfResolution": 50,
         "axiom": "F",
-        "rules": { "F": "F[&+F]F[&-F]F" },
+        "rules": { "F": [
+          { "to": "F[&+F]F[&-F]F", "weight": 1 },
+          { "to": "FF[&-F][&/+F]", "weight": 1 },
+          { "to": "F[&+F][&^-F]F", "weight": 1 }
+        ] },
         "iterations": 2,
         "length": 1.4,
         "radius": 0.22,
@@ -40,6 +45,7 @@
       {
         "kind": "rock",
         "skin": "sdf",
+        "variants": 3,
         "radius": 0.7,
         "lumps": 7,
         "cuts": 3,

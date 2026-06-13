@@ -4,19 +4,41 @@
 #include "../../rt_math.h"
 
 #include <algorithm>
+#include <random>
 #include <vector>
 
 namespace engine {
 
-std::string LSystem::expand(const std::string& axiom, int iterations) const {
+void LSystem::rule(char symbol, const std::string& replacement, double weight) {
+    rules[symbol].push_back({replacement, weight});
+}
+
+std::string LSystem::expand(const std::string& axiom, int iterations,
+                            uint32_t seed) const {
+    std::mt19937 gen(seed);
     std::string current = axiom;
     for (int it = 0; it < iterations; it++) {
         std::string next;
         next.reserve(current.size() * 2);
         for (char c : current) {
             auto rule = rules.find(c);
-            if (rule != rules.end()) next += rule->second;
-            else next += c;
+            if (rule == rules.end() || rule->second.empty()) {
+                next += c;                       // no production: copy verbatim
+                continue;
+            }
+            const std::vector<Production>& prods = rule->second;
+            if (prods.size() == 1) {
+                next += prods[0].text;           // deterministic
+                continue;
+            }
+            // Weighted random pick (seeded, so deterministic per seed).
+            double total = 0.0;
+            for (const Production& p : prods) total += p.weight;
+            double pick = std::uniform_real_distribution<double>(0.0, total)(gen);
+            for (const Production& p : prods) {
+                pick -= p.weight;
+                if (pick <= 0.0) { next += p.text; break; }
+            }
         }
         current.swap(next);
     }
@@ -128,13 +150,15 @@ RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& pa
 }
 
 RenderMesh generateTree(const LSystem& system, const std::string& axiom,
-                        int iterations, const TurtleParams& params) {
-    return buildTurtleMesh(system.expand(axiom, iterations), params);
+                        int iterations, const TurtleParams& params, uint32_t seed) {
+    return buildTurtleMesh(system.expand(axiom, iterations, seed), params);
 }
 
 RenderMesh generateTreeSdf(const LSystem& system, const std::string& axiom, int iterations,
-                           const TurtleParams& params, double smoothness, int resolution) {
-    return buildTurtleMeshSdf(system.expand(axiom, iterations), params, smoothness, resolution);
+                           const TurtleParams& params, double smoothness, int resolution,
+                           uint32_t seed) {
+    return buildTurtleMeshSdf(system.expand(axiom, iterations, seed), params,
+                              smoothness, resolution);
 }
 
 }  // namespace engine
