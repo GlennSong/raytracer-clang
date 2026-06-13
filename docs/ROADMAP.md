@@ -381,6 +381,25 @@ truly share before any language:
   `Mesh`; biome assignment drives `Material` selection. Erosion (hydraulic/
   thermal) and chunked LOD as it scales. Physics (2.3) can drive erosion.
 - **B.3 SDF CSG shape** — a small modeling example over Phase A.1.
+- **B.4 Scatter / distribution** — the `Frame` generator: place instances over a
+  surface or volume with seeded density rules (slope, altitude, a noise mask),
+  emitting a set of transforms. The bridge between terrain (Field/Mesh), the
+  asset meshes, and instanced rendering. This is where the value types compose.
+
+**Instanced rendering (pulled forward from Tier 5).** The substrate's whole
+payoff is "thousands of the same mesh" (forests, fields, fleets), so instancing
+is promoted to a Phase B prerequisite, not a late optimization. Shared
+`MeshHandle`s from the asset manager (3.1) are what it batches on; it adds an
+`InstanceGroup` representation + a `drawMeshInstanced` renderer path (see
+`docs/forest-arena-plan.md`).
+
+### Phase B milestone — "The Forest" arena
+The integration target that proves Phases A–B end to end and exercises every
+value type at once: a procedural heightfield terrain, slope/altitude-based
+material, L-system trees + noise-displaced rocks generated into the asset
+manager, scattered by the thousands with sensible density and drawn instanced,
+under an HDR sky. Full plan: `docs/forest-arena-plan.md`. Most of the pipeline
+is headless/CI-testable; only the final render needs macOS.
 
 ### Phase C — The procgen language (distilled, not designed up front)
 Only after Phase B. A **node-graph evaluator** over the value types
@@ -415,8 +434,9 @@ Items that become relevant as the world grows large.
   efficient queries over large generated worlds.
 - **LOD system** — distance-based level of detail for procgen meshes and
   terrain chunks.
-- **Instanced rendering** — draw thousands of generated trees/buildings
-  efficiently.
+- **Instanced rendering** — *pulled forward to Tier 4 Phase B* (the procgen
+  payoff needs it); see "The Forest" milestone and `docs/forest-arena-plan.md`.
+  Per-instance LOD and chunk culling for *huge* worlds remain here.
 - **Mixed precision / large world coordinates** — revisit ADR-0005 when float
   positions lose precision at world scale.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction
