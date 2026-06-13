@@ -7,6 +7,7 @@
 #include "world.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -108,6 +109,17 @@ struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
     bool lockRotation = false;
+};
+
+// A static triangle-mesh collider (terrain, and later any baked static geometry)
+// the PhysicsSystem turns into one static Jolt mesh body. Separate from Collider
+// because it owns geometry (CPU triangles in world space), not just dimensions.
+// bodyId is filled when the body is created, so it is made exactly once.
+struct MeshCollider {
+    std::vector<Vec3> vertices;
+    std::vector<uint32_t> indices;
+    Real friction = 0.6;
+    PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

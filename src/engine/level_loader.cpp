@@ -355,8 +355,19 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<Transform>(e, tr);
     world.add<PrevTransform>(e, PrevTransform{tr});
 
+    RenderMesh terrainMesh = generateTerrain(p, noise);
+
+    // Static collision from the same geometry, so the player walks on the
+    // terrain instead of falling through (PhysicsSystem makes one static mesh
+    // body). Inert when physics is disabled.
+    MeshCollider mc;
+    mc.vertices.reserve(terrainMesh.vertices.size());
+    for (const Vertex& v : terrainMesh.vertices) mc.vertices.push_back(v.position);
+    mc.indices = terrainMesh.indices;
+    world.add<MeshCollider>(e, mc);
+
     Renderable r;
-    r.mesh = assets.acquireMesh(generateTerrain(p, noise), "terrain");
+    r.mesh = assets.acquireMesh(terrainMesh, "terrain");
     if (t.contains("material")) {
         applyMaterial(t["material"], r.material);
     } else {

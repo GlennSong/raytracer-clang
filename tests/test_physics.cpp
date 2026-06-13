@@ -2,6 +2,7 @@
 
 #include "../src/engine/physics/physics_world.h"
 #include "../src/job_system.h"
+#include <vector>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -11,6 +12,13 @@ namespace {
 PhysicsBodyId addFloor(PhysicsWorld& world) {
     return world.addBox(Vec3(50, 1, 50), Vec3(0, -1, 0), Quat::identity(),
                         BodyMotion::Static);
+}
+
+// A flat triangle-mesh floor at y=0 (the terrain-collider path).
+PhysicsBodyId addMeshFloor(PhysicsWorld& world) {
+    std::vector<Vec3> verts = {{-50, 0, -50}, {50, 0, -50}, {50, 0, 50}, {-50, 0, 50}};
+    std::vector<uint32_t> idx = {0, 1, 2, 0, 2, 3};
+    return world.addMesh(verts, idx, Vec3(0, 0, 0));
 }
 
 void step(PhysicsWorld& world, int frames) {
@@ -31,6 +39,22 @@ TEST_CASE(physics_sphere_falls_under_gravity) {
     step(world, 12);
     Real laterY = world.bodyPosition(sphere).y;
     CHECK(laterY < startY);  // gravity pulled it down
+    world.shutdown();
+}
+
+TEST_CASE(physics_sphere_rests_on_mesh_floor) {
+    PhysicsWorld world;
+    world.initialize();
+    PhysicsBodyId floor = addMeshFloor(world);
+    CHECK(floor != INVALID_PHYSICS_BODY);   // the mesh shape was created
+    PhysicsBodyId sphere =
+        world.addSphere(0.5, Vec3(0, 5, 0), Quat::identity(), BodyMotion::Dynamic);
+    world.optimizeBroadPhase();
+
+    step(world, 240);   // ~4s to settle
+    Real y = world.bodyPosition(sphere).y;
+    CHECK(y > 0.3);     // did not fall through the triangle mesh
+    CHECK(y < 0.7);     // rests ~radius (0.5) above the surface
     world.shutdown();
 }
 
