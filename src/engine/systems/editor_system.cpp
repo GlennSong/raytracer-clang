@@ -24,6 +24,10 @@ namespace engine {
 
 namespace {
 
+// Half-size of the clickable box / drawn marker for a group (null object),
+// in world units at the group's origin.
+constexpr Real GROUP_MARKER_HALF = 0.3;
+
 // Mouse (window coords) -> world-space pick ray. NDC depth follows the
 // projection's [0,1] convention (ADR-0009): the near plane unprojects at
 // z = 0 and the far plane at z = 1, so the ray runs eye -> scene. (Getting
@@ -124,6 +128,29 @@ Mat4 parentWorldMatrix(World& world, Entity e) {
     if (!s || s->parentId == 0) return Mat4();
     Entity parent = findByDocumentId(world, s->parentId);
     return parent.valid() ? worldMatrix(world, parent) : Mat4();
+}
+
+// Project a world point to viewport pixels for the background draw list.
+// Returns false (and leaves `out` untouched) if the point is behind the
+// camera, so callers can skip line segments that would wrap.
+bool projectToScreen(const Mat4& view, const Mat4& proj,
+                     const ImGuiViewport* vp, const Vec3& world, ImVec2& out) {
+    Vec3 viewPos = view.transformPoint(world);
+    if (viewPos.z > -1e-3) return false;   // -Z is forward
+    Vec3 ndc = proj.transformPoint(viewPos);
+    out.x = vp->Pos.x + (static_cast<float>(ndc.x) * 0.5f + 0.5f) * vp->Size.x;
+    out.y = vp->Pos.y + (0.5f - static_cast<float>(ndc.y) * 0.5f) * vp->Size.y;
+    return true;
+}
+
+// Draw a world-space line into the background draw list, clipped to points in
+// front of the camera (skipped entirely if either end is behind).
+void drawWorldLine(const Mat4& view, const Mat4& proj, const ImGuiViewport* vp,
+                   const Vec3& a, const Vec3& b, ImU32 color, float thickness) {
+    ImVec2 pa, pb;
+    if (projectToScreen(view, proj, vp, a, pa) &&
+        projectToScreen(view, proj, vp, b, pb))
+        ImGui::GetBackgroundDrawList()->AddLine(pa, pb, color, thickness);
 }
 #endif
 
@@ -280,6 +307,22 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
             }
         });
 
+    // Groups carry no mesh, so they're invisible to the pass above; test a
+    // small fixed box at each group's world origin (matches the drawn marker)
+    // so they're clickable in the viewport, not only from the hierarchy.
+    BoundingSphere groupBox;
+    groupBox.boxMin = Vec3(-GROUP_MARKER_HALF, -GROUP_MARKER_HALF, -GROUP_MARKER_HALF);
+    groupBox.boxMax = Vec3(GROUP_MARKER_HALF, GROUP_MARKER_HALF, GROUP_MARKER_HALF);
+    ctx.world.each<Transform, SourceSpec>(
+        [&](Entity e, Transform&, SourceSpec& spec) {
+            if (!spec.isGroup()) return;
+            double hit = rayBox(ray, worldMatrix(ctx.world, e), groupBox);
+            if (hit > 0.0 && hit < bestT) {
+                bestT = hit;
+                best = e;
+            }
+        });
+
     // Shift-click extends the selection (toggle the hit); plain click
     // replaces it. Shift-clicking empty space leaves the set alone.
     if (ctx.input.keyShift) {
@@ -331,7 +374,7 @@ Entity EditorSystem::addPrimitive(FrameContext& ctx, const std::string& shape) {
 
 Entity EditorSystem::addGroup(FrameContext& ctx) {
     // A null object: a named transform, no mesh. Parent things under it to
-    // move them together. Pickable from the hierarchy, not the viewport.
+    // move them together. Drawn and pickable in the viewport as a small box.
     SourceSpec spec;
     spec.shape = "";   // marks it a group (isGroup())
     spec.name = "Group " + std::to_string(nextDocumentId(ctx.world));
@@ -382,8 +425,77 @@ void EditorSystem::render(FrameContext& ctx) {
         drawToolbar(ctx);
         drawInspector(ctx);
     }
+    drawCameraFrustums(ctx);
+    drawGroupMarkers(ctx);
     drawGizmo(ctx);
     drawSelectionMarker(ctx);
+}
+
+void EditorSystem::drawGroupMarkers(FrameContext& ctx) const {
+    const CameraState& cam = ctx.view.camera;
+    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
+                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+
+    // A small axis-aligned wireframe box at each group's world origin, so a
+    // null object reads as a thing you can click and grab.
+    const Real h = GROUP_MARKER_HALF;
+    const Vec3 corners[8] = {
+        {-h, -h, -h}, {h, -h, -h}, {h, h, -h}, {-h, h, -h},
+        {-h, -h, h},  {h, -h, h},  {h, h, h},  {-h, h, h}};
+    const int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                              {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+
+    ctx.world.each<Transform, SourceSpec>(
+        [&](Entity e, Transform&, SourceSpec& spec) {
+            if (!spec.isGroup()) return;
+            Mat4 wm = worldMatrix(ctx.world, e);
+            Vec3 w[8];
+            for (int i = 0; i < 8; i++) w[i] = wm.transformPoint(corners[i]);
+            ImU32 color = isSelected(e) ? IM_COL32(120, 220, 255, 235)
+                                        : IM_COL32(120, 220, 255, 140);
+            for (auto& edge : edges)
+                drawWorldLine(view, proj, vp, w[edge[0]], w[edge[1]], color,
+                              isSelected(e) ? 2.0f : 1.3f);
+        });
+}
+
+void EditorSystem::drawCameraFrustums(FrameContext& ctx) const {
+    // Show the framing pyramid for selected placed cameras: apex at the
+    // camera, opening to a rectangle whose half-angles come from the lens.
+    // Drawn to a capped distance (the real far plane is uselessly large) so
+    // it reads as "what this camera sees".
+    const CameraState& cam = ctx.view.camera;
+    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
+                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+
+    for (Entity e : selection) {
+        SceneCamera* sc = ctx.world.get<SceneCamera>(e);
+        Transform* t = ctx.world.get<Transform>(e);
+        if (!sc || !t) continue;
+        if (e == ctx.view.activeCameraEntity) continue;   // we're inside it
+
+        Mat4 wm = worldMatrix(ctx.world, e);
+        Real fov = degreesToRadians(sc->lens.verticalFovDegrees());
+        Real aspect = cam.aspectRatio > 0 ? cam.aspectRatio : 16.0 / 9.0;
+        Real dist = std::clamp(sc->lens.focusDistance, Real(2), Real(12));
+        Real hh = dist * std::tan(fov * 0.5);
+        Real hw = hh * aspect;
+
+        Vec3 apex = wm.transformPoint(Vec3(0, 0, 0));
+        Vec3 c[4] = {wm.transformPoint(Vec3(-hw, -hh, -dist)),
+                     wm.transformPoint(Vec3(hw, -hh, -dist)),
+                     wm.transformPoint(Vec3(hw, hh, -dist)),
+                     wm.transformPoint(Vec3(-hw, hh, -dist))};
+        ImU32 color = IM_COL32(255, 220, 90, 220);
+        for (int i = 0; i < 4; i++) {
+            drawWorldLine(view, proj, vp, apex, c[i], color, 1.5f);
+            drawWorldLine(view, proj, vp, c[i], c[(i + 1) % 4], color, 1.5f);
+        }
+    }
 }
 
 void EditorSystem::drawGrid(FrameContext& ctx) const {
@@ -763,6 +875,8 @@ void EditorSystem::drawInspector(FrameContext&) {}
 void EditorSystem::drawGizmo(FrameContext&) {}
 void EditorSystem::drawGrid(FrameContext&) const {}
 void EditorSystem::drawSelectionMarker(FrameContext&) const {}
+void EditorSystem::drawGroupMarkers(FrameContext&) const {}
+void EditorSystem::drawCameraFrustums(FrameContext&) const {}
 
 #endif
 

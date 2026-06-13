@@ -102,6 +102,8 @@ private:
     void drawGizmo(FrameContext& ctx);
     void drawGrid(FrameContext& ctx) const;
     void drawSelectionMarker(FrameContext& ctx) const;
+    void drawGroupMarkers(FrameContext& ctx) const;
+    void drawCameraFrustums(FrameContext& ctx) const;
 
     CameraSystem& cameras;
     std::string levelFile;

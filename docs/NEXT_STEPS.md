@@ -213,8 +213,17 @@ The transform-hierarchy feature landed:
 Remaining threads off this: multi-mesh glTF parenting under one root (the
 importer still moves only the first sub-mesh); camera parenting (SceneCamera
 entities don't carry SourceSpec, so they don't parent yet); preserving tree
-expansion state across rebuilds; a small in-viewport marker so groups are
-viewport-pickable, not only hierarchy-selectable.
+expansion state across rebuilds.
+
+## Editor viewport gizmos (ninth round)
+
+- **Group markers**: null objects draw a small cyan wireframe box at their
+  world origin (brighter when selected) and are now viewport-pickable via a
+  fixed box at that origin (GROUP_MARKER_HALF), not only hierarchy-clickable.
+- **Camera frustums**: a selected placed camera draws its framing pyramid
+  (apex -> rectangle) from the lens FOV + a focus-clamped draw distance, so
+  you can see what it frames. Shared `projectToScreen` / `drawWorldLine`
+  background-draw-list helpers back both.
 
 ## Editor <-> engine connections — QoL backlog
 
