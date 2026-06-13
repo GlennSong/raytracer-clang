@@ -3,12 +3,10 @@
 #include "camera.h"
 #include "scene.h"
 #include "level_scene.h"
+#include "path_tracer.h"
 #include "engine/model_importer.h"   // EnvironmentLoader: HDR decode + sun extraction
 #include "job_system.h"
 #include <iostream>
-#include <thread>
-#include <chrono>
-#include <atomic>
 #include <cstdlib>
 #include <string>
 #include <algorithm>
@@ -18,7 +16,6 @@ using namespace engine;  // namespace migration (ADR-0015)
 int IMAGE_SIZE = 512;          // --size
 int SAMPLES_PER_PIXEL = 128;   // --spp
 double EXPOSURE = 1.0;         // --exposure (linear scale before gamma)
-const int MAX_BOUNCES = 10;
 
 Scene buildCornellBox() {
     Scene scene;
@@ -52,56 +49,6 @@ Scene buildCornellBox() {
 
     scene.buildAccelerator();
     return scene;
-}
-
-void renderRow(const Scene& scene, const Camera& camera, Image& image,
-               int y, std::atomic<int>& linesComplete) {
-    double ca = camera.lens.chromaticAberration;
-    for (int x = 0; x < IMAGE_SIZE; x++) {
-        Vec3 color(0, 0, 0);
-        for (int s = 0; s < SAMPLES_PER_PIXEL; s++) {
-            double u = (x + randomDouble()) / (IMAGE_SIZE - 1);
-            double v = (IMAGE_SIZE - 1 - y + randomDouble()) / (IMAGE_SIZE - 1);
-            double lensU = randomDouble();
-            double lensV = randomDouble();
-            if (camera.hasChromaticAberration()) {
-                // Lateral CA: the channels image at slightly different radial
-                // scales, so trace one ray per channel through the same lens
-                // sample and keep each ray's own channel.
-                Vec3 r = scene.tracePath(
-                    camera.generateRay(u, v, lensU, lensV, 1.0 + ca), MAX_BOUNCES);
-                Vec3 g = scene.tracePath(
-                    camera.generateRay(u, v, lensU, lensV, 1.0), MAX_BOUNCES);
-                Vec3 b = scene.tracePath(
-                    camera.generateRay(u, v, lensU, lensV, 1.0 - ca), MAX_BOUNCES);
-                color += Vec3(r.x, g.y, b.z);
-            } else {
-                Ray ray = camera.generateRay(u, v, lensU, lensV);
-                color += scene.tracePath(ray, MAX_BOUNCES);
-            }
-        }
-        color = (color / static_cast<double>(SAMPLES_PER_PIXEL)) * EXPOSURE;
-
-        // Stylized vignette: quadratic radial falloff scaled by the parameter.
-        if (camera.lens.vignette != 0.0) {
-            double sx = 2.0 * x / (IMAGE_SIZE - 1) - 1.0;
-            double sy = 2.0 * y / (IMAGE_SIZE - 1) - 1.0;
-            double fall = 1.0 - camera.lens.vignette * (sx * sx + sy * sy) * 0.5;
-            color = color * std::max(fall, 0.0);
-        }
-
-        // The viewer's display transform (post.metal composite): exposure
-        // above, then ACES filmic, then 2.2 gamma — so offline renders match
-        // the realtime look instead of the old sqrt gamma.
-        auto aces = [](double v) {
-            v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14);
-            return std::pow(std::clamp(v, 0.0, 1.0), 1.0 / 2.2);
-        };
-        color = Vec3(aces(color.x), aces(color.y), aces(color.z));
-
-        image.setPixel(x, y, color);
-    }
-    linesComplete.fetch_add(1);
 }
 
 // CLI (docs/virtual-camera-plan.md, Phases 3 + 5). Two modes:
@@ -230,7 +177,6 @@ int main(int argc, char** argv) {
         if (scale <= 0.0) scale = 100.0;       // Cornell is ~555 units across
     }
 
-    Image image(IMAGE_SIZE, IMAGE_SIZE);
     Camera camera(lookFrom, lookAt, Vec3(0, 1, 0), fovDegrees, 1.0, lens, scale);
     if (lens.fStop > 0.0)
         std::cerr << "Lens: f/" << lens.fStop << " @ " << lens.focalLength
@@ -244,24 +190,11 @@ int main(int argc, char** argv) {
     std::cerr << "Rendering with " << jobs.workerCount() << " worker threads, "
               << SAMPLES_PER_PIXEL << " spp...\n";
 
-    std::atomic<int> linesComplete(0);
-    std::atomic<int> renderCounter(0);
-    for (int y = 0; y < IMAGE_SIZE; y++) {
-        jobs.run([&scene, &camera, &image, y, &linesComplete] {
-            renderRow(scene, camera, image, y, linesComplete);
-        }, &renderCounter);
-    }
-
-    // The main thread reports progress while the pool renders. (In synchronous
-    // mode the rows have already run during dispatch, so this loop is skipped.)
-    while (linesComplete.load() < IMAGE_SIZE) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        int done = linesComplete.load();
-        int pct = (done * 100) / IMAGE_SIZE;
-        std::cerr << "\r  Progress: " << pct << "% (" << done << "/" << IMAGE_SIZE << ")  " << std::flush;
-    }
-    jobs.wait(&renderCounter);
-
+    RenderConfig config{IMAGE_SIZE, SAMPLES_PER_PIXEL, EXPOSURE};
+    Image image = renderImage(scene, camera, config, jobs, [](float frac) {
+        std::cerr << "\r  Progress: " << static_cast<int>(frac * 100) << "%   "
+                  << std::flush;
+    });
     std::cerr << "\r  Progress: 100%                \n";
     std::cerr << "Done rendering.\n";
 

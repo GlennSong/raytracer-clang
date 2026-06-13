@@ -114,6 +114,7 @@ set(CORE_SOURCES
     src/scene.cpp
     src/kdtree.cpp
     src/level_scene.cpp
+    src/path_tracer.cpp
 )
 
 # ============================================================
@@ -153,6 +154,7 @@ add_executable(run_tests
     tests/test_frustum.cpp
     tests/test_day_night.cpp
     tests/test_cube_faces.cpp
+    tests/test_path_tracer.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
