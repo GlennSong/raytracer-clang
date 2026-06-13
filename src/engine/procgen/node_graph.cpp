@@ -2,6 +2,7 @@
 #include "rock.h"
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <functional>
 #include <optional>
 
@@ -22,6 +23,14 @@ bool valueIsType(const GraphValue& v, GraphType t) {
 const NodeType* NodeRegistry::find(const std::string& name) const {
     auto it = types_.find(name);
     return it != types_.end() ? &it->second : nullptr;
+}
+
+std::vector<std::string> NodeRegistry::typeNames() const {
+    std::vector<std::string> names;
+    names.reserve(types_.size());
+    for (const auto& kv : types_) names.push_back(kv.first);
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 namespace {
@@ -210,6 +219,62 @@ std::string graphToJson(const Graph& graph) {
     }
     root["nodes"] = nodes;
     return root.dump(2);
+}
+
+// --- editing operations ---
+
+namespace {
+GraphValue defaultLiteral(GraphType t) {
+    if (t == GraphType::Scalar) return 0.0;
+    if (t == GraphType::Vec3) return Vec3();
+    return std::monostate{};   // Field/Mesh must be connected
+}
+// Does `node` transitively depend on `target` via its input connections?
+bool dependsOn(const Graph& g, int node, int target) {
+    if (node == target) return true;
+    if (node < 0 || node >= static_cast<int>(g.nodes.size())) return false;
+    for (const Graph::Input& in : g.nodes[node].inputs)
+        if (in.source >= 0 && dependsOn(g, in.source, target)) return true;
+    return false;
+}
+}  // namespace
+
+int graphAddNode(Graph& graph, const NodeRegistry& registry, const std::string& type) {
+    const NodeType* t = registry.find(type);
+    if (!t) return -1;
+    Graph::Node node;
+    node.type = type;
+    for (const NodeSocket& sock : t->inputs) {
+        Graph::Input in;
+        in.source = -1;
+        in.literal = defaultLiteral(sock.type);
+        node.inputs.push_back(in);
+    }
+    graph.nodes.push_back(std::move(node));
+    return static_cast<int>(graph.nodes.size()) - 1;
+}
+
+bool graphConnect(Graph& graph, const NodeRegistry& registry,
+                  int srcNode, int dstNode, int socket) {
+    const int n = static_cast<int>(graph.nodes.size());
+    if (srcNode < 0 || srcNode >= n || dstNode < 0 || dstNode >= n || srcNode == dstNode)
+        return false;
+    const NodeType* st = registry.find(graph.nodes[srcNode].type);
+    const NodeType* dt = registry.find(graph.nodes[dstNode].type);
+    if (!st || !dt) return false;
+    if (socket < 0 || socket >= static_cast<int>(dt->inputs.size())) return false;
+    if (st->output != dt->inputs[socket].type) return false;        // type mismatch
+    if (dependsOn(graph, srcNode, dstNode)) return false;           // would form a cycle
+    if (socket >= static_cast<int>(graph.nodes[dstNode].inputs.size()))
+        graph.nodes[dstNode].inputs.resize(socket + 1);
+    graph.nodes[dstNode].inputs[socket].source = srcNode;
+    return true;
+}
+
+void graphDisconnect(Graph& graph, int dstNode, int socket) {
+    if (dstNode < 0 || dstNode >= static_cast<int>(graph.nodes.size())) return;
+    if (socket < 0 || socket >= static_cast<int>(graph.nodes[dstNode].inputs.size())) return;
+    graph.nodes[dstNode].inputs[socket].source = -1;
 }
 
 Graph graphFromJson(const std::string& text) {

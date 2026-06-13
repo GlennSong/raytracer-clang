@@ -63,6 +63,7 @@ add_library(engine_core STATIC
     src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/camera_panel_system.cpp
+    src/engine/systems/node_editor_system.cpp
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp

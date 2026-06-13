@@ -53,6 +53,7 @@ class NodeRegistry {
 public:
     void add(NodeType type) { types_[type.name] = std::move(type); }
     const NodeType* find(const std::string& name) const;
+    std::vector<std::string> typeNames() const;   // sorted; for an "add node" menu
 
 private:
     std::unordered_map<std::string, NodeType> types_;
@@ -89,6 +90,21 @@ struct Graph {
 // The graph is the generator asset: round-trips through JSON.
 std::string graphToJson(const Graph& graph);
 Graph graphFromJson(const std::string& json);
+
+// --- editing operations (the UI-agnostic model a node editor drives) ---
+
+// Append a node of `type` with default literals on its sockets. Returns the new
+// node index, or -1 if the type is unknown.
+int graphAddNode(Graph& graph, const NodeRegistry& registry, const std::string& type);
+
+// Wire srcNode's output into dstNode's input `socket`. Type-checked (output type
+// must match the socket) and cycle-guarded; returns false and changes nothing on
+// any invalid request.
+bool graphConnect(Graph& graph, const NodeRegistry& registry,
+                  int srcNode, int dstNode, int socket);
+
+// Clear a socket's connection (it reverts to its literal value).
+void graphDisconnect(Graph& graph, int dstNode, int socket);
 
 }  // namespace engine
 

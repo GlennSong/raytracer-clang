@@ -139,3 +139,32 @@ TEST_CASE(node_graph_rock_node_seeded_by_param) {
     RenderMesh direct = generateRockSdf(rp, 1);
     CHECK(m1->vertices.size() == direct.vertices.size());
 }
+
+TEST_CASE(node_graph_editing_add_connect_typecheck_cycle) {
+    NodeRegistry reg;
+    registerBuiltinNodes(reg);
+    Graph g;
+    int a = graphAddNode(g, reg, "SdfSphere");    // output: Field
+    int b = graphAddNode(g, reg, "SdfSphere");    // output: Field
+    int u = graphAddNode(g, reg, "SmoothUnion");  // inputs: Field, Field, Scalar
+    CHECK(a == 0 && b == 1 && u == 2);
+    CHECK(graphAddNode(g, reg, "NoSuchNode") == -1);
+    // A fresh SmoothUnion has 3 default-literal sockets.
+    CHECK(g.nodes[u].inputs.size() == 3);
+
+    // Field -> Field socket: valid. Field -> Scalar socket (k): rejected.
+    CHECK(graphConnect(g, reg, a, u, 0));
+    CHECK(graphConnect(g, reg, b, u, 1));
+    CHECK(!graphConnect(g, reg, a, u, 2));        // socket 2 is Scalar
+    CHECK(g.nodes[u].inputs[0].source == a);
+
+    // Cycle guard: u depends on a, so a -> a's input from u would loop. Connect
+    // u's output into a sphere's... spheres take Vec3/Scalar, so use type-valid
+    // nodes: union2 fed by u, then u <- union2 would cycle.
+    int u2 = graphAddNode(g, reg, "Union");
+    CHECK(graphConnect(g, reg, u, u2, 0));        // u -> u2 (ok)
+    CHECK(!graphConnect(g, reg, u2, u, 0));       // u2 -> u would cycle: rejected
+
+    graphDisconnect(g, u, 0);
+    CHECK(g.nodes[u].inputs[0].source == -1);
+}
