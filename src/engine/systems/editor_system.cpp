@@ -6,6 +6,7 @@
 #include "../level_writer.h"
 #include "../model_importer.h"
 #include "../../log.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -213,12 +214,22 @@ void EditorSystem::update(FrameContext& ctx) {
 
     processShellRequests(ctx);
 
-    if (!ctx.world.alive(selected)) selected = Entity{};
+    // Drop dead entities from the selection set (deletes, undo of a create).
+    selection.erase(std::remove_if(selection.begin(), selection.end(),
+                                   [&](Entity e) { return !ctx.world.alive(e); }),
+                    selection.end());
+    if (!ctx.world.alive(selected))
+        selected = selection.empty() ? Entity{} : selection.back();
 
     // One chokepoint catches every way selection moves (pick, hierarchy,
     // undo, delete): the shell reacts on its next drain instead of polling.
-    if (bridge && !(selected == lastNoticedSelection)) {
+    // A signature folds in the whole set, not just the primary, so adding to
+    // a multi-selection still wakes the panels.
+    std::size_t sig = selection.size();
+    for (Entity e : selection) sig = sig * 1000003u + e.index;
+    if (bridge && (!(selected == lastNoticedSelection) || sig != selectionSig)) {
         lastNoticedSelection = selected;
+        selectionSig = sig;
         bridge->notify(EditorNotice::SelectionChanged);
     }
 }
@@ -269,7 +280,23 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
             }
         });
 
-    selected = best;   // clicking empty space deselects
+    // Shift-click extends the selection (toggle the hit); plain click
+    // replaces it. Shift-clicking empty space leaves the set alone.
+    if (ctx.input.keyShift) {
+        if (!best.valid()) return;
+        std::vector<Entity> next = selection;
+        auto it = std::find(next.begin(), next.end(), best);
+        if (it != next.end()) {
+            next.erase(it);
+            setSelection(next, next.empty() ? Entity{} : next.back());
+        } else {
+            next.push_back(best);
+            setSelection(next, best);
+        }
+    } else {
+        if (best.valid()) setSelection({best}, best);
+        else setSelection({}, Entity{});
+    }
 }
 
 Vec3 EditorSystem::spawnPoint(FrameContext& ctx) const {
@@ -635,57 +662,87 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
 
     bool usingNow = ImGuizmo::IsUsing();
     if (usingNow) {
-        if (!gizmoWasUsing) gizmoDragStart = *t;   // drag begins this frame
-        // World back to local: strip the parent's contribution before
-        // decomposing, so a child stores its transform relative to its parent.
-        Mat4 local = parentWorldMatrix(ctx.world, selected).inverse() *
-                     fromGizmo(modelF);
-        *t = transformFromMatrix(local);
-        if (auto* prev = ctx.world.get<PrevTransform>(selected))
-            prev->value = *t;
-    } else if (gizmoWasUsing && undo) {
-        // Drag ended: one undo entry spanning the whole manipulation.
-        undo->recordTransformEdit(selected, gizmoDragStart, *t);
+        if (!gizmoWasUsing) {
+            // Drag begins: snapshot the primary's world and every selected
+            // entity's start state, so the group moves rigidly with the
+            // primary and one undo entry covers it all.
+            dragStartPrimaryWorld = worldMatrix(ctx.world, selected);
+            dragEntities.clear();
+            dragStartLocals.clear();
+            dragStartWorlds.clear();
+            for (Entity e : selection) {
+                Transform* et = ctx.world.get<Transform>(e);
+                if (!et) continue;
+                dragEntities.push_back(e);
+                dragStartLocals.push_back(*et);
+                dragStartWorlds.push_back(worldMatrix(ctx.world, e));
+            }
+        }
+        // The accumulated world-space delta the gizmo applied to the primary.
+        Mat4 delta = fromGizmo(modelF) * dragStartPrimaryWorld.inverse();
+        for (std::size_t i = 0; i < dragEntities.size(); i++) {
+            Entity e = dragEntities[i];
+            Mat4 newWorld = delta * dragStartWorlds[i];
+            Mat4 local = parentWorldMatrix(ctx.world, e).inverse() * newWorld;
+            Transform flat = transformFromMatrix(local);
+            if (Transform* et = ctx.world.get<Transform>(e)) *et = flat;
+            if (auto* prev = ctx.world.get<PrevTransform>(e)) prev->value = flat;
+        }
+    } else if (gizmoWasUsing && undo && !dragEntities.empty()) {
+        // Drag ended: one compound undo entry across the whole selection.
+        std::vector<Transform> after;
+        after.reserve(dragEntities.size());
+        for (Entity e : dragEntities)
+            after.push_back(*ctx.world.get<Transform>(e));
+        undo->recordTransformEditMulti(dragEntities, dragStartLocals, after);
     }
     gizmoWasUsing = usingNow;
 #endif
 }
 
 void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
-    Transform* t = ctx.world.get<Transform>(selected);
-    Renderable* r = ctx.world.get<Renderable>(selected);
-    if (!t || !r) return;
+    if (selection.empty()) return;
 
-    // Project the bounding-sphere center to the screen and ring it — selection
-    // feedback without touching the entity's material.
+    // Project each selected entity's bounding sphere to the screen and ring
+    // it — selection feedback without touching materials. The primary (gizmo
+    // anchor) rings brighter so it's distinguishable in a multi-selection.
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
     Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
                                   cam.aspectRatio, cam.nearPlane, cam.farPlane);
-    BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
-    Mat4 wm = worldMatrix(ctx.world, selected);
-    Vec3 center = wm.transformPoint(bounds.center);
-
-    Vec3 viewPos = view.transformPoint(center);
-    if (viewPos.z > -1e-3) return;   // behind the camera (-Z is forward)
-    Vec3 ndc = proj.transformPoint(viewPos);
-
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    float sx = vp->Pos.x + (static_cast<float>(ndc.x) * 0.5f + 0.5f) * vp->Size.x;
-    float sy = vp->Pos.y + (0.5f - static_cast<float>(ndc.y) * 0.5f) * vp->Size.y;
+    float fovScale =
+        vp->Size.y / (2.0f * std::tan(degreesToRadians(cam.fovDegrees) * 0.5f));
 
-    // Apparent radius: world radius over distance, scaled into pixels.
-    Vec3 wcx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
-    Vec3 wcy(wm.m[0][1], wm.m[1][1], wm.m[2][1]);
-    Vec3 wcz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
-    Real maxScale = std::max({wcx.length(), wcy.length(), wcz.length()});
-    float dist = static_cast<float>(-viewPos.z);
-    float fovScale = vp->Size.y / (2.0f * std::tan(degreesToRadians(cam.fovDegrees) * 0.5f));
-    float radius = static_cast<float>(bounds.radius * maxScale) / dist * fovScale;
-    radius = std::clamp(radius * 1.15f, 12.0f, 0.6f * vp->Size.y);
+    for (Entity e : selection) {
+        Renderable* r = ctx.world.get<Renderable>(e);
+        if (!r) continue;   // groups have no mesh; nothing to ring (yet)
+        BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
+        Mat4 wm = worldMatrix(ctx.world, e);
+        Vec3 center = wm.transformPoint(bounds.center);
 
-    ImGui::GetBackgroundDrawList()->AddCircle(
-        ImVec2(sx, sy), radius, IM_COL32(255, 170, 40, 200), 0, 2.0f);
+        Vec3 viewPos = view.transformPoint(center);
+        if (viewPos.z > -1e-3) continue;   // behind the camera (-Z is forward)
+        Vec3 ndc = proj.transformPoint(viewPos);
+
+        float sx = vp->Pos.x + (static_cast<float>(ndc.x) * 0.5f + 0.5f) * vp->Size.x;
+        float sy = vp->Pos.y + (0.5f - static_cast<float>(ndc.y) * 0.5f) * vp->Size.y;
+
+        Vec3 wcx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
+        Vec3 wcy(wm.m[0][1], wm.m[1][1], wm.m[2][1]);
+        Vec3 wcz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
+        Real maxScale = std::max({wcx.length(), wcy.length(), wcz.length()});
+        float dist = static_cast<float>(-viewPos.z);
+        float radius =
+            static_cast<float>(bounds.radius * maxScale) / dist * fovScale;
+        radius = std::clamp(radius * 1.15f, 12.0f, 0.6f * vp->Size.y);
+
+        bool primary = (e == selected);
+        ImU32 color = primary ? IM_COL32(255, 170, 40, 220)
+                              : IM_COL32(255, 170, 40, 130);
+        ImGui::GetBackgroundDrawList()->AddCircle(
+            ImVec2(sx, sy), radius, color, 0, primary ? 2.5f : 1.5f);
+    }
 }
 
 #else  // !RT_ENABLE_IMGUI
@@ -699,6 +756,7 @@ void EditorSystem::render(FrameContext& ctx) {
     (void)gizmoWasUsing;
     (void)gizmoDragStart;
     (void)pendingEdit;
+    (void)dragStartPrimaryWorld;
 }
 void EditorSystem::drawToolbar(FrameContext&) {}
 void EditorSystem::drawInspector(FrameContext&) {}

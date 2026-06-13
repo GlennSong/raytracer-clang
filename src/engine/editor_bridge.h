@@ -53,8 +53,14 @@ public:
 
     // Selection is shared with EditorSystem (viewport ring + gizmo follow)
     // while editing; in observer mode the bridge holds it for the panels.
+    // selected() is the primary (what the inspector shows).
     Entity selected() const;
     void select(Entity entity);
+
+    // Multi-selection: the full set, and a setter the tree drives (the
+    // primary is the active row). Observer mode is single-selection only.
+    std::vector<Entity> selectionList() const;
+    void setSelection(const std::vector<Entity>& entities, Entity primary);
 
     // The document entities a hierarchy panel shows: SourceSpec-bearing
     // objects and placed cameras, with display labels. `id`/`parentId` are
@@ -78,6 +84,8 @@ public:
     // step the in-viewport Play uses).
     bool saveDocument();
     void deleteEntity(Entity entity);
+    // Delete every selected entity (one undo command each for now).
+    void deleteSelection();
 
     // The one observer-mode write, and it is deliberately explicit: bake the
     // LIVE playtest over the document — settled physics stacks, pushed

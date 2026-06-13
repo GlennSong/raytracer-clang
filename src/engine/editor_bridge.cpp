@@ -54,6 +54,21 @@ void EditorBridge::select(Entity entity) {
     }
 }
 
+std::vector<Entity> EditorBridge::selectionList() const {
+    if (editorPtr) return editorPtr->selectionList();
+    if (observerSelection.valid()) return {observerSelection};
+    return {};
+}
+
+void EditorBridge::setSelection(const std::vector<Entity>& entities,
+                                Entity primary) {
+    if (editorPtr)
+        editorPtr->setSelection(entities, primary);
+    else
+        select(primary.valid() ? primary
+                               : (entities.empty() ? Entity{} : entities.back()));
+}
+
 std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
     std::vector<EntityInfo> out;
     if (!worldPtr) return out;
@@ -213,6 +228,15 @@ void EditorBridge::deleteEntity(Entity entity) {
     if (selected() == entity) select(Entity{});
     if (UndoStack* undo = undoStack()) undo->recordDelete(*worldPtr, entity);
     worldPtr->destroy(entity);
+}
+
+void EditorBridge::deleteSelection() {
+    if (!editable()) return;
+    // Copy first: deleteEntity mutates the live selection set.
+    std::vector<Entity> doomed = selectionList();
+    if (doomed.empty()) doomed = {selected()};
+    setSelection({}, Entity{});
+    for (Entity e : doomed) deleteEntity(e);
 }
 
 void EditorBridge::addComponent(Entity entity, const std::string& componentName) {

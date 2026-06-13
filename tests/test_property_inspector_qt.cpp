@@ -41,11 +41,26 @@ int main(int argc, char** argv) {
     world.add<PrevTransform>(e, {t});
     world.add<Renderable>(e);
 
+    // A second entity, to exercise multi-selection.
+    Entity e2 = world.create();
+    world.add<Transform>(e2);
+    world.add<PrevTransform>(e2);
+    world.add<Renderable>(e2);
+
     EditorBridge bridge;
     CameraSystem cameras;
     EditorSystem editor(cameras, "test.json", nullptr, &bridge);
     bridge.attach(&world, &editor, "test.json");
+
+    // Multi-selection: the set carries both, the primary is what the
+    // inspector shows; setSelected collapses to a single.
+    bridge.setSelection({e, e2}, e2);
+    REQUIRE(bridge.selectionList().size() == 2);
+    REQUIRE(bridge.selected() == e2);
+    REQUIRE(editor.isSelected(e));
     bridge.select(e);
+    REQUIRE(bridge.selectionList().size() == 1);
+    REQUIRE(bridge.selected() == e);
 
     PropertyInspector inspector(bridge);
     inspector.refresh();   // selection changed -> builds sections

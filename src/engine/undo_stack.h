@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <deque>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -40,6 +41,11 @@ public:
                          nlohmann::json after);
     void recordTransformEdit(Entity e, const Transform& before,
                              const Transform& after);
+    // A group move (gizmo on a multi-selection): one undo entry restores the
+    // whole set. `entities`, `before`, `after` are parallel arrays.
+    void recordTransformEditMulti(const std::vector<Entity>& entities,
+                                  const std::vector<Transform>& before,
+                                  const std::vector<Transform>& after);
     void recordCreate(Entity e);
     // Capture BEFORE destroying / removing — they snapshot the live state.
     void recordDelete(World& world, Entity e);
@@ -87,7 +93,8 @@ private:
             Delete,
             ComponentAdd,
             ComponentRemove,
-            Reparent
+            Reparent,
+            TransformEditMulti
         } kind = FieldEdit;
         Entity entity;
         std::string component;    // FieldEdit / ComponentAdd / ComponentRemove
@@ -95,6 +102,8 @@ private:
         nlohmann::json before, after;   // FieldEdit; ComponentRemove uses before
         Transform transformBefore, transformAfter;
         uint32_t parentBefore = 0, parentAfter = 0;   // Reparent
+        std::vector<Entity> entities;                 // TransformEditMulti
+        std::vector<Transform> beforeMany, afterMany; // TransformEditMulti
         EntitySnapshot snapshot;        // Create (filled on undo) / Delete
     };
 

@@ -86,6 +86,18 @@ void UndoStack::recordComponentRemove(World& world, Entity e,
     push(std::move(cmd));
 }
 
+void UndoStack::recordTransformEditMulti(const std::vector<Entity>& entities,
+                                         const std::vector<Transform>& before,
+                                         const std::vector<Transform>& after) {
+    if (entities.empty()) return;
+    Command cmd;
+    cmd.kind = Command::TransformEditMulti;
+    cmd.entities = entities;
+    cmd.beforeMany = before;
+    cmd.afterMany = after;
+    push(std::move(cmd));
+}
+
 void UndoStack::recordReparent(Entity e, uint32_t before, uint32_t after) {
     if (before == after) return;
     Command cmd;
@@ -228,6 +240,19 @@ Entity UndoStack::apply(Command& cmd, World& world, bool forward) {
             if (!s) return Entity{};
             s->parentId = forward ? cmd.parentAfter : cmd.parentBefore;
             return cmd.entity;
+        }
+
+        case Command::TransformEditMulti: {
+            const auto& target = forward ? cmd.afterMany : cmd.beforeMany;
+            for (std::size_t i = 0; i < cmd.entities.size(); i++) {
+                Entity e = cmd.entities[i];
+                if (Transform* t = world.get<Transform>(e)) {
+                    *t = target[i];
+                    if (auto* prev = world.get<PrevTransform>(e))
+                        prev->value = *t;
+                }
+            }
+            return cmd.entities.empty() ? Entity{} : cmd.entities.back();
         }
     }
     return Entity{};

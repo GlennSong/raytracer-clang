@@ -114,6 +114,40 @@ TEST_CASE(undo_transform_edit_restores_pose_and_prev) {
     CHECK(std::abs(fwd.x) > 0.1);
 }
 
+TEST_CASE(undo_multi_transform_edit_restores_whole_group) {
+    Fixture f;
+    Entity a = f.makeBox();
+    Entity b = f.makeBox();
+    Transform& ta = *f.world.get<Transform>(a);
+    Transform& tb = *f.world.get<Transform>(b);
+    ta.position = Vec3(0, 0, 0);
+    tb.position = Vec3(1, 0, 0);
+
+    // A group gizmo move: both shift by +5 in x in one drag.
+    std::vector<Entity> ents{a, b};
+    std::vector<Transform> before{ta, tb};
+    ta.position = Vec3(5, 0, 0);
+    tb.position = Vec3(6, 0, 0);
+    std::vector<Transform> after{ta, tb};
+    f.undo.recordTransformEditMulti(ents, before, after);
+    CHECK(f.undo.depth() == 1);   // one entry for the whole group
+
+    // A single undo reverts both, and prev-transforms follow.
+    f.undo.undo(f.world);
+    CHECK_APPROX(ta.position.x, 0.0, 1e-9);
+    CHECK_APPROX(tb.position.x, 1.0, 1e-9);
+    CHECK_APPROX(f.world.get<PrevTransform>(a)->value.position.x, 0.0, 1e-9);
+
+    // One redo re-applies both.
+    f.undo.redo(f.world);
+    CHECK_APPROX(ta.position.x, 5.0, 1e-9);
+    CHECK_APPROX(tb.position.x, 6.0, 1e-9);
+
+    // An empty set records nothing.
+    f.undo.recordTransformEditMulti({}, {}, {});
+    CHECK(f.undo.depth() == 1);
+}
+
 TEST_CASE(undo_create_and_delete_round_trip_with_remap) {
     Fixture f;
     Entity e = f.makeBox();

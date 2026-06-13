@@ -35,7 +35,27 @@ public:
     void render(FrameContext& ctx) override;
 
     Entity selectedEntity() const { return selected; }
-    void setSelected(Entity entity) { selected = entity; }
+    void setSelected(Entity entity) {
+        if (entity.valid()) setSelection({entity}, entity);
+        else setSelection({}, Entity{});
+    }
+    // Multi-selection: `selection` is the full set, `selected` the primary
+    // (the gizmo anchor + what the inspector shows). primary is forced into
+    // the set; an empty set clears the primary. Inline (like the other
+    // selection accessors) so the bridge can call them without force-linking
+    // this TU — and the state stack it drags — into renderer-less hosts.
+    const std::vector<Entity>& selectionList() const { return selection; }
+    bool isSelected(Entity e) const {
+        for (Entity s : selection)
+            if (s == e) return true;
+        return false;
+    }
+    void setSelection(std::vector<Entity> sel, Entity primary) {
+        selection = std::move(sel);
+        if (!primary.valid() || !isSelected(primary))
+            primary = selection.empty() ? Entity{} : selection.back();
+        selected = primary;
+    }
     void setGizmoOp(int op) { gizmoOp = op; }
     int gizmoOpMode() const { return gizmoOp; }
 
@@ -93,12 +113,20 @@ private:
     std::unique_ptr<ComponentRegistry> fallbackRegistry;
     std::unique_ptr<UndoStack> undo;
 
-    Entity selected;
+    Entity selected;                  // primary (gizmo anchor, inspector)
+    std::vector<Entity> selection;    // full set, includes the primary
     Entity lastNoticedSelection;   // edge detection for SelectionChanged
+    std::size_t selectionSig = 0;  // folds the whole set for change detection
     bool prevMouseLeft = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
     bool gizmoWasUsing = false; // drag-edge detection for undo recording
     Transform gizmoDragStart;
+    // Captured at gizmo-drag start so the whole selection moves rigidly with
+    // the primary and one undo entry covers the group.
+    Mat4 dragStartPrimaryWorld;
+    std::vector<Entity> dragEntities;
+    std::vector<Transform> dragStartLocals;
+    std::vector<Mat4> dragStartWorlds;
     // One continuous inspector interaction (drag/typing) being bracketed for
     // undo: component state at activation, committed on release.
     struct PendingEdit {

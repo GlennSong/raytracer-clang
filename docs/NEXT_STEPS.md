@@ -128,7 +128,13 @@ session.
   chain (render/pick/gizmo/frame), null-object groups, PLAY-time flattening,
   and a drag-to-reparent `QTreeWidget` with cycle-guarded undo. See the
   dedicated section below.
-- **Tests**: 187 engine cases (`make test` / ctest) + physics + the Qt
+- **Multi-select (eighth round)**: EditorSystem holds a selection set with a
+  primary (gizmo anchor + inspector); shift-click in the viewport toggles,
+  the Qt tree is `ExtendedSelection`. The gizmo moves the whole set rigidly
+  with the primary (one compound `TransformEditMulti` undo entry); selection
+  rings draw on all (primary brighter). Delete acts on the whole set. The
+  tree-selection reconcile is signal-blocked (also smooths first-paint).
+- **Tests**: 188 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so

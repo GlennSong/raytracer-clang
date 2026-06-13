@@ -284,7 +284,7 @@ public:
 
     explicit HierarchyTree(QWidget* parent) : QTreeWidget(parent) {
         setHeaderHidden(true);
-        setSelectionMode(QAbstractItemView::SingleSelection);
+        setSelectionMode(QAbstractItemView::ExtendedSelection);
         setDragDropMode(QAbstractItemView::InternalMove);
         setDragEnabled(true);
         setAcceptDrops(true);
@@ -323,12 +323,24 @@ struct Panels {
         auto* dock = new QDockWidget("Hierarchy", main);
         hierarchy = new HierarchyTree(dock);
         dock->setWidget(hierarchy);
-        QObject::connect(hierarchy, &QTreeWidget::currentItemChanged,
-                         [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
-            if (applyingUi || !bridge.attached() || !item) return;
-            int row = item->data(0, Qt::UserRole).toInt();
-            if (row >= 0 && row < static_cast<int>(lastList.size()))
-                bridge.select(lastList[row].entity);
+        // Selection (possibly multiple rows) flows to the engine; the current
+        // item is the primary (gizmo anchor + inspector).
+        QObject::connect(hierarchy, &QTreeWidget::itemSelectionChanged,
+                         [this]() {
+            if (applyingUi || !bridge.attached()) return;
+            std::vector<Entity> sel;
+            for (QTreeWidgetItem* item : hierarchy->selectedItems()) {
+                int row = item->data(0, Qt::UserRole).toInt();
+                if (row >= 0 && row < static_cast<int>(lastList.size()))
+                    sel.push_back(lastList[row].entity);
+            }
+            Entity primary;
+            if (QTreeWidgetItem* cur = hierarchy->currentItem()) {
+                int row = cur->data(0, Qt::UserRole).toInt();
+                if (row >= 0 && row < static_cast<int>(lastList.size()))
+                    primary = lastList[row].entity;
+            }
+            bridge.setSelection(sel, primary);
         });
         hierarchy->onReparent = [this](int childRow, int parentRow) {
             if (!bridge.editable()) return;
@@ -356,7 +368,7 @@ struct Panels {
 
         deleteButton = new QPushButton("Delete", body);
         QObject::connect(deleteButton, &QPushButton::clicked, [this]() {
-            if (bridge.attached()) bridge.deleteEntity(bridge.selected());
+            if (bridge.attached()) bridge.deleteSelection();
         });
         column->addWidget(deleteButton);
         column->addStretch();
@@ -391,12 +403,27 @@ struct Panels {
             rebuildTree();
         }
 
-        Entity selected = bridge.selected();
-        int row = -1;
-        for (size_t i = 0; i < lastList.size(); i++)
-            if (lastList[i].entity == selected) row = static_cast<int>(i);
-        QTreeWidgetItem* want = (row >= 0) ? itemForRow(row) : nullptr;
-        if (hierarchy->currentItem() != want) hierarchy->setCurrentItem(want);
+        // Mirror the engine's selection set into the tree. Block signals so
+        // this programmatic update doesn't echo back as a user selection
+        // (which also avoids the first-paint selection churn).
+        const QSignalBlocker blocker(hierarchy);
+        std::vector<Entity> engineSel = bridge.selectionList();
+        Entity primary = bridge.selected();
+        QTreeWidgetItem* primaryItem = nullptr;
+        for (size_t i = 0; i < lastList.size(); i++) {
+            QTreeWidgetItem* item = itemForRow(static_cast<int>(i));
+            if (!item) continue;
+            bool want = false;
+            for (Entity e : engineSel)
+                if (e == lastList[i].entity) { want = true; break; }
+            if (item->isSelected() != want) item->setSelected(want);
+            if (lastList[i].entity == primary) primaryItem = item;
+        }
+        // NoUpdate: set the current item without disturbing the multi-row
+        // selection we just applied above.
+        if (hierarchy->currentItem() != primaryItem)
+            hierarchy->setCurrentItem(primaryItem, 0,
+                                      QItemSelectionModel::NoUpdate);
         applyingUi = false;
     }
 
@@ -546,7 +573,7 @@ int main(int argc, char** argv) {
     });
     duplicateAction->setShortcut(QKeySequence("Ctrl+D"));
     auto* deleteAction = editMenu->addAction("De&lete", [&]() {
-        if (bridge.attached()) bridge.deleteEntity(bridge.selected());
+        if (bridge.attached()) bridge.deleteSelection();
     });
     deleteAction->setShortcut(QKeySequence::Delete);
     mainWindow.statusBar()->showMessage(
