@@ -403,6 +403,20 @@ void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
     for (Vertex& v : mesh.vertices) v.normal = normalize(v.normal);
 }
 
+void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high) {
+    if (mesh.vertices.empty()) return;
+    double minY = 1e30, maxY = -1e30;
+    for (const Vertex& v : mesh.vertices) {
+        minY = std::min(minY, static_cast<double>(v.position.y));
+        maxY = std::max(maxY, static_cast<double>(v.position.y));
+    }
+    double range = maxY - minY;
+    for (Vertex& v : mesh.vertices) {
+        double t = range > 1e-6 ? (v.position.y - minY) / range : 0.0;
+        v.color = low + (high - low) * t;
+    }
+}
+
 void MeshBuilder::generatePlanarUVs(RenderMesh& mesh, int axis, float scale) {
     for (Vertex& v : mesh.vertices) {
         const Vec3& p = v.position;

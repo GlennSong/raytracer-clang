@@ -425,6 +425,12 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         bool treeSdf = s.value("skin", std::string("cylinder")) == "sdf";
         double treeSmooth = s.value("smoothness", 0.12);
         int treeRes = s.value("sdfResolution", 40);
+        // Canopy coloration: trunk color at the base fading to leaf color at the
+        // top, baked into vertex colors (use a white material so it shows).
+        Vec3 trunkColor = parseVec3(s.value("trunkColor", json::array({0.30, 0.22, 0.12})),
+                                    Vec3(0.30, 0.22, 0.12));
+        Vec3 leafColor = parseVec3(s.value("leafColor", json::array({0.18, 0.40, 0.15})),
+                                   Vec3(0.18, 0.40, 0.15));
 
         // Rock params (parsed once).
         bool rockSdf = s.value("skin", std::string("displaced")) == "sdf";
@@ -454,6 +460,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 mesh = treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
                                                  treeSmooth, treeRes, seed)
                                : generateTree(sys, axiom, iterations, tp, seed);
+                MeshBuilder::bakeHeightColor(mesh, trunkColor, leafColor);
             }
             if (mesh.vertices.empty()) continue;
             Species sp;

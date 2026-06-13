@@ -15,13 +15,13 @@
   },
   "vegetation": {
     "seed": 24,
-    "region": 64,
-    "count": 90,
+    "region": 72,
+    "count": 1000,
     "maxSlopeDeg": 38,
     "minScale": 0.7,
     "maxScale": 1.4,
     "densityScale": 0.06,
-    "densityThreshold": -0.25,
+    "densityThreshold": -0.4,
     "species": [
       {
         "kind": "tree",
@@ -40,7 +40,9 @@
         "radius": 0.22,
         "radiusTaper": 0.72,
         "angleDeg": 32,
-        "material": { "albedo": [0.34, 0.25, 0.15], "roughness": 1.0 }
+        "trunkColor": [0.30, 0.22, 0.12],
+        "leafColor": [0.20, 0.42, 0.16],
+        "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
       },
       {
         "kind": "rock",

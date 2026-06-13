@@ -100,3 +100,15 @@ TEST_CASE(mesh_planar_uvs_project_position) {
     CHECK_APPROX(m.vertices[0].u, 2.0, 1e-5);   // x
     CHECK_APPROX(m.vertices[0].v, 3.0, 1e-5);   // z
 }
+
+TEST_CASE(mesh_bake_height_color_gradients_bottom_to_top) {
+    RenderMesh m;
+    m.vertices.push_back(Vertex(Vec3(0, 0, 0), Vec3(0, 1, 0)));   // bottom
+    m.vertices.push_back(Vertex(Vec3(0, 5, 0), Vec3(0, 1, 0)));   // middle
+    m.vertices.push_back(Vertex(Vec3(0, 10, 0), Vec3(0, 1, 0)));  // top
+    Vec3 low(0.3, 0.2, 0.1), high(0.2, 0.4, 0.15);
+    MeshBuilder::bakeHeightColor(m, low, high);
+    CHECK((m.vertices[0].color - low).lengthSquared() < 1e-9);    // bottom = low
+    CHECK((m.vertices[2].color - high).lengthSquared() < 1e-9);   // top = high
+    CHECK_APPROX(m.vertices[1].color.y, (low.y + high.y) * 0.5, 1e-5);  // midpoint
+}

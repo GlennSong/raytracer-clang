@@ -53,6 +53,12 @@ struct MeshBuilder {
     // position components, scaled, become (u, v). A cheap default mapping for
     // terrain (axis=1) and generated geometry that ships without UVs.
     static void generatePlanarUVs(RenderMesh& mesh, int axis = 1, float scale = 1.0f);
+
+    // Tint per-vertex color by height: `low` at the mesh's lowest vertex, `high`
+    // at its highest, linearly between. A cheap strata/canopy effect — e.g. a
+    // brown trunk fading to green leaves on a tree (use a white material so the
+    // vertex color shows). No-op on an empty mesh.
+    static void bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high);
 };
 
 }  // namespace engine
