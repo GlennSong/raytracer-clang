@@ -23,8 +23,9 @@ when fixed (git history is the archive).
 - **Camera gizmos render in reflections/shadows** (they are plain
   Renderables). Fine until a debug-draw layer exists.
 - **Repeated edit/play cycles re-upload level meshes** without freeing the
-  previous set — slow GPU-memory leak across mode switches. Needs either a
-  mesh cache keyed by shape+size or explicit removeMesh on world clear.
+  previous set — slow GPU-memory leak across mode switches. Fixed by the
+  `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped
+  mesh ownership with `release` on overwrite and `clear()` on world teardown.
 
 ## Offline tracer
 

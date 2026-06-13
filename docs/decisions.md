@@ -1153,6 +1153,69 @@ transforms — promote parenting into a runtime component the simulation resolve
 
 ---
 
+## ADR-0021 — Procgen is a generator library over shared value types, not a language first
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** The long-term vision (ROADMAP) is a procedural-generation engine:
+plants, terrain, cities, planets, clouds, textures — and the open question of a
+single "procgen language" spanning meshes, buildings, roads, particles,
+shaders, and bullet patterns. The temptation is to design that unifying language
+up front. We need to fix the *shape* of the procgen effort before committing
+Tier 3/4 work to it.
+
+**Decision.** Every generator is `(parameters, seed) -> content`, and `content`
+is one of a small set of **value types**: `Mesh`, `Field` (Rⁿ→scalar — SDF /
+noise), `Material`/`Texture`, and `Frame` (transform sets / instancing). Those
+value types *are* Tier 3 — the asset manager (3.1) owns them, the mesh builder
+(3.3) is the `Mesh` type, the material system (3.2) is the `Material` type — so
+the content pipeline is the **procgen substrate**, not a precursor to it.
+
+From that, four commitments:
+1. **Build bottom-up as a C++ library of composable generators** over the value
+   types, with a deterministic evaluation context (seeded RNG streams +
+   parameter binding; fits the determinism stance of ADR-0002). Prove it across
+   three paradigms on the *same* types — a grammar (L-system), a field (noise
+   heightfield), an implicit shape (SDF CSG).
+2. **The "procgen language" (node graph and/or text DSL, Blender-geometry-nodes
+   style) is a presentation layer distilled from the working library, AFTER
+   three generators exist** — never designed first.
+3. **Geometric modeling (Plasticity-style) is pursued via SDF / implicit
+   modeling**, not a B-rep kernel: booleans/blends are min / max / smooth-min,
+   meshed by marching cubes → dual contouring.
+4. **Temporal generators (particles, bullet patterns) share the seeded-RNG +
+   parameter substrate but live on a separate simulation track**, not the
+   static-geometry pipeline.
+
+**Alternatives considered.**
+- *Language/graph first* — rejected: designing the unifying DSL with zero
+  working generators means guessing the abstraction (a Turing-tarpit /
+  lowest-common-denominator trap). Houdini (VEX/SOPs) and Blender (geometry
+  nodes) grew the graph *over* an operation library, not the reverse.
+- *One representation for everything* — rejected: grammars, dataflow, fields,
+  and B-rep are genuinely different paradigms; the only real shared layer is the
+  evaluation substrate + value types, not the pipeline.
+- *B-rep / Parasolid for modeling* (as Plasticity uses) — rejected: a licensed
+  commercial kernel, multi-year to roll in-house, and against both the
+  no-new-dependencies rule (AGENTS.md) and the engine's procgen-robustness
+  priorities. SDF is the achievable, composable analog.
+
+**Consequences / tech debt.**
+- Tier 3 (asset manager / material / mesh builder) is reframed as the procgen
+  *value-type layer* and prioritized as foundation; a noise library joins it.
+- No procgen syntax is committed now; the language is deferred until three
+  generators expose what it must express.
+- SDF modeling forgoes exact-CAD precision (acceptable for a generation engine,
+  not a CAD tool).
+- All generators must be seed-deterministic, to match ADR-0002 and keep
+  generated worlds reproducible.
+
+**Revisit trigger.** After three generators exist on the substrate, revisit
+whether a node graph and/or DSL is worth building and what it must express —
+driven by what the generators actually share. Revisit B-rep only if exact-CAD
+*authoring* (not generation) becomes a goal.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1173,7 +1236,7 @@ to be replaced; listed here so they stay visible.
 | ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0015): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
-| Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | Mesh cache keyed by shape+size, or `removeMesh` on world clear |
+| Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | The `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped mesh ownership; `release` on overwrite, `clear()` on world teardown |
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
 
 ---

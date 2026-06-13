@@ -228,11 +228,19 @@ designed for **runtime procedural generation from the start** — not as "load
 from disk" pipelines with procgen bolted on later. Every asset type should be
 constructible programmatically as a first-class path.
 
+**This tier is the procgen substrate (ADR-0021).** Every generator is
+`(parameters, seed) → content`, where `content` is one of a few value types:
+`Mesh` (3.3), `Material`/`Texture` (3.2), `Field` (Rⁿ→scalar — SDF/noise, Tier
+4), all owned by the asset manager (3.1). So 3.1/3.2/3.3 plus a noise library
+(3.7) are not a precursor to procgen — they are the value types it emits. Build
+them first; Tier 4 stands on them.
+
 ### 3.1 Asset / resource system
-**Status:** Started — handle migration done (`MeshHandle`/`BufferHandle` →
-`Handle`/`SlotMap`, ADR-0007); the `AssetManager` itself is not yet built and
-needs design discussion (formats, async loading, animation — a large
-undertaking).
+**Status:** In design — handle migration done (`MeshHandle`/`BufferHandle` →
+`Handle`/`SlotMap`, ADR-0007); the `AssetManager` design is in
+`docs/asset-system-plan.md` (owns GPU resource lifetime, dedup, refcounting,
+async seam). It is the keystone of the procgen substrate (ADR-0021) and the fix
+for the editor mesh-leak tech debt. **Next to build.**
 **Why:** The engine needs a unified way to create, own, and reference meshes,
 textures, and materials — whether loaded from disk or generated at runtime.
 
@@ -331,40 +339,71 @@ cooking live in the editor's asset browser.
 
 ---
 
+### 3.7 Noise library
+**Status:** Not started
+**Why:** Perlin / Simplex / value noise + FBM + domain warp. Foundational to
+terrain, procedural textures, and clouds; tiny, pure math, no deps,
+Linux/CI-testable. Slotted into Tier 3 (not 4) because it is a value-type
+building block, not a generator. Seedable (ADR-0021/0002).
+
+**Depends on:** Nothing. Pairs with the mesh builder (3.3).
+
+---
+
 ## Tier 4 — Procedural Generation
 
-The creative core. Each subsystem generates content using the Tier 3 pipeline.
+The creative core. **Strategy is fixed by ADR-0021:** build a C++ *library of
+composable generators* over the Tier 3 value types (`Mesh`/`Field`/`Material`/
+`Frame`), deterministic from a seed; distill a node graph / DSL only after
+several generators expose what it must express; pursue geometric modeling via
+SDF/implicit functions, not a B-rep kernel. The phases below sequence the
+substrate before the language before the big applications.
 
-### 4.1 L-systems / grammar framework
-A parametric L-system engine: axiom + production rules → symbol strings →
-interpreted as geometry (turtle graphics in 3D). Start with simple branching
-structures (trees, bushes, coral), then extend to stochastic and context-
-sensitive grammars.
+### Phase A — Generator substrate
+A deterministic evaluation context (seeded RNG streams, parameter binding) and
+the `Field` value type alongside the Tier 3 `Mesh`/`Material`. A `Field` is
+Rⁿ→scalar — the home of noise (3.7) and SDFs — sampleable, maskable, and
+meshable.
 
-**Depends on:** Mesh generation API (3.3), material system (3.2).
+- **A.1 SDF / implicit modeling + mesher.** CSG via min/max, smooth blends via
+  smooth-min; mesh a field to a `Mesh` (marching cubes first, dual contouring
+  later for sharp features). The in-house, robust analog to a Plasticity/
+  Parasolid B-rep kernel (ADR-0021) — and the basis for organic shapes,
+  terrain, and clouds.
 
-### 4.2 Terrain generation
-Noise-based heightfield generation (Perlin, Simplex, domain-warped FBM) with
-hydraulic/thermal erosion. Chunked LOD for large worlds. Biome assignment
-driving material selection.
+### Phase B — Three generators, one substrate
+Implement one of each paradigm on the shared value types, to surface what they
+truly share before any language:
+- **B.1 L-systems / grammar** — parametric, stochastic, context-sensitive;
+  turtle-interpreted to a `Mesh`. Trees/bushes/coral first; the path to
+  split/shape grammars for buildings (CityEngine-style) later.
+- **B.2 Noise heightfield terrain** — FBM/domain-warp (3.7) → heightfield →
+  `Mesh`; biome assignment drives `Material` selection. Erosion (hydraulic/
+  thermal) and chunked LOD as it scales. Physics (2.3) can drive erosion.
+- **B.3 SDF CSG shape** — a small modeling example over Phase A.1.
 
-**Depends on:** Mesh generation API (3.3), material system (3.2). Enhanced by
-physics (2.3) for erosion simulation.
+### Phase C — The procgen language (distilled, not designed up front)
+Only after Phase B. A **node-graph evaluator** over the value types
+(`Mesh`/`Field`/`Frame`/attributes) — the engine's "geometry nodes"; an
+optional text DSL is sugar on top. Built *from* what the Phase B generators
+shared, per ADR-0021.
 
-### 4.3 Procedural textures and materials
-Noise-driven texture synthesis, weathering, aging, and material variation.
-Operates on the material system (3.2) to create runtime texture data without
-authored assets.
+### Phase D — Applications (by appetite)
+Each composes Phases A–C:
+- **Procedural textures/materials** — noise-driven synthesis, weathering,
+  variation feeding the material system (3.2).
+- **Voxel terrain** — volumetric representation (caves/overhangs/destruction);
+  meshed via Phase A.1; commits to chunking + LOD (Tier 5).
+- **Procedural clouds** — volumetric FBM, raymarched (renderer-side).
+- **City / road layout** — split-grammar buildings, road networks (L-systems /
+  tensor fields / agent-based), lot subdivision. Converges B.1 + B.2 + meshing.
+- **Procedural planet** — cube-sphere quadtree LOD + spherical terrain +
+  atmosphere. The capstone.
 
-**Depends on:** Material system (3.2), asset system (3.1).
-
-### 4.4 City / road layout generation
-Road networks (L-systems, tensor fields, or agent-based), lot subdivision,
-building placement and facade generation. This is where L-systems (4.1),
-terrain (4.2), mesh generation (3.3), and physics (2.3) converge.
-
-**Depends on:** Terrain (4.2), L-systems (4.1), mesh generation (3.3),
-physics (2.3).
+### Separate track — temporal generators
+Particles and bullet patterns share the seeded-RNG + parameter substrate but
+are **simulation, not static geometry** (ADR-0021); they live in their own
+subsystem rather than the mesh/field pipeline.
 
 ---
 
