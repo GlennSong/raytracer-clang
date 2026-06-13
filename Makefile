@@ -85,11 +85,11 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/asset_manager.cpp \
-	$(SRC_DIR)/engine/noise.cpp \
-	$(SRC_DIR)/engine/terrain.cpp \
-	$(SRC_DIR)/engine/lsystem.cpp \
-	$(SRC_DIR)/engine/rock.cpp \
-	$(SRC_DIR)/engine/scatter.cpp \
+	$(SRC_DIR)/engine/procgen/noise.cpp \
+	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/rock.cpp \
+	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

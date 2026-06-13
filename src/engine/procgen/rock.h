@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_ROCK_H
 #define RAYTRACER_ENGINE_ROCK_H
 
-#include "../renderer/renderer.h"   // RenderMesh
+#include "../../renderer/renderer.h"   // RenderMesh
 #include "noise.h"
 
 namespace engine {

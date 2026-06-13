@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_LSYSTEM_H
 #define RAYTRACER_ENGINE_LSYSTEM_H
 
-#include "../renderer/renderer.h"   // RenderMesh
+#include "../../renderer/renderer.h"   // RenderMesh
 #include <string>
 #include <unordered_map>
 

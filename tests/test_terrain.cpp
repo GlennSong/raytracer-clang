@@ -1,7 +1,7 @@
 #include "test_framework.h"
 
-#include "../src/engine/terrain.h"
-#include "../src/engine/noise.h"
+#include "../src/engine/procgen/terrain.h"
+#include "../src/engine/procgen/noise.h"
 #include <cmath>
 
 using namespace engine;  // namespace migration (ADR-0015)

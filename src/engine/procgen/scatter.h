@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_SCATTER_H
 #define RAYTRACER_ENGINE_SCATTER_H
 
-#include "../rt_math.h"   // Vec3
+#include "../../rt_math.h"   // Vec3
 #include "terrain.h"
 #include "noise.h"
 #include <cstdint>

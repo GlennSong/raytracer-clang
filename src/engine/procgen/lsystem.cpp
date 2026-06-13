@@ -1,6 +1,6 @@
 #include "lsystem.h"
-#include "mesh_builder.h"
-#include "../rt_math.h"
+#include "../mesh_builder.h"
+#include "../../rt_math.h"
 
 #include <vector>
 

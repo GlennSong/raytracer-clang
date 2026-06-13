@@ -38,11 +38,11 @@ add_library(engine_core STATIC
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
     src/engine/asset_manager.cpp
-    src/engine/noise.cpp
-    src/engine/terrain.cpp
-    src/engine/lsystem.cpp
-    src/engine/rock.cpp
-    src/engine/scatter.cpp
+    src/engine/procgen/noise.cpp
+    src/engine/procgen/terrain.cpp
+    src/engine/procgen/lsystem.cpp
+    src/engine/procgen/rock.cpp
+    src/engine/procgen/scatter.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp

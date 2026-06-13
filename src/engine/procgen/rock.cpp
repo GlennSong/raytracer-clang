@@ -1,5 +1,5 @@
 #include "rock.h"
-#include "mesh_builder.h"
+#include "../mesh_builder.h"
 
 namespace engine {
 

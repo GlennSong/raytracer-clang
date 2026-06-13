@@ -1,6 +1,6 @@
 #include "test_framework.h"
 
-#include "../src/engine/lsystem.h"
+#include "../src/engine/procgen/lsystem.h"
 #include "../src/engine/mesh_builder.h"
 #include <string>
 

@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_TERRAIN_H
 #define RAYTRACER_ENGINE_TERRAIN_H
 
-#include "../renderer/renderer.h"   // RenderMesh
+#include "../../renderer/renderer.h"   // RenderMesh
 #include "noise.h"
 
 namespace engine {
