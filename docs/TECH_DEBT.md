@@ -61,4 +61,13 @@ when fixed (git history is the archive).
   not welded into one surface. The clean fix is SDF/implicit skinning (branches
   as smooth-min'd capsules, meshed) — a reason to prioritize the SDF mesher
   (ROADMAP Phase A.1). Generalized-cylinder sweeps are an alternative for the
-  trunk but don't solve branch joints.
+  trunk but don't solve branch joints. *Done (Phase A.1): trees/rocks skin via
+  SDF + Surface Nets.*
+- **Surface Nets leaves occasional gaps on thin/pinched SDF features.** It
+  places one vertex per cell, so a cell where the isosurface has two near-
+  touching sheets (twisty branches) can't triangulate cleanly — an isolated
+  hole or sliver. Mitigated by the shorter-diagonal quad split, higher
+  resolution, and more smooth-union blend (fewer multi-sheet cells). The
+  principled fix is **marching cubes** (per-cell topology via the 256-case
+  table) or manifold dual contouring — bigger, and best added when the result
+  is on-device-verifiable. Tracked for ROADMAP Phase A.1 follow-up.

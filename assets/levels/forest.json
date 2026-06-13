@@ -26,8 +26,8 @@
       {
         "kind": "tree",
         "skin": "sdf",
-        "smoothness": 0.25,
-        "sdfResolution": 48,
+        "smoothness": 0.32,
+        "sdfResolution": 52,
         "axiom": "F",
         "rules": { "F": "F[&+F][&/-F]F" },
         "iterations": 2,

@@ -159,12 +159,23 @@ RenderMesh polygonizeSdf(const Sdf& field, const SdfBounds& bounds, int resoluti
     // the smooth shading regardless.
     auto emitQuad = [&](int i0, int i1, int i2, int i3, bool flip) {
         if (i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0) return;
-        if (flip)
-            mesh.indices.insert(mesh.indices.end(), {(uint32_t)i0,(uint32_t)i3,(uint32_t)i2,
-                                                     (uint32_t)i0,(uint32_t)i2,(uint32_t)i1});
-        else
-            mesh.indices.insert(mesh.indices.end(), {(uint32_t)i0,(uint32_t)i1,(uint32_t)i2,
-                                                     (uint32_t)i0,(uint32_t)i2,(uint32_t)i3});
+        auto tri = [&](int a, int b, int c) {
+            mesh.indices.push_back((uint32_t)a);
+            mesh.indices.push_back((uint32_t)b);
+            mesh.indices.push_back((uint32_t)c);
+        };
+        // The four dual vertices rarely form a planar/convex quad on thin or
+        // pinched features; splitting along the *shorter* diagonal avoids the
+        // slivers and folds that read as little holes. Winding is preserved.
+        double d02 = (mesh.vertices[i0].position - mesh.vertices[i2].position).lengthSquared();
+        double d13 = (mesh.vertices[i1].position - mesh.vertices[i3].position).lengthSquared();
+        if (d02 <= d13) {
+            if (!flip) { tri(i0, i1, i2); tri(i0, i2, i3); }
+            else       { tri(i0, i3, i2); tri(i0, i2, i1); }
+        } else {
+            if (!flip) { tri(i1, i2, i3); tri(i1, i3, i0); }
+            else       { tri(i1, i0, i3); tri(i1, i3, i2); }
+        }
     };
 
     for (int z = 0; z < N; z++)
