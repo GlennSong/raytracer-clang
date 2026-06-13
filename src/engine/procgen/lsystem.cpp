@@ -93,10 +93,7 @@ RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& pa
     std::vector<BranchSegment> segments = turtleSegments(symbols, params);
     if (segments.empty()) return RenderMesh{};
 
-    // Each branch is a capsule; smooth-union fuses them into one welded surface
-    // with fillets at the joints (the whole point of SDF skinning).
-    std::vector<Sdf> capsules;
-    capsules.reserve(segments.size());
+    // Bounds + sizing first, so we can keep branches above a minimum radius.
     Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
     double maxRadius = 0.0;
     auto expand = [&](const Vec3& p) {
@@ -104,15 +101,26 @@ RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& pa
         hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
     };
     for (const BranchSegment& s : segments) {
-        capsules.push_back(sdfCapsule(s.a, s.b, s.radius));
         expand(s.a);
         expand(s.b);
         maxRadius = std::max(maxRadius, static_cast<double>(s.radius));
     }
 
+    double margin = maxRadius + smoothness;
+    Vec3 size = (hi - lo) + Vec3(2 * margin, 2 * margin, 2 * margin);
+    double cell = std::max({size.x, size.y, size.z}) / std::max(1, resolution);
+    // A capsule thinner than ~1.5 cells can't be captured by Surface Nets (it
+    // falls between samples), producing the "weird geometry" on thin branches.
+    // Clamp each branch radius up to that floor so every branch stays solid.
+    double minRadius = 1.5 * cell;
+
+    std::vector<Sdf> capsules;
+    capsules.reserve(segments.size());
+    for (const BranchSegment& s : segments)
+        capsules.push_back(sdfCapsule(s.a, s.b, std::max(static_cast<double>(s.radius), minRadius)));
+
     // Pad the sampling box so the full radius + blend fits with a cell to spare.
-    double margin = maxRadius + smoothness + (hi - lo).length() / std::max(1, resolution);
-    Vec3 pad(margin, margin, margin);
+    Vec3 pad(margin + cell, margin + cell, margin + cell);
     SdfBounds bounds{lo - pad, hi + pad};
 
     Sdf field = sdfSmoothUnion(capsules, smoothness);
