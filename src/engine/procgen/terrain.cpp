@@ -15,19 +15,19 @@ Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    const Vec3 grass(0.28, 0.42, 0.18);
-    const Vec3 dirt(0.40, 0.31, 0.20);
-    const Vec3 rock(0.40, 0.39, 0.37);
+    (void)height;
+    const Vec3 grass(0.20, 0.38, 0.15);   // green
+    const Vec3 dirt(0.42, 0.30, 0.16);    // brown
+    const Vec3 rock(0.40, 0.38, 0.36);    // grey
 
-    // Steep ground reads as rock; gentle ground as grass over a dirt underlayer.
-    double slope = 1.0 - clamp01(normalUp);              // 0 flat .. 1 vertical
-    double rockFactor = smoothstep(0.30, 0.55, slope);
-    double dirtFactor = smoothstep(-2.0, 2.0, -height);  // a touch more dirt lower down
-    Vec3 ground = mixv(grass, dirt, 0.35 * dirtFactor);
+    // Steep ground reads as rock; gentle ground is a patchy mix of grass and
+    // dirt chosen by the noise term, so it's green in places and brown in others
+    // rather than a uniform color.
+    double slope = 1.0 - clamp01(normalUp);                 // 0 flat .. 1 vertical
+    double rockFactor = smoothstep(0.32, 0.60, slope);
+    double dirtFactor = smoothstep(-0.25, 0.25, noiseValue); // noise: grass<->dirt
+    Vec3 ground = mixv(grass, dirt, dirtFactor);
     Vec3 c = mixv(ground, rock, rockFactor);
-
-    // Break up the bands with the noise term, then clamp to valid color.
-    c = c * (0.85 + 0.30 * (0.5 * noiseValue + 0.5));
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }
 

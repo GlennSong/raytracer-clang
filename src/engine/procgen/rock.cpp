@@ -70,7 +70,18 @@ RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed) {
     double pad = extent * 0.15 + 2.0 * extent / std::max(1, params.resolution);
     Vec3 m(extent + pad, extent + pad, extent + pad);
     SdfBounds bounds{Vec3(0, 0, 0) - m, m};
-    return polygonizeSdf(body, bounds, params.resolution);
+    RenderMesh mesh = polygonizeSdf(body, bounds, params.resolution);
+
+    // Bake a grayscale brightness variation into the vertex color so the rock
+    // reads as mottled grey (the material albedo is multiplied by this), rather
+    // than a single flat tone.
+    Noise tint(seed + 50u);
+    for (Vertex& v : mesh.vertices) {
+        double n = tint.fbm3(v.position.x * 1.5, v.position.y * 1.5, v.position.z * 1.5, 2);
+        float b = static_cast<float>(0.78 + 0.30 * (0.5 * n + 0.5));   // ~0.78..1.08
+        v.color = Vec3(b, b, b);
+    }
+    return mesh;
 }
 
 }  // namespace engine

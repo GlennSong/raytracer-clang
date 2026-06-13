@@ -70,12 +70,16 @@ TEST_CASE(terrain_height_bounded_by_scale) {
     CHECK(maxAbs <= 12.0 * 1.05);
 }
 
-TEST_CASE(terrain_color_grass_on_flats_rock_on_slopes) {
-    Vec3 flat = terrainColor(0.0, 1.0, 0.0);    // flat ground -> grass
-    Vec3 steep = terrainColor(0.0, 0.0, 0.0);   // vertical -> rock
-    CHECK(flat.y > flat.x && flat.y > flat.z);            // grass is green-dominant
-    CHECK((flat.y - flat.x) > (steep.y - steep.x));       // flatter reads greener
-    for (const Vec3& c : {flat, steep}) {
+TEST_CASE(terrain_color_grass_dirt_patches_and_rock_slopes) {
+    Vec3 grass = terrainColor(0.0, 1.0, -1.0);   // flat, noise low -> green
+    Vec3 dirt  = terrainColor(0.0, 1.0,  1.0);   // flat, noise high -> brown
+    Vec3 rock  = terrainColor(0.0, 0.0,  0.0);   // vertical -> grey rock
+    CHECK(grass.y > grass.x && grass.y > grass.z);   // grass is green-dominant
+    CHECK(dirt.x > dirt.y && dirt.x > dirt.z);       // dirt is red/brown-dominant
+    CHECK(grass.y > dirt.y);                         // grass greener than dirt
+    // Rock is desaturated (channels close together), unlike green grass.
+    CHECK(std::fabs(rock.x - rock.y) < 0.1);
+    for (const Vec3& c : {grass, dirt, rock}) {
         CHECK(c.x >= 0.0 && c.x <= 1.0);
         CHECK(c.y >= 0.0 && c.y <= 1.0);
         CHECK(c.z >= 0.0 && c.z <= 1.0);
