@@ -2,6 +2,7 @@
 #include "../engine/components.h"
 #include "../engine/editor_bridge.h"
 #include "../engine/level_loader.h"
+#include "../engine/asset_manager.h"
 #include "../engine/systems/dev_control_system.h"
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/motion_system.h"
@@ -46,9 +47,10 @@ void ArenaState::update(FrameContext& ctx) {
 void ArenaState::onEnter(FrameContext& ctx) {
     // Always start from the document (edit mode may have just rewritten it).
     ctx.world.destroyAll();
+    ctx.assets.clear();   // free the previous level's deduped GPU meshes
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", true);
-    if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view)) {
+    if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view, ctx.assets)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
 

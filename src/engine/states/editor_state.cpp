@@ -2,6 +2,7 @@
 
 #include "../../renderer/window.h"
 #include "../level_loader.h"
+#include "../asset_manager.h"
 #include "../systems/dev_control_system.h"
 #include "../systems/camera_system.h"
 #include "../systems/camera_panel_system.h"
@@ -28,6 +29,7 @@ void EditorState::onEnter(FrameContext& ctx) {
     // The document is the only truth: drop whatever the previous mode left
     // (play-session spawns, physics aftermath) and load fresh.
     ctx.world.destroyAll();
+    ctx.assets.clear();   // free the previous level's deduped GPU meshes
 
     // Editor camera: scene-view style — right-drag looks, WASD/QE fly,
     // scroll dollies, left click is selection. (Buttonless free-look is the
@@ -38,7 +40,7 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
 
     if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view,
-                           /*editorMode=*/true)) {
+                           ctx.assets, /*editorMode=*/true)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
     PlayingState::onEnter(ctx);

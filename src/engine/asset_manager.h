@@ -34,6 +34,11 @@ public:
     // when its refcount reaches zero. A null or unknown handle is ignored.
     void releaseMesh(MeshHandle handle);
 
+    // Add a reference to an already-acquired handle — e.g. a duplicate that
+    // shares the mesh, where there is no key or source to re-acquire from.
+    // Returns the handle; an unknown handle is ignored.
+    MeshHandle retain(MeshHandle handle);
+
     // Cached bounds for a live mesh (no backend round-trip); null for unknown.
     BoundingSphere meshBounds(MeshHandle handle) const;
 

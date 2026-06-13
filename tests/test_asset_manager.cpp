@@ -87,6 +87,21 @@ TEST_CASE(asset_manager_clear_frees_all) {
     CHECK(up.uploads == 4);
 }
 
+TEST_CASE(asset_manager_retain_bumps_shared_refcount) {
+    // The duplicate pattern: a second reference to a mesh that has no key/source
+    // to re-acquire from. retain keeps it alive until both refs are released.
+    StubUploader up;
+    AssetManager assets(up);
+    MeshHandle h = assets.acquireMesh(RenderMesh{}, "");   // refs = 1
+    assets.retain(h);                                      // refs = 2
+    CHECK(assets.refCount(h) == 2);
+    assets.releaseMesh(h);
+    CHECK(up.removes == 0);                                // still referenced
+    assets.releaseMesh(h);
+    CHECK(up.removes == 1);                                // freed once
+    CHECK(assets.liveMeshCount() == 0);
+}
+
 TEST_CASE(asset_manager_primitive_dedups_and_builds_once) {
     StubUploader up;
     AssetManager assets(up);

@@ -1,5 +1,6 @@
 #include "level_loader.h"
 #include "mesh_builder.h"
+#include "asset_manager.h"
 #include "model_importer.h"
 #include "components.h"
 #include "property_json.h"
@@ -42,43 +43,14 @@ static RenderMaterial parseMaterial(const json& j) {
     return mat;
 }
 
-struct MeshKey {
-    std::string shape;
-    double d1, d2, d3;
-    bool operator==(const MeshKey& o) const {
-        return shape == o.shape && d1 == o.d1 && d2 == o.d2 && d3 == o.d3;
-    }
-};
-
-struct MeshKeyHash {
-    size_t operator()(const MeshKey& k) const {
-        size_t h = std::hash<std::string>{}(k.shape);
-        h ^= std::hash<double>{}(k.d1) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<double>{}(k.d2) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<double>{}(k.d3) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        return h;
-    }
-};
-
-static MeshHandle getOrCreateMesh(
-    const std::string& shape, const json& sizeJ,
-    Renderer& renderer,
-    std::unordered_map<MeshKey, MeshHandle, MeshKeyHash>& cache)
-{
-    Vec3 sz = parseVec3(sizeJ, Vec3(1, 1, 1));
-    MeshKey key{shape, sz.x, sz.y, sz.z};
-
-    auto it = cache.find(key);
-    if (it != cache.end()) return it->second;
-
-    RenderMesh mesh = MeshBuilder::shape(shape, sz);
-    if (mesh.vertices.empty()) {
-        LOG_ERROR << "Unknown shape: " << shape;
-        return MeshHandle{};
-    }
-
-    MeshHandle handle = renderer.uploadMesh(mesh);
-    cache[key] = handle;
+// Primitive meshes are deduped + refcounted by the AssetManager: identical
+// shape+size share one GPU upload across the whole level (and across loads,
+// since the manager persists), and the caller clears it before each load so the
+// previous level's meshes are freed.
+static MeshHandle getOrCreateMesh(const std::string& shape, const json& sizeJ,
+                                  AssetManager& assets) {
+    MeshHandle handle = assets.acquirePrimitive(shape, parseVec3(sizeJ, Vec3(1, 1, 1)));
+    if (!handle.valid()) LOG_ERROR << "Unknown shape: " << shape;
     return handle;
 }
 
@@ -158,9 +130,8 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
 }
 
 static void loadEntities(const json& entities, World& world, Renderer& renderer,
-                         const std::string& levelDir, bool editorMode) {
-    std::unordered_map<MeshKey, MeshHandle, MeshKeyHash> meshCache;
-
+                         AssetManager& assets, const std::string& levelDir,
+                         bool editorMode) {
     for (auto& ent : entities) {
         // Group / null object: a named transform with no mesh, for parenting.
         if (ent.value("group", false) ||
@@ -211,7 +182,7 @@ static void loadEntities(const json& entities, World& world, Renderer& renderer,
         createEntityCommon(e, ent, world);
         world.add<SourceSpec>(e, buildSourceSpec(ent, shape));
 
-        MeshHandle meshHandle = getOrCreateMesh(shape, sizeJ, renderer, meshCache);
+        MeshHandle meshHandle = getOrCreateMesh(shape, sizeJ, assets);
         Renderable r;
         r.mesh = meshHandle;
         if (ent.contains("material"))
@@ -338,7 +309,7 @@ static void loadLighting(const json& lighting, RenderView& view) {
 }
 
 static void loadPlayerSpawn(const json& player, World& world,
-                            Renderer& renderer) {
+                            AssetManager& assets) {
     Entity e = world.create();
     Transform t;
     if (player.contains("position"))
@@ -348,7 +319,8 @@ static void loadPlayerSpawn(const json& player, World& world,
     world.add<PlayerSpawn>(e);
 
     Renderable gizmo;
-    gizmo.mesh = renderer.uploadMesh(MeshBuilder::capsule(0.3f, 0.8f));
+    gizmo.mesh = assets.acquireMesh(MeshBuilder::capsule(0.3f, 0.8f),
+                                    "playerspawn:capsule");
     gizmo.material.albedo = Vec3(0.2, 0.8, 0.3);   // green = "you start here"
     gizmo.material.roughness = 0.5f;
     world.add<Renderable>(e, gizmo);
@@ -356,7 +328,7 @@ static void loadPlayerSpawn(const json& player, World& world,
 
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
-                       bool editorMode) {
+                       AssetManager& assets, bool editorMode) {
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;
@@ -386,10 +358,10 @@ bool LevelLoader::load(const std::string& path,
         levelDir = ".";
 
     if (root.contains("entities"))
-        loadEntities(root["entities"], world, renderer, levelDir, editorMode);
+        loadEntities(root["entities"], world, renderer, assets, levelDir, editorMode);
 
     if (root.contains("player"))
-        (editorMode ? loadPlayerSpawn(root["player"], world, renderer)
+        (editorMode ? loadPlayerSpawn(root["player"], world, assets)
                     : loadPlayer(root["player"], world));
 
     if (root.contains("lighting"))

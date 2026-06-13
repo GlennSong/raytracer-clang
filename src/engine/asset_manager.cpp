@@ -19,7 +19,9 @@ MeshHandle AssetManager::acquirePrimitive(const std::string& shape, Vec3 size) {
         records_[it->second].refs++;
         return it->second;
     }
-    return acquireMesh(MeshBuilder::shape(shape, size), key);
+    RenderMesh mesh = MeshBuilder::shape(shape, size);
+    if (mesh.vertices.empty()) return MeshHandle{};   // unknown shape: no upload
+    return acquireMesh(mesh, key);
 }
 
 MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& key) {
@@ -38,6 +40,12 @@ MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& 
     rec.key = key;
     records_[handle] = rec;
     if (!key.empty()) byKey_[key] = handle;
+    return handle;
+}
+
+MeshHandle AssetManager::retain(MeshHandle handle) {
+    auto it = records_.find(handle);
+    if (it != records_.end()) it->second.refs++;
     return handle;
 }
 
