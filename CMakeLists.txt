@@ -38,6 +38,7 @@ add_library(engine_core STATIC
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
     src/engine/asset_manager.cpp
+    src/engine/noise.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -158,6 +159,7 @@ add_executable(run_tests
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
     tests/test_mesh_builder.cpp
+    tests/test_noise.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
