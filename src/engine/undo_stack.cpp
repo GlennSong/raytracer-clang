@@ -98,13 +98,17 @@ void UndoStack::recordTransformEditMulti(const std::vector<Entity>& entities,
     push(std::move(cmd));
 }
 
-void UndoStack::recordReparent(Entity e, uint32_t before, uint32_t after) {
+void UndoStack::recordReparent(Entity e, uint32_t before, uint32_t after,
+                               const Transform& tBefore,
+                               const Transform& tAfter) {
     if (before == after) return;
     Command cmd;
     cmd.kind = Command::Reparent;
     cmd.entity = e;
     cmd.parentBefore = before;
     cmd.parentAfter = after;
+    cmd.transformBefore = tBefore;
+    cmd.transformAfter = tAfter;
     push(std::move(cmd));
 }
 
@@ -239,6 +243,13 @@ Entity UndoStack::apply(Command& cmd, World& world, bool forward) {
             SourceSpec* s = world.get<SourceSpec>(cmd.entity);
             if (!s) return Entity{};
             s->parentId = forward ? cmd.parentAfter : cmd.parentBefore;
+            // The local transform was rewritten alongside the link to hold
+            // world position; restore both together.
+            if (Transform* t = world.get<Transform>(cmd.entity)) {
+                *t = forward ? cmd.transformAfter : cmd.transformBefore;
+                if (auto* prev = world.get<PrevTransform>(cmd.entity))
+                    prev->value = *t;
+            }
             return cmd.entity;
         }
 

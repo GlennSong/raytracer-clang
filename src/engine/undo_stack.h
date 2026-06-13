@@ -53,8 +53,10 @@ public:
     void recordComponentRemove(World& world, Entity e,
                                const std::string& component);
     // Reparent: SourceSpec.parentId before -> after (the parent's document
-    // id, 0 = root). Not a described field, so it gets its own command.
-    void recordReparent(Entity e, uint32_t before, uint32_t after);
+    // id, 0 = root), AND the child's local Transform before -> after (it is
+    // rewritten to keep the child's world position when the parent changes).
+    void recordReparent(Entity e, uint32_t before, uint32_t after,
+                        const Transform& tBefore, const Transform& tAfter);
 
     // --- applying -----------------------------------------------------------
     bool canUndo() const { return !undoList.empty(); }

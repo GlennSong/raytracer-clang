@@ -192,11 +192,13 @@ void EditorBridge::placeCamera() {
 void EditorBridge::reparent(Entity child, Entity parent) {
     if (!editable() || !worldPtr->alive(child)) return;
     SourceSpec* childSpec = worldPtr->get<SourceSpec>(child);
-    if (!childSpec) return;
+    Transform* childT = worldPtr->get<Transform>(child);
+    if (!childSpec || !childT) return;
 
     // An invalid parent means "move to root". A valid one must be a document
     // entity and must not close a cycle.
     uint32_t newParentId = 0;
+    Entity parentEntity;
     if (parent.valid()) {
         SourceSpec* parentSpec = worldPtr->get<SourceSpec>(parent);
         if (!parentSpec || child == parent) return;
@@ -205,12 +207,26 @@ void EditorBridge::reparent(Entity child, Entity parent) {
             return;
         }
         newParentId = parentSpec->id;
+        parentEntity = parent;
     }
     if (newParentId == childSpec->parentId) return;
 
+    // Keep the child's WORLD position: its local transform is rewritten to be
+    // relative to the new parent (Unity's worldPositionStays). Grabbing the
+    // group doesn't teleport its children; moving the group then carries them
+    // along by their preserved relative offsets.
+    Mat4 childWorld = worldMatrix(*worldPtr, child);    // uses the OLD parent
+    Mat4 newParentWorld =
+        parentEntity.valid() ? worldMatrix(*worldPtr, parentEntity) : Mat4();
+    Transform before = *childT;
+    Transform after = transformFromMatrix(newParentWorld.inverse() * childWorld);
+
     if (UndoStack* undo = undoStack())
-        undo->recordReparent(child, childSpec->parentId, newParentId);
+        undo->recordReparent(child, childSpec->parentId, newParentId, before,
+                             after);
     childSpec->parentId = newParentId;
+    *childT = after;
+    if (auto* prev = worldPtr->get<PrevTransform>(child)) prev->value = after;
     notify(EditorNotice::SelectionChanged);   // tree shape changed
 }
 

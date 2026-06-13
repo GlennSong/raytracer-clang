@@ -139,7 +139,12 @@ session.
   removes/deletes the source rows (an InternalMove MoveAction did, leaving
   dangling QTreeWidgetItem pointers — a crash dragging a multi-selection
   into a group).
-- **Tests**: 188 engine cases (`make test` / ctest) + physics + the Qt
+- **World-preserving reparent**: reparenting keeps a child's world position
+  (Unity's worldPositionStays) — its local transform is rewritten relative
+  to the new parent, so dropping objects into a group doesn't teleport them;
+  moving the group then carries them by their preserved offsets. The
+  Reparent undo command restores both the link and the rewritten transform.
+- **Tests**: 189 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so

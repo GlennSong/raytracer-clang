@@ -299,6 +299,35 @@ TEST_CASE(level_writer_assigns_ids_to_unidentified_entities) {
     CHECK(a != b);
 }
 
+TEST_CASE(editor_bridge_reparent_preserves_world_position) {
+    World world;
+    Entity group = addBox(world, Vec3(10, 0, 0));   // stand-in for a group
+    Entity ball = addBox(world, Vec3(5, 0, 0));
+    world.get<SourceSpec>(group)->id = 1;
+    world.get<SourceSpec>(ball)->id = 2;
+
+    EditorBridge bridge;
+    bridge.attach(&world, nullptr, "level.json");
+
+    // Parenting must NOT move the ball in the world: its local transform is
+    // rewritten relative to the parent (5 - 10 = -5), world stays (5,0,0).
+    bridge.reparent(ball, group);
+    CHECK(world.get<SourceSpec>(ball)->parentId == 1);
+    CHECK_APPROX(world.get<Transform>(ball)->position.x, -5.0, 1e-9);
+    Vec3 worldPos = worldMatrix(world, ball).transformPoint(Vec3(0, 0, 0));
+    CHECK_APPROX(worldPos.x, 5.0, 1e-9);
+
+    // Moving the group carries the child by its preserved offset.
+    world.get<Transform>(group)->position = Vec3(20, 0, 0);
+    Vec3 moved = worldMatrix(world, ball).transformPoint(Vec3(0, 0, 0));
+    CHECK_APPROX(moved.x, 15.0, 1e-9);   // 20 + (-5)
+
+    // Un-parenting back to root also keeps world position (now 15).
+    bridge.reparent(ball, Entity{});
+    CHECK(world.get<SourceSpec>(ball)->parentId == 0);
+    CHECK_APPROX(world.get<Transform>(ball)->position.x, 15.0, 1e-9);
+}
+
 TEST_CASE(editor_bridge_reparents_with_cycle_guard) {
     World world;
     Entity a = addBox(world, Vec3(0, 0, 0));
@@ -309,7 +338,7 @@ TEST_CASE(editor_bridge_reparents_with_cycle_guard) {
     EditorBridge bridge;
     bridge.attach(&world, nullptr, "level.json");
 
-    // Parent b under a.
+    // Parent b under a (a is at origin, so b's local stays (1,0,0)).
     bridge.reparent(b, a);
     CHECK(world.get<SourceSpec>(b)->parentId == 1);
 
