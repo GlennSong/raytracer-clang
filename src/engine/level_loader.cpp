@@ -1,6 +1,7 @@
 #include "level_loader.h"
 #include "mesh_builder.h"
 #include "asset_manager.h"
+#include "terrain.h"
 #include "model_importer.h"
 #include "components.h"
 #include "property_json.h"
@@ -326,6 +327,38 @@ static void loadPlayerSpawn(const json& player, World& world,
     world.add<Renderable>(e, gizmo);
 }
 
+// Procedural terrain (ADR-0021 persistence: the document stores the recipe —
+// seed + params — and the engine regenerates the mesh at load, rather than
+// serializing the geometry). The terrain entity carries no SourceSpec, so the
+// LevelWriter never writes it back as a document entity (it stays a regenerated
+// runtime object); its GPU mesh is owned by the AssetManager and freed on the
+// next clear(). Terrain collision is deferred (fly the editor camera to view).
+static void loadTerrain(const json& t, World& world, AssetManager& assets) {
+    TerrainParams p;
+    p.size        = t.value("size", p.size);
+    p.resolution  = t.value("resolution", p.resolution);
+    p.heightScale = t.value("heightScale", p.heightScale);
+    p.noiseScale  = t.value("noiseScale", p.noiseScale);
+    p.octaves     = t.value("octaves", p.octaves);
+    p.warp        = t.value("warp", p.warp);
+    Noise noise(t.value("seed", 0u));
+
+    Entity e = world.create();
+    Transform tr;   // generated directly in world space
+    world.add<Transform>(e, tr);
+    world.add<PrevTransform>(e, PrevTransform{tr});
+
+    Renderable r;
+    r.mesh = assets.acquireMesh(generateTerrain(p, noise), "terrain");
+    if (t.contains("material")) {
+        applyMaterial(t["material"], r.material);
+    } else {
+        r.material.albedo = Vec3(0.42, 0.5, 0.32);   // muted green-brown default
+        r.material.roughness = 0.95f;
+    }
+    world.add<Renderable>(e, r);
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
@@ -356,6 +389,9 @@ bool LevelLoader::load(const std::string& path,
         levelDir = path.substr(0, lastSlash);
     else
         levelDir = ".";
+
+    if (root.contains("terrain"))
+        loadTerrain(root["terrain"], world, assets);
 
     if (root.contains("entities"))
         loadEntities(root["entities"], world, renderer, assets, levelDir, editorMode);
