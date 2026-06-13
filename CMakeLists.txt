@@ -37,6 +37,7 @@ add_library(engine_core STATIC
     src/engine/states/debug_overlay_state.cpp
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
+    src/engine/asset_manager.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -155,6 +156,7 @@ add_executable(run_tests
     tests/test_day_night.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
+    tests/test_asset_manager.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

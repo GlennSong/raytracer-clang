@@ -54,7 +54,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
 	$(TEST_DIR)/test_cube_faces.cpp \
-	$(TEST_DIR)/test_path_tracer.cpp
+	$(TEST_DIR)/test_path_tracer.cpp \
+	$(TEST_DIR)/test_asset_manager.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -77,6 +78,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/undo_stack.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
+	$(SRC_DIR)/engine/asset_manager.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \
