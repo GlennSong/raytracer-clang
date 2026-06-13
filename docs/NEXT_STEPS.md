@@ -215,6 +215,19 @@ importer still moves only the first sub-mesh); camera parenting (SceneCamera
 entities don't carry SourceSpec, so they don't parent yet); preserving tree
 expansion state across rebuilds.
 
+## Editor UI polish (tenth round, from feedback)
+
+- Inspector: color swatch + OS picker for color fields; object name/kind
+  header; default-name placeholder; trash-icon delete in the header
+  (replacing the bottom button); section separator lines; clearer
+  Add Component button (icon + tooltip).
+- Toolbar: icon-only transport cluster with tooltips; Play is a split button
+  (click plays, press-and-hold -> Play / Play From Here); Move/Rotate/Scale
+  gizmo-mode buttons (exclusive, mirror the engine's 1/2/3 via
+  `EditorBridge::setGizmoMode/gizmoMode`); everything tooltipped.
+- Hierarchy tree: indentation, alternating row colours, taller rows, and
+  type icons (folder / camera / file) instead of `[grp]`/`[cam]` text tags.
+
 ## Editor viewport gizmos (ninth round)
 
 - **Group markers**: null objects draw a small cyan wireframe box at their

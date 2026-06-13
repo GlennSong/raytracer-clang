@@ -19,6 +19,7 @@
 #include "../log.h"
 #include "property_inspector.h"
 
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
@@ -54,6 +55,7 @@
 #include <QWheelEvent>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -290,6 +292,12 @@ public:
         setDragDropMode(QAbstractItemView::InternalMove);
         setDragEnabled(true);
         setAcceptDrops(true);
+        // A bit of breathing room: clearer nesting, alternating rows, and
+        // taller rows so the tree reads as structure, not a dense list.
+        setIndentation(16);
+        setAlternatingRowColors(true);
+        setAnimated(true);
+        setStyleSheet("QTreeWidget::item { padding: 2px 0px; }");
     }
 
 protected:
@@ -436,11 +444,18 @@ struct Panels {
         rowItems.assign(lastList.size(), nullptr);
         std::unordered_map<uint32_t, QTreeWidgetItem*> byId;
 
+        QStyle* st = hierarchy->style();
         for (size_t i = 0; i < lastList.size(); i++) {
             const auto& info = lastList[i];
             auto* item = new QTreeWidgetItem;
-            const char* tag = info.isCamera ? "[cam] " : info.isGroup ? "[grp] " : "";
-            item->setText(0, QString::fromStdString(tag + info.label));
+            item->setText(0, QString::fromStdString(info.label));
+            // A type icon instead of text tags: folder for groups, a desktop
+            // glyph for cameras, a file glyph for plain objects.
+            QStyle::StandardPixmap icon =
+                info.isGroup ? QStyle::SP_DirIcon
+                : info.isCamera ? QStyle::SP_ComputerIcon
+                                : QStyle::SP_FileIcon;
+            item->setIcon(0, st->standardIcon(icon));
             item->setData(0, Qt::UserRole, static_cast<int>(i));
             rowItems[i] = item;
             if (info.id != 0) byId[info.id] = item;
@@ -653,36 +668,49 @@ int main(int argc, char** argv) {
         }
     });
 
-    // Toolbar, in three groups: document | transport (video-player order) |
-    // editing tools. Standard style icons keep it native without shipping
-    // an icon set.
+    // Toolbar, in groups: document | transport (icon buttons, Unity-style) |
+    // gizmo modes | editing tools. Standard style icons keep it native.
     const QStyle* style = mainWindow.style();
     auto* toolbar = mainWindow.addToolBar("Main");
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);   // transport = icons
+    // Force a toolbar action's button back to showing its text (for the
+    // labelled tools after the icon-only transport cluster).
+    auto asTextButton = [&](QAction* a) {
+        if (auto* w = qobject_cast<QToolButton*>(toolbar->widgetForAction(a)))
+            w->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    };
 
-    toolbar->addAction(style->standardIcon(QStyle::SP_DialogSaveButton),
-                       "Save", [&]() {
+    auto* saveAction = toolbar->addAction(
+        style->standardIcon(QStyle::SP_DialogSaveButton), "Save", [&]() {
         if (bridge.editable()) bridge.saveDocument();
     });
+    saveAction->setToolTip("Save the level (Ctrl+S)");
     toolbar->addSeparator();
 
-    auto* playAction = toolbar->addAction(
-        style->standardIcon(QStyle::SP_MediaPlay), "Play", [&]() {
+    // Play = compile + run. Click plays from the document spawn; press-and-
+    // hold opens a menu to Play From Here (the editor camera) instead.
+    auto startPlay = [&](bool fromHere) {
         if (!bridge.editable()) return;     // already playing
-        bridge.saveDocument();              // Play = compile + run
+        bridge.saveDocument();
+        if (fromHere) app.settings().setBool("playFromHere", true);
         app.simClock().setPaused(false);    // a fresh playtest always runs
         app.requestState(makePlay());
         viewport->setFocus();               // WASD goes to the game, not Qt
-    });
-    auto* playHereAction = toolbar->addAction(
-        style->standardIcon(QStyle::SP_MediaSkipForward), "Play Here", [&]() {
-        if (!bridge.editable()) return;
-        bridge.saveDocument();
-        app.settings().setBool("playFromHere", true);   // one-shot override
-        app.simClock().setPaused(false);
-        app.requestState(makePlay());
-        viewport->setFocus();
-    });
+    };
+    auto* playButton = new QToolButton(toolbar);
+    playButton->setIcon(style->standardIcon(QStyle::SP_MediaPlay));
+    playButton->setToolTip("Play  (press and hold for Play From Here)");
+    playButton->setPopupMode(QToolButton::DelayedPopup);
+    QObject::connect(playButton, &QToolButton::clicked,
+                     [startPlay]() { startPlay(false); });
+    auto* playMenu = new QMenu(playButton);
+    playMenu->addAction(style->standardIcon(QStyle::SP_MediaPlay), "Play",
+                        [startPlay]() { startPlay(false); });
+    playMenu->addAction(style->standardIcon(QStyle::SP_MediaSkipForward),
+                        "Play From Here", [startPlay]() { startPlay(true); });
+    playButton->setMenu(playMenu);
+    toolbar->addWidget(playButton);
+
     // Transport during play: the same pause switch Space toggles in-game,
     // plus fixed-step frame advance (Application::simClock is the hook).
     auto* pauseAction = toolbar->addAction(
@@ -691,18 +719,19 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     pauseAction->setCheckable(true);
+    pauseAction->setToolTip("Pause / resume the simulation (Space)");
     auto* stepAction = toolbar->addAction(
         style->standardIcon(QStyle::SP_MediaSeekForward), "Step", [&]() {
         app.simClock().requestStep();
     });
+    stepAction->setToolTip("Advance one fixed step while paused");
     auto* stopAction = toolbar->addAction(
         style->standardIcon(QStyle::SP_MediaStop), "Stop", [&]() {
         if (bridge.editable()) return;      // already editing
         app.requestState(makeEditor());
         viewport->setFocus();
     });
-    // Re-run the playtest from the document spawn (the document can't have
-    // changed mid-play; nothing to re-save).
+    stopAction->setToolTip("Stop and return to edit mode (Esc)");
     auto* restartAction = toolbar->addAction(
         style->standardIcon(QStyle::SP_BrowserReload), "Restart", [&]() {
         if (bridge.editable() || !bridge.attached()) return;
@@ -710,16 +739,36 @@ int main(int argc, char** argv) {
         app.requestState(makePlay());
         viewport->setFocus();
     });
+    restartAction->setToolTip("Restart the playtest from the spawn point");
     toolbar->addSeparator();
 
-    // Add: place primitives / cameras from native UI (the in-viewport ImGui
-    // Add panel is suppressed while the shell hosts the engine). Creation is
+    // Gizmo mode (mirrors the viewport's 1/2/3 keys). Exclusive, text labels.
+    auto* gizmoGroup = new QActionGroup(toolbar);
+    auto addGizmo = [&](const char* label, int op, const char* tip) {
+        auto* a = toolbar->addAction(label, [&, op]() {
+            bridge.setGizmoMode(op);
+            viewport->setFocus();
+        });
+        a->setCheckable(true);
+        a->setActionGroup(gizmoGroup);
+        a->setToolTip(tip);
+        asTextButton(a);
+        return a;
+    };
+    auto* moveAction = addGizmo("Move", 0, "Move tool (1)");
+    auto* rotateAction = addGizmo("Rotate", 1, "Rotate tool (2)");
+    auto* scaleAction = addGizmo("Scale", 2, "Scale tool (3)");
+    moveAction->setChecked(true);
+    toolbar->addSeparator();
+
+    // Add: place primitives / cameras / groups from native UI. Creation is
     // queued onto the editor — the spawn point comes from the live view.
     auto* addButton = new QToolButton(toolbar);
     addButton->setText("Add");
     addButton->setIcon(style->standardIcon(QStyle::SP_FileDialogNewFolder));
     addButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     addButton->setPopupMode(QToolButton::InstantPopup);
+    addButton->setToolTip("Add an object to the level");
     auto* addShapeMenu = new QMenu(addButton);
     static const char* SHAPES[] = {"box", "sphere", "cylinder", "plane",
                                    "cone", "wedge", "torus", "capsule"};
@@ -743,6 +792,8 @@ int main(int argc, char** argv) {
     });
     gridAction->setCheckable(true);
     gridAction->setChecked(app.settings().getBool("editorGrid", true));
+    gridAction->setToolTip("Toggle the ground grid");
+    asTextButton(gridAction);
 
     // Physics as a level-design tool: while playing, overwrite the document
     // with the live world (settled stacks, pushed props). Stop then reloads
@@ -760,6 +811,8 @@ int main(int argc, char** argv) {
                : "Bake failed (see console)",
             4000);
     });
+    bakeAction->setToolTip("Overwrite the level with the current play state");
+    asTextButton(bakeAction);
 
     // Open a level from the asset browser.
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
@@ -781,8 +834,7 @@ int main(int argc, char** argv) {
     // notice arrives, so mode/selection flips don't wait out the timer.
     auto refreshChrome = [&]() {
         const bool editing = bridge.editable();
-        playAction->setEnabled(editing);
-        playHereAction->setEnabled(editing);
+        playButton->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);
         pauseAction->setEnabled(!editing);
@@ -794,6 +846,19 @@ int main(int argc, char** argv) {
         redoAction->setEnabled(bridge.canRedo());
         duplicateAction->setEnabled(editing);
         deleteAction->setEnabled(editing);
+        // Gizmo mode buttons mirror the engine (1/2/3 keys can change it);
+        // block signals so reflecting the state doesn't fire setGizmoMode.
+        moveAction->setEnabled(editing);
+        rotateAction->setEnabled(editing);
+        scaleAction->setEnabled(editing);
+        if (editing) {
+            QAction* modes[3] = {moveAction, rotateAction, scaleAction};
+            int op = std::clamp(bridge.gizmoMode(), 0, 2);
+            if (!modes[op]->isChecked()) {
+                const QSignalBlocker b(gizmoGroup);
+                modes[op]->setChecked(true);
+            }
+        }
         const QString title =
             bridge.documentDirty() ? baseTitle + " *" : baseTitle;
         if (mainWindow.windowTitle() != title) mainWindow.setWindowTitle(title);

@@ -69,6 +69,14 @@ void EditorBridge::setSelection(const std::vector<Entity>& entities,
                                : (entities.empty() ? Entity{} : entities.back()));
 }
 
+void EditorBridge::setGizmoMode(int op) {
+    if (editorPtr) editorPtr->setGizmoOp(op);
+}
+
+int EditorBridge::gizmoMode() const {
+    return editorPtr ? editorPtr->gizmoOpMode() : 0;
+}
+
 std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
     std::vector<EntityInfo> out;
     if (!worldPtr) return out;

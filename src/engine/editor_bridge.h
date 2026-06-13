@@ -62,6 +62,11 @@ public:
     std::vector<Entity> selectionList() const;
     void setSelection(const std::vector<Entity>& entities, Entity primary);
 
+    // Gizmo manipulation mode: 0 translate, 1 rotate, 2 scale (shared with
+    // the viewport's 1/2/3 keys via EditorSystem).
+    void setGizmoMode(int op);
+    int gizmoMode() const;
+
     // The document entities a hierarchy panel shows: SourceSpec-bearing
     // objects and placed cameras, with display labels. `id`/`parentId` are
     // the document hierarchy (0 = root / no id); a tree view builds from them.
