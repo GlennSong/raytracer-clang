@@ -135,3 +135,21 @@ TEST_CASE(hosted_window_relative_mouse_mode_for_capture) {
     CHECK_APPROX(win.getInput().mouseDeltaX, 5.0, 1e-9);
     CHECK_APPROX(win.getInput().mouseDeltaY, 4.0, 1e-9);
 }
+
+TEST_CASE(hosted_window_publishes_injected_gamepads) {
+    // The Qt editor has no GLFW; it polls the GCController backend and pushes
+    // the snapshot via setGamepads. getGamepads() must reflect it so the engine
+    // (player input, fly camera) sees the sticks in the editor.
+    HostedWindow win;
+    win.initialize(800, 600, "test");
+    CHECK(!win.getGamepads()[0].connected);   // none by default in hosted mode
+
+    GamepadSet pads;
+    pads[0].connected = true;
+    pads[0].axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.5f;
+    win.setGamepads(pads);
+
+    CHECK(win.getGamepads()[0].connected);
+    CHECK_APPROX(win.getGamepads()[0].axes[static_cast<size_t>(GamepadAxis::LeftX)],
+                 0.5, 1e-6);
+}

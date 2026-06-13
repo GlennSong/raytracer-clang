@@ -16,6 +16,7 @@
 #include "../engine/states/editor_state.h"
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
+#include "../renderer/gamepad_gc.h"
 #include "../log.h"
 #include "property_inspector.h"
 
@@ -872,12 +873,19 @@ int main(int argc, char** argv) {
     // Qt owns the loop; the engine steps per timer tick, panels poll slower
     // — except when the engine notifies (mode/selection/save), which
     // refreshes on the very next frame.
+    // Gamepads: the Qt host has no GLFW, so poll the GCController backend each
+    // frame and push the snapshot into the hosted window (no-op off macOS).
+    // The engine's player input + fly camera then respond in the editor.
+    engine::GamepadSet editorGamepads;
+
     QTimer frameTimer;
     QObject::connect(&frameTimer, &QTimer::timeout, [&]() {
         if (!app.running()) {
             qtApp.quit();
             return;
         }
+        engine::gcPollGamepads(editorGamepads);
+        hosted->setGamepads(editorGamepads);
         viewport->pollCapturedMouse();   // relative look while playing
         app.runFrame();
         console.drain();
