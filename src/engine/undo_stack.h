@@ -46,6 +46,9 @@ public:
     void recordComponentAdd(World& world, Entity e, const std::string& component);
     void recordComponentRemove(World& world, Entity e,
                                const std::string& component);
+    // Reparent: SourceSpec.parentId before -> after (the parent's document
+    // id, 0 = root). Not a described field, so it gets its own command.
+    void recordReparent(Entity e, uint32_t before, uint32_t after);
 
     // --- applying -----------------------------------------------------------
     bool canUndo() const { return !undoList.empty(); }
@@ -83,13 +86,15 @@ private:
             Create,
             Delete,
             ComponentAdd,
-            ComponentRemove
+            ComponentRemove,
+            Reparent
         } kind = FieldEdit;
         Entity entity;
         std::string component;    // FieldEdit / ComponentAdd / ComponentRemove
         std::string fieldLabel;   // FieldEdit coalescing key ("" = none)
         nlohmann::json before, after;   // FieldEdit; ComponentRemove uses before
         Transform transformBefore, transformAfter;
+        uint32_t parentBefore = 0, parentAfter = 0;   // Reparent
         EntitySnapshot snapshot;        // Create (filled on undo) / Delete
     };
 

@@ -72,6 +72,7 @@ private:
     void pickAtCursor(FrameContext& ctx);
     void frameSelected(FrameContext& ctx);
     Entity addPrimitive(FrameContext& ctx, const std::string& shape);
+    Entity addGroup(FrameContext& ctx);
     Entity duplicateSelected(FrameContext& ctx);
     Vec3 spawnPoint(FrameContext& ctx) const;
     void processShellRequests(FrameContext& ctx);

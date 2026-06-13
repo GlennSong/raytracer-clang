@@ -115,23 +115,14 @@ Mat4 fromGizmo(const float* in) {
     return m;
 }
 
-// Decompose a manipulated matrix back into our Transform (M = T*R*S): the
-// translation is the last column, scale the rotation columns' lengths, and
-// the orientation the normalized rotation part.
-void matrixToTransform(const Mat4& m, Transform& t) {
-    t.position = Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
-    Vec3 cx(m.m[0][0], m.m[1][0], m.m[2][0]);
-    Vec3 cy(m.m[0][1], m.m[1][1], m.m[2][1]);
-    Vec3 cz(m.m[0][2], m.m[1][2], m.m[2][2]);
-    t.scale = Vec3(cx.length(), cy.length(), cz.length());
-    if (t.scale.x < 1e-9 || t.scale.y < 1e-9 || t.scale.z < 1e-9) return;
-
-    Mat4 pure;
-    Vec3 nx = cx / t.scale.x, ny = cy / t.scale.y, nz = cz / t.scale.z;
-    pure.m[0][0] = nx.x; pure.m[1][0] = nx.y; pure.m[2][0] = nx.z;
-    pure.m[0][1] = ny.x; pure.m[1][1] = ny.y; pure.m[2][1] = ny.z;
-    pure.m[0][2] = nz.x; pure.m[1][2] = nz.y; pure.m[2][2] = nz.z;
-    t.orientation = Quat::fromRotationMatrix(pure);
+// The selected entity's parent world matrix (identity if unparented) — the
+// gizmo works in world space, so a manipulated world matrix converts back to
+// the entity's LOCAL Transform via this matrix's inverse.
+Mat4 parentWorldMatrix(World& world, Entity e) {
+    SourceSpec* s = world.get<SourceSpec>(e);
+    if (!s || s->parentId == 0) return Mat4();
+    Entity parent = findByDocumentId(world, s->parentId);
+    return parent.valid() ? worldMatrix(world, parent) : Mat4();
 }
 #endif
 
@@ -184,17 +175,21 @@ void EditorSystem::onStart(FrameContext& ctx) {
 void EditorSystem::frameSelected(FrameContext& ctx) {
     Transform* t = ctx.world.get<Transform>(selected);
     if (!t) return;
+    Mat4 wm = worldMatrix(ctx.world, selected);
+    Vec3 worldPos = Vec3(wm.m[0][3], wm.m[1][3], wm.m[2][3]);
     Renderable* r = ctx.world.get<Renderable>(selected);
     Real radius = 1.0;
     if (r) {
         BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
-        Real maxScale = std::max({std::abs(t->scale.x), std::abs(t->scale.y),
-                                  std::abs(t->scale.z)});
+        Vec3 cx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
+        Vec3 cy(wm.m[0][1], wm.m[1][1], wm.m[2][1]);
+        Vec3 cz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
+        Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
         radius = std::max(bounds.radius * maxScale, Real(0.5));
     }
     // Keep the current view direction; back off far enough to see the object.
     FlyCameraController& fly = cameras.flyController();
-    fly.eye = t->position - fly.forward() * (radius * 3.5);
+    fly.eye = worldPos - fly.forward() * (radius * 3.5);
 }
 
 void EditorSystem::onStop(FrameContext&) {
@@ -231,7 +226,8 @@ void EditorSystem::update(FrameContext& ctx) {
 void EditorSystem::processShellRequests(FrameContext& ctx) {
     for (const std::string& what : pendingAdds) {
         Entity e = (what == "camera") ? cameras.placeCameraAtView(ctx)
-                                      : addPrimitive(ctx, what);
+                   : (what == "group") ? addGroup(ctx)
+                                       : addPrimitive(ctx, what);
         if (e.valid()) {
             selected = e;
             undoStack()->recordCreate(e);
@@ -255,14 +251,18 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
     Entity best;
     double bestT = 1e30;
     ctx.world.each<Transform, Renderable>(
-        [&](Entity e, Transform& t, Renderable& r) {
+        [&](Entity e, Transform&, Renderable& r) {
             BoundingSphere bounds = ctx.renderer.getMeshBounds(r.mesh);
-            Vec3 center = t.matrix().transformPoint(bounds.center);
-            Real maxScale = std::max({std::abs(t.scale.x), std::abs(t.scale.y),
-                                      std::abs(t.scale.z)});
+            // World matrix so parented children are hit where they're drawn.
+            Mat4 wm = worldMatrix(ctx.world, e);
+            Vec3 center = wm.transformPoint(bounds.center);
+            Vec3 cx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
+            Vec3 cy(wm.m[0][1], wm.m[1][1], wm.m[2][1]);
+            Vec3 cz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
+            Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
             // Broad phase: cheap sphere reject. Narrow: tight box hit.
             if (raySphere(ray, center, bounds.radius * maxScale) <= 0.0) return;
-            double hit = rayBox(ray, t.matrix(), bounds);
+            double hit = rayBox(ray, wm, bounds);
             if (hit > 0.0 && hit < bestT) {
                 bestT = hit;
                 best = e;
@@ -286,6 +286,7 @@ Entity EditorSystem::addPrimitive(FrameContext& ctx, const std::string& shape) {
     RenderMesh mesh = MeshBuilder::shape(shape, spec.size);
     if (mesh.vertices.empty()) return Entity{};
 
+    spec.id = nextDocumentId(ctx.world);
     Entity e = ctx.world.create();
     Transform t;
     t.position = spawnPoint(ctx);
@@ -301,19 +302,40 @@ Entity EditorSystem::addPrimitive(FrameContext& ctx, const std::string& shape) {
     return e;
 }
 
+Entity EditorSystem::addGroup(FrameContext& ctx) {
+    // A null object: a named transform, no mesh. Parent things under it to
+    // move them together. Pickable from the hierarchy, not the viewport.
+    SourceSpec spec;
+    spec.shape = "";   // marks it a group (isGroup())
+    spec.name = "Group " + std::to_string(nextDocumentId(ctx.world));
+    spec.id = nextDocumentId(ctx.world);
+
+    Entity e = ctx.world.create();
+    Transform t;
+    t.position = spawnPoint(ctx);
+    ctx.world.add<Transform>(e, t);
+    ctx.world.add<PrevTransform>(e, {t});
+    ctx.world.add<SourceSpec>(e, spec);
+    return e;
+}
+
 Entity EditorSystem::duplicateSelected(FrameContext& ctx) {
     Transform* t = ctx.world.get<Transform>(selected);
     SourceSpec* spec = ctx.world.get<SourceSpec>(selected);
-    Renderable* r = ctx.world.get<Renderable>(selected);
-    if (!t || !spec || !r) return Entity{};
+    if (!t || !spec) return Entity{};
 
     Entity e = ctx.world.create();
     Transform copy = *t;
     copy.position += Vec3(spec->size.x + 0.5, 0, 0);   // beside the original
     ctx.world.add<Transform>(e, copy);
     ctx.world.add<PrevTransform>(e, {copy});
-    ctx.world.add<SourceSpec>(e, *spec);
-    ctx.world.add<Renderable>(e, *r);   // shares the uploaded mesh
+
+    SourceSpec dup = *spec;
+    dup.id = nextDocumentId(ctx.world);   // fresh id; keep parentId (a sibling)
+    ctx.world.add<SourceSpec>(e, dup);
+
+    if (Renderable* r = ctx.world.get<Renderable>(selected))
+        ctx.world.add<Renderable>(e, *r);   // shares the uploaded mesh
     return e;
 }
 
@@ -411,6 +433,11 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
     }
     if (ImGui::Button("camera")) {
         selected = cameras.placeCameraAtView(ctx);
+        if (undo && selected.valid()) undo->recordCreate(selected);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("group")) {
+        selected = addGroup(ctx);
         if (undo && selected.valid()) undo->recordCreate(selected);
     }
 
@@ -577,7 +604,8 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     float viewF[16], projF[16], modelF[16];
     toGizmo(view, viewF);
     toGizmo(proj, projF);
-    toGizmo(t->matrix(), modelF);
+    // Manipulate in WORLD space so parented entities drag where they're drawn.
+    toGizmo(worldMatrix(ctx.world, selected), modelF);
 
     ImGuiIO& io = ImGui::GetIO();
     ImGuizmo::SetOrthographic(false);
@@ -608,7 +636,11 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     bool usingNow = ImGuizmo::IsUsing();
     if (usingNow) {
         if (!gizmoWasUsing) gizmoDragStart = *t;   // drag begins this frame
-        matrixToTransform(fromGizmo(modelF), *t);
+        // World back to local: strip the parent's contribution before
+        // decomposing, so a child stores its transform relative to its parent.
+        Mat4 local = parentWorldMatrix(ctx.world, selected).inverse() *
+                     fromGizmo(modelF);
+        *t = transformFromMatrix(local);
         if (auto* prev = ctx.world.get<PrevTransform>(selected))
             prev->value = *t;
     } else if (gizmoWasUsing && undo) {
@@ -631,7 +663,8 @@ void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
     Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
                                   cam.aspectRatio, cam.nearPlane, cam.farPlane);
     BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
-    Vec3 center = t->matrix().transformPoint(bounds.center);
+    Mat4 wm = worldMatrix(ctx.world, selected);
+    Vec3 center = wm.transformPoint(bounds.center);
 
     Vec3 viewPos = view.transformPoint(center);
     if (viewPos.z > -1e-3) return;   // behind the camera (-Z is forward)
@@ -642,8 +675,10 @@ void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
     float sy = vp->Pos.y + (0.5f - static_cast<float>(ndc.y) * 0.5f) * vp->Size.y;
 
     // Apparent radius: world radius over distance, scaled into pixels.
-    Real maxScale = std::max({std::abs(t->scale.x), std::abs(t->scale.y),
-                              std::abs(t->scale.z)});
+    Vec3 wcx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
+    Vec3 wcy(wm.m[0][1], wm.m[1][1], wm.m[2][1]);
+    Vec3 wcz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
+    Real maxScale = std::max({wcx.length(), wcy.length(), wcz.length()});
     float dist = static_cast<float>(-viewPos.z);
     float fovScale = vp->Size.y / (2.0f * std::tan(degreesToRadians(cam.fovDegrees) * 0.5f));
     float radius = static_cast<float>(bounds.radius * maxScale) / dist * fovScale;

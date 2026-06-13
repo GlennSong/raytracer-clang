@@ -8,6 +8,8 @@
 #include <fstream>
 #include <unordered_map>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -139,6 +141,8 @@ static void addPhysics(Entity e, const json& ent, const std::string& shape,
 // Authoring provenance for the editor's LevelWriter (docs/edit-mode-plan.md).
 static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     SourceSpec spec;
+    spec.id = ent.value("id", 0u);
+    spec.parentId = ent.value("parent", 0u);
     spec.name = ent.value("name", std::string());
     spec.shape = shape;
     spec.size = parseVec3(ent.value("size", json()), Vec3(1, 1, 1));
@@ -154,10 +158,21 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
 }
 
 static void loadEntities(const json& entities, World& world, Renderer& renderer,
-                         const std::string& levelDir) {
+                         const std::string& levelDir, bool editorMode) {
     std::unordered_map<MeshKey, MeshHandle, MeshKeyHash> meshCache;
 
     for (auto& ent : entities) {
+        // Group / null object: a named transform with no mesh, for parenting.
+        if (ent.value("group", false) ||
+            (ent.contains("shape") && ent["shape"].get<std::string>().empty()
+             && !ent.contains("mesh"))) {
+            Entity e = world.create();
+            createEntityCommon(e, ent, world);
+            SourceSpec spec = buildSourceSpec(ent, "");
+            world.add<SourceSpec>(e, spec);
+            continue;
+        }
+
         if (ent.contains("mesh")) {
             std::string meshPath = ent["mesh"].get<std::string>();
             if (!meshPath.empty() && meshPath[0] != '/')
@@ -204,6 +219,28 @@ static void loadEntities(const json& entities, World& world, Renderer& renderer,
         world.add<Renderable>(e, r);
 
         addPhysics(e, ent, shape, world);
+    }
+
+    // Levels authored before stable ids (or with gaps) get them now, so the
+    // editor's parenting always has something to reference.
+    assignMissingDocumentIds(world);
+
+    if (!editorMode) {
+        // PLAY flattens the hierarchy: bake each entity's composed world
+        // transform into its Transform and drop the parent link, so the
+        // runtime (render, physics) never walks a hierarchy and bodies are
+        // created in world space. Compute all world matrices first, then
+        // assign, so the result is independent of iteration order.
+        std::vector<std::pair<Entity, Mat4>> baked;
+        world.each<Transform, SourceSpec>([&](Entity e, Transform&, SourceSpec& s) {
+            if (s.parentId != 0) baked.emplace_back(e, worldMatrix(world, e));
+        });
+        for (auto& [e, m] : baked) {
+            Transform flat = transformFromMatrix(m);
+            *world.get<Transform>(e) = flat;
+            if (auto* prev = world.get<PrevTransform>(e)) prev->value = flat;
+            world.get<SourceSpec>(e)->parentId = 0;
+        }
     }
 }
 
@@ -349,7 +386,7 @@ bool LevelLoader::load(const std::string& path,
         levelDir = ".";
 
     if (root.contains("entities"))
-        loadEntities(root["entities"], world, renderer, levelDir);
+        loadEntities(root["entities"], world, renderer, levelDir, editorMode);
 
     if (root.contains("player"))
         (editorMode ? loadPlayerSpawn(root["player"], world, renderer)

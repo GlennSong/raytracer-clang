@@ -86,6 +86,16 @@ void UndoStack::recordComponentRemove(World& world, Entity e,
     push(std::move(cmd));
 }
 
+void UndoStack::recordReparent(Entity e, uint32_t before, uint32_t after) {
+    if (before == after) return;
+    Command cmd;
+    cmd.kind = Command::Reparent;
+    cmd.entity = e;
+    cmd.parentBefore = before;
+    cmd.parentAfter = after;
+    push(std::move(cmd));
+}
+
 void UndoStack::push(Command cmd) {
     undoList.push_back(std::move(cmd));
     redoList.clear();
@@ -210,6 +220,13 @@ Entity UndoStack::apply(Command& cmd, World& world, bool forward) {
                 if (entry->addTo) entry->addTo(world, cmd.entity);
                 applyComponentJson(world, cmd.entity, cmd.component, cmd.before);
             }
+            return cmd.entity;
+        }
+
+        case Command::Reparent: {
+            SourceSpec* s = world.get<SourceSpec>(cmd.entity);
+            if (!s) return Entity{};
+            s->parentId = forward ? cmd.parentAfter : cmd.parentBefore;
             return cmd.entity;
         }
     }

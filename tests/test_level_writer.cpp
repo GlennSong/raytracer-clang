@@ -243,6 +243,96 @@ TEST_CASE(editor_bridge_swaps_environment_hdr) {
     CHECK(!bridge.setEnvironmentHdr("../env/other.hdr"));
 }
 
+TEST_CASE(level_writer_serializes_hierarchy_and_groups) {
+    TmpFile cleanup;
+    World world;
+
+    // A group (null object) with a box parented under it.
+    Entity group = world.create();
+    world.add<Transform>(group);
+    SourceSpec gs;
+    gs.id = 10;
+    gs.shape = "";          // group
+    gs.name = "Rig";
+    world.add<SourceSpec>(group, gs);
+
+    Entity child = addBox(world, Vec3(1, 0, 0));
+    SourceSpec* cs = world.get<SourceSpec>(child);
+    cs->id = 11;
+    cs->parentId = 10;
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+
+    bool sawGroup = false, sawChild = false;
+    for (const auto& ent : root["entities"]) {
+        if (ent.value("id", 0u) == 10) {
+            sawGroup = true;
+            CHECK(ent.value("group", false));
+            CHECK(ent["name"] == "Rig");
+            CHECK(!ent.contains("shape"));
+        }
+        if (ent.value("id", 0u) == 11) {
+            sawChild = true;
+            CHECK(ent.value("parent", 0u) == 10);
+        }
+    }
+    CHECK(sawGroup);
+    CHECK(sawChild);
+}
+
+TEST_CASE(level_writer_assigns_ids_to_unidentified_entities) {
+    TmpFile cleanup;
+    World world;
+    addBox(world, Vec3(0, 0, 0));   // no id set
+    addBox(world, Vec3(1, 0, 0));
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    // Every saved entity carries a unique, nonzero id.
+    uint32_t a = root["entities"][0].value("id", 0u);
+    uint32_t b = root["entities"][1].value("id", 0u);
+    CHECK(a != 0);
+    CHECK(b != 0);
+    CHECK(a != b);
+}
+
+TEST_CASE(editor_bridge_reparents_with_cycle_guard) {
+    World world;
+    Entity a = addBox(world, Vec3(0, 0, 0));
+    Entity b = addBox(world, Vec3(1, 0, 0));
+    world.get<SourceSpec>(a)->id = 1;
+    world.get<SourceSpec>(b)->id = 2;
+
+    EditorBridge bridge;
+    bridge.attach(&world, nullptr, "level.json");
+
+    // Parent b under a.
+    bridge.reparent(b, a);
+    CHECK(world.get<SourceSpec>(b)->parentId == 1);
+
+    // listEntities exposes the graph for the tree.
+    bool childLinked = false;
+    for (const auto& info : bridge.listEntities())
+        if (info.entity == b) childLinked = (info.parentId == 1);
+    CHECK(childLinked);
+
+    // Parenting a under b would cycle — refused, link unchanged.
+    bridge.reparent(a, b);
+    CHECK(world.get<SourceSpec>(a)->parentId == 0);
+
+    // Reparent to root (invalid parent).
+    bridge.reparent(b, Entity{});
+    CHECK(world.get<SourceSpec>(b)->parentId == 0);
+
+    // Observer mode refuses reparenting.
+    bridge.attachObserver(&world, "level.json");
+    bridge.reparent(b, a);
+    CHECK(world.get<SourceSpec>(b)->parentId == 0);
+}
+
 TEST_CASE(level_writer_round_trips_mesh_entities) {
     TmpFile cleanup;
     World world;

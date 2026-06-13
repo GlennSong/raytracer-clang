@@ -62,8 +62,13 @@ std::vector<EditorBridge::EntityInfo> EditorBridge::listEntities() {
         [&](Entity e, Transform&, SourceSpec& spec) {
             EntityInfo info;
             info.entity = e;
+            info.id = spec.id;
+            info.parentId = spec.parentId;
+            info.isGroup = spec.isGroup();
             if (!spec.name.empty()) {
                 info.label = spec.name;   // user-given names stand alone
+            } else if (info.isGroup) {
+                info.label = "Group #" + std::to_string(e.index);
             } else if (!spec.meshFile.empty()) {
                 // Basename keeps the hierarchy readable for long asset paths.
                 std::size_t slash = spec.meshFile.find_last_of("/\\");
@@ -161,8 +166,37 @@ void EditorBridge::addPrimitive(const std::string& shape) {
     if (editorPtr && worldPtr) editorPtr->requestAddPrimitive(shape);
 }
 
+void EditorBridge::addGroup() {
+    if (editorPtr && worldPtr) editorPtr->requestAddPrimitive("group");
+}
+
 void EditorBridge::placeCamera() {
     if (editorPtr && worldPtr) editorPtr->requestPlaceCamera();
+}
+
+void EditorBridge::reparent(Entity child, Entity parent) {
+    if (!editable() || !worldPtr->alive(child)) return;
+    SourceSpec* childSpec = worldPtr->get<SourceSpec>(child);
+    if (!childSpec) return;
+
+    // An invalid parent means "move to root". A valid one must be a document
+    // entity and must not close a cycle.
+    uint32_t newParentId = 0;
+    if (parent.valid()) {
+        SourceSpec* parentSpec = worldPtr->get<SourceSpec>(parent);
+        if (!parentSpec || child == parent) return;
+        if (wouldCreateCycle(*worldPtr, child, parent)) {
+            LOG_WARN << "Reparent refused: would create a cycle";
+            return;
+        }
+        newParentId = parentSpec->id;
+    }
+    if (newParentId == childSpec->parentId) return;
+
+    if (UndoStack* undo = undoStack())
+        undo->recordReparent(child, childSpec->parentId, newParentId);
+    childSpec->parentId = newParentId;
+    notify(EditorNotice::SelectionChanged);   // tree shape changed
 }
 
 void EditorBridge::duplicateSelected() {

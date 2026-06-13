@@ -148,6 +148,7 @@ add_executable(run_tests
     tests/test_hosted_window.cpp
     tests/test_properties.cpp
     tests/test_undo.cpp
+    tests/test_hierarchy.cpp
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp

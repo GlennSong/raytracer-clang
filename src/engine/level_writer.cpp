@@ -30,8 +30,12 @@ static json materialToJson(RenderMaterial& m) {
 static json entityToJson(const Transform& t, const SourceSpec& spec,
                          RenderMaterial* material) {
     json ent;
+    if (spec.id != 0) ent["id"] = spec.id;
+    if (spec.parentId != 0) ent["parent"] = spec.parentId;
     if (!spec.name.empty()) ent["name"] = spec.name;
-    if (!spec.meshFile.empty()) {
+    if (spec.isGroup()) {
+        ent["group"] = true;   // null object: a named transform, no mesh
+    } else if (!spec.meshFile.empty()) {
         ent["mesh"] = spec.meshFile;
     } else {
         ent["shape"] = spec.shape;
@@ -81,6 +85,10 @@ bool LevelWriter::save(const std::string& path, World& world) {
             root["version"] = 1;
         }
     }
+
+    // Every saved entity gets a stable id (parenting references them); a
+    // hand-authored level with none picks them up here, once.
+    assignMissingDocumentIds(world);
 
     json entities = json::array();
     world.each<Transform, SourceSpec>(

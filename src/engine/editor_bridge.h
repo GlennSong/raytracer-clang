@@ -57,13 +57,22 @@ public:
     void select(Entity entity);
 
     // The document entities a hierarchy panel shows: SourceSpec-bearing
-    // objects and placed cameras, with display labels.
+    // objects and placed cameras, with display labels. `id`/`parentId` are
+    // the document hierarchy (0 = root / no id); a tree view builds from them.
     struct EntityInfo {
         Entity entity;
         std::string label;
         bool isCamera = false;
+        bool isGroup = false;
+        uint32_t id = 0;
+        uint32_t parentId = 0;
     };
     std::vector<EntityInfo> listEntities();
+
+    // Reparent `child` under `parent` (an invalid parent = move to root).
+    // Refused if it would form a cycle; recorded on the command log. Both
+    // must be document (SourceSpec) entities; cameras don't parent yet.
+    void reparent(Entity child, Entity parent);
 
     // Document actions (LevelWriter + camera sidecar — the same "compile"
     // step the in-viewport Play uses).
@@ -81,6 +90,7 @@ public:
     // Creation requests, queued onto the editor and applied next frame (the
     // spawn point comes from the live view, which only the engine holds).
     void addPrimitive(const std::string& shape);
+    void addGroup();
     void placeCamera();
     void duplicateSelected();
 

@@ -25,6 +25,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QDropEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -39,10 +40,13 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QHeaderView>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -51,7 +55,9 @@
 #include <QWidget>
 
 #include <cstring>
+#include <functional>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -265,11 +271,46 @@ protected:
     }
 };
 
+// Hierarchy tree with drag-to-reparent. Dropping an item ONTO another makes
+// it that item's child; dropping into empty space moves it to the root. The
+// drop is reported to a callback (engine applies it and the tree rebuilds on
+// the next refresh — the document is authoritative), so Qt's own move is
+// suppressed.
+class HierarchyTree : public QTreeWidget {
+public:
+    // (childRow, parentRow); parentRow < 0 means root. Rows index the
+    // bridge's last entity list (stored per item in Qt::UserRole).
+    std::function<void(int, int)> onReparent;
+
+    explicit HierarchyTree(QWidget* parent) : QTreeWidget(parent) {
+        setHeaderHidden(true);
+        setSelectionMode(QAbstractItemView::SingleSelection);
+        setDragDropMode(QAbstractItemView::InternalMove);
+        setDragEnabled(true);
+        setAcceptDrops(true);
+    }
+
+protected:
+    void dropEvent(QDropEvent* event) override {
+        QTreeWidgetItem* dragged = currentItem();
+        if (!dragged) return;
+        const QPoint pos = event->position().toPoint();
+        QTreeWidgetItem* target = itemAt(pos);
+        int childRow = dragged->data(0, Qt::UserRole).toInt();
+        int parentRow = target ? target->data(0, Qt::UserRole).toInt() : -1;
+        if (target == dragged) return;   // dropped on itself
+        event->acceptProposedAction();
+        if (onReparent) onReparent(childRow, parentRow);
+        // Do NOT call the base: the engine reparents and the next refresh
+        // rebuilds the tree from the document.
+    }
+};
+
 // Hierarchy + inspector, refreshed by polling the bridge (cheap at editor
 // entity counts; avoids engine-side notification plumbing).
 struct Panels {
     EditorBridge& bridge;
-    QListWidget* hierarchy = nullptr;
+    HierarchyTree* hierarchy = nullptr;
     PropertyInspector* inspector = nullptr;
     QPushButton* deleteButton = nullptr;
 
@@ -280,13 +321,25 @@ struct Panels {
 
     QDockWidget* buildHierarchyDock(QMainWindow* main) {
         auto* dock = new QDockWidget("Hierarchy", main);
-        hierarchy = new QListWidget(dock);
+        hierarchy = new HierarchyTree(dock);
         dock->setWidget(hierarchy);
-        QObject::connect(hierarchy, &QListWidget::currentRowChanged, [this](int row) {
-            if (applyingUi || !bridge.attached()) return;
+        QObject::connect(hierarchy, &QTreeWidget::currentItemChanged,
+                         [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
+            if (applyingUi || !bridge.attached() || !item) return;
+            int row = item->data(0, Qt::UserRole).toInt();
             if (row >= 0 && row < static_cast<int>(lastList.size()))
                 bridge.select(lastList[row].entity);
         });
+        hierarchy->onReparent = [this](int childRow, int parentRow) {
+            if (!bridge.editable()) return;
+            if (childRow < 0 || childRow >= static_cast<int>(lastList.size()))
+                return;
+            Entity parent = (parentRow >= 0 &&
+                             parentRow < static_cast<int>(lastList.size()))
+                                ? lastList[parentRow].entity
+                                : Entity{};
+            bridge.reparent(lastList[childRow].entity, parent);
+        };
         return dock;
     }
 
@@ -326,25 +379,62 @@ struct Panels {
 
         applyingUi = true;
         auto list = bridge.listEntities();
+        // Rebuild when anything structural changed: membership, label, OR the
+        // parent graph (a reparent keeps the same entities but moves them).
         bool sameList = list.size() == lastList.size();
         for (size_t i = 0; sameList && i < list.size(); i++)
             sameList = list[i].entity == lastList[i].entity &&
-                       list[i].label == lastList[i].label;
+                       list[i].label == lastList[i].label &&
+                       list[i].parentId == lastList[i].parentId;
         if (!sameList) {
             lastList = list;
-            hierarchy->clear();
-            for (const auto& info : lastList)
-                hierarchy->addItem(QString::fromStdString(
-                    (info.isCamera ? "[cam] " : "") + info.label));
+            rebuildTree();
         }
 
         Entity selected = bridge.selected();
         int row = -1;
         for (size_t i = 0; i < lastList.size(); i++)
             if (lastList[i].entity == selected) row = static_cast<int>(i);
-        if (hierarchy->currentRow() != row) hierarchy->setCurrentRow(row);
+        QTreeWidgetItem* want = (row >= 0) ? itemForRow(row) : nullptr;
+        if (hierarchy->currentItem() != want) hierarchy->setCurrentItem(want);
         applyingUi = false;
     }
+
+    // Build the tree from the document's parent graph (parentId references an
+    // id; cameras/player carry id 0 and sit at the root). Parent-before-child
+    // ordering is not assumed — items are created first, then attached.
+    void rebuildTree() {
+        hierarchy->clear();
+        rowItems.assign(lastList.size(), nullptr);
+        std::unordered_map<uint32_t, QTreeWidgetItem*> byId;
+
+        for (size_t i = 0; i < lastList.size(); i++) {
+            const auto& info = lastList[i];
+            auto* item = new QTreeWidgetItem;
+            const char* tag = info.isCamera ? "[cam] " : info.isGroup ? "[grp] " : "";
+            item->setText(0, QString::fromStdString(tag + info.label));
+            item->setData(0, Qt::UserRole, static_cast<int>(i));
+            rowItems[i] = item;
+            if (info.id != 0) byId[info.id] = item;
+        }
+        for (size_t i = 0; i < lastList.size(); i++) {
+            uint32_t pid = lastList[i].parentId;
+            auto it = (pid != 0) ? byId.find(pid) : byId.end();
+            if (it != byId.end() && it->second != rowItems[i])
+                it->second->addChild(rowItems[i]);
+            else
+                hierarchy->addTopLevelItem(rowItems[i]);
+        }
+        hierarchy->expandAll();
+    }
+
+    QTreeWidgetItem* itemForRow(int row) {
+        return (row >= 0 && row < static_cast<int>(rowItems.size()))
+                   ? rowItems[row]
+                   : nullptr;
+    }
+
+    std::vector<QTreeWidgetItem*> rowItems;
 };
 
 }  // namespace
@@ -612,6 +702,9 @@ int main(int argc, char** argv) {
     addShapeMenu->addSeparator();
     addShapeMenu->addAction("camera", [&bridge]() {
         if (bridge.attached()) bridge.placeCamera();
+    });
+    addShapeMenu->addAction("empty group", [&bridge]() {
+        if (bridge.attached()) bridge.addGroup();
     });
     addButton->setMenu(addShapeMenu);
     toolbar->addWidget(addButton);

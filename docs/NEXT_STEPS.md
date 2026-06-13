@@ -123,7 +123,12 @@ session.
     groups with standard media icons (video-player order: Play, Play Here,
     Pause, Step, Stop, Restart); inspector dock starts at ~330px with an
     aligned label column, flat group boxes, tighter spacing.
-- **Tests**: 178 engine cases (`make test` / ctest) + physics + the Qt
+- **Hierarchy / grouping (seventh round)**: stable document ids
+  (SourceSpec.id/parentId), `worldMatrix` composition through the parent
+  chain (render/pick/gizmo/frame), null-object groups, PLAY-time flattening,
+  and a drag-to-reparent `QTreeWidget` with cycle-guarded undo. See the
+  dedicated section below.
+- **Tests**: 187 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
   cover pause/step). GLFW + Qt6 dev packages install in the remote env, so
@@ -162,25 +167,38 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
    decision is shader strategy (dual-source vs SPIRV-Cross/slang
    single-source) — decide before writing.
 
-## Next big engine feature: grouping / transform hierarchy (+ stable ids)
+## Grouping / transform hierarchy — DONE (seventh round)
 
-Requested from use: null objects to parent things under, moved as one.
-This is the transform-hierarchy feature the engine has deliberately not had
-(the glTF multi-mesh limitation is the same gap). Rough shape when picked
-up:
-- **Stable entity ids first** (document-level, written to JSON): parenting
-  references ("parent": id), per-component apply-back, and undo across
-  reloads all need them. Small, self-contained, prerequisite.
-- A `Parent` component + world-matrix composition (Transform stays local;
-  systems that consume matrices compose up the chain — render, picking,
-  gizmo). Gizmo manipulates in world space, writes back through the
-  parent's inverse.
-- Null objects = entities with SourceSpec shape "" and no Renderable
-  (pickable via children's bounds or a small editor marker); LevelWriter
-  nests or flattens with parent ids.
-- Hierarchy panel becomes a tree (QTreeWidget), drag to reparent —
-  recorded on the undo log as a Parent-field edit.
-Multi-mesh glTF then lands naturally: sub-meshes parent under one root.
+The transform-hierarchy feature landed:
+- **Stable document ids**: `SourceSpec.id` / `parentId` ("id" / "parent" in
+  level JSON). Minted on editor create, assigned to id-less entities on load
+  and at save (`maxDocumentId` / `nextDocumentId` /
+  `assignMissingDocumentIds`); `findByDocumentId` resolves an id to its
+  runtime Entity. They survive save/load — the foundation for parenting and
+  (next) per-component apply-back + undo-across-reload.
+- **World composition**: Transform stays LOCAL; `worldMatrix(world, e)`
+  composes up the parentId chain (depth-capped against cycles). Render,
+  picking (now a world-space box test), the gizmo (manipulates world, writes
+  back through `parentWorldMatrix().inverse()`), selection ring, and F-frame
+  all use it. `transformFromMatrix` (shared decompose) reads manipulated
+  matrices back and flattens.
+- **Null objects / groups**: `SourceSpec.isGroup()` (empty shape, no
+  Renderable) — a named transform to parent under. Add via toolbar
+  ("empty group") or the in-viewport panel; pick from the hierarchy.
+- **PLAY flattens**: the loader bakes each parented entity's composed world
+  transform into its Transform and clears parentId in play mode, so the
+  runtime (render, physics) never walks a hierarchy and bodies are world-
+  space. Editor mode keeps the hierarchy live.
+- **Tree hierarchy**: the Qt panel is a `QTreeWidget` built from the
+  parentId graph; drag an item onto another to reparent (onto empty = root),
+  applied through `EditorBridge::reparent` with a cycle guard and recorded
+  as an undo `Reparent` command. `[grp]`/`[cam]` tag prefixes.
+
+Remaining threads off this: multi-mesh glTF parenting under one root (the
+importer still moves only the first sub-mesh); camera parenting (SceneCamera
+entities don't carry SourceSpec, so they don't parent yet); preserving tree
+expansion state across rebuilds; a small in-viewport marker so groups are
+viewport-pickable, not only hierarchy-selectable.
 
 ## Editor <-> engine connections — QoL backlog
 
