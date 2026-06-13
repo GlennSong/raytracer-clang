@@ -62,7 +62,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_lsystem.cpp \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
-	$(TEST_DIR)/test_sdf.cpp
+	$(TEST_DIR)/test_sdf.cpp \
+	$(TEST_DIR)/test_node_graph.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -92,6 +93,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
+	$(SRC_DIR)/engine/procgen/node_graph.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

@@ -1,0 +1,191 @@
+#include "node_graph.h"
+
+#include <nlohmann/json.hpp>
+#include <functional>
+#include <optional>
+
+using json = nlohmann::json;
+
+namespace engine {
+
+bool valueIsType(const GraphValue& v, GraphType t) {
+    switch (t) {
+        case GraphType::Scalar: return std::holds_alternative<double>(v);
+        case GraphType::Vec3:   return std::holds_alternative<Vec3>(v);
+        case GraphType::Field:  return std::holds_alternative<Sdf>(v);
+        case GraphType::Mesh:   return std::holds_alternative<MeshPtr>(v);
+    }
+    return false;
+}
+
+const NodeType* NodeRegistry::find(const std::string& name) const {
+    auto it = types_.find(name);
+    return it != types_.end() ? &it->second : nullptr;
+}
+
+namespace {
+// Safe input extraction (a mis-typed or missing input yields a default).
+double scalarOf(const std::vector<GraphValue>& in, size_t i, double def = 0.0) {
+    if (i < in.size()) if (auto* p = std::get_if<double>(&in[i])) return *p;
+    return def;
+}
+Vec3 vec3Of(const std::vector<GraphValue>& in, size_t i, Vec3 def = Vec3()) {
+    if (i < in.size()) if (auto* p = std::get_if<Vec3>(&in[i])) return *p;
+    return def;
+}
+Sdf fieldOf(const std::vector<GraphValue>& in, size_t i) {
+    if (i < in.size()) if (auto* p = std::get_if<Sdf>(&in[i])) return *p;
+    return [](const Vec3&) { return 1e30; };   // empty field (everything outside)
+}
+}  // namespace
+
+void registerBuiltinNodes(NodeRegistry& reg) {
+    using V = std::vector<GraphValue>;
+
+    reg.add({"SdfSphere",
+             {{"center", GraphType::Vec3}, {"radius", GraphType::Scalar}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue {
+                 return sdfSphere(vec3Of(in, 0), scalarOf(in, 1, 1.0));
+             }});
+
+    reg.add({"SdfBox",
+             {{"center", GraphType::Vec3}, {"halfExtent", GraphType::Vec3}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue {
+                 return sdfBox(vec3Of(in, 0), vec3Of(in, 1, Vec3(0.5, 0.5, 0.5)));
+             }});
+
+    reg.add({"SdfCapsule",
+             {{"a", GraphType::Vec3}, {"b", GraphType::Vec3}, {"radius", GraphType::Scalar}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue {
+                 return sdfCapsule(vec3Of(in, 0), vec3Of(in, 1, Vec3(0, 1, 0)),
+                                   scalarOf(in, 2, 0.3));
+             }});
+
+    reg.add({"Union",
+             {{"a", GraphType::Field}, {"b", GraphType::Field}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue { return sdfUnion(fieldOf(in, 0), fieldOf(in, 1)); }});
+
+    reg.add({"SmoothUnion",
+             {{"a", GraphType::Field}, {"b", GraphType::Field}, {"k", GraphType::Scalar}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue {
+                 return sdfSmoothUnion(fieldOf(in, 0), fieldOf(in, 1), scalarOf(in, 2, 0.3));
+             }});
+
+    reg.add({"Subtract",
+             {{"a", GraphType::Field}, {"b", GraphType::Field}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue { return sdfSubtract(fieldOf(in, 0), fieldOf(in, 1)); }});
+
+    reg.add({"Intersect",
+             {{"a", GraphType::Field}, {"b", GraphType::Field}},
+             GraphType::Field,
+             [](const V& in) -> GraphValue { return sdfIntersect(fieldOf(in, 0), fieldOf(in, 1)); }});
+
+    reg.add({"Polygonize",
+             {{"field", GraphType::Field}, {"min", GraphType::Vec3},
+              {"max", GraphType::Vec3}, {"resolution", GraphType::Scalar}},
+             GraphType::Mesh,
+             [](const V& in) -> GraphValue {
+                 SdfBounds b{vec3Of(in, 1, Vec3(-1, -1, -1)), vec3Of(in, 2, Vec3(1, 1, 1))};
+                 int res = static_cast<int>(scalarOf(in, 3, 32.0));
+                 return std::make_shared<RenderMesh>(polygonizeSdf(fieldOf(in, 0), b, res));
+             }});
+}
+
+GraphValue Graph::evaluate(const NodeRegistry& registry) const {
+    const int n = static_cast<int>(nodes.size());
+    if (outputNode < 0 || outputNode >= n) return std::monostate{};
+
+    std::vector<std::optional<GraphValue>> memo(n);
+    std::vector<bool> visiting(n, false);
+
+    std::function<GraphValue(int)> evalNode = [&](int idx) -> GraphValue {
+        if (idx < 0 || idx >= n) return std::monostate{};
+        if (memo[idx]) return *memo[idx];
+        if (visiting[idx]) return std::monostate{};   // cycle guard
+        visiting[idx] = true;
+
+        const Node& node = nodes[idx];
+        const NodeType* type = registry.find(node.type);
+        GraphValue result = std::monostate{};
+        if (type) {
+            std::vector<GraphValue> inputs(type->inputs.size());
+            for (size_t i = 0; i < inputs.size(); i++) {
+                if (i < node.inputs.size() && node.inputs[i].source >= 0)
+                    inputs[i] = evalNode(node.inputs[i].source);
+                else if (i < node.inputs.size())
+                    inputs[i] = node.inputs[i].literal;
+            }
+            result = type->eval(inputs);
+        }
+        visiting[idx] = false;
+        memo[idx] = result;
+        return result;
+    };
+    return evalNode(outputNode);
+}
+
+// --- serialization ---
+
+namespace {
+json valueToJson(const GraphValue& v) {
+    if (auto* d = std::get_if<double>(&v)) return *d;
+    if (auto* p = std::get_if<Vec3>(&v)) return json::array({p->x, p->y, p->z});
+    return nullptr;   // Field/Mesh/none are not literals
+}
+GraphValue jsonToValue(const json& j) {
+    if (j.is_number()) return j.get<double>();
+    if (j.is_array() && j.size() >= 3)
+        return Vec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>());
+    return std::monostate{};
+}
+}  // namespace
+
+std::string graphToJson(const Graph& graph) {
+    json root;
+    root["output"] = graph.outputNode;
+    json nodes = json::array();
+    for (const Graph::Node& node : graph.nodes) {
+        json jn;
+        jn["type"] = node.type;
+        json inputs = json::array();
+        for (const Graph::Input& in : node.inputs) {
+            json ji;
+            if (in.source >= 0) ji["source"] = in.source;
+            else                ji["value"] = valueToJson(in.literal);
+            inputs.push_back(ji);
+        }
+        jn["inputs"] = inputs;
+        nodes.push_back(jn);
+    }
+    root["nodes"] = nodes;
+    return root.dump(2);
+}
+
+Graph graphFromJson(const std::string& text) {
+    Graph graph;
+    json root = json::parse(text, nullptr, /*allow_exceptions=*/false);
+    if (root.is_discarded()) return graph;
+    graph.outputNode = root.value("output", -1);
+    if (!root.contains("nodes") || !root["nodes"].is_array()) return graph;
+    for (const json& jn : root["nodes"]) {
+        Graph::Node node;
+        node.type = jn.value("type", std::string());
+        if (jn.contains("inputs"))
+            for (const json& ji : jn["inputs"]) {
+                Graph::Input in;
+                if (ji.contains("source")) in.source = ji["source"].get<int>();
+                else if (ji.contains("value")) in.literal = jsonToValue(ji["value"]);
+                node.inputs.push_back(in);
+            }
+        graph.nodes.push_back(node);
+    }
+    return graph;
+}
+
+}  // namespace engine
