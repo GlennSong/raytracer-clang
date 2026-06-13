@@ -47,14 +47,8 @@
       },
       {
         "kind": "rock",
-        "skin": "sdf",
+        "graph": "../generators/rock.graph.json",
         "variants": 3,
-        "radius": 0.7,
-        "lumps": 7,
-        "cuts": 3,
-        "lumpScale": 0.55,
-        "smoothness": 0.18,
-        "sdfResolution": 36,
         "material": { "albedo": [0.5, 0.5, 0.52], "roughness": 1.0 }
       }
     ]

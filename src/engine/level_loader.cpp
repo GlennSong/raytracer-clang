@@ -5,6 +5,7 @@
 #include "procgen/lsystem.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
+#include "procgen/node_graph.h"
 #include "model_importer.h"
 #include <random>
 #include "components.h"
@@ -13,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <unordered_map>
+#include <iterator>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -384,12 +386,18 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // these are regenerated runtime objects, not document entities.
 static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
-                           AssetManager& assets) {
+                           AssetManager& assets, const std::string& levelDir) {
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     struct Species { MeshHandle mesh; RenderMaterial material; };
     std::vector<Species> species;
     uint32_t vegSeed = veg.value("seed", 0u);
+
+    // Node-graph generators (ADR-0021 Phase C): a species may define its mesh as
+    // a "graph" asset evaluated per variant with a seed, instead of the built-in
+    // tree/rock generators.
+    NodeRegistry nodeRegistry;
+    registerBuiltinNodes(nodeRegistry);
 
     int speciesIndex = 0;
     for (const auto& s : veg["species"]) {
@@ -451,10 +459,31 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         RenderMaterial material;
         if (s.contains("material")) applyMaterial(s["material"], material);
 
+        // Optional: this species' mesh is a node-graph asset, evaluated per
+        // variant with a "seed" parameter.
+        Graph graph;
+        bool hasGraph = false;
+        if (s.contains("graph")) {
+            std::string graphPath = s["graph"].get<std::string>();
+            if (!graphPath.empty() && graphPath[0] != '/') graphPath = levelDir + "/" + graphPath;
+            std::ifstream gf(graphPath);
+            if (gf) {
+                std::string text((std::istreambuf_iterator<char>(gf)),
+                                 std::istreambuf_iterator<char>());
+                graph = graphFromJson(text);
+                hasGraph = !graph.nodes.empty();
+            }
+            if (!hasGraph) LOG_ERROR << "Failed to load generator graph: " << graphPath;
+        }
+
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
             RenderMesh mesh;
-            if (kind == "rock") {
+            if (hasGraph) {
+                GraphValue out = graph.evaluate(
+                    nodeRegistry, {{"seed", GraphValue(static_cast<double>(seed))}});
+                if (auto* mp = std::get_if<MeshPtr>(&out)) { if (*mp) mesh = **mp; }
+            } else if (kind == "rock") {
                 mesh = rockSdf ? generateRockSdf(rsp, seed)
                                : generateRock(rp, Noise(seed));
             } else {
@@ -543,7 +572,8 @@ bool LevelLoader::load(const std::string& path,
         Noise terrainNoise(root["terrain"].value("seed", 0u));
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
-            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets);
+            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets,
+                           levelDir);
     }
 
     if (root.contains("entities"))

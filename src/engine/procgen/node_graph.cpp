@@ -1,4 +1,5 @@
 #include "node_graph.h"
+#include "rock.h"
 
 #include <nlohmann/json.hpp>
 #include <functional>
@@ -41,25 +42,39 @@ Sdf fieldOf(const std::vector<GraphValue>& in, size_t i) {
 
 void registerBuiltinNodes(NodeRegistry& reg) {
     using V = std::vector<GraphValue>;
+    using C = NodeContext;
+
+    // A graph input ("knob"): returns params[attr] if the caller set it, else
+    // the wired default. The mechanism behind "one graph, many seeds".
+    reg.add({"Param",
+             {{"default", GraphType::Scalar}},
+             GraphType::Scalar,
+             [](const V& in, const C& ctx) -> GraphValue {
+                 if (ctx.params) {
+                     auto it = ctx.params->find(ctx.attr);
+                     if (it != ctx.params->end()) return it->second;
+                 }
+                 return in.empty() ? GraphValue(std::monostate{}) : in[0];
+             }});
 
     reg.add({"SdfSphere",
              {{"center", GraphType::Vec3}, {"radius", GraphType::Scalar}},
              GraphType::Field,
-             [](const V& in) -> GraphValue {
+             [](const V& in, const C&) -> GraphValue {
                  return sdfSphere(vec3Of(in, 0), scalarOf(in, 1, 1.0));
              }});
 
     reg.add({"SdfBox",
              {{"center", GraphType::Vec3}, {"halfExtent", GraphType::Vec3}},
              GraphType::Field,
-             [](const V& in) -> GraphValue {
+             [](const V& in, const C&) -> GraphValue {
                  return sdfBox(vec3Of(in, 0), vec3Of(in, 1, Vec3(0.5, 0.5, 0.5)));
              }});
 
     reg.add({"SdfCapsule",
              {{"a", GraphType::Vec3}, {"b", GraphType::Vec3}, {"radius", GraphType::Scalar}},
              GraphType::Field,
-             [](const V& in) -> GraphValue {
+             [](const V& in, const C&) -> GraphValue {
                  return sdfCapsule(vec3Of(in, 0), vec3Of(in, 1, Vec3(0, 1, 0)),
                                    scalarOf(in, 2, 0.3));
              }});
@@ -67,37 +82,65 @@ void registerBuiltinNodes(NodeRegistry& reg) {
     reg.add({"Union",
              {{"a", GraphType::Field}, {"b", GraphType::Field}},
              GraphType::Field,
-             [](const V& in) -> GraphValue { return sdfUnion(fieldOf(in, 0), fieldOf(in, 1)); }});
+             [](const V& in, const C&) -> GraphValue {
+                 return sdfUnion(fieldOf(in, 0), fieldOf(in, 1));
+             }});
 
     reg.add({"SmoothUnion",
              {{"a", GraphType::Field}, {"b", GraphType::Field}, {"k", GraphType::Scalar}},
              GraphType::Field,
-             [](const V& in) -> GraphValue {
+             [](const V& in, const C&) -> GraphValue {
                  return sdfSmoothUnion(fieldOf(in, 0), fieldOf(in, 1), scalarOf(in, 2, 0.3));
              }});
 
     reg.add({"Subtract",
              {{"a", GraphType::Field}, {"b", GraphType::Field}},
              GraphType::Field,
-             [](const V& in) -> GraphValue { return sdfSubtract(fieldOf(in, 0), fieldOf(in, 1)); }});
+             [](const V& in, const C&) -> GraphValue {
+                 return sdfSubtract(fieldOf(in, 0), fieldOf(in, 1));
+             }});
 
     reg.add({"Intersect",
              {{"a", GraphType::Field}, {"b", GraphType::Field}},
              GraphType::Field,
-             [](const V& in) -> GraphValue { return sdfIntersect(fieldOf(in, 0), fieldOf(in, 1)); }});
+             [](const V& in, const C&) -> GraphValue {
+                 return sdfIntersect(fieldOf(in, 0), fieldOf(in, 1));
+             }});
 
     reg.add({"Polygonize",
              {{"field", GraphType::Field}, {"min", GraphType::Vec3},
               {"max", GraphType::Vec3}, {"resolution", GraphType::Scalar}},
              GraphType::Mesh,
-             [](const V& in) -> GraphValue {
+             [](const V& in, const C&) -> GraphValue {
                  SdfBounds b{vec3Of(in, 1, Vec3(-1, -1, -1)), vec3Of(in, 2, Vec3(1, 1, 1))};
                  int res = static_cast<int>(scalarOf(in, 3, 32.0));
                  return std::make_shared<RenderMesh>(polygonizeSdf(fieldOf(in, 0), b, res));
              }});
+
+    // High-level generator node: a whole rock (base + seeded lumps - cuts,
+    // polygonized) as one node — a graph can stay coarse (Param->Rock->out) or
+    // drop to primitives. Mirrors generateRockSdf.
+    reg.add({"Rock",
+             {{"radius", GraphType::Scalar}, {"lumps", GraphType::Scalar},
+              {"cuts", GraphType::Scalar}, {"lumpScale", GraphType::Scalar},
+              {"smoothness", GraphType::Scalar}, {"resolution", GraphType::Scalar},
+              {"seed", GraphType::Scalar}},
+             GraphType::Mesh,
+             [](const V& in, const C&) -> GraphValue {
+                 RockSdfParams p;
+                 p.baseRadius = scalarOf(in, 0, p.baseRadius);
+                 p.lumps      = static_cast<int>(scalarOf(in, 1, p.lumps));
+                 p.cuts       = static_cast<int>(scalarOf(in, 2, p.cuts));
+                 p.lumpScale  = scalarOf(in, 3, p.lumpScale);
+                 p.smoothness = scalarOf(in, 4, p.smoothness);
+                 p.resolution = static_cast<int>(scalarOf(in, 5, p.resolution));
+                 uint32_t seed = static_cast<uint32_t>(scalarOf(in, 6, 0.0));
+                 return std::make_shared<RenderMesh>(generateRockSdf(p, seed));
+             }});
 }
 
-GraphValue Graph::evaluate(const NodeRegistry& registry) const {
+GraphValue Graph::evaluate(const NodeRegistry& registry,
+                           const std::unordered_map<std::string, GraphValue>& params) const {
     const int n = static_cast<int>(nodes.size());
     if (outputNode < 0 || outputNode >= n) return std::monostate{};
 
@@ -121,7 +164,8 @@ GraphValue Graph::evaluate(const NodeRegistry& registry) const {
                 else if (i < node.inputs.size())
                     inputs[i] = node.inputs[i].literal;
             }
-            result = type->eval(inputs);
+            NodeContext ctx{node.attr, &params};
+            result = type->eval(inputs, ctx);
         }
         visiting[idx] = false;
         memo[idx] = result;
@@ -153,6 +197,7 @@ std::string graphToJson(const Graph& graph) {
     for (const Graph::Node& node : graph.nodes) {
         json jn;
         jn["type"] = node.type;
+        if (!node.attr.empty()) jn["attr"] = node.attr;
         json inputs = json::array();
         for (const Graph::Input& in : node.inputs) {
             json ji;
@@ -176,6 +221,7 @@ Graph graphFromJson(const std::string& text) {
     for (const json& jn : root["nodes"]) {
         Graph::Node node;
         node.type = jn.value("type", std::string());
+        node.attr = jn.value("attr", std::string());
         if (jn.contains("inputs"))
             for (const json& ji : jn["inputs"]) {
                 Graph::Input in;

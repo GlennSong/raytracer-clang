@@ -28,18 +28,25 @@ enum class GraphType { Scalar, Vec3, Field, Mesh };
 bool valueIsType(const GraphValue& v, GraphType t);
 
 // A node type: typed input sockets, an output type, and an evaluation thunk
-// that maps resolved inputs (in socket order) to its output. Registered once
-// per type — the registry is the single place node types are named (mirrors
-// ComponentRegistry / the property layer).
+// that maps resolved inputs (in socket order) + a context to its output.
+// Registered once per type — the registry is the single place node types are
+// named (mirrors ComponentRegistry / the property layer).
 struct NodeSocket {
     std::string name;
     GraphType type;
+};
+// Evaluation context: a node's config string (e.g. a Param's name) and the
+// graph's external parameters (the exposed knobs a host/loader sets per call —
+// "one graph, many seeds").
+struct NodeContext {
+    std::string attr;
+    const std::unordered_map<std::string, GraphValue>* params = nullptr;
 };
 struct NodeType {
     std::string name;
     std::vector<NodeSocket> inputs;
     GraphType output;
-    std::function<GraphValue(const std::vector<GraphValue>&)> eval;
+    std::function<GraphValue(const std::vector<GraphValue>&, const NodeContext&)> eval;
 };
 
 class NodeRegistry {
@@ -67,13 +74,16 @@ struct Graph {
     struct Node {
         std::string type;
         std::vector<Input> inputs;
+        std::string attr;        // optional per-node config (e.g. a Param's name)
     };
     std::vector<Node> nodes;
     int outputNode = -1;
 
-    // Pull-evaluate the output node, memoizing each node. Returns monostate on
-    // any error (unknown type, cycle, missing output).
-    GraphValue evaluate(const NodeRegistry& registry) const;
+    // Pull-evaluate the output node, memoizing each node. `params` are the
+    // graph's exposed inputs (read by Param nodes). Returns monostate on any
+    // error (unknown type, cycle, missing output).
+    GraphValue evaluate(const NodeRegistry& registry,
+                        const std::unordered_map<std::string, GraphValue>& params = {}) const;
 };
 
 // The graph is the generator asset: round-trips through JSON.

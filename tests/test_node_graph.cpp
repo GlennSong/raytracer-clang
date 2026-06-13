@@ -2,6 +2,7 @@
 
 #include "../src/engine/procgen/node_graph.h"
 #include "../src/engine/procgen/sdf.h"
+#include "../src/engine/procgen/rock.h"
 #include <variant>
 
 using namespace engine;  // namespace migration (ADR-0015)
@@ -13,11 +14,11 @@ Graph makeBlobGraph() {
     auto lit = [](GraphValue v) { Graph::Input i; i.source = -1; i.literal = std::move(v); return i; };
     auto src = [](int s) { Graph::Input i; i.source = s; return i; };
     Graph g;
-    g.nodes.push_back({"SdfSphere", {lit(Vec3(-0.5, 0, 0)), lit(0.8)}});
-    g.nodes.push_back({"SdfSphere", {lit(Vec3(0.5, 0, 0)), lit(0.8)}});
-    g.nodes.push_back({"SmoothUnion", {src(0), src(1), lit(0.3)}});
+    g.nodes.push_back({"SdfSphere", {lit(Vec3(-0.5, 0, 0)), lit(0.8)}, ""});
+    g.nodes.push_back({"SdfSphere", {lit(Vec3(0.5, 0, 0)), lit(0.8)}, ""});
+    g.nodes.push_back({"SmoothUnion", {src(0), src(1), lit(0.3)}, ""});
     g.nodes.push_back({"Polygonize",
-                       {src(2), lit(Vec3(-2, -2, -2)), lit(Vec3(2, 2, 2)), lit(28.0)}});
+                       {src(2), lit(Vec3(-2, -2, -2)), lit(Vec3(2, 2, 2)), lit(28.0)}, ""});
     g.outputNode = 3;
     return g;
 }
@@ -69,7 +70,7 @@ TEST_CASE(node_graph_errors_return_none_not_crash) {
     registerBuiltinNodes(reg);
 
     Graph unknown;
-    unknown.nodes.push_back({"NoSuchNode", {}});
+    unknown.nodes.push_back({"NoSuchNode", {}, ""});
     unknown.outputNode = 0;
     CHECK(std::holds_alternative<std::monostate>(unknown.evaluate(reg)));
 
@@ -78,7 +79,7 @@ TEST_CASE(node_graph_errors_return_none_not_crash) {
 
     // A self-referential input must terminate (cycle guard), not hang.
     Graph cyclic;
-    cyclic.nodes.push_back({"SmoothUnion", {{0, {}}, {0, {}}, {-1, GraphValue(0.3)}}});
+    cyclic.nodes.push_back({"SmoothUnion", {{0, {}}, {0, {}}, {-1, GraphValue(0.3)}}, ""});
     cyclic.outputNode = 0;
     cyclic.evaluate(reg);   // returns (any value); the test completing proves it terminated
     CHECK(true);
@@ -89,4 +90,52 @@ TEST_CASE(node_graph_value_type_check) {
     CHECK(valueIsType(GraphValue(Vec3(1, 2, 3)), GraphType::Vec3));
     CHECK(!valueIsType(GraphValue(1.5), GraphType::Vec3));
     CHECK(!valueIsType(GraphValue(std::monostate{}), GraphType::Mesh));
+}
+
+TEST_CASE(node_graph_param_reads_external_input) {
+    NodeRegistry reg;
+    registerBuiltinNodes(reg);
+    Graph g;
+    Graph::Node param;
+    param.type = "Param";
+    param.attr = "seed";
+    Graph::Input def; def.source = -1; def.literal = GraphValue(7.0);
+    param.inputs.push_back(def);
+    g.nodes.push_back(param);
+    g.outputNode = 0;
+
+    GraphValue noOverride = g.evaluate(reg);                          // uses default
+    CHECK(std::holds_alternative<double>(noOverride));
+    CHECK_APPROX(std::get<double>(noOverride), 7.0, 1e-9);
+    GraphValue overridden = g.evaluate(reg, {{"seed", GraphValue(42.0)}});
+    CHECK_APPROX(std::get<double>(overridden), 42.0, 1e-9);
+    // attr round-trips through JSON.
+    Graph reloaded = graphFromJson(graphToJson(g));
+    CHECK(reloaded.nodes.size() == 1 && reloaded.nodes[0].attr == "seed");
+}
+
+TEST_CASE(node_graph_rock_node_seeded_by_param) {
+    NodeRegistry reg;
+    registerBuiltinNodes(reg);
+    auto lit = [](GraphValue v) { Graph::Input i; i.source = -1; i.literal = std::move(v); return i; };
+    auto src = [](int s) { Graph::Input i; i.source = s; return i; };
+    Graph g;
+    Graph::Node p; p.type = "Param"; p.attr = "seed"; p.inputs.push_back(lit(GraphValue(1.0)));
+    g.nodes.push_back(p);                                              // 0: Param(seed)
+    g.nodes.push_back({"Rock",
+                       {lit(0.8), lit(6.0), lit(2.0), lit(0.5), lit(0.3), lit(24.0), src(0)},
+                       ""});                                          // 1: Rock(..., seed)
+    g.outputNode = 1;
+
+    MeshPtr m1 = meshOf(g.evaluate(reg, {{"seed", GraphValue(1.0)}}));
+    MeshPtr m2 = meshOf(g.evaluate(reg, {{"seed", GraphValue(2.0)}}));
+    CHECK(m1 && m2);
+    CHECK(m1->vertices.size() > 0);
+
+    // The Rock node reproduces generateRockSdf with the same params + seed.
+    RockSdfParams rp;
+    rp.baseRadius = 0.8f; rp.lumps = 6; rp.cuts = 2; rp.lumpScale = 0.5f;
+    rp.smoothness = 0.3; rp.resolution = 24;
+    RenderMesh direct = generateRockSdf(rp, 1);
+    CHECK(m1->vertices.size() == direct.vertices.size());
 }

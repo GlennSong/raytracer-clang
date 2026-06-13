@@ -1,0 +1,15 @@
+{
+  "output": 1,
+  "nodes": [
+    { "type": "Param", "attr": "seed", "inputs": [ { "value": 0 } ] },
+    { "type": "Rock", "inputs": [
+      { "value": 0.7 },
+      { "value": 7 },
+      { "value": 3 },
+      { "value": 0.55 },
+      { "value": 0.18 },
+      { "value": 36 },
+      { "source": 0 }
+    ] }
+  ]
+}
