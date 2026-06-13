@@ -271,16 +271,18 @@ protected:
     }
 };
 
-// Hierarchy tree with drag-to-reparent. Dropping an item ONTO another makes
-// it that item's child; dropping into empty space moves it to the root. The
-// drop is reported to a callback (engine applies it and the tree rebuilds on
-// the next refresh — the document is authoritative), so Qt's own move is
-// suppressed.
+// Hierarchy tree with drag-to-reparent. Dropping the selected item(s) ONTO
+// another makes them its children; dropping into empty space moves them to
+// the root. The engine applies the reparent and the tree rebuilds from the
+// document on the next refresh, so Qt must NOT move or delete items itself:
+// the drop is accepted as an IgnoreAction (otherwise Qt's InternalMove would
+// remove the source rows after this handler returns — deleting the very
+// QTreeWidgetItems still referenced by rowItems/lastList, a crash).
 class HierarchyTree : public QTreeWidget {
 public:
-    // (childRow, parentRow); parentRow < 0 means root. Rows index the
+    // (childRows, parentRow); parentRow < 0 means root. Rows index the
     // bridge's last entity list (stored per item in Qt::UserRole).
-    std::function<void(int, int)> onReparent;
+    std::function<void(const std::vector<int>&, int)> onReparent;
 
     explicit HierarchyTree(QWidget* parent) : QTreeWidget(parent) {
         setHeaderHidden(true);
@@ -292,17 +294,20 @@ public:
 
 protected:
     void dropEvent(QDropEvent* event) override {
-        QTreeWidgetItem* dragged = currentItem();
-        if (!dragged) return;
-        const QPoint pos = event->position().toPoint();
-        QTreeWidgetItem* target = itemAt(pos);
-        int childRow = dragged->data(0, Qt::UserRole).toInt();
+        QTreeWidgetItem* target = itemAt(event->position().toPoint());
         int parentRow = target ? target->data(0, Qt::UserRole).toInt() : -1;
-        if (target == dragged) return;   // dropped on itself
-        event->acceptProposedAction();
-        if (onReparent) onReparent(childRow, parentRow);
-        // Do NOT call the base: the engine reparents and the next refresh
-        // rebuilds the tree from the document.
+        // Snapshot every dragged row (the whole selection) up front, before
+        // any model change, skipping the drop target itself.
+        std::vector<int> childRows;
+        for (QTreeWidgetItem* item : selectedItems()) {
+            if (item == target) continue;
+            childRows.push_back(item->data(0, Qt::UserRole).toInt());
+        }
+        // Accept without moving: the engine owns the hierarchy. IgnoreAction
+        // stops Qt from removing/deleting the source rows.
+        event->setDropAction(Qt::IgnoreAction);
+        event->accept();
+        if (onReparent && !childRows.empty()) onReparent(childRows, parentRow);
     }
 };
 
@@ -342,15 +347,18 @@ struct Panels {
             }
             bridge.setSelection(sel, primary);
         });
-        hierarchy->onReparent = [this](int childRow, int parentRow) {
+        hierarchy->onReparent = [this](const std::vector<int>& childRows,
+                                       int parentRow) {
             if (!bridge.editable()) return;
-            if (childRow < 0 || childRow >= static_cast<int>(lastList.size()))
-                return;
             Entity parent = (parentRow >= 0 &&
                              parentRow < static_cast<int>(lastList.size()))
                                 ? lastList[parentRow].entity
                                 : Entity{};
-            bridge.reparent(lastList[childRow].entity, parent);
+            for (int childRow : childRows) {
+                if (childRow < 0 || childRow >= static_cast<int>(lastList.size()))
+                    continue;
+                bridge.reparent(lastList[childRow].entity, parent);
+            }
         };
         return dock;
     }

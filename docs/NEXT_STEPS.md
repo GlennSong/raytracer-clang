@@ -130,10 +130,15 @@ session.
   dedicated section below.
 - **Multi-select (eighth round)**: EditorSystem holds a selection set with a
   primary (gizmo anchor + inspector); shift-click in the viewport toggles,
-  the Qt tree is `ExtendedSelection`. The gizmo moves the whole set rigidly
-  with the primary (one compound `TransformEditMulti` undo entry); selection
-  rings draw on all (primary brighter). Delete acts on the whole set. The
-  tree-selection reconcile is signal-blocked (also smooths first-paint).
+  the Qt tree is `ExtendedSelection` (Ctrl-click toggles, Shift-click
+  ranges). The gizmo moves the whole set rigidly with the primary (one
+  compound `TransformEditMulti` undo entry); selection rings draw on all
+  (primary brighter). Delete acts on the whole set. The tree-selection
+  reconcile is signal-blocked (also smooths first-paint). Drag-reparent
+  moves the WHOLE selection and accepts the drop as IgnoreAction so Qt never
+  removes/deletes the source rows (an InternalMove MoveAction did, leaving
+  dangling QTreeWidgetItem pointers — a crash dragging a multi-selection
+  into a group).
 - **Tests**: 188 engine cases (`make test` / ctest) + physics + the Qt
   interaction test (undo via bridge, Add/Remove Component, dirty tracking;
   hosted-window tests cover the relative-mouse capture mode; clock tests
