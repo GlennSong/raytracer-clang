@@ -390,10 +390,12 @@ void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
     for (Vertex& v : mesh.vertices) v.normal = Vec3(0, 0, 0);
     for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
         uint32_t ia = mesh.indices[i], ib = mesh.indices[i + 1], ic = mesh.indices[i + 2];
-        // Area-weighted: the un-normalized cross product is proportional to the
-        // triangle area, so larger faces dominate a shared vertex's normal.
-        Vec3 faceNormal = cross(mesh.vertices[ib].position - mesh.vertices[ia].position,
-                                mesh.vertices[ic].position - mesh.vertices[ia].position);
+        // This engine winds front faces clockwise (a box's +Y face has explicit
+        // normal +Y but a right-hand winding normal of -Y), so the outward
+        // normal is cross(c-a, b-a) — the reverse of the textbook right-hand
+        // rule. Area-weighted (the un-normalized cross scales with face area).
+        Vec3 faceNormal = cross(mesh.vertices[ic].position - mesh.vertices[ia].position,
+                                mesh.vertices[ib].position - mesh.vertices[ia].position);
         mesh.vertices[ia].normal += faceNormal;
         mesh.vertices[ib].normal += faceNormal;
         mesh.vertices[ic].normal += faceNormal;

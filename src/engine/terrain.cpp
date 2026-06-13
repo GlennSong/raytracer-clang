@@ -40,8 +40,9 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
             uint32_t b = a + 1;                  // +x
             uint32_t c = a + static_cast<uint32_t>(n);   // +z
             uint32_t d = c + 1;                  // +x, +z
-            // Winding chosen so recomputeNormals yields up-facing (+Y) normals.
-            mesh.indices.insert(mesh.indices.end(), {a, c, b, b, c, d});
+            // Clockwise-front winding (matches the box convention) so the top
+            // surface faces up — and recomputeNormals derives up-facing normals.
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
         }
     }
 

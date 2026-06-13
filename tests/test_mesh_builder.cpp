@@ -75,6 +75,24 @@ TEST_CASE(mesh_recompute_normals_are_unit_length) {
         CHECK_APPROX(v.normal.length(), 1.0, 1e-4);
 }
 
+TEST_CASE(mesh_recompute_normals_face_out_for_engine_winding) {
+    // An up-facing quad wound the engine way (box top-face order: v0,v1,v2,v3
+    // around the rim). recomputeNormals must yield +Y, matching how the
+    // clockwise-front renderer shades it (regression guard for the terrain
+    // inverted-normal bug).
+    RenderMesh m;
+    m.vertices = {
+        Vertex(Vec3(-1, 0, -1), Vec3(0, 0, 0)),
+        Vertex(Vec3( 1, 0, -1), Vec3(0, 0, 0)),
+        Vertex(Vec3( 1, 0,  1), Vec3(0, 0, 0)),
+        Vertex(Vec3(-1, 0,  1), Vec3(0, 0, 0)),
+    };
+    m.indices = {0, 1, 2, 0, 2, 3};
+    MeshBuilder::recomputeNormals(m);
+    for (const Vertex& v : m.vertices)
+        CHECK_APPROX(v.normal.y, 1.0, 1e-4);
+}
+
 TEST_CASE(mesh_planar_uvs_project_position) {
     RenderMesh m;
     m.vertices.push_back(Vertex(Vec3(2, 5, 3), Vec3(0, 1, 0)));
