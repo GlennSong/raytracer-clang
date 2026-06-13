@@ -272,7 +272,7 @@ bool Scene::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) 
     }
 
     if (!kdTree.isEmpty()) {
-        if (kdTree.intersect(ray, tMin, closest, tempRec)) {
+        if (kdTree.intersect(triangles, ray, tMin, closest, tempRec)) {
             hitAnything = true;
             closest = tempRec.t;
             rec = tempRec;
