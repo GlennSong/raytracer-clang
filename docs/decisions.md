@@ -1011,6 +1011,148 @@ full-screen stylization passes).
 
 ---
 
+## ADR-0018 — The property layer: components describe their editable fields once
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** The editor needs a Unity-style inspector, JSON load/save, the
+in-viewport ImGui panels, and undo — all over the same component fields.
+Hand-writing each per component is five places to edit per field and five
+places to drift (the original inspector and `LevelWriter` already disagreed on
+the material block).
+
+**Decision.** Each component implements one
+`describeProperties(T&, PropertyVisitor&)` that walks its editable fields once —
+label + live reference + semantics (`FieldMeta`: range, log scale, unit, color,
+choices, read-only, serialization id). Every consumer is a *visitor* over that
+walk: the Qt inspector (build/sync/write passes), the in-viewport panels
+(`ImGuiPropertyVisitor`), JSON read/write (`JsonReadVisitor`/`JsonWriteVisitor`,
+where the `FieldMeta` id is the file-format key), and undo (component-state JSON
+snapshots). A `ComponentRegistry` (one line per type) enumerates which
+components an entity carries and walks each, so UI code never names a concrete
+component; entries also carry add/remove thunks and post-edit hooks. Adding a
+component = struct + describe + one registration line; it appears in every
+inspector and serializes automatically.
+
+**Alternatives considered.**
+- Hand-written inspectors/serializers per component — rejected: N×5 drift
+  surface, already observed.
+- A reflection library / codegen — rejected: heavyweight external dep; the
+  visitor pattern gives the same single-source guarantee in plain C++17.
+- Qt's property system (`Q_PROPERTY`/moc) — rejected: pulls moc into engine
+  code and couples field descriptions to Qt; the layer is engine-side and
+  UI-toolkit-free by construction.
+
+**Consequences / tech debt.**
+- `FieldMeta` ids ARE the level/camera JSON format now; renaming one is a format
+  change. Legacy spellings (e.g. the checkerboard `flags` array) are still read
+  on load for compatibility.
+- Read-only fields are display-only and the JSON read visitor skips them by
+  contract (size was read-only until a registry post-edit hook — Size → mesh
+  rebuild — made it editable everywhere).
+- Orientation is deliberately *not* a described field (the gizmo owns rotation),
+  so rotation undo rides a dedicated `Transform` command, not the visitors.
+
+**Revisit trigger.** A described field whose type the `PropertyVisitor`
+interface can't express (nested structs, arrays, asset references) — extend the
+visitor rather than fork the inspector.
+
+---
+
+## ADR-0019 — The editor is the engine hosted in a native shell, behind one bridge
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** We want a real level editor whose viewport behaves 1:1 with the
+game, without a second renderer or an emulated runtime. (Design detail lives in
+`docs/edit-mode-plan.md` and `docs/editor-app-plan.md`; this records the
+decision and its trade-offs.)
+
+**Decision.** The editor *is* the same engine, hosted. The level JSON is the
+document: an `EditorState` loads it, edits mutate the live `World`, and Play
+"compiles" (saves) then swaps to the game state. The Qt shell hosts the engine
+through the `HostedWindow` seam — ADR-0001 inverted: the host owns the OS
+window and the engine renders into a handed-in view, with input injected. A
+single `EditorBridge` is the only conduit between shell and engine (selection,
+document actions, creation requests, undo, component add/remove, gizmo mode,
+plus an `EditorNotice` queue the shell drains for instant refresh). The bridge
+attaches in two modes — *editable* (an `EditorState` is active) and *observer*
+(read-only during Play: live hierarchy/inspector, no writes). Undo is a command
+log (`UndoStack`) fed from the bridge's chokepoints. In-viewport ImGui tooling
+that pre-dates the shell stays as "quick tools," suppressed when the native
+panels own the duty.
+
+**Alternatives considered.**
+- A separate editor renderer / scene representation — rejected: two paths that
+  drift; the viewport would not match the game.
+- Direct shell→`World` access (no bridge) — rejected: every panel would couple
+  to ECS internals and to whether gameplay or the editor owns the world;
+  observer mode would be scattered checks instead of one flag.
+- An immediate-mode (ImGui) editor as the authoring surface — rejected: docking,
+  tree views, native file dialogs are years of toolkit work Qt gives free; ImGui
+  stays for in-viewport overlays only.
+
+**Consequences / tech debt.**
+- The shell is Qt; only the Metal *rendering inside the viewport* needs macOS —
+  the bridge, document model, and panels are Linux-CI-verified (headless Qt
+  interaction test).
+- First-person Play pointer capture is poll-based in the hosted viewport
+  (Qt `grabMouse`/move events are unreliable for warp-style lock on macOS).
+- Some cross-mode camera state still rides settings.json rather than the
+  document.
+
+**Revisit trigger.** A second shell (web/another toolkit) — the bridge is the
+contract to re-implement against; or the in-viewport ImGui tools fully
+superseded by native panels (then delete them).
+
+---
+
+## ADR-0020 — Transform hierarchy is a document concept, flattened for the runtime
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** Authors want to group objects under a null/parent and move them
+together. The ECS (ADR-0006) deliberately stores flat world transforms — no
+parent links — and physics/render assume world space. We needed grouping
+without giving the runtime a scene graph to walk every frame.
+
+**Decision.** Parenting lives in the *document*, keyed by **stable document
+ids** (`SourceSpec.id`/`parentId`, serialized; minted on create, assigned to
+id-less entities on load/save) rather than the runtime `Handle` (reminted each
+load). In the editor, `worldMatrix(world, e)` composes a child's local
+`Transform` up the parent chain (cycle-guarded); render, picking, the gizmo, and
+framing use it, and the gizmo writes a manipulated world matrix back through the
+parent's inverse. Reparenting preserves world position (the child's local
+transform is rewritten). **Entering Play flattens the hierarchy:** each parented
+entity's composed world transform is baked into its `Transform` and the parent
+link cleared, so the runtime (physics body creation, render interpolation) never
+walks a hierarchy and stays in world space — exactly as before. Groups are null
+objects (`SourceSpec` with empty shape, no `Renderable`).
+
+**Alternatives considered.**
+- A runtime scene graph (a parent component the simulation walks) — rejected for
+  now: physics bodies and render interpolation would need hierarchical world
+  resolution every frame; a large change for an authoring convenience.
+- Parent by runtime `Handle` — rejected: handles are reminted per load, so
+  parenting wouldn't survive save/load; stable ids are the prerequisite (and
+  also unlock future per-component apply-back and undo-across-reload).
+- Baking groups away at *save* time — rejected: the hierarchy wouldn't round-trip
+  in the editor; it must persist in the document and flatten only at the play
+  boundary.
+
+**Consequences / tech debt.**
+- `Transform` now has two meanings: *local* in the editor (composed via
+  parentId), *world* at runtime (flattened). The flatten point (`level_loader`,
+  non-editor mode) is the single bridge between them.
+- A child with physics under a *moving* parent only composes statically in the
+  editor; animated parents driving physics children would need the runtime graph
+  above.
+- glTF multi-mesh and camera parenting are not yet wired (cameras carry no
+  `SourceSpec`); the id/parent machinery is ready for them.
+
+**Revisit trigger.** Runtime-animated hierarchies (skeletal motion, moving
+platforms carrying dynamic children) or glTF node hierarchies needing per-node
+transforms — promote parenting into a runtime component the simulation resolves.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1031,6 +1173,8 @@ to be replaced; listed here so they stay visible.
 | ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0015): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
+| Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | Mesh cache keyed by shape+size, or `removeMesh` on world clear |
+| Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
 
 ---
 
