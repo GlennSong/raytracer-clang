@@ -114,13 +114,71 @@ slope/height material shader, and — of course — looking at the result.
 So we can build and unit-test the entire forest *generator* on Linux and hand the
 Mac just the render verification.
 
+## Persistence — store the recipe, not the result
+
+Generation is deterministic `(params, seed) → content` (ADR-0021/0002), so the
+level JSON stores the **seed + parameters**, and the engine reconstructs terrain,
+meshes, and scatter at load. We do **not** serialize tens of thousands of
+transforms or megabytes of mesh — just the recipe:
+
+```json
+"procedural": {
+  "seed": 1337,
+  "terrain": { "size": 4096, "octaves": 6, "warp": 0.3 },
+  "species": [ { "kind": "lsystem", "rules": "...", "lods": 3 } ],
+  "scatter": { "maxSlope": 30, "treeline": 120, "density": "noise:..." }
+}
+```
+
+Tiny files, vast worlds. It sits next to the hand-authored `entities` array (the
+LevelWriter already preserves sections it doesn't own). Hand-editing a generated
+instance later means a **"bake to entities"** or per-instance overrides (an editor
+concern, deferred). For huge worlds, cooked meshes can be cached to a binary
+asset cache (asset-system 3.1c) to regenerate less; first cut regenerates at
+load. *This is ADR-worthy when built* ("procedural content persists as a recipe,
+regenerated deterministically at load").
+
+## Loading progress — reuse the job + progress pattern
+
+World construction runs as `JobSystem` tasks (terrain, per-species mesh, scatter)
+behind a **loading state** with a progress bar driven by an atomic the jobs
+update — the same "progress on its own thread" pattern built for the offline
+tracer. Parallel and reportable, so construction never feels like a frozen hang.
+
+## Grass — a separate, specialized system (not the general scatter)
+
+Trees/rocks are *thousands* of instances (CPU scatter → `InstanceGroup` is fine);
+grass is *millions* of blades, which breaks that model. Grass is **GPU-placed,
+camera-relative** (blade positions generated per near-camera tile, wind animated
+in the vertex shader, distance-faded) — a dedicated grass system that reuses the
+scatter density-`Field` for *placement rules* but renders its own way. Out of
+scope for the first Forest; a follow-up.
+
+## Scaling layers (additive) — and the seams that keep them additive
+
+The first Forest is bounded; growing it to a *vast* forest is a sequence of
+independent Tier-5 systems, none a rewrite **if** these seams exist from the
+start:
+
+| Seam (designed in the first cut) | Unlocks later, no rewrite |
+|---|---|
+| Asset = **LOD chain** (N `MeshHandle`s per logical asset) | mesh LOD, billboard impostors |
+| Scatter → **per-tile `InstanceGroup`s** | uniform-grid frustum/distance culling, chunking, streaming |
+| Level = **recipe block** (seed + params) | huge worlds in tiny files |
+| Generation = **`JobSystem` tasks + progress** | loading bar, async, cooking cache |
+
+Performance order of attack (the ~20fps tech-debt item applies even now):
+instancing (drawcalls) → tile culling (offscreen work) → LOD/impostors/density
+fade (distant work). All additive.
+
 ## Scope: first cut vs. later
 
 - **First cut:** single terrain tile, a few species, thousands of instances,
   group-bounds culling, slope/height material blend, HDR sky, fly camera.
-- **Later (Tier 5):** per-instance / chunk culling + LOD for huge counts, terrain
-  chunking, hydraulic/thermal erosion, full procedural *texture* synthesis, SDF
-  rocks, terrain collision, wind/animation on foliage.
+- **Later (Tier 5):** per-tile grid culling + LOD + impostors for huge counts,
+  terrain chunking/streaming, hydraulic/thermal erosion, full procedural
+  *texture* synthesis, SDF rocks, terrain collision (Jolt `HeightFieldShape`),
+  the GPU grass system, wind/animation on foliage.
 
 ## Open questions
 
