@@ -317,7 +317,6 @@ struct Panels {
     EditorBridge& bridge;
     HierarchyTree* hierarchy = nullptr;
     PropertyInspector* inspector = nullptr;
-    QPushButton* deleteButton = nullptr;
 
     std::vector<EditorBridge::EntityInfo> lastList;
     bool applyingUi = false;   // guard: list writes vs refresh loop
@@ -370,15 +369,10 @@ struct Panels {
 
         // Every row below is generated from the engine's property
         // descriptions — Unity-style sections per component, zero
-        // field-specific code on the Qt side.
+        // field-specific code on the Qt side. Delete lives as a small trash
+        // button in the inspector's own header now.
         inspector = new PropertyInspector(bridge);
         column->addWidget(inspector);
-
-        deleteButton = new QPushButton("Delete", body);
-        QObject::connect(deleteButton, &QPushButton::clicked, [this]() {
-            if (bridge.attached()) bridge.deleteSelection();
-        });
-        column->addWidget(deleteButton);
         column->addStretch();
 
         dock->setWidget(body);
@@ -393,7 +387,6 @@ struct Panels {
         const bool live = bridge.attached();
         hierarchy->setEnabled(live);
         inspector->setEnabled(bridge.editable());
-        deleteButton->setEnabled(bridge.editable());
         inspector->refresh();
         if (!live) return;
 

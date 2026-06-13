@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     auto buttons = inspector.findChildren<QPushButton*>();
     QPushButton* addButton = nullptr;
     for (auto* b : buttons)
-        if (b->text() == "Add Component") addButton = b;
+        if (b->text().contains("Add Component")) addButton = b;
     REQUIRE(addButton != nullptr);
     if (addButton) {
         QMenu* menu = addButton->menu();
