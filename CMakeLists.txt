@@ -157,6 +157,7 @@ add_executable(run_tests
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
+    tests/test_mesh_builder.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

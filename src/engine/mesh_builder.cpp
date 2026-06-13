@@ -343,4 +343,74 @@ RenderMesh MeshBuilder::capsule(float radius, float height, int stacks, int slic
     return mesh;
 }
 
+// ---------------------------------------------------------------------------
+// Procgen-grade assembly ops (ROADMAP 3.3)
+// ---------------------------------------------------------------------------
+
+void MeshBuilder::append(RenderMesh& dst, const RenderMesh& src) {
+    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
+    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+}
+
+void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
+                                    const Mat4& xform) {
+    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    const Mat4 normalMatrix = xform.inverse().transpose();
+    dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+    for (const Vertex& v : src.vertices) {
+        Vertex out = v;
+        out.position = xform.transformPoint(v.position);
+        out.normal = normalize(normalMatrix.transformDirection(v.normal));
+        out.tangent = normalize(xform.transformDirection(v.tangent));
+        dst.vertices.push_back(out);
+    }
+    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+}
+
+void MeshBuilder::transform(RenderMesh& mesh, const Mat4& xform) {
+    const Mat4 normalMatrix = xform.inverse().transpose();
+    for (Vertex& v : mesh.vertices) {
+        v.position = xform.transformPoint(v.position);
+        v.normal = normalize(normalMatrix.transformDirection(v.normal));
+        v.tangent = normalize(xform.transformDirection(v.tangent));
+    }
+}
+
+RenderMesh MeshBuilder::merged(const std::vector<RenderMesh>& parts) {
+    RenderMesh out;
+    if (!parts.empty()) out.materialIndex = parts.front().materialIndex;
+    for (const RenderMesh& part : parts) append(out, part);
+    return out;
+}
+
+void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
+    for (Vertex& v : mesh.vertices) v.normal = Vec3(0, 0, 0);
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        uint32_t ia = mesh.indices[i], ib = mesh.indices[i + 1], ic = mesh.indices[i + 2];
+        // Area-weighted: the un-normalized cross product is proportional to the
+        // triangle area, so larger faces dominate a shared vertex's normal.
+        Vec3 faceNormal = cross(mesh.vertices[ib].position - mesh.vertices[ia].position,
+                                mesh.vertices[ic].position - mesh.vertices[ia].position);
+        mesh.vertices[ia].normal += faceNormal;
+        mesh.vertices[ib].normal += faceNormal;
+        mesh.vertices[ic].normal += faceNormal;
+    }
+    for (Vertex& v : mesh.vertices) v.normal = normalize(v.normal);
+}
+
+void MeshBuilder::generatePlanarUVs(RenderMesh& mesh, int axis, float scale) {
+    for (Vertex& v : mesh.vertices) {
+        const Vec3& p = v.position;
+        float uu, vv;
+        if (axis == 0)      { uu = static_cast<float>(p.z); vv = static_cast<float>(p.y); }
+        else if (axis == 2) { uu = static_cast<float>(p.x); vv = static_cast<float>(p.y); }
+        else                { uu = static_cast<float>(p.x); vv = static_cast<float>(p.z); }
+        v.u = uu * scale;
+        v.v = vv * scale;
+    }
+}
+
 }  // namespace engine
