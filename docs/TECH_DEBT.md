@@ -127,16 +127,18 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **The `seed` global is an implicit loader↔script contract.** A species script
   that forgets to read `seed` yields identical variants silently. Undocumented.
 - **Instancing for scattered plants — landed engine-side; two follow-ups left.**
-  `loadVegetation` now collapses placements into one `InstanceGroup` per species
-  (mesh + baked world matrices); `RenderSystem` coarse-culls per group and issues
-  `drawMeshInstanced`, whose default loops `drawMesh` so the Metal auto-batcher
-  coalesces them into instanced draws (no backend change; headless-tested via the
-  scatter-bucket + collapse tests). Remaining: (a) `MAX_INSTANCES = 4096` is a
-  per-pass cap — batches beyond it fall back to single draws (degrade, not
-  corrupt), so grow the buffer / chunk when forests scale; a *direct* Metal
-  `drawMeshInstanced` (skipping the per-call sort) is a minor optimization on top.
-  (b) Group bounds are coarse — one group spans the whole region, so the cull
-  rarely fires; per-instance / chunk culling is the Tier 5 scaling follow-up.
+  `loadVegetation` collapses placements into one `InstanceGroup` per species (mesh
+  + baked world matrices); `RenderSystem` does a coarse group reject, then a
+  PER-INSTANCE frustum cull (`frustumCullInstances`) so only on-screen plants
+  draw, then one `drawMeshInstanced` of the visible subset (default loops
+  `drawMesh`; the Metal auto-batcher coalesces). Headless-tested (bucket/collapse/
+  per-instance-cull). Remaining: (a) `MAX_INSTANCES = 4096` is a per-pass cap —
+  batches beyond it fall back to single draws (degrade, not corrupt), so grow the
+  buffer / chunk when forests scale; a *direct* Metal `drawMeshInstanced` is a
+  minor opt on top. (b) Per-instance cull rebuilds a `std::vector<Mat4>` per group
+  per frame (allocations) and is O(instances); a reusable scratch buffer + spatial
+  chunking is the Tier 5 scaling follow-up. The coarse group bounds rarely reject
+  (one group spans the region), so the per-instance pass does the real work.
 - **Mesh ops deep-copy the whole buffer.** Every `mesh.translate/scale/orient/
   merge/recompute_normals/bake_height_color` copies vertices+indices (functional
   style). Kit-bashing a leaf canopy allocates a lot. Fine at gen time; revisit if

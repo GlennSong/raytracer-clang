@@ -3,6 +3,7 @@
 #include "../src/engine/procgen/scatter.h"
 #include "../src/engine/components.h"
 #include "../src/engine/world.h"
+#include "../src/engine/systems/render_system.h"   // frustumCullInstances
 #include "../src/renderer/renderer.h"
 #include "../src/rt_math.h"
 
@@ -86,6 +87,23 @@ TEST_CASE(instance_group_collapses_entities) {
     }
     CHECK(world.entityCount() <= 3);     // a handful of groups, not 1000 entities
     CHECK(instances == 1000);            // but all 1000 plants are represented
+}
+
+TEST_CASE(instance_group_culls_per_instance) {
+    // Restores per-plant culling lost when scatter collapsed to one group: only
+    // instances inside the frustum survive (not the whole region every frame).
+    Mat4 view = Mat4::lookAt(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.0, 0.1, 100.0);
+    Frustum f = Frustum::fromViewProjection(proj * view);
+
+    std::vector<Mat4> xf = {
+        Mat4::translate(0, 0, 0),      // in front of the camera -> visible
+        Mat4::translate(0, 0, 50),     // behind the camera -> culled
+        Mat4::translate(200, 0, 0),    // far to the side -> culled
+    };
+    auto vis = frustumCullInstances(xf, f, Vec3(0, 0, 0), 0.5);
+    CHECK(vis.size() == 1);
+    CHECK_APPROX(vis[0].m[2][3], 0.0, 1e-9);   // the one at the origin survived
 }
 
 TEST_CASE(renderer_default_instanced_draw_loops_draw_mesh) {
