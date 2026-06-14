@@ -103,9 +103,6 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **The gameplay VM also opens the procgen builders.** Convenient (the gun
   generates its own mesh) but a per-frame `update()` can now call `polygonize`
   etc. with no guardrail — an easy perf footgun.
-- **The loader sets the seed by compiling Lua source.** `loadVegetation` does
-  `doString("seed=" + N)` per variant because there's no `ScriptVM::setGlobal*`.
-  Add `setGlobalNumber/String` and use it.
 - **Script failures are log-only.** Behaviour load/`start`/`update` errors
   `LOG_ERROR` + set `failed`; species-script errors are skipped. Nothing surfaces
   to the user/editor — content just goes missing.
@@ -129,10 +126,17 @@ took shortcuts worth paying down before the binding surface grows much more.
   every level load (no cache). Share one VM / cache the prelude.
 - **The `seed` global is an implicit loader↔script contract.** A species script
   that forgets to read `seed` yields identical variants silently. Undocumented.
-- **No instancing — every scattered plant is its own entity + draw call.** ~700
-  trees + ~1100 foliage = thousands of `Renderable`s. The substrate plan always
-  intended instancing (ROADMAP Phase B / `forest-arena-plan.md`); this is the
-  biggest forest perf debt and will dominate the frame once rendered.
+- **Instancing for scattered plants — landed engine-side; two follow-ups left.**
+  `loadVegetation` now collapses placements into one `InstanceGroup` per species
+  (mesh + baked world matrices); `RenderSystem` coarse-culls per group and issues
+  `drawMeshInstanced`, whose default loops `drawMesh` so the Metal auto-batcher
+  coalesces them into instanced draws (no backend change; headless-tested via the
+  scatter-bucket + collapse tests). Remaining: (a) `MAX_INSTANCES = 4096` is a
+  per-pass cap — batches beyond it fall back to single draws (degrade, not
+  corrupt), so grow the buffer / chunk when forests scale; a *direct* Metal
+  `drawMeshInstanced` (skipping the per-call sort) is a minor optimization on top.
+  (b) Group bounds are coarse — one group spans the whole region, so the cull
+  rarely fires; per-instance / chunk culling is the Tier 5 scaling follow-up.
 - **Mesh ops deep-copy the whole buffer.** Every `mesh.translate/scale/orient/
   merge/recompute_normals/bake_height_color` copies vertices+indices (functional
   style). Kit-bashing a leaf canopy allocates a lot. Fine at gen time; revisit if

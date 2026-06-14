@@ -542,7 +542,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             if (hasScript) {
 #ifdef RT_ENABLE_SCRIPTING
                 ScriptVM& vm = ensureScriptVm();
-                vm.doString("seed=" + std::to_string(seed));   // the script reads it
+                vm.setGlobalNumber("seed", seed);   // the script reads `seed`
                 std::shared_ptr<RenderMesh> out;
                 std::string err;
                 if (runProcgenMesh(vm, scriptSource, out, &err) && out) mesh = *out;
@@ -584,22 +584,35 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
 
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
 
-    // A separate stream picks which species each placement gets (deterministic).
-    std::mt19937 pick(vegSeed + 7u);
-    std::uniform_int_distribution<size_t> speciesPick(0, species.size() - 1);
-    for (const Placement& pl : placements) {
-        const Species& sp = species[speciesPick(pick)];
-        Entity e = world.create();
-        Transform t;
-        t.position = pl.position;
-        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), pl.yaw);
-        t.scale = Vec3(pl.scale, pl.scale, pl.scale);
-        world.add<Transform>(e, t);
-        world.add<PrevTransform>(e, PrevTransform{t});
-        Renderable r;
-        r.mesh = sp.mesh;
-        r.material = sp.material;
-        world.add<Renderable>(e, r);
+    // Collapse the placements into one InstanceGroup per species (ROADMAP Phase B
+    // instancing) instead of an entity per plant: the render system iterates a few
+    // groups and issues one instanced draw each. Plants carry no SourceSpec, so
+    // they were never document entities anyway (ADR-0022).
+    std::vector<std::vector<Mat4>> buckets =
+        bucketPlacementsBySpecies(placements, species.size(), vegSeed + 7u);
+    for (std::size_t si = 0; si < species.size(); ++si) {
+        if (buckets[si].empty()) continue;
+        InstanceGroup g;
+        g.mesh = species[si].mesh;
+        g.material = species[si].material;
+        g.transforms = std::move(buckets[si]);
+
+        // Coarse group bounds: centroid of instance origins + the spread + the
+        // mesh's own extent at the largest instance scale (one cheap cull volume).
+        Vec3 centroid(0, 0, 0);
+        for (const Mat4& m : g.transforms)
+            centroid = centroid + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+        centroid = centroid / static_cast<Real>(g.transforms.size());
+        Real spread = 0;
+        for (const Mat4& m : g.transforms)
+            spread = std::max(spread,
+                              (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - centroid).length());
+        BoundingSphere mb = assets.meshBounds(g.mesh);
+        g.boundsCenter = centroid;
+        g.boundsRadius = spread + (mb.center.length() + mb.radius) *
+                                      static_cast<Real>(scatter.maxScale);
+
+        world.add<InstanceGroup>(world.create(), g);
     }
 }
 

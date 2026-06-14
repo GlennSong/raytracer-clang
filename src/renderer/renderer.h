@@ -263,6 +263,16 @@ public:
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
+    // Draw many instances of one mesh (world-space transforms, one material for
+    // all). Default loops drawMesh: backends that batch by mesh handle (the Metal
+    // backend) already coalesce these into a single instanced draw, so the win
+    // here is CPU-side (one InstanceGroup vs. thousands of entities). A backend
+    // may override for a more direct path. (std::span is C++20; we are C++17.)
+    virtual void drawMeshInstanced(MeshHandle handle,
+                                   const std::vector<Mat4>& transforms,
+                                   const RenderMaterial& material) {
+        for (const Mat4& m : transforms) drawMesh(handle, m, material);
+    }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
     virtual void endFrame() = 0;
 

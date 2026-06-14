@@ -391,12 +391,14 @@ truly share before any language:
   emitting a set of transforms. The bridge between terrain (Field/Mesh), the
   asset meshes, and instanced rendering. This is where the value types compose.
 
-**Instanced rendering (pulled forward from Tier 5).** The substrate's whole
-payoff is "thousands of the same mesh" (forests, fields, fleets), so instancing
-is promoted to a Phase B prerequisite, not a late optimization. Shared
-`MeshHandle`s from the asset manager (3.1) are what it batches on; it adds an
-`InstanceGroup` representation + a `drawMeshInstanced` renderer path (see
-`docs/forest-arena-plan.md`).
+**Instanced rendering (pulled forward from Tier 5) — done.** The substrate's
+whole payoff is "thousands of the same mesh" (forests, fields, fleets), so
+instancing is a Phase B prerequisite, not a late optimization. Implemented: an
+`InstanceGroup` component (shared `MeshHandle` + baked world matrices) and a
+`Renderer::drawMeshInstanced` seam (default loops `drawMesh`; the Metal backend
+coalesces by mesh handle into instanced draws). `loadVegetation` emits one group
+per species. Coarse group-cull only for now; per-instance/chunk culling is Tier 5.
+See `docs/forest-arena-plan.md`.
 
 ### Phase B milestone — "The Forest" arena
 The integration target that proves Phases A–B end to end and exercises every
@@ -461,9 +463,13 @@ Items that become relevant as the world grows large.
   efficient queries over large generated worlds.
 - **LOD system** — distance-based level of detail for procgen meshes and
   terrain chunks.
-- **Instanced rendering** — *pulled forward to Tier 4 Phase B* (the procgen
-  payoff needs it); see "The Forest" milestone and `docs/forest-arena-plan.md`.
-  Per-instance LOD and chunk culling for *huge* worlds remain here.
+- **Instanced rendering** — *done (Tier 4 Phase B):* an `InstanceGroup` component
+  (mesh + baked world matrices) + a `Renderer::drawMeshInstanced` seam; scattered
+  vegetation collapses into one group per species instead of an entity per plant.
+  The default `drawMeshInstanced` loops `drawMesh`, which the Metal backend
+  already coalesces into instanced draws. *Per-instance LOD and chunk culling for
+  huge worlds remain here* (group bounds are coarse today), plus growing the
+  `MAX_INSTANCES` buffer / a direct Metal instanced path.
 - **Mixed precision / large world coordinates** — revisit ADR-0005 when float
   positions lose precision at world scale.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction

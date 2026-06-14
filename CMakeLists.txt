@@ -214,6 +214,7 @@ add_executable(run_tests
     tests/test_scatter.cpp
     tests/test_sdf.cpp
     tests/test_node_graph.cpp
+    tests/test_instancing.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

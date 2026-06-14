@@ -50,4 +50,21 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
     return placements;
 }
 
+std::vector<std::vector<Mat4>> bucketPlacementsBySpecies(
+    const std::vector<Placement>& placements, std::size_t numSpecies, uint32_t seed) {
+    std::vector<std::vector<Mat4>> buckets(numSpecies);
+    if (numSpecies == 0) return buckets;
+
+    std::mt19937 pick(seed);
+    std::uniform_int_distribution<std::size_t> speciesPick(0, numSpecies - 1);
+    for (const Placement& pl : placements) {
+        std::size_t si = speciesPick(pick);   // every placement lands in a bucket
+        Mat4 m = Mat4::trs(pl.position,
+                           Quat::fromAxisAngle(Vec3(0, 1, 0), pl.yaw),
+                           Vec3(pl.scale, pl.scale, pl.scale));
+        buckets[si].push_back(m);
+    }
+    return buckets;
+}
+
 }  // namespace engine

@@ -54,6 +54,12 @@ bool ScriptVM::doString(const std::string& code, std::string* error) {
     return true;
 }
 
+void ScriptVM::setGlobalNumber(const std::string& name, double value) {
+    lua_State* L = impl_->L;
+    lua_pushnumber(L, value);
+    lua_setglobal(L, name.c_str());
+}
+
 bool ScriptVM::getGlobalNumber(const std::string& name, double& out) const {
     lua_State* L = impl_->L;
     lua_getglobal(L, name.c_str());

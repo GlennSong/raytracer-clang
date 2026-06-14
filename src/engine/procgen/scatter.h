@@ -41,6 +41,13 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
                                         const TerrainParams& terrain,
                                         const Noise& terrainNoise);
 
+// Assign each placement a species (deterministic by seed) and bake it to a world
+// matrix (position + yaw + uniform scale), returning one matrix list per species
+// index. Feeds InstanceGroup creation: thousands of placements collapse to a few
+// instanced batches instead of one entity each. No placements are lost.
+std::vector<std::vector<Mat4>> bucketPlacementsBySpecies(
+    const std::vector<Placement>& placements, std::size_t numSpecies, uint32_t seed);
+
 }  // namespace engine
 
 #endif

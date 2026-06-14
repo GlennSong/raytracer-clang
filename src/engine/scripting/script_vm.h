@@ -32,6 +32,10 @@ public:
     // false and, if `error` is non-null, fills it with Lua's error message.
     bool doString(const std::string& code, std::string* error = nullptr);
 
+    // Set a global the script can read (e.g. a per-variant `seed`), so hosts
+    // pass parameters in without compiling Lua source.
+    void setGlobalNumber(const std::string& name, double value);
+
     // Read a global the script set (convenience for hosts/tests). Returns false
     // if the global is missing or not of the requested type.
     bool getGlobalNumber(const std::string& name, double& out) const;

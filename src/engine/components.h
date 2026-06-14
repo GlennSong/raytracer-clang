@@ -51,6 +51,21 @@ struct Renderable {
     RenderMaterial material;
 };
 
+// Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
+// Replaces "thousands of Renderable entities" for static scatter (the forest):
+// one InstanceGroup carries the shared mesh/material and a baked world matrix per
+// instance, so RenderSystem iterates a handful of groups instead of every plant,
+// culls by the group's bounds, and issues one drawMeshInstanced. The instances
+// are static (no per-instance Transform/interpolation). Per-instance culling /
+// chunking for huge worlds is the Tier 5 follow-up.
+struct InstanceGroup {
+    MeshHandle mesh;
+    RenderMaterial material;
+    std::vector<Mat4> transforms;   // world matrices, one per instance
+    Vec3 boundsCenter;              // world-space group bounds (coarse cull)
+    Real boundsRadius = 0;
+};
+
 // Associates an entity with a local player slot (ADR-0010). This is the only
 // bridge the engine provides between players and entities: the game tags
 // whatever entity it wants and reads the player's input via that index. The

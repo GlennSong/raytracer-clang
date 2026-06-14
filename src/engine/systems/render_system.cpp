@@ -61,6 +61,15 @@ void RenderSystem::render(FrameContext& ctx) {
                 return;
             ctx.renderer.drawMesh(r.mesh, model, r.material);
         });
+
+    // Instanced groups (static scatter — the forest). One coarse group-bounds
+    // cull, then one instanced draw per group (ADR/ROADMAP Phase B instancing).
+    ctx.world.each<InstanceGroup>(
+        [&](Entity, InstanceGroup& g) {
+            if (g.transforms.empty()) return;
+            if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
+            ctx.renderer.drawMeshInstanced(g.mesh, g.transforms, g.material);
+        });
 }
 
 void RenderSystem::onStop(FrameContext& /*ctx*/) {
