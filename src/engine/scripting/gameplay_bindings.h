@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_SCRIPTING_GAMEPLAY_BINDINGS_H
 
 #include "../../rt_math.h"
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -10,12 +12,20 @@ class ScriptVM;
 class World;
 class InputMap;
 struct CameraState;
+struct RenderMesh;
 
 // A deferred spawn request (ADR-0024). Scripts can't create entities during
-// World::each (the no-structural-mutation contract, ADR-0006), so spawn.block
-// records this and ScriptSystem applies it after iteration — a tiny command
-// buffer. Describes a dynamic physics cube: the Lua port of ShootingSystem.
+// World::each (the no-structural-mutation contract, ADR-0006), so spawn.* records
+// this and ScriptSystem applies it after iteration — a tiny command buffer.
+//   Block — a dynamic physics cube (the Lua port of ShootingSystem's bullet):
+//           Transform/Collider/RigidBody/Velocity.
+//   Model — a procgen-generated mesh entity (e.g. the gun viewmodel): a
+//           Renderable, plus an optional ScriptBehaviour so it can drive itself
+//           (the gun model follows the camera via its own follow script).
+enum class SpawnKind { Block, Model };
+
 struct SpawnCommand {
+    SpawnKind kind = SpawnKind::Block;
     Vec3 position;
     Vec3 velocity;
     double size = 0.5;
@@ -23,6 +33,12 @@ struct SpawnCommand {
     double friction = 0.3;
     Vec3 color{1, 1, 1};
     Vec3 emission{0, 0, 0};
+
+    // Model only:
+    std::shared_ptr<RenderMesh> mesh;   // the generated mesh to render
+    double metallic = 0.0;
+    double roughness = 0.5;
+    std::string script;                 // optional behaviour attached to it
 };
 
 // Per-tick services the gameplay surface reads/writes. Bound for the duration of
@@ -40,12 +56,16 @@ struct GameplayContext {
 // calls. Unlike the procgen sandbox, it reads/mutates the running game. Surface:
 //   log(msg)
 //   entity.alive(e) / get_position(e) / set_position(e,v) / translate(e,v)
-//   entity.set_yaw(e, radians)
+//   entity.set_yaw(e, radians) / look_along(e, fwd[, up]) / snap_prev(e)
 //   input.pressed(name) / held(name) / axis(name)        -- bound actions
 //   camera.eye() / forward() / right()                   -- the active view
 //   spawn.block{position=, velocity=, size=, restitution=, friction=,
 //               color=, emission=}                       -- a dynamic physics cube
-// Vectors are 3-element Lua arrays; `e` is the packed-Handle id start/update get.
+//   spawn.model{mesh=, position=, color=, metallic=, roughness=, script=}
+//                                                        -- a procgen mesh entity
+// `mesh` is a value built with the procgen builders (also open in this VM, so a
+// gameplay script can generate geometry). Vectors are 3-element Lua arrays; `e`
+// is the packed-Handle id start/update get.
 void openGameplayLibrary(ScriptVM& vm);
 
 // Bind the per-tick context the gameplay functions act on. ScriptSystem sets it

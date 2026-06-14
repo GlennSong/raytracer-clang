@@ -114,6 +114,46 @@ TEST_CASE(gun_fires_a_physics_block_along_camera_aim) {
     if (t) CHECK(t->position.z > 0.4);
 }
 
+TEST_CASE(gun_spawns_a_procgen_model_that_follows_the_camera) {
+    // start() generates the gun mesh with the procgen builders and spawns it as
+    // its own camera-following entity (a ScriptBehaviour, no physics). Proves the
+    // procgen builders are reachable from a gameplay script and that spawn.model
+    // + the follow behaviour wire up.
+    World world;
+    Entity player = makePlayer(world, gunSource());
+    InputMap input;
+    input.bindButton("fire", MouseButton::Left);
+    CameraState cam = forwardCamera();   // eye (0,1,0), forward +Z, right (-1,0,0)
+
+    ScriptSystem sys;
+    sys.setServices(&input, &cam, /*assets=*/nullptr);
+
+    input.beginFrame();
+    sys.tick(world, 0.016);   // start() spawns the model (deferred -> created now)
+
+    // The model is the scripted entity that isn't the player (and has no physics).
+    Entity model;
+    world.each<ScriptBehaviour, Transform>([&](Entity e, ScriptBehaviour&, Transform&) {
+        if (e != player) model = e;
+    });
+    if (!model.valid()) { CHECK(false); return; }
+    CHECK(!world.has<RigidBody>(model));      // a viewmodel, not a physics body
+
+    input.beginFrame();
+    sys.tick(world, 0.016);   // the follow behaviour now glues it to the camera
+
+    Transform* t = world.get<Transform>(model);
+    if (!t) { CHECK(false); return; }
+    // pos = eye + fwd*0.35 + right*0.18 - up*0.18 = (-0.18, 0.82, 0.35)
+    CHECK_APPROX(t->position.x, -0.18, 1e-5);
+    CHECK_APPROX(t->position.y, 0.82, 1e-5);
+    CHECK_APPROX(t->position.z, 0.35, 1e-5);
+    // look_along produced a valid (unit) orientation. Facing +Z happens to be
+    // the identity here (the model's local forward is +Z), so check normalization
+    // rather than non-identity.
+    CHECK_APPROX(t->orientation.length(), 1.0, 1e-6);
+}
+
 TEST_CASE(gun_fires_once_per_press_not_while_held) {
     World world;
     Entity player = makePlayer(world, gunSource());

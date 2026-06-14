@@ -1,5 +1,6 @@
 #include "procgen_bindings.h"
 
+#include "procgen_mesh.h"
 #include "lua_state.h"
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
@@ -269,6 +270,18 @@ int l_mesh_rotate_y(lua_State* L) {
     pushMesh(L, m);
     return 1;
 }
+int l_mesh_rotate_x(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::transform(*m, Mat4::rotateX(luaL_checknumber(L, 2)));
+    pushMesh(L, m);
+    return 1;
+}
+int l_mesh_rotate_z(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::transform(*m, Mat4::rotateZ(luaL_checknumber(L, 2)));
+    pushMesh(L, m);
+    return 1;
+}
 int l_mesh_recompute_normals(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
     MeshBuilder::recomputeNormals(*m);
@@ -412,6 +425,12 @@ void registerMetatable(lua_State* L, const char* name, lua_CFunction gc) {
 
 }  // namespace
 
+std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
+    void* ud = luaL_testudata(L, idx, kMeshMt);
+    if (ud == nullptr) return nullptr;
+    return *static_cast<MeshPtr*>(ud);
+}
+
 void openProcgenLibrary(ScriptVM& vm) {
     lua_State* L = luaState(vm);
 
@@ -465,7 +484,9 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"merge", l_mesh_merge},
         {"translate", l_mesh_translate},
         {"scale", l_mesh_scale},
+        {"rotate_x", l_mesh_rotate_x},
         {"rotate_y", l_mesh_rotate_y},
+        {"rotate_z", l_mesh_rotate_z},
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
         {nullptr, nullptr},

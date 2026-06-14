@@ -2,6 +2,7 @@
 
 #include "lua_state.h"
 #include "gameplay_bindings.h"
+#include "procgen_bindings.h"
 #include "script_behaviour.h"
 #include "../world.h"
 #include "../components.h"
@@ -63,7 +64,11 @@ void callHook(lua_State* L, const char* hook, Entity e, double dt, bool hasDt) {
 }  // namespace
 
 ScriptSystem::ScriptSystem() {
+    // Gameplay scripts get both surfaces in one VM: the effectful gameplay API
+    // and the (pure) procgen builders, so a behaviour can generate geometry
+    // (e.g. the gun viewmodel) and hand it to spawn.model.
     openGameplayLibrary(vm_);
+    openProcgenLibrary(vm_);
 }
 
 void ScriptSystem::setServices(InputMap* input, const CameraState* camera,
@@ -110,11 +115,9 @@ void ScriptSystem::tick(World& world, double dt) {
 
     setGameplayContext(vm_, nullptr);
 
-    // Apply deferred spawns now that iteration is done. Each is a dynamic cube
-    // (Transform/Collider/RigidBody/Velocity) the PhysicsSystem turns into a body
-    // and launches with `velocity` next fixed step — the Lua port of the C++
-    // ShootingSystem's bullet. The Renderable needs GPU upload, so it's added
-    // only when an AssetManager is present (headless ticks skip it).
+    // Apply deferred spawns now that iteration is done (the no-structural-
+    // mutation contract held during each). Renderables need GPU upload, so they
+    // are added only when an AssetManager is present (headless ticks skip them).
     for (const SpawnCommand& c : spawns) {
         Entity e = world.create();
         Transform t;
@@ -122,29 +125,49 @@ void ScriptSystem::tick(World& world, double dt) {
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
 
-        Collider col;
-        col.shape = ColliderShape::Box;
-        col.halfExtent = Vec3(c.size * 0.5, c.size * 0.5, c.size * 0.5);
-        col.restitution = c.restitution;
-        col.friction = c.friction;
-        world.add<Collider>(e, col);
+        if (c.kind == SpawnKind::Block) {
+            // A dynamic cube the PhysicsSystem turns into a body and launches at
+            // `velocity` next fixed step — the Lua port of ShootingSystem's bullet.
+            Collider col;
+            col.shape = ColliderShape::Box;
+            col.halfExtent = Vec3(c.size * 0.5, c.size * 0.5, c.size * 0.5);
+            col.restitution = c.restitution;
+            col.friction = c.friction;
+            world.add<Collider>(e, col);
 
-        RigidBody rb;
-        rb.motion = BodyMotion::Dynamic;
-        world.add<RigidBody>(e, rb);
+            RigidBody rb;
+            rb.motion = BodyMotion::Dynamic;
+            world.add<RigidBody>(e, rb);
 
-        Velocity vel;
-        vel.linear = c.velocity;
-        world.add<Velocity>(e, vel);
+            Velocity vel;
+            vel.linear = c.velocity;
+            world.add<Velocity>(e, vel);
 
-        if (assets_ != nullptr) {
-            Renderable r;
-            r.mesh = assets_->acquirePrimitive(
-                "box", Vec3(c.size, c.size, c.size));
-            r.material.albedo = c.color;
-            r.material.emission = c.emission;
-            r.material.roughness = 0.4f;
-            world.add<Renderable>(e, r);
+            if (assets_ != nullptr) {
+                Renderable r;
+                r.mesh = assets_->acquirePrimitive(
+                    "box", Vec3(c.size, c.size, c.size));
+                r.material.albedo = c.color;
+                r.material.emission = c.emission;
+                r.material.roughness = 0.4f;
+                world.add<Renderable>(e, r);
+            }
+        } else {  // SpawnKind::Model — a procgen mesh entity (e.g. the gun)
+            if (assets_ != nullptr && c.mesh) {
+                Renderable r;
+                r.mesh = assets_->acquireMesh(*c.mesh);
+                r.material.albedo = c.color;
+                r.material.emission = c.emission;
+                r.material.metallic = static_cast<float>(c.metallic);
+                r.material.roughness = static_cast<float>(c.roughness);
+                world.add<Renderable>(e, r);
+            }
+            // An optional behaviour drives it (the gun model follows the camera).
+            if (!c.script.empty()) {
+                ScriptBehaviour sb;
+                sb.source = c.script;
+                world.add<ScriptBehaviour>(e, sb);
+            }
         }
     }
 }

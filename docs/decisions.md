@@ -1412,10 +1412,14 @@ without coupling the core ECS to the scripting subsystem or breaking determinism
    frame. Its core is a headless `tick(World&, double)` (the `PhysicsSystem`
    pattern), so the whole layer is unit-tested without a window/renderer.
 3. **Effectful surface, the other half of the ADR-0023 split.** `openGameplayLibrary`
-   binds `log`, `entity.alive/get_position/set_position/translate/set_yaw`. Unlike
-   procgen, these read and **mutate the World**; the active `World` is bound for
-   the duration of a tick and cleared after, so no stale world is reachable
-   between ticks.
+   binds `log`, `entity.*` (position/orientation/`look_along`/`snap_prev`),
+   `input.*` (bound actions), `camera.*` (the active view = aim source), and
+   `spawn.block`/`spawn.model` (deferred). Unlike procgen, these read/**mutate the
+   World**; the per-tick `GameplayContext` (world/input/camera/spawn-buffer) is
+   bound for a tick and cleared after, so nothing stale is reachable between
+   ticks. The ScriptSystem VM **also opens the procgen builders** (they are pure),
+   so a gameplay behaviour can *generate* geometry — e.g. `gun.lua` kit-bashes its
+   own viewmodel and spawns it via `spawn.model`.
 4. **Runs in variable-rate `update()`, never `fixedUpdate()`.** Gameplay scripts
    are deliberately outside the deterministic stance — physics stays the
    fixed-step authority (ADR-0002/0012). Frame logic is where MonoBehaviour-style
@@ -1485,7 +1489,7 @@ to be replaced; listed here so they stay visible.
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
-| Cosmetic gun model dropped in the Lua port | `src/game/arena_state.cpp` | The C++ `ShootingSystem` also drew a camera-following gun cylinder; the Lua gun ports only the shooting | A `gun_model` ScriptBehaviour (or a follow-the-camera component) if the visible weapon is wanted |
+| ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 
 ---
 
