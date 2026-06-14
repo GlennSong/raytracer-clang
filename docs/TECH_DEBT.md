@@ -60,6 +60,18 @@ when fixed (git history is the archive).
   touches every depth-reading shader's sky-test/linearize), local-light shadows,
   and (much later) virtual shadow maps. Shadow-map size still fixed at 2048.
 
+- **Instance buffer was a single shared buffer with no frame-in-flight guard.**
+  The main frame doesn't `waitUntilCompleted` (only the frame-dump path does), so
+  ~3 frames are in flight, yet `issuePass` wrote per-frame instance transforms
+  into one shared `instanceBuffer` via `[contents]` — the CPU stomped data the GPU
+  was still reading, so forest trees popped to a neighbor's (often closer)
+  transform for a frame. *Fixed:* ring-buffered `instanceBuffers[MAX_FRAMES_IN_FLIGHT=3]`
+  indexed by a per-`beginFrame` counter; `nextDrawable` caps the CPU at ~3 frames
+  ahead so a 3-deep ring is always free when reused (no fence). **Unverified —
+  Metal, macOS-only.** `lightBuffer` (LightUniforms, written every `setLights`,
+  read on the async main pass) has the *same* latent race — light data tears
+  rather than geometry so it's subtle/unreported; ring it the same way next.
+
 - **Framerate dips to ~20fps in the arena viewer.** Workable but trending
   down. Suspects, in rough order: the post stack accumulated passes (SSAO,
   SSR, bloom, shadow maps, and now DOF/lens-warp wiring) running at full

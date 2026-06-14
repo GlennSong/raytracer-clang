@@ -36,6 +36,13 @@ struct GPUMesh {
 
 static constexpr uint32_t MAX_INSTANCES = 4096;
 
+// Dynamic per-frame GPU buffers (instance transforms) are ring-buffered this
+// many deep so the CPU writing frame N+1 never stomps data the GPU is still
+// reading for frame N. nextDrawable caps the CPU at ~maximumDrawableCount (3)
+// frames ahead, so a 3-deep ring is always free by the time it's reused — no
+// fence needed.
+static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
+
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
     for (int i = 0; i < 4; i++)
@@ -58,7 +65,8 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> depthStateOpaque;
     id<MTLDepthStencilState> depthStateTransparent;
     id<MTLDepthStencilState> depthStateWireOverlay;  // LessEqual, no write
-    id<MTLBuffer> instanceBuffer;
+    id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
+    int frameIndex = 0;                                   // advances each beginFrame
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
@@ -631,8 +639,9 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     }
 
     // Instance data buffer
-    impl->instanceBuffer = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
-                                                     options:MTLResourceStorageModeShared];
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        impl->instanceBuffers[i] = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
+                                                            options:MTLResourceStorageModeShared];
 
     // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
     impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
@@ -1457,6 +1466,10 @@ RenderStats MetalRenderer::getRenderStats() const {
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
+    // Advance the dynamic-buffer ring so this frame writes a slot the GPU isn't
+    // still reading for an in-flight earlier frame (fixes instance tearing —
+    // trees popping to a neighbor's transform for a frame).
+    impl->frameIndex = (impl->frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
@@ -2253,8 +2266,9 @@ void MetalRenderer::endFrame() {
                              return a.meshHandle < b.meshHandle;
                          });
 
+        id<MTLBuffer> instanceBuffer = impl->instanceBuffers[impl->frameIndex];
         GPUInstanceData* instanceBuf =
-            static_cast<GPUInstanceData*>([impl->instanceBuffer contents]);
+            static_cast<GPUInstanceData*>([instanceBuffer contents]);
         uint32_t instanceOffset = 0;
 
         size_t i = 0;
@@ -2289,7 +2303,7 @@ void MetalRenderer::endFrame() {
             [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
             [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                           length:sizeof(CameraUniforms) atIndex:1];
-            [impl->currentEncoder setVertexBuffer:impl->instanceBuffer
+            [impl->currentEncoder setVertexBuffer:instanceBuffer
                                            offset:instanceOffset * sizeof(GPUInstanceData)
                                           atIndex:2];
             [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
