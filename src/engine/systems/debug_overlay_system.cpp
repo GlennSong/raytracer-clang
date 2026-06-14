@@ -159,8 +159,8 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Intensity##ao", &ao.intensity, 0.0f, 3.0f);
         ImGui::SliderFloat("Bias##ao", &ao.bias, 0.0f, 0.3f);
         ImGui::SliderFloat("Floor##ao", &ao.aoFloor, 0.0f, 1.0f);
-        ImGui::SliderInt("Directions", &ao.directions, 1, 8);
-        ImGui::SliderInt("Steps", &ao.steps, 1, 8);
+        ImGui::SliderInt("Directions", &ao.directions, 1, 12);
+        ImGui::SliderInt("Steps", &ao.steps, 1, 16);   // higher = smoother, costlier
     }
 
     if (ImGui::CollapsingHeader("SSR")) {

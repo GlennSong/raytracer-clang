@@ -16,6 +16,17 @@ when fixed (git history is the archive).
   depth weight (`exp(-d²·1e5)`) is very sharp and barely blurs across foliage.
   Next levers if it's still noisy: temporal-accumulate AO (needs a history buffer
   + reprojection — none exists yet), raise steps, or soften the blur weight.
+- **SSAO was spatially under-sampled (blocky patches that shift under motion).**
+  The world radius (1.5m) projects to hundreds of px up close but the screen
+  radius was clamped to 64px while only 4 steps sampled it → ~16px-spaced samples
+  → coarse AO that reads "stable" as flat grey but shows as shifting blocks once
+  multiplied into the lit scene. *Mitigated:* screen-radius cap 64→32px, default
+  steps 4→8, directions→6; Steps/Directions sliders widened (16/12) so it's
+  tunable live. **Unverified (Metal/shader).** Deeper: SSAO multiplies the WHOLE
+  composited HDR (`hdr.rgb *= max(ao,floor)` in fragmentComposite), incl. direct
+  sun + emissive, not just ambient — so AO contrast at foliage silhouettes is
+  amplified and, with no AA/TAA, can still shimmer. Correct fix needs the
+  gather/respond split (ADR-0017 Phase 4) so AO only attenuates indirect light.
 
 - **Framerate dips to ~20fps in the arena viewer.** Workable but trending
   down. Suspects, in rough order: the post stack accumulated passes (SSAO,

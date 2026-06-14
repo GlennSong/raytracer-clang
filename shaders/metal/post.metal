@@ -304,9 +304,12 @@ kernel void gtaoCompute(
     // Produces well-distributed values in [0, 2π] with no visible tiling
     float rotAngle = fract(52.9829189 * fract(0.06711056 * float(gid.x) + 0.00583715 * float(gid.y))) * 2.0 * M_PI_F;
 
-    // Screen-space pixel radius (adapts to depth)
+    // Screen-space pixel radius (adapts to depth). Capped at 32px: the world
+    // radius projects to hundreds of px up close, so a large cap + few steps put
+    // samples ~16px apart -> coarse, blocky AO that shifts as the camera moves.
+    // A tighter cap keeps the (NUM_STEPS) samples dense enough to be smooth.
     float projScale = camera.projection[1][1] * float(texSize.y) * 0.5;
-    float screenRadius = clamp(radius * projScale / (-viewPos.z), 3.0, 64.0);
+    float screenRadius = clamp(radius * projScale / (-viewPos.z), 3.0, 32.0);
 
     float occlusion = 0.0;
 

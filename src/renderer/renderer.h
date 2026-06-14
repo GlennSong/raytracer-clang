@@ -333,7 +333,7 @@ public:
         float bias      = 0.05f;
         float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
         int directions  = 6;       // more angular samples -> less banding
-        int steps       = 4;
+        int steps       = 8;       // denser radial samples -> smoother (less blocky)
     } ssaoParams;
 
     static std::unique_ptr<Renderer> create();
