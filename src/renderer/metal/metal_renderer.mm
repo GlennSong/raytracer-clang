@@ -2263,6 +2263,7 @@ void MetalRenderer::endFrame() {
             [enc setComputePipelineState:impl->aoPipeline];
             [enc setTexture:impl->depthTexture atIndex:0];
             [enc setTexture:impl->aoTexture atIndex:1];
+            [enc setTexture:impl->viewNormalTexture atIndex:2];   // real normals (no depth recon)
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
             SSAOUniforms aoP = {
                 ssaoParams.radius, ssaoParams.intensity, ssaoParams.bias,

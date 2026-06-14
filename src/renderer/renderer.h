@@ -332,7 +332,7 @@ public:
         float intensity = 0.8f;
         float bias      = 0.05f;
         float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
-        int directions  = 4;
+        int directions  = 6;       // more angular samples -> less banding
         int steps       = 4;
     } ssaoParams;
 

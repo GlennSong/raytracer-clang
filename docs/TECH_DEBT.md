@@ -6,6 +6,17 @@ when fixed (git history is the archive).
 
 ## Rendering / performance
 
+- **SSAO had no temporal stabilization and reconstructed normals from depth.**
+  The depth-reconstructed normal sprayed garbage over thin/edgy geometry
+  (foliage), so AO crawled/blocked under motion — the forest's worst artifact.
+  *Fixed:* `gtaoCompute` now reads the real view-normal G-buffer (same encoding
+  as SSR), and the default direction count went 4→6. **Unverified — Metal/shader,
+  macOS-only.** Residual: there is still **no temporal accumulation**, so some
+  shimmer may remain under fast motion at the 4-step sample count; the bilateral
+  depth weight (`exp(-d²·1e5)`) is very sharp and barely blurs across foliage.
+  Next levers if it's still noisy: temporal-accumulate AO (needs a history buffer
+  + reprojection — none exists yet), raise steps, or soften the blur weight.
+
 - **Framerate dips to ~20fps in the arena viewer.** Workable but trending
   down. Suspects, in rough order: the post stack accumulated passes (SSAO,
   SSR, bloom, shadow maps, and now DOF/lens-warp wiring) running at full

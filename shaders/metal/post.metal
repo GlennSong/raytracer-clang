@@ -266,6 +266,7 @@ kernel void ssrBlurV(
 kernel void gtaoCompute(
     texture2d<float, access::read> depthTex [[texture(0)]],
     texture2d<float, access::write> aoResult [[texture(1)]],
+    texture2d<float, access::read> normalTex [[texture(2)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant SSAOUniforms& aoParams [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
@@ -286,25 +287,12 @@ kernel void gtaoCompute(
     // Reconstruct view-space position
     float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
 
-    // Reconstruct normal from depth neighbors (central differences, pick best pair)
-    uint2 maxCoord = texSize - 1;
-    float depthL = depthTex.read(uint2(max(int(gid.x) - 1, 0), gid.y)).x;
-    float depthR = depthTex.read(uint2(min(gid.x + 1, maxCoord.x), gid.y)).x;
-    float depthU = depthTex.read(uint2(gid.x, max(int(gid.y) - 1, 0))).x;
-    float depthD = depthTex.read(uint2(gid.x, min(gid.y + 1, maxCoord.y))).x;
+    // Use the real view-space normal from the G-buffer (same encoding as SSR).
+    // Reconstructing the normal from depth neighbours sprays garbage normals over
+    // thin/edgy geometry (foliage), which made AO crawl and block under motion.
+    float3 viewNormal = normalize(normalTex.read(gid).xyz * 2.0 - 1.0);
 
-    float2 texel = 1.0 / float2(texSize);
-    float3 viewPosL = ssrViewPos(depthL, uv - float2(texel.x, 0), camera.invProjection);
-    float3 viewPosR = ssrViewPos(depthR, uv + float2(texel.x, 0), camera.invProjection);
-    float3 viewPosU = ssrViewPos(depthU, uv - float2(0, texel.y), camera.invProjection);
-    float3 viewPosD = ssrViewPos(depthD, uv + float2(0, texel.y), camera.invProjection);
-
-    float3 ddx = (abs(depthR - depth) < abs(depthL - depth))
-                 ? (viewPosR - viewPos) : (viewPos - viewPosL);
-    float3 ddy = (abs(depthD - depth) < abs(depthU - depth))
-                 ? (viewPosD - viewPos) : (viewPos - viewPosU);
-    float3 viewNormal = normalize(cross(ddy, ddx));
-    if (viewNormal.z < 0.0) viewNormal = -viewNormal;
+    uint2 maxCoord = texSize - 1;   // clamp for sample reads below
 
     const int NUM_DIRECTIONS = aoParams.directions;
     const int NUM_STEPS = aoParams.steps;
