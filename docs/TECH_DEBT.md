@@ -36,6 +36,16 @@ when fixed (git history is the archive).
   sun + emissive, not just ambient — so AO contrast at foliage silhouettes is
   amplified and, with no AA/TAA, can still shimmer. Correct fix needs the
   gather/respond split (ADR-0017 Phase 4) so AO only attenuates indirect light.
+- **SSR ignored material roughness — every surface reflected like a mirror.**
+  The ray-march took only depth/normal/scene-color (no roughness), and the
+  G-buffer normal's `.w` was a wasted constant `1.0`, so rough ground mirrored the
+  forest (strong at grazing angles via the Fresnel term) and rough treetops added
+  shimmering reflections over the foliage. *Fixed:* the G-buffer now packs
+  perceptual roughness into normal `.w`; `ssrRayMarch` fades reflection to 0 by
+  `maxRoughness` (default 0.6, `Max Roughness` slider) and early-outs for rough
+  pixels (also skips the march for the common case). **Unverified — Metal/shader,
+  macOS-only.** Not yet gated by *metallic* (no free G-buffer channel left); fine
+  while reflective surfaces are low-roughness dielectrics/water.
 
 - **Framerate dips to ~20fps in the arena viewer.** Workable but trending
   down. Suspects, in rough order: the post stack accumulated passes (SSAO,

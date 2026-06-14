@@ -376,7 +376,9 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
     GBufferOut out;
     out.color = float4(color, alpha);
-    out.viewNormal = float4(viewN * 0.5 + 0.5, 1.0);
+    // Pack perceptual roughness into .w so screen-space passes (SSR) can gate by
+    // it — rough surfaces (ground, foliage) must not reflect like mirrors.
+    out.viewNormal = float4(viewN * 0.5 + 0.5, rough);
     return out;
 }
 

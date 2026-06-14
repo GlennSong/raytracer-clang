@@ -324,6 +324,7 @@ public:
         float thicknessFar  = 2.0f;
         float stride        = 2.0f;
         float blendStrength = 0.5f;
+        float maxRoughness  = 0.6f;   // surfaces rougher than this don't reflect
     } ssrParams;
 
     // SSAO tuning parameters

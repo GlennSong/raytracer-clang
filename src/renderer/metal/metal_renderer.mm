@@ -2347,7 +2347,7 @@ void MetalRenderer::endFrame() {
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
             SSRUniforms ssrP = {
                 ssrParams.maxRayDist, ssrParams.thickness, ssrParams.thicknessFar,
-                ssrParams.stride, ssrParams.blendStrength, {}
+                ssrParams.stride, ssrParams.blendStrength, ssrParams.maxRoughness, {}
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
             [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];

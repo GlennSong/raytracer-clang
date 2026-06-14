@@ -157,7 +157,8 @@ struct SSRUniforms {
     float thicknessFar;
     float stride;
     float blendStrength;
-    float _pad[3];
+    float maxRoughness;   // SSR fades to 0 by this roughness (rough = no mirror)
+    float _pad[2];
 };
 
 struct SSAOUniforms {

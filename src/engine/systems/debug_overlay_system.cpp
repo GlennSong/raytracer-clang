@@ -26,6 +26,7 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ssr.thicknessFar  = static_cast<float>(s.getDouble("ssr.thicknessFar", ssr.thicknessFar));
     ssr.stride        = static_cast<float>(s.getDouble("ssr.stride", ssr.stride));
     ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
+    ssr.maxRoughness  = static_cast<float>(s.getDouble("ssr.maxRoughness", ssr.maxRoughness));
 
     // NOTE: scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
     // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
@@ -60,6 +61,7 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssr.thicknessFar", ssr.thicknessFar);
     s.setDouble("ssr.stride", ssr.stride);
     s.setDouble("ssr.blendStrength", ssr.blendStrength);
+    s.setDouble("ssr.maxRoughness", ssr.maxRoughness);
 
     // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
     // session's slider tweaks don't silently override the level on next launch.
@@ -174,6 +176,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Thickness Far", &ssr.thicknessFar, 0.1f, 10.0f);
         ImGui::SliderFloat("Stride (px)", &ssr.stride, 1.0f, 8.0f);
         ImGui::SliderFloat("Blend Strength", &ssr.blendStrength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Max Roughness", &ssr.maxRoughness, 0.0f, 1.0f);  // rougher = no SSR
     }
 
     if (ImGui::CollapsingHeader("Bloom")) {

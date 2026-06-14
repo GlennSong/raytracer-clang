@@ -38,8 +38,15 @@ kernel void ssrRayMarch(
 
     // Reconstruct view-space position from depth, read normal from G-buffer
     float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
-    float3 viewNormal = normalTex.read(depthCoord).xyz * 2.0 - 1.0;
-    viewNormal = normalize(viewNormal);
+    float4 normalSample = normalTex.read(depthCoord);
+    float3 viewNormal = normalize(normalSample.xyz * 2.0 - 1.0);
+
+    // Roughness gate (packed in normal.w): rough surfaces scatter reflections to
+    // nothing — only smooth/metallic/wet surfaces get SSR. Fades to 0 at
+    // maxRoughness, killing the bogus forest-on-ground/foliage mirror look and
+    // skipping the ray march entirely for the (common) rough pixels.
+    float reflectivity = 1.0 - smoothstep(0.0, params.maxRoughness, normalSample.w);
+    if (reflectivity <= 0.0) { ssrResult.write(float4(0.0), gid); return; }
 
     float3 viewDir = normalize(viewPos);
     float3 reflectDir = reflect(viewDir, viewNormal);
@@ -166,7 +173,7 @@ kernel void ssrRayMarch(
 
     float NdotV = saturate(dot(viewNormal, -viewDir));
     float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
-    confidence *= fresnel;
+    confidence *= fresnel * reflectivity;
 
     ssrResult.write(float4(hitColor, confidence), gid);
 }
