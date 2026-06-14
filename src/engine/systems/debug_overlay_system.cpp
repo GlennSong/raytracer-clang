@@ -19,6 +19,7 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ao.bias      = static_cast<float>(s.getDouble("ssao.bias", ao.bias));
     ao.directions = static_cast<int>(s.getDouble("ssao.directions", ao.directions));
     ao.steps     = static_cast<int>(s.getDouble("ssao.steps", ao.steps));
+    ao.temporal  = static_cast<float>(s.getDouble("ssao.temporal", ao.temporal));
 
     ssr.maxRayDist    = static_cast<float>(s.getDouble("ssr.maxRayDist", ssr.maxRayDist));
     ssr.thickness     = static_cast<float>(s.getDouble("ssr.thickness", ssr.thickness));
@@ -52,6 +53,7 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssao.bias", ao.bias);
     s.setDouble("ssao.directions", ao.directions);
     s.setDouble("ssao.steps", ao.steps);
+    s.setDouble("ssao.temporal", ao.temporal);
 
     s.setDouble("ssr.maxRayDist", ssr.maxRayDist);
     s.setDouble("ssr.thickness", ssr.thickness);
@@ -161,6 +163,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Floor##ao", &ao.aoFloor, 0.0f, 1.0f);
         ImGui::SliderInt("Directions", &ao.directions, 1, 12);
         ImGui::SliderInt("Steps", &ao.steps, 1, 16);   // higher = smoother, costlier
+        ImGui::SliderFloat("Temporal", &ao.temporal, 0.0f, 0.97f);  // 0 = off; higher = steadier but ghostier
     }
 
     if (ImGui::CollapsingHeader("SSR")) {

@@ -137,10 +137,15 @@ struct MetalRenderer::Impl {
 
     // Screen-space ambient occlusion (SSAO/GTAO)
     id<MTLTexture> aoTexture;          // R16Float — full-res AO result
-    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong
+    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong / temporal out
+    id<MTLTexture> aoHistory;          // R16Float — previous frame's resolved AO
     id<MTLComputePipelineState> aoPipeline;
     id<MTLComputePipelineState> aoBlurHPipeline;
     id<MTLComputePipelineState> aoBlurVPipeline;
+    id<MTLComputePipelineState> aoTemporalPipeline;   // reprojected history blend
+    simd_float4x4 aoCurrViewProjection; // this frame's VP (inverse drives recon)
+    simd_float4x4 aoPrevViewProjection; // last frame's VP (reproject into history)
+    bool aoHistoryValid;                // false until the first resolve / after resize
 
     // Reflection probes (cubemap-based IBL)
     id<MTLTexture> probeCubemapArray;      // texturecube_array, RGBA16Float
@@ -528,6 +533,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
                                                                                 error:&error];
             if (!impl->aoBlurVPipeline) NSLog(@"AO blur V pipeline error: %@", error);
         }
+        id<MTLFunction> aoTemporalFunc = [library newFunctionWithName:@"aoTemporal"];
+        if (aoTemporalFunc) {
+            impl->aoTemporalPipeline = [impl->device newComputePipelineStateWithFunction:aoTemporalFunc
+                                                                                  error:&error];
+            if (!impl->aoTemporalPipeline) NSLog(@"AO temporal pipeline error: %@", error);
+        }
     }
 
     // Bloom compute pipelines
@@ -758,6 +769,8 @@ void MetalRenderer::resize(int width, int height) {
     aoDesc.storageMode = MTLStorageModePrivate;
     impl->aoTexture = [impl->device newTextureWithDescriptor:aoDesc];
     impl->aoBlurTemp = [impl->device newTextureWithDescriptor:aoDesc];
+    impl->aoHistory = [impl->device newTextureWithDescriptor:aoDesc];
+    impl->aoHistoryValid = false;   // contents undefined until the first resolve
 
     // Bloom mip chain (progressive half-res)
     {
@@ -1494,6 +1507,10 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     Mat4 viewMat = Mat4::lookAt(camera.position, camera.target, camera.up);
     Mat4 vpMat = projMat * viewMat;
     impl->cameraUniforms.invViewProjection = toSimd(vpMat.inverse());
+    // Roll the view-projection history for temporal AO: this frame's VP (matching
+    // the invViewProjection above) becomes "current"; last frame's becomes "prev".
+    impl->aoPrevViewProjection = impl->aoCurrViewProjection;
+    impl->aoCurrViewProjection = toSimd(vpMat);
     impl->cameraUniforms.projection = proj;
     impl->cameraUniforms.invProjection = toSimd(projMat.inverse());
     impl->cameraUniforms.screenSize = {static_cast<float>(impl->framebufferWidth),
@@ -2250,6 +2267,11 @@ void MetalRenderer::endFrame() {
                          && impl->bloomUpsamplePipeline && impl->bloomMips[0])
                      || dofActive;
 
+    // When temporal AO runs, the resolved result lands in aoBlurTemp (so the
+    // current/history reads don't alias the output); the composite samples that
+    // instead of aoTexture, and we blit it into aoHistory for next frame.
+    bool aoResolvedInBlurTemp = false;
+
     if (needsCompute) {
         id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
         MTLSize group = MTLSizeMake(8, 8, 1);
@@ -2286,6 +2308,27 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoTexture atIndex:2];
                 [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+            }
+
+            // --- Temporal resolve: blend in reprojected history AO ---
+            // Stabilizes foliage flicker (G-buffer aliasing). Reads the current
+            // (blurred) AO from aoTexture + history from aoHistory, writes the
+            // resolved AO to aoBlurTemp.
+            if (impl->aoTemporalPipeline && impl->aoHistory && impl->aoBlurTemp) {
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+                [enc setComputePipelineState:impl->aoTemporalPipeline];
+                [enc setTexture:impl->aoTexture atIndex:0];      // current (blurred)
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->aoHistory atIndex:2];      // last frame's resolved
+                [enc setTexture:impl->aoBlurTemp atIndex:3];     // resolved out
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+                AOTemporalUniforms tP = {};
+                tP.prevViewProjection = impl->aoPrevViewProjection;
+                tP.alpha = impl->aoHistoryValid ? ssaoParams.temporal : 0.0f;
+                [enc setBytes:&tP length:sizeof(tP) atIndex:1];
+                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                aoResolvedInBlurTemp = true;
+                impl->aoHistoryValid = true;
             }
         }
 
@@ -2402,6 +2445,13 @@ void MetalRenderer::endFrame() {
         }
 
         [enc endEncoding];
+
+        // Save this frame's resolved AO as next frame's temporal history.
+        if (aoResolvedInBlurTemp && impl->aoHistory) {
+            id<MTLBlitCommandEncoder> aoBlit = [impl->currentCommandBuffer blitCommandEncoder];
+            [aoBlit copyFromTexture:impl->aoBlurTemp toTexture:impl->aoHistory];
+            [aoBlit endEncoding];
+        }
     }
 
     // --- Composite pass: tone map HDR scene to LDR drawable ---
@@ -2418,7 +2468,9 @@ void MetalRenderer::endFrame() {
                                                    : impl->sceneColorTexture)
                                 atIndex:0];
         [compEncoder setFragmentTexture:impl->ssrTexture atIndex:1];
-        [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
+        [compEncoder setFragmentTexture:(aoResolvedInBlurTemp ? impl->aoBlurTemp
+                                                              : impl->aoTexture)
+                                atIndex:2];
         [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
         [compEncoder setFragmentTexture:impl->viewNormalTexture atIndex:4];
         if (bloomEnabled && impl->bloomUpsampleMips[0]) {

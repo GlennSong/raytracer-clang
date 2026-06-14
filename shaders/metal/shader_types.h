@@ -169,6 +169,16 @@ struct SSAOUniforms {
     float   _pad[3];
 };
 
+// Temporal AO reprojection (kills foliage flicker from G-buffer aliasing).
+// prevViewProjection reprojects this frame's world position into last frame's
+// screen to fetch the history AO; alpha is the history blend weight (0 on the
+// first frame / after a resize, when no valid history exists yet).
+struct AOTemporalUniforms {
+    simd_float4x4 prevViewProjection;
+    float         alpha;
+    float         _pad[3];
+};
+
 struct BloomUniforms {
     float   threshold;
     float   knee;

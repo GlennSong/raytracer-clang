@@ -425,6 +425,65 @@ kernel void aoBlurV(
     output.write(float4(total / weightSum, 0, 0, 1), gid);
 }
 
+// Temporal AO resolve: blends the (blurred) current-frame AO with last frame's
+// AO reprojected to this pixel. Foliage is sub-pixel, so with no AA each pixel
+// flips between leaf and background as the camera moves, swinging AO 0.5<->1.0
+// frame to frame; both values are individually valid, so only accumulating over
+// time stabilizes it. Ghosting/disocclusion are bounded by clamping the history
+// sample to the 3x3 neighborhood of the current AO (TAA-style neighborhood clamp)
+// and by rejecting history that reprojects off-screen.
+kernel void aoTemporal(
+    texture2d<float, access::read>   currentAO  [[texture(0)]],
+    texture2d<float, access::read>   depthTex   [[texture(1)]],
+    texture2d<float, access::sample> historyAO  [[texture(2)]],
+    texture2d<float, access::write>  resolvedAO [[texture(3)]],
+    constant CameraUniforms& camera [[buffer(0)]],
+    constant AOTemporalUniforms& t  [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint2 size = uint2(resolvedAO.get_width(), resolvedAO.get_height());
+    if (gid.x >= size.x || gid.y >= size.y) return;
+
+    float cur = currentAO.read(gid).r;
+    float depth = depthTex.read(gid).x;
+
+    // No history to blend (first frame / resize), or sky: pass current through.
+    if (t.alpha <= 0.0 || depth >= 0.999) {
+        resolvedAO.write(float4(cur), gid);
+        return;
+    }
+
+    // Reconstruct this pixel's world position, then project it into last frame.
+    float2 uv = (float2(gid) + 0.5) / float2(size);
+    float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float4 world = camera.invViewProjection * float4(ndc, depth, 1.0);
+    world /= world.w;
+    float4 prevClip = t.prevViewProjection * world;
+    float resolved = cur;
+    if (prevClip.w > 0.0) {
+        float2 prevNdc = prevClip.xy / prevClip.w;
+        float2 prevUV = float2(prevNdc.x * 0.5 + 0.5, 0.5 - prevNdc.y * 0.5);
+        if (all(prevUV >= float2(0.0)) && all(prevUV <= float2(1.0))) {
+            // Neighborhood min/max of the current AO bounds plausible values;
+            // clamping the reprojected history to it suppresses ghosting and
+            // disocclusion bleed without needing a history-depth buffer.
+            float mn = cur, mx = cur;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    uint2 c = uint2(clamp(int2(gid) + int2(dx, dy),
+                                          int2(0), int2(size) - 1));
+                    float s = currentAO.read(c).r;
+                    mn = min(mn, s);
+                    mx = max(mx, s);
+                }
+            constexpr sampler hsmp(filter::linear, address::clamp_to_edge);
+            float hist = clamp(historyAO.sample(hsmp, prevUV).r, mn, mx);
+            resolved = mix(cur, hist, t.alpha);
+        }
+    }
+    resolvedAO.write(float4(resolved), gid);
+}
+
 // --- Bloom: threshold extract + progressive downsample/upsample ---
 
 // Extract bright pixels and downsample to first mip (half-res).

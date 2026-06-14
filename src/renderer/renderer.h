@@ -334,6 +334,8 @@ public:
         float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
         int directions  = 6;       // more angular samples -> less banding
         int steps       = 8;       // denser radial samples -> smoother (less blocky)
+        float temporal  = 0.9f;    // history blend weight: higher = steadier but
+                                   // more ghosting in motion; 0 disables temporal AO
     } ssaoParams;
 
     static std::unique_ptr<Renderer> create();

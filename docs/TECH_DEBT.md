@@ -11,11 +11,20 @@ when fixed (git history is the archive).
   (foliage), so AO crawled/blocked under motion — the forest's worst artifact.
   *Fixed:* `gtaoCompute` now reads the real view-normal G-buffer (same encoding
   as SSR), and the default direction count went 4→6. **Unverified — Metal/shader,
-  macOS-only.** Residual: there is still **no temporal accumulation**, so some
-  shimmer may remain under fast motion at the 4-step sample count; the bilateral
-  depth weight (`exp(-d²·1e5)`) is very sharp and barely blurs across foliage.
-  Next levers if it's still noisy: temporal-accumulate AO (needs a history buffer
-  + reprojection — none exists yet), raise steps, or soften the blur weight.
+  macOS-only.**
+- **SSAO now has temporal accumulation** (the residual foliage flicker after the
+  normal-G-buffer + denser-sampling fixes). Sub-pixel foliage with no AA flips
+  each pixel between leaf and background as the camera moves, swinging AO frame to
+  frame; *both* values are individually valid, so only accumulating over time
+  stabilizes it. *Implemented:* `aoTemporal` kernel reprojects this frame's world
+  position into last frame via the previous view-projection, samples a history AO
+  texture, clamps it to the current 3×3 neighborhood (TAA-style, suppresses
+  ghosting/disocclusion without a history-depth buffer), and blends. Resolved AO
+  is kept in `aoHistory` (blit) for next frame; the blend weight is the `Temporal`
+  slider (`ssaoParams.temporal`, default 0.9; 0 = off). History is invalidated on
+  resize and on the first frame. **Unverified — Metal/shader, macOS-only.**
+  Residual risk: at high `temporal` values, fast motion may smear (neighborhood
+  clamp bounds it but there's no velocity rejection); dial the slider if so.
 - **SSAO was spatially under-sampled (blocky patches that shift under motion).**
   The world radius (1.5m) projects to hundreds of px up close but the screen
   radius was clamped to 64px while only 4 steps sampled it → ~16px-spaced samples
