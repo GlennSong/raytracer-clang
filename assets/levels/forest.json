@@ -44,7 +44,10 @@
       1.0,
       1.0
      ],
-     "roughness": 1.0
+     "roughness": 1.0,
+     "flags": [
+      "double_sided"
+     ]
     }
    },
    {
@@ -57,7 +60,10 @@
       1.0,
       1.0
      ],
-     "roughness": 1.0
+     "roughness": 1.0,
+     "flags": [
+      "double_sided"
+     ]
     }
    },
    {
@@ -70,7 +76,10 @@
       1.0,
       1.0
      ],
-     "roughness": 1.0
+     "roughness": 1.0,
+     "flags": [
+      "double_sided"
+     ]
     }
    },
    {
@@ -154,7 +163,10 @@
       1.0,
       1.0
      ],
-     "roughness": 1.0
+     "roughness": 1.0,
+     "flags": [
+      "double_sided"
+     ]
     }
    },
    {

@@ -62,6 +62,10 @@ struct RenderMaterial {
     uint32_t flags = 0;
 
     static constexpr uint32_t FLAG_CHECKERBOARD = 1;
+    // Render both faces (no back-face cull). For organic/voxelized meshes (the
+    // SDF-skinned trees) whose Surface Nets joints emit near-degenerate, view-
+    // dependently-facing triangles that otherwise pop in and out under culling.
+    static constexpr uint32_t FLAG_DOUBLE_SIDED = 2;
 
     TextureHandle albedoMap;
     TextureHandle normalMap;

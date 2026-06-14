@@ -1833,6 +1833,9 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
                     if (!mesh) continue;
 
+                    bool ds = (dc.material.flags & RenderMaterial::FLAG_DOUBLE_SIDED) != 0;
+                    [enc setCullMode:(ds ? MTLCullModeNone : MTLCullModeBack)];
+
                     ModelUniforms modelU;
                     modelU.model = toSimd(dc.transform);
                     modelU.normalMatrix = inverseTranspose(modelU.model);
@@ -2152,6 +2155,14 @@ void MetalRenderer::endFrame() {
 
         [impl->currentEncoder setDepthStencilState:depthState];
 
+        // Double-sided materials (FLAG_DOUBLE_SIDED) disable back-face culling for
+        // that draw; everything else keeps the default back cull. Cull mode is
+        // encoder state, so set it per batch/draw from the material.
+        auto setCull = [&](const RenderMaterial& mat) {
+            bool ds = (mat.flags & RenderMaterial::FLAG_DOUBLE_SIDED) != 0;
+            [impl->currentEncoder setCullMode:(ds ? MTLCullModeNone : MTLCullModeBack)];
+        };
+
         // Stable sort by mesh handle to group identical meshes while preserving
         // depth order within each group.
         std::stable_sort(drawCalls.begin(), drawCalls.end(),
@@ -2176,14 +2187,17 @@ void MetalRenderer::endFrame() {
 
             if (batchSize == 1) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
+                setCull(drawCalls[batchStart].material);
                 issueSingleDraw(drawCalls[batchStart]);
                 continue;
             }
 
             if (instanceOffset + batchSize > MAX_INSTANCES) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
-                for (size_t j = batchStart; j < batchStart + batchSize; j++)
+                for (size_t j = batchStart; j < batchStart + batchSize; j++) {
+                    setCull(drawCalls[j].material);
                     issueSingleDraw(drawCalls[j]);
+                }
                 continue;
             }
 
@@ -2192,6 +2206,7 @@ void MetalRenderer::endFrame() {
                     fillInstanceData(drawCalls[j]);
 
             [impl->currentEncoder setRenderPipelineState:instancedPipeline];
+            setCull(drawCalls[batchStart].material);
             [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
             [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                           length:sizeof(CameraUniforms) atIndex:1];

@@ -88,6 +88,18 @@ when fixed (git history is the archive).
 
 ## Procgen / editor
 
+- **SDF-skinned trees drop whole branches under camera motion (back-face cull
+  of folded Surface Nets quads).** `buildTurtleMeshSdf` smooth-unions branch
+  capsules and meshes them with Surface Nets (`sdf.cpp`); at the knobby joints
+  the single averaged dual vertex per cell makes the surrounding quad non-planar,
+  so a triangle is nearly edge-on and its screen-space facing flips with view
+  angle — back-face culling then pops it. (Ruled out: winding is globally
+  consistent, frustum cull is conservative/normalized, generation is
+  deterministic.) *Mitigated:* `FLAG_DOUBLE_SIDED` material flag → `MTLCullModeNone`
+  for that draw; set via `"flags":["double_sided"]`, on the forest trees + grass.
+  **Unverified — Metal, macOS-only.** Proper fix: better dual-vertex placement
+  (clamp-in-cell / QEF) so quads stop folding, or move branches to swept
+  generalized-cylinder tubes (clean topology + UVs for bark, exact thin twigs).
 - **Procedural objects aren't shown or editable in the editor** (terrain,
   scattered vegetation). By design for now (ADR-0022): they carry no
   `SourceSpec`, so they're regenerated runtime objects, not document entities.

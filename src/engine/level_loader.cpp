@@ -42,8 +42,9 @@ static void applyMaterial(const json& j, RenderMaterial& mat) {
     describeProperties(mat, reader);
     if (j.contains("flags")) {
         for (auto& flag : j["flags"]) {
-            if (flag.get<std::string>() == "checkerboard")
-                mat.flags |= RenderMaterial::FLAG_CHECKERBOARD;
+            const std::string name = flag.get<std::string>();
+            if (name == "checkerboard")  mat.flags |= RenderMaterial::FLAG_CHECKERBOARD;
+            else if (name == "double_sided") mat.flags |= RenderMaterial::FLAG_DOUBLE_SIDED;
         }
     }
 }
