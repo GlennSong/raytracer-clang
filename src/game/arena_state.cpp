@@ -13,10 +13,30 @@
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
 #include "../engine/systems/shooting_system.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "../engine/scripting/script_system.h"
+#include "../engine/scripting/script_behaviour.h"
+#include "../renderer/event.h"
+#include <fstream>
+#include <sstream>
+#include <vector>
+#endif
 #endif
 #include "../log.h"
 
 using namespace engine;
+
+#if defined(RT_ENABLE_PHYSICS) && defined(RT_ENABLE_SCRIPTING)
+namespace {
+std::string readTextFile(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return {};
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+}  // namespace
+#endif
 
 ArenaState::ArenaState(Window& window, Renderer& renderer,
                        const std::string& levelFile,
@@ -30,7 +50,14 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = addSystem<PhysicsSystem>();
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
+#ifdef RT_ENABLE_SCRIPTING
+    // The shooting gun is now a Lua ScriptBehaviour on the player (ADR-0024);
+    // ScriptSystem drives it. The script is attached in onEnter, once the player
+    // entity exists. (Replaces the C++ ShootingSystem's bullet spawning.)
+    addSystem<ScriptSystem>();
+#else
     addSystem<ShootingSystem>(camSys.flyController(), physSys, renderer);
+#endif
 #endif
     addSystem<MotionSystem>();
     addSystem<DayNightSystem>();
@@ -53,6 +80,34 @@ void ArenaState::onEnter(FrameContext& ctx) {
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view, ctx.assets)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }
+
+#if defined(RT_ENABLE_PHYSICS) && defined(RT_ENABLE_SCRIPTING)
+    // Attach the Lua gun (ADR-0024) to the player and bind its fire action. The
+    // player is the entity PlayerSystem drives (Transform + RigidBody +
+    // ControlledBy). Collected first, then tagged, so we never add a component
+    // mid-iteration (World::each contract, ADR-0006).
+    ctx.actions.bindButton("fire", MouseButton::Left);
+    ctx.actions.bindButton("fire", GamepadButton::RightBumper);
+    {
+        std::string gun = readTextFile("assets/scripts/gun.lua");
+        if (gun.empty()) {
+            LOG_WARN << "assets/scripts/gun.lua not found; player has no gun";
+        } else {
+            std::vector<Entity> players;
+            ctx.world.each<Transform, RigidBody, ControlledBy>(
+                [&](Entity e, Transform&, RigidBody&, ControlledBy&) {
+                    players.push_back(e);
+                });
+            for (Entity e : players) {
+                if (!ctx.world.has<ScriptBehaviour>(e)) {
+                    ScriptBehaviour sb;
+                    sb.source = gun;
+                    ctx.world.add<ScriptBehaviour>(e, sb);
+                }
+            }
+        }
+    }
+#endif
 
     // Play From Here (one-shot flag): start the player at the editor's view
     // instead of the document's spawn. The position rides the same settings

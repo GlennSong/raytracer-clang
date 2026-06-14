@@ -221,7 +221,10 @@ target_link_libraries(run_tests PRIVATE engine_core)
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
-        tests/test_script_system.cpp)
+        tests/test_script_system.cpp
+        tests/test_gun_script.cpp)
+    # Lets the gun test read the actual shipped assets/scripts/gun.lua.
+    target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)

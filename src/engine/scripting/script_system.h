@@ -7,6 +7,9 @@
 namespace engine {
 
 class World;
+class InputMap;
+class AssetManager;
+struct CameraState;
 
 // Drives MonoBehaviour-style scripts (ADR-0024): each frame it finds entities
 // with a ScriptBehaviour, lazily loads each one's chunk into a per-entity
@@ -17,19 +20,29 @@ class World;
 // Gameplay scripting is intentionally NOT in the deterministic sandbox: scripts
 // read/mutate the World. It runs in the variable-rate update() (frame logic),
 // not fixedUpdate() — physics stays the deterministic fixed-step authority
-// (ADR-0002/0012).
+// (ADR-0002/0012). Entity spawns requested from scripts are deferred and applied
+// after iteration (the World::each no-structural-mutation contract, ADR-0006).
 class ScriptSystem : public System {
 public:
     ScriptSystem();
 
     void update(FrameContext& ctx) override;
 
+    // Services the gameplay surface reads each tick. update() fills these from
+    // FrameContext; tests set only what they exercise. `assets` may be null —
+    // then spawned entities get physics components but no Renderable (headless).
+    void setServices(InputMap* input, const CameraState* camera, AssetManager* assets);
+
     // Headless-testable core: run start/update for every ScriptBehaviour in
-    // `world`, advancing by `dt`. update() forwards to this (like PhysicsSystem).
+    // `world`, advancing by `dt`, then apply any deferred spawns. update()
+    // forwards to this (like PhysicsSystem).
     void tick(World& world, double dt);
 
 private:
     ScriptVM vm_;
+    InputMap* input_ = nullptr;
+    const CameraState* camera_ = nullptr;
+    AssetManager* assets_ = nullptr;
 };
 
 }  // namespace engine

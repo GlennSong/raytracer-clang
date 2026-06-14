@@ -1388,7 +1388,7 @@ interop becoming a real authoring need (→ design the bridge then).
 ---
 
 ## ADR-0024 — Gameplay scripting: a MonoBehaviour-style `ScriptBehaviour` over the ECS
-**Status:** Accepted — first slice **implemented** (effectful gameplay binding surface; `ScriptBehaviour` component + `ScriptSystem` with a headless `tick`; per-entity instance tables; start/update lifecycle; Transform access — covered by `tests/test_script_system.cpp`). Not yet wired into a running game state; spawn/destroy, hot-reload, and ref cleanup are follow-ups. · **Date:** 2026-06-14
+**Status:** Accepted — **implemented** (effectful gameplay surface — entity/input/camera/spawn; `ScriptBehaviour` component + `ScriptSystem` with a headless `tick` + a deferred spawn command buffer; per-entity instance tables; start/update lifecycle). Proven by porting the C++ `ShootingSystem` to `assets/scripts/gun.lua` — a physics-block gun attached to the player, covered headlessly by `tests/test_script_system.cpp` and `tests/test_gun_script.cpp` (runs the real asset). Wired into `ArenaState` in place of `ShootingSystem` (macOS/viewer-gated, so CI-unverified per the standing backend constraint). Destroy-from-script, hot-reload, and ref cleanup remain follow-ups. · **Date:** 2026-06-14
 
 **Context.** ADR-0023 chose Lua, built the *procgen* (pure/sandboxed) surface
 first, and deferred the *gameplay* (effectful) surface. The open question it left:
@@ -1482,9 +1482,10 @@ to be replaced; listed here so they stay visible.
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 | Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | The `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped mesh ownership; `release` on overwrite, `clear()` on world teardown |
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
-| `ScriptSystem` not wired into a running state | `engine/scripting/script_system.*` | First slice (ADR-0024) is driven by `tick()` in tests only | Register it in PlayingState; an editor "attach script" affordance |
+| ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
-| No entity spawn/destroy from scripts | `engine/scripting/gameplay_bindings.*` | `World::each` forbids structural mutation mid-iteration (ADR-0006); scripts only touch Transform | A deferred command buffer, then spawn/destroy bindings |
+| Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
+| Cosmetic gun model dropped in the Lua port | `src/game/arena_state.cpp` | The C++ `ShootingSystem` also drew a camera-following gun cylinder; the Lua gun ports only the shooting | A `gun_model` ScriptBehaviour (or a follow-the-camera component) if the visible weapon is wanted |
 
 ---
 

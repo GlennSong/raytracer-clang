@@ -4,9 +4,12 @@
 #include "gameplay_bindings.h"
 #include "script_behaviour.h"
 #include "../world.h"
+#include "../components.h"
+#include "../asset_manager.h"
 #include "../../log.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace engine {
 namespace {
@@ -63,16 +66,32 @@ ScriptSystem::ScriptSystem() {
     openGameplayLibrary(vm_);
 }
 
+void ScriptSystem::setServices(InputMap* input, const CameraState* camera,
+                               AssetManager* assets) {
+    input_ = input;
+    camera_ = camera;
+    assets_ = assets;
+}
+
 void ScriptSystem::update(FrameContext& ctx) {
+    setServices(&ctx.actions, &ctx.view.camera, &ctx.assets);
     tick(ctx.world, ctx.frameDelta);
 }
 
 void ScriptSystem::tick(World& world, double dt) {
     lua_State* L = luaState(vm_);
-    setActiveWorld(vm_, &world);
+
+    std::vector<SpawnCommand> spawns;
+    GameplayContext gctx;
+    gctx.world = &world;
+    gctx.input = input_;
+    gctx.camera = camera_;
+    gctx.spawns = &spawns;
+    setGameplayContext(vm_, &gctx);
 
     // Mutating ScriptBehaviour's own fields (refs/flags) is allowed inside each;
-    // scripts only touch Transform, so the no-structural-mutation contract holds.
+    // entity creation is deferred to after iteration, so the no-structural-
+    // mutation contract (ADR-0006) holds.
     world.each<ScriptBehaviour>([&](Entity e, ScriptBehaviour& sb) {
         if (sb.failed) return;
         if (sb.instanceRef < 0 && !loadInstance(L, sb)) {
@@ -89,7 +108,45 @@ void ScriptSystem::tick(World& world, double dt) {
         lua_pop(L, 1);                                        // pop inst
     });
 
-    setActiveWorld(vm_, nullptr);
+    setGameplayContext(vm_, nullptr);
+
+    // Apply deferred spawns now that iteration is done. Each is a dynamic cube
+    // (Transform/Collider/RigidBody/Velocity) the PhysicsSystem turns into a body
+    // and launches with `velocity` next fixed step — the Lua port of the C++
+    // ShootingSystem's bullet. The Renderable needs GPU upload, so it's added
+    // only when an AssetManager is present (headless ticks skip it).
+    for (const SpawnCommand& c : spawns) {
+        Entity e = world.create();
+        Transform t;
+        t.position = c.position;
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+
+        Collider col;
+        col.shape = ColliderShape::Box;
+        col.halfExtent = Vec3(c.size * 0.5, c.size * 0.5, c.size * 0.5);
+        col.restitution = c.restitution;
+        col.friction = c.friction;
+        world.add<Collider>(e, col);
+
+        RigidBody rb;
+        rb.motion = BodyMotion::Dynamic;
+        world.add<RigidBody>(e, rb);
+
+        Velocity vel;
+        vel.linear = c.velocity;
+        world.add<Velocity>(e, vel);
+
+        if (assets_ != nullptr) {
+            Renderable r;
+            r.mesh = assets_->acquirePrimitive(
+                "box", Vec3(c.size, c.size, c.size));
+            r.material.albedo = c.color;
+            r.material.emission = c.emission;
+            r.material.roughness = 0.4f;
+            world.add<Renderable>(e, r);
+        }
+    }
 }
 
 }  // namespace engine
