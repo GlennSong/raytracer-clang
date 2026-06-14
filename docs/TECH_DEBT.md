@@ -6,6 +6,28 @@ when fixed (git history is the archive).
 
 ## Rendering / performance
 
+**Open follow-ups (rough priority — detail in the notes below):**
+1. **`lightBuffer` frame-in-flight ring** — last known CPU/GPU race; same fix as
+   the instance buffer (ring `MAX_FRAMES_IN_FLIGHT` deep, index per `beginFrame`).
+   Subtle light tearing, not geometry pops. ~10 min, low risk.
+2. **Reversed-Z depth** (shadows "Part B") — large-world far-plane precision; the
+   prerequisite for walkable distance. Mechanically small but cross-cutting: every
+   depth-reading shader's `depth >= 0.999` sky test inverts to `<= ~0`, and the
+   linearize formulas flip. Land as its own commit with a per-site checklist.
+3. **Ambient-only AO (gather/respond split, ADR-0017 Phase 4)** — stop the
+   composite multiplying AO into direct sun + emissive so residual AO wobble stops
+   being amplified. Needs the ambient term carried separately into the composite.
+4. **Local-light shadows** (point/spot) — a shadow atlas with a per-frame budget;
+   required for believable interiors. None exist today (sun-only).
+5. **Generalized-cylinder tree branches** (see Procgen) — replace SDF/Surface-Nets
+   skinning with swept tubes: clean topology (culling back on), real bark UVs,
+   exact thin twigs, and a natural home for vertex-shader wind.
+6. **World-scale foundation (later, large):** tile streaming + terrain LOD + origin
+   rebasing, atmospheric/aerial perspective, horizon-map terrain shadows. This is
+   the actual "open world" lift; shadows/precision above are prerequisites.
+
+Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
+
 - **SSAO had no temporal stabilization and reconstructed normals from depth.**
   The depth-reconstructed normal sprayed garbage over thin/edgy geometry
   (foliage), so AO crawled/blocked under motion — the forest's worst artifact.
