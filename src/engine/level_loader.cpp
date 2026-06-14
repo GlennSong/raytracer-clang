@@ -391,7 +391,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // these are regenerated runtime objects, not document entities.
 static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
-                           AssetManager& assets, const std::string& levelDir) {
+                           AssetManager& assets, const std::string& levelDir,
+                           const std::string& tag = "veg") {
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     struct Species { MeshHandle mesh; RenderMaterial material; };
@@ -563,7 +564,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             if (mesh.vertices.empty()) continue;
             Species sp;
             sp.mesh = assets.acquireMesh(
-                mesh, "veg:" + std::to_string(speciesIndex) + ":" + std::to_string(v));
+                mesh, tag + ":" + std::to_string(speciesIndex) + ":" + std::to_string(v));
             sp.material = material;
             species.push_back(sp);
         }
@@ -641,7 +642,13 @@ bool LevelLoader::load(const std::string& path,
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
             loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets,
-                           levelDir);
+                           levelDir, "veg");
+        // A second, denser pass for ground cover (grass/flowers). Same scatter
+        // generator with its own params — typically a low maxSlopeDeg so it lands
+        // on the gentle, green ground (terrainColor reads steep slopes as rock).
+        if (root.contains("foliage"))
+            loadVegetation(root["foliage"], terrainParams, terrainNoise, world, assets,
+                           levelDir, "foliage");
     }
 
     if (root.contains("entities"))

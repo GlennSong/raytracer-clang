@@ -411,8 +411,11 @@ provides `flora.tree/rock/grass/flower` over the procgen builders — stochastic
 upward-tapering trees with **real leaf cards** (not SDF blobs), three species,
 plus rocks/grass/flowers. The level loader accepts a `{ "kind":"script" }`
 vegetation species (inline Lua or a `.lua` path), so Lua-generated flora scatters
-in alongside the C++ tree/rock species; `assets/levels/forest.json` uses it.
-Generation is headless-tested (`tests/test_flora.cpp`); the look needs macOS.
+in alongside the C++ tree/rock species; `assets/levels/forest.json` uses it. A
+second `foliage` block runs an independent, denser scatter pass for ground cover
+(grass/flowers) with a low `maxSlopeDeg`, so it lands on the gentle, green ground
+(`terrainColor` reads steep slopes as rock). Generation is headless-tested
+(`tests/test_flora.cpp`); the look needs macOS.
 Supporting bindings: `lsystem.segments/leaves`, `mesh.orient`, `sdf.smooth_union_all`,
 and a `TurtleParams.taper` for continuous trunk thinning.
 

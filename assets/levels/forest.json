@@ -85,32 +85,6 @@
      ],
      "roughness": 1.0
     }
-   },
-   {
-    "kind": "script",
-    "script": "return flora.grass(seed, {blades=7})",
-    "variants": 2,
-    "material": {
-     "albedo": [
-      1.0,
-      1.0,
-      1.0
-     ],
-     "roughness": 1.0
-    }
-   },
-   {
-    "kind": "script",
-    "script": "return flora.flower(seed, {})",
-    "variants": 2,
-    "material": {
-     "albedo": [
-      1.0,
-      1.0,
-      1.0
-     ],
-     "roughness": 1.0
-    }
    }
   ]
  },
@@ -160,5 +134,43 @@
   ],
   "exposure": 1.0,
   "ambientMultiplier": 0.6
+ },
+ "foliage": {
+  "seed": 77,
+  "region": 72,
+  "count": 1100,
+  "maxSlopeDeg": 24,
+  "minScale": 0.5,
+  "maxScale": 1.0,
+  "densityScale": 0.09,
+  "densityThreshold": -0.7,
+  "species": [
+   {
+    "kind": "script",
+    "script": "return flora.grass(seed, {blades=7})",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "script",
+    "script": "return flora.flower(seed, {})",
+    "variants": 1,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   }
+  ]
  }
 }
