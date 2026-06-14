@@ -1275,7 +1275,7 @@ instances and the bake-to-static-asset pipeline then.
 ---
 
 ## ADR-0023 — Lua as the embedded scripting language: one VM, procgen-first, separate binding surfaces
-**Status:** Pending (Lua chosen; not yet vendored or wired) · **Date:** 2026-06-14
+**Status:** Accepted — Step 1 **implemented** (Lua 5.4.7 vendored + built; sandboxed `ScriptVM` seal; the procgen binding surface — `sdf.*`/`noise.*`/`polygonize` → Field/Mesh — headless-tested in `tests/test_script_vm.cpp`, incl. a script-vs-C++-substrate equivalence check). Gameplay surface, hot-reload, and graph↔script interop are follow-ups. · **Date:** 2026-06-14
 
 **Context.** The engine needs a scripting layer for two purposes that have so far
 been served by C++ only. (1) **Procgen authoring.** ADR-0021 fixed procgen as a
