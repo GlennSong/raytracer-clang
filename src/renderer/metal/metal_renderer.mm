@@ -57,6 +57,7 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> transparentInstancedPipeline;
     id<MTLDepthStencilState> depthStateOpaque;
     id<MTLDepthStencilState> depthStateTransparent;
+    id<MTLDepthStencilState> depthStateWireOverlay;  // LessEqual, no write
     id<MTLBuffer> instanceBuffer;
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
@@ -700,6 +701,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateTransparent = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Wireframe overlay: draw edges that pass an equal-or-nearer depth test
+    // without writing depth, so lines sit on the visible surface they belong to.
+    depthDesc.depthCompareFunction = MTLCompareFunctionLessEqual;
+    depthDesc.depthWriteEnabled = NO;
+    impl->depthStateWireOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
 
     resize(width, height);
     return true;
@@ -1833,9 +1840,6 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
                     if (!mesh) continue;
 
-                    bool ds = (dc.material.flags & RenderMaterial::FLAG_DOUBLE_SIDED) != 0;
-                    [enc setCullMode:(ds ? MTLCullModeNone : MTLCullModeBack)];
-
                     ModelUniforms modelU;
                     modelU.model = toSimd(dc.transform);
                     modelU.normalMatrix = inverseTranspose(modelU.model);
@@ -2155,14 +2159,6 @@ void MetalRenderer::endFrame() {
 
         [impl->currentEncoder setDepthStencilState:depthState];
 
-        // Double-sided materials (FLAG_DOUBLE_SIDED) disable back-face culling for
-        // that draw; everything else keeps the default back cull. Cull mode is
-        // encoder state, so set it per batch/draw from the material.
-        auto setCull = [&](const RenderMaterial& mat) {
-            bool ds = (mat.flags & RenderMaterial::FLAG_DOUBLE_SIDED) != 0;
-            [impl->currentEncoder setCullMode:(ds ? MTLCullModeNone : MTLCullModeBack)];
-        };
-
         // Stable sort by mesh handle to group identical meshes while preserving
         // depth order within each group.
         std::stable_sort(drawCalls.begin(), drawCalls.end(),
@@ -2187,17 +2183,14 @@ void MetalRenderer::endFrame() {
 
             if (batchSize == 1) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
-                setCull(drawCalls[batchStart].material);
                 issueSingleDraw(drawCalls[batchStart]);
                 continue;
             }
 
             if (instanceOffset + batchSize > MAX_INSTANCES) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
-                for (size_t j = batchStart; j < batchStart + batchSize; j++) {
-                    setCull(drawCalls[j].material);
+                for (size_t j = batchStart; j < batchStart + batchSize; j++)
                     issueSingleDraw(drawCalls[j]);
-                }
                 continue;
             }
 
@@ -2206,7 +2199,6 @@ void MetalRenderer::endFrame() {
                     fillInstanceData(drawCalls[j]);
 
             [impl->currentEncoder setRenderPipelineState:instancedPipeline];
-            setCull(drawCalls[batchStart].material);
             [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
             [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                           length:sizeof(CameraUniforms) atIndex:1];
@@ -2239,6 +2231,11 @@ void MetalRenderer::endFrame() {
     stats.entitiesSubmitted = static_cast<uint32_t>(
         impl->opaqueDrawCalls.size() + impl->transparentDrawCalls.size());
 
+    // Wireframe-only (mode 1): draw the geometry passes as lines. The skybox
+    // already drew filled above; overlay (mode 2) re-draws lines after the fills.
+    [impl->currentEncoder setTriangleFillMode:
+        (wireframe == 1 ? MTLTriangleFillModeLines : MTLTriangleFillModeFill)];
+
     // Sort each pass by distance first, then issuePass stable-sorts by mesh.
     std::sort(impl->opaqueDrawCalls.begin(), impl->opaqueDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
@@ -2255,6 +2252,19 @@ void MetalRenderer::endFrame() {
 
     issuePass(impl->transparentDrawCalls, impl->transparentPipeline,
               impl->transparentInstancedPipeline, impl->depthStateTransparent);
+
+    // Wireframe overlay (mode 2): re-draw opaque geometry as lines on top of the
+    // shaded image. Non-instanced (issueSingleDraw uses model bytes, not the
+    // shared instance buffer, so it can't clobber the fills' instance data), and
+    // a LessEqual/no-write depth state so lines sit on their own visible surface.
+    if (wireframe == 2) {
+        [impl->currentEncoder setRenderPipelineState:impl->opaquePipeline];
+        [impl->currentEncoder setDepthStencilState:impl->depthStateWireOverlay];
+        [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeLines];
+        for (auto& dc : impl->opaqueDrawCalls)
+            issueSingleDraw(dc);
+        [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeFill];
+    }
 
     impl->lastStats = stats;
 

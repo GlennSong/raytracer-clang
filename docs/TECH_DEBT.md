@@ -88,18 +88,18 @@ when fixed (git history is the archive).
 
 ## Procgen / editor
 
-- **SDF-skinned trees drop whole branches under camera motion (back-face cull
-  of folded Surface Nets quads).** `buildTurtleMeshSdf` smooth-unions branch
-  capsules and meshes them with Surface Nets (`sdf.cpp`); at the knobby joints
-  the single averaged dual vertex per cell makes the surrounding quad non-planar,
-  so a triangle is nearly edge-on and its screen-space facing flips with view
-  angle — back-face culling then pops it. (Ruled out: winding is globally
-  consistent, frustum cull is conservative/normalized, generation is
-  deterministic.) *Mitigated:* `FLAG_DOUBLE_SIDED` material flag → `MTLCullModeNone`
-  for that draw; set via `"flags":["double_sided"]`, on the forest trees + grass.
-  **Unverified — Metal, macOS-only.** Proper fix: better dual-vertex placement
-  (clamp-in-cell / QEF) so quads stop folding, or move branches to swept
-  generalized-cylinder tubes (clean topology + UVs for bark, exact thin twigs).
+- **SDF-skinned trees glitch in "massive blocks" under lateral camera motion near
+  dense overlapping canopy.** Under investigation. *Ruled out so far:* depth,
+  view-normal, albedo, and shadow G-buffers all look stable in their debug views;
+  L-system generation is deterministic; winding is globally consistent; frustum
+  cull is conservative/normalized. A `FLAG_DOUBLE_SIDED` material flag (cull→None)
+  was tried and **reverted** — the artifact isn't back-face popping (normals are
+  stable). Leading suspect now: depth-tie/z-fight between overlapping tree
+  *instances* at near-equal depth (invisible in the depth view, but the lit result
+  swaps surfaces). Added debug views (facing green/red, wireframe) to localize it.
+  Separately, the **AO map still flickers** at foliage silhouettes even with
+  temporal accumulation — SSAO's horizon search is inherently unstable where
+  sub-pixel overlapping geometry shifts which surface each sample lands on.
 - **Procedural objects aren't shown or editable in the editor** (terrain,
   scattered vegetation). By design for now (ADR-0022): they carry no
   `SourceSpec`, so they're regenerated runtime objects, not document entities.

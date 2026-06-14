@@ -643,6 +643,16 @@ fragment float4 fragmentComposite(
         float3 a = sceneColor.sample(smp, in.uv).rgb;
         return float4(pow(a, float3(1.0 / 2.2)), 1.0);
     }
+    if (params.debugView == 7) {
+        // Facing test: green = front-facing (G-buffer normal points toward the
+        // camera), red = facing away. Every visible fragment should be green;
+        // red marks a flipped normal or a shown back-face. Brightness = |N·V|.
+        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        float3 n = normalize(normalTexture.read(uint2(in.position.xy)).xyz * 2.0 - 1.0);
+        float3 viewPos = ssrViewPos(depth, in.uv, camera.invProjection);
+        float ndv = dot(n, normalize(-viewPos));   // V points to the camera (origin)
+        return ndv >= 0.0 ? float4(0.0, ndv, 0.0, 1.0) : float4(-ndv, 0.0, 0.0, 1.0);
+    }
 
     // --- Normal rendering ---
     float3 hdrColor;

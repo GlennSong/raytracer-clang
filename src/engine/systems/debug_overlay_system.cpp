@@ -119,8 +119,11 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
 
     ImGui::Separator();
-    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals", "Shadow", "Albedo"};
-    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 7);
+    const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",
+                               "Shadow", "Albedo", "Facing"};
+    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 8);
+    const char* wireNames[] = {"Off", "Wireframe", "Wire overlay"};
+    ImGui::Combo("Wireframe", &ctx.renderer.wireframe, wireNames, 3);
 
     if (ImGui::CollapsingHeader("Lighting")) {
         auto& lit = ctx.view.lighting;

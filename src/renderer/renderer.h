@@ -62,10 +62,6 @@ struct RenderMaterial {
     uint32_t flags = 0;
 
     static constexpr uint32_t FLAG_CHECKERBOARD = 1;
-    // Render both faces (no back-face cull). For organic/voxelized meshes (the
-    // SDF-skinned trees) whose Surface Nets joints emit near-degenerate, view-
-    // dependently-facing triangles that otherwise pop in and out under culling.
-    static constexpr uint32_t FLAG_DOUBLE_SIDED = 2;
 
     TextureHandle albedoMap;
     TextureHandle normalMap;
@@ -293,8 +289,12 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
-    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
+    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
+    // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
     int debugView = 0;
+
+    // Wireframe: 0=off, 1=wireframe only, 2=wireframe overlaid on the shaded image
+    int wireframe = 0;
 
     // Lens effects of the active view's LensParams (docs/virtual-camera-plan.md):
     // a final image-space warp pass (distortion + chromatic aberration +
