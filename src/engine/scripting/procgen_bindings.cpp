@@ -11,6 +11,7 @@
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
 
+#include <cmath>
 #include <memory>
 #include <new>
 #include <utility>
@@ -97,6 +98,13 @@ Vec3 checkVec3(lua_State* L, int idx) {
     return v;
 }
 
+void pushVec3(lua_State* L, const Vec3& v) {
+    lua_createtable(L, 3, 0);
+    lua_pushnumber(L, v.x); lua_seti(L, -2, 1);
+    lua_pushnumber(L, v.y); lua_seti(L, -2, 2);
+    lua_pushnumber(L, v.z); lua_seti(L, -2, 3);
+}
+
 // --- sdf.* ---
 
 int l_sdf_sphere(lua_State* L) {
@@ -141,6 +149,21 @@ int l_sdf_smooth_union(lua_State* L) {
     Sdf b = checkSdf(L, 2);
     double k = luaL_checknumber(L, 3);
     pushSdf(L, sdfSmoothUnion(a, b, k));
+    return 1;
+}
+// smooth_union_all({f1, f2, ...}, k) — fold a list (avoids deep closure nesting).
+int l_sdf_smooth_union_all(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    double k = luaL_checknumber(L, 2);
+    std::vector<Sdf> parts;
+    lua_Integer n = luaL_len(L, 1);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 1, i);
+        parts.push_back(checkSdf(L, -1));
+        lua_pop(L, 1);
+    }
+    luaL_argcheck(L, !parts.empty(), 1, "need at least one field");
+    pushSdf(L, sdfSmoothUnion(parts, k));
     return 1;
 }
 
@@ -282,6 +305,22 @@ int l_mesh_rotate_z(lua_State* L) {
     pushMesh(L, m);
     return 1;
 }
+// Rotate a mesh so its local +Y aligns with `dir` (places oriented leaf cards,
+// petals, grass blades along a heading).
+int l_mesh_orient(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    Vec3 y = normalize(checkVec3(L, 2));
+    Vec3 ref = (std::fabs(y.y) > 0.99) ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
+    Vec3 x = normalize(cross(ref, y));
+    Vec3 z = cross(x, y);
+    Mat4 r;   // identity; basis as columns
+    r.m[0][0] = x.x; r.m[1][0] = x.y; r.m[2][0] = x.z;
+    r.m[0][1] = y.x; r.m[1][1] = y.y; r.m[2][1] = y.z;
+    r.m[0][2] = z.x; r.m[1][2] = z.y; r.m[2][2] = z.z;
+    MeshBuilder::transform(*m, r);
+    pushMesh(L, m);
+    return 1;
+}
 int l_mesh_recompute_normals(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
     MeshBuilder::recomputeNormals(*m);
@@ -332,6 +371,7 @@ TurtleParams readTurtleParams(lua_State* L, int idx) {
     p.length = static_cast<float>(optField(L, idx, "length", p.length));
     p.radius = static_cast<float>(optField(L, idx, "radius", p.radius));
     p.radiusTaper = static_cast<float>(optField(L, idx, "radius_taper", p.radiusTaper));
+    p.taper = static_cast<float>(optField(L, idx, "taper", p.taper));
     p.angleDeg = static_cast<float>(optField(L, idx, "angle_deg", p.angleDeg));
     p.segmentSlices = static_cast<int>(optField(L, idx, "segment_slices", p.segmentSlices));
     p.leafRadius = static_cast<float>(optField(L, idx, "leaf_radius", p.leafRadius));
@@ -350,6 +390,37 @@ int l_turtle_mesh_sdf(lua_State* L) {           // one welded surface (SDF skin)
     int res = static_cast<int>(luaL_checkinteger(L, 4));
     pushMesh(L, std::make_shared<RenderMesh>(
                     buildTurtleMeshSdf(symbols, p, smoothness, res)));
+    return 1;
+}
+// segments(symbols, params) -> array of {a={x,y,z}, b={x,y,z}, radius} (branches
+// only; tapered radius reflects the `taper` param). For building/inspecting.
+int l_lsystem_segments(lua_State* L) {
+    const char* symbols = luaL_checkstring(L, 1);
+    std::vector<BranchSegment> segs = turtleSegments(symbols, readTurtleParams(L, 2));
+    lua_newtable(L);
+    lua_Integer out = 0;
+    for (const BranchSegment& s : segs) {
+        if (s.a.x == s.b.x && s.a.y == s.b.y && s.a.z == s.b.z) continue;  // leaf
+        lua_createtable(L, 0, 3);
+        pushVec3(L, s.a); lua_setfield(L, -2, "a");
+        pushVec3(L, s.b); lua_setfield(L, -2, "b");
+        lua_pushnumber(L, s.radius); lua_setfield(L, -2, "radius");
+        lua_seti(L, -2, ++out);
+    }
+    return 1;
+}
+// leaves(symbols, params) -> array of {position={x,y,z}, direction={x,y,z}} —
+// where to place real leaf cards (and which way they point).
+int l_lsystem_leaves(lua_State* L) {
+    const char* symbols = luaL_checkstring(L, 1);
+    std::vector<LeafPlacement> leaves = turtleLeaves(symbols, readTurtleParams(L, 2));
+    lua_createtable(L, static_cast<int>(leaves.size()), 0);
+    for (std::size_t i = 0; i < leaves.size(); ++i) {
+        lua_createtable(L, 0, 2);
+        pushVec3(L, leaves[i].position); lua_setfield(L, -2, "position");
+        pushVec3(L, leaves[i].direction); lua_setfield(L, -2, "direction");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
     return 1;
 }
 
@@ -459,6 +530,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"intersect", l_sdf_intersect},
         {"subtract", l_sdf_subtract},
         {"smooth_union", l_sdf_smooth_union},
+        {"smooth_union_all", l_sdf_smooth_union_all},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kSdfFns);
@@ -487,6 +559,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"rotate_x", l_mesh_rotate_x},
         {"rotate_y", l_mesh_rotate_y},
         {"rotate_z", l_mesh_rotate_z},
+        {"orient", l_mesh_orient},
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
         {nullptr, nullptr},
@@ -498,6 +571,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"create", l_lsystem_create},
         {"turtle_mesh", l_turtle_mesh},
         {"turtle_mesh_sdf", l_turtle_mesh_sdf},
+        {"segments", l_lsystem_segments},
+        {"leaves", l_lsystem_leaves},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kLSystemFns);

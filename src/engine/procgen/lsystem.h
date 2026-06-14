@@ -38,6 +38,8 @@ struct TurtleParams {
     float length = 1.0f;        // segment length per F
     float radius = 0.12f;       // branch radius at the trunk
     float radiusTaper = 0.8f;   // radius *= taper on each push (thinner branches)
+    float taper = 1.0f;         // radius *= taper per F (continuous thinning up
+                                //   the trunk/branches; 1.0 = no taper)
     float angleDeg = 25.0f;     // turn angle for the yaw/pitch/roll symbols
     int   segmentSlices = 6;    // cylinder resolution
     float leafRadius = 0.0f;    // leaf-blob radius for L (0 = no leaves)
@@ -63,6 +65,18 @@ struct BranchSegment {
 // skinning, or to physics/analysis.
 std::vector<BranchSegment> turtleSegments(const std::string& symbols,
                                           const TurtleParams& params);
+
+// A leaf attachment point: where an `L` symbol lands and the turtle heading
+// there (so a caller can place an oriented leaf card instead of a blob).
+struct LeafPlacement {
+    Vec3 position;
+    Vec3 direction;   // turtle heading (local +Y) at the leaf
+};
+
+// Every leaf attachment point in the string (independent of leafRadius, so a
+// caller that draws real leaves needn't enable the blob path).
+std::vector<LeafPlacement> turtleLeaves(const std::string& symbols,
+                                        const TurtleParams& params);
 
 // Interpret the string as a single *welded* surface: each branch is a capsule,
 // smooth-union'd (smoothness = blend radius) and polygonized at `resolution`

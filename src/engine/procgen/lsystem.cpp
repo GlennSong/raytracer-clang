@@ -69,6 +69,7 @@ void walkTurtle(const std::string& symbols, const TurtleParams& params, Fn onEle
                 onElement(st.position, st.orientation, st.radius, /*isLeaf=*/false);
                 Vec3 heading = st.orientation.transformDirection(Vec3(0, 1, 0));
                 st.position = st.position + heading * params.length;
+                st.radius *= params.taper;   // thin continuously up the path
                 break;
             }
             case 'L':   // a leaf blob at the current position (no advance)
@@ -125,6 +126,22 @@ std::vector<BranchSegment> turtleSegments(const std::string& symbols,
         segments.push_back({pos, pos + heading * params.length, radius});
     });
     return segments;
+}
+
+std::vector<LeafPlacement> turtleLeaves(const std::string& symbols,
+                                        const TurtleParams& params) {
+    // Force leaf emission regardless of the blob radius — a real-leaf caller
+    // wants the attachment points, not the blob path.
+    TurtleParams p = params;
+    if (p.leafRadius <= 0.0f) p.leafRadius = 1.0f;
+
+    std::vector<LeafPlacement> leaves;
+    walkTurtle(symbols, p, [&](const Vec3& pos, const Mat4& orient, float,
+                               bool isLeaf) {
+        if (!isLeaf) return;
+        leaves.push_back({pos, orient.transformDirection(Vec3(0, 1, 0))});
+    });
+    return leaves;
 }
 
 RenderMesh buildTurtleMeshSdf(const std::string& symbols, const TurtleParams& params,

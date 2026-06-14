@@ -426,6 +426,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         tp.length        = s.value("length", tp.length);
         tp.radius        = s.value("radius", tp.radius);
         tp.radiusTaper   = s.value("radiusTaper", tp.radiusTaper);
+        tp.taper         = s.value("taper", tp.taper);
         tp.angleDeg      = s.value("angleDeg", tp.angleDeg);
         tp.segmentSlices = s.value("segmentSlices", tp.segmentSlices);
         tp.leafRadius    = s.value("leafRadius", tp.leafRadius);
