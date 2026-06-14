@@ -243,4 +243,74 @@ TreeMesh growTree(const TreeParams& params, uint32_t seed) {
     return out;
 }
 
+// --- procedural textures ---------------------------------------------------
+
+namespace {
+
+// A cheap deterministic hash -> [0,1), and value noise from it.
+float hash2(int x, int y, uint32_t seed) {
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u +
+                 static_cast<uint32_t>(y) * 668265263u + seed * 362437u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (h ^ (h >> 16)) / 4294967296.0f;
+}
+float valueNoise(float x, float y, uint32_t seed) {
+    int xi = (int)std::floor(x), yi = (int)std::floor(y);
+    float fx = x - xi, fy = y - yi;
+    float sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    float a = hash2(xi, yi, seed),       b = hash2(xi + 1, yi, seed);
+    float c = hash2(xi, yi + 1, seed),   d = hash2(xi + 1, yi + 1, seed);
+    return (a + (b - a) * sx) + ((c - a) + (d - c) * sx - (b - a) * sx) * sy;
+}
+
+}  // namespace
+
+TextureData barkTexture(int size, uint32_t seed) {
+    TextureData t;
+    t.width = t.height = size;
+    t.channels = 3;
+    t.pixels.resize((size_t)size * size * 3);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float u = (float)x / size, v = (float)y / size;
+            // Vertical fibres: stretched in v, several octaves; ridges in u.
+            float n = 0.0f, amp = 0.5f, fu = 8.0f, fv = 2.0f;
+            for (int o = 0; o < 4; o++) {
+                n += amp * valueNoise(u * fu, v * fv, seed + o * 17u);
+                amp *= 0.5f; fu *= 2.0f; fv *= 2.0f;
+            }
+            // Sharpen into bark ridges and keep it bright enough to modulate.
+            float ridge = 0.55f + 0.45f * std::abs(std::sin((u * 6.2832f) * 3.0f + n * 4.0f));
+            float g = std::min(1.0f, 0.5f * ridge + 0.6f * n);
+            uint8_t b = (uint8_t)(std::max(0.4f, std::min(1.0f, g)) * 255.0f);
+            size_t i = ((size_t)y * size + x) * 3;
+            t.pixels[i] = t.pixels[i + 1] = t.pixels[i + 2] = b;
+        }
+    }
+    return t;
+}
+
+TextureData leafTexture(int size) {
+    TextureData t;
+    t.width = t.height = size;
+    t.channels = 4;
+    t.pixels.resize((size_t)size * size * 4);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float u = (float)x / (size - 1), v = (float)y / (size - 1);
+            // Pointed-oval leaf: half-width tapers to 0 at the tip and base.
+            float halfW = 0.42f * std::sin(v * 3.14159f);
+            float dist = std::abs(u - 0.5f);
+            float alpha = dist < halfW ? 1.0f : 0.0f;
+            // A faint central vein darkens the RGB a touch (still mostly white).
+            float vein = dist < 0.03f ? 0.7f : 1.0f;
+            uint8_t c = (uint8_t)(vein * 255.0f);
+            size_t i = ((size_t)y * size + x) * 4;
+            t.pixels[i] = t.pixels[i + 1] = t.pixels[i + 2] = c;
+            t.pixels[i + 3] = (uint8_t)(alpha * 255.0f);
+        }
+    }
+    return t;
+}
+
 }  // namespace engine

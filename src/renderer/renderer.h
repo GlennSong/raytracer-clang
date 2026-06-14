@@ -62,6 +62,10 @@ struct RenderMaterial {
     uint32_t flags = 0;
 
     static constexpr uint32_t FLAG_CHECKERBOARD = 1;
+    // Alpha-cut foliage: discard fragments where the albedo map's alpha is
+    // below the threshold, so leaf cards keep crisp silhouettes in the opaque
+    // pass (depth-correct, no transparency sorting). Needs an albedoMap.
+    static constexpr uint32_t FLAG_ALPHA_TEST = 2;
 
     TextureHandle albedoMap;
     TextureHandle normalMap;

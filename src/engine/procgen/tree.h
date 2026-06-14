@@ -59,6 +59,24 @@ struct TreeMesh {
 // scatter); the same params + seed always produce the same tree (ADR-0002).
 TreeMesh growTree(const TreeParams& params, uint32_t seed = 0);
 
+// CPU pixel data for a procedural texture — uploaded by the renderer-aware
+// caller (level loader), so procgen stays GPU-agnostic (ADR-0021). Row-major,
+// `channels` bytes per texel.
+struct TextureData {
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    std::vector<uint8_t> pixels;
+};
+
+// A seamless grayscale bark texture (RGB, vertical fibrous streaks) meant to
+// *modulate* the bark vertex color — values around 0.55..1.0. Tiles vertically.
+TextureData barkTexture(int size = 256, uint32_t seed = 0);
+
+// A leaf card texture (RGBA): white RGB so the leaf vertex color tints it, with
+// a pointed-oval alpha silhouette for alpha-cut foliage.
+TextureData leafTexture(int size = 128);
+
 }  // namespace engine
 
 #endif

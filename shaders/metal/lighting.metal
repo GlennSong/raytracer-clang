@@ -280,7 +280,13 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float3 emit = mat.emission;
     float ao = 1.0;
     uint tf = mat.textureFlags;
-    if (tf & 1u) albedo *= albedoMap.sample(texSampler, geom.texcoord).rgb;
+    if (tf & 1u) {
+        float4 base = albedoMap.sample(texSampler, geom.texcoord);
+        // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fragments under the leaf
+        // silhouette so cards stay crisp in the opaque pass.
+        if ((int(mat.flags) & 2) && base.a < 0.5) discard_fragment();
+        albedo *= base.rgb;
+    }
     if (tf & 2u) {
         float4 mr = metalRoughMap.sample(texSampler, geom.texcoord);
         rough *= mr.g;

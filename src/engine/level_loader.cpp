@@ -3,6 +3,7 @@
 #include "asset_manager.h"
 #include "procgen/terrain.h"
 #include "procgen/lsystem.h"
+#include "procgen/tree.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
 #ifdef RT_ENABLE_SCRIPTING
@@ -140,10 +141,93 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     return spec;
 }
 
+// A hero parametric tree (shape: "tree"): a real, collidable object you can
+// bounce off or shoot at, distinct from the instanced vegetation scatter. The
+// bark is one mesh (procedural bark texture, opaque) with a static triangle
+// MeshCollider; the leaves are a second entity at the same transform (alpha-cut
+// cards, no collision). docs/lsystem-botany-plan.md.
+static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
+                           AssetManager& assets, int index) {
+    TreeParams tp;
+    uint32_t seed = 0;
+    if (ent.contains("tree")) {
+        const auto& j = ent["tree"];
+        tp.iterations     = j.value("iterations", tp.iterations);
+        tp.trunkLength    = j.value("trunkLength", tp.trunkLength);
+        tp.lengthFalloff  = j.value("lengthFalloff", tp.lengthFalloff);
+        tp.branchAngle    = j.value("branchAngle", tp.branchAngle);
+        tp.angleJitter    = j.value("angleJitter", tp.angleJitter);
+        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
+        tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
+        tp.tipRadius      = j.value("tipRadius", tp.tipRadius);
+        tp.pipeExponent   = j.value("pipeExponent", tp.pipeExponent);
+        tp.radiusScale    = j.value("radiusScale", tp.radiusScale);
+        tp.ringSegments   = j.value("ringSegments", tp.ringSegments);
+        tp.leaves         = j.value("leaves", tp.leaves);
+        tp.leafSize       = j.value("leafSize", tp.leafSize);
+        tp.leavesPerTip   = j.value("leavesPerTip", tp.leavesPerTip);
+        tp.barkColor      = parseVec3(j.value("barkColor", json()), tp.barkColor);
+        tp.leafColor      = parseVec3(j.value("leafColor", json()), tp.leafColor);
+        seed              = j.value("seed", 0u);
+    }
+
+    TreeMesh tm = growTree(tp, seed);
+    if (tm.branches.vertices.empty()) return;
+
+    auto upload = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+
+    const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed);
+
+    // Bark entity: textured, collidable.
+    {
+        Entity e = world.create();
+        createEntityCommon(e, ent, world);
+
+        Renderable r;
+        r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
+        r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
+        r.material.roughness = 1.0f;
+        r.material.albedoMap = upload(barkTexture(256, seed));
+        if (ent.contains("material")) applyMaterial(ent["material"], r.material);
+        world.add<Renderable>(e, r);
+
+        MeshCollider mc;
+        mc.vertices = tm.collisionVertices;
+        mc.indices = tm.collisionIndices;
+        if (ent.contains("physics"))
+            mc.friction = ent["physics"].value("friction", mc.friction);
+        world.add<MeshCollider>(e, mc);
+    }
+
+    // Leaf entity: alpha-cut cards at the same transform, no collision.
+    if (!tm.leaves.vertices.empty()) {
+        Entity e = world.create();
+        createEntityCommon(e, ent, world);
+
+        Renderable r;
+        r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
+        r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
+        r.material.roughness = 0.7f;
+        r.material.albedoMap = upload(leafTexture(128));
+        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        world.add<Renderable>(e, r);
+    }
+}
+
 static void loadEntities(const json& entities, World& world, Renderer& renderer,
                          AssetManager& assets, const std::string& levelDir,
                          bool editorMode) {
+    int treeIndex = 0;
     for (auto& ent : entities) {
+        // Hero parametric tree: a collidable, textured object (not scatter).
+        if (ent.value("shape", std::string()) == "tree") {
+            loadTreeEntity(ent, world, renderer, assets, treeIndex++);
+            continue;
+        }
+
         // Group / null object: a named transform with no mesh, for parenting.
         if (ent.value("group", false) ||
             (ent.contains("shape") && ent["shape"].get<std::string>().empty()

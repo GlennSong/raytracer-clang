@@ -82,3 +82,30 @@ TEST_CASE(tree_leaves_can_be_disabled) {
     CHECK(t.leaves.vertices.empty());
     CHECK(t.branches.vertices.size() > 0);
 }
+
+TEST_CASE(bark_texture_is_rgb_and_modulating) {
+    TextureData t = barkTexture(32, 5);
+    CHECK(t.width == 32);
+    CHECK(t.channels == 3);
+    CHECK(t.pixels.size() == 32u * 32u * 3u);
+    // Values stay bright enough to modulate (>= ~0.4) and vary across the image.
+    uint8_t lo = 255, hi = 0;
+    for (uint8_t px : t.pixels) { lo = std::min(lo, px); hi = std::max(hi, px); }
+    CHECK(lo >= 100);            // 0.4 * 255 floor
+    CHECK(hi > lo);              // there is actual variation
+    CHECK(barkTexture(32, 5).pixels == t.pixels);   // deterministic per seed
+}
+
+TEST_CASE(leaf_texture_has_alpha_cutout) {
+    TextureData t = leafTexture(64);
+    CHECK(t.channels == 4);
+    CHECK(t.pixels.size() == 64u * 64u * 4u);
+    // The silhouette has both opaque interior and transparent corners.
+    bool opaque = false, clear = false;
+    for (size_t i = 3; i < t.pixels.size(); i += 4) {
+        if (t.pixels[i] > 200) opaque = true;
+        if (t.pixels[i] < 50) clear = true;
+    }
+    CHECK(opaque);
+    CHECK(clear);
+}
