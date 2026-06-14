@@ -14,18 +14,28 @@ struct RenderMesh;
 // docs/node-graph-plan.md) — a script is the *text* front-end to the same C++
 // substrate the visual graph wraps; both lower to the same functions.
 //
-// Registers into a (sandboxed) ScriptVM:
-//   sdf.sphere(center, radius)            -> Field
-//   sdf.box(center, halfExtent)           -> Field
-//   sdf.capsule(a, b, radius)             -> Field
-//   sdf.union/intersect/subtract(a, b)    -> Field
-//   sdf.smooth_union(a, b, k)             -> Field
-//   noise.value2(seed, x, y)             -> Scalar
-//   noise.fbm2(seed, x, y[, octaves])    -> Scalar
-//   noise.fbm3(seed, x, y, z[, octaves]) -> Scalar
-//   polygonize(field, {min=, max=}, res)  -> Mesh
-// Vectors are 3-element Lua arrays, e.g. {0, 1, 0}. Fields and Meshes are opaque
-// userdata (their C++ objects are released by __gc).
+// Registers into a (sandboxed) ScriptVM the full generator vocabulary across the
+// value types (Field / Mesh / Frame):
+//   Fields (SDF):
+//     sdf.sphere(center, radius) / box(center, halfExtent) / capsule(a, b, r)
+//     sdf.union/intersect/subtract(a, b) / smooth_union(a, b, k)        -> Field
+//   Noise:
+//     noise.value2/fbm2/fbm3(seed, x[, y[, z]][, octaves])             -> Scalar
+//   Mesh primitives + assembly:
+//     mesh.box/sphere/cylinder/cone/plane/torus/capsule(...)            -> Mesh
+//     mesh.merge({m1, m2, ...}) / translate / scale / rotate_y          -> Mesh
+//     mesh.recompute_normals / bake_height_color(m, low, high)          -> Mesh
+//   Grammar (L-system):
+//     local sys = lsystem.create(); sys:rule("F","FF"[,w]); sys:expand(axiom,n[,seed])
+//     lsystem.turtle_mesh(symbols, params) / turtle_mesh_sdf(symbols, params, k, res)
+//   Generators:
+//     polygonize(field, {min=, max=}, res)                              -> Mesh
+//     terrain(params, seed)                                             -> Mesh
+//     scatter(scatterParams, terrainParams, terrainSeed)               -> Frames
+// Vectors are 3-element Lua arrays, e.g. {0, 1, 0}; params/bounds are tables with
+// named fields. Fields/Meshes/LSystems are opaque userdata (released by __gc);
+// Frames are plain Lua arrays of {position, yaw, scale}. The heavy lifting stays
+// in C++ — a script orchestrates (ADR-0023).
 void openProcgenLibrary(ScriptVM& vm);
 
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and

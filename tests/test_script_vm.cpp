@@ -3,6 +3,7 @@
 #include "../src/engine/scripting/script_vm.h"
 #include "../src/engine/scripting/procgen_bindings.h"
 #include "../src/engine/procgen/sdf.h"
+#include "../src/engine/mesh_builder.h"
 #include "../src/renderer/renderer.h"
 
 #include <cmath>
@@ -122,4 +123,85 @@ TEST_CASE(procgen_noise_is_seed_deterministic) {
     CHECK(vm.getGlobalNumber("c", v3));
     CHECK_APPROX(v1, v2, 1e-12);   // deterministic
     CHECK(std::fabs(v1 - v3) > 1e-9);  // seed actually matters
+}
+
+// --- the deepened surface: a whole generator written in Lua ---
+
+TEST_CASE(procgen_script_builds_a_full_lsystem_tree) {
+    // A complete grammar generator authored in Lua: define rules, expand the
+    // axiom, then skin the turtle string into one welded SDF surface. This is
+    // the "how deep can you go" proof — the same pipeline as the C++ generators.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> tree;
+    std::string err;
+    const char* code = R"LUA(
+        local sys = lsystem.create()
+        sys:rule("X", "F[+X][-X]FX")
+        sys:rule("F", "FF")
+        local symbols = sys:expand("X", 3, 7)
+        return lsystem.turtle_mesh_sdf(symbols,
+            {length = 0.6, radius = 0.10, angle_deg = 28, leaf_radius = 0.0},
+            0.08, 48)
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, tree, &err));
+    if (!tree) { CHECK(false); return; }
+    CHECK(tree->vertices.size() > 100);     // a real welded canopy of branches
+    CHECK(tree->indices.size() % 3 == 0);
+}
+
+TEST_CASE(procgen_script_kitbashes_meshes) {
+    // mesh primitives + transform + merge: two boxes welded into one buffer.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> combined;
+    const char* code = R"LUA(
+        local a = mesh.box({1, 1, 1})
+        local b = mesh.translate(mesh.box({1, 1, 1}), {2, 0, 0})
+        return mesh.merge({a, b})
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, combined, nullptr));
+    if (!combined) { CHECK(false); return; }
+
+    RenderMesh oneBox = MeshBuilder::box(Vec3(1, 1, 1));
+    CHECK(combined->vertices.size() == oneBox.vertices.size() * 2);
+    CHECK(combined->indices.size() == oneBox.indices.size() * 2);
+    // The second box was shifted +2 in x: some vertex must sit out there.
+    bool shifted = false;
+    for (const Vertex& v : combined->vertices)
+        if (v.position.x > 1.5) shifted = true;
+    CHECK(shifted);
+}
+
+TEST_CASE(procgen_script_builds_terrain) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> ground;
+    const char* code = R"LUA(
+        return terrain({size = 50, resolution = 16, height_scale = 5}, 99)
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, ground, nullptr));
+    if (!ground) { CHECK(false); return; }
+    CHECK(ground->vertices.size() == 17 * 17);   // (resolution + 1)^2
+    CHECK(ground->indices.size() % 3 == 0);
+}
+
+TEST_CASE(procgen_scatter_returns_frames) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    // scatter yields a plain Lua array of {position, yaw, scale} — the Frame
+    // value type. A script consumes it like any table.
+    CHECK(vm.doString(R"LUA(
+        local frames = scatter({region_size = 80, count = 200, seed = 3},
+                               {size = 80, resolution = 32}, 99)
+        n = #frames
+        ok = (n > 0) and (frames[1].position ~= nil)
+              and (type(frames[1].yaw) == "number")
+    )LUA"));
+    double n = 0;
+    bool ok = false;
+    CHECK(vm.getGlobalNumber("n", n));
+    CHECK(n > 0);
+    CHECK(vm.getGlobalBool("ok", ok));
+    CHECK(ok);
 }
