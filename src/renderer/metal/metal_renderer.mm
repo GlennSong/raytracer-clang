@@ -171,8 +171,13 @@ struct MetalRenderer::Impl {
     id<MTLSamplerState> shadowSampler;
     int shadowMapSize = 2048;
     bool shadowEnabled = false;
-    CameraUniforms shadowCameraUniforms;  // light VP for shadow pass
     ShadowUniforms shadowUniforms;
+    // Per-cascade light VP (for the shadow pass) and world bounds (for culling
+    // casters per cascade). activeCascadeCount cascades are live this frame.
+    simd_float4x4 cascadeVP[RT_MAX_CASCADES];
+    Vec3 cascadeCenter[RT_MAX_CASCADES];
+    Real cascadeRadius[RT_MAX_CASCADES] = {0};
+    int activeCascadeCount = 0;
     // Rasterization-side depth bias for the shadow pass encoder, from
     // ShadowConfig::bias (the lookup-side controls ride in shadowUniforms).
     float shadowDepthBias = 0.005f;
@@ -633,13 +638,14 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
                                                   options:MTLResourceStorageModeShared];
 
-    // Shadow map texture
+    // Shadow map: a depth-texture array, one slice per shadow cascade.
     {
-        MTLTextureDescriptor* shadowDesc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
-                                         width:impl->shadowMapSize
-                                        height:impl->shadowMapSize
-                                     mipmapped:NO];
+        MTLTextureDescriptor* shadowDesc = [[MTLTextureDescriptor alloc] init];
+        shadowDesc.textureType = MTLTextureType2DArray;
+        shadowDesc.pixelFormat = MTLPixelFormatDepth32Float;
+        shadowDesc.width = impl->shadowMapSize;
+        shadowDesc.height = impl->shadowMapSize;
+        shadowDesc.arrayLength = RT_MAX_CASCADES;
         shadowDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         shadowDesc.storageMode = MTLStorageModePrivate;
         impl->shadowMap = [impl->device newTextureWithDescriptor:shadowDesc];
@@ -690,8 +696,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->shadowSampler = [impl->device newSamplerStateWithDescriptor:samplerDesc];
     }
 
-    impl->shadowUniforms = {0.02f, 1.0f, impl->shadowMapSize, 0,
-                            {0, 0, 0}, 1.0f, 0.5f, {0, 0}};
+    impl->shadowUniforms = {};
+    impl->shadowUniforms.normalBias = 0.02f;
+    impl->shadowUniforms.pcfRadius = 1.0f;
+    impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
+    impl->shadowUniforms.shadowStrength = 1.0f;
+    impl->shadowUniforms.ambientStrength = 0.5f;
 
     // Depth states
     MTLDepthStencilDescriptor* depthDesc = [[MTLDepthStencilDescriptor alloc] init];
@@ -1551,36 +1561,91 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
         g.outerCosAngle = 0;
 
         if (lighting.sun.castsShadow && lighting.shadow.enabled) {
-            // Compute light VP for shadow mapping. The ortho volume follows the
-            // camera (ADR-0017 Phase 2) instead of anchoring at the world
-            // origin, so shadows exist wherever the player is. Snapped to
-            // shadow-map texels in light space so edges don't swim as the
-            // camera moves. Frustum-fitting / cascades remain Phase 5.
-            Real sceneBound = 30.0;
-            // Avoid degenerate up vector when light is nearly vertical
+            // Cascaded shadow maps (ADR-0017 Phase 5): split the camera view
+            // frustum into shadowParams.cascadeCount ranges out to
+            // shadowParams.distance and fit a texel-snapped ortho light box to
+            // each. Near cascades are small (crisp); far ones cover distance —
+            // no coverage "slice" when high up, and far better near-field
+            // resolution than one fixed camera-sized box.
+            int cascadeCount = std::max(1, std::min(shadowParams.cascadeCount,
+                                                    (int)RT_MAX_CASCADES));
             Vec3 up = (std::abs(sunDir.y) > 0.99) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
 
-            Vec3 sceneCenter = impl->currentCameraPos;
-            Mat4 snapView = Mat4::lookAt(sceneCenter + sunDir * sceneBound,
-                                         sceneCenter, up);
-            Real texelWorld = (sceneBound * 2.0) / impl->shadowMapSize;
-            Vec3 centerLS = snapView.transformPoint(sceneCenter);
-            centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
-            centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
-            sceneCenter = snapView.inverse().transformPoint(centerLS);
+            Real camNear = static_cast<Real>(impl->cameraUniforms.nearPlane);
+            Real camFar  = static_cast<Real>(impl->cameraUniforms.farPlane);
+            Real shadowDist = std::min(static_cast<Real>(shadowParams.distance), camFar);
+            shadowDist = std::max(shadowDist, camNear * 2.0);
+            Real lambda = shadowParams.splitLambda;
 
-            Vec3 lightPos = sceneCenter + sunDir * sceneBound;
-            Mat4 lightView = Mat4::lookAt(lightPos, sceneCenter, up);
-            Mat4 lightProj = Mat4::orthographic(sceneBound * 2.0, 1.0, 0.1, sceneBound * 2.0);
-            Mat4 lightVP = lightProj * lightView;
-            g.lightViewProjection = toSimd(lightVP);
+            // World-space corners of the full view frustum (Metal NDC z in [0,1]).
+            auto worldCorner = [&](float nx, float ny, float nz) -> Vec3 {
+                simd_float4 c = simd_mul(impl->cameraUniforms.invViewProjection,
+                                         simd_make_float4(nx, ny, nz, 1.0f));
+                return Vec3(c.x / c.w, c.y / c.w, c.z / c.w);
+            };
+            Vec3 nearC[4] = { worldCorner(-1,-1,0), worldCorner(1,-1,0),
+                              worldCorner(1,1,0),   worldCorner(-1,1,0) };
+            Vec3 farC[4]  = { worldCorner(-1,-1,1), worldCorner(1,-1,1),
+                              worldCorner(1,1,1),   worldCorner(-1,1,1) };
 
-            // Store for shadow pass encoding
-            impl->shadowCameraUniforms.viewProjection = g.lightViewProjection;
-            impl->shadowCameraUniforms.view = toSimd(lightView);
-            impl->shadowCameraUniforms.cameraPosition = toSimd3(lightPos);
+            float splitArr[RT_MAX_CASCADES] = {0};
+            Real prevFar = camNear;
+            for (int c = 0; c < cascadeCount; c++) {
+                Real f = Real(c + 1) / Real(cascadeCount);
+                Real uni = camNear + (shadowDist - camNear) * f;
+                Real lg  = camNear * std::pow(shadowDist / camNear, f);
+                Real zFar = lambda * lg + (1.0 - lambda) * uni;
+                Real zNear = prevFar;
+                prevFar = zFar;
+
+                // View depth is affine along each frustum edge, so interpolate the
+                // full-frustum corners by the cascade's near/far depth fractions.
+                Real fN = (zNear - camNear) / (camFar - camNear);
+                Real fF = (zFar  - camNear) / (camFar - camNear);
+                Vec3 corners[8];
+                for (int k = 0; k < 4; k++) {
+                    corners[k]     = nearC[k] + (farC[k] - nearC[k]) * fN;
+                    corners[k + 4] = nearC[k] + (farC[k] - nearC[k]) * fF;
+                }
+                Vec3 center(0, 0, 0);
+                for (auto& p : corners) center = center + p;
+                center = center * (1.0 / 8.0);
+                Real radius = 0.01;   // floor avoids a zero-size ortho / snap div-by-0
+                for (auto& p : corners) radius = std::max(radius, (p - center).length());
+                radius = std::ceil(radius * 16.0) / 16.0;   // quantize to limit jitter
+
+                // Pull the light back past the sphere so tall casters above the
+                // cascade (trees) still register in the depth map.
+                Real pullback = radius + 50.0;
+                Real texelWorld = (radius * 2.0) / impl->shadowMapSize;
+
+                Mat4 lightView = Mat4::lookAt(center + sunDir * pullback, center, up);
+                Vec3 centerLS = lightView.transformPoint(center);
+                centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
+                centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
+                Vec3 snapped = lightView.inverse().transformPoint(centerLS);
+
+                lightView = Mat4::lookAt(snapped + sunDir * pullback, snapped, up);
+                Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1,
+                                                    pullback + radius);
+                Mat4 lightVP = lightProj * lightView;
+
+                impl->cascadeVP[c] = toSimd(lightVP);
+                impl->shadowUniforms.cascadeViewProjection[c] = toSimd(lightVP);
+                impl->cascadeCenter[c] = snapped;
+                impl->cascadeRadius[c] = radius;
+                splitArr[c] = static_cast<float>(zFar);
+            }
+
+            impl->shadowUniforms.cascadeSplit =
+                simd_make_float4(splitArr[0], splitArr[1], splitArr[2], splitArr[3]);
+            impl->shadowUniforms.cascadeCount = cascadeCount;
+            impl->activeCascadeCount = cascadeCount;
+
+            // The cascade matrices live in shadowUniforms (sun-only); GPULight
+            // just flags the sun as a shadow caster (shadowMapIndex >= 0).
+            g.lightViewProjection = impl->shadowUniforms.cascadeViewProjection[0];
             impl->shadowEnabled = true;
-
             g.shadowMapIndex = 0;
             impl->shadowDepthBias = lighting.shadow.bias;
             impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
@@ -1790,8 +1855,9 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 [enc setFragmentTexture:impl->shadowMap atIndex:0];
                 [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
                 // strength/ambientStrength 0: probes bake unshadowed, as before
-                ShadowUniforms noShadow = {0.0f, 1.0f, impl->shadowMapSize, 0,
-                                           {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+                ShadowUniforms noShadow = {};   // cascadeCount 0 -> no shadow
+                noShadow.pcfRadius = 1.0f;
+                noShadow.shadowMapSize = impl->shadowMapSize;
                 [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
 
                 // Bind empty probe data (no recursion)
@@ -1943,44 +2009,62 @@ void MetalRenderer::endFrame() {
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
 
-    // --- Shadow pass ---
+    // --- Shadow pass: one depth-array slice per cascade ---
     if (impl->shadowEnabled && impl->shadowPipeline) {
-        MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-        shadowPassDesc.depthAttachment.texture = impl->shadowMap;
-        shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
-        shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
-        shadowPassDesc.depthAttachment.clearDepth = 1.0;
+        for (int c = 0; c < impl->activeCascadeCount; c++) {
+            MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+            shadowPassDesc.depthAttachment.texture = impl->shadowMap;
+            shadowPassDesc.depthAttachment.slice = c;
+            shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+            shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
+            shadowPassDesc.depthAttachment.clearDepth = 1.0;
 
-        id<MTLRenderCommandEncoder> shadowEncoder = [impl->currentCommandBuffer
-            renderCommandEncoderWithDescriptor:shadowPassDesc];
-        [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
-        [shadowEncoder setCullMode:MTLCullModeBack];
-        [shadowEncoder setDepthStencilState:impl->shadowDepthState];
-        [shadowEncoder setDepthBias:impl->shadowDepthBias slopeScale:1.5 clamp:0.01];
+            id<MTLRenderCommandEncoder> shadowEncoder = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:shadowPassDesc];
+            [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
+            [shadowEncoder setCullMode:MTLCullModeBack];
+            [shadowEncoder setDepthStencilState:impl->shadowDepthState];
+            [shadowEncoder setDepthBias:impl->shadowDepthBias slopeScale:1.5 clamp:0.01];
 
-        // Render all opaque draw calls from light's perspective
-        for (auto& dc : impl->opaqueDrawCalls) {
-            const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
-            if (!mesh) continue;
+            CameraUniforms cascadeCam = {};
+            cascadeCam.viewProjection = impl->cascadeVP[c];
 
-            ModelUniforms modelU;
-            modelU.model = toSimd(dc.transform);
-            modelU.normalMatrix = inverseTranspose(modelU.model);
+            // Conservative caster cull: a sphere reject around the cascade,
+            // inflated by its own radius so the near cascade skips the distant
+            // forest yet still catches tall casters that shadow into it.
+            Vec3 cc = impl->cascadeCenter[c];
+            Real cullR = impl->cascadeRadius[c] * 2.0;
 
-            [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
-            [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
-            [shadowEncoder setVertexBytes:&impl->shadowCameraUniforms
-                                   length:sizeof(CameraUniforms) atIndex:1];
-            [shadowEncoder setVertexBytes:&modelU
-                                   length:sizeof(ModelUniforms) atIndex:2];
-            [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                      indexCount:mesh->indexCount
-                                       indexType:MTLIndexTypeUInt32
-                                     indexBuffer:mesh->indexBuffer
-                               indexBufferOffset:0];
+            for (auto& dc : impl->opaqueDrawCalls) {
+                const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
+                if (!mesh) continue;
+
+                BoundingSphere b = getMeshBounds(dc.meshHandle);
+                const Mat4& m = dc.transform;
+                Vec3 wc = m.transformPoint(b.center);
+                Real maxScale = std::max({Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
+                                          Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
+                                          Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
+                if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+
+                ModelUniforms modelU;
+                modelU.model = toSimd(dc.transform);
+                modelU.normalMatrix = inverseTranspose(modelU.model);
+
+                [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
+                [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+                [shadowEncoder setVertexBytes:&cascadeCam
+                                       length:sizeof(CameraUniforms) atIndex:1];
+                [shadowEncoder setVertexBytes:&modelU
+                                       length:sizeof(ModelUniforms) atIndex:2];
+                [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                          indexCount:mesh->indexCount
+                                           indexType:MTLIndexTypeUInt32
+                                         indexBuffer:mesh->indexBuffer
+                                   indexBufferOffset:0];
+            }
+            [shadowEncoder endEncoding];
         }
-
-        [shadowEncoder endEncoding];
     }
 
     // --- Main color pass ---
@@ -1994,10 +2078,13 @@ void MetalRenderer::endFrame() {
     // the skybox draw below, which clobbers these bindings and needs them
     // restored (texture/sampler 0 and fragment buffer 5 are shared slots).
     impl->shadowUniforms.debugShadow = debugView;  // lit shader branches: 5=shadow factor, 6=albedo
-    ShadowUniforms activeShadowU = impl->shadowEnabled
-        ? impl->shadowUniforms
-        : ShadowUniforms{0.0f, 1.0f, impl->shadowMapSize, debugView,
-                         {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+    ShadowUniforms activeShadowU = impl->shadowUniforms;
+    if (!impl->shadowEnabled) {       // cascadeCount 0 -> computeShadow returns lit
+        activeShadowU = {};
+        activeShadowU.pcfRadius = 1.0f;
+        activeShadowU.shadowMapSize = impl->shadowMapSize;
+        activeShadowU.debugShadow = debugView;
+    }
     [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
     [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
     [impl->currentEncoder setFragmentBytes:&activeShadowU

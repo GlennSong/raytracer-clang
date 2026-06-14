@@ -241,7 +241,7 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
                          constant ProbeUniforms& probeParams,
                          device const GPUReflectionProbe* probes,
                          constant EnvUniforms& env,
-                         depth2d<float> shadowMap,
+                         depth2d_array<float> shadowMap,
                          texturecube_array<float> cubemapArray,
                          texture2d<float> brdfLUT,
                          texture2d<float> albedoMap,
@@ -257,14 +257,14 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // Shadow debug view: the sun's shadow factor as grayscale (white = lit,
     // black = shadowed), to inspect the shadow path in isolation.
     if (shadowData.debugShadow == 5) {
+        float viewDepth = -(camera.view * float4(geom.worldPosition, 1.0)).z;
         float s = 1.0;
         for (uint i = 0; i < uint(lightData.lightCount); i++) {
             if (lightData.lights[i].type == LightType_Directional &&
                 lightData.lights[i].shadowMapIndex >= 0) {
                 s = computeShadow(shadowMap, shadowSampler,
-                                  lightData.lights[i].lightViewProjection,
                                   geom.worldPosition,
-                                  normalize(geom.worldNormal), shadowData);
+                                  normalize(geom.worldNormal), viewDepth, shadowData);
                 break;
             }
         }
@@ -309,17 +309,36 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         return dbg;
     }
 
+    // Cascade debug view: tint each fragment by which shadow cascade it lands in
+    // (red/green/blue/yellow for 0..3) so the cascade fit is visible on-device.
+    if (shadowData.debugShadow == 8) {
+        float viewDepth = -(camera.view * float4(geom.worldPosition, 1.0)).z;
+        int count = max(shadowData.cascadeCount, 1);
+        int c = count - 1;
+        for (int i = 0; i < count; i++) {
+            if (viewDepth < shadowData.cascadeSplit[i]) { c = i; break; }
+        }
+        float3 tint = (c == 0) ? float3(1.0, 0.4, 0.4)
+                    : (c == 1) ? float3(0.4, 1.0, 0.4)
+                    : (c == 2) ? float3(0.4, 0.4, 1.0)
+                               : float3(1.0, 1.0, 0.4);
+        GBufferOut dbg;
+        dbg.color = float4(tint, 1.0);
+        dbg.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return dbg;
+    }
+
     // Sun shadow visibility, evaluated once. Artistic response (ADR-0017
     // Phase 2): occlusion lerps toward the shadow tint; `strength` scales the
     // direct-light occlusion, `ambientStrength` scales how much the same
     // shadow darkens the environment terms — without that, an HDR sky fills
     // shadows right back in through the (otherwise unshadowed) ambient path.
     float sunV = 1.0;
+    float viewDepth = -(camera.view * float4(geom.worldPosition, 1.0)).z;
     for (int i = 0; i < lightData.lightCount && i < RT_MAX_LIGHTS; i++) {
         if (lightData.lights[i].shadowMapIndex >= 0) {
             sunV = computeShadow(shadowMap, shadowSampler,
-                                 lightData.lights[i].lightViewProjection,
-                                 geom.worldPosition, normal, shadowData);
+                                 geom.worldPosition, normal, viewDepth, shadowData);
             break;
         }
     }
@@ -436,7 +455,7 @@ fragment GBufferOut fragmentMain(
     constant ProbeUniforms& probeParams [[buffer(6)]],
     device const GPUReflectionProbe* probes [[buffer(7)]],
     constant EnvUniforms& env [[buffer(8)]],
-    depth2d<float> shadowMap [[texture(0)]],
+    depth2d_array<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
     texture2d<float> albedoMap [[texture(3)]],
@@ -474,7 +493,7 @@ fragment GBufferOut fragmentMainInstanced(
     constant ProbeUniforms& probeParams [[buffer(6)]],
     device const GPUReflectionProbe* probes [[buffer(7)]],
     constant EnvUniforms& env [[buffer(8)]],
-    depth2d<float> shadowMap [[texture(0)]],
+    depth2d_array<float> shadowMap [[texture(0)]],
     texturecube_array<float> cubemapArray [[texture(1)]],
     texture2d<float> brdfLUT [[texture(2)]],
     texture2d<float> albedoMap [[texture(3)]],

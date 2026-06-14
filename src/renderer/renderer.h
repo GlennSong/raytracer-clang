@@ -343,6 +343,15 @@ public:
                                    // more ghosting in motion; 0 disables temporal AO
     } ssaoParams;
 
+    // Cascaded shadow maps (sun). The view frustum is split into `cascadeCount`
+    // ranges out to `distance`; each gets its own shadow-map slice fit tightly to
+    // it, so near geometry is crisp and far geometry stays covered (no slice).
+    struct ShadowParams {
+        float distance    = 150.0f;  // furthest range that receives sun shadows (m)
+        int   cascadeCount = 3;      // 1..RT_MAX_CASCADES
+        float splitLambda  = 0.6f;   // 0 = uniform splits, 1 = logarithmic
+    } shadowParams;
+
     static std::unique_ptr<Renderer> create();
 };
 

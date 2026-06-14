@@ -26,6 +26,7 @@ namespace engine {
 #endif
 
 #define RT_MAX_LIGHTS 32
+#define RT_MAX_CASCADES 4
 
 struct CameraUniforms {
     simd_float4x4 viewProjection;
@@ -122,6 +123,13 @@ struct ShadowUniforms {
     float   shadowStrength;  // 0 = shadows off, 1 = full occlusion of direct light
     float   ambientStrength; // how much shadow also occludes the ambient/IBL terms
     float   _pad[2];
+    // Cascaded shadow maps (sun): per-cascade light view-projection (into the
+    // matching slice of the shadow-map array) and the view-space far distance of
+    // each cascade for selection. cascadeCount active cascades, 0..RT_MAX_CASCADES.
+    simd_float4x4 cascadeViewProjection[RT_MAX_CASCADES];
+    simd_float4   cascadeSplit;   // view-space far depth of cascades 0..3 in x..w
+    int32_t       cascadeCount;
+    float         _pad2[3];
 };
 
 // Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR cube.

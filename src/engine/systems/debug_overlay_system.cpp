@@ -28,6 +28,11 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
     ssr.maxRoughness  = static_cast<float>(s.getDouble("ssr.maxRoughness", ssr.maxRoughness));
 
+    auto& sh = ctx.renderer.shadowParams;
+    sh.distance     = static_cast<float>(s.getDouble("shadow.distance", sh.distance));
+    sh.cascadeCount = static_cast<int>(s.getDouble("shadow.cascades", sh.cascadeCount));
+    sh.splitLambda  = static_cast<float>(s.getDouble("shadow.splitLambda", sh.splitLambda));
+
     // NOTE: scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
     // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
     // / day-night). Persisting it here silently overrode the level on load, which
@@ -63,6 +68,10 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssr.blendStrength", ssr.blendStrength);
     s.setDouble("ssr.maxRoughness", ssr.maxRoughness);
 
+    s.setDouble("shadow.distance", ctx.renderer.shadowParams.distance);
+    s.setDouble("shadow.cascades", ctx.renderer.shadowParams.cascadeCount);
+    s.setDouble("shadow.splitLambda", ctx.renderer.shadowParams.splitLambda);
+
     // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
     // session's slider tweaks don't silently override the level on next launch.
     (void)lit;
@@ -81,6 +90,7 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
 void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {
     ctx.renderer.ssaoParams = Renderer::SSAOParams{};
     ctx.renderer.ssrParams = Renderer::SSRParams{};
+    ctx.renderer.shadowParams = Renderer::ShadowParams{};
     ctx.renderer.bloomParams = Renderer::BloomParams{};
     ctx.view.lighting.exposure = 1.0f;
     ctx.view.lighting.ambientMultiplier = 0.3f;
@@ -120,8 +130,8 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",
-                               "Shadow", "Albedo", "Facing"};
-    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 8);
+                               "Shadow", "Albedo", "Facing", "Cascades"};
+    ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 9);
     const char* wireNames[] = {"Off", "Wireframe", "Wire overlay"};
     ImGui::Combo("Wireframe", &ctx.renderer.wireframe, wireNames, 3);
 
@@ -180,6 +190,13 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Stride (px)", &ssr.stride, 1.0f, 8.0f);
         ImGui::SliderFloat("Blend Strength", &ssr.blendStrength, 0.0f, 1.0f);
         ImGui::SliderFloat("Max Roughness", &ssr.maxRoughness, 0.0f, 1.0f);  // rougher = no SSR
+    }
+
+    if (ImGui::CollapsingHeader("Shadows")) {
+        auto& sh = ctx.renderer.shadowParams;
+        ImGui::SliderFloat("Distance", &sh.distance, 20.0f, 500.0f);  // sun-shadow range (m)
+        ImGui::SliderInt("Cascades", &sh.cascadeCount, 1, 4);   // RT_MAX_CASCADES
+        ImGui::SliderFloat("Split lambda", &sh.splitLambda, 0.0f, 1.0f);  // 0=uniform, 1=log
     }
 
     if (ImGui::CollapsingHeader("Bloom")) {

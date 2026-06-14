@@ -653,6 +653,12 @@ fragment float4 fragmentComposite(
         float ndv = dot(n, normalize(-viewPos));   // V points to the camera (origin)
         return ndv >= 0.0 ? float4(0.0, ndv, 0.0, 1.0) : float4(-ndv, 0.0, 0.0, 1.0);
     }
+    if (params.debugView == 8) {
+        // Shadow cascades: the lit pass wrote a per-cascade tint into sceneColor
+        // (red/green/blue/yellow = cascade 0..3); show it raw.
+        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        return float4(sceneColor.sample(smp, in.uv).rgb, 1.0);
+    }
 
     // --- Normal rendering ---
     float3 hdrColor;

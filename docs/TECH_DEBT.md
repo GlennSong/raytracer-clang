@@ -47,6 +47,19 @@ when fixed (git history is the archive).
   macOS-only.** Not yet gated by *metallic* (no free G-buffer channel left); fine
   while reflective surfaces are low-roughness dielectrics/water.
 
+- **Shadows: single camera-following ortho map → cascaded shadow maps.** The old
+  one 60 m box centered on the camera cut a hard "slice" across the level when
+  high up (geometry left the box → forced lit) and gave coarse ~3 cm texels that
+  shimmered under motion. *Fixed (Part A):* 3-cascade CSM (`shaders/metal/shadows.metal`
+  + `metal_renderer.mm setLights`/shadow pass): the view frustum is split out to
+  `shadowParams.distance` (slider), each cascade fit to its sub-frustum's bounding
+  sphere, texel-snapped, rendered into a `depth2d_array` slice; the lit pass picks
+  the cascade by view depth and cross-fades the seam. Debug "Cascades" view + a
+  conservative per-cascade caster cull. **Unverified — Metal, macOS-only.**
+  Follow-ups: **reversed-Z** depth (Part B — large-world far-plane precision;
+  touches every depth-reading shader's sky-test/linearize), local-light shadows,
+  and (much later) virtual shadow maps. Shadow-map size still fixed at 2048.
+
 - **Framerate dips to ~20fps in the arena viewer.** Workable but trending
   down. Suspects, in rough order: the post stack accumulated passes (SSAO,
   SSR, bloom, shadow maps, and now DOF/lens-warp wiring) running at full
