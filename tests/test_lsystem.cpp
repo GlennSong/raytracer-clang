@@ -108,6 +108,71 @@ TEST_CASE(lsystem_single_production_ignores_seed) {
     CHECK(sys.expand("F", 3, 1) == sys.expand("F", 3, 99));   // no choice = deterministic
 }
 
+// ---------------------------------------------------------------------------
+// Parametric L-system
+
+TEST_CASE(parametric_parse_and_serialize_round_trip) {
+    ModuleString m = parseModuleLiterals("F(1,0.5)[+(30)A]");
+    CHECK(m.size() == 5);                       // F ( [ + A ] -> F, [, +, A, ]
+    CHECK(m[0].symbol == 'F');
+    CHECK(m[0].params.size() == 2);
+    CHECK_APPROX(m[0].params[0], 1.0, 1e-6);
+    CHECK_APPROX(m[0].params[1], 0.5, 1e-6);
+    CHECK(m[1].symbol == '[');
+    CHECK(m[1].params.empty());
+    CHECK(m[2].symbol == '+');
+    CHECK_APPROX(m[2].params[0], 30.0, 1e-6);
+    CHECK(moduleString(m) == "F(1,0.5)[+(30)A]");
+}
+
+TEST_CASE(parametric_expression_shrinks_params_with_depth) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)A(l*0.5)");           // F is left verbatim; A recurses
+    ModuleString s = pls.expand("A(1)", 3);
+    // A(1) -> F(1)A(.5) -> F(1)F(.5)A(.25) -> F(1)F(.5)F(.25)A(.125)
+    CHECK(s.size() == 4);
+    CHECK(s[0].symbol == 'F'); CHECK_APPROX(s[0].params[0], 1.0,   1e-6);
+    CHECK(s[1].symbol == 'F'); CHECK_APPROX(s[1].params[0], 0.5,   1e-6);
+    CHECK(s[2].symbol == 'F'); CHECK_APPROX(s[2].params[0], 0.25,  1e-6);
+    CHECK(s[3].symbol == 'A'); CHECK_APPROX(s[3].params[0], 0.125, 1e-6);
+}
+
+TEST_CASE(parametric_full_arithmetic_expression) {
+    ParametricLSystem pls;
+    pls.rule("A(l,w)", "F(l*2-1, w/2 + 0.1)");
+    ModuleString s = pls.expand("A(3,1)", 1);
+    CHECK(s.size() == 1);
+    CHECK_APPROX(s[0].params[0], 5.0, 1e-5);    // 3*2-1
+    CHECK_APPROX(s[0].params[1], 0.6, 1e-5);    // 1/2+0.1
+}
+
+TEST_CASE(parametric_matches_by_arity) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)");                    // one-arg A
+    pls.rule("A",    "X");                       // zero-arg A
+    CHECK(moduleString(pls.expand("A(2)", 1)) == "F(2)");
+    CHECK(moduleString(pls.expand("A", 1)) == "X");
+}
+
+TEST_CASE(parametric_passes_through_unmatched_modules) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)[+(25)A(l*0.7)]");
+    ModuleString s = pls.expand("A(1)", 1);
+    // The '[', '+', ']' have no rules and must survive with their params intact.
+    CHECK(moduleString(s) == "F(1)[+(25)A(0.7)]");
+}
+
+TEST_CASE(parametric_stochastic_varies_by_seed) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)[+(30)A(l*0.7)]", 1.0);
+    pls.rule("A(l)", "F(l)[-(30)A(l*0.7)]", 1.0);
+    std::string a = moduleString(pls.expand("A(1)", 5, 1));
+    std::string b = moduleString(pls.expand("A(1)", 5, 1));
+    std::string c = moduleString(pls.expand("A(1)", 5, 7));
+    CHECK(a == b);                              // deterministic per seed
+    CHECK(a != c);                             // different seed -> different tree
+}
+
 TEST_CASE(turtle_leaf_symbol_adds_blob_geometry) {
     TurtleParams p;
     p.leafRadius = 0.5f;
