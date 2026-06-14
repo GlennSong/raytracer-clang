@@ -174,14 +174,23 @@ Each phase is independently shippable and visibly better than the last.
 - **Phase 0 — Free wins (no engine code).** Turn on `taper`/`leafRadius`;
   rewrite stock grammars with roll/pitch + manual golden-angle spacing. Proves
   the levers.
-- **Phase 1 — Generalized-cylinder skinner** (§4.1) with pipe-model radii
-  (§3.2). The cheapest slice that fixes *both* taper and the blobby/thin-twig
-  problem, and unlocks bark textures. *Recommended first build.* (ADR.)
-- **Phase 2 — Leaf cards + alpha-test material** (§4.2). Gives a canopy.
-- **Phase 3 — Parametric L-system** (§3.1) + RMF curvature (§3.5). (ADR.)
+- ✅ **Phase 1 — Generalized-cylinder skinner** (§4.1) with pipe-model radii
+  (§3.2). Done: `src/engine/procgen/tree.{h,cpp}` (`growTree`) sweeps tapered
+  bark rings (UVs + tangents) and solves radii bottom-up by the pipe model.
+- ✅ **Phase 2 — Leaf cards + alpha-test material** (§4.2). Done: double-sided
+  alpha-cut leaf cards + `RenderMaterial::FLAG_ALPHA_TEST` (Metal-shader
+  discard). Procedural bark/leaf textures generated CPU-side in `tree.cpp`.
+- ✅ **Phase 3a — Parametric L-system** (§3.1). Done: `ParametricLSystem` in
+  `lsystem.{h,cpp}` — modules with parameters, expression-valued successors.
+  *Remaining:* RMF bark curvature (§3.5) for twist-free UVs.
+- **Also landed:** a collidable `shape:"tree"` level entity (static triangle
+  `MeshCollider` from the bark) — a real object to bounce off / shoot at.
 - **Phase 4 — Tropisms, phyllotaxis as grammar, jitter, full alphabet**
-  (§3.3, §3.4, §3.6). Where botanical realism and *variety* (vines, flowers,
-  ferns) actually live.
+  (§3.3, §3.4, §3.6). Phyllotaxis + angle jitter are in; tropisms and the wider
+  alphabet (vines, flowers, ferns) remain. Where the *variety* lives.
+
+The two ADRs flagged in §7 (branch skinning; parametric semantics) are now
+worth writing retroactively, since the implementations exist to describe.
 
 Phases 1–2 alone move the trees from "hotdog fingers" to "recognizable tree
 with foliage." 3–4 are what make a *variety* of believable species.
