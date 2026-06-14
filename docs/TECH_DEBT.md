@@ -71,3 +71,93 @@ when fixed (git history is the archive).
   principled fix is **marching cubes** (per-cell topology via the 256-case
   table) or manifold dual contouring — bigger, and best added when the result
   is on-device-verifiable. Tracked for ROADMAP Phase A.1 follow-up.
+
+## Scripting / Lua bindings (ADR-0023/0024)
+
+Added fast across several sessions; the logic is headless-tested but the code
+took shortcuts worth paying down before the binding surface grows much more.
+
+- **Binding helpers are copy-pasted across surfaces.** `checkVec3`, `pushVec3`,
+  `optField` are defined independently in both `procgen_bindings.cpp` and
+  `gameplay_bindings.cpp` (anon namespaces). Lift them into one module-internal
+  `lua_helpers.h` so there's a single definition.
+- **Entity pack/unpack is duplicated and must stay in sync by hand.** The
+  `(generation<<32)|index` encoding lives in `script_system.cpp` (`packEntity`)
+  and the decode in `gameplay_bindings.cpp` (`toEntity`). If one drifts, entity
+  ids corrupt silently. Move both to one shared `packEntity/unpackEntity`.
+- **Every binding is hand-written C-API stack juggling** (manual push/pop
+  balance, magic stack indices) — verbose and easy to get subtly wrong. ADR-0023
+  deferred a binding lib (sol2); revisit when the surface grows, since the
+  per-function boilerplate is the recurring cost.
+- **`noise.*` rebuilds a `Noise` per call.** `noise.fbm2(seed, x, y)` constructs
+  `Noise(seed)` (a 512-entry permutation build) on every call — wasteful in a
+  loop. Should be a `noise.create(seed)` userdata with methods (like the LSystem
+  object).
+- **Lua behaviour instance refs are never released.** `ScriptSystem` `luaL_ref`s
+  each behaviour table but never `luaL_unref`s on entity/component destroy → the
+  registry grows until the VM closes. Bounded leak; needs a removal hook. (Also
+  in the ADR-0024 register.)
+- **`ScriptBehaviour` mixes data with runtime state.** `source` (data) sits next
+  to `instanceRef`/`started`/`failed` (runtime), with `-1` as a magic "unloaded"
+  ref. A side table keyed by entity, or a clear data/loaded split, is cleaner.
+- **The gameplay VM also opens the procgen builders.** Convenient (the gun
+  generates its own mesh) but a per-frame `update()` can now call `polygonize`
+  etc. with no guardrail — an easy perf footgun.
+- **The loader sets the seed by compiling Lua source.** `loadVegetation` does
+  `doString("seed=" + N)` per variant because there's no `ScriptVM::setGlobal*`.
+  Add `setGlobalNumber/String` and use it.
+- **Script failures are log-only.** Behaviour load/`start`/`update` errors
+  `LOG_ERROR` + set `failed`; species-script errors are skipped. Nothing surfaces
+  to the user/editor — content just goes missing.
+- **Cwd-relative asset paths.** `arena_state` reads `assets/scripts/gun.lua` and
+  the loader reads `assets/scripts/flora.lua` relative to the process cwd (works
+  only when launched from the repo root). Needs real asset-root resolution.
+- **`gun.lua` embeds the follow behaviour as a Lua string literal.** No syntax
+  check until runtime; awkward to edit. Fine as a demo, not as the pattern.
+
+## Lua flora / forest assembly
+
+- **`loadVegetation` is a 213-line god-function.** It handles tree/rock/builtin/
+  graph/script kinds, inline-vs-path detection, per-variant seeds, two scatter
+  passes, and entity creation. The mesh-source branching wants a small "species
+  mesh provider" seam (builtin | graph | script -> mesh).
+- **`script` species inline-vs-path is a `.lua`-suffix heuristic.** `{"script":
+  "..."}` is a file path iff it ends in `.lua`, else inline Lua — ambiguous.
+  Prefer explicit fields (e.g. `scriptFile` vs `script`).
+- **Each scatter pass builds its own `ScriptVM` and re-parses `flora.lua`.** The
+  `vegetation` and `foliage` passes don't share a VM, and `flora.lua` is re-read
+  every level load (no cache). Share one VM / cache the prelude.
+- **The `seed` global is an implicit loader↔script contract.** A species script
+  that forgets to read `seed` yields identical variants silently. Undocumented.
+- **No instancing — every scattered plant is its own entity + draw call.** ~700
+  trees + ~1100 foliage = thousands of `Renderable`s. The substrate plan always
+  intended instancing (ROADMAP Phase B / `forest-arena-plan.md`); this is the
+  biggest forest perf debt and will dominate the frame once rendered.
+- **Mesh ops deep-copy the whole buffer.** Every `mesh.translate/scale/orient/
+  merge/recompute_normals/bake_height_color` copies vertices+indices (functional
+  style). Kit-bashing a leaf canopy allocates a lot. Fine at gen time; revisit if
+  generation latency bites.
+- **`mesh.bake_height_color(m, c, c)` is used as a flat-color hack.** Relies on
+  the mesh having Y extent; a perfectly flat mesh (minY==maxY) would divide-by-
+  zero → NaN colors. Add a real `mesh.set_color(m, c)`.
+- **`flora.lua` uses Lua `math.random` + global `math.randomseed`** for rock/
+  grass/flower — a second RNG alongside the engine `Noise`, reseeded per call via
+  global state. Deterministic per call, but not coordinated with the engine's
+  seeded streams. Prefer driving variation off `noise.*`/an engine RNG binding.
+- **`TurtleParams.taper` is a blunt per-F multiplier** — thins trunk and twigs
+  uniformly by path depth, not botanically. Good enough; revisit for nicer trees.
+- **Leaf cards orient `+Y -> heading` with no variation,** chosen blind. Likely
+  needs jitter/scale variation and visual tuning on-device.
+
+## Verification gap (the meta-debt)
+
+- **Most scripting/flora *integration* is macOS-render-unverified.** Headless
+  tests cover generation and logic (counts, taper, determinism, spawn, follow
+  math), but the in-game wiring only builds/runs on macOS: `arena_state` (gun +
+  script attach), the gun viewmodel, the forest look, the foliage pass. Treat all
+  of it as "compiles + logic-tested, not seen." First Mac session: confirm the
+  gun renders/fires, trees read as trees (leaf size/density/taper), and check
+  forest+foliage framerate.
+- **Several tests assert via vertex-count inequalities** ("different species ->
+  different vertex counts", "leaves add vertices"). Brittle proxies that can
+  break on tuning — smoke tests, not exact specs.
