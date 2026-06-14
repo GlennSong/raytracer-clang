@@ -1274,6 +1274,119 @@ instances and the bake-to-static-asset pipeline then.
 
 ---
 
+## ADR-0023 — Lua as the embedded scripting language: one VM, procgen-first, separate binding surfaces
+**Status:** Pending (Lua chosen; not yet vendored or wired) · **Date:** 2026-06-14
+
+**Context.** The engine needs a scripting layer for two purposes that have so far
+been served by C++ only. (1) **Procgen authoring.** ADR-0021 fixed procgen as a
+C++ library of composable generators with the *language* — "node graph **and/or
+text DSL**, distilled from the working library" — deferred until generators
+exist. They now do (terrain, L-systems, SDF rocks, scatter), and the node-graph
+evaluator (ADR-0021 Phase C, `docs/node-graph-plan.md`) has shipped Phases 1–3.
+The node graph is the **visual** presentation layer; the "text DSL sugar on top"
+that ADR-0021/ROADMAP Phase C foreshadowed is still unbuilt. (2) **Gameplay.**
+There is no way to express behaviour (triggers, spawns, level logic, tuning)
+without recompiling; the engine is a `System`/ECS C++ binary end to end. Both
+wants point at the same missing piece — an embedded interpreter — so the question
+is which language, and how it relates to the node graph and the existing seams.
+
+A hard constraint rides along: AGENTS.md forbids new third-party dependencies
+without an ADR (ADR-0016 refined the rule to *"no **new** dependencies"*; vendored
+libs already built — Jolt, ImGui, tinygltf, stb — are accepted). A scripting VM
+is unambiguously a new dependency. This ADR is that authorization.
+
+**Decision.**
+
+1. **Embed Lua.** Adopt Lua (5.4.x) as the engine's scripting language. It is a
+   tiny, self-contained ANSI-C interpreter built for embedding, and is the
+   gamedev de-facto standard for exactly this role.
+
+2. **One VM, separate binding surfaces.** A single interpreter implementation
+   backs both uses; what differs is *which API is exposed*. Two binding surfaces:
+   - **Procgen surface (pure/deterministic).** Binds the generator substrate
+     (mesh builder, noise, SDF ops, L-system, scatter, polygonize) and nothing
+     with ambient state. A procgen script is `(params, seed) -> content`, the
+     same contract as a C++ generator (ADR-0021/0022) and a node graph. No
+     wall-clock, no ambient RNG, no `io`/`os` — randomness only through seeded
+     streams. This makes procgen scripts reproducible (ADR-0002) and safe to run
+     on worker threads.
+   - **Gameplay surface (effectful).** Binds ECS/world access, input, events,
+     spawning, etc. — and **may call the procgen surface** (gameplay is the
+     effectful layer that orchestrates the pure one), never the reverse.
+
+3. **Procgen-first.** Build the procgen binding surface first. It is the
+   smaller, purer, already-specified surface (the node graph names the exact
+   vocabulary), it is fully **headless/Linux-testable** (like Jolt — pure C/C++,
+   no GPU/OS), and doing Lua once procgen-first avoids throwaway gameplay
+   plumbing. The Lua text script and the node graph are **two front-ends over the
+   same C++ substrate** (ADR-0021/0022): the graph for visual authoring, Lua for
+   text authoring and anything imperative the graph is awkward for. Neither
+   replaces the other; both lower to the same generator functions.
+
+4. **Seal Lua behind a `ScriptVM`** — a pimpl whose header carries no `lua_*`
+   type, exactly as `Window` seals GLFW (ADR-0001) and `PhysicsWorld` seals Jolt
+   (ADR-0012). Engine/game code speaks our types and an opaque VM handle; the
+   `lua_State` and C API live only in the `.cpp`. One `lua_State` **per thread**
+   (Lua has no global lock / GIL — see below), so the procgen surface is
+   naturally parallel on the shared pool (ADR-0014): a `parallelFor` over species
+   can each drive their own VM with no contention.
+
+5. **Vendor as a pinned git submodule** under `third_party/lua`, built as a small
+   static library by CMake — matching how Jolt and ImGui are vendored (clean
+   tree, explicit version). Cross-platform pure C, so it builds and is tested in
+   CI/Linux; the std-lib-only **offline tracer (`make`) is untouched** —
+   scripting is an engine/CMake concern, like physics.
+
+6. **Hand-written bindings over the raw C API first; defer a binding library.**
+   The procgen surface is a few dozen functions; bind them by hand behind
+   `ScriptVM` rather than pulling in a C++ binding lib (sol2/LuaBridge) — which
+   would be a *second* new dependency. Revisit sol2 only if binding boilerplate
+   measurably dominates (the ADR-0008 "measure first" ethos).
+
+**Alternatives considered.**
+- **Python (CPython / pybind11)** — rejected for the *runtime*. The GIL
+  serializes script execution across threads, which is backwards for procgen
+  fan-out on the JobSystem (ADR-0014); the runtime + stdlib is multi-MB to
+  deploy vs. Lua's kilobytes; embedding ergonomics and per-call cost are heavier;
+  and there's a minor determinism caveat (hash-seed/iteration order). Python's
+  real strength is familiarity/ecosystem, which belongs to **offline tooling**
+  (asset cooking, build/editor automation), not the engine runtime — left open as
+  a separate, non-embedded option.
+- **A hand-rolled DSL / interpreter** — rejected: re-implements lexer/parser/VM/
+  GC/error handling that Lua already provides, tuned and battle-tested, for less
+  capability and more maintenance. The node graph already covers the *visual*
+  DSL; a bespoke *text* VM is the wheel Lua is.
+- **Node graph only, no text language** — rejected: ADR-0021 explicitly named
+  "graph **and/or** DSL"; graphs are clumsy for imperative logic (loops,
+  conditionals, gameplay rules), and a text surface is the right tool there. They
+  coexist over one substrate.
+- **A parser-library-based DSL** (ANTLR, etc.) — rejected: still a new dependency,
+  and yields only a parser — we'd still hand-build the runtime Lua already is.
+
+**Consequences / tech debt.**
+- Adds the first **new** third-party dependency since the ADR-0016 rule refinement
+  (engine/CMake scope; the offline tracer stays std-lib-only). Requires
+  `git submodule update --init`; CLAUDE.md/AGENTS.md updated to list it.
+- **Two procgen front-ends now coexist** (node graph + Lua) over one C++
+  substrate. Graph↔script interop (a "Script" node; or a graph callable from
+  Lua) is a deliberate **open question**, not built here — kept open by the fact
+  both lower to the same generator functions.
+- The procgen surface must be a **deterministic sandbox** (no `io`/`os`/ambient
+  time, seeded RNG only); enforced by *what we bind*, not by trusting scripts.
+- Per-thread `lua_State`s mean procgen scripts must not share mutable VM state
+  across threads — fits the "independent work only" contract of `parallelFor`
+  (ADR-0014).
+- No gameplay surface, hot-reload, or debugger yet — explicit follow-ups; the
+  gameplay bindings touch the ECS and are the larger, later surface.
+
+**Revisit trigger.** Binding boilerplate dominating (→ adopt sol2, a second
+dependency, with its own ADR); per-frame gameplay script cost showing in a
+profile (→ JIT via LuaJIT, or move hot paths to C++); needing offline
+tooling/automation (→ reconsider Python *there*, non-embedded); or graph↔script
+interop becoming a real authoring need (→ design the bridge then).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

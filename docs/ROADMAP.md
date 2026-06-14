@@ -414,6 +414,13 @@ shared, per ADR-0021. **Planned: `docs/node-graph-plan.md`** (graph engine
 headless-first, then the editor UI) — the trigger is met (four generators
 exist).
 
+The **text DSL is Lua** (ADR-0023): one embedded VM with separate binding
+surfaces, built **procgen-first** (the pure/deterministic substrate, callable
+later by the effectful gameplay surface). The node graph (visual) and Lua (text)
+are two front-ends over the *same* C++ generator substrate — neither replaces the
+other. This also lands the engine's general scripting layer for gameplay, sealed
+behind a Jolt-style `ScriptVM` (no `lua_*` types in headers).
+
 ### Phase D — Applications (by appetite)
 Each composes Phases A–C:
 - **Procedural textures/materials** — noise-driven synthesis, weathering,
