@@ -75,7 +75,6 @@
    },
    {
     "kind": "rock",
-    "graph": "../generators/rock.graph.json",
     "variants": 3,
     "material": {
      "albedo": [

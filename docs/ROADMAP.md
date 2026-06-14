@@ -422,19 +422,21 @@ Supporting bindings: `lsystem.segments/leaves`, `mesh.orient`, `sdf.smooth_union
 and a `TurtleParams.taper` for continuous trunk thinning.
 
 ### Phase C — The procgen language (distilled, not designed up front)
-Only after Phase B. A **node-graph evaluator** over the value types
-(`Mesh`/`Field`/`Frame`/attributes) — the engine's "geometry nodes"; an
-optional text DSL is sugar on top. Built *from* what the Phase B generators
-shared, per ADR-0021. **Planned: `docs/node-graph-plan.md`** (graph engine
-headless-first, then the editor UI) — the trigger is met (four generators
-exist).
+Only after Phase B. A text authoring layer over the value types
+(`Mesh`/`Field`/`Frame`/attributes), distilled *from* what the Phase B
+generators shared, per ADR-0021.
 
-The **text DSL is Lua** (ADR-0023): one embedded VM with separate binding
+The language is **Lua** (ADR-0023): one embedded VM with separate binding
 surfaces, built **procgen-first** (the pure/deterministic substrate, callable
-later by the effectful gameplay surface). The node graph (visual) and Lua (text)
-are two front-ends over the *same* C++ generator substrate — neither replaces the
-other. This also lands the engine's general scripting layer for gameplay, sealed
-behind a Jolt-style `ScriptVM` (no `lua_*` types in headers).
+later by the effectful gameplay surface), sealed behind a Jolt-style `ScriptVM`
+(no `lua_*` types in headers). This also lands the engine's general scripting
+layer for gameplay (ADR-0024).
+
+A node-graph evaluator was prototyped (Phases 1–3) as a parallel *visual*
+front-end but **removed** (ADR-0025): Lua became the path actually used and the
+graph never grew a canvas or a graph↔Lua bridge. Lua is now the single procgen
+authoring path; any future visual editor should emit Lua rather than be a second
+evaluator.
 
 ### Phase D — Applications (by appetite)
 Each composes Phases A–C:

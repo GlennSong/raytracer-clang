@@ -66,4 +66,5 @@ Any other letter is a no-op placeholder you can use in rules to carry structure
   differs.
 - A leaf/canopy symbol that places foliage cards or blobs.
 - Per-rule parameters (separate trunk vs. branch taper/length).
-- Eventually, authoring this as a node graph instead of a string (ADR-0022).
+- Eventually, authoring this from Lua instead of a hand-written string (ADR-0023;
+  the `flora` library already grows trees this way).

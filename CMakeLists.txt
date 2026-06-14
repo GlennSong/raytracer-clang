@@ -44,7 +44,6 @@ add_library(engine_core STATIC
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
     src/engine/procgen/sdf.cpp
-    src/engine/procgen/node_graph.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -63,7 +62,6 @@ add_library(engine_core STATIC
     src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/camera_panel_system.cpp
-    src/engine/systems/node_editor_system.cpp
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp
@@ -213,7 +211,6 @@ add_executable(run_tests
     tests/test_rock.cpp
     tests/test_scatter.cpp
     tests/test_sdf.cpp
-    tests/test_node_graph.cpp
     tests/test_instancing.cpp
     ${CORE_SOURCES}
 )

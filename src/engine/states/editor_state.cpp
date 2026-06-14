@@ -6,7 +6,6 @@
 #include "../systems/dev_control_system.h"
 #include "../systems/camera_system.h"
 #include "../systems/camera_panel_system.h"
-#include "../systems/node_editor_system.h"
 #include "../systems/render_system.h"
 #include "../../log.h"
 
@@ -22,7 +21,6 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     auto& camSys = addSystem<CameraSystem>();
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
-    addSystem<NodeEditorSystem>();   // procgen graph authoring (behind the overlay)
     addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),
                             bridge);
 }

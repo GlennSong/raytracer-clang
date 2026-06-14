@@ -5,7 +5,6 @@
 #include "procgen/lsystem.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
-#include "procgen/node_graph.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
@@ -399,12 +398,6 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     std::vector<Species> species;
     uint32_t vegSeed = veg.value("seed", 0u);
 
-    // Node-graph generators (ADR-0021 Phase C): a species may define its mesh as
-    // a "graph" asset evaluated per variant with a seed, instead of the built-in
-    // tree/rock generators.
-    NodeRegistry nodeRegistry;
-    registerBuiltinNodes(nodeRegistry);
-
 #ifdef RT_ENABLE_SCRIPTING
     // Lua flora species (ADR-0023): created on first use, with the procgen
     // builders and the shared flora library loaded, so a species can be
@@ -493,23 +486,6 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         RenderMaterial material;
         if (s.contains("material")) applyMaterial(s["material"], material);
 
-        // Optional: this species' mesh is a node-graph asset, evaluated per
-        // variant with a "seed" parameter.
-        Graph graph;
-        bool hasGraph = false;
-        if (s.contains("graph")) {
-            std::string graphPath = s["graph"].get<std::string>();
-            if (!graphPath.empty() && graphPath[0] != '/') graphPath = levelDir + "/" + graphPath;
-            std::ifstream gf(graphPath);
-            if (gf) {
-                std::string text((std::istreambuf_iterator<char>(gf)),
-                                 std::istreambuf_iterator<char>());
-                graph = graphFromJson(text);
-                hasGraph = !graph.nodes.empty();
-            }
-            if (!hasGraph) LOG_ERROR << "Failed to load generator graph: " << graphPath;
-        }
-
         // Optional: this species' mesh comes from a Lua flora script (inline
         // chunk, or a level-relative .lua path), evaluated per variant.
         std::string scriptSpec = s.value("script", std::string());
@@ -548,10 +524,6 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 if (runProcgenMesh(vm, scriptSource, out, &err) && out) mesh = *out;
                 else LOG_ERROR << "flora script error: " << err;
 #endif
-            } else if (hasGraph) {
-                GraphValue out = graph.evaluate(
-                    nodeRegistry, {{"seed", GraphValue(static_cast<double>(seed))}});
-                if (auto* mp = std::get_if<MeshPtr>(&out)) { if (*mp) mesh = **mp; }
             } else if (kind == "rock") {
                 mesh = rockSdf ? generateRockSdf(rsp, seed)
                                : generateRock(rp, Noise(seed));

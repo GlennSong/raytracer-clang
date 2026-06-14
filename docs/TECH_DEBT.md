@@ -72,8 +72,10 @@ when fixed (git history is the archive).
 - **Procedural objects aren't shown or editable in the editor** (terrain,
   scattered vegetation). By design for now (ADR-0022): they carry no
   `SourceSpec`, so they're regenerated runtime objects, not document entities.
-  Revisit when the node graph (ADR-0021 Phase C) gives generators editable
-  instances; until then decide per content type which realness tier it gets.
+  Revisit when generators get editable instances (e.g. authored as Lua scripts
+  with inspectable params, ADR-0023); until then decide per content type which
+  realness tier it gets. (The node graph that was once slated for this was
+  removed — ADR-0025; Lua is the single authoring path.)
 - **Gamepad doesn't work in the editor.** `HostedWindow` returns an empty
   gamepad set — the Qt host never polls. The GLFW viewer polls gamepads
   (`window.cpp`); to enable it in the editor, poll via the GCController backend

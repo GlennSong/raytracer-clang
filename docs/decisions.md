@@ -1464,6 +1464,47 @@ cost in a profile (→ LuaJIT, or move hot logic to C++).
 
 ---
 
+## ADR-0025 — Remove the node graph: Lua is the one procgen authoring path
+
+**Status:** Accepted. Supersedes ADR-0021 Phase C and the node-graph half of
+ADR-0023's "two front-ends" framing.
+
+**Context.** ADR-0021 ended with a "procgen language (node graph and/or text
+DSL)" to be distilled from the C++ generator library, and `node-graph-plan.md`
+shipped Phases 1–3: a headless graph engine (`node_graph.{h,cpp}`), JSON
+generators (`*.graph.json`), and a list-style ImGui editor (`NodeEditorSystem`).
+ADR-0023 then chose Lua and explicitly kept the graph as the *visual* front-end
+alongside Lua's *text* front-end — "neither replaces the other."
+
+In practice that balance never materialized. Lua became the authoring path we
+actually use (flora library, gun viewmodel, whole-generator binding surface,
+`test_script_vm`), while the graph stayed a stub: one consumer
+(`rock.graph.json`), a list editor rather than a real canvas, and **no
+graph↔Lua bridge** (the interop ADR-0023 left open was never built). Carrying two
+parallel front-ends over the same substrate is maintenance with no payoff.
+
+**Decision.** Remove the node graph entirely. Lua (ADR-0023/0024) is the single
+procgen + gameplay authoring surface over the C++ generator library
+(ADR-0021/0022). Deleted: `procgen/node_graph.{h,cpp}`,
+`systems/node_editor_system.{h,cpp}`, `tests/test_node_graph.cpp`,
+`assets/generators/rock.graph.json`, `docs/node-graph-plan.md`, and the
+`"graph"` species branch in `level_loader.cpp` (the level loader now resolves a
+species mesh from a built-in generator or a Lua `script`). The forest's rock
+species falls back to the built-in SDF/displaced rock generator.
+
+**Consequences.**
+- One authoring story, one set of bindings to maintain; the C++ generators and
+  the Lua surface are unaffected.
+- Lose visual/dataflow authoring. If a node canvas is ever wanted, it should be
+  re-derived as a thin front-end that *emits Lua* (or calls the same generator
+  functions), not a second evaluator — so it can't drift from the text path.
+- ADR-0021/0023 stay as historical record; this ADR is the live word on Phase C.
+
+**Revisit trigger.** A concrete need for visual authoring by non-programmers, or
+a generator graph too awkward to express as a Lua script.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
