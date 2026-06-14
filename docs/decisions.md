@@ -1387,6 +1387,79 @@ interop becoming a real authoring need (→ design the bridge then).
 
 ---
 
+## ADR-0024 — Gameplay scripting: a MonoBehaviour-style `ScriptBehaviour` over the ECS
+**Status:** Accepted — first slice **implemented** (effectful gameplay binding surface; `ScriptBehaviour` component + `ScriptSystem` with a headless `tick`; per-entity instance tables; start/update lifecycle; Transform access — covered by `tests/test_script_system.cpp`). Not yet wired into a running game state; spawn/destroy, hot-reload, and ref cleanup are follow-ups. · **Date:** 2026-06-14
+
+**Context.** ADR-0023 chose Lua, built the *procgen* (pure/sandboxed) surface
+first, and deferred the *gameplay* (effectful) surface. The open question it left:
+how does a script become behaviour on an entity? The reference the user named is
+Unity's **MonoBehaviour** — a script with `Start()`/`Update()` attached to a
+GameObject. Our engine already has that exact lifecycle at the C++ level: a
+`System` has `onStart`/`update`/`fixedUpdate`/`onEvent`/`render`/`onStop`
+(ADR-0004). So the question is really: expose that lifecycle to Lua, per entity,
+without coupling the core ECS to the scripting subsystem or breaking determinism.
+
+**Decision.**
+1. **A `ScriptBehaviour` component = a Lua script on an entity.** Its `source` is
+   a chunk that **`return`s a table** of hooks; that returned table *is* the
+   per-entity instance, so its fields are the behaviour's state — exactly
+   MonoBehaviour members. Hooks mirror the engine lifecycle: `start(self, e)`
+   once, `update(self, e, dt)` each frame (room to add `on_event`, `fixed_update`
+   later). The entity arrives as an opaque packed-Handle integer.
+2. **A `ScriptSystem` drives them.** It owns **one gameplay `ScriptVM`** (effectful
+   bindings, *not* the procgen sandbox), lazily loads each behaviour into its own
+   registry-held instance table, runs `start` once, then `update(e, dt)` every
+   frame. Its core is a headless `tick(World&, double)` (the `PhysicsSystem`
+   pattern), so the whole layer is unit-tested without a window/renderer.
+3. **Effectful surface, the other half of the ADR-0023 split.** `openGameplayLibrary`
+   binds `log`, `entity.alive/get_position/set_position/translate/set_yaw`. Unlike
+   procgen, these read and **mutate the World**; the active `World` is bound for
+   the duration of a tick and cleared after, so no stale world is reachable
+   between ticks.
+4. **Runs in variable-rate `update()`, never `fixedUpdate()`.** Gameplay scripts
+   are deliberately outside the deterministic stance — physics stays the
+   fixed-step authority (ADR-0002/0012). Frame logic is where MonoBehaviour-style
+   scripts belong.
+5. **`ScriptBehaviour` lives in the scripting module, not core `components.h`.**
+   The ECS stays scripting-agnostic and the entire layer gates on
+   `RT_ENABLE_SCRIPTING`. The component carries only plain ints for its runtime
+   refs — no `lua_*` type leaks into a header (the ADR-0023 seal rule).
+
+**Alternatives considered.**
+- **A Lua *System* (one script ticking a query) instead of a per-entity
+  component** — rejected as the *primary* model: per-entity behaviour is the
+  Unity-familiar, ECS-natural unit and what was asked for. A system-level script
+  surface can be added later as a different binding without disturbing this one.
+- **One `lua_State` per behaviour (or coroutine per entity)** — rejected: one VM
+  per thread is the Lua idiom; per-entity *instance tables* already give state
+  isolation (a test pins it) without N interpreters.
+- **Full ECS reflection from Lua (read/write any component)** — deferred: start
+  with Transform + lifecycle; grow the surface (via the property layer, ADR-0018)
+  as real behaviours demand it, rather than exposing everything speculatively.
+- **Put `ScriptBehaviour` in core `components.h`** — rejected: couples the ECS to
+  the optional scripting dep; keeping it in the module preserves the gate.
+
+**Consequences / tech debt.**
+- **No spawn/destroy from scripts yet.** Scripts only mutate `Transform`, so the
+  `World::each` no-structural-mutation contract (ADR-0006) holds. Entity
+  creation/destruction from Lua needs a deferred command buffer first.
+- **Instance-ref cleanup is missing.** A destroyed entity's `ScriptBehaviour`
+  registry ref is not `luaL_unref`'d, so refs accumulate until the VM closes — a
+  bounded leak for now (tracked below); fix when behaviours churn.
+- **Not hot-reloadable**, and **not yet registered in a running state** — the slice
+  is exercised through `tick()` directly. Wiring `ScriptSystem` into PlayingState
+  (and an editor "attach script" affordance) is the next step.
+- **Single-threaded** gameplay VM (main thread) — fine; procgen keeps the
+  per-thread-VM parallelism story (ADR-0023), gameplay does not need it.
+
+**Revisit trigger.** Scripts needing to spawn/despawn entities (→ deferred command
+buffer, ADR-0006); behaviour churn making the ref leak matter (→ unref on
+component removal / entity destroy); wanting hot-reload; behaviours needing
+fixed-step determinism (→ a `fixed_update` hook on the fixed schedule); or script
+cost in a profile (→ LuaJIT, or move hot logic to C++).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1409,6 +1482,9 @@ to be replaced; listed here so they stay visible.
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
 | Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | The `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped mesh ownership; `release` on overwrite, `clear()` on world teardown |
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
+| `ScriptSystem` not wired into a running state | `engine/scripting/script_system.*` | First slice (ADR-0024) is driven by `tick()` in tests only | Register it in PlayingState; an editor "attach script" affordance |
+| Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
+| No entity spawn/destroy from scripts | `engine/scripting/gameplay_bindings.*` | `World::each` forbids structural mutation mid-iteration (ADR-0006); scripts only touch Transform | A deferred command buffer, then spawn/destroy bindings |
 
 ---
 

@@ -148,6 +148,8 @@ if(RT_ENABLE_SCRIPTING)
     target_sources(engine_core PRIVATE
         src/engine/scripting/script_vm.cpp
         src/engine/scripting/procgen_bindings.cpp
+        src/engine/scripting/gameplay_bindings.cpp
+        src/engine/scripting/script_system.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -217,7 +219,9 @@ add_executable(run_tests
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE engine_core)
 if(RT_ENABLE_SCRIPTING)
-    target_sources(run_tests PRIVATE tests/test_script_vm.cpp)
+    target_sources(run_tests PRIVATE
+        tests/test_script_vm.cpp
+        tests/test_script_system.cpp)
 endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
