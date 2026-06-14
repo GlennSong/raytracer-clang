@@ -60,6 +60,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
 	$(TEST_DIR)/test_lsystem.cpp \
+	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
 	$(TEST_DIR)/test_sdf.cpp
@@ -89,6 +90,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \

@@ -41,6 +41,7 @@ add_library(engine_core STATIC
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
     src/engine/procgen/lsystem.cpp
+    src/engine/procgen/tree.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
     src/engine/procgen/sdf.cpp
@@ -208,6 +209,7 @@ add_executable(run_tests
     tests/test_noise.cpp
     tests/test_terrain.cpp
     tests/test_lsystem.cpp
+    tests/test_tree.cpp
     tests/test_rock.cpp
     tests/test_scatter.cpp
     tests/test_sdf.cpp

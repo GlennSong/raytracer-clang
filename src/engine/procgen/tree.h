@@ -1,0 +1,64 @@
+#ifndef RAYTRACER_ENGINE_TREE_H
+#define RAYTRACER_ENGINE_TREE_H
+
+#include "../../renderer/renderer.h"   // RenderMesh, Vertex
+#include "../../rt_math.h"             // Vec3
+#include <cstdint>
+#include <vector>
+
+namespace engine {
+
+// A parametric tree generator (ROADMAP Tier 4 Phase B; the realism plan in
+// docs/lsystem-botany-plan.md). It grows a branch skeleton with a parametric
+// L-system (lsystem.h), assigns branch radii bottom-up by the pipe model
+// (da Vinci / Murray's law), then skins each branch as a generalized cylinder
+// — swept tapered rings with bark UVs + tangents — instead of an SDF blob, so
+// thin twigs survive and bark textures apply. Leaves are alpha-cut cards, not
+// spheres. The bark mesh doubles as the static collision surface.
+struct TreeParams {
+    // --- L-system shape ---
+    int   iterations    = 5;        // branch orders (recursion depth)
+    float trunkLength   = 1.6f;     // length of the first internode
+    float lengthFalloff = 0.82f;    // child internode = parent * this
+    float branchAngle   = 36.0f;    // pitch of a branch away from its parent (deg)
+    float angleJitter   = 14.0f;    // +/- random variation applied to every turn (deg)
+    int   branchesPerNode = 2;      // children spawned at each node (2 = forking)
+    float phyllotaxis   = 137.5f;   // roll advance between successive children (deg)
+
+    // --- Radii (pipe model) ---
+    float tipRadius     = 0.018f;   // radius of a terminal twig
+    float pipeExponent  = 2.3f;     // n in r_parent^n = sum(r_child^n); 2..3
+    float radiusScale   = 1.0f;     // multiply every radius (overall thickness)
+
+    // --- Mesh resolution ---
+    int   ringSegments  = 7;        // cross-section vertices per branch ring
+    float barkVScale    = 1.0f;     // bark UV tiling along branch length
+
+    // --- Leaves ---
+    bool  leaves        = true;
+    float leafSize      = 0.16f;    // leaf card width
+    int   leavesPerTip  = 4;
+
+    // --- Colors (baked into vertex color; multiply the material albedo) ---
+    Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
+    Vec3  leafColor     = Vec3(0.19, 0.44, 0.13);
+};
+
+// A grown tree: bark and leaves as separate meshes (different materials — bark
+// is opaque, leaves are alpha-cut foliage), plus a collision triangle soup
+// (branches only — you bounce off wood, not leaves). Feed the collision arrays
+// straight to a MeshCollider / PhysicsWorld::addMesh.
+struct TreeMesh {
+    RenderMesh branches;                  // generalized-cylinder bark (UVs + tangents)
+    RenderMesh leaves;                    // textured leaf cards
+    std::vector<Vec3>     collisionVertices;
+    std::vector<uint32_t> collisionIndices;
+};
+
+// Grow a tree. `seed` selects the stochastic variant (angle jitter + leaf
+// scatter); the same params + seed always produce the same tree (ADR-0002).
+TreeMesh growTree(const TreeParams& params, uint32_t seed = 0);
+
+}  // namespace engine
+
+#endif
