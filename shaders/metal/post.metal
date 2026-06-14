@@ -38,8 +38,15 @@ kernel void ssrRayMarch(
 
     // Reconstruct view-space position from depth, read normal from G-buffer
     float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
-    float3 viewNormal = normalTex.read(depthCoord).xyz * 2.0 - 1.0;
-    viewNormal = normalize(viewNormal);
+    float4 normalSample = normalTex.read(depthCoord);
+    float3 viewNormal = normalize(normalSample.xyz * 2.0 - 1.0);
+
+    // Roughness gate (packed in normal.w): rough surfaces scatter reflections to
+    // nothing — only smooth/metallic/wet surfaces get SSR. Fades to 0 at
+    // maxRoughness, killing the bogus forest-on-ground/foliage mirror look and
+    // skipping the ray march entirely for the (common) rough pixels.
+    float reflectivity = 1.0 - smoothstep(0.0, params.maxRoughness, normalSample.w);
+    if (reflectivity <= 0.0) { ssrResult.write(float4(0.0), gid); return; }
 
     float3 viewDir = normalize(viewPos);
     float3 reflectDir = reflect(viewDir, viewNormal);
@@ -166,7 +173,7 @@ kernel void ssrRayMarch(
 
     float NdotV = saturate(dot(viewNormal, -viewDir));
     float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
-    confidence *= fresnel;
+    confidence *= fresnel * reflectivity;
 
     ssrResult.write(float4(hitColor, confidence), gid);
 }
@@ -266,6 +273,7 @@ kernel void ssrBlurV(
 kernel void gtaoCompute(
     texture2d<float, access::read> depthTex [[texture(0)]],
     texture2d<float, access::write> aoResult [[texture(1)]],
+    texture2d<float, access::read> normalTex [[texture(2)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant SSAOUniforms& aoParams [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
@@ -286,25 +294,12 @@ kernel void gtaoCompute(
     // Reconstruct view-space position
     float3 viewPos = ssrViewPos(depth, uv, camera.invProjection);
 
-    // Reconstruct normal from depth neighbors (central differences, pick best pair)
-    uint2 maxCoord = texSize - 1;
-    float depthL = depthTex.read(uint2(max(int(gid.x) - 1, 0), gid.y)).x;
-    float depthR = depthTex.read(uint2(min(gid.x + 1, maxCoord.x), gid.y)).x;
-    float depthU = depthTex.read(uint2(gid.x, max(int(gid.y) - 1, 0))).x;
-    float depthD = depthTex.read(uint2(gid.x, min(gid.y + 1, maxCoord.y))).x;
+    // Use the real view-space normal from the G-buffer (same encoding as SSR).
+    // Reconstructing the normal from depth neighbours sprays garbage normals over
+    // thin/edgy geometry (foliage), which made AO crawl and block under motion.
+    float3 viewNormal = normalize(normalTex.read(gid).xyz * 2.0 - 1.0);
 
-    float2 texel = 1.0 / float2(texSize);
-    float3 viewPosL = ssrViewPos(depthL, uv - float2(texel.x, 0), camera.invProjection);
-    float3 viewPosR = ssrViewPos(depthR, uv + float2(texel.x, 0), camera.invProjection);
-    float3 viewPosU = ssrViewPos(depthU, uv - float2(0, texel.y), camera.invProjection);
-    float3 viewPosD = ssrViewPos(depthD, uv + float2(0, texel.y), camera.invProjection);
-
-    float3 ddx = (abs(depthR - depth) < abs(depthL - depth))
-                 ? (viewPosR - viewPos) : (viewPos - viewPosL);
-    float3 ddy = (abs(depthD - depth) < abs(depthU - depth))
-                 ? (viewPosD - viewPos) : (viewPos - viewPosU);
-    float3 viewNormal = normalize(cross(ddy, ddx));
-    if (viewNormal.z < 0.0) viewNormal = -viewNormal;
+    uint2 maxCoord = texSize - 1;   // clamp for sample reads below
 
     const int NUM_DIRECTIONS = aoParams.directions;
     const int NUM_STEPS = aoParams.steps;
@@ -316,9 +311,12 @@ kernel void gtaoCompute(
     // Produces well-distributed values in [0, 2π] with no visible tiling
     float rotAngle = fract(52.9829189 * fract(0.06711056 * float(gid.x) + 0.00583715 * float(gid.y))) * 2.0 * M_PI_F;
 
-    // Screen-space pixel radius (adapts to depth)
+    // Screen-space pixel radius (adapts to depth). Capped at 32px: the world
+    // radius projects to hundreds of px up close, so a large cap + few steps put
+    // samples ~16px apart -> coarse, blocky AO that shifts as the camera moves.
+    // A tighter cap keeps the (NUM_STEPS) samples dense enough to be smooth.
     float projScale = camera.projection[1][1] * float(texSize.y) * 0.5;
-    float screenRadius = clamp(radius * projScale / (-viewPos.z), 3.0, 64.0);
+    float screenRadius = clamp(radius * projScale / (-viewPos.z), 3.0, 32.0);
 
     float occlusion = 0.0;
 
@@ -432,6 +430,65 @@ kernel void aoBlurV(
     }
 
     output.write(float4(total / weightSum, 0, 0, 1), gid);
+}
+
+// Temporal AO resolve: blends the (blurred) current-frame AO with last frame's
+// AO reprojected to this pixel. Foliage is sub-pixel, so with no AA each pixel
+// flips between leaf and background as the camera moves, swinging AO 0.5<->1.0
+// frame to frame; both values are individually valid, so only accumulating over
+// time stabilizes it. Ghosting/disocclusion are bounded by clamping the history
+// sample to the 3x3 neighborhood of the current AO (TAA-style neighborhood clamp)
+// and by rejecting history that reprojects off-screen.
+kernel void aoTemporal(
+    texture2d<float, access::read>   currentAO  [[texture(0)]],
+    texture2d<float, access::read>   depthTex   [[texture(1)]],
+    texture2d<float, access::sample> historyAO  [[texture(2)]],
+    texture2d<float, access::write>  resolvedAO [[texture(3)]],
+    constant CameraUniforms& camera [[buffer(0)]],
+    constant AOTemporalUniforms& t  [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint2 size = uint2(resolvedAO.get_width(), resolvedAO.get_height());
+    if (gid.x >= size.x || gid.y >= size.y) return;
+
+    float cur = currentAO.read(gid).r;
+    float depth = depthTex.read(gid).x;
+
+    // No history to blend (first frame / resize), or sky: pass current through.
+    if (t.alpha <= 0.0 || depth >= 0.999) {
+        resolvedAO.write(float4(cur), gid);
+        return;
+    }
+
+    // Reconstruct this pixel's world position, then project it into last frame.
+    float2 uv = (float2(gid) + 0.5) / float2(size);
+    float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float4 world = camera.invViewProjection * float4(ndc, depth, 1.0);
+    world /= world.w;
+    float4 prevClip = t.prevViewProjection * world;
+    float resolved = cur;
+    if (prevClip.w > 0.0) {
+        float2 prevNdc = prevClip.xy / prevClip.w;
+        float2 prevUV = float2(prevNdc.x * 0.5 + 0.5, 0.5 - prevNdc.y * 0.5);
+        if (all(prevUV >= float2(0.0)) && all(prevUV <= float2(1.0))) {
+            // Neighborhood min/max of the current AO bounds plausible values;
+            // clamping the reprojected history to it suppresses ghosting and
+            // disocclusion bleed without needing a history-depth buffer.
+            float mn = cur, mx = cur;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    uint2 c = uint2(clamp(int2(gid) + int2(dx, dy),
+                                          int2(0), int2(size) - 1));
+                    float s = currentAO.read(c).r;
+                    mn = min(mn, s);
+                    mx = max(mx, s);
+                }
+            constexpr sampler hsmp(filter::linear, address::clamp_to_edge);
+            float hist = clamp(historyAO.sample(hsmp, prevUV).r, mn, mx);
+            resolved = mix(cur, hist, t.alpha);
+        }
+    }
+    resolvedAO.write(float4(resolved), gid);
 }
 
 // --- Bloom: threshold extract + progressive downsample/upsample ---
@@ -585,6 +642,22 @@ fragment float4 fragmentComposite(
         if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
         float3 a = sceneColor.sample(smp, in.uv).rgb;
         return float4(pow(a, float3(1.0 / 2.2)), 1.0);
+    }
+    if (params.debugView == 7) {
+        // Facing test: green = front-facing (G-buffer normal points toward the
+        // camera), red = facing away. Every visible fragment should be green;
+        // red marks a flipped normal or a shown back-face. Brightness = |N·V|.
+        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        float3 n = normalize(normalTexture.read(uint2(in.position.xy)).xyz * 2.0 - 1.0);
+        float3 viewPos = ssrViewPos(depth, in.uv, camera.invProjection);
+        float ndv = dot(n, normalize(-viewPos));   // V points to the camera (origin)
+        return ndv >= 0.0 ? float4(0.0, ndv, 0.0, 1.0) : float4(-ndv, 0.0, 0.0, 1.0);
+    }
+    if (params.debugView == 8) {
+        // Shadow cascades: the lit pass wrote a per-cascade tint into sceneColor
+        // (red/green/blue/yellow = cascade 0..3); show it raw.
+        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        return float4(sceneColor.sample(smp, in.uv).rgb, 1.0);
     }
 
     // --- Normal rendering ---

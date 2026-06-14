@@ -58,7 +58,6 @@ AABB triangleBounds(const Triangle& tri) {
 }
 
 void KdTree::build(const std::vector<Triangle>& triangles) {
-    triangleData = &triangles;
     if (triangles.empty()) {
         root = nullptr;
         return;
@@ -66,14 +65,15 @@ void KdTree::build(const std::vector<Triangle>& triangles) {
 
     std::vector<int> indices(triangles.size());
     std::iota(indices.begin(), indices.end(), 0);
-    root = buildRecursive(indices, 0);
+    root = buildRecursive(triangles, indices, 0);
 }
 
-std::unique_ptr<KdNode> KdTree::buildRecursive(const std::vector<int>& indices, int depth) {
+std::unique_ptr<KdNode> KdTree::buildRecursive(const std::vector<Triangle>& triangles,
+                                               const std::vector<int>& indices, int depth) {
     auto node = std::make_unique<KdNode>();
 
     for (int idx : indices) {
-        node->bounds.expand(triangleBounds((*triangleData)[idx]));
+        node->bounds.expand(triangleBounds(triangles[idx]));
     }
 
     if (static_cast<int>(indices.size()) <= MIN_TRIANGLES || depth >= MAX_DEPTH) {
@@ -85,8 +85,8 @@ std::unique_ptr<KdNode> KdTree::buildRecursive(const std::vector<int>& indices, 
 
     std::vector<int> sorted = indices;
     std::sort(sorted.begin(), sorted.end(), [&](int a, int b) {
-        const Triangle& triA = (*triangleData)[a];
-        const Triangle& triB = (*triangleData)[b];
+        const Triangle& triA = triangles[a];
+        const Triangle& triB = triangles[b];
         double centroidA = ((&triA.v0.x)[axis] + (&triA.v1.x)[axis] + (&triA.v2.x)[axis]) / 3.0;
         double centroidB = ((&triB.v0.x)[axis] + (&triB.v1.x)[axis] + (&triB.v2.x)[axis]) / 3.0;
         return centroidA < centroidB;
@@ -96,26 +96,27 @@ std::unique_ptr<KdNode> KdTree::buildRecursive(const std::vector<int>& indices, 
     std::vector<int> leftIndices(sorted.begin(), sorted.begin() + mid);
     std::vector<int> rightIndices(sorted.begin() + mid, sorted.end());
 
-    node->left = buildRecursive(leftIndices, depth + 1);
-    node->right = buildRecursive(rightIndices, depth + 1);
+    node->left = buildRecursive(triangles, leftIndices, depth + 1);
+    node->right = buildRecursive(triangles, rightIndices, depth + 1);
 
     return node;
 }
 
-bool KdTree::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const {
+bool KdTree::intersect(const std::vector<Triangle>& triangles, const Ray& ray,
+                       double tMin, double tMax, HitRecord& rec) const {
     if (!root) return false;
-    return intersectNode(root.get(), ray, tMin, tMax, rec);
+    return intersectNode(triangles, root.get(), ray, tMin, tMax, rec);
 }
 
-bool KdTree::intersectNode(const KdNode* node, const Ray& ray,
-                           double tMin, double tMax, HitRecord& rec) const {
+bool KdTree::intersectNode(const std::vector<Triangle>& triangles, const KdNode* node,
+                           const Ray& ray, double tMin, double tMax, HitRecord& rec) const {
     if (!node->bounds.intersect(ray, tMin, tMax)) return false;
 
     if (node->isLeaf()) {
         bool hitAnything = false;
         for (int idx : node->triangleIndices) {
             HitRecord tempRec;
-            if ((*triangleData)[idx].intersect(ray, tMin, tMax, tempRec)) {
+            if (triangles[idx].intersect(ray, tMin, tMax, tempRec)) {
                 hitAnything = true;
                 tMax = tempRec.t;
                 rec = tempRec;
@@ -124,9 +125,9 @@ bool KdTree::intersectNode(const KdNode* node, const Ray& ray,
         return hitAnything;
     }
 
-    bool hitLeft = intersectNode(node->left.get(), ray, tMin, tMax, rec);
+    bool hitLeft = intersectNode(triangles, node->left.get(), ray, tMin, tMax, rec);
     if (hitLeft) tMax = rec.t;
-    bool hitRight = intersectNode(node->right.get(), ray, tMin, tMax, rec);
+    bool hitRight = intersectNode(triangles, node->right.get(), ray, tMin, tMax, rec);
 
     return hitLeft || hitRight;
 }

@@ -228,11 +228,19 @@ designed for **runtime procedural generation from the start** — not as "load
 from disk" pipelines with procgen bolted on later. Every asset type should be
 constructible programmatically as a first-class path.
 
+**This tier is the procgen substrate (ADR-0021).** Every generator is
+`(parameters, seed) → content`, where `content` is one of a few value types:
+`Mesh` (3.3), `Material`/`Texture` (3.2), `Field` (Rⁿ→scalar — SDF/noise, Tier
+4), all owned by the asset manager (3.1). So 3.1/3.2/3.3 plus a noise library
+(3.7) are not a precursor to procgen — they are the value types it emits. Build
+them first; Tier 4 stands on them.
+
 ### 3.1 Asset / resource system
-**Status:** Started — handle migration done (`MeshHandle`/`BufferHandle` →
-`Handle`/`SlotMap`, ADR-0007); the `AssetManager` itself is not yet built and
-needs design discussion (formats, async loading, animation — a large
-undertaking).
+**Status:** In design — handle migration done (`MeshHandle`/`BufferHandle` →
+`Handle`/`SlotMap`, ADR-0007); the `AssetManager` design is in
+`docs/asset-system-plan.md` (owns GPU resource lifetime, dedup, refcounting,
+async seam). It is the keystone of the procgen substrate (ADR-0021) and the fix
+for the editor mesh-leak tech debt. **Next to build.**
 **Why:** The engine needs a unified way to create, own, and reference meshes,
 textures, and materials — whether loaded from disk or generated at runtime.
 
@@ -331,40 +339,121 @@ cooking live in the editor's asset browser.
 
 ---
 
+### 3.7 Noise library
+**Status:** Not started
+**Why:** Perlin / Simplex / value noise + FBM + domain warp. Foundational to
+terrain, procedural textures, and clouds; tiny, pure math, no deps,
+Linux/CI-testable. Slotted into Tier 3 (not 4) because it is a value-type
+building block, not a generator. Seedable (ADR-0021/0002).
+
+**Depends on:** Nothing. Pairs with the mesh builder (3.3).
+
+---
+
 ## Tier 4 — Procedural Generation
 
-The creative core. Each subsystem generates content using the Tier 3 pipeline.
+The creative core. **Strategy is fixed by ADR-0021:** build a C++ *library of
+composable generators* over the Tier 3 value types (`Mesh`/`Field`/`Material`/
+`Frame`), deterministic from a seed; distill a node graph / DSL only after
+several generators expose what it must express; pursue geometric modeling via
+SDF/implicit functions, not a B-rep kernel. The phases below sequence the
+substrate before the language before the big applications.
 
-### 4.1 L-systems / grammar framework
-A parametric L-system engine: axiom + production rules → symbol strings →
-interpreted as geometry (turtle graphics in 3D). Start with simple branching
-structures (trees, bushes, coral), then extend to stochastic and context-
-sensitive grammars.
+### Phase A — Generator substrate
+A deterministic evaluation context (seeded RNG streams, parameter binding) and
+the `Field` value type alongside the Tier 3 `Mesh`/`Material`. A `Field` is
+Rⁿ→scalar — the home of noise (3.7) and SDFs — sampleable, maskable, and
+meshable.
 
-**Depends on:** Mesh generation API (3.3), material system (3.2).
+- **A.1 SDF / implicit modeling + mesher.** CSG via min/max, smooth blends via
+  smooth-min; mesh a field to a `Mesh` (marching cubes first, dual contouring
+  later for sharp features). The in-house, robust analog to a Plasticity/
+  Parasolid B-rep kernel (ADR-0021) — and the basis for organic shapes,
+  terrain, and clouds. **Prioritized (June 2026 feedback):** it is the clean fix
+  for *welded* organic geometry — kit-bashed L-system cylinders are disjoint and
+  self-intersecting; skinning branches as smooth-min'd capsules and meshing the
+  field yields one continuous surface. It is also the heart of "a rock is a
+  generator graph": a rock becomes a few SDF ops with tunable params, not
+  rock.cpp.
 
-### 4.2 Terrain generation
-Noise-based heightfield generation (Perlin, Simplex, domain-warped FBM) with
-hydraulic/thermal erosion. Chunked LOD for large worlds. Biome assignment
-driving material selection.
+### Phase B — Three generators, one substrate
+Implement one of each paradigm on the shared value types, to surface what they
+truly share before any language:
+- **B.1 L-systems / grammar** — parametric, stochastic, context-sensitive;
+  turtle-interpreted to a `Mesh`. Trees/bushes/coral first; the path to
+  split/shape grammars for buildings (CityEngine-style) later.
+- **B.2 Noise heightfield terrain** — FBM/domain-warp (3.7) → heightfield →
+  `Mesh`; biome assignment drives `Material` selection. Erosion (hydraulic/
+  thermal) and chunked LOD as it scales. Physics (2.3) can drive erosion.
+- **B.3 SDF CSG shape** — a small modeling example over Phase A.1.
+- **B.4 Scatter / distribution** — the `Frame` generator: place instances over a
+  surface or volume with seeded density rules (slope, altitude, a noise mask),
+  emitting a set of transforms. The bridge between terrain (Field/Mesh), the
+  asset meshes, and instanced rendering. This is where the value types compose.
 
-**Depends on:** Mesh generation API (3.3), material system (3.2). Enhanced by
-physics (2.3) for erosion simulation.
+**Instanced rendering (pulled forward from Tier 5) — done.** The substrate's
+whole payoff is "thousands of the same mesh" (forests, fields, fleets), so
+instancing is a Phase B prerequisite, not a late optimization. Implemented: an
+`InstanceGroup` component (shared `MeshHandle` + baked world matrices) and a
+`Renderer::drawMeshInstanced` seam (default loops `drawMesh`; the Metal backend
+coalesces by mesh handle into instanced draws). `loadVegetation` emits one group
+per species. Coarse group-cull only for now; per-instance/chunk culling is Tier 5.
+See `docs/forest-arena-plan.md`.
 
-### 4.3 Procedural textures and materials
-Noise-driven texture synthesis, weathering, aging, and material variation.
-Operates on the material system (3.2) to create runtime texture data without
-authored assets.
+### Phase B milestone — "The Forest" arena
+The integration target that proves Phases A–B end to end and exercises every
+value type at once: a procedural heightfield terrain, slope/altitude-based
+material, L-system trees + noise-displaced rocks generated into the asset
+manager, scattered by the thousands with sensible density and drawn instanced,
+under an HDR sky. Full plan: `docs/forest-arena-plan.md`. Most of the pipeline
+is headless/CI-testable; only the final render needs macOS.
 
-**Depends on:** Material system (3.2), asset system (3.1).
+**Flora is now authorable in Lua** (ADR-0023/0024): `assets/scripts/flora.lua`
+provides `flora.tree/rock/grass/flower` over the procgen builders — stochastic,
+upward-tapering trees with **real leaf cards** (not SDF blobs), three species,
+plus rocks/grass/flowers. The level loader accepts a `{ "kind":"script" }`
+vegetation species (inline Lua or a `.lua` path), so Lua-generated flora scatters
+in alongside the C++ tree/rock species; `assets/levels/forest.json` uses it. A
+second `foliage` block runs an independent, denser scatter pass for ground cover
+(grass/flowers) with a low `maxSlopeDeg`, so it lands on the gentle, green ground
+(`terrainColor` reads steep slopes as rock). Generation is headless-tested
+(`tests/test_flora.cpp`); the look needs macOS.
+Supporting bindings: `lsystem.segments/leaves`, `mesh.orient`, `sdf.smooth_union_all`,
+and a `TurtleParams.taper` for continuous trunk thinning.
 
-### 4.4 City / road layout generation
-Road networks (L-systems, tensor fields, or agent-based), lot subdivision,
-building placement and facade generation. This is where L-systems (4.1),
-terrain (4.2), mesh generation (3.3), and physics (2.3) converge.
+### Phase C — The procgen language (distilled, not designed up front)
+Only after Phase B. A text authoring layer over the value types
+(`Mesh`/`Field`/`Frame`/attributes), distilled *from* what the Phase B
+generators shared, per ADR-0021.
 
-**Depends on:** Terrain (4.2), L-systems (4.1), mesh generation (3.3),
-physics (2.3).
+The language is **Lua** (ADR-0023): one embedded VM with separate binding
+surfaces, built **procgen-first** (the pure/deterministic substrate, callable
+later by the effectful gameplay surface), sealed behind a Jolt-style `ScriptVM`
+(no `lua_*` types in headers). This also lands the engine's general scripting
+layer for gameplay (ADR-0024).
+
+A node-graph evaluator was prototyped (Phases 1–3) as a parallel *visual*
+front-end but **removed** (ADR-0025): Lua became the path actually used and the
+graph never grew a canvas or a graph↔Lua bridge. Lua is now the single procgen
+authoring path; any future visual editor should emit Lua rather than be a second
+evaluator.
+
+### Phase D — Applications (by appetite)
+Each composes Phases A–C:
+- **Procedural textures/materials** — noise-driven synthesis, weathering,
+  variation feeding the material system (3.2).
+- **Voxel terrain** — volumetric representation (caves/overhangs/destruction);
+  meshed via Phase A.1; commits to chunking + LOD (Tier 5).
+- **Procedural clouds** — volumetric FBM, raymarched (renderer-side).
+- **City / road layout** — split-grammar buildings, road networks (L-systems /
+  tensor fields / agent-based), lot subdivision. Converges B.1 + B.2 + meshing.
+- **Procedural planet** — cube-sphere quadtree LOD + spherical terrain +
+  atmosphere. The capstone.
+
+### Separate track — temporal generators
+Particles and bullet patterns share the seeded-RNG + parameter substrate but
+are **simulation, not static geometry** (ADR-0021); they live in their own
+subsystem rather than the mesh/field pipeline.
 
 ---
 
@@ -376,8 +465,13 @@ Items that become relevant as the world grows large.
   efficient queries over large generated worlds.
 - **LOD system** — distance-based level of detail for procgen meshes and
   terrain chunks.
-- **Instanced rendering** — draw thousands of generated trees/buildings
-  efficiently.
+- **Instanced rendering** — *done (Tier 4 Phase B):* an `InstanceGroup` component
+  (mesh + baked world matrices) + a `Renderer::drawMeshInstanced` seam; scattered
+  vegetation collapses into one group per species instead of an entity per plant.
+  The default `drawMeshInstanced` loops `drawMesh`, which the Metal backend
+  already coalesces into instanced draws. *Per-instance LOD and chunk culling for
+  huge worlds remain here* (group bounds are coarse today), plus growing the
+  `MAX_INSTANCES` buffer / a direct Metal instanced path.
 - **Mixed precision / large world coordinates** — revisit ADR-0005 when float
   positions lose precision at world scale.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction

@@ -5,6 +5,8 @@
 #include "state_stack.h"
 #include "world.h"
 #include "clock.h"
+#include "asset_manager.h"
+#include "mesh_uploader.h"
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
@@ -56,6 +58,7 @@ public:
 
     World& world() { return worldState; }
     Renderer& renderer() { return *rendererPtr; }
+    AssetManager& assets() { return *assetManager; }
     RenderView& renderView() { return view; }
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
@@ -70,6 +73,12 @@ private:
 
     std::unique_ptr<Window> window;
     std::unique_ptr<Renderer> rendererPtr;
+    // The asset manager drives the renderer through a seam adapter; both are
+    // created in initialize() once the renderer exists, and destroyed (reverse
+    // order) before it. ~AssetManager is trivial — GPU teardown is the
+    // renderer's job at shutdown — so the order is safe regardless.
+    std::unique_ptr<RendererMeshUploader> meshUploader;
+    std::unique_ptr<AssetManager> assetManager;
     World worldState;
     SimClock clock;
     Settings settingsStore;

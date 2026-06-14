@@ -22,6 +22,10 @@ struct Vertex {
     Vec3 normal;
     Vec3 tangent;
     float u, v;
+    // Per-vertex tint, multiplied with the material albedo in the shader.
+    // Default white = no tint, so existing meshes are unaffected. Generators
+    // bake it (e.g. terrain height/slope coloration).
+    Vec3 color{1, 1, 1};
 
     Vertex() : u(0), v(0) {}
     Vertex(const Vec3& pos, const Vec3& norm, float u = 0, float v = 0)
@@ -259,6 +263,16 @@ public:
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
+    // Draw many instances of one mesh (world-space transforms, one material for
+    // all). Default loops drawMesh: backends that batch by mesh handle (the Metal
+    // backend) already coalesce these into a single instanced draw, so the win
+    // here is CPU-side (one InstanceGroup vs. thousands of entities). A backend
+    // may override for a more direct path. (std::span is C++20; we are C++17.)
+    virtual void drawMeshInstanced(MeshHandle handle,
+                                   const std::vector<Mat4>& transforms,
+                                   const RenderMaterial& material) {
+        for (const Mat4& m : transforms) drawMesh(handle, m, material);
+    }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
     virtual void endFrame() = 0;
 
@@ -275,8 +289,12 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
-    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals
+    // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
+    // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
     int debugView = 0;
+
+    // Wireframe: 0=off, 1=wireframe only, 2=wireframe overlaid on the shaded image
+    int wireframe = 0;
 
     // Lens effects of the active view's LensParams (docs/virtual-camera-plan.md):
     // a final image-space warp pass (distortion + chromatic aberration +
@@ -310,6 +328,7 @@ public:
         float thicknessFar  = 2.0f;
         float stride        = 2.0f;
         float blendStrength = 0.5f;
+        float maxRoughness  = 0.6f;   // surfaces rougher than this don't reflect
     } ssrParams;
 
     // SSAO tuning parameters
@@ -318,9 +337,20 @@ public:
         float intensity = 0.8f;
         float bias      = 0.05f;
         float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
-        int directions  = 4;
-        int steps       = 4;
+        int directions  = 6;       // more angular samples -> less banding
+        int steps       = 8;       // denser radial samples -> smoother (less blocky)
+        float temporal  = 0.9f;    // history blend weight: higher = steadier but
+                                   // more ghosting in motion; 0 disables temporal AO
     } ssaoParams;
+
+    // Cascaded shadow maps (sun). The view frustum is split into `cascadeCount`
+    // ranges out to `distance`; each gets its own shadow-map slice fit tightly to
+    // it, so near geometry is crisp and far geometry stays covered (no slice).
+    struct ShadowParams {
+        float distance    = 150.0f;  // furthest range that receives sun shadows (m)
+        int   cascadeCount = 3;      // 1..RT_MAX_CASCADES
+        float splitLambda  = 0.6f;   // 0 = uniform splits, 1 = logarithmic
+    } shadowParams;
 
     static std::unique_ptr<Renderer> create();
 };

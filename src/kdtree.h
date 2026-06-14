@@ -36,7 +36,12 @@ struct KdNode {
 class KdTree {
 public:
     void build(const std::vector<Triangle>& triangles);
-    bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
+    // The live triangle array is supplied at query time rather than cached as a
+    // pointer: the tree stores only indices, so it stays valid when the owning
+    // Scene is copied or moved (a cached pointer would dangle to the source's
+    // vector). The caller passes the SAME vector it built from.
+    bool intersect(const std::vector<Triangle>& triangles, const Ray& ray,
+                   double tMin, double tMax, HitRecord& rec) const;
     bool isEmpty() const { return !root; }
 
 private:
@@ -44,11 +49,11 @@ private:
     static const int MIN_TRIANGLES = 4;
 
     std::unique_ptr<KdNode> root;
-    const std::vector<Triangle>* triangleData = nullptr;
 
-    std::unique_ptr<KdNode> buildRecursive(const std::vector<int>& indices, int depth);
-    bool intersectNode(const KdNode* node, const Ray& ray,
-                       double tMin, double tMax, HitRecord& rec) const;
+    std::unique_ptr<KdNode> buildRecursive(const std::vector<Triangle>& triangles,
+                                           const std::vector<int>& indices, int depth);
+    bool intersectNode(const std::vector<Triangle>& triangles, const KdNode* node,
+                       const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
 };
 
 

@@ -26,6 +26,7 @@ namespace engine {
 #endif
 
 #define RT_MAX_LIGHTS 32
+#define RT_MAX_CASCADES 4
 
 struct CameraUniforms {
     simd_float4x4 viewProjection;
@@ -122,6 +123,13 @@ struct ShadowUniforms {
     float   shadowStrength;  // 0 = shadows off, 1 = full occlusion of direct light
     float   ambientStrength; // how much shadow also occludes the ambient/IBL terms
     float   _pad[2];
+    // Cascaded shadow maps (sun): per-cascade light view-projection (into the
+    // matching slice of the shadow-map array) and the view-space far distance of
+    // each cascade for selection. cascadeCount active cascades, 0..RT_MAX_CASCADES.
+    simd_float4x4 cascadeViewProjection[RT_MAX_CASCADES];
+    simd_float4   cascadeSplit;   // view-space far depth of cascades 0..3 in x..w
+    int32_t       cascadeCount;
+    float         _pad2[3];
 };
 
 // Environment selection (ADR-0016). mode 0 = procedural sky, 1 = HDR cube.
@@ -157,7 +165,8 @@ struct SSRUniforms {
     float thicknessFar;
     float stride;
     float blendStrength;
-    float _pad[3];
+    float maxRoughness;   // SSR fades to 0 by this roughness (rough = no mirror)
+    float _pad[2];
 };
 
 struct SSAOUniforms {
@@ -167,6 +176,16 @@ struct SSAOUniforms {
     int32_t directions;
     int32_t steps;
     float   _pad[3];
+};
+
+// Temporal AO reprojection (kills foliage flicker from G-buffer aliasing).
+// prevViewProjection reprojects this frame's world position into last frame's
+// screen to fetch the history AO; alpha is the history blend weight (0 on the
+// first frame / after a resize, when no valid history exists yet).
+struct AOTemporalUniforms {
+    simd_float4x4 prevViewProjection;
+    float         alpha;
+    float         _pad[3];
 };
 
 struct BloomUniforms {

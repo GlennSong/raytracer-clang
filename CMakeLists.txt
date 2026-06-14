@@ -37,6 +37,13 @@ add_library(engine_core STATIC
     src/engine/states/debug_overlay_state.cpp
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
+    src/engine/asset_manager.cpp
+    src/engine/procgen/noise.cpp
+    src/engine/procgen/terrain.cpp
+    src/engine/procgen/lsystem.cpp
+    src/engine/procgen/rock.cpp
+    src/engine/procgen/scatter.cpp
+    src/engine/procgen/sdf.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -105,6 +112,47 @@ if(RT_ENABLE_IMGUI)
     endif()
 endif()
 
+# ============================================================
+# Lua scripting (ADR-0023) — pure ANSI-C, builds and runs headless like Jolt, so
+# it compiles into engine_core (no GPU/OS deps). Sealed behind ScriptVM; the
+# sandbox opens only the pure stdlibs. The lua/lua source ships no build, so we
+# compile its core ourselves, excluding the lua.c/luac.c stand-alone mains.
+# ============================================================
+option(RT_ENABLE_SCRIPTING "Build the Lua scripting layer" ON)
+if(RT_ENABLE_SCRIPTING)
+    set(LUA_DIR ${CMAKE_SOURCE_DIR}/third_party/lua)
+    if(NOT EXISTS ${LUA_DIR}/lua.h)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "Lua submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init third_party/lua
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${LUA_DIR}/lua.h)
+        message(FATAL_ERROR
+            "Lua submodule not found at third_party/lua.\n"
+            "Fetch it with:  git submodule update --init third_party/lua\n"
+            "or configure with -DRT_ENABLE_SCRIPTING=OFF to build without scripting.")
+    endif()
+
+    file(GLOB LUA_SOURCES ${LUA_DIR}/*.c)
+    list(REMOVE_ITEM LUA_SOURCES ${LUA_DIR}/lua.c ${LUA_DIR}/luac.c)
+    add_library(lua_static STATIC ${LUA_SOURCES})
+    target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
+    target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
+
+    target_sources(engine_core PRIVATE
+        src/engine/scripting/script_vm.cpp
+        src/engine/scripting/procgen_bindings.cpp
+        src/engine/scripting/gameplay_bindings.cpp
+        src/engine/scripting/script_system.cpp
+    )
+    target_link_libraries(engine_core PUBLIC lua_static)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
+endif()
+
 # Offline path-tracer sources (the tracer's own scene/camera/image stack).
 set(CORE_SOURCES
     src/image.cpp
@@ -114,6 +162,7 @@ set(CORE_SOURCES
     src/scene.cpp
     src/kdtree.cpp
     src/level_scene.cpp
+    src/path_tracer.cpp
 )
 
 # ============================================================
@@ -153,10 +202,29 @@ add_executable(run_tests
     tests/test_frustum.cpp
     tests/test_day_night.cpp
     tests/test_cube_faces.cpp
+    tests/test_path_tracer.cpp
+    tests/test_asset_manager.cpp
+    tests/test_mesh_builder.cpp
+    tests/test_noise.cpp
+    tests/test_terrain.cpp
+    tests/test_lsystem.cpp
+    tests/test_rock.cpp
+    tests/test_scatter.cpp
+    tests/test_sdf.cpp
+    tests/test_instancing.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE engine_core)
+if(RT_ENABLE_SCRIPTING)
+    target_sources(run_tests PRIVATE
+        tests/test_script_vm.cpp
+        tests/test_script_system.cpp
+        tests/test_gun_script.cpp
+        tests/test_flora.cpp)
+    # Lets the gun test read the actual shipped assets/scripts/gun.lua.
+    target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
 

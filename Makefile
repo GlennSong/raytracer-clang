@@ -21,6 +21,7 @@ SRCS = \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/kdtree.cpp \
 	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
@@ -52,7 +53,16 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
-	$(TEST_DIR)/test_cube_faces.cpp
+	$(TEST_DIR)/test_cube_faces.cpp \
+	$(TEST_DIR)/test_path_tracer.cpp \
+	$(TEST_DIR)/test_asset_manager.cpp \
+	$(TEST_DIR)/test_mesh_builder.cpp \
+	$(TEST_DIR)/test_noise.cpp \
+	$(TEST_DIR)/test_terrain.cpp \
+	$(TEST_DIR)/test_lsystem.cpp \
+	$(TEST_DIR)/test_rock.cpp \
+	$(TEST_DIR)/test_scatter.cpp \
+	$(TEST_DIR)/test_sdf.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -75,11 +85,20 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/undo_stack.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
+	$(SRC_DIR)/engine/asset_manager.cpp \
+	$(SRC_DIR)/engine/procgen/noise.cpp \
+	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/rock.cpp \
+	$(SRC_DIR)/engine/procgen/scatter.cpp \
+	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/image.cpp \
+	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/rt_math.cpp
 TEST_TARGET = run_tests
 

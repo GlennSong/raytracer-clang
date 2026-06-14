@@ -1153,6 +1153,358 @@ transforms — promote parenting into a runtime component the simulation resolve
 
 ---
 
+## ADR-0021 — Procgen is a generator library over shared value types, not a language first
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** The long-term vision (ROADMAP) is a procedural-generation engine:
+plants, terrain, cities, planets, clouds, textures — and the open question of a
+single "procgen language" spanning meshes, buildings, roads, particles,
+shaders, and bullet patterns. The temptation is to design that unifying language
+up front. We need to fix the *shape* of the procgen effort before committing
+Tier 3/4 work to it.
+
+**Decision.** Every generator is `(parameters, seed) -> content`, and `content`
+is one of a small set of **value types**: `Mesh`, `Field` (Rⁿ→scalar — SDF /
+noise), `Material`/`Texture`, and `Frame` (transform sets / instancing). Those
+value types *are* Tier 3 — the asset manager (3.1) owns them, the mesh builder
+(3.3) is the `Mesh` type, the material system (3.2) is the `Material` type — so
+the content pipeline is the **procgen substrate**, not a precursor to it.
+
+From that, four commitments:
+1. **Build bottom-up as a C++ library of composable generators** over the value
+   types, with a deterministic evaluation context (seeded RNG streams +
+   parameter binding; fits the determinism stance of ADR-0002). Prove it across
+   three paradigms on the *same* types — a grammar (L-system), a field (noise
+   heightfield), an implicit shape (SDF CSG).
+2. **The "procgen language" (node graph and/or text DSL, Blender-geometry-nodes
+   style) is a presentation layer distilled from the working library, AFTER
+   three generators exist** — never designed first.
+3. **Geometric modeling (Plasticity-style) is pursued via SDF / implicit
+   modeling**, not a B-rep kernel: booleans/blends are min / max / smooth-min,
+   meshed by marching cubes → dual contouring.
+4. **Temporal generators (particles, bullet patterns) share the seeded-RNG +
+   parameter substrate but live on a separate simulation track**, not the
+   static-geometry pipeline.
+
+**Alternatives considered.**
+- *Language/graph first* — rejected: designing the unifying DSL with zero
+  working generators means guessing the abstraction (a Turing-tarpit /
+  lowest-common-denominator trap). Houdini (VEX/SOPs) and Blender (geometry
+  nodes) grew the graph *over* an operation library, not the reverse.
+- *One representation for everything* — rejected: grammars, dataflow, fields,
+  and B-rep are genuinely different paradigms; the only real shared layer is the
+  evaluation substrate + value types, not the pipeline.
+- *B-rep / Parasolid for modeling* (as Plasticity uses) — rejected: a licensed
+  commercial kernel, multi-year to roll in-house, and against both the
+  no-new-dependencies rule (AGENTS.md) and the engine's procgen-robustness
+  priorities. SDF is the achievable, composable analog.
+
+**Consequences / tech debt.**
+- Tier 3 (asset manager / material / mesh builder) is reframed as the procgen
+  *value-type layer* and prioritized as foundation; a noise library joins it.
+- No procgen syntax is committed now; the language is deferred until three
+  generators expose what it must express.
+- SDF modeling forgoes exact-CAD precision (acceptable for a generation engine,
+  not a CAD tool).
+- All generators must be seed-deterministic, to match ADR-0002 and keep
+  generated worlds reproducible.
+
+**Revisit trigger.** After three generators exist on the substrate, revisit
+whether a node graph and/or DSL is worth building and what it must express —
+driven by what the generators actually share. Revisit B-rep only if exact-CAD
+*authoring* (not generation) becomes a goal.
+
+---
+
+## ADR-0022 — Procedural objects: generators as data, and the realness spectrum
+**Status:** Accepted · **Date:** 2026-06-13
+
+**Context.** The first generators (terrain, L-system trees, rocks, scatter) are
+hand-written C++ (`rock.cpp`, `lsystem.cpp`, ...). The intent (ADR-0021) is that
+these become *data* — node graphs / scripts an author composes from the mesh +
+noise + SDF tools — so "a rock is a generator graph, not a rock.cpp file", and
+the same generator can fill a level at runtime or be baked to a static asset.
+Two things need pinning down: how generators are structured so they can evolve
+into data, and how "real" a procedural object is (today they don't appear in the
+editor and can't be selected/edited).
+
+**Decision.**
+1. **A generator is a uniform `(params, seed) -> Mesh (+ Material)` producer**
+   over the tool library (mesh builder, noise, and SDF when it lands). The C++
+   generators are the *bootstrap*: they define the vocabulary of operations a
+   later node-graph evaluator (ADR-0021 Phase C) will expose as data. The same
+   substrate evaluates a hand-written C++ generator and a graph asset, so code
+   today migrates to data later without changing consumers.
+2. **Generators live under `src/engine/procgen/`** (terrain, lsystem, rock,
+   scatter, noise as the field primitive), separate from general tools the rest
+   of the engine uses (mesh builder stays in `engine/`).
+3. **Realness spectrum** — a procedural thing takes one of three forms, chosen
+   per use, all driven by the *same* generator:
+   - **Runtime-procedural**: regenerated from a recipe every load; not a
+     document entity; not editable; cheap space-filling (today's terrain +
+     scattered vegetation).
+   - **Baked static asset**: the generator runs offline → a mesh + material on
+     disk → placed/edited/collided like any authored asset; fixed geometry,
+     reusable.
+   - **Editable procedural instance** (future): a generator instance in the
+     document with tunable params, pickable and re-runnable in the editor —
+     needs the node graph + editor authoring UI.
+4. **A coherent level is a mix**: authored entities + runtime-procedural recipes
+   (fill/scatter) + baked assets. The recipe-vs-bake choice is per-object,
+   driven by whether it must be edited, collided precisely, or reused exactly.
+
+**Alternatives considered.**
+- *Keep generators as bespoke C++ indefinitely* — rejected: every new content
+  type would be a code change; the author can never compose new things without a
+  programmer. The node-graph-as-data path is the whole point (ADR-0021).
+- *Make procedural objects full editable document entities now* — rejected:
+  premature; needs the node graph and stable per-instance identity first. They
+  stay runtime-regenerated until then (tech-debt item below).
+
+**Consequences / tech debt.**
+- Procedural objects (terrain, vegetation) are intentionally **not shown or
+  editable in the editor** — they carry no `SourceSpec`, so they're regenerated
+  runtime objects, not document entities. Tracked in the register; the "which
+  realness tier" decision per content type is deferred.
+- No baking pipeline or node graph yet; the C++ generators are the stand-in.
+
+**Revisit trigger.** When the node-graph evaluator (ADR-0021 Phase C) lands,
+generators become authorable data — revisit editor authoring of generator
+instances and the bake-to-static-asset pipeline then.
+
+---
+
+## ADR-0023 — Lua as the embedded scripting language: one VM, procgen-first, separate binding surfaces
+**Status:** Accepted — Step 1 **implemented** (Lua 5.4.7 vendored + built; sandboxed `ScriptVM` seal; the procgen binding surface — `sdf.*`/`noise.*`/`polygonize` → Field/Mesh — headless-tested in `tests/test_script_vm.cpp`, incl. a script-vs-C++-substrate equivalence check). Gameplay surface, hot-reload, and graph↔script interop are follow-ups. · **Date:** 2026-06-14
+
+**Context.** The engine needs a scripting layer for two purposes that have so far
+been served by C++ only. (1) **Procgen authoring.** ADR-0021 fixed procgen as a
+C++ library of composable generators with the *language* — "node graph **and/or
+text DSL**, distilled from the working library" — deferred until generators
+exist. They now do (terrain, L-systems, SDF rocks, scatter), and the node-graph
+evaluator (ADR-0021 Phase C, `docs/node-graph-plan.md`) has shipped Phases 1–3.
+The node graph is the **visual** presentation layer; the "text DSL sugar on top"
+that ADR-0021/ROADMAP Phase C foreshadowed is still unbuilt. (2) **Gameplay.**
+There is no way to express behaviour (triggers, spawns, level logic, tuning)
+without recompiling; the engine is a `System`/ECS C++ binary end to end. Both
+wants point at the same missing piece — an embedded interpreter — so the question
+is which language, and how it relates to the node graph and the existing seams.
+
+A hard constraint rides along: AGENTS.md forbids new third-party dependencies
+without an ADR (ADR-0016 refined the rule to *"no **new** dependencies"*; vendored
+libs already built — Jolt, ImGui, tinygltf, stb — are accepted). A scripting VM
+is unambiguously a new dependency. This ADR is that authorization.
+
+**Decision.**
+
+1. **Embed Lua.** Adopt Lua (5.4.x) as the engine's scripting language. It is a
+   tiny, self-contained ANSI-C interpreter built for embedding, and is the
+   gamedev de-facto standard for exactly this role.
+
+2. **One VM, separate binding surfaces.** A single interpreter implementation
+   backs both uses; what differs is *which API is exposed*. Two binding surfaces:
+   - **Procgen surface (pure/deterministic).** Binds the generator substrate
+     (mesh builder, noise, SDF ops, L-system, scatter, polygonize) and nothing
+     with ambient state. A procgen script is `(params, seed) -> content`, the
+     same contract as a C++ generator (ADR-0021/0022) and a node graph. No
+     wall-clock, no ambient RNG, no `io`/`os` — randomness only through seeded
+     streams. This makes procgen scripts reproducible (ADR-0002) and safe to run
+     on worker threads.
+   - **Gameplay surface (effectful).** Binds ECS/world access, input, events,
+     spawning, etc. — and **may call the procgen surface** (gameplay is the
+     effectful layer that orchestrates the pure one), never the reverse.
+
+3. **Procgen-first.** Build the procgen binding surface first. It is the
+   smaller, purer, already-specified surface (the node graph names the exact
+   vocabulary), it is fully **headless/Linux-testable** (like Jolt — pure C/C++,
+   no GPU/OS), and doing Lua once procgen-first avoids throwaway gameplay
+   plumbing. The Lua text script and the node graph are **two front-ends over the
+   same C++ substrate** (ADR-0021/0022): the graph for visual authoring, Lua for
+   text authoring and anything imperative the graph is awkward for. Neither
+   replaces the other; both lower to the same generator functions.
+
+4. **Seal Lua behind a `ScriptVM`** — a pimpl whose header carries no `lua_*`
+   type, exactly as `Window` seals GLFW (ADR-0001) and `PhysicsWorld` seals Jolt
+   (ADR-0012). Engine/game code speaks our types and an opaque VM handle; the
+   `lua_State` and C API live only in the `.cpp`. One `lua_State` **per thread**
+   (Lua has no global lock / GIL — see below), so the procgen surface is
+   naturally parallel on the shared pool (ADR-0014): a `parallelFor` over species
+   can each drive their own VM with no contention.
+
+5. **Vendor as a pinned git submodule** under `third_party/lua`, built as a small
+   static library by CMake — matching how Jolt and ImGui are vendored (clean
+   tree, explicit version). Cross-platform pure C, so it builds and is tested in
+   CI/Linux; the std-lib-only **offline tracer (`make`) is untouched** —
+   scripting is an engine/CMake concern, like physics.
+
+6. **Hand-written bindings over the raw C API first; defer a binding library.**
+   The procgen surface is a few dozen functions; bind them by hand behind
+   `ScriptVM` rather than pulling in a C++ binding lib (sol2/LuaBridge) — which
+   would be a *second* new dependency. Revisit sol2 only if binding boilerplate
+   measurably dominates (the ADR-0008 "measure first" ethos).
+
+**Alternatives considered.**
+- **Python (CPython / pybind11)** — rejected for the *runtime*. The GIL
+  serializes script execution across threads, which is backwards for procgen
+  fan-out on the JobSystem (ADR-0014); the runtime + stdlib is multi-MB to
+  deploy vs. Lua's kilobytes; embedding ergonomics and per-call cost are heavier;
+  and there's a minor determinism caveat (hash-seed/iteration order). Python's
+  real strength is familiarity/ecosystem, which belongs to **offline tooling**
+  (asset cooking, build/editor automation), not the engine runtime — left open as
+  a separate, non-embedded option.
+- **A hand-rolled DSL / interpreter** — rejected: re-implements lexer/parser/VM/
+  GC/error handling that Lua already provides, tuned and battle-tested, for less
+  capability and more maintenance. The node graph already covers the *visual*
+  DSL; a bespoke *text* VM is the wheel Lua is.
+- **Node graph only, no text language** — rejected: ADR-0021 explicitly named
+  "graph **and/or** DSL"; graphs are clumsy for imperative logic (loops,
+  conditionals, gameplay rules), and a text surface is the right tool there. They
+  coexist over one substrate.
+- **A parser-library-based DSL** (ANTLR, etc.) — rejected: still a new dependency,
+  and yields only a parser — we'd still hand-build the runtime Lua already is.
+
+**Consequences / tech debt.**
+- Adds the first **new** third-party dependency since the ADR-0016 rule refinement
+  (engine/CMake scope; the offline tracer stays std-lib-only). Requires
+  `git submodule update --init`; CLAUDE.md/AGENTS.md updated to list it.
+- **Two procgen front-ends now coexist** (node graph + Lua) over one C++
+  substrate. Graph↔script interop (a "Script" node; or a graph callable from
+  Lua) is a deliberate **open question**, not built here — kept open by the fact
+  both lower to the same generator functions.
+- The procgen surface must be a **deterministic sandbox** (no `io`/`os`/ambient
+  time, seeded RNG only); enforced by *what we bind*, not by trusting scripts.
+- Per-thread `lua_State`s mean procgen scripts must not share mutable VM state
+  across threads — fits the "independent work only" contract of `parallelFor`
+  (ADR-0014).
+- No gameplay surface, hot-reload, or debugger yet — explicit follow-ups; the
+  gameplay bindings touch the ECS and are the larger, later surface.
+
+**Revisit trigger.** Binding boilerplate dominating (→ adopt sol2, a second
+dependency, with its own ADR); per-frame gameplay script cost showing in a
+profile (→ JIT via LuaJIT, or move hot paths to C++); needing offline
+tooling/automation (→ reconsider Python *there*, non-embedded); or graph↔script
+interop becoming a real authoring need (→ design the bridge then).
+
+---
+
+## ADR-0024 — Gameplay scripting: a MonoBehaviour-style `ScriptBehaviour` over the ECS
+**Status:** Accepted — **implemented** (effectful gameplay surface — entity/input/camera/spawn; `ScriptBehaviour` component + `ScriptSystem` with a headless `tick` + a deferred spawn command buffer; per-entity instance tables; start/update lifecycle). Proven by porting the C++ `ShootingSystem` to `assets/scripts/gun.lua` — a physics-block gun attached to the player, covered headlessly by `tests/test_script_system.cpp` and `tests/test_gun_script.cpp` (runs the real asset). Wired into `ArenaState` in place of `ShootingSystem` (macOS/viewer-gated, so CI-unverified per the standing backend constraint). Destroy-from-script, hot-reload, and ref cleanup remain follow-ups. · **Date:** 2026-06-14
+
+**Context.** ADR-0023 chose Lua, built the *procgen* (pure/sandboxed) surface
+first, and deferred the *gameplay* (effectful) surface. The open question it left:
+how does a script become behaviour on an entity? The reference the user named is
+Unity's **MonoBehaviour** — a script with `Start()`/`Update()` attached to a
+GameObject. Our engine already has that exact lifecycle at the C++ level: a
+`System` has `onStart`/`update`/`fixedUpdate`/`onEvent`/`render`/`onStop`
+(ADR-0004). So the question is really: expose that lifecycle to Lua, per entity,
+without coupling the core ECS to the scripting subsystem or breaking determinism.
+
+**Decision.**
+1. **A `ScriptBehaviour` component = a Lua script on an entity.** Its `source` is
+   a chunk that **`return`s a table** of hooks; that returned table *is* the
+   per-entity instance, so its fields are the behaviour's state — exactly
+   MonoBehaviour members. Hooks mirror the engine lifecycle: `start(self, e)`
+   once, `update(self, e, dt)` each frame (room to add `on_event`, `fixed_update`
+   later). The entity arrives as an opaque packed-Handle integer.
+2. **A `ScriptSystem` drives them.** It owns **one gameplay `ScriptVM`** (effectful
+   bindings, *not* the procgen sandbox), lazily loads each behaviour into its own
+   registry-held instance table, runs `start` once, then `update(e, dt)` every
+   frame. Its core is a headless `tick(World&, double)` (the `PhysicsSystem`
+   pattern), so the whole layer is unit-tested without a window/renderer.
+3. **Effectful surface, the other half of the ADR-0023 split.** `openGameplayLibrary`
+   binds `log`, `entity.*` (position/orientation/`look_along`/`snap_prev`),
+   `input.*` (bound actions), `camera.*` (the active view = aim source), and
+   `spawn.block`/`spawn.model` (deferred). Unlike procgen, these read/**mutate the
+   World**; the per-tick `GameplayContext` (world/input/camera/spawn-buffer) is
+   bound for a tick and cleared after, so nothing stale is reachable between
+   ticks. The ScriptSystem VM **also opens the procgen builders** (they are pure),
+   so a gameplay behaviour can *generate* geometry — e.g. `gun.lua` kit-bashes its
+   own viewmodel and spawns it via `spawn.model`.
+4. **Runs in variable-rate `update()`, never `fixedUpdate()`.** Gameplay scripts
+   are deliberately outside the deterministic stance — physics stays the
+   fixed-step authority (ADR-0002/0012). Frame logic is where MonoBehaviour-style
+   scripts belong.
+5. **`ScriptBehaviour` lives in the scripting module, not core `components.h`.**
+   The ECS stays scripting-agnostic and the entire layer gates on
+   `RT_ENABLE_SCRIPTING`. The component carries only plain ints for its runtime
+   refs — no `lua_*` type leaks into a header (the ADR-0023 seal rule).
+
+**Alternatives considered.**
+- **A Lua *System* (one script ticking a query) instead of a per-entity
+  component** — rejected as the *primary* model: per-entity behaviour is the
+  Unity-familiar, ECS-natural unit and what was asked for. A system-level script
+  surface can be added later as a different binding without disturbing this one.
+- **One `lua_State` per behaviour (or coroutine per entity)** — rejected: one VM
+  per thread is the Lua idiom; per-entity *instance tables* already give state
+  isolation (a test pins it) without N interpreters.
+- **Full ECS reflection from Lua (read/write any component)** — deferred: start
+  with Transform + lifecycle; grow the surface (via the property layer, ADR-0018)
+  as real behaviours demand it, rather than exposing everything speculatively.
+- **Put `ScriptBehaviour` in core `components.h`** — rejected: couples the ECS to
+  the optional scripting dep; keeping it in the module preserves the gate.
+
+**Consequences / tech debt.**
+- **No spawn/destroy from scripts yet.** Scripts only mutate `Transform`, so the
+  `World::each` no-structural-mutation contract (ADR-0006) holds. Entity
+  creation/destruction from Lua needs a deferred command buffer first.
+- **Instance-ref cleanup is missing.** A destroyed entity's `ScriptBehaviour`
+  registry ref is not `luaL_unref`'d, so refs accumulate until the VM closes — a
+  bounded leak for now (tracked below); fix when behaviours churn.
+- **Not hot-reloadable**, and **not yet registered in a running state** — the slice
+  is exercised through `tick()` directly. Wiring `ScriptSystem` into PlayingState
+  (and an editor "attach script" affordance) is the next step.
+- **Single-threaded** gameplay VM (main thread) — fine; procgen keeps the
+  per-thread-VM parallelism story (ADR-0023), gameplay does not need it.
+
+**Revisit trigger.** Scripts needing to spawn/despawn entities (→ deferred command
+buffer, ADR-0006); behaviour churn making the ref leak matter (→ unref on
+component removal / entity destroy); wanting hot-reload; behaviours needing
+fixed-step determinism (→ a `fixed_update` hook on the fixed schedule); or script
+cost in a profile (→ LuaJIT, or move hot logic to C++).
+
+---
+
+## ADR-0025 — Remove the node graph: Lua is the one procgen authoring path
+
+**Status:** Accepted. Supersedes ADR-0021 Phase C and the node-graph half of
+ADR-0023's "two front-ends" framing.
+
+**Context.** ADR-0021 ended with a "procgen language (node graph and/or text
+DSL)" to be distilled from the C++ generator library, and `node-graph-plan.md`
+shipped Phases 1–3: a headless graph engine (`node_graph.{h,cpp}`), JSON
+generators (`*.graph.json`), and a list-style ImGui editor (`NodeEditorSystem`).
+ADR-0023 then chose Lua and explicitly kept the graph as the *visual* front-end
+alongside Lua's *text* front-end — "neither replaces the other."
+
+In practice that balance never materialized. Lua became the authoring path we
+actually use (flora library, gun viewmodel, whole-generator binding surface,
+`test_script_vm`), while the graph stayed a stub: one consumer
+(`rock.graph.json`), a list editor rather than a real canvas, and **no
+graph↔Lua bridge** (the interop ADR-0023 left open was never built). Carrying two
+parallel front-ends over the same substrate is maintenance with no payoff.
+
+**Decision.** Remove the node graph entirely. Lua (ADR-0023/0024) is the single
+procgen + gameplay authoring surface over the C++ generator library
+(ADR-0021/0022). Deleted: `procgen/node_graph.{h,cpp}`,
+`systems/node_editor_system.{h,cpp}`, `tests/test_node_graph.cpp`,
+`assets/generators/rock.graph.json`, `docs/node-graph-plan.md`, and the
+`"graph"` species branch in `level_loader.cpp` (the level loader now resolves a
+species mesh from a built-in generator or a Lua `script`). The forest's rock
+species falls back to the built-in SDF/displaced rock generator.
+
+**Consequences.**
+- One authoring story, one set of bindings to maintain; the C++ generators and
+  the Lua surface are unaffected.
+- Lose visual/dataflow authoring. If a node canvas is ever wanted, it should be
+  re-derived as a thin front-end that *emits Lua* (or calls the same generator
+  functions), not a second evaluator — so it can't drift from the text path.
+- ADR-0021/0023 stay as historical record; this ADR is the live word on Phase C.
+
+**Revisit trigger.** A concrete need for visual authoring by non-programmers, or
+a generator graph too awkward to express as a Lua script.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1173,8 +1525,12 @@ to be replaced; listed here so they stay visible.
 | ~~Transitional namespace shims~~ | ~~core headers + leaf consumers~~ | *Resolved (ADR-0015): the staged `namespace engine` migration is complete; all `using engine::…` aliases removed. Leaf consumers keep a `using namespace engine;` by design.* | — |
 | ~~Projection matrices built in backend~~ | ~~`metal_renderer.mm`~~ | *Resolved (ROADMAP 1.2): `Mat4::perspective`/`orthographic` now build the matrices engine-side; backend calls them via `toSimd`. Perspective depth convention fixed to Metal [0,1]; regression-tested.* | — |
 | No dedicated 2D camera | `renderer/orbit_camera.*` | Ortho via OrbitCamera as stand-in | A pan/zoom 2D camera when 2D is built |
-| Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | Mesh cache keyed by shape+size, or `removeMesh` on world clear |
+| Editor mesh re-uploads leak | `engine/systems/editor_system.cpp`, `level_loader.cpp` | Edit/play cycles and size edits upload new meshes without freeing the old (ADR-0019/0020 editor) | The `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped mesh ownership; `release` on overwrite, `clear()` on world teardown |
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
+| ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
+| Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
+| Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
+| ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 
 ---
 

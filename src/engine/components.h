@@ -7,6 +7,7 @@
 #include "world.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -48,6 +49,21 @@ struct Velocity {
 struct Renderable {
     MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
+};
+
+// Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
+// Replaces "thousands of Renderable entities" for static scatter (the forest):
+// one InstanceGroup carries the shared mesh/material and a baked world matrix per
+// instance, so RenderSystem iterates a handful of groups instead of every plant,
+// culls by the group's bounds, and issues one drawMeshInstanced. The instances
+// are static (no per-instance Transform/interpolation). Per-instance culling /
+// chunking for huge worlds is the Tier 5 follow-up.
+struct InstanceGroup {
+    MeshHandle mesh;
+    RenderMaterial material;
+    std::vector<Mat4> transforms;   // world matrices, one per instance
+    Vec3 boundsCenter;              // world-space group bounds (coarse cull)
+    Real boundsRadius = 0;
 };
 
 // Associates an entity with a local player slot (ADR-0010). This is the only
@@ -108,6 +124,17 @@ struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
     bool lockRotation = false;
+};
+
+// A static triangle-mesh collider (terrain, and later any baked static geometry)
+// the PhysicsSystem turns into one static Jolt mesh body. Separate from Collider
+// because it owns geometry (CPU triangles in world space), not just dimensions.
+// bodyId is filled when the body is created, so it is made exactly once.
+struct MeshCollider {
+    std::vector<Vec3> vertices;
+    std::vector<uint32_t> indices;
+    Real friction = 0.6;
+    PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

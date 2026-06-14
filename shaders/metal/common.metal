@@ -7,6 +7,7 @@ struct Vertex {
     packed_float3 normal;
     packed_float3 tangent;
     packed_float2 texcoord;
+    packed_float3 color;      // per-vertex tint (matches engine Vertex::color)
 };
 
 struct VertexOut {
@@ -15,6 +16,7 @@ struct VertexOut {
     float3 worldNormal;
     float3 worldTangent;
     float2 texcoord;
+    float3 vertexColor;
 };
 
 // VertexOut + per-instance material values carried through interpolation
@@ -25,6 +27,7 @@ struct FragmentData {
     float3 worldNormal;
     float3 worldTangent;
     float2 texcoord;
+    float3 vertexColor;
     float3 albedo;
     float metallic;
     float roughness;

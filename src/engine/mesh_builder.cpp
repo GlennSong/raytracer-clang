@@ -343,4 +343,90 @@ RenderMesh MeshBuilder::capsule(float radius, float height, int stacks, int slic
     return mesh;
 }
 
+// ---------------------------------------------------------------------------
+// Procgen-grade assembly ops (ROADMAP 3.3)
+// ---------------------------------------------------------------------------
+
+void MeshBuilder::append(RenderMesh& dst, const RenderMesh& src) {
+    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
+    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+}
+
+void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
+                                    const Mat4& xform) {
+    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    const Mat4 normalMatrix = xform.inverse().transpose();
+    dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+    for (const Vertex& v : src.vertices) {
+        Vertex out = v;
+        out.position = xform.transformPoint(v.position);
+        out.normal = normalize(normalMatrix.transformDirection(v.normal));
+        out.tangent = normalize(xform.transformDirection(v.tangent));
+        dst.vertices.push_back(out);
+    }
+    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+}
+
+void MeshBuilder::transform(RenderMesh& mesh, const Mat4& xform) {
+    const Mat4 normalMatrix = xform.inverse().transpose();
+    for (Vertex& v : mesh.vertices) {
+        v.position = xform.transformPoint(v.position);
+        v.normal = normalize(normalMatrix.transformDirection(v.normal));
+        v.tangent = normalize(xform.transformDirection(v.tangent));
+    }
+}
+
+RenderMesh MeshBuilder::merged(const std::vector<RenderMesh>& parts) {
+    RenderMesh out;
+    if (!parts.empty()) out.materialIndex = parts.front().materialIndex;
+    for (const RenderMesh& part : parts) append(out, part);
+    return out;
+}
+
+void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
+    for (Vertex& v : mesh.vertices) v.normal = Vec3(0, 0, 0);
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        uint32_t ia = mesh.indices[i], ib = mesh.indices[i + 1], ic = mesh.indices[i + 2];
+        // This engine winds front faces clockwise (a box's +Y face has explicit
+        // normal +Y but a right-hand winding normal of -Y), so the outward
+        // normal is cross(c-a, b-a) — the reverse of the textbook right-hand
+        // rule. Area-weighted (the un-normalized cross scales with face area).
+        Vec3 faceNormal = cross(mesh.vertices[ic].position - mesh.vertices[ia].position,
+                                mesh.vertices[ib].position - mesh.vertices[ia].position);
+        mesh.vertices[ia].normal += faceNormal;
+        mesh.vertices[ib].normal += faceNormal;
+        mesh.vertices[ic].normal += faceNormal;
+    }
+    for (Vertex& v : mesh.vertices) v.normal = normalize(v.normal);
+}
+
+void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high) {
+    if (mesh.vertices.empty()) return;
+    double minY = 1e30, maxY = -1e30;
+    for (const Vertex& v : mesh.vertices) {
+        minY = std::min(minY, static_cast<double>(v.position.y));
+        maxY = std::max(maxY, static_cast<double>(v.position.y));
+    }
+    double range = maxY - minY;
+    for (Vertex& v : mesh.vertices) {
+        double t = range > 1e-6 ? (v.position.y - minY) / range : 0.0;
+        v.color = low + (high - low) * t;
+    }
+}
+
+void MeshBuilder::generatePlanarUVs(RenderMesh& mesh, int axis, float scale) {
+    for (Vertex& v : mesh.vertices) {
+        const Vec3& p = v.position;
+        float uu, vv;
+        if (axis == 0)      { uu = static_cast<float>(p.z); vv = static_cast<float>(p.y); }
+        else if (axis == 2) { uu = static_cast<float>(p.x); vv = static_cast<float>(p.y); }
+        else                { uu = static_cast<float>(p.x); vv = static_cast<float>(p.z); }
+        v.u = uu * scale;
+        v.v = vv * scale;
+    }
+}
+
 }  // namespace engine

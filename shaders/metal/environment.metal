@@ -254,6 +254,17 @@ float3 cubeFaceDir(int face, float2 uv) {
     }
 }
 
+// Clamp a radiance sample's luminance to tame HDR fireflies: a tiny ultra-bright
+// sun disc otherwise sparkles across the IBL at finite sample counts (the
+// speckles on everything when an HDR is used). The sun's *direct* contribution
+// comes from the extracted directional light (ADR-0017), so the IBL only needs
+// the sky — clamping the sun out of the convolution is correct, not a loss.
+constant float IBL_FIREFLY_CLAMP = 16.0;
+inline float3 clampRadiance(float3 c) {
+    float lum = max(c.r, max(c.g, c.b));
+    return (lum > IBL_FIREFLY_CLAMP) ? c * (IBL_FIREFLY_CLAMP / lum) : c;
+}
+
 // GGX importance-sampled radiance prefilter, one (mip, face) per dispatch.
 kernel void prefilterEnvMap(
     texturecube<float> inputCube [[texture(0)]],
@@ -292,7 +303,7 @@ kernel void prefilterEnvMap(
 
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL > 0.0) {
-            prefilteredColor += inputCube.sample(envSampler, L, level(srcLod)).rgb * NdotL;
+            prefilteredColor += clampRadiance(inputCube.sample(envSampler, L, level(srcLod)).rgb) * NdotL;
             totalWeight += NdotL;
         }
     }
@@ -350,7 +361,7 @@ kernel void convolveIrradiance(
         float cosTheta = sqrt(1.0 - Xi.y);
         float sinTheta = sqrt(Xi.y);
         float3 l = T * (cos(phi) * sinTheta) + B * (sin(phi) * sinTheta) + N * cosTheta;
-        sum += inputCube.sample(envSampler, l, level(4.0)).rgb;
+        sum += clampRadiance(inputCube.sample(envSampler, l, level(4.0)).rgb);
     }
     outputFace.write(float4(sum / float(SAMPLES), 1.0), gid, faceIndex);
 }

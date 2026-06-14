@@ -14,6 +14,8 @@
 
 namespace engine {
 
+class AssetManager;
+
 // End-of-frame request to swap the active app state (e.g. the editor's Play
 // button, the game's Stop). Application pops the current state and pushes
 // `next` after applyPending — states never touch the stack directly.
@@ -47,6 +49,7 @@ struct RenderView {
 struct FrameContext {
     World& world;
     Renderer& renderer;
+    AssetManager& assets;      // owns GPU mesh lifetime (ROADMAP 3.1)
     RenderView& view;
     SimClock& clock;
     Settings& settings;

@@ -60,6 +60,11 @@ public:
     void injectEvent(const Event& event);   // anything else (focus, resize...)
     void requestClose() { closeRequested = true; }
 
+    // Gamepads, polled by the host each frame (the Qt editor has no GLFW, so it
+    // polls the GCController backend and pushes the snapshot here). Published
+    // immediately — getGamepads() returns the last set pushed.
+    void setGamepads(const GamepadSet& pads) { gamepads = pads; }
+
     // How the host reacts to engine cursor-mode changes (capture/release the
     // pointer on its toolkit). Invoked from setCursorMode.
     void setCursorModeCallback(std::function<void(CursorMode)> callback) {

@@ -36,6 +36,11 @@ bool Application::initialize(const Config& config,
 
     // Debug UI (ADR-0011): renderer creates the ImGui context, then the window
     // attaches its platform backend. Both no-ops without RT_ENABLE_IMGUI.
+    // The asset manager owns GPU mesh lifetime, driving the renderer through
+    // the seam adapter (ROADMAP 3.1). Created here, once the renderer exists.
+    meshUploader = std::make_unique<RendererMeshUploader>(*rendererPtr);
+    assetManager = std::make_unique<AssetManager>(*meshUploader);
+
     rendererPtr->initDebugUi(window->nativeWindowHandle());
     window->initDebugUi();
 
@@ -55,7 +60,7 @@ FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
     window->getSize(winW, winH);
     return FrameContext{
-        worldState, *rendererPtr, view, clock, settingsStore, jobs,
+        worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,

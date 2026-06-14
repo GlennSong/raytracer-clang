@@ -18,6 +18,10 @@ public:
     void setPixel(int x, int y, const Vec3& color);
     Vec3 getPixel(int x, int y) const;
     void writePpm(const std::string& filename) const;
+    // PNG via the vendored stb_image_write (ADR-0016) — smaller and directly
+    // viewable, unlike P3 PPM. The implementation TU lives in
+    // model_importer.cpp; here we only call the declaration.
+    void writePng(const std::string& filename) const;
 
     Image bilateralFilter(int radius, double sigmaSpatial, double sigmaColor) const;
 };

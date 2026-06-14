@@ -1,0 +1,175 @@
+{
+ "version": 1,
+ "environment": {
+  "skyColor": [
+   0.46,
+   0.64,
+   0.86
+  ]
+ },
+ "terrain": {
+  "seed": 1337,
+  "size": 80,
+  "resolution": 96,
+  "heightScale": 8,
+  "noiseScale": 0.03,
+  "octaves": 5,
+  "warp": 0.3,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  }
+ },
+ "vegetation": {
+  "seed": 24,
+  "region": 72,
+  "count": 700,
+  "maxSlopeDeg": 38,
+  "minScale": 0.7,
+  "maxScale": 1.4,
+  "densityScale": 0.06,
+  "densityThreshold": -0.4,
+  "species": [
+   {
+    "kind": "script",
+    "script": "return flora.tree(seed, {species='oak',   res=44})",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "script",
+    "script": "return flora.tree(seed, {species='pine',  iterations=3, res=44})",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "script",
+    "script": "return flora.tree(seed, {species='birch', iterations=3, res=44})",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "rock",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      0.5,
+      0.5,
+      0.52
+     ],
+     "roughness": 1.0
+    }
+   }
+  ]
+ },
+ "player": {
+  "position": [
+   0,
+   6,
+   12
+  ],
+  "collider": {
+   "shape": "capsule",
+   "radius": 0.3,
+   "halfHeight": 0.4
+  },
+  "friction": 0.5
+ },
+ "lighting": {
+  "sun": {
+   "direction": [
+    0.4,
+    0.85,
+    0.3
+   ],
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "intensity": 7.0,
+   "castsShadow": true
+  },
+  "pointLights": [
+   {
+    "position": [
+     0,
+     20,
+     0
+    ],
+    "color": [
+     1.0,
+     0.95,
+     0.9
+    ],
+    "intensity": 220,
+    "range": 60
+   }
+  ],
+  "exposure": 1.0,
+  "ambientMultiplier": 0.6
+ },
+ "foliage": {
+  "seed": 77,
+  "region": 72,
+  "count": 1100,
+  "maxSlopeDeg": 24,
+  "minScale": 0.5,
+  "maxScale": 1.0,
+  "densityScale": 0.09,
+  "densityThreshold": -0.7,
+  "species": [
+   {
+    "kind": "script",
+    "script": "return flora.grass(seed, {blades=7})",
+    "variants": 3,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "script",
+    "script": "return flora.flower(seed, {})",
+    "variants": 1,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   }
+  ]
+ }
+}

@@ -6,16 +6,16 @@
 make            # debug build (offline path tracer)
 make release    # optimized build
 make clean      # remove build artifacts
-./raytracer     # renders to output.ppm
+./raytracer     # renders to output.png (PNG via stb_image_write; --out x.ppm for P3)
 make test       # Jolt-free unit tests (math, ECS, input, camera)
 ```
 
-The interactive viewer and physics build via CMake. Jolt and Dear ImGui are git
-submodules — fetch them first (re-run after pulling commits that add a new
-submodule; CMake also tries to auto-init them):
+The interactive viewer and physics build via CMake. Jolt, Dear ImGui, and Lua
+are git submodules — fetch them first (re-run after pulling commits that add a
+new submodule; CMake also tries to auto-init them):
 
 ```bash
-git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui}
+git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui,lua}
 cmake -S . -B build && cmake --build build
 ctest --test-dir build                      # runs unit + physics tests
 ./build/viewer                              # the game (boots into play; --edit for edit mode)
@@ -23,7 +23,10 @@ ctest --test-dir build                      # runs unit + physics tests
 
 The viewer target builds only where GLFW is found (e.g. macOS); physics
 (`-DRT_ENABLE_PHYSICS=ON`, default) is cross-platform and builds/tests headless.
-Add `-DRT_ENABLE_IMGUI=ON` to enable the Dear ImGui debug overlay.
+Add `-DRT_ENABLE_IMGUI=ON` to enable the Dear ImGui debug overlay. The Lua
+scripting layer (`-DRT_ENABLE_SCRIPTING=ON`, default) is pure C — cross-platform,
+builds/tests headless — sealed behind `ScriptVM` (ADR-0023); the procgen binding
+surface is covered by `tests/test_script_vm.cpp`.
 
 Gamepad support uses Apple's GCController framework on macOS (ADR-0013) for
 Xbox/PS controllers, with GLFW's IOKit path as fallback. A

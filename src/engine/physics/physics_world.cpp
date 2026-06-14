@@ -12,6 +12,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -254,6 +255,31 @@ PhysicsBodyId PhysicsWorld::addCapsule(Real halfHeight, Real radius,
     if (result.HasError()) return INVALID_PHYSICS_BODY;
     return createBody(impl->bodies(), result.Get(), position, orientation, motion,
                       restitution, friction, lockRotation);
+}
+
+PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
+                                    const std::vector<uint32_t>& indices,
+                                    const Vec3& position, Real friction) {
+    if (!impl || vertices.empty() || indices.size() < 3) return INVALID_PHYSICS_BODY;
+    JPH::VertexList verts;
+    verts.reserve(vertices.size());
+    for (const Vec3& v : vertices)
+        verts.push_back(JPH::Float3(static_cast<float>(v.x), static_cast<float>(v.y),
+                                    static_cast<float>(v.z)));
+    // The engine winds front faces clockwise, but Jolt's one-sided mesh
+    // collision follows counter-clockwise winding (its triangle normal is the
+    // solid side). Reverse each triangle so the collision face matches the
+    // visual outward normal — otherwise bodies fall through from "above".
+    JPH::IndexedTriangleList tris;
+    tris.reserve(indices.size() / 3);
+    for (size_t i = 0; i + 2 < indices.size(); i += 3)
+        tris.push_back(JPH::IndexedTriangle(indices[i], indices[i + 2], indices[i + 1], 0));
+
+    JPH::MeshShapeSettings shapeSettings(verts, tris);
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) return INVALID_PHYSICS_BODY;
+    return createBody(impl->bodies(), result.Get(), position, Quat::identity(),
+                      BodyMotion::Static, 0.0, friction);
 }
 
 void PhysicsWorld::removeBody(PhysicsBodyId id) {

@@ -1,7 +1,9 @@
 #include "image.h"
+#include <tinygltf/stb_image_write.h>
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace engine {
 
@@ -73,6 +75,17 @@ void Image::writePpm(const std::string& filename) const {
             file << r << " " << g << " " << b << "\n";
         }
     }
+}
+
+void Image::writePng(const std::string& filename) const {
+    std::vector<unsigned char> rgb(static_cast<size_t>(width) * height * 3);
+    for (int i = 0; i < width * height; i++) {
+        Vec3 color = clampVec(pixels[i], 0.0, 1.0);
+        rgb[i * 3 + 0] = static_cast<unsigned char>(255.99 * color.x);
+        rgb[i * 3 + 1] = static_cast<unsigned char>(255.99 * color.y);
+        rgb[i * 3 + 2] = static_cast<unsigned char>(255.99 * color.z);
+    }
+    stbi_write_png(filename.c_str(), width, height, 3, rgb.data(), width * 3);
 }
 
 }  // namespace engine

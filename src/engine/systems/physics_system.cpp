@@ -46,6 +46,14 @@ void PhysicsSystem::createBodies(World& world) {
             created = true;
         });
 
+    // Static triangle-mesh colliders (terrain): one static body each, made once.
+    world.each<Transform, MeshCollider>(
+        [this, &created](Entity, Transform& t, MeshCollider& mc) {
+            if (mc.bodyId != INVALID_PHYSICS_BODY) return;
+            mc.bodyId = physics.addMesh(mc.vertices, mc.indices, t.position, mc.friction);
+            if (mc.bodyId != INVALID_PHYSICS_BODY) created = true;
+        });
+
     // Apply initial velocities outside iteration
     for (auto& nb : newBodies) {
         physics.setLinearVelocity(nb.id, nb.velocity);

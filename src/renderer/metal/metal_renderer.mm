@@ -36,6 +36,13 @@ struct GPUMesh {
 
 static constexpr uint32_t MAX_INSTANCES = 4096;
 
+// Dynamic per-frame GPU buffers (instance transforms) are ring-buffered this
+// many deep so the CPU writing frame N+1 never stomps data the GPU is still
+// reading for frame N. nextDrawable caps the CPU at ~maximumDrawableCount (3)
+// frames ahead, so a 3-deep ring is always free by the time it's reused — no
+// fence needed.
+static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
+
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
     for (int i = 0; i < 4; i++)
@@ -57,7 +64,9 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> transparentInstancedPipeline;
     id<MTLDepthStencilState> depthStateOpaque;
     id<MTLDepthStencilState> depthStateTransparent;
-    id<MTLBuffer> instanceBuffer;
+    id<MTLDepthStencilState> depthStateWireOverlay;  // LessEqual, no write
+    id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
+    int frameIndex = 0;                                   // advances each beginFrame
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
@@ -137,10 +146,15 @@ struct MetalRenderer::Impl {
 
     // Screen-space ambient occlusion (SSAO/GTAO)
     id<MTLTexture> aoTexture;          // R16Float — full-res AO result
-    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong
+    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong / temporal out
+    id<MTLTexture> aoHistory;          // R16Float — previous frame's resolved AO
     id<MTLComputePipelineState> aoPipeline;
     id<MTLComputePipelineState> aoBlurHPipeline;
     id<MTLComputePipelineState> aoBlurVPipeline;
+    id<MTLComputePipelineState> aoTemporalPipeline;   // reprojected history blend
+    simd_float4x4 aoCurrViewProjection; // this frame's VP (inverse drives recon)
+    simd_float4x4 aoPrevViewProjection; // last frame's VP (reproject into history)
+    bool aoHistoryValid;                // false until the first resolve / after resize
 
     // Reflection probes (cubemap-based IBL)
     id<MTLTexture> probeCubemapArray;      // texturecube_array, RGBA16Float
@@ -165,8 +179,13 @@ struct MetalRenderer::Impl {
     id<MTLSamplerState> shadowSampler;
     int shadowMapSize = 2048;
     bool shadowEnabled = false;
-    CameraUniforms shadowCameraUniforms;  // light VP for shadow pass
     ShadowUniforms shadowUniforms;
+    // Per-cascade light VP (for the shadow pass) and world bounds (for culling
+    // casters per cascade). activeCascadeCount cascades are live this frame.
+    simd_float4x4 cascadeVP[RT_MAX_CASCADES];
+    Vec3 cascadeCenter[RT_MAX_CASCADES];
+    Real cascadeRadius[RT_MAX_CASCADES] = {0};
+    int activeCascadeCount = 0;
     // Rasterization-side depth bias for the shadow pass encoder, from
     // ShadowConfig::bias (the lookup-side controls ride in shadowUniforms).
     float shadowDepthBias = 0.005f;
@@ -528,6 +547,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
                                                                                 error:&error];
             if (!impl->aoBlurVPipeline) NSLog(@"AO blur V pipeline error: %@", error);
         }
+        id<MTLFunction> aoTemporalFunc = [library newFunctionWithName:@"aoTemporal"];
+        if (aoTemporalFunc) {
+            impl->aoTemporalPipeline = [impl->device newComputePipelineStateWithFunction:aoTemporalFunc
+                                                                                  error:&error];
+            if (!impl->aoTemporalPipeline) NSLog(@"AO temporal pipeline error: %@", error);
+        }
     }
 
     // Bloom compute pipelines
@@ -614,20 +639,22 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     }
 
     // Instance data buffer
-    impl->instanceBuffer = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
-                                                     options:MTLResourceStorageModeShared];
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        impl->instanceBuffers[i] = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
+                                                            options:MTLResourceStorageModeShared];
 
     // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
     impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
                                                   options:MTLResourceStorageModeShared];
 
-    // Shadow map texture
+    // Shadow map: a depth-texture array, one slice per shadow cascade.
     {
-        MTLTextureDescriptor* shadowDesc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
-                                         width:impl->shadowMapSize
-                                        height:impl->shadowMapSize
-                                     mipmapped:NO];
+        MTLTextureDescriptor* shadowDesc = [[MTLTextureDescriptor alloc] init];
+        shadowDesc.textureType = MTLTextureType2DArray;
+        shadowDesc.pixelFormat = MTLPixelFormatDepth32Float;
+        shadowDesc.width = impl->shadowMapSize;
+        shadowDesc.height = impl->shadowMapSize;
+        shadowDesc.arrayLength = RT_MAX_CASCADES;
         shadowDesc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         shadowDesc.storageMode = MTLStorageModePrivate;
         impl->shadowMap = [impl->device newTextureWithDescriptor:shadowDesc];
@@ -678,8 +705,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->shadowSampler = [impl->device newSamplerStateWithDescriptor:samplerDesc];
     }
 
-    impl->shadowUniforms = {0.02f, 1.0f, impl->shadowMapSize, 0,
-                            {0, 0, 0}, 1.0f, 0.5f, {0, 0}};
+    impl->shadowUniforms = {};
+    impl->shadowUniforms.normalBias = 0.02f;
+    impl->shadowUniforms.pcfRadius = 1.0f;
+    impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
+    impl->shadowUniforms.shadowStrength = 1.0f;
+    impl->shadowUniforms.ambientStrength = 0.5f;
 
     // Depth states
     MTLDepthStencilDescriptor* depthDesc = [[MTLDepthStencilDescriptor alloc] init];
@@ -689,6 +720,12 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateTransparent = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Wireframe overlay: draw edges that pass an equal-or-nearer depth test
+    // without writing depth, so lines sit on the visible surface they belong to.
+    depthDesc.depthCompareFunction = MTLCompareFunctionLessEqual;
+    depthDesc.depthWriteEnabled = NO;
+    impl->depthStateWireOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
 
     resize(width, height);
     return true;
@@ -758,6 +795,8 @@ void MetalRenderer::resize(int width, int height) {
     aoDesc.storageMode = MTLStorageModePrivate;
     impl->aoTexture = [impl->device newTextureWithDescriptor:aoDesc];
     impl->aoBlurTemp = [impl->device newTextureWithDescriptor:aoDesc];
+    impl->aoHistory = [impl->device newTextureWithDescriptor:aoDesc];
+    impl->aoHistoryValid = false;   // contents undefined until the first resolve
 
     // Bloom mip chain (progressive half-res)
     {
@@ -805,11 +844,13 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     GPUMesh gpuMesh;
     gpuMesh.materialIndex = mesh.materialIndex;
 
+    // Layout must match `struct Vertex` in shaders/metal/common.metal.
     struct GPUVertex {
         float position[3];
         float normal[3];
         float tangent[3];
         float texcoord[2];
+        float color[3];
     };
 
     std::vector<GPUVertex> gpuVertices(mesh.vertices.size());
@@ -824,7 +865,10 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
             {static_cast<float>(mesh.vertices[i].tangent.x),
              static_cast<float>(mesh.vertices[i].tangent.y),
              static_cast<float>(mesh.vertices[i].tangent.z)},
-            {mesh.vertices[i].u, mesh.vertices[i].v}
+            {mesh.vertices[i].u, mesh.vertices[i].v},
+            {static_cast<float>(mesh.vertices[i].color.x),
+             static_cast<float>(mesh.vertices[i].color.y),
+             static_cast<float>(mesh.vertices[i].color.z)}
         };
     }
 
@@ -1422,6 +1466,10 @@ RenderStats MetalRenderer::getRenderStats() const {
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
+    // Advance the dynamic-buffer ring so this frame writes a slot the GPU isn't
+    // still reading for an in-flight earlier frame (fixes instance tearing —
+    // trees popping to a neighbor's transform for a frame).
+    impl->frameIndex = (impl->frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
@@ -1489,6 +1537,10 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     Mat4 viewMat = Mat4::lookAt(camera.position, camera.target, camera.up);
     Mat4 vpMat = projMat * viewMat;
     impl->cameraUniforms.invViewProjection = toSimd(vpMat.inverse());
+    // Roll the view-projection history for temporal AO: this frame's VP (matching
+    // the invViewProjection above) becomes "current"; last frame's becomes "prev".
+    impl->aoPrevViewProjection = impl->aoCurrViewProjection;
+    impl->aoCurrViewProjection = toSimd(vpMat);
     impl->cameraUniforms.projection = proj;
     impl->cameraUniforms.invProjection = toSimd(projMat.inverse());
     impl->cameraUniforms.screenSize = {static_cast<float>(impl->framebufferWidth),
@@ -1522,36 +1574,91 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
         g.outerCosAngle = 0;
 
         if (lighting.sun.castsShadow && lighting.shadow.enabled) {
-            // Compute light VP for shadow mapping. The ortho volume follows the
-            // camera (ADR-0017 Phase 2) instead of anchoring at the world
-            // origin, so shadows exist wherever the player is. Snapped to
-            // shadow-map texels in light space so edges don't swim as the
-            // camera moves. Frustum-fitting / cascades remain Phase 5.
-            Real sceneBound = 30.0;
-            // Avoid degenerate up vector when light is nearly vertical
+            // Cascaded shadow maps (ADR-0017 Phase 5): split the camera view
+            // frustum into shadowParams.cascadeCount ranges out to
+            // shadowParams.distance and fit a texel-snapped ortho light box to
+            // each. Near cascades are small (crisp); far ones cover distance —
+            // no coverage "slice" when high up, and far better near-field
+            // resolution than one fixed camera-sized box.
+            int cascadeCount = std::max(1, std::min(shadowParams.cascadeCount,
+                                                    (int)RT_MAX_CASCADES));
             Vec3 up = (std::abs(sunDir.y) > 0.99) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
 
-            Vec3 sceneCenter = impl->currentCameraPos;
-            Mat4 snapView = Mat4::lookAt(sceneCenter + sunDir * sceneBound,
-                                         sceneCenter, up);
-            Real texelWorld = (sceneBound * 2.0) / impl->shadowMapSize;
-            Vec3 centerLS = snapView.transformPoint(sceneCenter);
-            centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
-            centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
-            sceneCenter = snapView.inverse().transformPoint(centerLS);
+            Real camNear = static_cast<Real>(impl->cameraUniforms.nearPlane);
+            Real camFar  = static_cast<Real>(impl->cameraUniforms.farPlane);
+            Real shadowDist = std::min(static_cast<Real>(shadowParams.distance), camFar);
+            shadowDist = std::max(shadowDist, camNear * 2.0);
+            Real lambda = shadowParams.splitLambda;
 
-            Vec3 lightPos = sceneCenter + sunDir * sceneBound;
-            Mat4 lightView = Mat4::lookAt(lightPos, sceneCenter, up);
-            Mat4 lightProj = Mat4::orthographic(sceneBound * 2.0, 1.0, 0.1, sceneBound * 2.0);
-            Mat4 lightVP = lightProj * lightView;
-            g.lightViewProjection = toSimd(lightVP);
+            // World-space corners of the full view frustum (Metal NDC z in [0,1]).
+            auto worldCorner = [&](float nx, float ny, float nz) -> Vec3 {
+                simd_float4 c = simd_mul(impl->cameraUniforms.invViewProjection,
+                                         simd_make_float4(nx, ny, nz, 1.0f));
+                return Vec3(c.x / c.w, c.y / c.w, c.z / c.w);
+            };
+            Vec3 nearC[4] = { worldCorner(-1,-1,0), worldCorner(1,-1,0),
+                              worldCorner(1,1,0),   worldCorner(-1,1,0) };
+            Vec3 farC[4]  = { worldCorner(-1,-1,1), worldCorner(1,-1,1),
+                              worldCorner(1,1,1),   worldCorner(-1,1,1) };
 
-            // Store for shadow pass encoding
-            impl->shadowCameraUniforms.viewProjection = g.lightViewProjection;
-            impl->shadowCameraUniforms.view = toSimd(lightView);
-            impl->shadowCameraUniforms.cameraPosition = toSimd3(lightPos);
+            float splitArr[RT_MAX_CASCADES] = {0};
+            Real prevFar = camNear;
+            for (int c = 0; c < cascadeCount; c++) {
+                Real f = Real(c + 1) / Real(cascadeCount);
+                Real uni = camNear + (shadowDist - camNear) * f;
+                Real lg  = camNear * std::pow(shadowDist / camNear, f);
+                Real zFar = lambda * lg + (1.0 - lambda) * uni;
+                Real zNear = prevFar;
+                prevFar = zFar;
+
+                // View depth is affine along each frustum edge, so interpolate the
+                // full-frustum corners by the cascade's near/far depth fractions.
+                Real fN = (zNear - camNear) / (camFar - camNear);
+                Real fF = (zFar  - camNear) / (camFar - camNear);
+                Vec3 corners[8];
+                for (int k = 0; k < 4; k++) {
+                    corners[k]     = nearC[k] + (farC[k] - nearC[k]) * fN;
+                    corners[k + 4] = nearC[k] + (farC[k] - nearC[k]) * fF;
+                }
+                Vec3 center(0, 0, 0);
+                for (auto& p : corners) center = center + p;
+                center = center * (1.0 / 8.0);
+                Real radius = 0.01;   // floor avoids a zero-size ortho / snap div-by-0
+                for (auto& p : corners) radius = std::max(radius, (p - center).length());
+                radius = std::ceil(radius * 16.0) / 16.0;   // quantize to limit jitter
+
+                // Pull the light back past the sphere so tall casters above the
+                // cascade (trees) still register in the depth map.
+                Real pullback = radius + 50.0;
+                Real texelWorld = (radius * 2.0) / impl->shadowMapSize;
+
+                Mat4 lightView = Mat4::lookAt(center + sunDir * pullback, center, up);
+                Vec3 centerLS = lightView.transformPoint(center);
+                centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
+                centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
+                Vec3 snapped = lightView.inverse().transformPoint(centerLS);
+
+                lightView = Mat4::lookAt(snapped + sunDir * pullback, snapped, up);
+                Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1,
+                                                    pullback + radius);
+                Mat4 lightVP = lightProj * lightView;
+
+                impl->cascadeVP[c] = toSimd(lightVP);
+                impl->shadowUniforms.cascadeViewProjection[c] = toSimd(lightVP);
+                impl->cascadeCenter[c] = snapped;
+                impl->cascadeRadius[c] = radius;
+                splitArr[c] = static_cast<float>(zFar);
+            }
+
+            impl->shadowUniforms.cascadeSplit =
+                simd_make_float4(splitArr[0], splitArr[1], splitArr[2], splitArr[3]);
+            impl->shadowUniforms.cascadeCount = cascadeCount;
+            impl->activeCascadeCount = cascadeCount;
+
+            // The cascade matrices live in shadowUniforms (sun-only); GPULight
+            // just flags the sun as a shadow caster (shadowMapIndex >= 0).
+            g.lightViewProjection = impl->shadowUniforms.cascadeViewProjection[0];
             impl->shadowEnabled = true;
-
             g.shadowMapIndex = 0;
             impl->shadowDepthBias = lighting.shadow.bias;
             impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
@@ -1761,8 +1868,9 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 [enc setFragmentTexture:impl->shadowMap atIndex:0];
                 [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
                 // strength/ambientStrength 0: probes bake unshadowed, as before
-                ShadowUniforms noShadow = {0.0f, 1.0f, impl->shadowMapSize, 0,
-                                           {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+                ShadowUniforms noShadow = {};   // cascadeCount 0 -> no shadow
+                noShadow.pcfRadius = 1.0f;
+                noShadow.shadowMapSize = impl->shadowMapSize;
                 [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
 
                 // Bind empty probe data (no recursion)
@@ -1914,44 +2022,62 @@ void MetalRenderer::endFrame() {
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
 
-    // --- Shadow pass ---
+    // --- Shadow pass: one depth-array slice per cascade ---
     if (impl->shadowEnabled && impl->shadowPipeline) {
-        MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-        shadowPassDesc.depthAttachment.texture = impl->shadowMap;
-        shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
-        shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
-        shadowPassDesc.depthAttachment.clearDepth = 1.0;
+        for (int c = 0; c < impl->activeCascadeCount; c++) {
+            MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+            shadowPassDesc.depthAttachment.texture = impl->shadowMap;
+            shadowPassDesc.depthAttachment.slice = c;
+            shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+            shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
+            shadowPassDesc.depthAttachment.clearDepth = 1.0;
 
-        id<MTLRenderCommandEncoder> shadowEncoder = [impl->currentCommandBuffer
-            renderCommandEncoderWithDescriptor:shadowPassDesc];
-        [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
-        [shadowEncoder setCullMode:MTLCullModeBack];
-        [shadowEncoder setDepthStencilState:impl->shadowDepthState];
-        [shadowEncoder setDepthBias:impl->shadowDepthBias slopeScale:1.5 clamp:0.01];
+            id<MTLRenderCommandEncoder> shadowEncoder = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:shadowPassDesc];
+            [shadowEncoder setFrontFacingWinding:MTLWindingClockwise];
+            [shadowEncoder setCullMode:MTLCullModeBack];
+            [shadowEncoder setDepthStencilState:impl->shadowDepthState];
+            [shadowEncoder setDepthBias:impl->shadowDepthBias slopeScale:1.5 clamp:0.01];
 
-        // Render all opaque draw calls from light's perspective
-        for (auto& dc : impl->opaqueDrawCalls) {
-            const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
-            if (!mesh) continue;
+            CameraUniforms cascadeCam = {};
+            cascadeCam.viewProjection = impl->cascadeVP[c];
 
-            ModelUniforms modelU;
-            modelU.model = toSimd(dc.transform);
-            modelU.normalMatrix = inverseTranspose(modelU.model);
+            // Conservative caster cull: a sphere reject around the cascade,
+            // inflated by its own radius so the near cascade skips the distant
+            // forest yet still catches tall casters that shadow into it.
+            Vec3 cc = impl->cascadeCenter[c];
+            Real cullR = impl->cascadeRadius[c] * 2.0;
 
-            [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
-            [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
-            [shadowEncoder setVertexBytes:&impl->shadowCameraUniforms
-                                   length:sizeof(CameraUniforms) atIndex:1];
-            [shadowEncoder setVertexBytes:&modelU
-                                   length:sizeof(ModelUniforms) atIndex:2];
-            [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                      indexCount:mesh->indexCount
-                                       indexType:MTLIndexTypeUInt32
-                                     indexBuffer:mesh->indexBuffer
-                               indexBufferOffset:0];
+            for (auto& dc : impl->opaqueDrawCalls) {
+                const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
+                if (!mesh) continue;
+
+                BoundingSphere b = getMeshBounds(dc.meshHandle);
+                const Mat4& m = dc.transform;
+                Vec3 wc = m.transformPoint(b.center);
+                Real maxScale = std::max({Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
+                                          Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
+                                          Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
+                if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+
+                ModelUniforms modelU;
+                modelU.model = toSimd(dc.transform);
+                modelU.normalMatrix = inverseTranspose(modelU.model);
+
+                [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
+                [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+                [shadowEncoder setVertexBytes:&cascadeCam
+                                       length:sizeof(CameraUniforms) atIndex:1];
+                [shadowEncoder setVertexBytes:&modelU
+                                       length:sizeof(ModelUniforms) atIndex:2];
+                [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                          indexCount:mesh->indexCount
+                                           indexType:MTLIndexTypeUInt32
+                                         indexBuffer:mesh->indexBuffer
+                                   indexBufferOffset:0];
+            }
+            [shadowEncoder endEncoding];
         }
-
-        [shadowEncoder endEncoding];
     }
 
     // --- Main color pass ---
@@ -1965,10 +2091,13 @@ void MetalRenderer::endFrame() {
     // the skybox draw below, which clobbers these bindings and needs them
     // restored (texture/sampler 0 and fragment buffer 5 are shared slots).
     impl->shadowUniforms.debugShadow = debugView;  // lit shader branches: 5=shadow factor, 6=albedo
-    ShadowUniforms activeShadowU = impl->shadowEnabled
-        ? impl->shadowUniforms
-        : ShadowUniforms{0.0f, 1.0f, impl->shadowMapSize, debugView,
-                         {0, 0, 0}, 0.0f, 0.0f, {0, 0}};
+    ShadowUniforms activeShadowU = impl->shadowUniforms;
+    if (!impl->shadowEnabled) {       // cascadeCount 0 -> computeShadow returns lit
+        activeShadowU = {};
+        activeShadowU.pcfRadius = 1.0f;
+        activeShadowU.shadowMapSize = impl->shadowMapSize;
+        activeShadowU.debugShadow = debugView;
+    }
     [impl->currentEncoder setFragmentTexture:impl->shadowMap atIndex:0];
     [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
     [impl->currentEncoder setFragmentBytes:&activeShadowU
@@ -2137,8 +2266,9 @@ void MetalRenderer::endFrame() {
                              return a.meshHandle < b.meshHandle;
                          });
 
+        id<MTLBuffer> instanceBuffer = impl->instanceBuffers[impl->frameIndex];
         GPUInstanceData* instanceBuf =
-            static_cast<GPUInstanceData*>([impl->instanceBuffer contents]);
+            static_cast<GPUInstanceData*>([instanceBuffer contents]);
         uint32_t instanceOffset = 0;
 
         size_t i = 0;
@@ -2173,7 +2303,7 @@ void MetalRenderer::endFrame() {
             [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
             [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                           length:sizeof(CameraUniforms) atIndex:1];
-            [impl->currentEncoder setVertexBuffer:impl->instanceBuffer
+            [impl->currentEncoder setVertexBuffer:instanceBuffer
                                            offset:instanceOffset * sizeof(GPUInstanceData)
                                           atIndex:2];
             [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
@@ -2202,6 +2332,11 @@ void MetalRenderer::endFrame() {
     stats.entitiesSubmitted = static_cast<uint32_t>(
         impl->opaqueDrawCalls.size() + impl->transparentDrawCalls.size());
 
+    // Wireframe-only (mode 1): draw the geometry passes as lines. The skybox
+    // already drew filled above; overlay (mode 2) re-draws lines after the fills.
+    [impl->currentEncoder setTriangleFillMode:
+        (wireframe == 1 ? MTLTriangleFillModeLines : MTLTriangleFillModeFill)];
+
     // Sort each pass by distance first, then issuePass stable-sorts by mesh.
     std::sort(impl->opaqueDrawCalls.begin(), impl->opaqueDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
@@ -2218,6 +2353,19 @@ void MetalRenderer::endFrame() {
 
     issuePass(impl->transparentDrawCalls, impl->transparentPipeline,
               impl->transparentInstancedPipeline, impl->depthStateTransparent);
+
+    // Wireframe overlay (mode 2): re-draw opaque geometry as lines on top of the
+    // shaded image. Non-instanced (issueSingleDraw uses model bytes, not the
+    // shared instance buffer, so it can't clobber the fills' instance data), and
+    // a LessEqual/no-write depth state so lines sit on their own visible surface.
+    if (wireframe == 2) {
+        [impl->currentEncoder setRenderPipelineState:impl->opaquePipeline];
+        [impl->currentEncoder setDepthStencilState:impl->depthStateWireOverlay];
+        [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeLines];
+        for (auto& dc : impl->opaqueDrawCalls)
+            issueSingleDraw(dc);
+        [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeFill];
+    }
 
     impl->lastStats = stats;
 
@@ -2245,6 +2393,11 @@ void MetalRenderer::endFrame() {
                          && impl->bloomUpsamplePipeline && impl->bloomMips[0])
                      || dofActive;
 
+    // When temporal AO runs, the resolved result lands in aoBlurTemp (so the
+    // current/history reads don't alias the output); the composite samples that
+    // instead of aoTexture, and we blit it into aoHistory for next frame.
+    bool aoResolvedInBlurTemp = false;
+
     if (needsCompute) {
         id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
         MTLSize group = MTLSizeMake(8, 8, 1);
@@ -2258,6 +2411,7 @@ void MetalRenderer::endFrame() {
             [enc setComputePipelineState:impl->aoPipeline];
             [enc setTexture:impl->depthTexture atIndex:0];
             [enc setTexture:impl->aoTexture atIndex:1];
+            [enc setTexture:impl->viewNormalTexture atIndex:2];   // real normals (no depth recon)
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
             SSAOUniforms aoP = {
                 ssaoParams.radius, ssaoParams.intensity, ssaoParams.bias,
@@ -2281,6 +2435,27 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->aoTexture atIndex:2];
                 [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
             }
+
+            // --- Temporal resolve: blend in reprojected history AO ---
+            // Stabilizes foliage flicker (G-buffer aliasing). Reads the current
+            // (blurred) AO from aoTexture + history from aoHistory, writes the
+            // resolved AO to aoBlurTemp.
+            if (impl->aoTemporalPipeline && impl->aoHistory && impl->aoBlurTemp) {
+                [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+                [enc setComputePipelineState:impl->aoTemporalPipeline];
+                [enc setTexture:impl->aoTexture atIndex:0];      // current (blurred)
+                [enc setTexture:impl->depthTexture atIndex:1];
+                [enc setTexture:impl->aoHistory atIndex:2];      // last frame's resolved
+                [enc setTexture:impl->aoBlurTemp atIndex:3];     // resolved out
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+                AOTemporalUniforms tP = {};
+                tP.prevViewProjection = impl->aoPrevViewProjection;
+                tP.alpha = impl->aoHistoryValid ? ssaoParams.temporal : 0.0f;
+                [enc setBytes:&tP length:sizeof(tP) atIndex:1];
+                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                aoResolvedInBlurTemp = true;
+                impl->aoHistoryValid = true;
+            }
         }
 
         // --- SSR ---
@@ -2298,7 +2473,7 @@ void MetalRenderer::endFrame() {
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
             SSRUniforms ssrP = {
                 ssrParams.maxRayDist, ssrParams.thickness, ssrParams.thicknessFar,
-                ssrParams.stride, ssrParams.blendStrength, {}
+                ssrParams.stride, ssrParams.blendStrength, ssrParams.maxRoughness, {}
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
             [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
@@ -2396,6 +2571,13 @@ void MetalRenderer::endFrame() {
         }
 
         [enc endEncoding];
+
+        // Save this frame's resolved AO as next frame's temporal history.
+        if (aoResolvedInBlurTemp && impl->aoHistory) {
+            id<MTLBlitCommandEncoder> aoBlit = [impl->currentCommandBuffer blitCommandEncoder];
+            [aoBlit copyFromTexture:impl->aoBlurTemp toTexture:impl->aoHistory];
+            [aoBlit endEncoding];
+        }
     }
 
     // --- Composite pass: tone map HDR scene to LDR drawable ---
@@ -2412,7 +2594,9 @@ void MetalRenderer::endFrame() {
                                                    : impl->sceneColorTexture)
                                 atIndex:0];
         [compEncoder setFragmentTexture:impl->ssrTexture atIndex:1];
-        [compEncoder setFragmentTexture:impl->aoTexture atIndex:2];
+        [compEncoder setFragmentTexture:(aoResolvedInBlurTemp ? impl->aoBlurTemp
+                                                              : impl->aoTexture)
+                                atIndex:2];
         [compEncoder setFragmentTexture:impl->depthTexture atIndex:3];
         [compEncoder setFragmentTexture:impl->viewNormalTexture atIndex:4];
         if (bloomEnabled && impl->bloomUpsampleMips[0]) {

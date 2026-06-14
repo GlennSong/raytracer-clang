@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace engine {
 
@@ -48,6 +49,11 @@ public:
                              const Quat& orientation, BodyMotion motion,
                              Real restitution = 0.0, Real friction = 0.2,
                              bool lockRotation = false);
+    // A static triangle mesh (terrain, baked geometry). vertices/indices are in
+    // world space; the body is always static. Indexed triangles, 3 indices each.
+    PhysicsBodyId addMesh(const std::vector<Vec3>& vertices,
+                          const std::vector<uint32_t>& indices,
+                          const Vec3& position, Real friction = 0.5);
     void removeBody(PhysicsBodyId id);
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
