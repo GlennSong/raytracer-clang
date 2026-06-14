@@ -406,6 +406,16 @@ manager, scattered by the thousands with sensible density and drawn instanced,
 under an HDR sky. Full plan: `docs/forest-arena-plan.md`. Most of the pipeline
 is headless/CI-testable; only the final render needs macOS.
 
+**Flora is now authorable in Lua** (ADR-0023/0024): `assets/scripts/flora.lua`
+provides `flora.tree/rock/grass/flower` over the procgen builders — stochastic,
+upward-tapering trees with **real leaf cards** (not SDF blobs), three species,
+plus rocks/grass/flowers. The level loader accepts a `{ "kind":"script" }`
+vegetation species (inline Lua or a `.lua` path), so Lua-generated flora scatters
+in alongside the C++ tree/rock species; `assets/levels/forest.json` uses it.
+Generation is headless-tested (`tests/test_flora.cpp`); the look needs macOS.
+Supporting bindings: `lsystem.segments/leaves`, `mesh.orient`, `sdf.smooth_union_all`,
+and a `TurtleParams.taper` for continuous trunk thinning.
+
 ### Phase C — The procgen language (distilled, not designed up front)
 Only after Phase B. A **node-graph evaluator** over the value types
 (`Mesh`/`Field`/`Frame`/attributes) — the engine's "geometry nodes"; an

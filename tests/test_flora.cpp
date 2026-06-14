@@ -85,6 +85,19 @@ TEST_CASE(flora_species_produce_different_trees) {
     CHECK(pine->vertices.size() != birch->vertices.size());
 }
 
+TEST_CASE(flora_seed_varies_trees_via_global) {
+    FloraVM f;
+    // Mirrors the level loader: set a `seed` global, then run the species' inline
+    // chunk. Stochastic grammars => different seeds grow different trees.
+    f.vm.doString("seed = 100");
+    auto a = run(f.vm, "return flora.tree(seed, {species='oak', res=40})");
+    f.vm.doString("seed = 200");
+    auto b = run(f.vm, "return flora.tree(seed, {species='oak', res=40})");
+    if (!a || !b) { CHECK(false); return; }
+    CHECK(a->vertices.size() > 0);
+    CHECK(a->vertices.size() != b->vertices.size());
+}
+
 TEST_CASE(flora_generators_are_seed_deterministic) {
     FloraVM f;
     const char* recipes[] = {

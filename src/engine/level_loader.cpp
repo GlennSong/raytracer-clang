@@ -6,6 +6,10 @@
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
 #include "procgen/node_graph.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "scripting/script_vm.h"
+#include "scripting/procgen_bindings.h"
+#endif
 #include "model_importer.h"
 #include <random>
 #include "components.h"
@@ -13,6 +17,7 @@
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <memory>
 #include <unordered_map>
 #include <iterator>
 #include <tuple>
@@ -399,6 +404,33 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     NodeRegistry nodeRegistry;
     registerBuiltinNodes(nodeRegistry);
 
+#ifdef RT_ENABLE_SCRIPTING
+    // Lua flora species (ADR-0023): created on first use, with the procgen
+    // builders and the shared flora library loaded, so a species can be
+    // `{ "kind":"script", "script":"return flora.tree(seed, {species='oak'})" }`
+    // (inline) or `"script":"trees/oak.lua"` (a level-relative chunk) that
+    // returns a mesh, read per variant from a `seed` global. Mixed freely with
+    // the C++ tree/rock species in the same scatter.
+    std::unique_ptr<ScriptVM> scriptVm;
+    auto ensureScriptVm = [&]() -> ScriptVM& {
+        if (!scriptVm) {
+            scriptVm = std::make_unique<ScriptVM>();
+            openProcgenLibrary(*scriptVm);
+            std::ifstream ff("assets/scripts/flora.lua");
+            if (ff) {
+                std::string src((std::istreambuf_iterator<char>(ff)),
+                                std::istreambuf_iterator<char>());
+                std::string err;
+                if (!scriptVm->doString(src, &err))
+                    LOG_ERROR << "flora.lua load failed: " << err;
+            } else {
+                LOG_WARN << "assets/scripts/flora.lua not found; `flora.*` unavailable";
+            }
+        }
+        return *scriptVm;
+    };
+#endif
+
     int speciesIndex = 0;
     for (const auto& s : veg["species"]) {
         std::string kind = s.value("kind", "tree");
@@ -477,10 +509,45 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             if (!hasGraph) LOG_ERROR << "Failed to load generator graph: " << graphPath;
         }
 
+        // Optional: this species' mesh comes from a Lua flora script (inline
+        // chunk, or a level-relative .lua path), evaluated per variant.
+        std::string scriptSpec = s.value("script", std::string());
+        bool hasScript = !scriptSpec.empty();
+        std::string scriptSource;
+        if (hasScript) {
+            const bool isPath = scriptSpec.size() > 4 &&
+                                scriptSpec.compare(scriptSpec.size() - 4, 4, ".lua") == 0;
+            if (isPath) {
+                std::string p = scriptSpec;
+                if (!p.empty() && p[0] != '/') p = levelDir + "/" + p;
+                std::ifstream sf(p);
+                if (sf) scriptSource.assign((std::istreambuf_iterator<char>(sf)),
+                                            std::istreambuf_iterator<char>());
+                if (scriptSource.empty()) LOG_ERROR << "Failed to load flora script: " << p;
+            } else {
+                scriptSource = scriptSpec;   // inline Lua chunk
+            }
+            hasScript = !scriptSource.empty();
+#ifndef RT_ENABLE_SCRIPTING
+            if (hasScript)
+                LOG_WARN << "species 'script' ignored (scripting disabled)";
+            hasScript = false;
+#endif
+        }
+
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
             RenderMesh mesh;
-            if (hasGraph) {
+            if (hasScript) {
+#ifdef RT_ENABLE_SCRIPTING
+                ScriptVM& vm = ensureScriptVm();
+                vm.doString("seed=" + std::to_string(seed));   // the script reads it
+                std::shared_ptr<RenderMesh> out;
+                std::string err;
+                if (runProcgenMesh(vm, scriptSource, out, &err) && out) mesh = *out;
+                else LOG_ERROR << "flora script error: " << err;
+#endif
+            } else if (hasGraph) {
                 GraphValue out = graph.evaluate(
                     nodeRegistry, {{"seed", GraphValue(static_cast<double>(seed))}});
                 if (auto* mp = std::get_if<MeshPtr>(&out)) { if (*mp) mesh = **mp; }

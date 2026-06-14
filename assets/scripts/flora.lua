@@ -23,17 +23,22 @@ end
 local function add(v, w) return { v[1] + w[1], v[2] + w[2], v[3] + w[3] } end
 local function scale(v, s) return { v[1] * s, v[2] * s, v[3] * s } end
 
--- A few tree "species" presets (the knobs that change a tree's character).
+-- A few tree "species" presets. `rules` are STOCHASTIC (several weighted
+-- productions for X), so the seed grows a genuinely different tree each time —
+-- that is what gives the forest variety across instances/variants.
 local SPECIES = {
-    oak  = { axiom = "X", rule = "F[&+X][&-X][/&X][\\^X]FX", iterations = 3,
-             angle_deg = 32, length = 0.55, radius = 0.18, taper = 0.90,
-             leaf_size = 0.20, trunk = { 0.34, 0.24, 0.13 }, leaf = { 0.20, 0.44, 0.15 } },
-    pine = { axiom = "X", rule = "F[&X][^X][/X][\\X]FX", iterations = 4,
-             angle_deg = 22, length = 0.5, radius = 0.16, taper = 0.86,
-             leaf_size = 0.16, trunk = { 0.30, 0.20, 0.12 }, leaf = { 0.12, 0.36, 0.18 } },
-    birch = { axiom = "X", rule = "F[+X][-X]FX", iterations = 4,
-              angle_deg = 28, length = 0.6, radius = 0.12, taper = 0.92,
-              leaf_size = 0.18, trunk = { 0.80, 0.80, 0.74 }, leaf = { 0.40, 0.55, 0.20 } },
+    oak  = { axiom = "X", iterations = 3, angle_deg = 32, length = 0.55,
+             radius = 0.18, taper = 0.90, leaf_size = 0.20,
+             trunk = { 0.34, 0.24, 0.13 }, leaf = { 0.20, 0.44, 0.15 },
+             rules = { "F[&+X][&-X]FX", "F[&+X][/&X][\\^X]FX", "FF[&-X][&/+X]X" } },
+    pine = { axiom = "X", iterations = 4, angle_deg = 22, length = 0.5,
+             radius = 0.16, taper = 0.86, leaf_size = 0.16,
+             trunk = { 0.30, 0.20, 0.12 }, leaf = { 0.12, 0.36, 0.18 },
+             rules = { "F[&X][^X]FX", "FF[/&X][\\&X]X", "F[&X][/X][\\X]FX" } },
+    birch = { axiom = "X", iterations = 4, angle_deg = 28, length = 0.6,
+              radius = 0.12, taper = 0.92, leaf_size = 0.18,
+              trunk = { 0.80, 0.80, 0.74 }, leaf = { 0.40, 0.55, 0.20 },
+              rules = { "F[+X][-X]FX", "FF[+X]X", "F[-X][/X]FX" } },
 }
 
 -- A tapered, welded trunk/branches with real (oriented) leaf cards instead of
@@ -44,7 +49,7 @@ function flora.tree(seed, opts)
     local function pick(k) if opts[k] ~= nil then return opts[k] else return s[k] end end
 
     local sys = lsystem.create()
-    sys:rule("X", pick("rule"))
+    for _, prod in ipairs(opts.rules or s.rules) do sys:rule("X", prod, 1.0) end
     sys:rule("F", "FF")
     local symbols = sys:expand(pick("axiom"), pick("iterations"), seed)
     -- Apices (leftover X) become leaf attachment points; L draws no blob since
