@@ -214,6 +214,18 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **`gun.lua` embeds the follow behaviour as a Lua string literal.** No syntax
   check until runtime; awkward to edit. Fine as a demo, not as the pattern.
 
+- **Rock generation is duplicated C++ ↔ Lua.** `procgen/rock.{h,cpp}`
+  (`generateRock` / `generateRockSdf`, `test_rock.cpp`) is now only reached by the
+  level loader's `kind == "rock"` branch, used by exactly one level
+  (`forest.json`); `flora.lua` already has `flora.rock`, an explicit Lua port of
+  the same SDF generator. With Lua as the single procgen authoring path
+  (ADR-0023/0025, node graph already removed), the C++ rock is redundant. Kept for
+  now (it works + is tested). To retire: migrate forest.json's rock species to
+  `kind:"script"` → `flora.rock(...)`, drop the loader branch + `rock.{h,cpp}` +
+  `test_rock.cpp` + their CMake/Make entries. Caveat: visual equivalence of the
+  Lua rock is author-verify-on-device, and `test_rock`'s coverage would need to
+  move to a `flora.rock` script-VM test.
+
 ## Lua flora / forest assembly
 
 - **`loadVegetation` is a 213-line god-function.** It handles tree/rock/builtin/
