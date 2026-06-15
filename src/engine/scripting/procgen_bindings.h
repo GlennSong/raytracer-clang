@@ -3,11 +3,29 @@
 
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "../../rt_math.h"   // Vec3
 
 namespace engine {
 
 class ScriptVM;
 struct RenderMesh;
+
+// One material-part of a procedural model (ADR-0032): geometry plus the intent
+// to build a RenderMaterial. `hasMaterial == false` means "use the caller's
+// default material" (a bare single-mesh script return — back-compat). `texture`
+// names a built-in procedural texture ("bark" | "leaf"; "" = none); a leaf
+// texture implies alpha-cut.
+struct ScriptMeshPart {
+    std::shared_ptr<RenderMesh> mesh;
+    bool hasMaterial = false;
+    Vec3 albedo{1, 1, 1};
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    bool alphaTest = false;
+    std::string texture;
+};
 
 // The procgen binding surface (ADR-0023): the pure generator vocabulary exposed
 // to Lua. These mirror the node-graph value types and nodes (ADR-0021,
@@ -44,6 +62,14 @@ void openProcgenLibrary(ScriptVM& vm);
 // been called on `vm` first.
 bool runProcgenMesh(ScriptVM& vm, const std::string& code,
                     std::shared_ptr<RenderMesh>& out, std::string* error = nullptr);
+
+// Run a procgen script that returns a *model* — one mesh, or a list of parts —
+// and hand back the parts (ADR-0032). Accepts: a single Mesh (one part,
+// hasMaterial=false), a list of Meshes, or a list of part tables
+// `{ mesh=, texture=, alpha_test=, albedo=, roughness=, metallic= }`. Returns
+// false (with `error`) on a script error or a non-model return.
+bool runProcgenModel(ScriptVM& vm, const std::string& code,
+                     std::vector<ScriptMeshPart>& out, std::string* error = nullptr);
 
 }  // namespace engine
 

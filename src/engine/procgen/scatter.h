@@ -23,6 +23,10 @@ struct ScatterParams {
     float maxHeight = 1e9f;
     double densityScale = 0.03;      // frequency of the density-mask noise
     float densityThreshold = 0.0f;   // keep where density noise > threshold
+    float minSpacing = 0.0f;         // reject candidates within this distance of
+                                     // an accepted one (0 = off). Set to the
+                                     // instance footprint so big meshes (trees)
+                                     // don't jumble. Dart-throwing Poisson disk.
     uint32_t seed = 0;
 };
 

@@ -45,6 +45,20 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
         double d = density.noise2(x * params.densityScale, z * params.densityScale);
         if (d < params.densityThreshold) continue;
 
+        // Footprint spacing (dart-throwing Poisson disk): reject if too close in
+        // XZ to an accepted placement, so large instances don't jumble. The RNG
+        // was already drawn above, so the sequence stays acceptance-independent.
+        if (params.minSpacing > 0.0f) {
+            const double minSq =
+                static_cast<double>(params.minSpacing) * params.minSpacing;
+            bool tooClose = false;
+            for (const Placement& p : placements) {
+                double dx = p.position.x - x, dz = p.position.z - z;
+                if (dx * dx + dz * dz < minSq) { tooClose = true; break; }
+            }
+            if (tooClose) continue;
+        }
+
         placements.push_back({Vec3(x, h, z), yaw, scale});
     }
     return placements;

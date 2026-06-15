@@ -483,12 +483,17 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // these are regenerated runtime objects, not document entities.
 static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
-                           AssetManager& assets, const std::string& levelDir,
+                           Renderer& renderer, AssetManager& assets,
+                           const std::string& levelDir,
                            const std::string& tag = "veg") {
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
-    struct Species { MeshHandle mesh; RenderMaterial material; };
-    std::vector<Species> species;
+    // A species variant is now a multi-part model (ADR-0032): each part is one
+    // {mesh, material} drawn as its own InstanceGroup over the shared transforms,
+    // so bark (opaque) and leaves (alpha-cut) — or any N parts — scatter together.
+    struct Part { MeshHandle mesh; RenderMaterial material; };
+    struct Variant { std::vector<Part> parts; float xzRadius = 0.0f; };
+    std::vector<Variant> variantList;
     uint32_t vegSeed = veg.value("seed", 0u);
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -607,35 +612,76 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
 
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
-            RenderMesh mesh;
+            Variant var;
+            // Add one part; track the canopy footprint (max XZ radius) for spacing.
+            auto addPart = [&](const RenderMesh& m, const RenderMaterial& mat) {
+                if (m.vertices.empty()) return;
+                float r = 0.0f;
+                for (const Vertex& vert : m.vertices)
+                    r = std::max(r, std::sqrt(static_cast<float>(
+                            vert.position.x * vert.position.x +
+                            vert.position.z * vert.position.z)));
+                var.xzRadius = std::max(var.xzRadius, r);
+                Part p;
+                p.mesh = assets.acquireMesh(
+                    m, tag + ":" + std::to_string(speciesIndex) + ":" +
+                           std::to_string(v) + ":" + std::to_string(var.parts.size()));
+                p.material = mat;
+                var.parts.push_back(p);
+            };
+
             if (hasScript) {
 #ifdef RT_ENABLE_SCRIPTING
                 ScriptVM& vm = ensureScriptVm();
                 vm.setGlobalNumber("seed", seed);   // the script reads `seed`
-                std::shared_ptr<RenderMesh> out;
+                std::vector<ScriptMeshPart> parts;
                 std::string err;
-                if (runProcgenMesh(vm, scriptSource, out, &err) && out) mesh = *out;
-                else LOG_ERROR << "flora script error: " << err;
+                if (runProcgenModel(vm, scriptSource, parts, &err)) {
+                    for (const ScriptMeshPart& sp : parts) {
+                        if (!sp.mesh) continue;
+                        RenderMaterial mat = material;   // species JSON default
+                        if (sp.hasMaterial) {
+                            mat = RenderMaterial();
+                            mat.albedo = sp.albedo;
+                            mat.roughness = sp.roughness;
+                            mat.metallic = sp.metallic;
+                            if (sp.alphaTest || sp.texture == "leaf")
+                                mat.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+                            if (sp.texture == "bark") {
+                                TextureData td = barkTexture(256, seed);
+                                if (!td.pixels.empty())
+                                    mat.albedoMap = renderer.uploadTexture(
+                                        td.width, td.height, td.channels, td.pixels.data());
+                            } else if (sp.texture == "leaf") {
+                                TextureData td = leafTexture(128);
+                                if (!td.pixels.empty())
+                                    mat.albedoMap = renderer.uploadTexture(
+                                        td.width, td.height, td.channels, td.pixels.data());
+                            }
+                        }
+                        addPart(*sp.mesh, mat);
+                    }
+                } else {
+                    LOG_ERROR << "flora script error: " << err;
+                }
 #endif
             } else if (kind == "rock") {
-                mesh = rockSdf ? generateRockSdf(rsp, seed)
-                               : generateRock(rp, Noise(seed));
+                addPart(rockSdf ? generateRockSdf(rsp, seed)
+                                : generateRock(rp, Noise(seed)),
+                        material);
             } else {
-                mesh = treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
-                                                 treeSmooth, treeRes, seed)
-                               : generateTree(sys, axiom, iterations, tp, seed);
+                RenderMesh mesh =
+                    treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
+                                              treeSmooth, treeRes, seed)
+                            : generateTree(sys, axiom, iterations, tp, seed);
                 MeshBuilder::bakeHeightColor(mesh, trunkColor, leafColor);
+                addPart(mesh, material);
             }
-            if (mesh.vertices.empty()) continue;
-            Species sp;
-            sp.mesh = assets.acquireMesh(
-                mesh, tag + ":" + std::to_string(speciesIndex) + ":" + std::to_string(v));
-            sp.material = material;
-            species.push_back(sp);
+            if (!var.parts.empty()) variantList.push_back(std::move(var));
         }
         speciesIndex++;
     }
-    if (species.empty()) return;
+    if (variantList.empty()) return;
 
     ScatterParams scatter;
     scatter.regionSize       = veg.value("region", 70.0f);
@@ -647,37 +693,50 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.densityThreshold = veg.value("densityThreshold", -0.2f);
     scatter.seed             = vegSeed;
 
+    // Footprint spacing so big meshes don't jumble: default to the largest
+    // canopy radius * max scale * a factor (<1 lets canopies overlap a little).
+    // A level may override with an explicit `spacing` (world units) or tune the
+    // `spacingFactor`.
+    float maxXz = 0.0f;
+    for (const Variant& var : variantList) maxXz = std::max(maxXz, var.xzRadius);
+    float spacingFactor = veg.value("spacingFactor", 0.9f);
+    scatter.minSpacing = veg.contains("spacing")
+                             ? veg.value("spacing", 0.0f)
+                             : maxXz * scatter.maxScale * spacingFactor;
+
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
 
-    // Collapse the placements into one InstanceGroup per species (ROADMAP Phase B
-    // instancing) instead of an entity per plant: the render system iterates a few
-    // groups and issues one instanced draw each. Plants carry no SourceSpec, so
-    // they were never document entities anyway (ADR-0022).
+    // One InstanceGroup per (variant, part): a variant's parts share the same
+    // per-instance transforms (ROADMAP Phase B instancing). Plants carry no
+    // SourceSpec, so they were never document entities anyway (ADR-0022).
     std::vector<std::vector<Mat4>> buckets =
-        bucketPlacementsBySpecies(placements, species.size(), vegSeed + 7u);
-    for (std::size_t si = 0; si < species.size(); ++si) {
+        bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
+    for (std::size_t si = 0; si < variantList.size(); ++si) {
         if (buckets[si].empty()) continue;
-        InstanceGroup g;
-        g.mesh = species[si].mesh;
-        g.material = species[si].material;
-        g.transforms = std::move(buckets[si]);
+        const std::vector<Mat4>& transforms = buckets[si];
 
-        // Coarse group bounds: centroid of instance origins + the spread + the
-        // mesh's own extent at the largest instance scale (one cheap cull volume).
+        // Coarse group bounds shared by the variant's parts: centroid of instance
+        // origins + the spread (the per-part mesh extent is added below).
         Vec3 centroid(0, 0, 0);
-        for (const Mat4& m : g.transforms)
+        for (const Mat4& m : transforms)
             centroid = centroid + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
-        centroid = centroid / static_cast<Real>(g.transforms.size());
+        centroid = centroid / static_cast<Real>(transforms.size());
         Real spread = 0;
-        for (const Mat4& m : g.transforms)
+        for (const Mat4& m : transforms)
             spread = std::max(spread,
                               (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - centroid).length());
-        BoundingSphere mb = assets.meshBounds(g.mesh);
-        g.boundsCenter = centroid;
-        g.boundsRadius = spread + (mb.center.length() + mb.radius) *
-                                      static_cast<Real>(scatter.maxScale);
 
-        world.add<InstanceGroup>(world.create(), g);
+        for (const Part& part : variantList[si].parts) {
+            InstanceGroup g;
+            g.mesh = part.mesh;
+            g.material = part.material;
+            g.transforms = transforms;
+            BoundingSphere mb = assets.meshBounds(g.mesh);
+            g.boundsCenter = centroid;
+            g.boundsRadius = spread + (mb.center.length() + mb.radius) *
+                                          static_cast<Real>(scatter.maxScale);
+            world.add<InstanceGroup>(world.create(), g);
+        }
     }
 }
 
@@ -719,14 +778,14 @@ bool LevelLoader::load(const std::string& path,
         Noise terrainNoise(root["terrain"].value("seed", 0u));
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
-            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets,
-                           levelDir, "veg");
+            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
+                           renderer, assets, levelDir, "veg");
         // A second, denser pass for ground cover (grass/flowers). Same scatter
         // generator with its own params — typically a low maxSlopeDeg so it lands
         // on the gentle, green ground (terrainColor reads steep slopes as rock).
         if (root.contains("foliage"))
-            loadVegetation(root["foliage"], terrainParams, terrainNoise, world, assets,
-                           levelDir, "foliage");
+            loadVegetation(root["foliage"], terrainParams, terrainNoise, world,
+                           renderer, assets, levelDir, "foliage");
     }
 
     if (root.contains("entities"))

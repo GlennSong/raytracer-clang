@@ -741,4 +741,75 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return true;
 }
 
+namespace {
+// Read one model part from the value at `idx`: either a Mesh userdata, or a
+// table { mesh=, texture=, alpha_test=, albedo=, roughness=, metallic= }.
+bool readModelPart(lua_State* L, int idx, ScriptMeshPart& part) {
+    idx = lua_absindex(L, idx);
+    if (auto* m = static_cast<MeshPtr*>(luaL_testudata(L, idx, kMeshMt))) {
+        part.mesh = *m;
+        part.hasMaterial = true;   // table/list parts describe themselves
+        return true;
+    }
+    if (!lua_istable(L, idx)) return false;
+    lua_getfield(L, idx, "mesh");
+    auto* m = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt));
+    if (m == nullptr) { lua_pop(L, 1); return false; }
+    part.mesh = *m;
+    lua_pop(L, 1);
+    part.hasMaterial = true;
+    part.roughness = static_cast<float>(optField(L, idx, "roughness", part.roughness));
+    part.metallic = static_cast<float>(optField(L, idx, "metallic", part.metallic));
+    lua_getfield(L, idx, "alpha_test");
+    part.alphaTest = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "texture");
+    if (lua_isstring(L, -1)) part.texture = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    part.albedo = optVec3Field(L, idx, "albedo", part.albedo);
+    return true;
+}
+}  // namespace
+
+bool runProcgenModel(ScriptVM& vm, const std::string& code,
+                     std::vector<ScriptMeshPart>& out, std::string* error) {
+    lua_State* L = luaState(vm);
+    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
+        lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (error != nullptr) {
+            const char* msg = lua_tostring(L, -1);
+            *error = msg != nullptr ? msg : "unknown Lua error";
+        }
+        lua_pop(L, 1);
+        return false;
+    }
+
+    out.clear();
+    // A single Mesh return -> one part using the caller's default material.
+    if (luaL_testudata(L, -1, kMeshMt) != nullptr) {
+        ScriptMeshPart part;
+        readModelPart(L, -1, part);
+        part.hasMaterial = false;
+        out.push_back(std::move(part));
+        lua_pop(L, 1);
+        return true;
+    }
+    // Otherwise a list (array) of parts (Mesh userdata or part tables).
+    if (lua_istable(L, -1)) {
+        lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            ScriptMeshPart part;
+            if (readModelPart(L, -1, part)) out.push_back(std::move(part));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (out.empty()) {
+        if (error != nullptr) *error = "procgen script did not return a model";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace engine

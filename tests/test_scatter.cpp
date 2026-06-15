@@ -36,6 +36,30 @@ TEST_CASE(scatter_is_deterministic_for_a_seed) {
     CHECK(same);
 }
 
+TEST_CASE(scatter_min_spacing_keeps_instances_apart) {
+    // Footprint spacing: no two accepted placements are closer than minSpacing
+    // in XZ, and the constraint thins the result vs the unconstrained scatter.
+    ScatterParams sp;
+    sp.count = 600; sp.seed = 11; sp.regionSize = 60.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+
+    auto dense = scatterOnTerrain(sp, t, n);
+    sp.minSpacing = 5.0f;
+    auto spaced = scatterOnTerrain(sp, t, n);
+
+    CHECK(spaced.size() < dense.size());   // spacing rejects crowded candidates
+    CHECK(!spaced.empty());
+    bool ok = true;
+    for (size_t i = 0; i < spaced.size(); i++)
+        for (size_t j = i + 1; j < spaced.size(); j++) {
+            double dx = spaced[i].position.x - spaced[j].position.x;
+            double dz = spaced[i].position.z - spaced[j].position.z;
+            if (dx * dx + dz * dz < 5.0 * 5.0 - 1e-6) ok = false;
+        }
+    CHECK(ok);
+}
+
 TEST_CASE(scatter_respects_region_surface_scale_and_yaw) {
     ScatterParams sp; sp.count = 500; sp.seed = 7;
     sp.minScale = 0.5f; sp.maxScale = 2.0f;
