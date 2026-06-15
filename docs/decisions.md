@@ -1730,6 +1730,106 @@ with the L-system.
 
 ---
 
+## ADR-0029 — Branch skinning is generalized cylinders; SDF retained for fusion
+**Status:** Accepted (retroactive — describes shipped code) · **Date:** 2026-06-15
+
+**Context.** ADR-0021 made SDF + Surface Nets the geometric-modeling path. For
+tree *branches* that is the wrong default: `buildTurtleMeshSdf` floors capsule
+radius at ~1.5 grid cells (thin twigs vanish or balloon; cost O(resolution³)),
+Surface Nets emits no UVs/tangents (no bark texture — the clay look), and
+smooth-min rounds away forks. Phase 1 of `docs/lsystem-botany-plan.md` (§4.1)
+shipped a different path in `src/engine/procgen/tree.cpp` (`growTree`); this ADR
+ratifies it.
+
+**Decision.**
+1. **Branches are skinned as generalized cylinders** — sweep a ring of vertices
+   along each branch internode (`addTube` per node→child edge), ring radius from
+   the pipe model, **UVs flowing length × circumference** so bark textures and
+   tangents (normal maps) work. Cost O(branches × ring-verts); twigs are free; no
+   volumetric grid.
+2. **This sits *alongside* the SDF path, not replacing it.** It is a Mesh
+   generator in the ADR-0021 sense (produces the `Mesh` value type). SDF +
+   Surface Nets remains the path for **CSG / organic fusion** (rocks today; the
+   planned lower-trunk / root-flare / burl hybrid).
+3. **Radii by the pipe model** (da Vinci / Murray's law): a **bottom-up pass**
+   over the node tree (`assignRadii`), `r_parent^n = Σ r_child^n`, `n ≈ 2.3`,
+   with a tip-radius clamp. The forward `taper` heuristic stays as a fallback.
+4. **The bark mesh doubles as the static collider** (collision triangle soup =
+   branch vertices/indices; leaves excluded — you bounce off wood, not foliage).
+
+**Boundary (SDF vs cylinder).** Cylinders for all branches now; SDF smooth-union
+is reserved for the lower trunk / root flare / burls where fusion genuinely
+matters. That **hybrid is not yet implemented** — defining the seam is part of
+this decision, building it is owed (botany §4.1).
+
+**Current limitations / planned refinement.** Rings use a per-segment frame
+(`frameFor`), which can drift in roll between internodes; the
+rotation-minimizing frame + curved internodes (botany §3.5) is the planned
+upgrade for twist-free UVs and curvature. Branch junctions simply overlap (hidden
+under bark/foliage); proper stitching is later polish.
+
+**Alternatives considered.** Pure SDF (rejected — twigs, missing UVs, O(res³));
+metaballs (same UV/cost problems); kit-bashed disjoint cylinders
+(`buildTurtleMesh`) (rejected — self-intersecting joints, no continuity, poor
+collider).
+
+**Consequences / tech debt.** Two skinning paths to maintain. The trunk-flare
+SDF hybrid and the RMF/curvature pass are owed (botany §3.5, §4.1).
+
+**Revisit trigger.** Revisit the SDF/cylinder boundary when the trunk-flare
+hybrid is built, or if junction artifacts show through under foliage.
+
+---
+
+## ADR-0030 — Parametric L-system with expression-valued successor parameters
+**Status:** Accepted (retroactive — describes shipped code) · **Date:** 2026-06-15
+
+**Context.** The plain `char` `LSystem` cannot carry magnitudes — length/width/
+angle live in one global `TurtleParams`, so a self-similar grammar cannot taper
+per recursion. ABoP §1.10 parametric modules fix this. Botany plan §3.1 flagged
+an open decision: a **restricted subset** (parameters passed through, no
+expressions) vs **full arithmetic**. Phase 3a shipped `ParametricLSystem` in
+`src/engine/procgen/lsystem.{h,cpp}`; this ADR ratifies what was built.
+
+**Decision.**
+1. **Modules carry numeric parameters** (`Module` = symbol + `float` params;
+   `ModuleString` replaces the char string for this path). Both coexist: the
+   `char` `LSystem` stays for simple grammars, `ParametricLSystem` for trees.
+2. **Successor parameters are arithmetic *expressions* over the predecessor's
+   formal parameters** — we chose the **fuller** option, not the plan's
+   recommended restricted subset. Supported: `+ - * /`, parentheses, unary minus,
+   numeric literals, formal names; each compiles to a
+   `ParamExpr = std::function<float(params)>` (mirrors the `Sdf = std::function`
+   precedent, ADR-0021). E.g. `A(l,w)` →
+   `F(l,w)[+(30)A(l*0.7,w*0.6)][-(30)A(l*0.7,w*0.6)]`.
+3. **Productions match by symbol *and* parameter arity**; unmatched modules are
+   copied verbatim. Repeating a predecessor adds **weighted stochastic
+   alternatives** (seeded RNG), as in `LSystem` — deterministic per
+   `(params, seed)` (ADR-0002).
+
+**Why fuller than planned.** Tapering by depth (`l*0.7`, `w*0.6`) is the entire
+point and needs at least multiply; once an expression evaluator exists, full
+`+ - * /` is marginal extra effort and keeps length/width/angle math in the
+grammar instead of a second pass. The restricted subset would have forced taper
+back into the global `TurtleParams` — the very thing this replaces.
+
+**Alternatives considered.** Restricted pass-through parameters (rejected — can't
+express taper); a full embedded scripting expression language / Lua-per-rule
+(rejected — overkill on a hot path; four operators cover ABoP grammars); keep
+taper in `TurtleParams` only (rejected — global, not per-branch).
+
+**Consequences / tech debt.** A small expression parser/evaluator to maintain;
+published ABoP grammars become near copy-paste. **Owed:** the Lua binding still
+exposes only the `char` `LSystem` (`flora.lua` uses `lsystem.create/rule`) —
+`growTree` uses `ParametricLSystem` directly in C++; exposing the parametric
+system to Lua is future work if recipes want it. Context-sensitivity (`a<b>c`)
+and production predicates/guards remain future (botany §3.5–3.6).
+
+**Revisit trigger.** Revisit if grammars need conditionals/guards
+(`F(s):s>1 -> …`), or a second numeric type (e.g. vector parameters) in modules.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

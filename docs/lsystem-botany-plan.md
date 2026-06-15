@@ -196,7 +196,8 @@ Each phase is independently shippable and visibly better than the last.
   alphabet (vines, flowers, ferns) remain. Where the *variety* lives.
 
 The two ADRs flagged in §7 (branch skinning; parametric semantics) are now
-worth writing retroactively, since the implementations exist to describe.
+**written: ADR-0029** (generalized cylinders; SDF retained for fusion) and
+**ADR-0030** (parametric L-system with expression-valued successors).
 
 Phases 1–2 alone move the trees from "hotdog fingers" to "recognizable tree
 with foliage." 3–4 are what make a *variety* of believable species.
@@ -244,7 +245,7 @@ substrate (ADR-0021):
 
 - Slots under **Tier 4 → Phase B** of `docs/ROADMAP.md` (the L-system is one of
   the "three generators on one substrate").
-- Two ADRs to write before building: **branch mesh skinning** (generalized
-  cylinders + SDF hybrid, §4.1) and **parametric L-system semantics** (§3.1).
+- Branch-skinning and parametric-semantics decisions are recorded retroactively
+  in **ADR-0029** (§4.1) and **ADR-0030** (§3.1).
 - Update `docs/lsystem-grammar.md` as the alphabet grows; its "Planned
   extensions" list is this plan's Phase 0/2/3 in miniature.
