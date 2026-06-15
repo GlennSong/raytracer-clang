@@ -26,7 +26,7 @@ struct TreeParams {
     float phyllotaxis   = 137.5f;   // roll advance between successive children (deg)
 
     // --- Organic shaping (centerline bend; thin branches bend most) ---
-    float droop         = 0.35f;    // gravity sag: bend each segment toward -Y
+    float droop         = 0.22f;    // gravity sag per segment, accumulates down a limb
     float wander        = 0.06f;    // lateral random meander (kills the stiffness)
 
     // --- Radii (pipe model) ---

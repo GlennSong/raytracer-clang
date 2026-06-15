@@ -124,13 +124,33 @@ void assignRadii(std::vector<Node>& nodes, const TreeParams& p) {
     }
 }
 
-// Organic shaping: bend each segment toward gravity (droop) and add a lateral
-// meander (wander), thin branches bending most. Applied to node positions in
-// parent-before-child order (walkSkeleton's push order), so a child inherits its
-// parent's bent position and the bends accumulate into cantilever curves while
-// joints stay connected. The trunk (thick, ~vertical) barely moves.
+// Organic shaping: bend branches under gravity (droop) and add a lateral
+// meander (wander), thin branches bending most. The key is that the bend
+// *accumulates* down a limb — each apical segment bends relative to its parent's
+// already-bent direction, so a straight rod of skeleton nodes curls into a
+// cantilever arc (more sag toward the tip), not just a uniform tilt. At a fork a
+// lateral child bends from its *own* direction, preserving the branch angle.
+// Runs in parent-before-child order, so children inherit the bent positions and
+// joints stay connected; the thick ~vertical trunk (thin~0) barely moves.
 void shapeBranches(std::vector<Node>& nodes, const TreeParams& p, std::mt19937& rng) {
     if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f)) return;
+
+    // Apical (straightest) child per node, from the original geometry.
+    std::vector<int> cont(nodes.size(), -1);
+    std::vector<double> best(nodes.size(), -2.0);
+    for (size_t i = 1; i < nodes.size(); i++) {
+        int par = nodes[i].parent;
+        if (par < 0) continue;
+        Vec3 inDir = nodes[par].parent >= 0
+                         ? normalize(nodes[par].pos - nodes[nodes[par].parent].pos)
+                         : nodes[par].heading;
+        Vec3 d = nodes[i].pos - nodes[par].pos;
+        double L = d.length();
+        if (L < 1e-9) continue;
+        double dp = dot(d * (1.0 / L), inDir);
+        if (dp > best[par]) { best[par] = dp; cont[par] = static_cast<int>(i); }
+    }
+
     std::vector<Vec3> orig(nodes.size());
     for (size_t i = 0; i < nodes.size(); i++) orig[i] = nodes[i].pos;
 
@@ -142,10 +162,16 @@ void shapeBranches(std::vector<Node>& nodes, const TreeParams& p, std::mt19937& 
         Vec3 off = orig[i] - orig[par];
         float len = static_cast<float>(off.length());
         if (len < 1e-6f) { nodes[i].pos = nodes[par].pos; continue; }
-        Vec3 dir = off * (1.0f / len);
-        float thin = std::clamp(1.0f - nodes[i].radius / trunkR, 0.0f, 1.0f);
 
-        Vec3 bent = normalize(dir + Vec3(0, -1, 0) * static_cast<double>(p.droop * thin));
+        // Base direction: the parent's already-bent direction when this is the
+        // apical continuation (bends accumulate into a curve), else the segment's
+        // own direction at a fork (keep the branch angle).
+        Vec3 base = off * (1.0f / len);
+        if (cont[par] == static_cast<int>(i) && nodes[par].parent >= 0)
+            base = normalize(nodes[par].pos - nodes[nodes[par].parent].pos);
+
+        float thin = std::clamp(1.0f - nodes[i].radius / trunkR, 0.0f, 1.0f);
+        Vec3 bent = normalize(base + Vec3(0, -1, 0) * static_cast<double>(p.droop * thin));
         Vec3 ref = std::abs(bent.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
         Vec3 side = normalize(cross(bent, ref));
         Vec3 up = normalize(cross(side, bent));
