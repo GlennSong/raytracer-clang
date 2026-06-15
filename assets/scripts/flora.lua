@@ -41,6 +41,73 @@ local SPECIES = {
               rules = { "F[+X][-X]FX", "FF[+X]X", "F[-X][/X]FX" } },
 }
 
+-- Parametric-grammar species (ADR-0030/0032): each defines a *parametric*
+-- L-system (successor params are expressions over the predecessor's) plus skin
+-- params, grown by flora.param_tree into the real curved generalized-cylinder
+-- tree (bark + alpha-cut leaves). Structurally distinct, not just retuned:
+-- oak is broad and drooping, pine a narrow whorled conifer, birch slender/weepy.
+local PARAM_SPECIES = {
+    oak = { iterations = 6, length = 2.2, width = 0.14, angle = 40,
+            falloff = 0.82, leader_falloff = 0.9, branches = 2,
+            droop = 0.26, wander = 0.08, angle_jitter = 20, ring_segments = 6,
+            tip_radius = 0.02, pipe_exponent = 2.4, radius_scale = 1.6,
+            leaves_per_tip = 8, leaf_size = 0.2,
+            bark_color = { 0.32, 0.23, 0.15 }, leaf_color = { 0.20, 0.46, 0.13 } },
+    pine = { iterations = 7, length = 1.5, width = 0.13, angle = 70,
+             falloff = 0.58, leader_falloff = 0.95, branches = 3,
+             droop = 0.12, wander = 0.05, angle_jitter = 14, ring_segments = 6,
+             tip_radius = 0.018, pipe_exponent = 2.3, radius_scale = 1.4,
+             leaves_per_tip = 6, leaf_size = 0.13,
+             bark_color = { 0.28, 0.19, 0.12 }, leaf_color = { 0.12, 0.34, 0.16 } },
+    birch = { iterations = 6, length = 2.0, width = 0.1, angle = 30,
+              falloff = 0.86, leader_falloff = 0.92, branches = 2,
+              droop = 0.36, wander = 0.11, angle_jitter = 22, ring_segments = 6,
+              tip_radius = 0.016, pipe_exponent = 2.3, radius_scale = 1.1,
+              leaves_per_tip = 7, leaf_size = 0.16,
+              bark_color = { 0.78, 0.76, 0.70 }, leaf_color = { 0.42, 0.55, 0.18 } },
+}
+
+-- Grow a tree from a parametric grammar built out of the species params, and
+-- return it as a MODEL: a list of {mesh, material} parts (bark opaque + leaf
+-- alpha-cut), which the vegetation loader scatters as separate instance groups.
+function flora.param_tree(seed, opts)
+    opts = opts or {}
+    local s = PARAM_SPECIES[opts.species or "oak"] or PARAM_SPECIES.oak
+    local function pick(k) if opts[k] ~= nil then return opts[k] else return s[k] end end
+
+    local angle, fall, lead = pick("angle"), pick("falloff"), pick("leader_falloff")
+    local branches, roll = pick("branches"), 137.5
+    -- Successor: lay an internode, spawn `branches` golden-angle side branches
+    -- (each pitched away and shrunk), then continue a central leader.
+    local succ = "F(l,w)"
+    for _ = 1, branches do
+        succ = succ .. string.format("/(%g)[&(%g)A(l*%g,w*0.6)]", roll, angle, fall)
+    end
+    succ = succ .. string.format("/(%g)A(l*%g,w*0.75)", roll, lead)
+
+    local sys = lsystem.parametric()
+    sys:rule("A(l,w)", succ)
+    local modules = sys:expand(
+        string.format("A(%g,%g)", pick("length"), pick("width")),
+        pick("iterations"), seed)
+
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = pick("tip_radius"), pipe_exponent = pick("pipe_exponent"),
+        radius_scale = pick("radius_scale"), ring_segments = pick("ring_segments"),
+        droop = pick("droop"), wander = pick("wander"),
+        angle_jitter = pick("angle_jitter"),
+        leaves_per_tip = pick("leaves_per_tip"), leaf_size = pick("leaf_size"),
+        bark_color = pick("bark_color"), leaf_color = pick("leaf_color"),
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] =
+            { mesh = leaves, texture = "leaf", alpha_test = true, roughness = 0.6 }
+    end
+    return parts
+end
+
 -- A tapered, welded trunk/branches with real (oriented) leaf cards instead of
 -- blobs. `opts.species` picks a preset; individual fields override it.
 function flora.tree(seed, opts)

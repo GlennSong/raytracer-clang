@@ -9,79 +9,48 @@
  },
  "terrain": {
   "seed": 1337,
-  "size": 80,
-  "resolution": 96,
+  "size": 140,
+  "resolution": 128,
   "heightScale": 8,
   "noiseScale": 0.03,
   "octaves": 5,
   "warp": 0.3,
   "material": {
-   "albedo": [
-    1.0,
-    1.0,
-    1.0
-   ],
+   "albedo": [1.0, 1.0, 1.0],
    "roughness": 1.0
   }
  },
  "vegetation": {
   "seed": 24,
-  "region": 72,
-  "count": 700,
-  "maxSlopeDeg": 38,
-  "minScale": 0.7,
+  "region": 120,
+  "count": 600,
+  "maxSlopeDeg": 34,
+  "minScale": 0.8,
   "maxScale": 1.4,
-  "densityScale": 0.06,
-  "densityThreshold": -0.4,
+  "spacingFactor": 0.8,
+  "densityScale": 0.05,
+  "densityThreshold": -0.5,
   "species": [
    {
     "kind": "script",
-    "script": "return flora.tree(seed, {species='oak',   res=44})",
-    "variants": 3,
-    "material": {
-     "albedo": [
-      1.0,
-      1.0,
-      1.0
-     ],
-     "roughness": 1.0
-    }
+    "script": "return flora.param_tree(seed, {species='oak'})",
+    "variants": 3
    },
    {
     "kind": "script",
-    "script": "return flora.tree(seed, {species='pine',  iterations=3, res=44})",
-    "variants": 3,
-    "material": {
-     "albedo": [
-      1.0,
-      1.0,
-      1.0
-     ],
-     "roughness": 1.0
-    }
+    "script": "return flora.param_tree(seed, {species='pine'})",
+    "variants": 3
    },
    {
     "kind": "script",
-    "script": "return flora.tree(seed, {species='birch', iterations=3, res=44})",
-    "variants": 3,
-    "material": {
-     "albedo": [
-      1.0,
-      1.0,
-      1.0
-     ],
-     "roughness": 1.0
-    }
+    "script": "return flora.param_tree(seed, {species='birch'})",
+    "variants": 3
    },
    {
     "kind": "rock",
     "variants": 3,
     "material": {
-     "albedo": [
-      0.5,
-      0.5,
-      0.52
-     ],
+     "albedo": [0.5, 0.5, 0.52],
      "roughness": 1.0
     }
    }
@@ -136,8 +105,8 @@
  },
  "foliage": {
   "seed": 77,
-  "region": 72,
-  "count": 1100,
+  "region": 120,
+  "count": 1800,
   "maxSlopeDeg": 24,
   "minScale": 0.5,
   "maxScale": 1.0,

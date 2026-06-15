@@ -41,6 +41,33 @@ std::shared_ptr<RenderMesh> run(ScriptVM& vm, const char* code) {
 
 }  // namespace
 
+TEST_CASE(flora_param_tree_returns_bark_and_leaf_parts) {
+    // The parametric path (ADR-0030/0032): flora.param_tree builds a grammar,
+    // skins the real curved tree, and returns a two-part model (opaque bark +
+    // alpha-cut leaves) for the multi-material scatter.
+    FloraVM f;
+    std::vector<ScriptMeshPart> parts;
+    std::string err;
+    bool ok = runProcgenModel(f.vm, "return flora.param_tree(7, {species='pine'})",
+                              parts, &err);
+    if (!ok) std::printf("    run error: %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(parts.size() == 2u);
+    if (parts.size() == 2) {
+        CHECK(parts[0].texture == "bark");
+        CHECK(parts[0].mesh && parts[0].mesh->vertices.size() > 100);
+        CHECK(parts[1].texture == "leaf");
+        CHECK(parts[1].alphaTest);
+        CHECK(parts[1].mesh && !parts[1].mesh->vertices.empty());
+    }
+    // Different species => different geometry (structurally distinct grammars).
+    std::vector<ScriptMeshPart> oak;
+    runProcgenModel(f.vm, "return flora.param_tree(7, {species='oak'})", oak, nullptr);
+    CHECK(!oak.empty());
+    if (!oak.empty() && parts.size() == 2)
+        CHECK(oak[0].mesh->vertices.size() != parts[0].mesh->vertices.size());
+}
+
 TEST_CASE(flora_tree_has_real_leaf_cards_not_blobs) {
     FloraVM f;
     // Full canopy vs. branches-only (leaf_step huge keeps no leaf cards): the
