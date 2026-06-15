@@ -1925,8 +1925,10 @@ cover the cases, ADR-0021 "distill, don't design up front").
 **Consequences / tech debt.** `growTree`'s C++ `shape:"tree"` path still spawns
 its two entities by hand (could fold onto the same N-part path later). Static
 placement of arbitrary N-part Lua models isn't wired (only scatter is). Built-in
-texture *names* are a stopgap until a real texture/material binding. Per-trunk
-capsule colliders and LOD for the forest remain owed.
+texture *names* are a stopgap until a real texture/material binding. A scattered
+species may opt into a **per-trunk static capsule collider** (`collide: true`,
+auto-measured from the mesh or `colliderRadius`/`colliderHeight`), one body per
+instance — done. LOD for distant instances remains owed.
 
 **Revisit trigger.** Revisit when a part needs an authored (non-built-in)
 texture or a shared material across assets, or when N-part static placement is
@@ -1961,7 +1963,7 @@ to be replaced; listed here so they stay visible.
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
-| ~~Forest uses the old SDF tree, not `growTree`~~ | ~~`assets/levels/forest.json`~~ | *Resolved (ADR-0032): `flora.param_tree` grows the real curved tree from a parametric grammar and returns a bark+leaf model; `loadVegetation` scatters N parts as N instance groups with footprint spacing; `forest.json` uses three param-tree species. Owed: per-trunk capsule colliders (forest trees have no collision yet) and LOD for distant instances.* | Capsule trunk colliders + instance LOD |
+| ~~Forest uses the old SDF tree, not `growTree`~~ | ~~`assets/levels/forest.json`~~ | *Resolved (ADR-0032): `flora.param_tree` grows the real curved tree from a parametric grammar and returns a bark+leaf model; `loadVegetation` scatters N parts as N instance groups with footprint spacing + opt-in per-trunk capsule colliders; `forest.json` uses three collidable param-tree species. Owed: LOD for distant instances.* | Instanced LOD for distant plants |
 | Offline path tracer skips scatter + glTF | `src/level_scene.cpp` | The offline tracer now renders procgen terrain and the hero `shape:"tree"` (per-vertex normal/uv/color + alpha-cut leaf cards, for realtime↔offline parity), but not the `vegetation`/`foliage` scatter or glTF `mesh` entities — so `forest.json` renders terrain only offline | Expand scatter instances to triangles (or share the generator) + tessellate glTF offline |
 | ~~`ParametricLSystem` not exposed to Lua~~ | ~~`engine/scripting/procgen_bindings.cpp`~~ | *Resolved (ADR-0030): `lsystem.parametric()` (rule/expand with expression successors) + `tree.skin(modules, params, seed) -> bark, leaves` are bound; `growTree` was split into a grammar half and a reusable `skinTree`, so Lua authors the grammar and skins the real curved-cylinder tree. Covered by `procgen_script_skins_a_parametric_tree`.* | — |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |

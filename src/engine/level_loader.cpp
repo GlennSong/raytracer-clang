@@ -492,7 +492,16 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // {mesh, material} drawn as its own InstanceGroup over the shared transforms,
     // so bark (opaque) and leaves (alpha-cut) — or any N parts — scatter together.
     struct Part { MeshHandle mesh; RenderMaterial material; };
-    struct Variant { std::vector<Part> parts; float xzRadius = 0.0f; };
+    struct Variant {
+        std::vector<Part> parts;
+        float xzRadius = 0.0f;       // canopy footprint, for scatter spacing
+        float trunkHeight = 0.0f;    // measured mesh height (capsule collider)
+        float trunkRadius = 0.0f;    // measured base footprint (capsule collider)
+        bool collide = false;
+        float colliderRadius = 0.0f; // 0 = auto from trunkRadius
+        float colliderHeight = 0.0f; // 0 = auto from trunkHeight
+        double colliderFriction = 0.8;
+    };
     std::vector<Variant> variantList;
     uint32_t vegSeed = veg.value("seed", 0u);
 
@@ -584,6 +593,13 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         RenderMaterial material;
         if (s.contains("material")) applyMaterial(s["material"], material);
 
+        // Optional per-trunk capsule collider for this species (forest trees you
+        // bounce off). Radius/height auto-measured from the mesh unless given.
+        bool spCollide = s.value("collide", false);
+        float spColRadius = s.value("colliderRadius", 0.0f);
+        float spColHeight = s.value("colliderHeight", 0.0f);
+        double spColFriction = s.value("colliderFriction", 0.8);
+
         // Optional: this species' mesh comes from a Lua flora script (inline
         // chunk, or a level-relative .lua path), evaluated per variant.
         std::string scriptSpec = s.value("script", std::string());
@@ -613,15 +629,31 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
             Variant var;
-            // Add one part; track the canopy footprint (max XZ radius) for spacing.
+            var.collide = spCollide;
+            var.colliderRadius = spColRadius;
+            var.colliderHeight = spColHeight;
+            var.colliderFriction = spColFriction;
+            // Add one part; measure the canopy footprint (XZ radius, for scatter
+            // spacing) and the trunk capsule (mesh height + base footprint).
             auto addPart = [&](const RenderMesh& m, const RenderMaterial& mat) {
                 if (m.vertices.empty()) return;
-                float r = 0.0f;
-                for (const Vertex& vert : m.vertices)
+                float r = 0.0f, maxY = 0.0f;
+                for (const Vertex& vert : m.vertices) {
                     r = std::max(r, std::sqrt(static_cast<float>(
                             vert.position.x * vert.position.x +
                             vert.position.z * vert.position.z)));
+                    maxY = std::max(maxY, static_cast<float>(vert.position.y));
+                }
                 var.xzRadius = std::max(var.xzRadius, r);
+                var.trunkHeight = std::max(var.trunkHeight, maxY);
+                // Base footprint: widest XZ in the lowest fifth (the trunk).
+                float yThresh = 0.2f * maxY, baseR = 0.0f;
+                for (const Vertex& vert : m.vertices)
+                    if (vert.position.y <= yThresh)
+                        baseR = std::max(baseR, std::sqrt(static_cast<float>(
+                                vert.position.x * vert.position.x +
+                                vert.position.z * vert.position.z)));
+                var.trunkRadius = std::max(var.trunkRadius, baseR);
                 Part p;
                 p.mesh = assets.acquireMesh(
                     m, tag + ":" + std::to_string(speciesIndex) + ":" +
@@ -736,6 +768,38 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             g.boundsRadius = spread + (mb.center.length() + mb.radius) *
                                           static_cast<Real>(scatter.maxScale);
             world.add<InstanceGroup>(world.create(), g);
+        }
+
+        // Per-trunk static capsule colliders (one body per instance) so you
+        // bounce off forest trees. Cheap vs the bark triangle soup; the
+        // InstanceGroups above stay render-only. No SourceSpec -> not serialized.
+        const Variant& var = variantList[si];
+        float colR = var.colliderRadius > 0.0f ? var.colliderRadius : var.trunkRadius;
+        float colH = var.colliderHeight > 0.0f ? var.colliderHeight : var.trunkHeight;
+        if (var.collide && colR > 1e-3f && colH > 1e-3f) {
+            for (const Mat4& m : transforms) {
+                Vec3 pos(m.m[0][3], m.m[1][3], m.m[2][3]);
+                Real s = Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length();   // uniform
+                float rr = colR * static_cast<float>(s);
+                float hh = colH * static_cast<float>(s);
+
+                Entity e = world.create();
+                Transform t;
+                t.position = Vec3(pos.x, pos.y + hh * 0.5, pos.z);
+                world.add<Transform>(e, t);
+                world.add<PrevTransform>(e, PrevTransform{t});
+
+                Collider c;
+                c.shape = ColliderShape::Capsule;
+                c.radius = rr;
+                c.halfHeight = std::max(0.0, hh * 0.5 - rr);
+                c.friction = var.colliderFriction;
+                world.add<Collider>(e, c);
+
+                RigidBody rb;
+                rb.motion = BodyMotion::Static;
+                world.add<RigidBody>(e, rb);
+            }
         }
     }
 }

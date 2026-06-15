@@ -34,17 +34,20 @@
    {
     "kind": "script",
     "script": "return flora.param_tree(seed, {species='oak'})",
-    "variants": 3
+    "variants": 3,
+    "collide": true
    },
    {
     "kind": "script",
     "script": "return flora.param_tree(seed, {species='pine'})",
-    "variants": 3
+    "variants": 3,
+    "collide": true
    },
    {
     "kind": "script",
     "script": "return flora.param_tree(seed, {species='birch'})",
-    "variants": 3
+    "variants": 3,
+    "collide": true
    },
    {
     "kind": "rock",
