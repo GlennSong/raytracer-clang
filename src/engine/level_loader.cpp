@@ -181,10 +181,17 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
 
     const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed);
 
-    // Bark entity: textured, collidable.
+    // Bark entity: textured, collidable. It is the tree's *document* entity —
+    // it carries the SourceSpec (with the recipe) so the whole tree round-trips
+    // through the LevelWriter; the leaf entity is a runtime companion (no
+    // SourceSpec) regenerated from the recipe on load.
     {
         Entity e = world.create();
         createEntityCommon(e, ent, world);
+
+        SourceSpec spec = buildSourceSpec(ent, "tree");
+        if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
+        world.add<SourceSpec>(e, spec);
 
         Renderable r;
         r.mesh = assets.acquireMesh(tm.branches, key + ":bark");

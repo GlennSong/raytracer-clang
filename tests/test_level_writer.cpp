@@ -379,6 +379,45 @@ TEST_CASE(level_writer_round_trips_mesh_entities) {
     CHECK(!root["entities"][0].contains("shape"));
 }
 
+TEST_CASE(level_writer_round_trips_recipe_entities) {
+    // Regression: a procedural recipe entity (shape:"tree") used to carry no
+    // SourceSpec, so the writer dropped it on save — the tree vanished on the
+    // edit->play "compile" (silent data loss). It must now survive, recipe and
+    // all, with no auto size/material block leaking in.
+    TmpFile cleanup;
+    World world;
+    Entity tree = world.create();
+    Transform t;
+    t.position = Vec3(0, 0, -8);
+    world.add<Transform>(tree, t);
+    SourceSpec spec;
+    spec.shape = "tree";
+    spec.recipe = R"({"seed":7,"iterations":6,"leafColor":[0.2,0.46,0.14]})";
+    spec.hasPhysics = true;
+    spec.motion = "static";
+    world.add<SourceSpec>(tree, spec);
+    Renderable r;                       // the bark render entity also has a material
+    r.material.albedo = Vec3(1, 1, 1);
+    world.add<Renderable>(tree, r);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    CHECK(root["entities"].size() == 1);
+
+    const json& ent = root["entities"][0];
+    CHECK(ent["shape"] == "tree");
+    CHECK(ent.contains("tree"));
+    CHECK(ent["tree"]["seed"].get<int>() == 7);
+    CHECK(ent["tree"]["iterations"].get<int>() == 6);
+    CHECK_APPROX(ent["tree"]["leafColor"][1].get<double>(), 0.46, 1e-9);
+    CHECK_APPROX(ent["position"][2].get<double>(), -8.0, 1e-9);
+    CHECK(ent["physics"]["motion"] == "static");
+    // The generator owns size and color — neither leaks into the document.
+    CHECK(!ent.contains("size"));
+    CHECK(!ent.contains("material"));
+}
+
 TEST_CASE(editor_bridge_lists_and_selects) {
     World world;
     Entity box = addBox(world, Vec3(0, 0, 0));

@@ -194,6 +194,7 @@ void EditorSystem::onStart(FrameContext& ctx) {
             SourceSpec* spec = world.get<SourceSpec>(e);
             Renderable* r = world.get<Renderable>(e);
             if (!spec || !r || !spec->meshFile.empty()) return;
+            if (!spec->recipe.empty()) return;   // recipe entities (trees) don't rebuild from Size
             RenderMesh mesh = MeshBuilder::shape(spec->shape, spec->size);
             if (!mesh.vertices.empty()) r->mesh = renderer->uploadMesh(mesh);
         };
