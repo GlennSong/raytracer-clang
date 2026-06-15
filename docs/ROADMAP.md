@@ -348,6 +348,25 @@ building block, not a generator. Seedable (ADR-0021/0002).
 
 **Depends on:** Nothing. Pairs with the mesh builder (3.3).
 
+### 3.8 Curve library
+**Status:** Not started (design ratified — ADR-0031).
+**Why:** One curve primitive serves procgen (branch centerlines for the organic
+branches of ADR-0029 §3.5), animation (F-curves), and 2D vector / SVG import.
+Slotted into Tier 3 as a value-type building block alongside noise (3.7), not a
+generator. Pure math, no deps, Linux/CI-testable.
+
+**Decision (ADR-0031):** split a **math kernel** from its consumers. Kernel is a
+piecewise-cubic `Spline<T>` for `T ∈ {float, Vec2, Vec3}`, stored as Hermite
+knots (value + in/out tangent) — the canonical form Catmull-Rom, cubic Bezier,
+and keyframes all lower to; exposes `eval`/`tangent`. Per-consumer services layer
+on top in their own modules: `Path3` (arc-length LUT + rotation-minimizing frame,
+procgen), `AnimCurve` (time + tangent modes, animation), `Path2` + SVG parser
+(asset loading). **Phase 1 (now):** kernel + Catmull-Rom + arc-length + RMF,
+which immediately gives `growTree` continuous curved branches (ADR-0029 §3.5).
+AnimCurve and SVG follow when their domains need them.
+
+**Depends on:** Nothing. First consumer is the tree branch sweep (Tier 4 / B.1).
+
 ---
 
 ## Tier 4 — Procedural Generation

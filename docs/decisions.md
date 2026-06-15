@@ -1830,6 +1830,62 @@ and production predicates/guards remain future (botany §3.5–3.6).
 
 ---
 
+## ADR-0031 — Curves are a templated cubic Hermite kernel; consumers layer on top
+**Status:** Accepted (design ratified; implementation pending) · **Date:** 2026-06-15
+
+**Context.** Curves are wanted in at least three places: procgen geometry (branch
+centerlines for the §3.5 organic-branch work / ADR-0029), F-curves for animation
+(value-over-time channels), and 2D vector / SVG import. The branch-curvature work
+needs one *now*, so the representation is on the critical path rather than
+hypothetical. The failure mode is a single mega `Curve` class trying to serve all
+three: they disagree on fundamentals — parameter is **arc length** (procgen,
+even ring spacing) vs **time** (animation) vs **natural t** (vector); dimension is
+Vec3 vs scalar vs Vec2; animation needs tangent *modes* (stepped/auto/broken)
+the others don't.
+
+**Decision.** Split the **math kernel** from the **consumers**.
+
+1. **Kernel:** a piecewise-cubic `Spline<T>` templated on the value type
+   `T ∈ {float, Vec2, Vec3}` (it needs only `+` and `scalar *`, which the math
+   types already provide — same spirit as `Sdf`/`ParamExpr = std::function`).
+   Store each knot in **Hermite form (value + in/out tangent)** — the canonical
+   representation everything lowers to. The kernel exposes `eval(t)` and
+   `tangent(t)`; it lives in **core math** (dependency-free, near `rt_math`).
+2. **Authoring front-ends all lower to Hermite knots:**
+   - **Catmull-Rom** (pass-through points): tangent = `(p[i+1] − p[i−1]) / 2`
+     — for procgen skeletons; trivial authoring.
+   - **Cubic Bezier** (SVG, DCC tools): handles convert to Hermite tangents.
+   - **Keyframe** (animation): already *is* value + in/out tangent.
+3. **Per-consumer services layer on the kernel, each in its own module:**
+   - `Path3` (procgen): arc-length LUT (cumulative length → t) for even ring
+     spacing + the rotation-minimizing-frame helper. ← the ADR-0029 §3.5 dependency.
+   - `AnimCurve` (animation): time lookup + tangent modes — lives in animation,
+     **not** the kernel.
+   - `Path2` + an **SVG path parser**: lives in asset loading, not the kernel.
+
+**Phasing (YAGNI guard).** Phase 1 — the kernel + Catmull-Rom + arc-length + RMF
+helper — is built **now**, justified by the branch-curvature work, and is
+headless-testable (`make test`). `AnimCurve` and SVG import come **when their
+domains need them**; they are *proof the abstraction is right*, not work to do up
+front. Build the kernel and the procgen consumer; stub nothing else.
+
+**Alternatives considered.** A single mega `Curve` class (rejected — the
+parameterization semantics conflict, as above). Bespoke per-domain curves with no
+shared kernel (rejected — duplicates the cubic math three times; reuse is the
+whole point). NURBS / rational curves (rejected — overkill; cubics cover trees,
+animation, and SVG, whose elliptic arcs can be approximated by cubic Beziers).
+
+**Consequences / tech debt.** A small templated header kernel to maintain.
+Unifies every curve consumer on one evaluator. Ties directly into ADR-0029 §3.5:
+the continuous branch sweep is a `Path3` (Catmull-Rom through skeleton nodes) with
+an RMF. SVG arcs are cubic *approximations*, not exact, until/unless rational
+curves are added.
+
+**Revisit trigger.** Revisit if a consumer needs rational curves (exact conics /
+perspective-correct SVG arcs) or degree > 3.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1857,6 +1913,8 @@ to be replaced; listed here so they stay visible.
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
+| Forest uses the old SDF tree, not `growTree` | `assets/levels/forest.json`, `assets/scripts/flora.lua` | The good tree (generalized cylinders, ADR-0029) is on the `shape:"tree"` C++ path; the forest scatters `flora.tree` (the SDF welded blob, char L-system). The vegetation pipeline can't reach `growTree`, and it assumes one mesh/material per species while `growTree` emits bark + alpha-cut leaves separately | Expose `growTree` to vegetation (a `kind:"tree"` species or a parametric Lua binding, ADR-0030); two-submesh instancing; a cheap per-trunk capsule collider instead of the bark soup; LOD for distant trees |
+| `ParametricLSystem` not exposed to Lua | `engine/scripting/procgen_bindings.cpp`, `assets/scripts/flora.lua` | Only the `char` `LSystem` is bound; `growTree` uses the parametric path in C++ only (ADR-0030), so Lua recipes can't author tapering parametric grammars | Bind `ParametricLSystem` (modules + expression successors) to the procgen VM |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 
 ---
