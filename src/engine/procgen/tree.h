@@ -3,6 +3,7 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh, Vertex
 #include "../../rt_math.h"             // Vec3
+#include "lsystem.h"                   // ModuleString (for skinTree)
 #include <cstdint>
 #include <vector>
 
@@ -62,6 +63,15 @@ struct TreeMesh {
 // Grow a tree. `seed` selects the stochastic variant (angle jitter + leaf
 // scatter); the same params + seed always produce the same tree (ADR-0002).
 TreeMesh growTree(const TreeParams& params, uint32_t seed = 0);
+
+// Skin a pre-expanded module string into a tree (turtle-interpret -> skeleton ->
+// pipe-model radii -> droop/wander -> curved generalized-cylinder sweep + leaf
+// cards). The grammar-agnostic half of growTree: a Lua-authored parametric
+// L-system feeds its expanded modules straight in (ADR-0030). The grammar
+// fields of `params` (iterations/trunkLength/...) are unused here; the shaping
+// fields (radii, ringSegments, droop, wander, angleJitter, leaves, colors) apply.
+TreeMesh skinTree(const ModuleString& modules, const TreeParams& params,
+                  uint32_t seed = 0);
 
 // CPU pixel data for a procedural texture — uploaded by the renderer-aware
 // caller (level loader), so procgen stays GPU-agnostic (ADR-0021). Row-major,

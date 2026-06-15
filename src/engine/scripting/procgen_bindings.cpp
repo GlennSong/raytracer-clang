@@ -5,6 +5,7 @@
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
+#include "../procgen/tree.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../mesh_builder.h"
@@ -72,6 +73,32 @@ LSystem& checkLSystem(lua_State* L, int idx) {
 
 int lsystemGc(lua_State* L) {
     static_cast<LSystem*>(lua_touserdata(L, 1))->~LSystem();
+    return 0;
+}
+
+// --- ParametricLSystem + ModuleString userdata (grammar in Lua; ADR-0030) ---
+
+constexpr const char* kPLSystemMt = "engine.procgen.ParametricLSystem";
+constexpr const char* kModulesMt = "engine.procgen.ModuleString";
+
+ParametricLSystem& checkPLSystem(lua_State* L, int idx) {
+    return *static_cast<ParametricLSystem*>(luaL_checkudata(L, idx, kPLSystemMt));
+}
+int plsystemGc(lua_State* L) {
+    static_cast<ParametricLSystem*>(lua_touserdata(L, 1))->~ParametricLSystem();
+    return 0;
+}
+
+void pushModules(lua_State* L, ModuleString m) {
+    void* mem = lua_newuserdatauv(L, sizeof(ModuleString), 0);
+    new (mem) ModuleString(std::move(m));
+    luaL_setmetatable(L, kModulesMt);
+}
+ModuleString& checkModules(lua_State* L, int idx) {
+    return *static_cast<ModuleString*>(luaL_checkudata(L, idx, kModulesMt));
+}
+int modulesGc(lua_State* L) {
+    static_cast<ModuleString*>(lua_touserdata(L, 1))->~ModuleString();
     return 0;
 }
 
@@ -364,6 +391,86 @@ int l_lsystem_expand(lua_State* L) {            // sys:expand(axiom, iters, seed
     return 1;
 }
 
+// --- parametric L-system: scripts author the grammar (ADR-0030) ---
+
+int l_lsystem_parametric(lua_State* L) {        // lsystem.parametric()
+    void* mem = lua_newuserdatauv(L, sizeof(ParametricLSystem), 0);
+    new (mem) ParametricLSystem();
+    luaL_setmetatable(L, kPLSystemMt);
+    return 1;
+}
+// sys:rule("A(l,w)", "F(l,w)[+(30)A(l*0.7,w*0.6)]", weight?) — successor params
+// are arithmetic expressions over the predecessor's formals (+ - * /, parens).
+int l_plsystem_rule(lua_State* L) {
+    ParametricLSystem& sys = checkPLSystem(L, 1);
+    const char* pred = luaL_checkstring(L, 2);
+    const char* succ = luaL_checkstring(L, 3);
+    double weight = luaL_optnumber(L, 4, 1.0);
+    sys.rule(pred, succ, weight);
+    lua_settop(L, 1);                           // return self, for chaining
+    return 1;
+}
+// sys:expand("A(1.0,0.1)", iterations, seed?) -> module string (feeds tree.skin).
+int l_plsystem_expand(lua_State* L) {
+    ParametricLSystem& sys = checkPLSystem(L, 1);
+    const char* axiom = luaL_checkstring(L, 2);
+    int iters = static_cast<int>(luaL_checkinteger(L, 3));
+    auto seed = static_cast<uint32_t>(luaL_optinteger(L, 4, 0));
+    pushModules(L, sys.expand(axiom, iters, seed));
+    return 1;
+}
+
+// Read an optional {x,y,z} field; fall back if absent/not a table.
+Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
+    idx = lua_absindex(L, idx);
+    lua_getfield(L, idx, key);
+    Vec3 v = lua_istable(L, -1) ? checkVec3(L, -1) : fallback;
+    lua_pop(L, 1);
+    return v;
+}
+
+// The skin-side TreeParams (grammar fields are unused; the grammar is the
+// module string passed to tree.skin).
+TreeParams readTreeParams(lua_State* L, int idx) {
+    TreeParams p;
+    if (lua_isnoneornil(L, idx)) return p;
+    luaL_checktype(L, idx, LUA_TTABLE);
+    p.angleJitter  = static_cast<float>(optField(L, idx, "angle_jitter", p.angleJitter));
+    p.phyllotaxis  = static_cast<float>(optField(L, idx, "phyllotaxis", p.phyllotaxis));
+    p.tipRadius    = static_cast<float>(optField(L, idx, "tip_radius", p.tipRadius));
+    p.pipeExponent = static_cast<float>(optField(L, idx, "pipe_exponent", p.pipeExponent));
+    p.radiusScale  = static_cast<float>(optField(L, idx, "radius_scale", p.radiusScale));
+    p.ringSegments = static_cast<int>(optField(L, idx, "ring_segments", p.ringSegments));
+    p.barkVScale   = static_cast<float>(optField(L, idx, "bark_v_scale", p.barkVScale));
+    p.droop        = static_cast<float>(optField(L, idx, "droop", p.droop));
+    p.wander       = static_cast<float>(optField(L, idx, "wander", p.wander));
+    p.leafSize     = static_cast<float>(optField(L, idx, "leaf_size", p.leafSize));
+    p.leavesPerTip = static_cast<int>(optField(L, idx, "leaves_per_tip", p.leavesPerTip));
+    lua_getfield(L, lua_absindex(L, idx), "leaves");
+    if (!lua_isnil(L, -1)) p.leaves = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    p.barkColor = optVec3Field(L, idx, "bark_color", p.barkColor);
+    p.leafColor = optVec3Field(L, idx, "leaf_color", p.leafColor);
+    return p;
+}
+
+// tree.skin(modules, params?, seed?) -> bark Mesh, leaf Mesh (leaf may be nil).
+// Two meshes because bark is opaque and leaves are alpha-cut (different
+// materials); the caller places/instances them separately.
+int l_tree_skin(lua_State* L) {
+    ModuleString& modules = checkModules(L, 1);
+    TreeParams params = readTreeParams(L, 2);
+    auto seed = static_cast<uint32_t>(luaL_optinteger(L, 3, 0));
+    TreeMesh tm = skinTree(modules, params, seed);
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(tm.branches)));
+    if (tm.leaves.vertices.empty()) {
+        lua_pushnil(L);
+    } else {
+        pushMesh(L, std::make_shared<RenderMesh>(std::move(tm.leaves)));
+    }
+    return 2;
+}
+
 TurtleParams readTurtleParams(lua_State* L, int idx) {
     TurtleParams p;
     if (lua_isnoneornil(L, idx)) return p;
@@ -522,6 +629,20 @@ void openProcgenLibrary(ScriptVM& vm) {
     }
     lua_pop(L, 1);
 
+    // ParametricLSystem: rule/expand methods; ModuleString is opaque (just __gc).
+    if (luaL_newmetatable(L, kPLSystemMt)) {
+        lua_pushcfunction(L, plsystemGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_plsystem_rule);
+        lua_setfield(L, -2, "rule");
+        lua_pushcfunction(L, l_plsystem_expand);
+        lua_setfield(L, -2, "expand");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    registerMetatable(L, kModulesMt, modulesGc);
+
     static const luaL_Reg kSdfFns[] = {
         {"sphere", l_sdf_sphere},
         {"box", l_sdf_box},
@@ -569,6 +690,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kLSystemFns[] = {
         {"create", l_lsystem_create},
+        {"parametric", l_lsystem_parametric},
         {"turtle_mesh", l_turtle_mesh},
         {"turtle_mesh_sdf", l_turtle_mesh_sdf},
         {"segments", l_lsystem_segments},
@@ -577,6 +699,15 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kLSystemFns);
     lua_setglobal(L, "lsystem");
+
+    // tree.skin(modules, params, seed) -> bark, leaves — the grammar-agnostic
+    // skinner, so Lua authors the grammar (lsystem.parametric) and skins it.
+    static const luaL_Reg kTreeFns[] = {
+        {"skin", l_tree_skin},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kTreeFns);
+    lua_setglobal(L, "tree");
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");

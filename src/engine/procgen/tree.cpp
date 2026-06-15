@@ -281,12 +281,8 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
 
 }  // namespace
 
-TreeMesh growTree(const TreeParams& params, uint32_t seed) {
+TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed) {
     std::mt19937 rng(seed);
-
-    ParametricLSystem grammar = buildGrammar(params);
-    ModuleString axiom = parseModuleLiterals("A(" + num(params.trunkLength) + ")");
-    ModuleString s = grammar.expand(axiom, params.iterations, seed);
 
     std::vector<Node> nodes = walkSkeleton(s, params, rng);
     assignRadii(nodes, params);
@@ -376,6 +372,16 @@ TreeMesh growTree(const TreeParams& params, uint32_t seed) {
     out.collisionIndices = out.branches.indices;
 
     return out;
+}
+
+// Grow a tree from the standard parametric grammar (the C++ convenience): build
+// the grammar from `params`, expand it, then skin. Lua can instead author its
+// own grammar and call skinTree directly (ADR-0030).
+TreeMesh growTree(const TreeParams& params, uint32_t seed) {
+    ParametricLSystem grammar = buildGrammar(params);
+    ModuleString axiom = parseModuleLiterals("A(" + num(params.trunkLength) + ")");
+    ModuleString s = grammar.expand(axiom, params.iterations, seed);
+    return skinTree(s, params, seed);
 }
 
 // --- procedural textures ---------------------------------------------------
