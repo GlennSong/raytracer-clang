@@ -1762,11 +1762,14 @@ is reserved for the lower trunk / root flare / burls where fusion genuinely
 matters. That **hybrid is not yet implemented** — defining the seam is part of
 this decision, building it is owed (botany §4.1).
 
-**Current limitations / planned refinement.** Rings use a per-segment frame
-(`frameFor`), which can drift in roll between internodes; the
-rotation-minimizing frame + curved internodes (botany §3.5) is the planned
-upgrade for twist-free UVs and curvature. Branch junctions simply overlap (hidden
-under bark/foliage); proper stitching is later polish.
+**Refinement — implemented (2026-06-15).** Branches are now skinned as
+*continuous curved* limbs (ADR-0031): the skeleton is decomposed into chains
+(each node follows its straightest child as the apical leader; other children
+fork off, anchored at the joint), a Catmull-Rom curve is fit through each chain,
+sampled at even arc length, and swept with a **rotation-minimizing frame** —
+twist-free UVs and real curvature, replacing the per-segment `frameFor`/`addTube`
+path. Branch junctions still simply overlap (hidden under bark/foliage); the
+branch-collar flare + proper stitching remain later polish.
 
 **Alternatives considered.** Pure SDF (rejected — twigs, missing UVs, O(res³));
 metaballs (same UV/cost problems); kit-bashed disjoint cylinders

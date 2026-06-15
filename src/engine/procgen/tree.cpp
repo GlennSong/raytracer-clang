@@ -1,7 +1,9 @@
 #include "tree.h"
 #include "lsystem.h"
 #include "../../rt_math.h"
+#include "../../curve.h"
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 #include <sstream>
@@ -124,43 +126,70 @@ void assignRadii(std::vector<Node>& nodes, const TreeParams& p) {
 
 // --- generalized-cylinder skinning ----------------------------------------
 
-// Two perpendiculars (right, up) to `axis` with cross(right, up) == -axis, so a
-// ring built as right*cos + up*sin winds outward-front exactly like
-// MeshBuilder::cylinder (engine winds front faces clockwise).
-void frameFor(const Vec3& axis, Vec3& right, Vec3& up) {
-    Vec3 ref = std::abs(axis.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
-    right = normalize(cross(axis, ref));
-    up = normalize(cross(right, axis));
+// A branch as a polyline of node samples: centerline points, per-point radius,
+// and distance-from-root (for bark v). Skinned as one continuous swept tube.
+struct BranchPath {
+    std::vector<Vec3>  points;
+    std::vector<float> radius;
+    std::vector<float> dist;
+};
+
+// Linear-interpolate a per-knot attribute at spline parameter u in [0, segs].
+float lerpAt(const std::vector<float>& a, double u) {
+    if (a.empty()) return 0.0f;
+    int segs = static_cast<int>(a.size()) - 1;
+    if (segs <= 0) return a[0];
+    double cu = std::clamp(u, 0.0, static_cast<double>(segs));
+    int i = std::min(static_cast<int>(std::floor(cu)), segs - 1);
+    float t = static_cast<float>(cu - i);
+    return a[i] * (1.0f - t) + a[i + 1] * t;
 }
 
-// Append one tapered tube segment from A (radius rA) to B (radius rB), with bark
-// v running vA..vB. Mirrors the cylinder side-wall layout/winding.
-void addTube(RenderMesh& mesh, const Vec3& A, const Vec3& B, float rA, float rB,
-             float vA, float vB, const Vec3& color, int segs) {
-    Vec3 axis = B - A;
-    float len = static_cast<float>(axis.length());
-    if (len < 1e-6f) return;
-    axis = axis * (1.0f / len);
-    Vec3 right, up;
-    frameFor(axis, right, up);
+// Skin a branch as a continuous generalized cylinder: fit a Catmull-Rom curve
+// through the centerline, sample it at even arc length (so curvature shows),
+// orient each ring with a rotation-minimizing frame (no twist), and sweep a
+// tapered ring strip with bark UVs flowing along the length. Ring winding/normal
+// layout matches MeshBuilder::cylinder.
+void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color,
+                     int segs, float vScale, int ringsPerSegment) {
+    if (path.points.size() < 2) return;
+    Spline<Vec3> spline = Spline<Vec3>::catmullRom(path.points);
+    int rings = std::max(2, spline.segments() * std::max(1, ringsPerSegment) + 1);
+
+    std::vector<double> us = spline.uniformArcLengthParams(rings);
+    std::vector<Vec3> centers(rings), tangents(rings);
+    for (int k = 0; k < rings; k++) {
+        centers[k] = spline.eval(us[k]);
+        tangents[k] = spline.derivative(us[k]);
+    }
+    std::vector<CurveFrame> frames = rotationMinimizingFrames(centers, tangents);
 
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-    for (int i = 0; i <= segs; i++) {
-        float phi = 2.0f * static_cast<float>(PI) * i / segs;
-        float c = std::cos(phi), s = std::sin(phi);
-        Vec3 dir = right * c + up * s;          // outward radial = normal
-        Vec3 tan = right * (-s) + up * c;       // around the circumference
-        float u = static_cast<float>(i) / segs;
-        Vertex va(A + dir * rA, dir, tan, u, vA);
-        Vertex vb(B + dir * rB, dir, tan, u, vB);
-        va.color = color;
-        vb.color = color;
-        mesh.vertices.push_back(va);
-        mesh.vertices.push_back(vb);
+    for (int k = 0; k < rings; k++) {
+        const Vec3 right = frames[k].right;
+        const Vec3 up = frames[k].up;
+        float rad = lerpAt(path.radius, us[k]);
+        float v = lerpAt(path.dist, us[k]) * vScale;
+        for (int i = 0; i <= segs; i++) {
+            float phi = 2.0f * static_cast<float>(PI) * i / segs;
+            float c = std::cos(phi), s = std::sin(phi);
+            Vec3 dir = right * c + up * s;        // outward radial = normal
+            Vec3 tan = right * (-s) + up * c;     // around the circumference
+            Vertex vert(centers[k] + dir * rad, dir, tan,
+                        static_cast<float>(i) / segs, v);
+            vert.color = color;
+            mesh.vertices.push_back(vert);
+        }
     }
-    for (int i = 0; i < segs; i++) {
-        uint32_t a = base + i * 2, b = a + 1, cc = a + 2, d = a + 3;
-        mesh.indices.insert(mesh.indices.end(), {a, cc, b, b, cc, d});
+    const int stride = segs + 1;
+    for (int k = 0; k < rings - 1; k++) {
+        for (int i = 0; i < segs; i++) {
+            uint32_t a = base + k * stride + i;            // ring k, vert i
+            uint32_t cc = a + 1;                           // ring k, vert i+1
+            uint32_t b = base + (k + 1) * stride + i;      // ring k+1, vert i
+            uint32_t d = b + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, cc, b, b, cc, d});
+        }
     }
 }
 
@@ -203,18 +232,62 @@ TreeMesh growTree(const TreeParams& params, uint32_t seed) {
 
     TreeMesh out;
 
-    // Skin each edge (parent -> node) as a tapered tube.
+    // Decompose the skeleton into branch chains: from each node, the child whose
+    // direction best continues the incoming direction is the "apical" leader
+    // (one smooth limb); every other child starts a new chain anchored at the
+    // fork, so side branches socket into their parent. Each chain is then swept
+    // as one continuous curved tube.
+    std::vector<std::vector<int>> children(nodes.size());
+    for (size_t i = 0; i < nodes.size(); i++)
+        if (nodes[i].parent >= 0) children[nodes[i].parent].push_back(static_cast<int>(i));
+
+    auto incomingDir = [&](int n) -> Vec3 {
+        if (nodes[n].parent < 0) return nodes[n].heading;
+        Vec3 d = nodes[n].pos - nodes[nodes[n].parent].pos;
+        double L = d.length();
+        return L > 1e-9 ? d * (1.0 / L) : nodes[n].heading;
+    };
+    std::vector<int> cont(nodes.size(), -1);
+    for (size_t n = 0; n < nodes.size(); n++) {
+        Vec3 inDir = incomingDir(static_cast<int>(n));
+        double best = -2.0;
+        for (int c : children[n]) {
+            Vec3 d = nodes[c].pos - nodes[n].pos;
+            double L = d.length();
+            if (L < 1e-9) continue;
+            double dp = dot(d * (1.0 / L), inDir);
+            if (dp > best) { best = dp; cont[n] = c; }
+        }
+    }
+
+    // Walk chains from a worklist of (anchor, first) starts; the anchor is the
+    // fork point, included so the curve passes through the joint.
+    std::vector<std::pair<int, int>> work;
+    auto pushStarts = [&](int node) {
+        for (int c : children[node])
+            if (c != cont[node]) work.push_back({node, c});
+    };
+    if (cont[0] != -1) work.push_back({0, cont[0]});
+    pushStarts(0);
+
     float vScale = params.barkVScale;
-    for (size_t i = 1; i < nodes.size(); i++) {
-        const Node& n = nodes[i];
-        if (n.parent < 0) continue;
-        const Node& par = nodes[n.parent];
-        // Slight per-branch color variation so the bark isn't a flat slab.
-        std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+    std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+    while (!work.empty()) {
+        auto [anchor, first] = work.back();
+        work.pop_back();
+        BranchPath path;
+        auto append = [&](int idx) {
+            path.points.push_back(nodes[idx].pos);
+            path.radius.push_back(nodes[idx].radius);
+            path.dist.push_back(nodes[idx].distFromRoot);
+        };
+        append(anchor);
+        for (int cur = first; cur != -1; cur = cont[cur]) {
+            append(cur);
+            pushStarts(cur);
+        }
         Vec3 color = params.barkColor * vary(rng);
-        addTube(out.branches, par.pos, n.pos, par.radius, n.radius,
-                par.distFromRoot * vScale, n.distFromRoot * vScale, color,
-                params.ringSegments);
+        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3);
     }
 
     // Leaves at twig tips.

@@ -349,7 +349,10 @@ building block, not a generator. Seedable (ADR-0021/0002).
 **Depends on:** Nothing. Pairs with the mesh builder (3.3).
 
 ### 3.8 Curve library
-**Status:** Not started (design ratified — ADR-0031).
+**Status:** Phase 1 done — `Spline<T>` Hermite kernel (Catmull-Rom, eval/
+derivative, arc-length, rotation-minimizing frames) in `src/curve.{h,cpp}`,
+covered by `tests/test_curve.cpp`; first consumer is the curved tree branch
+sweep (`growTree`). `AnimCurve` (F-curves) and SVG import remain (ADR-0031).
 **Why:** One curve primitive serves procgen (branch centerlines for the organic
 branches of ADR-0029 §3.5), animation (F-curves), and 2D vector / SVG import.
 Slotted into Tier 3 as a value-type building block alongside noise (3.7), not a
