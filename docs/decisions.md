@@ -1505,6 +1505,95 @@ a generator graph too awkward to express as a Lua script.
 
 ---
 
+## ADR-0026 — Procedural objects are multi-output assets: mesh + rig + collision, Lua recipe, data instance
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** ADR-0021/0022 set the procgen substrate (generators are
+`(params, seed) -> content` over shared value types) and the realness spectrum
+(runtime-procedural / baked static asset / editable procedural instance);
+ADR-0025 made Lua the one authoring path. The first parametric tree
+(`src/engine/procgen/tree.{h,cpp}`, `growTree`) exposed two gaps the earlier
+ADRs left implicit:
+
+1. A real game object is **not one mesh**. A tree is a small prefab — a
+   *skinned* render mesh (bark + leaves), a **skeleton/rig**, a **collision**
+   representation, and **material/texture** bindings — that a maintainer expects
+   to sway in wind and animate. `growTree` already builds the branch node tree
+   (which *is* a bone skeleton) and currently discards it.
+2. The tree was wired in as a `shape:"tree"` JSON block that **inlines a recipe
+   into the level**, bypassing Lua. That is a second authoring path, against
+   ADR-0025.
+
+We need to pin how a procedural object is structured, authored, instanced, and
+edited before building more of it.
+
+**Decision.**
+1. **A generator emits a multi-output asset, not a bare `Mesh`.** A tree
+   generator returns a `TreeAsset`: skinned bark + leaf meshes, a **skeleton**
+   (bones = branch segments, derived from the L-system node tree), per-vertex
+   **skin weights** binding rings to bones, a **collision** representation, and
+   material refs. The skeleton is reused as the wind/animation rig — the rig is
+   a near-free byproduct of generation, not a separate authoring step.
+2. **Collision is its own representation, separate from the render mesh and from
+   sway.** Gameplay collision (bump/shoot) is a cheap static shape — a capsule
+   chain over the major limbs is preferred to a full triangle soup. Wind sway is
+   a *separate* concern layered on top, chosen per project from a cost ladder:
+   (a) vertex-shader wind (no rig/physics; the shipping default), (b) rig +
+   procedural wind animation, (c) rig + Jolt joints (a body+spring per bone — the
+   literal "physics object", expensive, rarely per-branch). The static collider
+   is kept regardless of which sway approach is used.
+3. **Four authoring layers, named and not collapsed:**
+   - **Operations** (C++): `growTree`, `lsystem`, `sdf`, mesh ops — the systems.
+   - **Recipe / generator asset** (Lua file under `assets/`): a composition plus
+     a **declared parameter schema** (names, types, ranges, defaults) = "a
+     species". Authored outside the engine.
+   - **Instance** (level/editor data): an asset ref + transform + seed +
+     param overrides. Pure data; not a grammar.
+   - **Baked asset** (optional): a frozen generator output (mesh/rig) on disk.
+4. **Lua authors recipes; data places instances** (refining ADR-0025's "Lua is
+   the authoring path"): the *recipe* is the Lua asset; the *instance* is data
+   that references it. The `shape:"tree"` JSON shortcut is removed in favor of an
+   entity that references a recipe asset.
+5. **The editor is the iteration surface.** A procedural instance becomes a real
+   document entity via a `ProcgenSource` component (recipe ref + seed + params);
+   the recipe's declared param schema drives the inspector, re-running the
+   generator on change. "Build by script" (author the Lua recipe) and "build in
+   the editor" (edit params/seed) are the same path with two front-ends. This
+   realizes ADR-0022's deferred *editable procedural instance* tier.
+
+**Alternatives considered.**
+- *Keep generators emitting a single `Mesh`* — rejected: forces rig/collision/
+  material to be re-derived or hand-authored per object; throws away the
+  skeleton the L-system already builds.
+- *Bind `growTree`'s current output to Lua now, defer the asset shape* — rejected
+  as premature: the binding would be reworked the moment rig + skin weights +
+  capsule collision + a param schema land; design the asset first.
+- *Per-branch Jolt joints as the default sway* — rejected as the default:
+  expensive and rarely how trees sway in shipping games; kept as an opt-in rung
+  on the cost ladder, not the baseline.
+- *Editor-only authoring (no text recipes)* — rejected: contradicts ADR-0025 and
+  blocks headless/scripted generation; the editor edits the same Lua/params.
+
+**Consequences / tech debt.**
+- `growTree` must be reshaped from `TreeMesh` to a `TreeAsset` (skeleton + skin
+  weights + collision + material); current consumers (the `shape:"tree"` entity)
+  change with it, and that JSON shortcut is removed.
+- Needs new engine pieces: a skinned-mesh + `Skeleton`/animator path, a
+  `ProcgenSource` component, a recipe-asset loader with a param schema, and Lua
+  bindings over the multi-output generator. Each is its own step.
+- Wind/skinning are not built; only the static collider exists today. The
+  shipped C++ generator, pipe-model taper, textures, and gameplay collider are
+  retained — this ADR adds layers around them.
+- A param-schema format must be chosen (likely declared in the Lua recipe), used
+  by both the editor inspector and the baker.
+
+**Revisit trigger.** When skinned meshes + a skeleton/animator exist, validate
+the `TreeAsset` shape against a second procedural asset (e.g. a building or a
+creature) before generalizing it; revisit the wind cost-ladder choice when a
+target platform's perf budget is known.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1530,6 +1619,8 @@ to be replaced; listed here so they stay visible.
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
+| `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
+| Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 
 ---
