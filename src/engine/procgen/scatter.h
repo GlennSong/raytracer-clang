@@ -27,6 +27,12 @@ struct ScatterParams {
                                      // an accepted one (0 = off). Set to the
                                      // instance footprint so big meshes (trees)
                                      // don't jumble. Dart-throwing Poisson disk.
+    // Focal point (XZ): make a clearing around a hero and step instance size down
+    // with distance from it, so the hero reads as the focus.
+    Vec3  focus{0, 0, 0};
+    float focusRadius = 0.0f;        // distance over which scale fades to base (0 = off)
+    float focusScale = 1.0f;         // scale multiplier at the focus, lerped to 1 at focusRadius
+    float focusClear = 0.0f;         // reject placements within this distance of the focus
     uint32_t seed = 0;
 };
 

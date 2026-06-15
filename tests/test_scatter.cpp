@@ -60,6 +60,33 @@ TEST_CASE(scatter_min_spacing_keeps_instances_apart) {
     CHECK(ok);
 }
 
+TEST_CASE(scatter_focus_clears_center_and_steps_size_down_outward) {
+    // A hero focal point: a clearing around it, and instances scaled bigger near
+    // it (stepping down with distance) so the hero reads as the focus.
+    ScatterParams sp;
+    sp.count = 2000; sp.seed = 3; sp.regionSize = 100.0f;
+    sp.minScale = 1.0f; sp.maxScale = 1.0f;        // isolate the focus multiplier
+    sp.focusRadius = 40.0f; sp.focusScale = 2.0f; sp.focusClear = 10.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+    auto p = scatterOnTerrain(sp, t, n);
+    CHECK(!p.empty());
+
+    bool clear = true;
+    double nearSum = 0, farSum = 0;
+    int nearN = 0, farN = 0;
+    for (const auto& pl : p) {
+        double d = std::sqrt(pl.position.x * pl.position.x +
+                             pl.position.z * pl.position.z);
+        if (d < 10.0 - 1e-3) clear = false;        // keep-out honored
+        if (d < 18.0) { nearSum += pl.scale; nearN++; }
+        else if (d > 35.0) { farSum += pl.scale; farN++; }
+    }
+    CHECK(clear);
+    CHECK(nearN > 0 && farN > 0);
+    if (nearN && farN) CHECK(nearSum / nearN > farSum / farN);   // bigger near focus
+}
+
 TEST_CASE(scatter_respects_region_surface_scale_and_yaw) {
     ScatterParams sp; sp.count = 500; sp.seed = 7;
     sp.minScale = 0.5f; sp.maxScale = 2.0f;

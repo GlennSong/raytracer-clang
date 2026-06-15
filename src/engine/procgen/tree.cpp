@@ -348,12 +348,14 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3);
     }
 
-    // Leaves at twig tips.
+    // Leaves on twig tips and (to fill out the ends) any thin enough branch.
     if (params.leaves) {
         std::uniform_real_distribution<float> tilt(-0.5f, 0.5f);
         std::uniform_real_distribution<float> vary(0.8f, 1.15f);
         for (const Node& n : nodes) {
-            if (!n.isTip) continue;
+            bool leafy = n.isTip ||
+                         (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
+            if (!leafy) continue;
             for (int j = 0; j < params.leavesPerTip; j++) {
                 // Spiral the leaves around the heading and pitch them outward.
                 double roll = (params.phyllotaxis * j) * PI / 180.0;

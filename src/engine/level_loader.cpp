@@ -168,6 +168,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         tp.leaves         = j.value("leaves", tp.leaves);
         tp.leafSize       = j.value("leafSize", tp.leafSize);
         tp.leavesPerTip   = j.value("leavesPerTip", tp.leavesPerTip);
+        tp.leafThickness  = j.value("leafThickness", tp.leafThickness);
         tp.barkColor      = parseVec3(j.value("barkColor", json()), tp.barkColor);
         tp.leafColor      = parseVec3(j.value("leafColor", json()), tp.leafColor);
         seed              = j.value("seed", 0u);
@@ -723,6 +724,10 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.maxScale         = veg.value("maxScale", 1.3f);
     scatter.densityScale     = veg.value("densityScale", 0.05);
     scatter.densityThreshold = veg.value("densityThreshold", -0.2f);
+    scatter.focus            = parseVec3(veg.value("focus", json()), Vec3(0, 0, 0));
+    scatter.focusRadius      = veg.value("focusRadius", 0.0f);
+    scatter.focusScale       = veg.value("focusScale", 1.0f);
+    scatter.focusClear       = veg.value("focusClear", 0.0f);
     scatter.seed             = vegSeed;
 
     // Footprint spacing so big meshes don't jumble: default to the largest

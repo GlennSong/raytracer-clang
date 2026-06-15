@@ -45,6 +45,19 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
         double d = density.noise2(x * params.densityScale, z * params.densityScale);
         if (d < params.densityThreshold) continue;
 
+        // Focal point: a clearing around the hero, and scale stepping down with
+        // distance from it (bigger near the focus, base size out at focusRadius).
+        if (params.focusClear > 0.0f || params.focusRadius > 0.0f) {
+            double fx = x - params.focus.x, fz = z - params.focus.z;
+            double fdist = std::sqrt(fx * fx + fz * fz);
+            if (params.focusClear > 0.0f && fdist < params.focusClear) continue;
+            if (params.focusRadius > 0.0f) {
+                double t = std::min(fdist / params.focusRadius, 1.0);
+                scale *= static_cast<float>(params.focusScale +
+                                            (1.0 - params.focusScale) * t);
+            }
+        }
+
         // Footprint spacing (dart-throwing Poisson disk): reject if too close in
         // XZ to an accepted placement, so large instances don't jumble. The RNG
         // was already drawn above, so the sequence stays acceptance-independent.

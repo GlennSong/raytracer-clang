@@ -129,6 +129,7 @@ void addTree(const json& ent, Scene& scene) {
         tp.leaves          = j.value("leaves", tp.leaves);
         tp.leafSize        = j.value("leafSize", tp.leafSize);
         tp.leavesPerTip    = j.value("leavesPerTip", tp.leavesPerTip);
+        tp.leafThickness   = j.value("leafThickness", tp.leafThickness);
         tp.barkColor       = parseVec3(j.value("barkColor", json()), tp.barkColor);
         tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
         seed               = j.value("seed", 0u);

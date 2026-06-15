@@ -43,6 +43,8 @@ struct TreeParams {
     bool  leaves        = true;
     float leafSize      = 0.16f;    // leaf card width
     int   leavesPerTip  = 4;
+    float leafThickness = 0.045f;   // also leaf branches at/under this radius (not
+                                    //   just twig tips), to fill out the ends; 0 = tips only
 
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);

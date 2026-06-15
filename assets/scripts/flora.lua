@@ -51,19 +51,19 @@ local PARAM_SPECIES = {
             falloff = 0.82, leader_falloff = 0.9, branches = 2,
             droop = 0.26, wander = 0.08, angle_jitter = 20, ring_segments = 6,
             tip_radius = 0.02, pipe_exponent = 2.4, radius_scale = 1.6,
-            leaves_per_tip = 8, leaf_size = 0.2,
+            leaves_per_tip = 11, leaf_size = 0.2, leaf_thickness = 0.055,
             bark_color = { 0.32, 0.23, 0.15 }, leaf_color = { 0.20, 0.46, 0.13 } },
     pine = { iterations = 7, length = 1.5, width = 0.13, angle = 70,
              falloff = 0.58, leader_falloff = 0.95, branches = 3,
              droop = 0.12, wander = 0.05, angle_jitter = 14, ring_segments = 6,
              tip_radius = 0.018, pipe_exponent = 2.3, radius_scale = 1.4,
-             leaves_per_tip = 6, leaf_size = 0.13,
+             leaves_per_tip = 9, leaf_size = 0.13, leaf_thickness = 0.04,
              bark_color = { 0.28, 0.19, 0.12 }, leaf_color = { 0.12, 0.34, 0.16 } },
     birch = { iterations = 6, length = 2.0, width = 0.1, angle = 30,
               falloff = 0.86, leader_falloff = 0.92, branches = 2,
               droop = 0.36, wander = 0.11, angle_jitter = 22, ring_segments = 6,
               tip_radius = 0.016, pipe_exponent = 2.3, radius_scale = 1.1,
-              leaves_per_tip = 7, leaf_size = 0.16,
+              leaves_per_tip = 10, leaf_size = 0.16, leaf_thickness = 0.045,
               bark_color = { 0.78, 0.76, 0.70 }, leaf_color = { 0.42, 0.55, 0.18 } },
 }
 
@@ -97,6 +97,7 @@ function flora.param_tree(seed, opts)
         droop = pick("droop"), wander = pick("wander"),
         angle_jitter = pick("angle_jitter"),
         leaves_per_tip = pick("leaves_per_tip"), leaf_size = pick("leaf_size"),
+        leaf_thickness = pick("leaf_thickness"),
         bark_color = pick("bark_color"), leaf_color = pick("leaf_color"),
     }, seed)
 
