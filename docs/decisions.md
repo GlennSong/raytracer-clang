@@ -1664,6 +1664,72 @@ open-world scene.
 
 ---
 
+## ADR-0028 — Generators are a layered Lua vocabulary; recipes compose via attach points
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** A grammar (L-system) has its own declarative rules + a turtle. Open
+question: how much can general-purpose Lua (loops, functions, recursion,
+conditionals, noise) extend procgen *beyond* a grammar's own rules — e.g. a
+sakura = a branch grammar, a separate blossom variant populated onto the tree,
+the tree grouped into a grove; and buildings via a split grammar. Current state
+(ADR-0023): the L-system is already a C++ engine object exposed to Lua
+(`lsystem.create/rule/expand`, `turtle_mesh*`, `leaves`); `assets/scripts/flora.lua`
+already drives it with plain Lua — loops build the rule set, place leaf cards,
+and merge meshes. This ADR ratifies that model and extends it to composition and
+to a building grammar. Detail: `docs/lsystem-botany-plan.md`, `docs/world-system-plan.md` §8.
+
+**Decision.**
+1. **Three layers (already the shape of the code).**
+   - **L0 — primitives** (C++ exposed to Lua): `sdf.*`, `noise.*`, `mesh.*`, the
+     turtle, `polygonize`, `terrain`, `scatter`.
+   - **L1 — grammar interpreters** as engine objects exposed to Lua: the
+     L-system now; a **split/shape-grammar sibling later for buildings**. Rules
+     are declarative *data fed from Lua* (`sys:rule(...)`); hot expansion stays
+     in C++.
+   - **L2 — free Lua recipes**: full general-purpose code orchestrating L0/L1 and
+     *each other*. **A grammar is a tool called from Lua, never a wall** —
+     anything it can't express cleanly (field-weighted thinning, collision-aware
+     growth, spline bending) is written in Lua around it.
+2. **Recipes compose by calling recipes, connected through named attach points
+   (sockets)** — frames a parent asset exposes (terminal branch nodes, facade
+   panel anchors) that a child recipe populates. Attach points are flagged nodes
+   on the asset skeleton (extends ADR-0026). Blossom-on-branch, fruit-on-tree,
+   tree-in-grove, and prop-on-building are the same mechanism at different
+   scales. Child seeds derive from `parentSeed + attachIndex` (ADR-0002).
+3. **Building generation is a split/shape grammar implemented as an L1 sibling
+   helper** exposed to Lua (not a plant L-system, not a separate engine);
+   deferred, but slots into this model (ADR-0027; world-system-plan §8).
+4. **Organic branch geometry is generated at L0/L2, independent of the grammar:**
+   curved internodes (Catmull-Rom + rotation-minimizing frame, botany §3.5) plus
+   per-ring surface noise (bark bumps / fork swell) so branches read organic, not
+   straight tubes.
+
+**Alternatives considered.**
+- *Pure declarative grammar (everything as rewrite rules)* — rejected: blossom
+  placement, field-weighted thinning, composition, and collision-aware growth
+  want general code; a grammar alone can't.
+- *Grammar as a sealed engine that returns a finished asset (Lua only sets
+  params)* — rejected: forecloses composition and post-processing; the explicit
+  goal is Lua loops/functions in the loop.
+- *Buildings via a plant L-system* — rejected: paradigm mismatch (ADR-0027).
+- *Reimplement grammars in pure Lua* — rejected: expansion is hot; keep it C++,
+  expose as objects (ADR-0023).
+
+**Consequences / tech debt.**
+- New shared primitive: **attach points / sockets** on assets (ties to the
+  ADR-0026 skeleton) — needs a small API (`asset:attach_points(tag)`, a populate
+  helper) and a recipe-calls-recipe convention in the Lua layer.
+- The L1 grammar surface grows (parametric L-system in; split-grammar later) but
+  the L0/L2 contract stays stable — recipes don't change shape as grammars land.
+- Organic branches add a curvature + surface-noise pass to the cylinder skinner
+  (botany §3.5/§4.1).
+
+**Revisit trigger.** Revisit if composition needs a dependency/graph model beyond
+direct calls, or if the split-grammar wants a different substrate than it shares
+with the L-system.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
