@@ -193,9 +193,10 @@ Vec3 Scene::sampleDirectLight(const Vec3& point, const Vec3& normal,
     double NdotL = dot(normal, lightDir);
     if (NdotL <= 0.0 || attenuation <= 0.0) return Vec3(0, 0, 0);
 
-    // Shadow ray; all occluders count, like the viewer's shadow map.
+    // Shadow ray; opaque occluders count, alpha-cut leaves let light through
+    // (dappled shade), like the viewer's alpha-tested shadow pass.
     HitRecord shadowRec;
-    if (intersect(Ray(point, lightDir), 1e-3, maxDist, shadowRec))
+    if (intersectVisible(Ray(point, lightDir), 1e-3, maxDist, shadowRec))
         return Vec3(0, 0, 0);
 
     Vec3 brdf = evalBRDF(normal, viewDir, lightDir, albedo, metallic, roughness);
@@ -203,9 +204,22 @@ Vec3 Scene::sampleDirectLight(const Vec3& point, const Vec3& normal,
            (attenuation * NdotL * static_cast<double>(lights.size()));
 }
 
+double Texture::sampleAlpha(double u, double v) const {
+    if (pixels.empty() || channels < 1) return 1.0;
+    int x = std::clamp(static_cast<int>(u * width), 0, width - 1);
+    int y = std::clamp(static_cast<int>(v * height), 0, height - 1);
+    size_t i = (static_cast<size_t>(y) * width + x) * channels + (channels - 1);
+    return pixels[i] / 255.0;
+}
+
 int Scene::addMaterial(const Material& mat) {
     materials.push_back(mat);
     return static_cast<int>(materials.size()) - 1;
+}
+
+int Scene::addTexture(Texture tex) {
+    textures.push_back(std::move(tex));
+    return static_cast<int>(textures.size()) - 1;
 }
 
 void Scene::addSphere(const Vec3& center, double radius, int matIdx) {
@@ -298,6 +312,22 @@ bool Scene::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) 
     return hitAnything;
 }
 
+bool Scene::intersectVisible(const Ray& ray, double tMin, double tMax,
+                             HitRecord& rec) const {
+    double start = tMin;
+    for (int i = 0; i < 64; i++) {   // cap: bounded leaf overdraw per ray
+        if (!intersect(ray, start, tMax, rec)) return false;
+        const Material& mat = materials[rec.materialIndex];
+        if (mat.alphaTex >= 0 &&
+            textures[mat.alphaTex].sampleAlpha(rec.u, rec.v) < mat.alphaCutoff) {
+            start = rec.t + 1e-4;   // transparent texel: continue along the ray
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
 Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
     Vec3 throughput(1.0, 1.0, 1.0);
     Vec3 radiance(0.0, 0.0, 0.0);
@@ -305,7 +335,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
 
     for (int bounce = 0; bounce < maxBounces; bounce++) {
         HitRecord rec;
-        if (!intersect(currentRay, 0.001, 1e20, rec)) {
+        if (!intersectVisible(currentRay, 0.001, 1e20, rec)) {
             if (environment.enabled)
                 radiance += throughput *
                             environment.radiance(normalize(currentRay.direction));
@@ -323,13 +353,14 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
         if (mat.type == MaterialType::DIFFUSE) {
             // Delta lights can't be hit by chance, so explicit sampling here
             // never double-counts the scattered path below.
+            Vec3 albedo = mat.albedo * rec.color;
             radiance += throughput *
                         sampleDirectLight(rec.point, rec.normal,
                                           -normalize(currentRay.direction),
-                                          mat.albedo, 0.0, 1.0);
+                                          albedo, 0.0, 1.0);
             Vec3 scatterDir = randomCosineHemisphere(rec.normal);
             currentRay = Ray(rec.point, scatterDir);
-            throughput = throughput * mat.albedo;
+            throughput = throughput * albedo;
         } else if (mat.type == MaterialType::PBR) {
             // The viewer's surface model (ADR-0017), path-traced: explicit
             // light sampling with the same GGX BRDF for direct light, then a
@@ -337,9 +368,10 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
             // indirect bounce.
             Vec3 n = rec.normal;
             Vec3 v = -normalize(currentRay.direction);
-            Vec3 albedo = mat.checkerboard
-                              ? applyCheckerboard(mat.albedo, rec.point)
-                              : mat.albedo;
+            Vec3 albedo = (mat.checkerboard
+                               ? applyCheckerboard(mat.albedo, rec.point)
+                               : mat.albedo) *
+                          rec.color;
 
             radiance += throughput * sampleDirectLight(rec.point, n, v, albedo,
                                                        mat.metallic,

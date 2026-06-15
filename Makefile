@@ -23,7 +23,12 @@ SRCS = \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
-	$(SRC_DIR)/engine/model_importer.cpp
+	$(SRC_DIR)/engine/model_importer.cpp \
+	$(SRC_DIR)/engine/procgen/noise.cpp \
+	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/sdf.cpp \
+	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/tree.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few

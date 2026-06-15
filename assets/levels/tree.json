@@ -13,7 +13,7 @@
     "octaves": 4,
     "warp": 0.2,
     "material": {
-      "albedo": [0.30, 0.40, 0.18],
+      "albedo": [1.0, 1.0, 1.0],
       "roughness": 1.0
     }
   },
