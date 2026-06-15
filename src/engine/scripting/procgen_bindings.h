@@ -24,6 +24,7 @@ struct ScriptMeshPart {
     float roughness = 1.0f;
     float metallic = 0.0f;
     bool alphaTest = false;
+    bool wind = false;          // FLAG_WIND: vertex-shader sway (grass/foliage)
     std::string texture;
 };
 

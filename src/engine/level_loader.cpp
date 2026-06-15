@@ -600,6 +600,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         float spColRadius = s.value("colliderRadius", 0.0f);
         float spColHeight = s.value("colliderHeight", 0.0f);
         double spColFriction = s.value("colliderFriction", 0.8);
+        bool spWind = s.value("wind", false);   // FLAG_WIND sway for this species
+        if (spWind) material.flags |= RenderMaterial::FLAG_WIND;
 
         // Optional: this species' mesh comes from a Lua flora script (inline
         // chunk, or a level-relative .lua path), evaluated per variant.
@@ -692,6 +694,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                                         td.width, td.height, td.channels, td.pixels.data());
                             }
                         }
+                        if (spWind || sp.wind) mat.flags |= RenderMaterial::FLAG_WIND;
                         addPart(*sp.mesh, mat);
                     }
                 } else {

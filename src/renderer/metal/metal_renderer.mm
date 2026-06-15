@@ -3,6 +3,7 @@
 #import "metal_renderer.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CABase.h>   // CACurrentMediaTime (wind sway clock)
 #import <AppKit/AppKit.h>
 #import <simd/simd.h>
 #include "../../slot_map.h"
@@ -1549,6 +1550,16 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     impl->cameraUniforms.farPlane = static_cast<float>(camera.farPlane);
     impl->currentCameraPos = camera.position;
     impl->currentLens = camera.lens;   // drives the lens-warp + DOF passes
+
+    // Wind for FLAG_WIND foliage (self-timed off the wall clock — purely
+    // cosmetic vertex sway, no engine plumbing needed). Tunable defaults.
+    static const double windStart = CACurrentMediaTime();
+    impl->cameraUniforms.windDir = {0.85f, 0.0f, 0.30f};
+    impl->cameraUniforms.windTime = static_cast<float>(CACurrentMediaTime() - windStart);
+    impl->cameraUniforms.windAmplitude = 0.12f;
+    impl->cameraUniforms.windFrequency = 1.6f;
+    impl->cameraUniforms.windHeight = 2.5f;
+    impl->cameraUniforms._windPad = 0.0f;
 }
 
 static simd_float3 toSimd3(const Vec3& v) {

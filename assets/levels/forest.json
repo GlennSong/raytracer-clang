@@ -138,17 +138,19 @@
  "foliage": {
   "seed": 77,
   "region": 120,
-  "count": 6000,
-  "maxSlopeDeg": 26,
-  "minScale": 0.6,
+  "count": 7000,
+  "maxSlopeDeg": 28,
+  "minScale": 0.8,
   "maxScale": 1.3,
-  "densityScale": 0.05,
-  "densityThreshold": -0.15,
+  "spacingFactor": 0.45,
+  "densityScale": 0.04,
+  "densityThreshold": -0.85,
   "species": [
    {
     "kind": "script",
-    "script": "return flora.grass(seed, {blades=9})",
+    "script": "return flora.grass(seed, {radius=1.6})",
     "variants": 4,
+    "wind": true,
     "material": {
      "albedo": [
       1.0,

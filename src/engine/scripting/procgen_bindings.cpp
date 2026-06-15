@@ -764,6 +764,9 @@ bool readModelPart(lua_State* L, int idx, ScriptMeshPart& part) {
     lua_getfield(L, idx, "alpha_test");
     part.alphaTest = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
+    lua_getfield(L, idx, "wind");
+    part.wind = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
     lua_getfield(L, idx, "texture");
     if (lua_isstring(L, -1)) part.texture = lua_tostring(L, -1);
     lua_pop(L, 1);

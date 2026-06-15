@@ -103,8 +103,8 @@ function flora.param_tree(seed, opts)
 
     local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
     if leaves then
-        parts[#parts + 1] =
-            { mesh = leaves, texture = "leaf", alpha_test = true, roughness = 0.6 }
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
     end
     return parts
 end
@@ -191,19 +191,27 @@ end
 
 -- A clump of grass blades (thin cards), bent and rotated, dark at the base to
 -- light at the tip.
+-- A dense grass *patch* (not a lone tuft): many blades spread over a disc, so a
+-- handful of overlapping instances read as a continuous field. `radius` is the
+-- patch size; `blades` the count within it.
 function flora.grass(seed, opts)
     opts = opts or {}
     math.randomseed(seed)
-    local n = opts.blades or 6
-    local h = opts.height or 0.4
+    local n = opts.blades or 45
+    local h = opts.height or 0.45
+    local radius = opts.radius or 1.5
     local lo = opts.color_low or { 0.10, 0.28, 0.06 }
     local hi = opts.color_high or { 0.32, 0.55, 0.16 }
     local blades = {}
     for _ = 1, n do
-        local b = mesh.translate(mesh.box({ 0.02, h, 0.006 }), { 0, h * 0.5, 0 })
-        b = mesh.rotate_z(b, (math.random() - 0.5) * 0.7)      -- bend
+        local bh = h * (0.6 + math.random() * 0.8)             -- varied height
+        local b = mesh.translate(mesh.box({ 0.022, bh, 0.006 }), { 0, bh * 0.5, 0 })
+        b = mesh.rotate_z(b, (math.random() - 0.5) * 0.8)      -- bend
         b = mesh.rotate_y(b, math.random() * 2 * math.pi)      -- face anywhere
-        b = mesh.translate(b, { (math.random() - 0.5) * 0.14, 0, (math.random() - 0.5) * 0.14 })
+        -- Uniform-area placement over the disc (sqrt keeps it from clumping center).
+        local rr = radius * math.sqrt(math.random())
+        local a = math.random() * 2 * math.pi
+        b = mesh.translate(b, { rr * math.cos(a), 0, rr * math.sin(a) })
         blades[#blades + 1] = mesh.bake_height_color(b, lo, hi)
     end
     return mesh.merge(blades)

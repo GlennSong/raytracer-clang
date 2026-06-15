@@ -58,6 +58,7 @@ TEST_CASE(flora_param_tree_returns_bark_and_leaf_parts) {
         CHECK(parts[0].mesh && parts[0].mesh->vertices.size() > 100);
         CHECK(parts[1].texture == "leaf");
         CHECK(parts[1].alphaTest);
+        CHECK(parts[1].wind);   // leaves opt into wind sway
         CHECK(parts[1].mesh && !parts[1].mesh->vertices.empty());
     }
     // Different species => different geometry (structurally distinct grammars).

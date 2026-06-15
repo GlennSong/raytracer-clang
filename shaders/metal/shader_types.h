@@ -39,6 +39,14 @@ struct CameraUniforms {
     simd_float2   screenSize;
     float         nearPlane;
     float         farPlane;
+    // Wind (FLAG_WIND): foliage sway evaluated in the vertex shader. windDir.xz
+    // is the world-space sway direction; windTime is seconds.
+    simd_float3   windDir;
+    float         windTime;
+    float         windAmplitude;
+    float         windFrequency;
+    float         windHeight;     // height over which the sway weight ramps 0->1
+    float         _windPad;
 };
 
 struct ModelUniforms {

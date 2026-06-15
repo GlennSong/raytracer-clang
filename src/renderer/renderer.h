@@ -66,6 +66,10 @@ struct RenderMaterial {
     // below the threshold, so leaf cards keep crisp silhouettes in the opaque
     // pass (depth-correct, no transparency sorting). Needs an albedoMap.
     static constexpr uint32_t FLAG_ALPHA_TEST = 2;
+    // Wind sway: the vertex shader displaces this mesh by a per-frame wind
+    // function, weighted by height above the instance origin (base planted, tips
+    // move). For grass/foliage; applied on the instanced draw path.
+    static constexpr uint32_t FLAG_WIND = 4;
 
     TextureHandle albedoMap;
     TextureHandle normalMap;
