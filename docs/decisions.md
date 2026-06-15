@@ -1594,6 +1594,76 @@ target platform's perf budget is known.
 
 ---
 
+## ADR-0027 — The world is fields + recipes, streamed in deterministic tiles, authored as data
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** The world (terrain, biomes, scatter vegetation, water, later
+cities) is bigger than the current pieces — a single heightfield
+(`procgen/terrain.cpp`) with noise/slope scatter (`procgen/scatter.cpp`) baked
+into a level. We need a representation that an artist authors *and* that
+generates an open, streamed world, on the procgen substrate (ADR-0021) with Lua
+authoring (ADR-0025). Detail in `docs/world-system-plan.md`.
+
+**Decision.**
+1. **A world is a stack of *fields* + a set of *recipes* that read them.** Fields
+   are 2D rasters aligned to terrain (`height`, derived `slope`/`aspect`,
+   `moisture`, `temperature`, `biome id`, and N scatter-density masks). Recipes
+   (Lua) are `(region, fields, seed) -> content`: a forest = a scatter recipe
+   over a region weighted by masks; a river = a water recipe (+ carve); a city =
+   a building recipe that masks out nature.
+2. **Authoring is data, not code.** The editor edits regions, painted mask
+   layers (brushes -> raster assets), carve volumes, recipe params, and seeds —
+   all stowed as assets; Lua recipes are themselves assets; the world file
+   references them. "Build by script" and "build in editor" are one path, two
+   front-ends (extends ADR-0025).
+3. **Scatter/biome masks are procedurally seeded, then brush-paintable** raster
+   layers (not vertex colors), sampled by scatter *and* terrain-material splat.
+4. **A scatter region / biome is one entity** (footprint + recipe + masks),
+   expanding to instance groups at runtime; individual scattered props stay
+   render data, not entities (extends ADR-0022). Terrain, water bodies, and
+   carve edits are entities; fields/masks are paintable overlays.
+5. **Open-world via deterministic per-tile generation + sparse per-tile override
+   assets.** Each tile regenerates identically from `(tileCoord, worldSeed)`
+   (ADR-0002); human edits layer on top per tile. Streamed by distance with LOD.
+   Design for streaming now; implement against a fixed tile set first.
+6. **Terrain is a heightfield now; carving comes later via SDF edits.** A
+   heightfield cannot do caves/overhangs. When designed carving is needed,
+   subtract SDF volumes from terrain and re-mesh only affected chunks with the
+   existing `polygonizeSdf`. Full voxels only if runtime carve-anywhere becomes a
+   gameplay feature. Order: heightfield -> SDF-carve -> voxels.
+
+**Alternatives considered.**
+- *Author the world by hand-editing JSON / placing every object* — rejected: no
+  scale, no procedural reuse; the fields+recipes model is the whole point.
+- *Vertex-painted scatter weights* — rejected: tessellation-bound; raster masks
+  are resolution-independent and shared with material splat.
+- *Voxel terrain from the start* — rejected for now: heavy (memory, LOD, meshing)
+  and unneeded until runtime carving is a requirement; SDF-carve covers designed
+  carves first.
+- *Plant/turtle L-system for buildings* — rejected as the building paradigm:
+  buildings want a split/shape grammar (subdivide mass -> floors -> facade), a
+  cousin but distinct; deferred (world-system-plan §8).
+- *Thousands of tree entities for a forest* — rejected: a forest is one region
+  entity over instance groups (ADR-0022).
+
+**Consequences / tech debt.**
+- New subsystems implied (each its own step): a field/mask layer system, editor
+  brushes + overlay rendering, terrain tiling + a streaming manager with
+  per-tile overrides, a biome/material splat path, water, and (later) an
+  SDF-carve terrain path and a building grammar.
+- The current single-heightfield + baked-scatter level path is superseded by the
+  world file; it stays until the world system lands.
+- Streaming + determinism constrain every generator to be tile-local and
+  seed-reproducible.
+- Param-schema reuse with ADR-0026 (recipes declare params for the editor).
+
+**Revisit trigger.** Revisit voxels when runtime carving is a gameplay need;
+revisit the building generator paradigm once the scatter/plant recipes prove the
+Lua substrate; validate the tile/streaming design against the first real
+open-world scene.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
