@@ -219,7 +219,11 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             uint32_t cc = a + 1;                           // ring k, vert i+1
             uint32_t b = base + (k + 1) * stride + i;      // ring k+1, vert i
             uint32_t d = b + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, cc, b, b, cc, d});
+            // Wound so front faces point along the outward radial (= the vertex
+            // normal). The RMF frame has cross(right, up) == +tangent, the
+            // opposite chirality to the old per-segment frame, so the winding is
+            // reversed from a plain cylinder to keep faces facing out.
+            mesh.indices.insert(mesh.indices.end(), {a, b, cc, cc, b, d});
         }
     }
 }
