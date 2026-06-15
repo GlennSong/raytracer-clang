@@ -20,6 +20,7 @@ SRCS = \
 	$(SRC_DIR)/material.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
@@ -68,7 +69,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
-	$(TEST_DIR)/test_sdf.cpp
+	$(TEST_DIR)/test_sdf.cpp \
+	$(TEST_DIR)/test_curve.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -104,6 +106,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/rt_math.cpp
