@@ -120,6 +120,8 @@ void addTree(const json& ent, Scene& scene) {
         tp.angleJitter     = j.value("angleJitter", tp.angleJitter);
         tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
         tp.phyllotaxis     = j.value("phyllotaxis", tp.phyllotaxis);
+        tp.droop           = j.value("droop", tp.droop);
+        tp.wander          = j.value("wander", tp.wander);
         tp.tipRadius       = j.value("tipRadius", tp.tipRadius);
         tp.pipeExponent    = j.value("pipeExponent", tp.pipeExponent);
         tp.radiusScale     = j.value("radiusScale", tp.radiusScale);

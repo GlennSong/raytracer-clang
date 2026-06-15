@@ -2,13 +2,13 @@
   "cameras": [
     {
       "name": "Hero",
-      "position": [6, 4, 11],
-      "forward": [-0.477, -0.0796, -0.875],
+      "position": [12, 9, 28],
+      "forward": [-0.4, -0.13, -0.907],
       "lens": {
-        "focalLength": 38,
+        "focalLength": 32,
         "sensorHeight": 24,
         "fStop": 0,
-        "focusDistance": 12
+        "focusDistance": 28
       }
     }
   ]

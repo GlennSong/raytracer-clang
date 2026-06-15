@@ -124,6 +124,37 @@ void assignRadii(std::vector<Node>& nodes, const TreeParams& p) {
     }
 }
 
+// Organic shaping: bend each segment toward gravity (droop) and add a lateral
+// meander (wander), thin branches bending most. Applied to node positions in
+// parent-before-child order (walkSkeleton's push order), so a child inherits its
+// parent's bent position and the bends accumulate into cantilever curves while
+// joints stay connected. The trunk (thick, ~vertical) barely moves.
+void shapeBranches(std::vector<Node>& nodes, const TreeParams& p, std::mt19937& rng) {
+    if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f)) return;
+    std::vector<Vec3> orig(nodes.size());
+    for (size_t i = 0; i < nodes.size(); i++) orig[i] = nodes[i].pos;
+
+    float trunkR = std::max(nodes[0].radius, p.tipRadius);
+    std::uniform_real_distribution<float> jit(-1.0f, 1.0f);
+    for (size_t i = 1; i < nodes.size(); i++) {
+        int par = nodes[i].parent;
+        if (par < 0) continue;
+        Vec3 off = orig[i] - orig[par];
+        float len = static_cast<float>(off.length());
+        if (len < 1e-6f) { nodes[i].pos = nodes[par].pos; continue; }
+        Vec3 dir = off * (1.0f / len);
+        float thin = std::clamp(1.0f - nodes[i].radius / trunkR, 0.0f, 1.0f);
+
+        Vec3 bent = normalize(dir + Vec3(0, -1, 0) * static_cast<double>(p.droop * thin));
+        Vec3 ref = std::abs(bent.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        Vec3 side = normalize(cross(bent, ref));
+        Vec3 up = normalize(cross(side, bent));
+        Vec3 jitter = (side * jit(rng) + up * jit(rng)) *
+                      static_cast<double>(p.wander * thin);
+        nodes[i].pos = nodes[par].pos + normalize(bent + jitter) * len;
+    }
+}
+
 // --- generalized-cylinder skinning ----------------------------------------
 
 // A branch as a polyline of node samples: centerline points, per-point radius,
@@ -229,6 +260,7 @@ TreeMesh growTree(const TreeParams& params, uint32_t seed) {
 
     std::vector<Node> nodes = walkSkeleton(s, params, rng);
     assignRadii(nodes, params);
+    shapeBranches(nodes, params, rng);
 
     TreeMesh out;
 

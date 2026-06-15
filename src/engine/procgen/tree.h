@@ -25,6 +25,10 @@ struct TreeParams {
     int   branchesPerNode = 2;      // children spawned at each node (2 = forking)
     float phyllotaxis   = 137.5f;   // roll advance between successive children (deg)
 
+    // --- Organic shaping (centerline bend; thin branches bend most) ---
+    float droop         = 0.35f;    // gravity sag: bend each segment toward -Y
+    float wander        = 0.06f;    // lateral random meander (kills the stiffness)
+
     // --- Radii (pipe model) ---
     float tipRadius     = 0.018f;   // radius of a terminal twig
     float pipeExponent  = 2.3f;     // n in r_parent^n = sum(r_child^n); 2..3
