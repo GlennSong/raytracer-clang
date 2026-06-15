@@ -24,6 +24,7 @@ set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
 # ============================================================
 add_library(engine_core STATIC
     src/rt_math.cpp
+    src/curve.cpp
     src/log.cpp
     src/job_system.cpp
     src/renderer/settings.cpp
