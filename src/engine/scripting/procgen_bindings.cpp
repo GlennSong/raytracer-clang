@@ -449,6 +449,8 @@ TreeParams readTreeParams(lua_State* L, int idx) {
     p.leafSize     = static_cast<float>(optField(L, idx, "leaf_size", p.leafSize));
     p.leavesPerTip = static_cast<int>(optField(L, idx, "leaves_per_tip", p.leavesPerTip));
     p.leafThickness = static_cast<float>(optField(L, idx, "leaf_thickness", p.leafThickness));
+    p.leafClump = static_cast<float>(optField(L, idx, "leaf_clump", p.leafClump));
+    p.maxLeafCards = static_cast<int>(optField(L, idx, "max_leaf_cards", p.maxLeafCards));
     lua_getfield(L, lua_absindex(L, idx), "leaves");
     if (!lua_isnil(L, -1)) p.leaves = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);

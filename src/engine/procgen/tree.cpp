@@ -388,21 +388,31 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     }
 
     // Leaves on twig tips and (to fill out the ends) any thin enough branch.
+    // Each card is jittered off the node into the surrounding gap, so clusters
+    // fill the crown volume rather than sitting only on the skeleton. A hard
+    // card budget keeps a single tree's triangle count bounded.
     if (params.leaves) {
         std::uniform_real_distribution<float> tilt(-0.5f, 0.5f);
         std::uniform_real_distribution<float> vary(0.8f, 1.15f);
+        std::uniform_real_distribution<float> off(-1.0f, 1.0f);
+        int cards = 0;
         for (const Node& n : nodes) {
             bool leafy = n.isTip ||
                          (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
             if (!leafy) continue;
             for (int j = 0; j < params.leavesPerTip; j++) {
+                if (cards >= params.maxLeafCards) break;
                 // Spiral the leaves around the heading and pitch them outward.
                 double roll = (params.phyllotaxis * j) * PI / 180.0;
                 Mat4 r = Mat4::rotateY(roll) * Mat4::rotateX((0.7 + tilt(rng)));
                 Vec3 dir = r.transformDirection(n.heading);
-                addLeaf(out.leaves, n.pos, dir, params.leafSize,
+                Vec3 jpos = n.pos + Vec3(off(rng), off(rng), off(rng)) *
+                                        (params.leafSize * params.leafClump);
+                addLeaf(out.leaves, jpos, dir, params.leafSize,
                         params.leafColor * vary(rng));
+                cards++;
             }
+            if (cards >= params.maxLeafCards) break;
         }
     }
 
@@ -518,9 +528,10 @@ TextureData leafTexture(int size) {
     t.pixels.assign((size_t)size * size * 4, 0);
 
     // A CLUSTER of many small pointed-oval leaves (not one leaf): so a single
-    // card reads as a dense tuft of foliage. Deterministic layout.
+    // card reads as a dense tuft of foliage. Density here is ~free (fixed texture
+    // cost), unlike adding cards — so pack it full. Deterministic layout.
     struct Leaf { float cx, cy, ca, sa, halfLen, halfW, shade; };
-    const int K = 18;
+    const int K = 34;
     std::vector<Leaf> leaves;
     uint32_t h = 0x9e3779b9u;
     auto rnd = [&]() {
@@ -530,12 +541,12 @@ TextureData leafTexture(int size) {
     for (int i = 0; i < K; i++) {
         float ang = rnd() * 6.2831853f;
         Leaf lf;
-        lf.cx = 0.5f + (rnd() - 0.5f) * 0.7f;
-        lf.cy = 0.5f + (rnd() - 0.5f) * 0.85f;
+        lf.cx = 0.5f + (rnd() - 0.5f) * 0.82f;
+        lf.cy = 0.5f + (rnd() - 0.5f) * 0.92f;
         lf.ca = std::cos(ang); lf.sa = std::sin(ang);
-        lf.halfLen = 0.13f + rnd() * 0.08f;
-        lf.halfW = 0.035f + rnd() * 0.025f;
-        lf.shade = 0.7f + rnd() * 0.3f;       // per-leaf value variation
+        lf.halfLen = 0.15f + rnd() * 0.09f;
+        lf.halfW = 0.045f + rnd() * 0.03f;
+        lf.shade = 0.62f + rnd() * 0.38f;     // per-leaf value variation
         leaves.push_back(lf);
     }
 

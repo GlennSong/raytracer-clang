@@ -49,6 +49,10 @@ struct TreeParams {
     int   leavesPerTip  = 4;
     float leafThickness = 0.045f;   // also leaf branches at/under this radius (not
                                     //   just twig tips), to fill out the ends; 0 = tips only
+    float leafClump     = 0.9f;     // jitter cards into the gaps around a node, in
+                                    //   leafSize units (canopy-volume fill); 0 = on-node
+    int   maxLeafCards  = 6000;     // hard budget: stop emitting cluster cards past
+                                    //   this, so one tree can't blow up the triangle count
 
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
