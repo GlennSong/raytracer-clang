@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86]
+  },
+  "terrain": {
+    "seed": 1337,
+    "size": 200,
+    "resolution": 140,
+    "heightScale": 7,
+    "noiseScale": 0.012,
+    "octaves": 6,
+    "warp": 0.25,
+    "mountainHeight": 95,
+    "mountainScale": 0.0032,
+    "lodRings": 5,
+    "lodCells": 48,
+    "material": {
+      "albedo": [1.0, 1.0, 1.0],
+      "roughness": 1.0
+    }
+  },
+  "player": {
+    "position": [0, 6, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.4, 0.55, 0.5],
+      "color": [1.0, 0.95, 0.85],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.55
+  }
+}

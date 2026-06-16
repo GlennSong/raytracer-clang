@@ -451,6 +451,8 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.noiseScale  = t.value("noiseScale", p.noiseScale);
     p.octaves     = t.value("octaves", p.octaves);
     p.warp        = t.value("warp", p.warp);
+    p.mountainHeight = t.value("mountainHeight", p.mountainHeight);
+    p.mountainScale  = t.value("mountainScale", p.mountainScale);
     return p;
 }
 
@@ -487,6 +489,24 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
         r.material.roughness = 0.95f;
     }
     world.add<Renderable>(e, r);
+
+    // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a
+    // fraction of the triangle cost. Render-only (no collider — you never reach
+    // them); regenerated runtime objects, no SourceSpec.
+    int lodRings = t.value("lodRings", 0);
+    if (lodRings > 0) {
+        int lodCells = t.value("lodCells", 40);
+        std::vector<RenderMesh> rings = generateTerrainLOD(p, noise, lodRings, lodCells);
+        for (std::size_t i = 0; i < rings.size(); i++) {
+            Entity re = world.create();
+            world.add<Transform>(re, Transform{});
+            world.add<PrevTransform>(re, PrevTransform{Transform{}});
+            Renderable rr;
+            rr.mesh = assets.acquireMesh(rings[i], "terrain_lod" + std::to_string(i));
+            rr.material = r.material;
+            world.add<Renderable>(re, rr);
+        }
+    }
 }
 
 // Vegetation: generate a few "species" meshes (L-system trees, noise rocks)

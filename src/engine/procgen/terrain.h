@@ -16,6 +16,11 @@ struct TerrainParams {
     double noiseScale = 0.02;  // frequency: multiplies world coords before noise
     int   octaves = 5;
     double warp = 0.0;         // domain-warp amount (0 = plain FBM)
+    // Long-range relief: a low-frequency ridged layer added on top, so distant
+    // terrain reads as mountains / rolling hills while the high-frequency octaves
+    // above give near detail. 0 = off.
+    float  mountainHeight = 0.0f;
+    double mountainScale = 0.004;
 };
 
 // Sample the terrain height at a world (x, z). The single source of truth for
@@ -34,6 +39,20 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration
 // (terrainColor) baked in. Centered on the origin.
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise);
+
+// Build one square annular ring of terrain from inner to outer half-extent at
+// `cells` resolution (coarse), with a hole for the inner (higher-detail) tile.
+// Used to extend terrain to the horizon as concentric coarsening LOD rings —
+// cheap distant mountains/hills. Same height field as generateTerrain.
+RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
+                               float innerHalf, float outerHalf, int cells);
+
+// Concentric LOD rings around the central tile: `levels` rings, each doubling
+// the extent (so triangle count per ring stays ~constant while coverage grows
+// geometrically). Ring 0 starts at the central tile's edge (size/2).
+std::vector<RenderMesh> generateTerrainLOD(const TerrainParams& params,
+                                           const Noise& noise, int levels,
+                                           int cells = 40);
 
 }  // namespace engine
 

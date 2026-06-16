@@ -1,0 +1,10 @@
+{
+  "cameras": [
+    {
+      "name": "Vista",
+      "position": [0, 210, 520],
+      "forward": [0, -0.235, -0.972],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 300 }
+    }
+  ]
+}

@@ -97,11 +97,20 @@ void addTerrain(const json& t, Scene& scene) {
     tp.noiseScale  = t.value("noiseScale", tp.noiseScale);
     tp.octaves     = t.value("octaves", tp.octaves);
     tp.warp        = t.value("warp", tp.warp);
+    tp.mountainHeight = t.value("mountainHeight", tp.mountainHeight);
+    tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
     Noise noise(t.value("seed", 0u));
-    RenderMesh mesh = generateTerrain(tp, noise);
     int matIdx = importMaterial(t, scene);
-    addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), matIdx,
-                       scene);
+    addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
+                       Vec3(1, 1, 1), matIdx, scene);
+    // Distant LOD rings (mountains/hills out to the horizon).
+    int lodRings = t.value("lodRings", 0);
+    if (lodRings > 0) {
+        for (RenderMesh& ring :
+             generateTerrainLOD(tp, noise, lodRings, t.value("lodCells", 40)))
+            addMeshAsTriangles(ring, Vec3(), Quat::identity(), Vec3(1, 1, 1),
+                               matIdx, scene);
+    }
 }
 
 // A hero parametric tree (shape:"tree"): grow the same mesh the viewer does,

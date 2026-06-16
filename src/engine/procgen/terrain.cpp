@@ -38,7 +38,15 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     double h = params.warp > 0.0
                    ? noise.warpedFbm2(nx, nz, params.warp, params.octaves)
                    : noise.fbm2(nx, nz, params.octaves);
-    return h * params.heightScale;
+    h *= params.heightScale;
+    // Long-range ridged mountain layer (low frequency, always-positive relief).
+    if (params.mountainHeight > 0.0f) {
+        double m = noise.fbm2(worldX * params.mountainScale,
+                              worldZ * params.mountainScale, 4);
+        double ridge = 1.0 - std::abs(m);          // [0,1], peaks where m ~ 0
+        h += ridge * ridge * params.mountainHeight;
+    }
+    return h;
 }
 
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
@@ -83,6 +91,58 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
         v.color = terrainColor(v.position.y, v.normal.y, nv);
     }
     return mesh;
+}
+
+RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
+                               float innerHalf, float outerHalf, int cells) {
+    RenderMesh mesh;
+    cells = std::max(2, cells);
+    const int n = cells + 1;
+    const float step = (outerHalf * 2.0f) / cells;
+
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++) {
+            float x = -outerHalf + i * step;
+            float z = -outerHalf + j * step;
+            float y = static_cast<float>(terrainHeight(params, noise, x, z));
+            mesh.vertices.push_back(Vertex(Vec3(x, y, z), Vec3(0, 1, 0)));
+        }
+    }
+    for (int j = 0; j < cells; j++) {
+        for (int i = 0; i < cells; i++) {
+            float x0 = -outerHalf + i * step, x1 = x0 + step;
+            float z0 = -outerHalf + j * step, z1 = z0 + step;
+            // Skip quads entirely inside the inner hole (left for the finer tile).
+            if (std::max(std::abs(x0), std::abs(x1)) <= innerHalf &&
+                std::max(std::abs(z0), std::abs(z1)) <= innerHalf)
+                continue;
+            uint32_t a = static_cast<uint32_t>(j * n + i);
+            uint32_t b = a + 1;
+            uint32_t c = a + static_cast<uint32_t>(n);
+            uint32_t d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+        }
+    }
+
+    MeshBuilder::recomputeNormals(mesh);
+    MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
+    for (Vertex& v : mesh.vertices) {
+        double nv = noise.noise2(v.position.x * 0.15, v.position.z * 0.15);
+        v.color = terrainColor(v.position.y, v.normal.y, nv);
+    }
+    return mesh;
+}
+
+std::vector<RenderMesh> generateTerrainLOD(const TerrainParams& params,
+                                           const Noise& noise, int levels, int cells) {
+    std::vector<RenderMesh> rings;
+    float inner = params.size * 0.5f;          // central tile edge
+    for (int l = 0; l < levels; l++) {
+        float outer = inner * 2.0f;            // each ring doubles the extent
+        rings.push_back(generateTerrainRing(params, noise, inner, outer, cells));
+        inner = outer;
+    }
+    return rings;
 }
 
 }  // namespace engine

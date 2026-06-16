@@ -2,7 +2,9 @@
 
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -98,4 +100,62 @@ TEST_CASE(terrain_bakes_nonwhite_vertex_colors) {
         CHECK(v.color.x >= 0.0 && v.color.y >= 0.0 && v.color.z >= 0.0);
     }
     CHECK(anyTinted);   // coloration was baked (not left default white)
+}
+
+TEST_CASE(terrain_mountain_layer_raises_relief) {
+    // The ridged mountain layer only adds positive relief: max height rises,
+    // and the flat-field minimum is not pushed below the base terrain.
+    TerrainParams base; base.size = 400; base.heightScale = 5; base.octaves = 5;
+    TerrainParams mtn = base; mtn.mountainHeight = 60; mtn.mountainScale = 0.004;
+    Noise n(3);
+    double baseMax = -1e9, mtnMax = -1e9;
+    for (int i = 0; i < 60; i++) {
+        double x = -200 + i * 6.7, z = 37 + i * 5.0;
+        baseMax = std::max(baseMax, terrainHeight(base, n, x, z));
+        mtnMax = std::max(mtnMax, terrainHeight(mtn, n, x, z));
+    }
+    CHECK(mtnMax > baseMax + 20.0);   // mountains add substantial elevation
+}
+
+TEST_CASE(terrain_ring_is_a_hollow_annulus) {
+    TerrainParams p; p.size = 100; p.heightScale = 8;
+    Noise n(1);
+    RenderMesh ring = generateTerrainRing(p, n, /*inner=*/50.0f, /*outer=*/100.0f, 20);
+    CHECK(!ring.vertices.empty());
+    CHECK(ring.indices.size() % 3 == 0);
+    // Covers out to the outer extent...
+    float maxAbs = 0.0f;
+    for (const Vertex& v : ring.vertices)
+        maxAbs = std::max(maxAbs, std::max(std::abs((float)v.position.x),
+                                           std::abs((float)v.position.z)));
+    CHECK(maxAbs > 95.0f);
+    // ...with a hole: fewer triangles than a full grid of the same resolution.
+    CHECK(ring.indices.size() < 20u * 20u * 6u);
+    // No triangle lies entirely inside the inner hole.
+    bool allInsideSome = false;
+    for (size_t i = 0; i + 2 < ring.indices.size(); i += 3) {
+        bool inside = true;
+        for (int k = 0; k < 3; k++) {
+            const Vec3& q = ring.vertices[ring.indices[i + k]].position;
+            if (std::abs(q.x) > 50.0 || std::abs(q.z) > 50.0) inside = false;
+        }
+        allInsideSome |= inside;
+    }
+    CHECK(!allInsideSome);
+}
+
+TEST_CASE(terrain_lod_rings_double_in_extent) {
+    TerrainParams p; p.size = 100;
+    Noise n(1);
+    std::vector<RenderMesh> rings = generateTerrainLOD(p, n, 3, 24);
+    CHECK(rings.size() == 3u);
+    float prev = 0.0f;
+    for (const RenderMesh& r : rings) {
+        float maxAbs = 0.0f;
+        for (const Vertex& v : r.vertices)
+            maxAbs = std::max(maxAbs, std::max(std::abs((float)v.position.x),
+                                               std::abs((float)v.position.z)));
+        CHECK(maxAbs > prev * 1.5f);   // each ring extends well beyond the last
+        prev = maxAbs;
+    }
 }
