@@ -15,19 +15,30 @@ Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    (void)height;
-    const Vec3 grass(0.20, 0.38, 0.15);   // green
-    const Vec3 dirt(0.42, 0.30, 0.16);    // brown
-    const Vec3 rock(0.40, 0.38, 0.36);    // grey
+    // Richer, more saturated palette with a green -> olive -> earth gradient on
+    // flat ground, warm-grey rock on slopes, and snow on high gentle ground.
+    const Vec3 grass(0.13, 0.30, 0.07);    // deep green
+    const Vec3 dryGrass(0.34, 0.36, 0.12); // olive / dry meadow
+    const Vec3 dirt(0.30, 0.20, 0.10);     // rich earth brown
+    const Vec3 rock(0.29, 0.27, 0.25);     // warm grey
+    const Vec3 snow(0.90, 0.92, 0.96);
 
-    // Steep ground reads as rock; gentle ground is a patchy mix of grass and
-    // dirt chosen by the noise term, so it's green in places and brown in others
-    // rather than a uniform color.
     double slope = 1.0 - clamp01(normalUp);                 // 0 flat .. 1 vertical
-    double rockFactor = smoothstep(0.32, 0.60, slope);
-    double dirtFactor = smoothstep(-0.25, 0.25, noiseValue); // noise: grass<->dirt
-    Vec3 ground = mixv(grass, dirt, dirtFactor);
+    double rockFactor = smoothstep(0.30, 0.62, slope);
+
+    // Two-stop gradient over the noise term: green -> dry meadow -> earth, so the
+    // ground varies richly instead of a flat green/brown lerp.
+    double t = clamp01(noiseValue * 0.5 + 0.5);
+    Vec3 ground = t < 0.5 ? mixv(grass, dryGrass, t * 2.0)
+                          : mixv(dryGrass, dirt, (t - 0.5) * 2.0);
     Vec3 c = mixv(ground, rock, rockFactor);
+
+    // Snow on high, non-steep ground (absolute altitude — a no-op on low terrain,
+    // caps mountains). Snow doesn't cling to cliffs.
+    double snowFactor = smoothstep(74.0, 108.0, height) *
+                        (1.0 - smoothstep(0.42, 0.68, slope));
+    c = mixv(c, snow, snowFactor);
+
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }
 
