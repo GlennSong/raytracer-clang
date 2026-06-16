@@ -3,6 +3,7 @@
 #include "../src/engine/procgen/scatter.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
+#include <algorithm>
 #include <cmath>
 
 using namespace engine;  // namespace migration (ADR-0015)
@@ -85,6 +86,39 @@ TEST_CASE(scatter_focus_clears_center_and_steps_size_down_outward) {
     CHECK(clear);
     CHECK(nearN > 0 && farN > 0);
     if (nearN && farN) CHECK(nearSum / nearN > farSum / farN);   // bigger near focus
+}
+
+TEST_CASE(scatter_clustering_clumps_placements) {
+    // The Thomas process clumps candidates around parent points, so the mean
+    // nearest-neighbour distance is far smaller than a uniform scatter of the
+    // same count — natural groves rather than even spacing.
+    auto avgNearest = [](const std::vector<Placement>& p) {
+        double sum = 0.0;
+        for (size_t i = 0; i < p.size(); i++) {
+            double best = 1e30;
+            for (size_t j = 0; j < p.size(); j++) {
+                if (i == j) continue;
+                double dx = p[i].position.x - p[j].position.x;
+                double dz = p[i].position.z - p[j].position.z;
+                best = std::min(best, dx * dx + dz * dz);
+            }
+            sum += std::sqrt(best);
+        }
+        return p.empty() ? 0.0 : sum / p.size();
+    };
+
+    ScatterParams sp;
+    sp.count = 400; sp.seed = 5; sp.regionSize = 80.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+    double uniformNN = avgNearest(scatterOnTerrain(sp, t, n));
+
+    sp.clusterCount = 6; sp.clusterRadius = 4.0f;
+    auto clustered = scatterOnTerrain(sp, t, n);
+    double clusterNN = avgNearest(clustered);
+
+    CHECK(!clustered.empty());
+    CHECK(clusterNN < 0.6 * uniformNN);   // clumped => neighbours much closer
 }
 
 TEST_CASE(scatter_respects_region_surface_scale_and_yaw) {

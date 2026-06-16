@@ -59,6 +59,8 @@
   "focusRadius": 55,
   "focusScale": 1.7,
   "focusClear": 9,
+  "clusterCount": 11,
+  "clusterRadius": 13,
   "species": [
    {
     "kind": "script",

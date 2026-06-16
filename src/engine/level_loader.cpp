@@ -748,6 +748,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.focusRadius      = veg.value("focusRadius", 0.0f);
     scatter.focusScale       = veg.value("focusScale", 1.0f);
     scatter.focusClear       = veg.value("focusClear", 0.0f);
+    scatter.clusterCount     = veg.value("clusterCount", 0);
+    scatter.clusterRadius    = veg.value("clusterRadius", 6.0f);
     scatter.seed             = vegSeed;
 
     // Footprint spacing so big meshes don't jumble: default to the largest

@@ -33,6 +33,12 @@ struct ScatterParams {
     float focusRadius = 0.0f;        // distance over which scale fades to base (0 = off)
     float focusScale = 1.0f;         // scale multiplier at the focus, lerped to 1 at focusRadius
     float focusClear = 0.0f;         // reject placements within this distance of the focus
+    // Clustering (Thomas point process): instead of uniform candidates, draw
+    // `clusterCount` parent points and scatter candidates in Gaussian clumps of
+    // std-dev `clusterRadius` around them — natural groves and clearings rather
+    // than even spacing. 0 = uniform (off).
+    int   clusterCount = 0;
+    float clusterRadius = 6.0f;
     uint32_t seed = 0;
 };
 
