@@ -32,7 +32,8 @@ std::string num(float v) {
 // Side branches start shorter, so they hit the threshold sooner and ramify
 // earlier than the leader. Unexpanded apices after `iterations` are the tips.
 ParametricLSystem buildGrammar(const TreeParams& p) {
-    const std::string f = num(p.lengthFalloff);
+    const std::string f = num(p.lengthFalloff);        // side branches
+    const std::string lf = num(p.leaderFalloff);       // central leader (height)
     const std::string roll = num(p.phyllotaxis);
     const std::string pitch = num(p.branchAngle);
 
@@ -40,7 +41,7 @@ ParametricLSystem buildGrammar(const TreeParams& p) {
         std::string s = "F(l)";
         for (int i = 0; i < p.branchesPerNode; i++)
             s += "/(" + roll + ")[&(" + pitch + ")A(l*" + f + ")]";
-        s += "/(" + roll + ")A(l*" + f + ")";   // central leader continues
+        s += "/(" + roll + ")A(l*" + lf + ")";   // tall central leader continues
         return s;
     };
 

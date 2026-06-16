@@ -116,6 +116,7 @@ void addTree(const json& ent, Scene& scene) {
         tp.iterations      = j.value("iterations", tp.iterations);
         tp.trunkLength     = j.value("trunkLength", tp.trunkLength);
         tp.lengthFalloff   = j.value("lengthFalloff", tp.lengthFalloff);
+        tp.leaderFalloff   = j.value("leaderFalloff", tp.leaderFalloff);
         tp.branchAngle     = j.value("branchAngle", tp.branchAngle);
         tp.angleJitter     = j.value("angleJitter", tp.angleJitter);
         tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);

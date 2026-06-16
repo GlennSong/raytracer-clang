@@ -20,7 +20,10 @@ struct TreeParams {
     // --- L-system shape ---
     int   iterations    = 5;        // branch orders (recursion depth)
     float trunkLength   = 1.6f;     // length of the first internode
-    float lengthFalloff = 0.82f;    // child internode = parent * this
+    float lengthFalloff = 0.82f;    // SIDE-branch internode = parent * this (lower
+                                    //   = sides shrink fast and ramify densely)
+    float leaderFalloff = 0.9f;     // central-leader internode = parent * this (high
+                                    //   = a tall trunk that keeps its height)
     float branchAngle   = 36.0f;    // pitch of a branch away from its parent (deg)
     float angleJitter   = 14.0f;    // +/- random variation applied to every turn (deg)
     int   branchesPerNode = 2;      // children spawned at each node (2 = forking)
