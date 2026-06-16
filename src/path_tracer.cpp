@@ -49,11 +49,32 @@ void renderRow(const Scene& scene, const Camera& camera, Image& image,
             color = color * std::max(fall, 0.0);
         }
 
-        auto aces = [](double val) {
-            val = (val * (2.51 * val + 0.03)) / (val * (2.43 * val + 0.59) + 0.14);
-            return std::pow(std::clamp(val, 0.0, 1.0), 1.0 / 2.2);
+        // Fitted ACES filmic tonemap (Stephen Hill). The RGB input/output
+        // matrices preserve saturation — a per-channel ACES curve washes colors
+        // out (shifts hue, pulls brights toward white). Then sRGB-ish 2.2 gamma.
+        auto mul = [](const double m[3][3], const Vec3& c) {
+            return Vec3(m[0][0] * c.x + m[0][1] * c.y + m[0][2] * c.z,
+                        m[1][0] * c.x + m[1][1] * c.y + m[1][2] * c.z,
+                        m[2][0] * c.x + m[2][1] * c.y + m[2][2] * c.z);
         };
-        color = Vec3(aces(color.x), aces(color.y), aces(color.z));
+        static const double ACESin[3][3] = {{0.59719, 0.35458, 0.04823},
+                                            {0.07600, 0.90834, 0.01566},
+                                            {0.02840, 0.13383, 0.83777}};
+        static const double ACESout[3][3] = {{1.60475, -0.53108, -0.07367},
+                                             {-0.10208, 1.10813, -0.00605},
+                                             {-0.00327, -0.07276, 1.07602}};
+        auto fit = [](double v) {
+            double a = v * (v + 0.0245786) - 0.000090537;
+            double b = v * (0.983729 * v + 0.432951) + 0.238081;
+            return a / b;
+        };
+        Vec3 c = mul(ACESin, color);
+        c = Vec3(fit(c.x), fit(c.y), fit(c.z));
+        c = mul(ACESout, c);
+        auto gamma = [](double v) {
+            return std::pow(std::clamp(v, 0.0, 1.0), 1.0 / 2.2);
+        };
+        color = Vec3(gamma(c.x), gamma(c.y), gamma(c.z));
 
         image.setPixel(x, y, color);
     }
