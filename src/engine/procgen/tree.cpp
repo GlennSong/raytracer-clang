@@ -445,6 +445,45 @@ float valueNoise(float x, float y, uint32_t seed) {
     return (a + (b - a) * sx) + ((c - a) + (d - c) * sx - (b - a) * sx) * sy;
 }
 
+float fbm(float x, float y, uint32_t seed, int octaves) {
+    float n = 0.0f, amp = 0.5f, f = 1.0f;
+    for (int o = 0; o < octaves; o++) {
+        n += amp * valueNoise(x * f, y * f, seed + o * 17u);
+        amp *= 0.5f; f *= 2.0f;
+    }
+    return n;
+}
+float ridged(float x, float y, uint32_t seed, int octaves) {
+    return 1.0f - std::abs(fbm(x, y, seed, octaves) * 2.0f - 1.0f);
+}
+
+// Bark relief height in [0,1] per species. Furrows run vertically (texture V is
+// along the branch length), so the across-trunk axis (U) carries the ridges.
+float barkHeight(BarkStyle style, float u, float v, uint32_t seed) {
+    if (style == BarkStyle::Birch) {
+        // Smooth pale bark with short horizontal lenticel dashes + peeling bands.
+        float base = 0.6f + 0.08f * fbm(u * 5.0f, v * 5.0f, seed, 3);
+        float lent = fbm(u * 22.0f, v * 60.0f, seed + 3u, 2);   // stretched across U
+        if (lent > 0.72f) base -= 0.45f;                        // dark lenticel
+        float band = valueNoise(u * 1.5f, v * 9.0f, seed + 7u);
+        if (band > 0.8f) base -= 0.12f;                         // peeling band
+        return std::clamp(base, 0.0f, 1.0f);
+    }
+    if (style == BarkStyle::Pine) {
+        // Blocky scale plates separated by cracks.
+        float warp = fbm(u * 4.0f, v * 4.0f, seed + 5u, 2) * 0.4f;
+        float plate = fbm(u * 6.0f + warp, v * 6.0f, seed, 2);
+        float crack = ridged(u * 7.0f, v * 7.0f, seed + 2u, 2);
+        return std::clamp(plate * 0.7f + 0.3f - (crack > 0.85f ? 0.5f : 0.0f),
+                          0.0f, 1.0f);
+    }
+    // Oak: deep vertical furrows, wavy. High U-frequency ridges, slow V warp.
+    float warp = fbm(u * 3.0f, v * 2.0f, seed + 5u, 2) * 0.35f;
+    float furrow = ridged(u * 9.0f + warp, v * 1.6f, seed, 4);
+    return std::clamp(furrow * 0.85f + 0.1f * fbm(u * 16.0f, v * 16.0f, seed + 9u, 2),
+                      0.0f, 1.0f);
+}
+
 }  // namespace
 
 TextureData barkTexture(int size, uint32_t seed) {
@@ -525,6 +564,49 @@ TextureData leafTexture(int size) {
         }
     }
     return t;
+}
+
+BarkStyle barkStyleFromName(const std::string& name) {
+    if (name.find("birch") != std::string::npos) return BarkStyle::Birch;
+    if (name.find("pine") != std::string::npos) return BarkStyle::Pine;
+    return BarkStyle::Oak;
+}
+
+BarkMaps barkMaps(BarkStyle style, int size, uint32_t seed) {
+    BarkMaps m;
+    m.albedo.width = m.albedo.height = size;
+    m.albedo.channels = 3;
+    m.albedo.pixels.resize((size_t)size * size * 3);
+    m.normal.width = m.normal.height = size;
+    m.normal.channels = 3;
+    m.normal.pixels.resize((size_t)size * size * 3);
+
+    auto H = [&](int x, int y) {
+        x = ((x % size) + size) % size;            // wrap (seamless tiling)
+        y = ((y % size) + size) % size;
+        return barkHeight(style, (float)x / size, (float)y / size, seed);
+    };
+    const float strength = size * 0.012f;          // bump intensity
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float h = H(x, y);
+            // Albedo: a grayscale value pattern (furrows darker) that modulates
+            // the bark vertex color — keep it bright enough to read as bark.
+            float val = std::clamp(0.55f + 0.45f * h, 0.35f, 1.0f);
+            size_t i = ((size_t)y * size + x) * 3;
+            uint8_t a = (uint8_t)(val * 255.0f);
+            m.albedo.pixels[i] = m.albedo.pixels[i + 1] = m.albedo.pixels[i + 2] = a;
+
+            // Tangent-space normal from the height gradient (central difference).
+            float dx = (H(x + 1, y) - H(x - 1, y)) * strength;
+            float dy = (H(x, y + 1) - H(x, y - 1)) * strength;
+            Vec3 n = normalize(Vec3(-dx, -dy, 1.0));
+            m.normal.pixels[i + 0] = (uint8_t)((n.x * 0.5 + 0.5) * 255.0);
+            m.normal.pixels[i + 1] = (uint8_t)((n.y * 0.5 + 0.5) * 255.0);
+            m.normal.pixels[i + 2] = (uint8_t)((n.z * 0.5 + 0.5) * 255.0);
+        }
+    }
+    return m;
 }
 
 }  // namespace engine

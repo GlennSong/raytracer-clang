@@ -54,7 +54,7 @@ TEST_CASE(flora_param_tree_returns_bark_and_leaf_parts) {
     CHECK(ok);
     CHECK(parts.size() == 2u);
     if (parts.size() == 2) {
-        CHECK(parts[0].texture == "bark");
+        CHECK(parts[0].texture.rfind("bark", 0) == 0);   // bark / bark_pine / ...
         CHECK(parts[0].mesh && parts[0].mesh->vertices.size() > 100);
         CHECK(parts[1].texture == "leaf");
         CHECK(parts[1].alphaTest);

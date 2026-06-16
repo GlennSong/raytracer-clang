@@ -101,7 +101,8 @@ function flora.param_tree(seed, opts)
         bark_color = pick("bark_color"), leaf_color = pick("leaf_color"),
     }, seed)
 
-    local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
+    local parts = { { mesh = bark, texture = "bark_" .. (opts.species or "oak"),
+                      roughness = 1.0 } }
     if leaves then
         parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
                               wind = true, roughness = 0.6 }

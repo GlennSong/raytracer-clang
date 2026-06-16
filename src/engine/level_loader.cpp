@@ -202,7 +202,12 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
         r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
         r.material.roughness = 1.0f;
-        r.material.albedoMap = upload(barkTexture(256, seed));
+        // Per-species bark relief: value pattern (modulates vertex color) + normal map.
+        std::string styleName = ent.contains("tree")
+            ? ent["tree"].value("barkStyle", std::string("oak")) : "oak";
+        BarkMaps bm = barkMaps(barkStyleFromName(styleName), 256, seed);
+        r.material.albedoMap = upload(bm.albedo);
+        r.material.normalMap = upload(bm.normal);
         if (ent.contains("material")) applyMaterial(ent["material"], r.material);
         world.add<Renderable>(e, r);
 
@@ -684,11 +689,16 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                             mat.metallic = sp.metallic;
                             if (sp.alphaTest || sp.texture == "leaf")
                                 mat.flags |= RenderMaterial::FLAG_ALPHA_TEST;
-                            if (sp.texture == "bark") {
-                                TextureData td = barkTexture(256, seed);
-                                if (!td.pixels.empty())
+                            if (sp.texture.rfind("bark", 0) == 0) {
+                                BarkMaps bm = barkMaps(barkStyleFromName(sp.texture), 256, seed);
+                                if (!bm.albedo.pixels.empty())
                                     mat.albedoMap = renderer.uploadTexture(
-                                        td.width, td.height, td.channels, td.pixels.data());
+                                        bm.albedo.width, bm.albedo.height,
+                                        bm.albedo.channels, bm.albedo.pixels.data());
+                                if (!bm.normal.pixels.empty())
+                                    mat.normalMap = renderer.uploadTexture(
+                                        bm.normal.width, bm.normal.height,
+                                        bm.normal.channels, bm.normal.pixels.data());
                             } else if (sp.texture == "leaf") {
                                 TextureData td = leafTexture(128);
                                 if (!td.pixels.empty())

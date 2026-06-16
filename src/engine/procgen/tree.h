@@ -93,6 +93,18 @@ struct TextureData {
 // *modulate* the bark vertex color — values around 0.55..1.0. Tiles vertically.
 TextureData barkTexture(int size = 256, uint32_t seed = 0);
 
+// Per-species bark relief: a grayscale albedo value pattern (modulates the bark
+// vertex color) plus a tangent-space normal map for bump/relief (the renderer
+// samples normalMap). Oak = deep vertical furrows, birch = pale with horizontal
+// lenticels, pine = scale plates. Seamless (wraps).
+enum class BarkStyle { Oak, Birch, Pine };
+struct BarkMaps {
+    TextureData albedo;
+    TextureData normal;
+};
+BarkMaps barkMaps(BarkStyle style, int size = 256, uint32_t seed = 0);
+BarkStyle barkStyleFromName(const std::string& name);   // "bark_birch" -> Birch
+
 // A leaf card texture (RGBA): white RGB so the leaf vertex color tints it, with
 // a pointed-oval alpha silhouette for alpha-cut foliage.
 TextureData leafTexture(int size = 128);
