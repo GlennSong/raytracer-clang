@@ -134,6 +134,47 @@ ParamExpr compileExpr(const std::string& text,
     return e;
 }
 
+// Compile a guard like "l < 0.5" or "l*0.6 >= w" into a predicate over the bound
+// params. Splits on the first top-level comparison operator (< <= > >= == !=);
+// both sides are ordinary parameter expressions. No operator -> always true.
+ParamPredicate compileCondition(const std::string& text,
+                                const std::unordered_map<std::string, int>& vars) {
+    enum Op { LT, LE, GT, GE, EQ, NE };
+    int depth = 0;
+    for (size_t i = 0; i < text.size(); i++) {
+        char c = text[i];
+        if (c == '(') { depth++; continue; }
+        if (c == ')') { depth--; continue; }
+        if (depth != 0) continue;
+        if (c != '<' && c != '>' && c != '=' && c != '!') continue;
+        char n = (i + 1 < text.size()) ? text[i + 1] : '\0';
+        Op op;
+        size_t rhsStart;
+        if (n == '=') {
+            rhsStart = i + 2;
+            op = c == '<' ? LE : c == '>' ? GE : c == '!' ? NE : EQ;
+        } else {
+            rhsStart = i + 1;
+            op = c == '<' ? LT : c == '>' ? GT : EQ;
+        }
+        ParamExpr lhs = compileExpr(text.substr(0, i), vars);
+        ParamExpr rhs = compileExpr(text.substr(rhsStart), vars);
+        return [op, lhs, rhs](const std::vector<float>& b) {
+            float L = lhs(b), R = rhs(b);
+            switch (op) {
+                case LT: return L < R;
+                case LE: return L <= R;
+                case GT: return L > R;
+                case GE: return L >= R;
+                case EQ: return L == R;
+                case NE: return L != R;
+            }
+            return true;
+        };
+    }
+    return ParamPredicate();   // no comparison found: unconditional
+}
+
 // Read the balanced parenthesised group starting at text[pos]=='(' and return
 // its inner contents, advancing pos past the matching ')'.
 std::string readParens(const std::string& text, size_t& pos) {
@@ -188,8 +229,13 @@ void ParametricLSystem::rule(const std::string& predecessor,
         }
     }
 
-    // Successor: a sequence of module templates with parameter expressions.
+    // Optional guard after the formals: "A(l,w) : l < 0.5" (ABoP condition).
     Production prod;
+    while (p < predecessor.size() && std::isspace((unsigned char)predecessor[p])) p++;
+    if (p < predecessor.size() && predecessor[p] == ':')
+        prod.condition = compileCondition(predecessor.substr(p + 1), vars);
+
+    // Successor: a sequence of module templates with parameter expressions.
     prod.formals = formals;
     prod.weight = weight;
     for (size_t i = 0; i < successor.size();) {
@@ -214,10 +260,12 @@ ModuleString ParametricLSystem::expand(const ModuleString& axiom, int iterations
         for (const Module& m : current) {
             auto rule = rules_.find(m.symbol);
             if (rule == rules_.end()) { next.push_back(m); continue; }
-            // Match by symbol *and* parameter arity (ABoP module matching).
+            // Match by symbol, parameter arity, AND guard (ABoP module matching).
             std::vector<const Production*> matches;
             for (const Production& pr : rule->second)
-                if (pr.formals.size() == m.params.size()) matches.push_back(&pr);
+                if (pr.formals.size() == m.params.size() &&
+                    (!pr.condition || pr.condition(m.params)))
+                    matches.push_back(&pr);
             if (matches.empty()) { next.push_back(m); continue; }
 
             const Production* chosen = matches.front();

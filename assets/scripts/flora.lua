@@ -48,22 +48,25 @@ local SPECIES = {
 -- oak is broad and drooping, pine a narrow whorled conifer, birch slender/weepy.
 local PARAM_SPECIES = {
     oak = { iterations = 6, length = 2.2, width = 0.14, angle = 40,
-            falloff = 0.82, leader_falloff = 0.9, branches = 2,
+            falloff = 0.76, leader_falloff = 0.88, branches = 2,
+            terminal_fraction = 0.34, terminal_forks = 3,
             droop = 0.26, wander = 0.08, angle_jitter = 20, ring_segments = 6,
             tip_radius = 0.02, pipe_exponent = 2.4, radius_scale = 1.6,
-            leaves_per_tip = 11, leaf_size = 0.2, leaf_thickness = 0.055,
+            leaves_per_tip = 5, leaf_size = 0.18, leaf_thickness = 0.05,
             bark_color = { 0.32, 0.23, 0.15 }, leaf_color = { 0.20, 0.46, 0.13 } },
-    pine = { iterations = 7, length = 1.5, width = 0.13, angle = 70,
-             falloff = 0.58, leader_falloff = 0.95, branches = 3,
+    pine = { iterations = 7, length = 1.5, width = 0.13, angle = 68,
+             falloff = 0.62, leader_falloff = 0.92, branches = 3,
+             terminal_fraction = 0.3, terminal_forks = 3,
              droop = 0.12, wander = 0.05, angle_jitter = 14, ring_segments = 6,
              tip_radius = 0.018, pipe_exponent = 2.3, radius_scale = 1.4,
-             leaves_per_tip = 9, leaf_size = 0.13, leaf_thickness = 0.04,
+             leaves_per_tip = 5, leaf_size = 0.12, leaf_thickness = 0.04,
              bark_color = { 0.28, 0.19, 0.12 }, leaf_color = { 0.12, 0.34, 0.16 } },
-    birch = { iterations = 6, length = 2.0, width = 0.1, angle = 30,
-              falloff = 0.86, leader_falloff = 0.92, branches = 2,
+    birch = { iterations = 6, length = 2.0, width = 0.1, angle = 32,
+              falloff = 0.78, leader_falloff = 0.9, branches = 2,
+              terminal_fraction = 0.34, terminal_forks = 3,
               droop = 0.36, wander = 0.11, angle_jitter = 22, ring_segments = 6,
               tip_radius = 0.016, pipe_exponent = 2.3, radius_scale = 1.1,
-              leaves_per_tip = 10, leaf_size = 0.16, leaf_thickness = 0.045,
+              leaves_per_tip = 5, leaf_size = 0.15, leaf_thickness = 0.045,
               bark_color = { 0.78, 0.76, 0.70 }, leaf_color = { 0.42, 0.55, 0.18 } },
 }
 
@@ -77,16 +80,29 @@ function flora.param_tree(seed, opts)
 
     local angle, fall, lead = pick("angle"), pick("falloff"), pick("leader_falloff")
     local branches, roll = pick("branches"), 137.5
-    -- Successor: lay an internode, spawn `branches` golden-angle side branches
-    -- (each pitched away and shrunk), then continue a central leader.
-    local succ = "F(l,w)"
-    for _ = 1, branches do
-        succ = succ .. string.format("/(%g)[&(%g)A(l*%g,w*0.6)]", roll, angle, fall)
-    end
-    succ = succ .. string.format("/(%g)A(l*%g,w*0.75)", roll, lead)
-
     local sys = lsystem.parametric()
-    sys:rule("A(l,w)", succ)
+
+    -- Structural growth while the internode is long: lay an internode, spawn
+    -- `branches` golden-angle side branches (pitched away + shrunk), continue a
+    -- central leader.
+    local struct = "F(l,w)"
+    for _ = 1, branches do
+        struct = struct .. string.format("/(%g)[&(%g)A(l*%g,w*0.6)]", roll, angle, fall)
+    end
+    struct = struct .. string.format("/(%g)A(l*%g,w*0.75)", roll, lead)
+
+    -- Terminal spray once short (guarded): more forks, wider pitch, faster shrink
+    -- => branch ends fork repeatedly into dense short tipped twigs.
+    local thresh = pick("length") * (pick("terminal_fraction") or 0.34)
+    local tforks = pick("terminal_forks") or 3
+    local term = "F(l,w)"
+    for _ = 1, tforks do
+        term = term .. string.format("/(%g)[&(%g)A(l*0.7,w*0.55)]", roll, angle * 1.3)
+    end
+    term = term .. string.format("/(%g)A(l*0.7,w*0.6)", roll)
+
+    sys:rule(string.format("A(l,w):l>%g", thresh), struct)
+    sys:rule(string.format("A(l,w):l<=%g", thresh), term)
     local modules = sys:expand(
         string.format("A(%g,%g)", pick("length"), pick("width")),
         pick("iterations"), seed)

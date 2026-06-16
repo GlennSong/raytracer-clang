@@ -159,6 +159,8 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         tp.angleJitter    = j.value("angleJitter", tp.angleJitter);
         tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
         tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
+        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
+        tp.terminalForks  = j.value("terminalForks", tp.terminalForks);
         tp.droop          = j.value("droop", tp.droop);
         tp.wander         = j.value("wander", tp.wander);
         tp.rootCount      = j.value("rootCount", tp.rootCount);

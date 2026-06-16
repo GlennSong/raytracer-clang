@@ -1822,14 +1822,16 @@ express taper); a full embedded scripting expression language / Lua-per-rule
 taper in `TurtleParams` only (rejected — global, not per-branch).
 
 **Consequences / tech debt.** A small expression parser/evaluator to maintain;
-published ABoP grammars become near copy-paste. **Owed:** the Lua binding still
-exposes only the `char` `LSystem` (`flora.lua` uses `lsystem.create/rule`) —
-`growTree` uses `ParametricLSystem` directly in C++; exposing the parametric
-system to Lua is future work if recipes want it. Context-sensitivity (`a<b>c`)
-and production predicates/guards remain future (botany §3.5–3.6).
+published ABoP grammars become near copy-paste. The parametric system is now
+**exposed to Lua** (`lsystem.parametric` + `tree.skin`, ADR-0032) and supports
+**guarded productions** — `A(l):l<=t -> …` — added 2026-06-16: a production fires
+only when its condition holds, used for terminal sprays (branch ends fork into
+dense short twigs once the internode is short). Both `buildGrammar` (C++) and
+`flora.param_tree` (Lua) use a structural + terminal guarded pair.
+Context-sensitivity (`a<b>c`) remains future (botany §3.6).
 
-**Revisit trigger.** Revisit if grammars need conditionals/guards
-(`F(s):s>1 -> …`), or a second numeric type (e.g. vector parameters) in modules.
+**Revisit trigger.** Revisit if grammars need context-sensitivity (neighbor
+matching), or a second numeric type (e.g. vector parameters) in modules.
 
 ---
 

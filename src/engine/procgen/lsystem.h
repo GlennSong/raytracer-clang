@@ -48,11 +48,17 @@ using ModuleString = std::vector<Module>;
 // predecessor parameters (mirrors the `Sdf = std::function` precedent).
 using ParamExpr = std::function<float(const std::vector<float>&)>;
 
+// A compiled production guard: a boolean condition over the bound predecessor
+// parameters (e.g. "l < 0.5"). Empty = always applies (ABoP guarded productions).
+using ParamPredicate = std::function<bool(const std::vector<float>&)>;
+
 class ParametricLSystem {
 public:
     // Add a production. `predecessor` is a symbol with formal parameter names —
-    // "A(l,w)" (or just "A"). `successor` is a module template whose parameters
-    // are expressions over those names, e.g.
+    // "A(l,w)" (or just "A"), with an optional guard "A(l,w):l<0.5" so a rule
+    // fires only when the condition holds (ABoP guarded productions — used for
+    // terminal sprays once an internode gets short). `successor` is a module
+    // template whose parameters are expressions over those names, e.g.
     //   "F(l,w)[+(30)A(l*0.7,w*0.6)][-(30)A(l*0.7,w*0.6)]"
     // Supported expression syntax: + - * /, parentheses, unary minus, numeric
     // literals, and the formal names. Repeat the same predecessor to add
@@ -75,6 +81,7 @@ private:
     struct Production {
         std::vector<std::string> formals;
         std::vector<ModuleTemplate> successor;
+        ParamPredicate condition;   // empty = unconditional; else a guard ("l<0.5")
         double weight = 1.0;
     };
     std::unordered_map<char, std::vector<Production>> rules_;

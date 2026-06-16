@@ -25,6 +25,14 @@ struct TreeParams {
     float angleJitter   = 14.0f;    // +/- random variation applied to every turn (deg)
     int   branchesPerNode = 2;      // children spawned at each node (2 = forking)
     float phyllotaxis   = 137.5f;   // roll advance between successive children (deg)
+    // Terminal ramification: once an internode shrinks below
+    // `terminalFraction * trunkLength`, a node bursts into a denser spray of
+    // `terminalForks` short twigs (guarded production), so branch ends fork
+    // repeatedly and carry many leaf clusters — the real source of crown density.
+    // 0 forks disables it. Needs a falloff < ~0.85 so internodes actually reach
+    // the threshold within `iterations`.
+    float terminalFraction = 0.34f;
+    int   terminalForks    = 3;
 
     // --- Organic shaping (centerline bend; thin branches bend most) ---
     float droop         = 0.22f;    // gravity sag per segment, accumulates down a limb

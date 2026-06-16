@@ -137,6 +137,19 @@ TEST_CASE(parametric_expression_shrinks_params_with_depth) {
     CHECK(s[3].symbol == 'A'); CHECK_APPROX(s[3].params[0], 0.125, 1e-6);
 }
 
+TEST_CASE(parametric_guarded_production_fires_on_condition) {
+    // Two guarded rules partition by magnitude: grow while long, then switch to
+    // a different (terminal) production once the parameter drops below threshold.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>0.5", "F(l)A(l*0.5)");   // structural: keep shrinking
+    pls.rule("A(l):l<=0.5", "T(l)");          // terminal: emit a T and stop
+    ModuleString s = pls.expand("A(1)", 5);
+    // A(1)->F(1)A(.5); A(.5)->T(.5) (0.5 is not >0.5). So: F(1) T(0.5).
+    CHECK(s.size() == 2);
+    CHECK(s[0].symbol == 'F'); CHECK_APPROX(s[0].params[0], 1.0, 1e-6);
+    CHECK(s[1].symbol == 'T'); CHECK_APPROX(s[1].params[0], 0.5, 1e-6);
+}
+
 TEST_CASE(parametric_full_arithmetic_expression) {
     ParametricLSystem pls;
     pls.rule("A(l,w)", "F(l*2-1, w/2 + 0.1)");

@@ -23,20 +23,45 @@ std::string num(float v) {
 // (so they spiral around the trunk in 3D, not in a plane), and continues a
 // central leader A(l*falloff). Rolls are applied *outside* the brackets so the
 // phyllotactic spin accumulates into the leader; the pitch '&' is inside, so
-// only the branch bends away. Unexpanded apices left after `iterations` are the
-// twig tips where leaves attach.
+// only the branch bends away.
+//
+// With terminal ramification on, a second guarded production fires once the
+// internode shrinks below terminalFraction*trunkLength: a denser spray of
+// `terminalForks` short twigs (wider pitch, faster shrink), so branch ends fork
+// repeatedly into many short tipped twigs — the crown density real trees have.
+// Side branches start shorter, so they hit the threshold sooner and ramify
+// earlier than the leader. Unexpanded apices after `iterations` are the tips.
 ParametricLSystem buildGrammar(const TreeParams& p) {
     const std::string f = num(p.lengthFalloff);
     const std::string roll = num(p.phyllotaxis);
     const std::string pitch = num(p.branchAngle);
 
-    std::string succ = "F(l)";
-    for (int i = 0; i < p.branchesPerNode; i++)
-        succ += "/(" + roll + ")[&(" + pitch + ")A(l*" + f + ")]";
-    succ += "/(" + roll + ")A(l*" + f + ")";   // central leader continues
+    auto structural = [&]() {
+        std::string s = "F(l)";
+        for (int i = 0; i < p.branchesPerNode; i++)
+            s += "/(" + roll + ")[&(" + pitch + ")A(l*" + f + ")]";
+        s += "/(" + roll + ")A(l*" + f + ")";   // central leader continues
+        return s;
+    };
 
     ParametricLSystem g;
-    g.rule("A(l)", succ);
+    if (p.terminalForks <= 0 || p.terminalFraction <= 0.0f) {
+        g.rule("A(l)", structural());
+        return g;
+    }
+
+    const std::string thresh = num(p.trunkLength * p.terminalFraction);
+    g.rule("A(l):l>" + thresh, structural());
+
+    // Terminal spray: more forks, wider pitch, shorter twigs (faster shrink so it
+    // stays terminal and keeps forking for the remaining orders).
+    const std::string ft = num(0.7f);
+    const std::string pitchT = num(p.branchAngle * 1.3f);
+    std::string term = "F(l)";
+    for (int i = 0; i < p.terminalForks; i++)
+        term += "/(" + roll + ")[&(" + pitchT + ")A(l*" + ft + ")]";
+    term += "/(" + roll + ")A(l*" + ft + ")";
+    g.rule("A(l):l<=" + thresh, term);
     return g;
 }
 
