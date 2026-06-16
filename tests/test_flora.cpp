@@ -69,6 +69,35 @@ TEST_CASE(flora_param_tree_returns_bark_and_leaf_parts) {
         CHECK(oak[0].mesh->vertices.size() != parts[0].mesh->vertices.size());
 }
 
+TEST_CASE(flora_phased_tree_caps_crown_and_clears_lower_trunk) {
+    // The three-phase grammar (pure Lua) skins into the majestic structure:
+    // foliage caps the crown (terminal phase leaves every end clad) while the
+    // lower trunk (phase 1) stays bare. Vertical-extent check — droop-robust.
+    FloraVM f;
+    std::vector<ScriptMeshPart> parts;
+    std::string err;
+    bool ok = runProcgenModel(f.vm, "return flora.phased_tree(7, {})", parts, &err);
+    if (!ok) std::printf("    run error: %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(parts.size() == 2u);
+    if (parts.size() != 2 || !parts[0].mesh || !parts[1].mesh) { CHECK(false); return; }
+
+    const RenderMesh& bark = *parts[0].mesh;
+    const RenderMesh& leaves = *parts[1].mesh;
+    CHECK(bark.vertices.size() > 100);
+    CHECK(leaves.vertices.size() > 100);
+
+    float maxY = 0.0f;
+    for (const Vertex& v : bark.vertices) maxY = std::max(maxY, (float)v.position.y);
+    float maxLeafY = 0.0f, minLeafY = 1e9f;
+    for (const Vertex& v : leaves.vertices) {
+        maxLeafY = std::max(maxLeafY, (float)v.position.y);
+        minLeafY = std::min(minLeafY, (float)v.position.y);
+    }
+    CHECK(maxLeafY > 0.7f * maxY);    // crown capped with foliage (not bare on top)
+    CHECK(minLeafY > 0.12f * maxY);   // bare clear lower trunk (no leaves at base)
+}
+
 TEST_CASE(flora_tree_has_real_leaf_cards_not_blobs) {
     FloraVM f;
     // Full canopy vs. branches-only (leaf_step huge keeps no leaf cards): the

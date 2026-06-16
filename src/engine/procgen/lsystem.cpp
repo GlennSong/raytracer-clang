@@ -134,11 +134,11 @@ ParamExpr compileExpr(const std::string& text,
     return e;
 }
 
-// Compile a guard like "l < 0.5" or "l*0.6 >= w" into a predicate over the bound
-// params. Splits on the first top-level comparison operator (< <= > >= == !=);
-// both sides are ordinary parameter expressions. No operator -> always true.
-ParamPredicate compileCondition(const std::string& text,
-                                const std::unordered_map<std::string, int>& vars) {
+// Compile one comparison ("l < 0.5", "l*0.6 >= w") into a predicate. Splits on
+// the first top-level comparison operator (< <= > >= == !=). No operator -> empty
+// (treated as always-true by the callers).
+ParamPredicate compileCmp(const std::string& text,
+                          const std::unordered_map<std::string, int>& vars) {
     enum Op { LT, LE, GT, GE, EQ, NE };
     int depth = 0;
     for (size_t i = 0; i < text.size(); i++) {
@@ -172,7 +172,59 @@ ParamPredicate compileCondition(const std::string& text,
             return true;
         };
     }
-    return ParamPredicate();   // no comparison found: unconditional
+    return ParamPredicate();
+}
+
+// Split `s` on a top-level two-char operator `ab` (e.g. "&&"), respecting parens.
+std::vector<std::string> splitTopLevel(const std::string& s, char a, char b) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i + 1 < s.size(); i++) {
+        char c = s[i];
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        else if (depth == 0 && c == a && s[i + 1] == b) {
+            parts.push_back(s.substr(start, i - start));
+            i++;
+            start = i + 1;
+        }
+    }
+    parts.push_back(s.substr(start));
+    return parts;
+}
+
+// Conjunction of comparisons: "l>0.5 && l<=1.4".
+ParamPredicate compileAnd(const std::string& text,
+                          const std::unordered_map<std::string, int>& vars) {
+    std::vector<std::string> parts = splitTopLevel(text, '&', '&');
+    if (parts.size() == 1) return compileCmp(text, vars);
+    std::vector<ParamPredicate> preds;
+    for (const std::string& p : parts) {
+        ParamPredicate pr = compileCmp(p, vars);
+        if (pr) preds.push_back(std::move(pr));
+    }
+    return [preds](const std::vector<float>& b) {
+        for (const ParamPredicate& pr : preds) if (!pr(b)) return false;
+        return true;
+    };
+}
+
+// Compile a full guard: disjunction of conjunctions of comparisons (|| over &&
+// over < <= > >= == !=). Empty (no comparison anywhere) -> unconditional.
+ParamPredicate compileCondition(const std::string& text,
+                                const std::unordered_map<std::string, int>& vars) {
+    std::vector<std::string> parts = splitTopLevel(text, '|', '|');
+    if (parts.size() == 1) return compileAnd(text, vars);
+    std::vector<ParamPredicate> preds;
+    for (const std::string& p : parts) {
+        ParamPredicate pr = compileAnd(p, vars);
+        if (pr) preds.push_back(std::move(pr));
+    }
+    return [preds](const std::vector<float>& b) {
+        for (const ParamPredicate& pr : preds) if (pr(b)) return true;
+        return false;
+    };
 }
 
 // Read the balanced parenthesised group starting at text[pos]=='(' and return

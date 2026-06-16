@@ -1825,10 +1825,15 @@ taper in `TurtleParams` only (rejected — global, not per-branch).
 published ABoP grammars become near copy-paste. The parametric system is now
 **exposed to Lua** (`lsystem.parametric` + `tree.skin`, ADR-0032) and supports
 **guarded productions** — `A(l):l<=t -> …` — added 2026-06-16: a production fires
-only when its condition holds, used for terminal sprays (branch ends fork into
-dense short twigs once the internode is short). Both `buildGrammar` (C++) and
-`flora.param_tree` (Lua) use a structural + terminal guarded pair.
-Context-sensitivity (`a<b>c`) remains future (botany §3.6).
+only when its condition holds. Guards are full boolean expressions —
+`A(l):l<=clear && l>term` — (`||` over `&&` over the six comparisons), so a single
+symbol can express a phase *range*. This makes **N-phase trees pure grammar**:
+`flora.phased_tree` (Lua) is a majestic three-phase tree — one symbol `A` with
+trunk / crown / terminal-cap rules — with **no engine code** beyond the generic
+guard support (the proof the language is robust to 4-, 6-, N-phase). Both
+`buildGrammar` (C++) and `flora.param_tree`/`phased_tree` (Lua) use guarded
+productions. Context-sensitivity (`a<b>c`) remains the one classic L-system
+feature still future (botany §3.6).
 
 **Revisit trigger.** Revisit if grammars need context-sensitivity (neighbor
 matching), or a second numeric type (e.g. vector parameters) in modules.

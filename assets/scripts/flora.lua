@@ -126,6 +126,70 @@ function flora.param_tree(seed, opts)
     return parts
 end
 
+-- A majestic THREE-PHASE tree, defined entirely in the grammar (no engine
+-- changes): one symbol A with three guarded productions selected by internode
+-- length l (ADR-0030 guards + && ranges). Demonstrates that N-phase structure is
+-- pure Lua.
+--   Phase 1  l > clear      : bare clear trunk (leader only, no branches)
+--   Phase 2  term < l <= clear : scaffold crown (limbs + leader)
+--   Phase 3  l <= term      : terminal twig sprays (thin => leaf-clad), so the
+--                             crown caps with foliage and nothing pokes out bare.
+-- Thresholds are fractions of trunk length; trunk vs crown use different falloffs
+-- (a tall dominant trunk, a faster-capping crown).
+function flora.phased_tree(seed, opts)
+    opts = opts or {}
+    local len   = opts.length or 2.6
+    local clr   = len * (opts.clear_fraction or 0.6)
+    local trm   = len * (opts.terminal_fraction or 0.2)
+    local trunkFall = opts.trunk_falloff or 0.84
+    local crownFall = opts.crown_falloff or 0.82
+    local sideFall  = opts.side_falloff or 0.62
+    local angle = opts.angle or 42
+    local branches = opts.branches or 2
+    local roll = 137.5
+
+    local sys = lsystem.parametric()
+    -- Phase 1: bare clear trunk.
+    sys:rule(string.format("A(l):l>%g", clr),
+             string.format("F(l)/(%g)A(l*%g)", roll, trunkFall))
+    -- Phase 2: scaffold crown (single-symbol range guard via &&).
+    local crown = "F(l)"
+    for _ = 1, branches do
+        crown = crown .. string.format("/(%g)[&(%g)A(l*%g)]", roll, angle, sideFall)
+    end
+    crown = crown .. string.format("/(%g)A(l*%g)", roll, crownFall)
+    sys:rule(string.format("A(l):l<=%g && l>%g", clr, trm), crown)
+    -- Phase 3: terminal sprays — fork into short thin twigs (leaf-clad by
+    -- leaf_thickness), capping every end including the leader's tip.
+    local ta = angle * 1.4
+    sys:rule(string.format("A(l):l<=%g", trm),
+             string.format("F(l)/(%g)[&(%g)A(l*0.6)]/(%g)[&(-%g)A(l*0.6)]/(%g)A(l*0.6)",
+                           roll, ta, roll, ta, roll))
+
+    local modules = sys:expand(string.format("A(%g)", len),
+                               opts.iterations or 12, seed)
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = opts.tip_radius or 0.02,
+        pipe_exponent = opts.pipe_exponent or 2.4,
+        radius_scale = opts.radius_scale or 1.7,
+        ring_segments = opts.ring_segments or 6,
+        droop = opts.droop or 0.12, wander = opts.wander or 0.06,
+        leaves_per_tip = opts.leaves_per_tip or 4,
+        leaf_size = opts.leaf_size or 0.2,
+        leaf_thickness = opts.leaf_thickness or 0.06,
+        leaf_clump = opts.leaf_clump or 1.0,
+        bark_color = opts.bark_color or { 0.30, 0.22, 0.14 },
+        leaf_color = opts.leaf_color or { 0.20, 0.46, 0.13 },
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
+    end
+    return parts
+end
+
 -- A tapered, welded trunk/branches with real (oriented) leaf cards instead of
 -- blobs. `opts.species` picks a preset; individual fields override it.
 function flora.tree(seed, opts)

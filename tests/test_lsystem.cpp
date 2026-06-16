@@ -150,6 +150,37 @@ TEST_CASE(parametric_guarded_production_fires_on_condition) {
     CHECK(s[1].symbol == 'T'); CHECK_APPROX(s[1].params[0], 0.5, 1e-6);
 }
 
+TEST_CASE(parametric_guard_supports_and_ranges) {
+    // A single symbol can express a phase RANGE with &&, so the three-phase tree
+    // (trunk / crown / terminal) is one symbol with three guarded rules.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>3",          "H(l)");   // high
+    pls.rule("A(l):l>1 && l<=3",  "M(l)");   // mid band
+    pls.rule("A(l):l<=1",         "L(l)");   // low
+    CHECK(pls.expand("A(5)", 1)[0].symbol == 'H');
+    CHECK(pls.expand("A(2)", 1)[0].symbol == 'M');
+    CHECK(pls.expand("A(0.5)", 1)[0].symbol == 'L');
+}
+
+TEST_CASE(parametric_three_phase_grammar_sequences_by_length) {
+    // The majestic tree is ONE symbol with three guarded rules (trunk / crown /
+    // terminal) — no engine support, pure grammar. Verify the phases sequence:
+    // a bare trunk run (F, no branches) before any '[' branch appears.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>2",            "F(l)A(l*0.8)");            // trunk: bare leader
+    pls.rule("A(l):l<=2 && l>0.5",  "F(l)[+(30)A(l*0.6)]A(l*0.7)"); // crown: branches
+    pls.rule("A(l):l<=0.5",         "F(l)");                    // terminal: cap
+    std::string str = moduleString(pls.expand("A(5)", 8));
+
+    size_t firstF = str.find('F');
+    size_t firstBranch = str.find('[');
+    CHECK(firstF != std::string::npos);
+    CHECK(firstBranch != std::string::npos);        // a crown formed (branches)
+    CHECK(firstBranch > firstF);                    // trunk drawn before branching
+    // The clear-trunk run: at least two bare internodes before the first branch.
+    CHECK(str.find("F(", str.find("F(") + 1) < firstBranch);
+}
+
 TEST_CASE(parametric_full_arithmetic_expression) {
     ParametricLSystem pls;
     pls.rule("A(l,w)", "F(l*2-1, w/2 + 0.1)");
