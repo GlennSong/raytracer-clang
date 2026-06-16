@@ -444,6 +444,8 @@ TreeParams readTreeParams(lua_State* L, int idx) {
     p.barkVScale   = static_cast<float>(optField(L, idx, "bark_v_scale", p.barkVScale));
     p.droop        = static_cast<float>(optField(L, idx, "droop", p.droop));
     p.wander       = static_cast<float>(optField(L, idx, "wander", p.wander));
+    p.rootCount    = static_cast<int>(optField(L, idx, "root_count", p.rootCount));
+    p.rootSpread   = static_cast<float>(optField(L, idx, "root_spread", p.rootSpread));
     p.leafSize     = static_cast<float>(optField(L, idx, "leaf_size", p.leafSize));
     p.leavesPerTip = static_cast<int>(optField(L, idx, "leaves_per_tip", p.leavesPerTip));
     p.leafThickness = static_cast<float>(optField(L, idx, "leaf_thickness", p.leafThickness));

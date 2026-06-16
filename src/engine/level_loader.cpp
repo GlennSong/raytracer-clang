@@ -161,6 +161,8 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
         tp.droop          = j.value("droop", tp.droop);
         tp.wander         = j.value("wander", tp.wander);
+        tp.rootCount      = j.value("rootCount", tp.rootCount);
+        tp.rootSpread     = j.value("rootSpread", tp.rootSpread);
         tp.tipRadius      = j.value("tipRadius", tp.tipRadius);
         tp.pipeExponent   = j.value("pipeExponent", tp.pipeExponent);
         tp.radiusScale    = j.value("radiusScale", tp.radiusScale);

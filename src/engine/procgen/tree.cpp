@@ -256,14 +256,11 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
 
 // --- leaf cards ------------------------------------------------------------
 
-void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
-             const Vec3& color) {
-    Vec3 forward = normalize(dir);
-    Vec3 ref = std::abs(forward.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
-    Vec3 side = normalize(cross(forward, ref));
-    Vec3 normal = normalize(cross(forward, side));
-    float w = size * 0.5f, len = size * 1.7f;
-
+// One double-sided card from `at` along `forward` for `len`, `w` wide along
+// `side`, shaded with `normal`.
+void addLeafQuad(RenderMesh& mesh, const Vec3& at, const Vec3& forward,
+                 const Vec3& side, const Vec3& normal, float w, float len,
+                 const Vec3& color) {
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     Vec3 corners[4] = {at - side * w, at + side * w,
                        at + side * w + forward * len, at - side * w + forward * len};
@@ -273,10 +270,23 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
         v.color = color;
         mesh.vertices.push_back(v);
     }
-    // Double-sided so the card shows from either face.
     mesh.indices.insert(mesh.indices.end(),
                         {base, base + 1, base + 2, base, base + 2, base + 3,
                          base, base + 2, base + 1, base, base + 3, base + 2});
+}
+
+// A leaf-cluster card: two perpendicular crossed quads, so a cluster has volume
+// from any viewing angle instead of vanishing edge-on. The texture is a clump of
+// many leaves, so one cross reads as a dense tuft.
+void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
+             const Vec3& color) {
+    Vec3 forward = normalize(dir);
+    Vec3 ref = std::abs(forward.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+    Vec3 side = normalize(cross(forward, ref));
+    Vec3 normal = normalize(cross(forward, side));
+    float w = size * 0.5f, len = size * 1.7f;
+    addLeafQuad(mesh, at, forward, side, normal, w, len, color);
+    addLeafQuad(mesh, at, forward, normal, side, w, len, color);   // crossed 90°
 }
 
 }  // namespace
@@ -346,6 +356,35 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
         Vec3 color = params.barkColor * vary(rng);
         addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3);
+    }
+
+    // Buttress roots: from the base, swept out and down, flattening to run along
+    // the ground (local y~0). Widens the flare and grounds the tree.
+    if (params.rootCount > 0 && !nodes.empty()) {
+        float baseR = std::max(nodes[0].radius, params.tipRadius * params.radiusScale);
+        Vec3 baseP = nodes[0].pos;
+        float rootLen = baseR * params.rootSpread;
+        float tipR = params.tipRadius * params.radiusScale;
+        std::uniform_real_distribution<float> jit(-0.3f, 0.3f);
+        std::uniform_real_distribution<float> lenv(0.7f, 1.2f);
+        std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+        for (int k = 0; k < params.rootCount; k++) {
+            float ang = (params.phyllotaxis * k) * static_cast<float>(PI) / 180.0f + jit(rng);
+            Vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
+            float L = rootLen * lenv(rng);
+            BranchPath rp;
+            auto add = [&](const Vec3& p, float r) {
+                rp.points.push_back(p);
+                rp.radius.push_back(r);
+                rp.dist.push_back(static_cast<float>((p - baseP).length()));
+            };
+            add(baseP + dir * (baseR * 0.3f) + Vec3(0, baseR * 0.7f, 0), baseR * 0.55f);
+            add(baseP + dir * (baseR * 1.5f) + Vec3(0, baseR * 0.15f, 0), baseR * 0.4f);
+            add(baseP + dir * (L * 0.6f), tipR * 2.0f);
+            add(baseP + dir * L + Vec3(0, -0.02f, 0), tipR);
+            Vec3 color = params.barkColor * vary(rng);
+            addCurvedBranch(out.branches, rp, color, params.ringSegments, vScale, 3);
+        }
     }
 
     // Leaves on twig tips and (to fill out the ends) any thin enough branch.
@@ -437,17 +476,49 @@ TextureData leafTexture(int size) {
     TextureData t;
     t.width = t.height = size;
     t.channels = 4;
-    t.pixels.resize((size_t)size * size * 4);
+    t.pixels.assign((size_t)size * size * 4, 0);
+
+    // A CLUSTER of many small pointed-oval leaves (not one leaf): so a single
+    // card reads as a dense tuft of foliage. Deterministic layout.
+    struct Leaf { float cx, cy, ca, sa, halfLen, halfW, shade; };
+    const int K = 18;
+    std::vector<Leaf> leaves;
+    uint32_t h = 0x9e3779b9u;
+    auto rnd = [&]() {
+        h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+        return (h & 0xffffff) / static_cast<float>(0x1000000);
+    };
+    for (int i = 0; i < K; i++) {
+        float ang = rnd() * 6.2831853f;
+        Leaf lf;
+        lf.cx = 0.5f + (rnd() - 0.5f) * 0.7f;
+        lf.cy = 0.5f + (rnd() - 0.5f) * 0.85f;
+        lf.ca = std::cos(ang); lf.sa = std::sin(ang);
+        lf.halfLen = 0.13f + rnd() * 0.08f;
+        lf.halfW = 0.035f + rnd() * 0.025f;
+        lf.shade = 0.7f + rnd() * 0.3f;       // per-leaf value variation
+        leaves.push_back(lf);
+    }
+
     for (int y = 0; y < size; y++) {
         for (int x = 0; x < size; x++) {
             float u = (float)x / (size - 1), v = (float)y / (size - 1);
-            // Pointed-oval leaf: half-width tapers to 0 at the tip and base.
-            float halfW = 0.42f * std::sin(v * 3.14159f);
-            float dist = std::abs(u - 0.5f);
-            float alpha = dist < halfW ? 1.0f : 0.0f;
-            // A faint central vein darkens the RGB a touch (still mostly white).
-            float vein = dist < 0.03f ? 0.7f : 1.0f;
-            uint8_t c = (uint8_t)(vein * 255.0f);
+            float alpha = 0.0f, shade = 1.0f;
+            for (const Leaf& lf : leaves) {
+                float dx = u - lf.cx, dy = v - lf.cy;
+                // into the leaf's local frame (lx along length, ly across width)
+                float lx = dx * lf.ca + dy * lf.sa;
+                float ly = -dx * lf.sa + dy * lf.ca;
+                float ty = (lx + lf.halfLen) / (2.0f * lf.halfLen);   // 0..1 base->tip
+                if (ty < 0.0f || ty > 1.0f) continue;
+                float w = lf.halfW * std::sin(ty * 3.14159f);         // pointed oval
+                if (std::abs(ly) <= w) {
+                    alpha = 1.0f;
+                    float vein = std::abs(ly) < w * 0.12f ? 0.65f : 1.0f;   // midrib
+                    shade = lf.shade * vein;
+                }
+            }
+            uint8_t c = (uint8_t)(std::min(1.0f, shade) * 255.0f);
             size_t i = ((size_t)y * size + x) * 4;
             t.pixels[i] = t.pixels[i + 1] = t.pixels[i + 2] = c;
             t.pixels[i + 3] = (uint8_t)(alpha * 255.0f);

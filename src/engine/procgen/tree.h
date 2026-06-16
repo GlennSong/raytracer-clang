@@ -30,6 +30,10 @@ struct TreeParams {
     float droop         = 0.22f;    // gravity sag per segment, accumulates down a limb
     float wander        = 0.06f;    // lateral random meander (kills the stiffness)
 
+    // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
+    int   rootCount     = 5;        // number of surface roots (0 = none)
+    float rootSpread    = 5.0f;     // root length = base radius * this
+
     // --- Radii (pipe model) ---
     float tipRadius     = 0.018f;   // radius of a terminal twig
     float pipeExponent  = 2.3f;     // n in r_parent^n = sum(r_child^n); 2..3
