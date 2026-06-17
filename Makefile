@@ -27,6 +27,7 @@ SRCS = \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/terrain_lod.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
@@ -67,6 +68,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_mesh_builder.cpp \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
+	$(TEST_DIR)/test_terrain_lod.cpp \
 	$(TEST_DIR)/test_lsystem.cpp \
 	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
@@ -98,6 +100,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/asset_manager.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/terrain_lod.cpp \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \

@@ -2125,6 +2125,75 @@ or skirts) extends this; streaming (Phase 3) pages these chunks by distance.
 
 ---
 
+## ADR-0036 — CDLOD heightfield terrain (geometric LOD via vertex morphing) (open-world Phase 1c)
+**Status:** Accepted · **Date:** 2026-06-17
+
+**Context.** ADR-0035 left terrain as a uniform-resolution chunk grid — correct and
+seamless, but every chunk meshes at the same density regardless of distance, so the
+bounded ~16 km world (ADR-0034) with walkable distant mountains is unaffordable. The
+far field needs to coarsen. ADR-0034's open question (clipmaps vs CDLOD) is resolved
+here in favour of **CDLOD on a heightfield**, chosen with the user over geometry
+clipmaps (which discard the chunk/AABB/streaming substrate and want GPU height
+sampling) and over discrete-LOD-plus-skirts (visible popping). Overhangs/caves are
+explicitly out of scope: a heightfield is `y = f(x,z)`, so it gives dramatic canyons
+and cliffs but not undercuts — those are a future *volumetric feature layer* (SDF +
+the in-tree surface nets), which the representation-agnostic AABB cull already admits.
+
+**Decision.**
+1. **Quadtree node selection (CPU, pure).** `selectLodNodes` cuts a restricted
+   quadtree over the square world: the root covers the world at the coarsest level,
+   leaves are level 0 (finest). A node subdivides when the camera is within the
+   finer level's visibility range, else it is emitted whole. Distance is to the
+   **nearest point** of the node's XZ box — this *guarantees* adjacent emitted nodes
+   differ by ≤1 LOD level (a shared edge has one distance, so a 2-level jump is a
+   contradiction), which is exactly the invariant the morph relies on to stay
+   crack-free. Coverage is exact (each recursion emits one node or four that
+   partition it) — no gaps/overlaps. Ranges double per level by default.
+2. **Vertex morphing (the CDLOD core).** Each node is one fixed-resolution grid
+   (even `gridRes`, so the next-coarser grid aligns on even indices). Per vertex we
+   bake the **morph target** — the height it collapses to on the coarser grid (the
+   average of its even-indexed neighbours; even/even vertices target themselves) —
+   into `Vertex::tangent` (terrain has no normal map, so the channel is free; no
+   global vertex-layout change). The terrain vertex shader lerps
+   `worldPos = mix(position, tangent, morphK)` where `morphK` ramps 0→1 over the
+   node level's morph band `[ranges[L-1], ranges[L]]` by the per-vertex camera
+   distance. So as a node nears the distance where its parent takes over, its
+   geometry has already morphed to match — no pop, no T-junction crack against a
+   coarser neighbour.
+3. **Heightfield reuse.** Node meshes come from the shared `terrainHeight` /
+   `terrainNormal` / `terrainColor` (ADR-0035), so visuals match the existing terrain
+   exactly and the offline tracer stays the parity oracle. No heightmap *texture* /
+   GPU vertex-texture-fetch — height stays CPU-analytic; "heightmap" here means the
+   2.5D representation, not a sampled texture. (A GPU-VTF clipmap remains the
+   documented upgrade path if node mesh churn ever dominates.)
+4. **Normals not morphed (interim).** Height morphs; the fine normal is kept across
+   the morph band. The lighting error mid-morph is subtle on terrain; morphing
+   normals (or a normal map) is a follow-up if it reads.
+
+**Alternatives considered.**
+- *Geometry clipmaps* — rejected for this codebase: discards the chunk/AABB/stream
+  substrate and wants GPU height sampling; better for endless GPU-driven terrain.
+- *Discrete per-chunk LOD + skirts* — rejected: visible popping; CDLOD is this plus
+  the morph, and the morph removes both the pop and the cracks skirts would hide.
+- *Changing the global `Vertex` for a morph attribute* — avoided: reusing the unused
+  `tangent` keeps every other pipeline and the offline tracer untouched.
+
+**Consequences / tech debt.**
+- The selection + morph-target math is pure and **unit-tested on Linux**
+  (`test_terrain_lod`): coverage tiles the world, ≤1 neighbour-level invariant, finer
+  near camera, morph targets collapse to coarse heights, flat terrain ⇒ identity
+  morph. The **vertex-morph shader + per-node draw path are Metal-only and
+  unverified** — they need a viewer pass (the standing macOS-only verification gap).
+- Node meshes are generated lazily and cached; eviction by distance/budget is
+  **Phase 3 streaming**, not here.
+- Colliders: only near nodes need them (as today); collider LOD is unchanged.
+
+**Revisit trigger.** Sector streaming (Phase 3) pages these nodes by distance;
+overhangs/caves add a volumetric feature layer beside the heightfield; a GPU-VTF
+clipmap replaces CPU node meshing if churn dominates a profile.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
