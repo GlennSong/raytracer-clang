@@ -2463,6 +2463,7 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->aoTexture atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoBlurTemp atIndex:2];
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
@@ -2470,6 +2471,7 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->aoBlurTemp atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoTexture atIndex:2];
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
             }
 
@@ -2527,6 +2529,7 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->ssrTexture atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrBlurTemp atIndex:2];
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
@@ -2534,6 +2537,7 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->ssrBlurTemp atIndex:0];
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrTexture atIndex:2];
+                [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
             }
         }

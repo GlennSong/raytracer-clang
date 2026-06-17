@@ -19,6 +19,20 @@ float linearizeReverseZ(float z, float near, float far) {
     return near * far / (near + z * (far - near));
 }
 
+// Bilateral depth edge-stop for the SSR/AO blurs. Compares depths in linear eye
+// space (so it's reverse-Z-correct) and as a *relative* difference, so a single
+// sigma behaves the same near and far — the old kernels compared raw NDC depth
+// with a fixed sigma tuned for the forward-Z distribution, which under reverse-Z
+// rejected most same-surface neighbors up close and almost none far away.
+// Returns ~1 on the same surface and falls to 0 across a depth discontinuity.
+float bilateralDepthWeight(float zCenter, float zSample, float near, float far,
+                           float sigmaRel) {
+    float c = linearizeReverseZ(zCenter, near, far);
+    float s = linearizeReverseZ(zSample, near, far);
+    float rel = (s - c) / max(c, near);
+    return exp(-rel * rel / (2.0 * sigmaRel * sigmaRel));
+}
+
 kernel void ssrRayMarch(
     texture2d<float, access::read> sceneColor [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
@@ -223,6 +237,7 @@ kernel void ssrBlurH(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
     texture2d<float, access::write> output [[texture(2)]],
+    constant CameraUniforms& camera [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint w = input.get_width();
@@ -253,7 +268,8 @@ kernel void ssrBlurH(
         float sd = depthTex.read(depthCoord).x;
 
         float spatial = exp(-float(i * i) / 10.0);
-        float depthW = exp(-abs(sd - centerDepth) / 0.003);
+        float depthW = bilateralDepthWeight(centerDepth, sd,
+                                            camera.nearPlane, camera.farPlane, 0.05);
         float wt = spatial * depthW;
 
         total += s * wt;
@@ -268,6 +284,7 @@ kernel void ssrBlurV(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
     texture2d<float, access::write> output [[texture(2)]],
+    constant CameraUniforms& camera [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint w = input.get_width();
@@ -297,7 +314,8 @@ kernel void ssrBlurV(
         float sd = depthTex.read(depthCoord).x;
 
         float spatial = exp(-float(i * i) / 10.0);
-        float depthW = exp(-abs(sd - centerDepth) / 0.003);
+        float depthW = bilateralDepthWeight(centerDepth, sd,
+                                            camera.nearPlane, camera.farPlane, 0.05);
         float wt = spatial * depthW;
 
         total += s * wt;
@@ -405,6 +423,7 @@ kernel void aoBlurH(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
     texture2d<float, access::write> output [[texture(2)]],
+    constant CameraUniforms& camera [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint w = output.get_width();
@@ -425,8 +444,8 @@ kernel void aoBlurH(
         float sampleDepth = depthTex.read(coord).x;
 
         float spatial = exp(-float(i * i) / 8.0);
-        float depthDiff = abs(sampleDepth - centerDepth);
-        float depthW = exp(-depthDiff * depthDiff * 100000.0);
+        float depthW = bilateralDepthWeight(centerDepth, sampleDepth,
+                                            camera.nearPlane, camera.farPlane, 0.03);
         float wt = spatial * depthW;
 
         total += sampleAO * wt;
@@ -441,6 +460,7 @@ kernel void aoBlurV(
     texture2d<float, access::read> input [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
     texture2d<float, access::write> output [[texture(2)]],
+    constant CameraUniforms& camera [[buffer(0)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     uint w = output.get_width();
@@ -461,8 +481,8 @@ kernel void aoBlurV(
         float sampleDepth = depthTex.read(coord).x;
 
         float spatial = exp(-float(i * i) / 8.0);
-        float depthDiff = abs(sampleDepth - centerDepth);
-        float depthW = exp(-depthDiff * depthDiff * 100000.0);
+        float depthW = bilateralDepthWeight(centerDepth, sampleDepth,
+                                            camera.nearPlane, camera.farPlane, 0.03);
         float wt = spatial * depthW;
 
         total += sampleAO * wt;
