@@ -5,6 +5,8 @@
 #include "../../curve.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 
 namespace engine {
@@ -306,6 +308,88 @@ std::vector<RenderMesh> generateTerrainLOD(const TerrainParams& params,
         inner = outer;
     }
     return rings;
+}
+
+Vec3 terrainNormal(const TerrainParams& params, const Noise& noise,
+                   double worldX, double worldZ, double eps) {
+    // Central differences of the height field: n = normalize(-dH/dx, 1, -dH/dz).
+    // A fixed eps (independent of which chunk samples it) makes the normal at a
+    // shared border position identical for both chunks, so borders are seamless.
+    double hL = terrainHeight(params, noise, worldX - eps, worldZ);
+    double hR = terrainHeight(params, noise, worldX + eps, worldZ);
+    double hD = terrainHeight(params, noise, worldX, worldZ - eps);
+    double hU = terrainHeight(params, noise, worldX, worldZ + eps);
+    return normalize(Vec3((hL - hR), 2.0 * eps, (hD - hU)));
+}
+
+std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
+                                                const Noise& noise,
+                                                int chunksPerSide, float chunkSize,
+                                                int resolution, float colliderRadius) {
+    chunksPerSide = std::max(1, chunksPerSide);
+    const int res = std::max(1, resolution);
+    const int n = res + 1;                         // vertices per side
+    const float step = chunkSize / static_cast<float>(res);
+    const double eps = step;                        // shared across chunks -> seamless
+    const float worldHalf = chunksPerSide * chunkSize * 0.5f;  // world centred on origin
+
+    std::vector<TerrainChunk> chunks;
+    chunks.reserve(static_cast<size_t>(chunksPerSide) * chunksPerSide);
+
+    for (int cz = 0; cz < chunksPerSide; cz++) {
+        for (int cx = 0; cx < chunksPerSide; cx++) {
+            const double originX = -worldHalf + cx * chunkSize;
+            const double originZ = -worldHalf + cz * chunkSize;
+
+            TerrainChunk chunk;
+            chunk.cx = cx;
+            chunk.cz = cz;
+            RenderMesh& mesh = chunk.mesh;
+            mesh.vertices.reserve(static_cast<size_t>(n) * n);
+
+            float minY = std::numeric_limits<float>::max();
+            float maxY = std::numeric_limits<float>::lowest();
+            for (int j = 0; j < n; j++) {
+                for (int i = 0; i < n; i++) {
+                    double x = originX + i * step;
+                    double z = originZ + j * step;
+                    double y = terrainHeight(params, noise, x, z);
+                    minY = std::min(minY, static_cast<float>(y));
+                    maxY = std::max(maxY, static_cast<float>(y));
+                    Vertex v(Vec3(x, y, z),
+                             terrainNormal(params, noise, x, z, eps));
+                    // World-continuous UVs (tile across the whole world).
+                    v.u = static_cast<float>(x / chunkSize);
+                    v.v = static_cast<float>(z / chunkSize);
+                    double nv = noise.noise2(x * 0.15, z * 0.15);
+                    v.color = terrainColor(y, v.normal.y, nv);
+                    mesh.vertices.push_back(v);
+                }
+            }
+
+            mesh.indices.reserve(static_cast<size_t>(res) * res * 6);
+            for (int j = 0; j < res; j++) {
+                for (int i = 0; i < res; i++) {
+                    uint32_t a = static_cast<uint32_t>(j * n + i);
+                    uint32_t b = a + 1;
+                    uint32_t c = a + static_cast<uint32_t>(n);
+                    uint32_t d = c + 1;
+                    // Same clockwise-front winding as generateTerrain (top up).
+                    mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+                }
+            }
+
+            chunk.boundsMin = Vec3(originX, minY, originZ);
+            chunk.boundsMax = Vec3(originX + chunkSize, maxY, originZ + chunkSize);
+
+            double dx = originX + chunkSize * 0.5;   // chunk centre
+            double dz = originZ + chunkSize * 0.5;
+            chunk.collider = std::sqrt(dx * dx + dz * dz) <= colliderRadius;
+
+            chunks.push_back(std::move(chunk));
+        }
+    }
+    return chunks;
 }
 
 }  // namespace engine

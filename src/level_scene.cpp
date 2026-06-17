@@ -125,6 +125,21 @@ void addTerrain(const json& t, Scene& scene) {
     }
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
+    // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
+    // offline tracer has no far clip or culling, so this is the same surface as
+    // the single mesh — the parity oracle for the viewer's chunked path.
+    if (t.contains("chunks") && t["chunks"].get<int>() > 0) {
+        int chunksPerSide = t.value("chunks", 1);
+        float chunkSize = t.value("chunkSize", tp.size);
+        int res = t.value("chunkResolution", tp.resolution);
+        float colliderRadius = t.value("colliderRadius", chunkSize * 1.5f);
+        for (TerrainChunk& chunk :
+             generateTerrainChunks(tp, noise, chunksPerSide, chunkSize, res,
+                                   colliderRadius))
+            addMeshAsTriangles(chunk.mesh, Vec3(), Quat::identity(),
+                               Vec3(1, 1, 1), matIdx, scene);
+        return;
+    }
     if (t.value("erode", false)) {
         // Bake the analytic field to a grid, erode it (drainage detail), mesh it.
         Heightmap hm = bakeHeightmap(tp, noise);

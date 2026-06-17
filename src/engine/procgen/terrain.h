@@ -98,6 +98,38 @@ std::vector<RenderMesh> generateTerrainLOD(const TerrainParams& params,
                                            const Noise& noise, int levels,
                                            int cells = 40);
 
+// One generated terrain chunk: a world-space mesh plus its tight world AABB, grid
+// coordinate, and whether it should carry a collider. Position is baked into the
+// vertices (identity transform), matching generateTerrain.
+struct TerrainChunk {
+    RenderMesh mesh;
+    Vec3 boundsMin;        // world-space tight AABB (spans the chunk's height range)
+    Vec3 boundsMax;
+    int  cx = 0, cz = 0;   // chunk grid coordinate (0,0 = min corner)
+    bool collider = false; // near chunks: the player walks on them
+};
+
+// Tile a bounded square world into a grid of terrain chunks (ADR-0034 Phase 1),
+// replacing the single origin-centred tile + concentric rings. The world is
+// `chunksPerSide` x `chunksPerSide` chunks of `chunkSize` world units each,
+// centred on the origin. Each chunk is meshed independently at `resolution` cells
+// per side from the shared height field, so it has its own tight AABB for frustum
+// culling. Normals are taken analytically from the height field (finite
+// differences), so they are continuous across chunk borders and seams don't show
+// — no T-junction cracks (matching grids share exact edge vertices) and no skirts
+// needed. A chunk is flagged for a collider when its centre is within
+// `colliderRadius` world units of the origin.
+std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
+                                                const Noise& noise,
+                                                int chunksPerSide, float chunkSize,
+                                                int resolution, float colliderRadius);
+
+// Analytic surface normal of the height field at world (x, z), from central
+// finite differences at offset `eps`. Used for seamless per-chunk normals; also
+// handy for placement queries.
+Vec3 terrainNormal(const TerrainParams& params, const Noise& noise,
+                   double worldX, double worldZ, double eps);
+
 }  // namespace engine
 
 #endif

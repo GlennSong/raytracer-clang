@@ -251,3 +251,89 @@ TEST_CASE(branching_range_builds_multi_depth_ridge_network) {
     CHECK(maxNear > 40.0);              // the range rises
     CHECK(far < 20.0);                  // plains beyond the network
 }
+
+TEST_CASE(terrain_chunks_tile_the_world) {
+    TerrainParams p;
+    p.heightScale = 5.0f;
+    Noise noise(11);
+    const int perSide = 4;
+    const float chunkSize = 50.0f;
+    const int res = 8;
+    auto chunks = generateTerrainChunks(p, noise, perSide, chunkSize, res,
+                                        /*colliderRadius=*/chunkSize);
+    CHECK(chunks.size() == static_cast<size_t>(perSide * perSide));
+
+    const float worldHalf = perSide * chunkSize * 0.5f;
+    for (const TerrainChunk& c : chunks) {
+        // Grid topology per chunk.
+        CHECK(c.mesh.vertices.size() == static_cast<size_t>((res + 1) * (res + 1)));
+        CHECK(c.mesh.indices.size() == static_cast<size_t>(res * res * 6));
+        // Tight world AABB matches the chunk footprint.
+        float expMinX = -worldHalf + c.cx * chunkSize;
+        float expMinZ = -worldHalf + c.cz * chunkSize;
+        CHECK_APPROX(c.boundsMin.x, expMinX, 1e-3);
+        CHECK_APPROX(c.boundsMax.x, expMinX + chunkSize, 1e-3);
+        CHECK_APPROX(c.boundsMin.z, expMinZ, 1e-3);
+        CHECK_APPROX(c.boundsMax.z, expMinZ + chunkSize, 1e-3);
+        CHECK(c.boundsMax.y >= c.boundsMin.y);   // height range non-degenerate
+        // Every vertex is inside its chunk's AABB.
+        for (const Vertex& v : c.mesh.vertices) {
+            CHECK(v.position.x >= c.boundsMin.x - 1e-3 && v.position.x <= c.boundsMax.x + 1e-3);
+            CHECK(v.position.y >= c.boundsMin.y - 1e-3 && v.position.y <= c.boundsMax.y + 1e-3);
+        }
+    }
+}
+
+TEST_CASE(terrain_chunks_match_the_height_field) {
+    // A chunk's surface must equal the shared height-field query (one source of
+    // truth), so chunked terrain is the same surface as the single mesh.
+    TerrainParams p;
+    p.heightScale = 8.0f;
+    Noise noise(5);
+    auto chunks = generateTerrainChunks(p, noise, 2, 40.0f, 8, 40.0f);
+    for (const TerrainChunk& c : chunks)
+        for (const Vertex& v : c.mesh.vertices) {
+            double h = terrainHeight(p, noise, v.position.x, v.position.z);
+            CHECK_APPROX(v.position.y, h, 1e-9);
+        }
+}
+
+TEST_CASE(terrain_chunk_borders_are_seamless) {
+    // Adjacent chunks share exact edge vertex positions AND normals (analytic
+    // normals from a shared eps), so there are no cracks or lighting seams.
+    TerrainParams p;
+    p.heightScale = 6.0f;
+    Noise noise(9);
+    const int res = 8;
+    const float chunkSize = 40.0f;
+    auto chunks = generateTerrainChunks(p, noise, 2, chunkSize, res, chunkSize);
+    auto at = [&](int cx, int cz) -> const TerrainChunk& {
+        for (const TerrainChunk& c : chunks) if (c.cx == cx && c.cz == cz) return c;
+        return chunks[0];
+    };
+    const TerrainChunk& left = at(0, 0);
+    const TerrainChunk& right = at(1, 0);
+    const int n = res + 1;
+    // Left chunk's +x edge (i = res) vs right chunk's -x edge (i = 0), same z rows.
+    for (int j = 0; j < n; j++) {
+        const Vertex& a = left.mesh.vertices[j * n + res];
+        const Vertex& b = right.mesh.vertices[j * n + 0];
+        CHECK_APPROX(a.position.x, b.position.x, 1e-6);
+        CHECK_APPROX(a.position.y, b.position.y, 1e-9);
+        CHECK_APPROX(a.position.z, b.position.z, 1e-9);
+        CHECK_APPROX(a.normal.x, b.normal.x, 1e-9);
+        CHECK_APPROX(a.normal.y, b.normal.y, 1e-9);
+        CHECK_APPROX(a.normal.z, b.normal.z, 1e-9);
+    }
+}
+
+TEST_CASE(terrain_chunk_collider_flag_by_radius) {
+    TerrainParams p;
+    Noise noise(2);
+    // 4x4 chunks of 50 units; only chunks whose centre is within 60 units of the
+    // origin get a collider (the central four).
+    auto chunks = generateTerrainChunks(p, noise, 4, 50.0f, 4, 60.0f);
+    int withCollider = 0;
+    for (const TerrainChunk& c : chunks) if (c.collider) withCollider++;
+    CHECK(withCollider == 4);   // the four chunks straddling the origin
+}

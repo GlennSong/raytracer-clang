@@ -2064,6 +2064,67 @@ proves too small, and the depth scheme if a second backend lands.
 
 ---
 
+## ADR-0035 — Chunked terrain (uniform grid, analytic normals) + AABB frustum culling (open-world Phase 1)
+**Status:** Accepted · **Date:** 2026-06-17
+
+**Context.** ADR-0034 Phase 1 calls for spatial partitioning + chunked terrain with
+tight bounds + geometric LOD, replacing the single origin-centred terrain tile and
+the concentric `generateTerrainLOD` rings (whose bounding sphere misjudged culling
+and whose ring boundaries T-junction-cracked). This ADR records the concrete first
+cut; the heavier geometric-LOD scheme is deliberately split out.
+
+**Decision.**
+1. **AABB frustum culling.** Add `Frustum::containsAABB` (p-vertex plane test) and
+   `transformedAABB` (model-space box → world box via the 8 corners). The per-entity
+   render path culls against the world AABB using the `boxMin/boxMax` already carried
+   in `BoundingSphere` — tight for large/flat meshes where a sphere swallows the sky.
+   Instance groups keep the sphere coarse-reject (small props). CPU frustum stays
+   forward-Z (the view volume is identical to reverse-Z).
+2. **Chunked terrain.** `generateTerrainChunks` tiles a bounded square world into a
+   `chunksPerSide²` grid of independently-meshed chunks (each its own `RenderMesh`,
+   world-space, identity transform, tight AABB), from the shared `terrainHeight`
+   field. Opt-in per level via `"chunks"`; without it the legacy single tile + rings
+   path is unchanged. Near chunks (centre within `colliderRadius`) carry a collider.
+   Wired into both the viewer ECS loader and the offline `addTerrain`.
+3. **Seamless borders without skirts.** Chunks use **uniform** resolution, so
+   matching grids share exact edge vertices (no T-junction cracks), and normals are
+   taken **analytically** from the height field (`terrainNormal`, central
+   differences at a shared eps) so they are continuous across borders (no lighting
+   seam). This retires the ring-seam tech debt outright.
+4. **Geometric LOD deferred.** Distance-/camera-driven per-chunk resolution with
+   crack handling (skirts or CDLOD vertex morphing) is **not** in this phase — it
+   rides with the morphing work (Phase 1c, its own ADR). Uniform chunks are the
+   foundation both clipmaps and CDLOD could later build on or replace.
+
+**Chosen scheme: chunked quadtree family, not clipmaps.** A bounded curated world
+with discrete chunks that also host per-chunk scatter (Phase 2/3) maps naturally to
+a chunk grid/quadtree with per-chunk AABB culling and streaming; clipmaps
+(camera-centred concentric grids) fit endless GPU-driven terrain less well here.
+
+**Alternatives considered.**
+- *Vertical skirts now (to allow mixed-resolution chunks)* — deferred: skirt winding
+  is Metal-only and unverifiable on Linux; uniform-res + analytic normals is
+  crack-free with no winding risk, and LOD lands with the morph work anyway.
+- *Keep the rings, just fix bounds* — rejected: doesn't give per-chunk culling or a
+  streaming substrate, and leaves the T-junction debt.
+- *Global analytic normals replacing topological everywhere* — out of scope; only
+  chunks switch (a genuine improvement: seamless), the legacy mesh path is untouched.
+
+**Consequences / tech debt.**
+- Uniform-resolution chunks make a large extent expensive (no LOD yet) — keep demo
+  worlds modest until Phase 1c. The world extent is a level parameter, not hardcoded
+  (ADR-0034 rule).
+- Erosion (`erode`) still applies only on the legacy single-mesh path; per-chunk
+  erosion (bake a per-chunk heightmap) is a follow-up.
+- Verified on Linux via the offline tracer (the parity oracle: chunk surface ==
+  height field, borders seamless — unit-tested + an offline render of
+  `assets/levels/chunked.json`); viewer culling is unit-tested (`test_frustum`).
+
+**Revisit trigger.** Phase 1c (geometric LOD: per-chunk resolution + CDLOD morphing
+or skirts) extends this; streaming (Phase 3) pages these chunks by distance.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

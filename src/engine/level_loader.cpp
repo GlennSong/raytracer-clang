@@ -486,8 +486,55 @@ static TerrainParams parseTerrainParams(const json& t) {
 // LevelWriter never writes it back as a document entity (it stays a regenerated
 // runtime object); its GPU mesh is owned by the AssetManager and freed on the
 // next clear().
+// Chunked terrain (ADR-0034 Phase 1): a grid of independently-meshed chunks, each
+// with its own tight AABB so frustum culling rejects off-screen chunks, replacing
+// the single origin-centred tile + concentric LOD rings. Near chunks (within the
+// collider radius) carry a static collider so the player walks on them. Opt-in via
+// the level's "chunks" key; without it, loadTerrain keeps the legacy single tile.
+static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
+                               const json& t, World& world, AssetManager& assets) {
+    int chunksPerSide = t.value("chunks", 1);
+    float chunkSize = t.value("chunkSize", p.size);
+    int res = t.value("chunkResolution", p.resolution);
+    // Default collider coverage: the central chunk and its immediate neighbours.
+    float colliderRadius = t.value("colliderRadius", chunkSize * 1.5f);
+
+    RenderMaterial material;
+    bool hasMat = t.contains("material");
+    if (hasMat) applyMaterial(t["material"], material);
+    else {
+        material.albedo = Vec3(0.42, 0.5, 0.32);
+        material.roughness = 0.95f;
+    }
+
+    auto chunks = generateTerrainChunks(p, noise, chunksPerSide, chunkSize, res,
+                                        colliderRadius);
+    for (TerrainChunk& chunk : chunks) {
+        Entity e = world.create();
+        world.add<Transform>(e, Transform{});             // mesh is world-space
+        world.add<PrevTransform>(e, PrevTransform{Transform{}});
+        if (chunk.collider) {
+            MeshCollider mc;
+            mc.vertices.reserve(chunk.mesh.vertices.size());
+            for (const Vertex& v : chunk.mesh.vertices) mc.vertices.push_back(v.position);
+            mc.indices = chunk.mesh.indices;
+            world.add<MeshCollider>(e, mc);
+        }
+        Renderable r;
+        r.mesh = assets.acquireMesh(chunk.mesh, "terrain_chunk_" +
+                                    std::to_string(chunk.cx) + "_" +
+                                    std::to_string(chunk.cz));
+        r.material = material;
+        world.add<Renderable>(e, r);
+    }
+}
+
 static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& t,
                         World& world, AssetManager& assets) {
+    if (t.contains("chunks") && t["chunks"].get<int>() > 0) {
+        loadChunkedTerrain(p, noise, t, world, assets);
+        return;
+    }
     Entity e = world.create();
     Transform tr;   // generated directly in world space
     world.add<Transform>(e, tr);
