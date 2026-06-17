@@ -17,7 +17,7 @@ struct LensParams {
     Real fStop = 8.0;           // aperture f-number
     Real focusDistance = 10.0;  // world units
     Real nearPlane = 0.1;
-    Real farPlane = 1000.0;
+    Real farPlane = 8000.0;   // cover distant LOD terrain; fog fades the far field
 
     // Image-forming aberrations; 0 = ideal lens.
     Real distortionK1 = 0.0;          // Brown radial terms

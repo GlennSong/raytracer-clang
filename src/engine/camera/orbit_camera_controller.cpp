@@ -46,7 +46,7 @@ CameraState OrbitCameraController::cameraState(float aspect) const {
     state.orthoHeight = static_cast<float>(2.0 * distance * std::tan(fovRad * 0.5));
     state.aspectRatio = aspect;
     state.nearPlane = 0.1f;
-    state.farPlane = 1000.0f;
+    state.farPlane = 8000.0f;   // cover distant LOD terrain
     return state;
 }
 

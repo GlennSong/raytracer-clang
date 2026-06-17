@@ -116,6 +116,11 @@ struct LightUniforms {
     float skyCloudScale;    float skyCloudTime;
     // Grading (ADR-0017 Phase 3): tints the ambient/irradiance term only.
     simd_float3 ambientTint; float _grad0;
+    // Aerial-perspective fog: lit color lerps toward fogColor with
+    // 1-exp(-fogDensity*dist). Mirrors the offline tracer's Scene::fog so both
+    // paths fade distant terrain into atmosphere and hide the far clip / LOD
+    // seams. fogDensity 0 = off.
+    simd_float3 fogColor; float fogDensity;
 };
 
 // Per-frame shadow sampling parameters. The rasterization depth bias is NOT

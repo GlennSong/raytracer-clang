@@ -318,6 +318,14 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                              scene.environment.skyHorizon);
         scene.environment.skyHorizon = sky;
         scene.environment.skyZenith = sky;
+        // Aerial-perspective fog (defaults its color to the sky for a seamless
+        // horizon): "fog": { "density": 0.0008, "color": [r,g,b] }.
+        if (env.contains("fog") && env["fog"].is_object()) {
+            const auto& f = env["fog"];
+            scene.fog.enabled = true;
+            scene.fog.density = f.value("density", 0.0);
+            scene.fog.color = parseVec3(f.value("color", json()), sky);
+        }
         hdr = env.value("hdr", std::string());
         if (!hdr.empty() && outHdrPath) {
             // Resolve relative to the level file, like the viewer's loader.

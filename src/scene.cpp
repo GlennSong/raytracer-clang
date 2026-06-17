@@ -332,6 +332,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
     Vec3 throughput(1.0, 1.0, 1.0);
     Vec3 radiance(0.0, 0.0, 0.0);
     Ray currentRay = ray;
+    double firstDist = -1.0;
 
     for (int bounce = 0; bounce < maxBounces; bounce++) {
         HitRecord rec;
@@ -341,6 +342,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                             environment.radiance(normalize(currentRay.direction));
             break;
         }
+        if (bounce == 0) firstDist = rec.t;
 
         const Material& mat = materials[rec.materialIndex];
 
@@ -454,6 +456,13 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
             if (randomDouble() > p) break;
             throughput = throughput / p;
         }
+    }
+
+    // Aerial-perspective fog: fade the shaded result toward the fog color with
+    // primary-ray distance (sky rays already are the horizon color, so skip them).
+    if (fog.enabled && fog.density > 0.0 && firstDist > 0.0) {
+        double f = 1.0 - std::exp(-fog.density * firstDist);
+        radiance = radiance * (1.0 - f) + fog.color * f;
     }
 
     return radiance;

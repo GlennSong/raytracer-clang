@@ -182,6 +182,16 @@ struct ProceduralSky {
     float cloudTime      = 0.0f;   // animation phase (advanced by the cycle)
 };
 
+// Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
+// by 1-exp(-density*dist) from the camera, so distant terrain dissolves into
+// atmosphere — a depth cue that also hides the far clip / LOD seams. Mirrors the
+// offline tracer's Scene::fog so both render paths match. density 0 = off.
+struct FogParams {
+    bool  enabled = false;
+    Vec3  color{0.6, 0.7, 0.82};
+    float density = 0.0f;
+};
+
 struct SceneLighting {
     DirectionalLight sun;
     std::vector<PointLight> pointLights;
@@ -189,6 +199,7 @@ struct SceneLighting {
     ShadowConfig shadow;
     ShadowArtistic shadowArtistic;
     ProceduralSky sky;
+    FogParams fog;
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
     Vec3 ambientTint{1, 1, 1};   // grades the ambient/irradiance term only

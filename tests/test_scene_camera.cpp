@@ -47,7 +47,7 @@ TEST_CASE(scene_camera_state_from_identity_transform) {
     CHECK_APPROX(state.fovDegrees, 26.9905, 0.001);
     CHECK_APPROX(state.aspectRatio, 1.5, EPS);
     CHECK_APPROX(state.nearPlane, 0.1, EPS);
-    CHECK_APPROX(state.farPlane, 1000.0, EPS);
+    CHECK_APPROX(state.farPlane, 8000.0, EPS);   // covers distant LOD terrain
 }
 
 TEST_CASE(scene_camera_state_follows_orientation) {

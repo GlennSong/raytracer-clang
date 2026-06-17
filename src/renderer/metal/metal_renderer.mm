@@ -1751,6 +1751,12 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyCloudTime = sky.cloudTime;
     lu.ambientTint = toSimd3(lighting.ambientTint);
     lu._grad0 = 0;
+
+    // Aerial-perspective fog (mirrors the offline tracer): the lit pass fades
+    // distant geometry toward fogColor. density 0 / disabled = off.
+    lu.fogColor = toSimd3(lighting.fog.color);
+    lu.fogDensity = lighting.fog.enabled ? lighting.fog.density : 0.0f;
+
     impl->skyCloudsEnabled = sky.cloudsEnabled;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));

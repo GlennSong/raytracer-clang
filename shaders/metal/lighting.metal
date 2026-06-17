@@ -396,6 +396,16 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         color += envReflection * fresnelTerm * 0.8;
     }
 
+    // Aerial-perspective fog (mirrors the offline tracer's Scene::fog): lerp the
+    // lit radiance toward the fog color by 1-exp(-density*dist), so distant
+    // terrain dissolves into atmosphere and the far clip / LOD seams hide. Done
+    // here in scene-referred linear space, before the composite exposure/tonemap.
+    if (lightData.fogDensity > 0.0) {
+        float dist = length(geom.worldPosition - camera.cameraPosition);
+        float f = 1.0 - exp(-lightData.fogDensity * dist);
+        color = mix(color, lightData.fogColor, f);
+    }
+
     // Exposure is applied once, uniformly, in the composite pass — sceneColor holds
     // linear scene-referred radiance, so do NOT pre-expose here.
     float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);

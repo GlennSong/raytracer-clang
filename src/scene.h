@@ -70,6 +70,15 @@ struct Texture {
     double sampleAlpha(double u, double v) const;   // clamped, nearest
 };
 
+// Distance (aerial-perspective) fog: surfaces fade toward `color` with distance
+// from the camera, so far terrain dissolves into atmosphere — depth cue, and it
+// hides the far clip / LOD seams. `density` is the exponential rate (0 = off).
+struct Fog {
+    bool   enabled = false;
+    Vec3   color{0.6, 0.7, 0.82};
+    double density = 0.0;
+};
+
 class Scene {
 public:
     std::vector<Sphere> spheres;
@@ -79,6 +88,7 @@ public:
     std::vector<Texture> textures;
     KdTree kdTree;
     EnvironmentLight environment;
+    Fog fog;
     std::vector<SceneLight> lights;
 
     int addMaterial(const Material& mat);

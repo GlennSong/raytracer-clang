@@ -953,6 +953,16 @@ bool LevelLoader::load(const std::string& path,
     // "hdr"; path is relative to the level file.
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
+        // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
+        // under "environment" alongside the sky; pushed to the renderer via the
+        // lighting block (setLights). density 0 = off.
+        if (env.contains("fog") && env["fog"].is_object()) {
+            const auto& f = env["fog"];
+            view.lighting.fog.enabled = true;
+            view.lighting.fog.density = f.value("density", 0.0f);
+            view.lighting.fog.color =
+                parseVec3(f.value("color", json()), view.lighting.fog.color);
+        }
         if (env.contains("hdr")) {
             std::string envPath = env["hdr"].get<std::string>();
             if (!envPath.empty() && envPath[0] != '/')
