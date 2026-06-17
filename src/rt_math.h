@@ -205,6 +205,21 @@ struct Mat4 {
         return result;
     }
 
+    // Reverse-Z clip-space flip: maps a [0,1] forward-depth clip vector to
+    // reverse depth (near->1, far->0). Pre-multiply a projection by this
+    // (reverseZ() * perspective(...)) to get a reverse-Z projection, which
+    // spreads float depth-buffer precision near-uniformly across a wide far
+    // plane (ADR-0034 Phase 0). Acts on clip coords before the perspective
+    // divide: z' = w - z, w' = w, so z'/w' = 1 - z/w. Works for perspective
+    // and orthographic alike. GPU-depth-path only; CPU frustum/picking keep the
+    // forward projection (the view volume is identical either way).
+    static Mat4 reverseZ() {
+        Mat4 r;            // identity
+        r.m[2][2] = -1.0;
+        r.m[2][3] = 1.0;
+        return r;
+    }
+
     // Right-handed view matrix (world -> view), camera at eye looking toward
     // center; matches the renderer convention of looking down -z. Built engine-
     // side so it is backend-neutral and testable (companion to the projection

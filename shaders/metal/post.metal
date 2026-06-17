@@ -3,11 +3,20 @@
 
 // --- Screen-Space Reflections (SSR) ---
 
-// Reconstruct view-space position from NDC depth and screen UV
+// Reconstruct view-space position from NDC depth and screen UV. invProjection is
+// the inverse of the reverse-Z projection (ADR-0034 Phase 0), so this unprojects
+// reverse-Z depth correctly without any per-call sign handling.
 float3 ssrViewPos(float depth, float2 uv, float4x4 invProjection) {
     float4 clip = float4(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0), depth, 1.0);
     float4 vp = invProjection * clip;
     return vp.xyz / vp.w;
+}
+
+// Reverse-Z NDC depth -> positive linear eye distance (near at z=1, far at z=0).
+// Inverse of z = near*(far - d) / (d*(far - near)). Monotonic in distance, so
+// depth comparisons done in this space are convention-independent.
+float linearizeReverseZ(float z, float near, float far) {
+    return near * far / (near + z * (far - near));
 }
 
 kernel void ssrRayMarch(
@@ -31,7 +40,7 @@ kernel void ssrRayMarch(
     uint2 depthCoord = min(uint2(uv * fullSize), fullMax);
     float depth = depthTex.read(depthCoord).x;
 
-    if (depth >= 0.999) {
+    if (depth <= 0.0) {   // reverse-Z background (cleared far value)
         ssrResult.write(float4(0.0), gid);
         return;
     }
@@ -107,27 +116,23 @@ kernel void ssrRayMarch(
 
         uint2 sampleCoord = min(uint2(sampleUV * fullSize), fullMax);
         float sceneDepth = depthTex.read(sampleCoord).x;
-        if (sceneDepth >= 0.999) continue;
+        if (sceneDepth <= 0.0) continue;   // reverse-Z background
 
-        // Perspective-correct ray depth in NDC
+        // Perspective-correct ray depth in NDC (reverse-Z)
         float invW = mix(startInvW, endInvW, t);
         float rayDepth = mix(startZoW, endZoW, t) / invW;
 
-        float depthDiff = rayDepth - sceneDepth;
+        // Compare in linear eye space: monotonic and sign-stable under reverse-Z.
+        // depthDiff > 0 means the ray has passed behind the scene surface.
+        float rayLinZ = linearizeReverseZ(rayDepth, near, far);
+        float sceneLinZ = linearizeReverseZ(sceneDepth, near, far);
+        float depthDiff = rayLinZ - sceneLinZ;
 
-        // Convert ray's linear depth for distance-aware thickness
-        // linearZ = near * far / (far - ndcZ * (far - near))
-        float rayLinZ = near * far / (far - rayDepth * (far - near));
+        // Distance-aware surface thickness, directly in world/eye units.
         float thicknessWorld = mix(params.thickness, params.thicknessFar, saturate(rayLinZ / 30.0));
-        // Convert world thickness to NDC at this depth:
-        // dNDC/dZ ≈ near * far / (linearZ^2 * (far - near) / (far))
-        //         = near * far^2 / (linearZ^2 * (far - near))  ... but simpler:
-        float offsetZ = rayLinZ + thicknessWorld;
-        float ndcAtOffset = far * (offsetZ - near) / (offsetZ * (far - near));
-        float thicknessNDC = ndcAtOffset - rayDepth;
 
-        if (depthDiff > 0.0 && depthDiff < thicknessNDC) {
-            // Binary search refinement — pure NDC comparison, no matrix math
+        if (depthDiff > 0.0 && depthDiff < thicknessWorld) {
+            // Binary search refinement — linear-eye comparison, no matrix math
             float tLo = (float(i) + hash) / float(stepCount);
             float tHi = t;
             float2 bestUV = sampleUV;
@@ -139,8 +144,10 @@ kernel void ssrRayMarch(
 
                 float midInvW = mix(startInvW, endInvW, tMid);
                 float midRayZ = mix(startZoW, endZoW, tMid) / midInvW;
+                float midRayLinZ = linearizeReverseZ(midRayZ, near, far);
+                float midSceneLinZ = linearizeReverseZ(depthTex.read(midCoord).x, near, far);
 
-                if (midRayZ > depthTex.read(midCoord).x) {
+                if (midRayLinZ > midSceneLinZ) {   // behind surface -> pull closer
                     tHi = tMid; bestUV = midUV;
                 } else {
                     tLo = tMid;
@@ -151,9 +158,9 @@ kernel void ssrRayMarch(
             float finalT = (tLo + tHi) * 0.5;
             float finalInvW = mix(startInvW, endInvW, finalT);
             float finalRayZ = mix(startZoW, endZoW, finalT) / finalInvW;
-            float finalLinZ = near * far / (far - finalRayZ * (far - near));
-            float startLinZ = near * far / (far - startNDC.z * (far - near));
-            hitDist = finalLinZ - startLinZ;
+            float finalLinZ = linearizeReverseZ(finalRayZ, near, far);
+            float startLinZ = linearizeReverseZ(startNDC.z, near, far);
+            hitDist = abs(finalLinZ - startLinZ);
             break;
         }
     }
@@ -283,8 +290,8 @@ kernel void gtaoCompute(
 
     float depth = depthTex.read(gid).x;
 
-    // Sky pixels — no occlusion
-    if (depth >= 0.999) {
+    // Sky pixels — no occlusion (reverse-Z background = cleared far value 0)
+    if (depth <= 0.0) {
         aoResult.write(float4(1.0), gid);
         return;
     }
@@ -335,7 +342,7 @@ kernel void gtaoCompute(
 
             uint2 sampleCoord = min(uint2(sampleUV * float2(texSize)), maxCoord);
             float sampleDepth = depthTex.read(sampleCoord).x;
-            if (sampleDepth >= 0.999) continue;
+            if (sampleDepth <= 0.0) continue;   // reverse-Z background
 
             float3 samplePos = ssrViewPos(sampleDepth, sampleUV, camera.invProjection);
             float3 horizonVec = samplePos - viewPos;
@@ -455,7 +462,7 @@ kernel void aoTemporal(
     float depth = depthTex.read(gid).x;
 
     // No history to blend (first frame / resize), or sky: pass current through.
-    if (t.alpha <= 0.0 || depth >= 0.999) {
+    if (t.alpha <= 0.0 || depth <= 0.0) {   // reverse-Z background
         resolvedAO.write(float4(cur), gid);
         return;
     }
@@ -610,7 +617,7 @@ fragment float4 fragmentComposite(
     if (params.debugView == 1) {
         // AO only — white = no occlusion, black = full occlusion
         float ao = aoTexture.sample(smp, in.uv).r;
-        if (depth >= 0.999) ao = 1.0;
+        if (depth <= 0.0) ao = 1.0;   // reverse-Z background
         return float4(ao, ao, ao, 1.0);
     }
     if (params.debugView == 2) {
@@ -619,27 +626,28 @@ fragment float4 fragmentComposite(
         return float4(ssr.rgb * ssr.a, 1.0);
     }
     if (params.debugView == 3) {
-        // Depth — linearized, white=near black=far
-        float lin = camera.nearPlane / (camera.farPlane - depth * (camera.farPlane - camera.nearPlane));
-        lin = saturate(lin * camera.farPlane * 0.1);
+        // Depth — linearized, white=near black=far (reverse-Z)
+        float linZ = linearizeReverseZ(depth, camera.nearPlane, camera.farPlane);
+        float lin = saturate(1.0 - (linZ - camera.nearPlane) /
+                                   (camera.farPlane - camera.nearPlane));
         return float4(lin, lin, lin, 1.0);
     }
     if (params.debugView == 4) {
         // View-space normals visualization
         float3 n = normalTexture.read(uint2(in.position.xy)).xyz;
-        if (depth >= 0.999) return float4(0.5, 0.5, 1.0, 1.0);
+        if (depth <= 0.0) return float4(0.5, 0.5, 1.0, 1.0);   // reverse-Z background
         return float4(n, 1.0);
     }
     if (params.debugView == 5) {
         // Shadow factor (the lit pass wrote grayscale into sceneColor) — raw, no
         // tone map. White = lit, black = shadowed. Sky shows mid-gray.
-        if (depth >= 0.999) return float4(0.3, 0.3, 0.3, 1.0);
+        if (depth <= 0.0) return float4(0.3, 0.3, 0.3, 1.0);   // reverse-Z background
         return float4(sceneColor.sample(smp, in.uv).rgb, 1.0);
     }
     if (params.debugView == 6) {
         // Albedo (the lit pass wrote raw material color into sceneColor) — no
         // exposure or tone map, gamma only, so material color shows directly.
-        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        if (depth <= 0.0) return float4(0.0, 0.0, 0.0, 1.0);   // reverse-Z background
         float3 a = sceneColor.sample(smp, in.uv).rgb;
         return float4(pow(a, float3(1.0 / 2.2)), 1.0);
     }
@@ -647,7 +655,7 @@ fragment float4 fragmentComposite(
         // Facing test: green = front-facing (G-buffer normal points toward the
         // camera), red = facing away. Every visible fragment should be green;
         // red marks a flipped normal or a shown back-face. Brightness = |N·V|.
-        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        if (depth <= 0.0) return float4(0.0, 0.0, 0.0, 1.0);   // reverse-Z background
         float3 n = normalize(normalTexture.read(uint2(in.position.xy)).xyz * 2.0 - 1.0);
         float3 viewPos = ssrViewPos(depth, in.uv, camera.invProjection);
         float ndv = dot(n, normalize(-viewPos));   // V points to the camera (origin)
@@ -656,17 +664,19 @@ fragment float4 fragmentComposite(
     if (params.debugView == 8) {
         // Shadow cascades: the lit pass wrote a per-cascade tint into sceneColor
         // (red/green/blue/yellow = cascade 0..3); show it raw.
-        if (depth >= 0.999) return float4(0.0, 0.0, 0.0, 1.0);
+        if (depth <= 0.0) return float4(0.0, 0.0, 0.0, 1.0);   // reverse-Z background
         return float4(sceneColor.sample(smp, in.uv).rgb, 1.0);
     }
 
     // --- Normal rendering ---
     float3 hdrColor;
-    if (depth >= 0.999) {
+    if (depth <= 0.0) {   // reverse-Z background (cleared far value)
         // Sky pixel — re-derive the active environment directly in composite.
+        // Reverse-Z: the near plane is at clip z=1, the far plane at z=0, so the
+        // view ray runs from the z=1 point out to the z=0 point.
         float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
-        float4 nearWorld = camera.invViewProjection * float4(ndc, 0.0, 1.0);
-        float4 farWorld  = camera.invViewProjection * float4(ndc, 1.0, 1.0);
+        float4 nearWorld = camera.invViewProjection * float4(ndc, 1.0, 1.0);
+        float4 farWorld  = camera.invViewProjection * float4(ndc, 0.0, 1.0);
         float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
         if (params.envMode == 1) {
             // HDR environment: a cheap cube lookup. The bake's orientation is
@@ -727,9 +737,9 @@ fragment float4 fragmentComposite(
 
 // --- Lens effects (virtual-camera plan Phase 4) ---
 
-// NDC depth → linear view depth (same conversion the SSR march uses)
+// NDC depth → linear view depth (reverse-Z; same conversion the SSR march uses)
 float dofLinearDepth(float ndcDepth, float near, float far) {
-    return near * far / (far - ndcDepth * (far - near));
+    return linearizeReverseZ(ndcDepth, near, far);
 }
 
 // Thin-lens circle-of-confusion radius in pixels. Sensor-plane diameter is
@@ -742,7 +752,7 @@ float dofCocRadius(float linZ, constant DOFUniforms& dof) {
 }
 
 // Depth of field: single-pass scatter-as-gather on the HDR scene color, before
-// composite. Sky pixels (depth >= 0.999) sit at far-plane CoC but composite
+// composite. Sky pixels (reverse-Z depth <= 0) sit at far-plane CoC but composite
 // re-derives the sky analytically, so blur there is never visible.
 kernel void dofGather(
     texture2d<float, access::read> sceneColor [[texture(0)]],

@@ -10,10 +10,18 @@ when fixed (git history is the archive).
 1. **`lightBuffer` frame-in-flight ring** — last known CPU/GPU race; same fix as
    the instance buffer (ring `MAX_FRAMES_IN_FLIGHT` deep, index per `beginFrame`).
    Subtle light tearing, not geometry pops. ~10 min, low risk.
-2. **Reversed-Z depth** (shadows "Part B") — large-world far-plane precision; the
-   prerequisite for walkable distance. Mechanically small but cross-cutting: every
-   depth-reading shader's `depth >= 0.999` sky test inverts to `<= ~0`, and the
-   linearize formulas flip. Land as its own commit with a per-site checklist.
+2. ~~**Reversed-Z depth**~~ — *Implemented (ADR-0034 Phase 0, reverse-Z branch).*
+   GPU projection is `reverseZ() * perspective` (near→1/far→0); the screen pass
+   clears depth to 0 and tests Greater; every post-shader sky test became
+   `depth <= 0.0` and the linear-depth reconstruction flipped to
+   `linearizeReverseZ`; SSR's NDC hit test moved to linear eye space; the skybox
+   clip-z and composite sky-ray were flipped. The self-contained reflection-probe
+   bake stays forward-Z (own depth buffer). Projection math is unit-tested
+   (`test_math`); **the shader half is Metal-only and unverified — needs a macOS
+   viewer pass.** Follow-up: the bilateral edge-stop constants in the SSR blur
+   (`exp(-|Δdepth|/0.003)`) and AO blur (`exp(-Δdepth²·1e5)`) are tuned for the old
+   forward-Z NDC distribution and may need retuning under reverse-Z (those kernels
+   don't bind near/far, so linearizing them means plumbing a camera uniform).
 3. **Ambient-only AO (gather/respond split, ADR-0017 Phase 4)** — stop the
    composite multiplying AO into direct sun + emissive so residual AO wobble stops
    being amplified. Needs the ambient term carried separately into the composite.
@@ -22,9 +30,13 @@ when fixed (git history is the archive).
 5. **Generalized-cylinder tree branches** (see Procgen) — replace SDF/Surface-Nets
    skinning with swept tubes: clean topology (culling back on), real bark UVs,
    exact thin twigs, and a natural home for vertex-shader wind.
-6. **World-scale foundation (later, large):** tile streaming + terrain LOD + origin
-   rebasing, atmospheric/aerial perspective, horizon-map terrain shadows. This is
-   the actual "open world" lift; shadows/precision above are prerequisites.
+6. **World-scale foundation (later, large):** the bounded ~16 km curated world —
+   spatial partitioning + chunked terrain LOD + sector streaming + object LOD
+   (impostors/HLOD), atmospheric/aerial perspective, horizon-map terrain shadows.
+   This is the actual "open world" lift (ADR-0034 / `open-world-foundations-plan.md`);
+   reverse-Z (#2) is the first phase and a prerequisite. (Camera-relative rendering
+   + origin rebasing are *not* needed at this scale — single precision is exact to
+   ~mm; they're the documented upgrade path for an endless/planetary world.)
 
 Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
 
