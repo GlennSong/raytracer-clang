@@ -63,9 +63,10 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> transparentPipeline;
     id<MTLRenderPipelineState> opaqueInstancedPipeline;
     id<MTLRenderPipelineState> transparentInstancedPipeline;
-    id<MTLDepthStencilState> depthStateOpaque;
-    id<MTLDepthStencilState> depthStateTransparent;
-    id<MTLDepthStencilState> depthStateWireOverlay;  // LessEqual, no write
+    id<MTLDepthStencilState> depthStateOpaque;        // reverse-Z: Greater, write
+    id<MTLDepthStencilState> depthStateTransparent;   // reverse-Z: Greater, no write
+    id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
+    id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     int frameIndex = 0;                                   // advances each beginFrame
     CAMetalLayer* metalLayer;
@@ -713,9 +714,11 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     impl->shadowUniforms.shadowStrength = 1.0f;
     impl->shadowUniforms.ambientStrength = 0.5f;
 
-    // Depth states
+    // Depth states. The screen pass renders reverse-Z (ADR-0034 Phase 0): depth
+    // clears to 0 (far) and nearer fragments have a Greater depth, so the test
+    // is Greater (opaque/transparent) / GreaterEqual (overlay).
     MTLDepthStencilDescriptor* depthDesc = [[MTLDepthStencilDescriptor alloc] init];
-    depthDesc.depthCompareFunction = MTLCompareFunctionLess;
+    depthDesc.depthCompareFunction = MTLCompareFunctionGreater;
     depthDesc.depthWriteEnabled = YES;
     impl->depthStateOpaque = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
 
@@ -724,9 +727,17 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     // Wireframe overlay: draw edges that pass an equal-or-nearer depth test
     // without writing depth, so lines sit on the visible surface they belong to.
-    depthDesc.depthCompareFunction = MTLCompareFunctionLessEqual;
+    depthDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateWireOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Forward-Z opaque state for the reflection-probe bake only: that pass owns
+    // a self-contained depth buffer (clearDepth 1.0, DontCare store) with a
+    // forward [0,1] cube-face projection and never feeds the reverse-Z screen
+    // passes, so it keeps the conventional Less test.
+    depthDesc.depthCompareFunction = MTLCompareFunctionLess;
+    depthDesc.depthWriteEnabled = YES;
+    impl->depthStateOpaqueForwardZ = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
 
     resize(width, height);
     return true;
@@ -1493,7 +1504,7 @@ void MetalRenderer::beginFrame() {
         passDesc.depthAttachment.texture = impl->depthTexture;
         passDesc.depthAttachment.loadAction = MTLLoadActionClear;
         passDesc.depthAttachment.storeAction = MTLStoreActionStore;
-        passDesc.depthAttachment.clearDepth = 1.0;
+        passDesc.depthAttachment.clearDepth = 0.0;   // reverse-Z: far plane = 0
         impl->currentPassDesc = passDesc;
 
         // Composite pass renders to the drawable (BGRA8Unorm, no depth).
@@ -1524,6 +1535,12 @@ void MetalRenderer::setCamera(const CameraState& camera) {
                              camera.nearPlane, camera.farPlane)
         : Mat4::perspective(fovRad, camera.aspectRatio,
                             camera.nearPlane, camera.farPlane);
+    // Reverse-Z (ADR-0034 Phase 0): near->1, far->0 so float depth precision is
+    // near-uniform across the wide far plane. The screen pass clears depth to 0
+    // and tests Greater; every depth consumer (the post shader's sky test +
+    // linear-depth reconstruction) is keyed to this. Inverses below derive from
+    // this matrix, so SSR/SSAO/temporal-AO unprojection stay consistent.
+    projMat = Mat4::reverseZ() * projMat;
     simd_float4x4 proj = toSimd(projMat);
 
     simd_float4x4 vp = simd_mul(proj, view);
@@ -1879,7 +1896,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 // winding of the scene's (clockwise-authored) triangles.
                 [enc setFrontFacingWinding:MTLWindingCounterClockwise];
                 [enc setCullMode:MTLCullModeBack];
-                [enc setDepthStencilState:impl->depthStateOpaque];
+                [enc setDepthStencilState:impl->depthStateOpaqueForwardZ];
 
                 // Bind shadow resources (lights won't have shadows in probes, but shader expects bindings)
                 [enc setFragmentTexture:impl->shadowMap atIndex:0];
@@ -1931,7 +1948,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 }
 
                 // Draw opaque scene geometry
-                [enc setDepthStencilState:impl->depthStateOpaque];
+                [enc setDepthStencilState:impl->depthStateOpaqueForwardZ];
                 for (auto& dc : impl->opaqueDrawCalls) {
                     const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
                     if (!mesh) continue;

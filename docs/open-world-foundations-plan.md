@@ -164,7 +164,7 @@ foundation for it either way.
 
 | Phase | Scope | Unblocks | Risk |
 |---|---|---|---|
-| **0** | Reverse-Z + robust sky test; re-enable culling; (diagnostics already reverted) | The current broken render; far-field z-fighting | Small, Metal-only (user-verified) |
+| **0** | Reverse-Z + robust sky test; re-enable culling; (diagnostics already reverted) — *implemented; projection math unit-tested; shader half pending macOS-viewer verification* | The current broken render; far-field z-fighting | Small, Metal-only (user-verified) |
 | **1** | Spatial partition (sector grid/BVH) + chunked terrain w/ tight bounds + terrain LOD | Correct culling; distant terrain/mountains; retires ring/seam debt | Medium–large |
 | **2** | Object mesh LOD + **foliage impostors** | A forest to the horizon at frame rate | Medium; needs an impostor bake |
 | **3** | Sector streaming + **HLOD/building impostors** | The curated city; the full 16 km place | Large; content-pipeline work |

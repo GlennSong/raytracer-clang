@@ -104,6 +104,50 @@ TEST_CASE(perspective_edge_maps_to_ndc_one) {
     CHECK_APPROX(p.y, 1, 1e-6);
 }
 
+// Reverse-Z (ADR-0034 Phase 0): near->1, far->0, the opposite of the forward
+// [0,1] mapping, for near-uniform depth precision across a wide far plane.
+TEST_CASE(reverse_z_perspective_flips_near_and_far) {
+    const Real nearPlane = 0.1;
+    const Real farPlane = 8000.0;
+    Mat4 proj = Mat4::reverseZ() * Mat4::perspective(degreesToRadians(60), 1.6,
+                                                     nearPlane, farPlane);
+
+    Vec3 atNear = proj.transformPoint(Vec3(0, 0, -nearPlane));
+    Vec3 atFar = proj.transformPoint(Vec3(0, 0, -farPlane));
+    CHECK_APPROX(atNear.z, 1, 1e-6);
+    CHECK_APPROX(atFar.z, 0, 1e-6);
+
+    // Closer geometry maps to a strictly greater depth than farther geometry
+    // (so the GPU's Greater depth test keeps the nearer fragment), and distant
+    // terrain stays strictly above the cleared far value of 0 — the property
+    // that stops far terrain from being misclassified as sky.
+    Vec3 near100 = proj.transformPoint(Vec3(0, 0, -100.0));
+    Vec3 far4000 = proj.transformPoint(Vec3(0, 0, -4000.0));
+    CHECK(near100.z > far4000.z);
+    CHECK(far4000.z > 0.0);
+
+    // The flip only touches z; x/y projection is unchanged.
+    const Real fov = degreesToRadians(90);
+    Mat4 rzEdge = Mat4::reverseZ() * Mat4::perspective(fov, 1.0, 0.1, 100.0);
+    const Real d = 5.0;
+    Vec3 p = rzEdge.transformPoint(Vec3(0, d * std::tan(fov * 0.5), -d));
+    CHECK_APPROX(p.y, 1, 1e-6);
+}
+
+TEST_CASE(reverse_z_orthographic_flips_near_and_far) {
+    const Real nearPlane = 0.5;
+    const Real farPlane = 50.0;
+    Mat4 proj = Mat4::reverseZ() * Mat4::orthographic(10.0, 1.6, nearPlane, farPlane);
+
+    Vec3 atNear = proj.transformPoint(Vec3(0, 0, -nearPlane));
+    Vec3 atFar = proj.transformPoint(Vec3(0, 0, -farPlane));
+    CHECK_APPROX(atNear.z, 1, 1e-9);
+    CHECK_APPROX(atFar.z, 0, 1e-9);
+    // Linear depth, so the midpoint still lands at 0.5.
+    Vec3 mid = proj.transformPoint(Vec3(0, 0, -(nearPlane + farPlane) * 0.5));
+    CHECK_APPROX(mid.z, 0.5, 1e-9);
+}
+
 TEST_CASE(orthographic_depth_maps_to_zero_one) {
     const Real nearPlane = 0.5;
     const Real farPlane = 50.0;

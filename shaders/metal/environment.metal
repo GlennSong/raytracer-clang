@@ -110,8 +110,10 @@ vertex SkyboxOut vertexSkybox(
 ) {
     // Generate fullscreen triangle (oversized, clipped to viewport)
     float2 uv = float2((vid << 1) & 2, vid & 2);
-    // z=0.999 — just inside the far plane to avoid far-plane clipping on some GPUs
-    float4 clipPos = float4(uv * 2.0 - 1.0, 0.999, 1.0);
+    // Reverse-Z (ADR-0034 Phase 0): the far plane is z=0. The skybox draws first
+    // with no depth write, so this value only needs to stay inside the clip
+    // range; a hair above 0 avoids far-plane clipping on some GPUs.
+    float4 clipPos = float4(uv * 2.0 - 1.0, 0.0001, 1.0);
 
     SkyboxOut out;
     out.position = clipPos;
