@@ -88,13 +88,15 @@ std::vector<LodNode> selectLodNodes(float worldHalf, int numLods,
 }
 
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
-                                const LodNode& node, int gridRes) {
+                                const LodNode& node, int gridRes, double normalEps) {
     // Even grid so the next-coarser level samples align on even indices.
     int res = std::max(2, gridRes);
     if (res % 2 != 0) res += 1;
     const int n = res + 1;                              // vertices per side
     const float step = node.size / static_cast<float>(res);
-    const double eps = step;                            // seamless analytic normals
+    // A world-consistent eps (passed in) makes normals identical at shared edges
+    // across LOD levels (no shading seam); 0 falls back to the per-tile step.
+    const double eps = (normalEps > 0.0) ? normalEps : static_cast<double>(step);
 
     LodNodeMesh out;
     RenderMesh& mesh = out.mesh;

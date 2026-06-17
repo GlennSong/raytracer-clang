@@ -206,6 +206,37 @@ TEST_CASE(morph_target_collapses_odd_vertices_to_coarse_height) {
     }
 }
 
+TEST_CASE(consistent_eps_makes_lod_boundary_normals_seamless) {
+    // A fine tile and a coarse tile sharing the edge x=100, built with the SAME
+    // normalEps, must have identical normals at coincident edge vertices — that is
+    // what removes the shading seam between different LOD levels.
+    TerrainParams p;
+    p.heightScale = 20.0f;
+    p.octaves = 5;
+    Noise noise(11);
+    double eps = 3.0;
+    LodNode fine{0.0f, 0.0f, 100.0f, 0};      // step 12.5 at gridRes 8
+    LodNode coarse{100.0f, 0.0f, 200.0f, 1};  // step 25 at gridRes 8
+    LodNodeMesh A = generateLodNodeMesh(p, noise, fine, 8, eps);
+    LodNodeMesh B = generateLodNodeMesh(p, noise, coarse, 8, eps);
+    auto findVert = [](const RenderMesh& m, float x, float z) -> const Vertex* {
+        for (const Vertex& v : m.vertices)
+            if (std::fabs(v.position.x - x) < 1e-3 && std::fabs(v.position.z - z) < 1e-3)
+                return &v;
+        return nullptr;
+    };
+    for (float z : {0.0f, 25.0f, 50.0f, 75.0f, 100.0f}) {
+        const Vertex* a = findVert(A.mesh, 100.0f, z);
+        const Vertex* b = findVert(B.mesh, 100.0f, z);
+        CHECK(a != nullptr && b != nullptr);
+        if (a && b) {
+            CHECK_APPROX(a->normal.x, b->normal.x, 1e-4);
+            CHECK_APPROX(a->normal.y, b->normal.y, 1e-4);
+            CHECK_APPROX(a->normal.z, b->normal.z, 1e-4);
+        }
+    }
+}
+
 TEST_CASE(node_surface_matches_height_field) {
     // The node mesh samples the same height field as the rest of the terrain, so a
     // vertex's y is terrainHeight at its XZ (parity oracle with ADR-0035 chunks).

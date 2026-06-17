@@ -69,8 +69,14 @@ struct LodNodeMesh {
     RenderMesh mesh;
     Vec3 boundsMin, boundsMax;
 };
+// `normalEps` is the central-difference offset for the analytic normals. Pass the
+// SAME value for every node in a world (the finest leaf step is a good choice) so a
+// shared edge position gets an identical normal regardless of the two tiles' LOD —
+// otherwise a per-tile eps gives different normals on each side and the LOD boundary
+// shows a shading seam. 0 falls back to the node's own grid step (per-tile; seams).
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
-                                const LodNode& node, int gridRes);
+                                const LodNode& node, int gridRes,
+                                double normalEps = 0.0);
 
 }  // namespace engine
 

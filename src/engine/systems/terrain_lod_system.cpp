@@ -47,13 +47,19 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         cfg->worldHalf, cfg->numLods, ranges,
         static_cast<float>(cam.position.x), static_cast<float>(cam.position.z));
 
+    // World-consistent normal eps (the finest leaf step), the SAME for every node
+    // so normals match across LOD boundaries — no shading seam (ADR-0036).
+    float leafSize = (cfg->worldHalf * 2.0f) /
+                     static_cast<float>(1 << std::max(0, cfg->numLods - 1));
+    double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
+
     Noise noise(cfg->seed);
     for (const LodNode& node : nodes) {
         int64_t key = nodeKey(node);
         auto it = cache_.find(key);
         if (it == cache_.end()) {
             LodNodeMesh built =
-                generateLodNodeMesh(cfg->params, noise, node, cfg->gridRes);
+                generateLodNodeMesh(cfg->params, noise, node, cfg->gridRes, normalEps);
             CachedNode cached;
             cached.mesh = ctx.assets.acquireMesh(built.mesh,
                                                  "cdlod_" + std::to_string(key));
