@@ -17,11 +17,16 @@ when fixed (git history is the archive).
    `linearizeReverseZ`; SSR's NDC hit test moved to linear eye space; the skybox
    clip-z and composite sky-ray were flipped. The self-contained reflection-probe
    bake stays forward-Z (own depth buffer). Projection math is unit-tested
-   (`test_math`); **the shader half is Metal-only and unverified — needs a macOS
-   viewer pass.** Follow-up: the bilateral edge-stop constants in the SSR blur
-   (`exp(-|Δdepth|/0.003)`) and AO blur (`exp(-Δdepth²·1e5)`) are tuned for the old
-   forward-Z NDC distribution and may need retuning under reverse-Z (those kernels
-   don't bind near/far, so linearizing them means plumbing a camera uniform).
+   (`test_math`). **Verified on-device:** sky classification, depth debug view,
+   sun shadows (needed a CPU-side CSM cascade-fit fix — near/far corners were
+   unprojected with the wrong reverse-Z NDC z), and SSR (needed a confidence fix —
+   the dielectric-F0 fresnel crushed head-on hits to ~4%; replaced with a
+   high-floor grazing term). A color-coded SSR debug view (view 2) was added to
+   localize this. Remaining follow-up: the bilateral edge-stop constants in the
+   SSR blur (`exp(-|Δdepth|/0.003)`) and AO blur (`exp(-Δdepth²·1e5)`) are still
+   tuned for the old forward-Z NDC distribution; reflections look correct, so this
+   is a possible quality retune, not a bug (those kernels don't bind near/far, so
+   linearizing them means plumbing a camera uniform).
 3. **Ambient-only AO (gather/respond split, ADR-0017 Phase 4)** — stop the
    composite multiplying AO into direct sun + emissive so residual AO wobble stops
    being amplified. Needs the ambient term carried separately into the composite.
