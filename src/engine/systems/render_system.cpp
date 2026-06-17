@@ -1,5 +1,6 @@
 #include "render_system.h"
 #include "../components.h"
+#include "../../log.h"
 
 #include <algorithm>
 #include <vector>
@@ -47,6 +48,16 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.renderer.setLights(ctx.view.lighting);
 
     const auto& cam = ctx.view.camera;
+    // TEMP diagnostic: log the actual near/far reaching the renderer whenever it
+    // changes, to confirm the camera's view distance in the live viewport.
+    static float dbgNear = -1, dbgFar = -1;
+    if (cam.nearPlane != dbgNear || cam.farPlane != dbgFar) {
+        dbgNear = cam.nearPlane;
+        dbgFar = cam.farPlane;
+        LOG_INFO << "[camera] near=" << cam.nearPlane << " far=" << cam.farPlane
+                 << " fov=" << cam.fovDegrees << " pos=(" << cam.position.x << ","
+                 << cam.position.y << "," << cam.position.z << ")";
+    }
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
     Mat4 proj = (cam.projection == CameraProjection::Perspective)
         ? Mat4::perspective(degreesToRadians(cam.fovDegrees), cam.aspectRatio,
