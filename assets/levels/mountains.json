@@ -5,16 +5,16 @@
   },
   "terrain": {
     "seed": 1337,
-    "size": 200,
-    "resolution": 140,
+    "size": 360,
+    "resolution": 320,
     "heightScale": 7,
     "noiseScale": 0.012,
-    "octaves": 6,
+    "octaves": 7,
     "warp": 0.25,
     "mountainHeight": 95,
     "mountainScale": 0.0032,
     "lodRings": 5,
-    "lodCells": 48,
+    "lodCells": 96,
     "material": {
       "albedo": [1.0, 1.0, 1.0],
       "roughness": 1.0
