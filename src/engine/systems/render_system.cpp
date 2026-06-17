@@ -1,6 +1,5 @@
 #include "render_system.h"
 #include "../components.h"
-#include "../../log.h"
 
 #include <algorithm>
 #include <vector>
@@ -48,16 +47,6 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.renderer.setLights(ctx.view.lighting);
 
     const auto& cam = ctx.view.camera;
-    // TEMP diagnostic: log the actual near/far reaching the renderer whenever it
-    // changes, to confirm the camera's view distance in the live viewport.
-    static float dbgNear = -1, dbgFar = -1;
-    if (cam.nearPlane != dbgNear || cam.farPlane != dbgFar) {
-        dbgNear = cam.nearPlane;
-        dbgFar = cam.farPlane;
-        LOG_INFO << "[camera] near=" << cam.nearPlane << " far=" << cam.farPlane
-                 << " fov=" << cam.fovDegrees << " pos=(" << cam.position.x << ","
-                 << cam.position.y << "," << cam.position.z << ")";
-    }
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
     Mat4 proj = (cam.projection == CameraProjection::Perspective)
         ? Mat4::perspective(degreesToRadians(cam.fovDegrees), cam.aspectRatio,
@@ -86,11 +75,8 @@ void RenderSystem::render(FrameContext& ctx) {
             Vec3 cy(model.m[0][1], model.m[1][1], model.m[2][1]);
             Vec3 cz(model.m[0][2], model.m[1][2], model.m[2][2]);
             Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
-            // TEMP diagnostic: per-object frustum cull bypassed to test whether
-            // it is wrongly rejecting the large terrain meshes. Restore after.
-            (void)worldCenter; (void)bounds; (void)maxScale; (void)frustum;
-            // if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
-            //     return;
+            if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
+                return;
             ctx.renderer.drawMesh(r.mesh, model, r.material);
         });
 

@@ -483,6 +483,13 @@ subsystem rather than the mesh/field pipeline.
 
 Items that become relevant as the world grows large.
 
+- **Open-world foundations** — coordinate precision + rendering + streaming for an
+  *infinite procedural* world (the small-world assumption breaks distant terrain
+  today). Phased: (0) reverse-Z depth + robust sky/background classification +
+  re-enable culling; (1) camera-relative rendering; (2) deterministic, tightly-
+  bounded streamed terrain chunks with LOD; (3) floating-origin rebasing. See
+  `docs/open-world-foundations-plan.md` and ADR-0034; pairs with the ADR-0027
+  content model (fields + recipes + tiles).
 - **Scene graph / spatial indexing** — BVH or octree for frustum culling and
   efficient queries over large generated worlds.
 - **LOD system** — distance-based level of detail for procgen meshes and
