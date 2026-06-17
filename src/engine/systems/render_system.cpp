@@ -86,8 +86,11 @@ void RenderSystem::render(FrameContext& ctx) {
             Vec3 cy(model.m[0][1], model.m[1][1], model.m[2][1]);
             Vec3 cz(model.m[0][2], model.m[1][2], model.m[2][2]);
             Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
-            if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
-                return;
+            // TEMP diagnostic: per-object frustum cull bypassed to test whether
+            // it is wrongly rejecting the large terrain meshes. Restore after.
+            (void)worldCenter; (void)bounds; (void)maxScale; (void)frustum;
+            // if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
+            //     return;
             ctx.renderer.drawMesh(r.mesh, model, r.material);
         });
 
