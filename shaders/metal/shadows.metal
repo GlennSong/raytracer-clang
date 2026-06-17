@@ -25,6 +25,27 @@ vertex float4 vertexShadowInstanced(
     return lightCamera.viewProjection * worldPos;
 }
 
+// CDLOD terrain shadow caster (ADR-0036). Applies the SAME vertex morph as
+// terrainVertexMain — by the MAIN camera distance (lightCamera.cameraPosition
+// carries the real camera position; .viewProjection is the cascade's light VP) —
+// so the caster geometry matches the morphed receiver exactly. Without this the
+// un-morphed caster sits above the morphed surface and lit, sun-facing slopes
+// self-shadow (acne).
+vertex float4 terrainVertexShadow(
+    const device Vertex* vertices [[buffer(0)]],
+    constant CameraUniforms& lightCamera [[buffer(1)]],
+    constant TerrainUniforms& terrain [[buffer(2)]],
+    uint vid [[vertex_id]]
+) {
+    float3 pos = float3(vertices[vid].position);
+    float3 morphTarget = float3(vertices[vid].tangent);
+    float dist = distance(lightCamera.cameraPosition, pos);
+    float k = saturate((dist - terrain.morphStart) /
+                       max(terrain.morphEnd - terrain.morphStart, 1e-3));
+    float3 worldPos = mix(pos, morphTarget, k);
+    return lightCamera.viewProjection * float4(worldPos, 1.0);
+}
+
 // 3x3 PCF against one slice of the cascade array; pcfRadius spreads the taps.
 float sampleShadowPCF(depth2d_array<float> shadowMap, sampler smp, uint slice,
                        float2 uv, float compareDepth, float texelSize,
@@ -91,6 +112,15 @@ float computeShadow(depth2d_array<float> shadowMap, sampler smp,
                                         shadowData.cascadeViewProjection[c + 1],
                                         worldPos, normal, shadowData);
             v = mix(v, vNext, t);
+        }
+    } else {
+        // Last cascade: fade shadow -> lit over its outer 20% so distant shadows
+        // dissolve gracefully at the shadow-distance edge instead of popping off.
+        float farSplit = shadowData.cascadeSplit[count - 1];
+        float fadeStart = farSplit * 0.8;
+        if (viewDepth > fadeStart) {
+            float t = saturate((viewDepth - fadeStart) / (farSplit - fadeStart));
+            v = mix(v, 1.0, t);
         }
     }
     return v;

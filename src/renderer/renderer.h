@@ -147,6 +147,11 @@ struct ShadowConfig {
     float pcfRadius = 1.0f;     // PCF tap spread in shadow-map texels
     int resolution = 2048;
     bool enabled = true;
+    // Per-level overrides for the cascade fit (ShadowParams). 0 = unset (keep the
+    // settings-driven default). A large world (CDLOD terrain) needs a much longer
+    // shadow distance than the 150 m default, so the level can raise it.
+    float distance = 0.0f;
+    int   cascadeCount = 0;
 };
 
 // Artistic shadow response (ADR-0017 Phase 2). Shadow visibility becomes a

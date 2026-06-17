@@ -36,6 +36,11 @@
       "intensity": 9.5,
       "castsShadow": true
     },
+    "shadow": {
+      "distance": 1800,
+      "cascades": 4,
+      "normalBias": 0.15
+    },
     "exposure": 0.5,
     "ambientMultiplier": 0.4
   }

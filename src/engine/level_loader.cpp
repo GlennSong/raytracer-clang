@@ -413,6 +413,9 @@ static void loadLighting(const json& lighting, RenderView& view) {
         l.shadow.bias       = sh.value("bias", l.shadow.bias);
         l.shadow.normalBias = sh.value("normalBias", l.shadow.normalBias);
         l.shadow.pcfRadius  = sh.value("pcfRadius", l.shadow.pcfRadius);
+        // Cascade-fit overrides (0 = unset): a big world needs a longer shadow range.
+        l.shadow.distance     = sh.value("distance", l.shadow.distance);
+        l.shadow.cascadeCount = sh.value("cascades", l.shadow.cascadeCount);
         // Artistic response (ADR-0017 Phase 2)
         l.shadowArtistic.strength        = sh.value("strength", l.shadowArtistic.strength);
         l.shadowArtistic.ambientStrength = sh.value("ambientStrength", l.shadowArtistic.ambientStrength);

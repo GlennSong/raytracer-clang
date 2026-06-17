@@ -178,6 +178,7 @@ struct MetalRenderer::Impl {
     id<MTLTexture> shadowMap;
     id<MTLRenderPipelineState> shadowPipeline;
     id<MTLRenderPipelineState> shadowInstancedPipeline;
+    id<MTLRenderPipelineState> terrainShadowPipeline;   // CDLOD morphing caster
     id<MTLDepthStencilState> shadowDepthState;
     id<MTLSamplerState> shadowSampler;
     int shadowMapSize = 2048;
@@ -708,6 +709,18 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
                                                                                      error:&error];
         if (!impl->shadowInstancedPipeline) {
             NSLog(@"Shadow instanced pipeline error: %@", error);
+        }
+
+        // CDLOD terrain shadow caster (ADR-0036): morphs the caster like the
+        // receiver so sun-facing slopes don't self-shadow. Absent function ->
+        // terrain just won't cast (the loop checks the pipeline).
+        id<MTLFunction> terrainShadowFunc = [library newFunctionWithName:@"terrainVertexShadow"];
+        if (terrainShadowFunc) {
+            shadowPipeDesc.vertexFunction = terrainShadowFunc;
+            impl->terrainShadowPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:shadowPipeDesc error:&error];
+            if (!impl->terrainShadowPipeline)
+                NSLog(@"Terrain shadow pipeline error: %@", error);
         }
     }
 
@@ -1614,6 +1627,12 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     int idx = 0;
     constexpr int MAX_LIGHTS = 32;
 
+    // Per-level cascade-fit overrides (0 = unset, keep the settings-driven value):
+    // a large CDLOD world needs a far longer shadow range than the 150 m default.
+    if (lighting.shadow.distance > 0.0f) shadowParams.distance = lighting.shadow.distance;
+    if (lighting.shadow.cascadeCount > 0)
+        shadowParams.cascadeCount = lighting.shadow.cascadeCount;
+
     // Directional light (sun)
     impl->shadowEnabled = false;
     if (idx < MAX_LIGHTS) {
@@ -2151,25 +2170,26 @@ void MetalRenderer::endFrame() {
 
             // CDLOD terrain casters (ADR-0036): render the selected nodes into the
             // cascade so ridges shadow their own far slopes (and the map isn't empty
-            // in terrain-only scenes). Nodes are world-space (identity transform);
-            // cast from the un-morphed base position — the slight LOD-morph mismatch
-            // is absorbed by the depth/normal bias. Same cascade sphere cull.
-            {
-                ModelUniforms terrainModelU;
-                terrainModelU.model = toSimd(Mat4());
-                terrainModelU.normalMatrix = toSimd(Mat4());
+            // in terrain-only scenes). The morphing caster pipeline applies the SAME
+            // vertex morph as the receiver (by the real camera distance, passed in
+            // cascadeCam.cameraPosition), so caster and surface line up — otherwise
+            // lit, sun-facing slopes self-shadow. Nodes are world-space. Same cull.
+            if (impl->terrainShadowPipeline) {
+                CameraUniforms terrainCascadeCam = cascadeCam;
+                terrainCascadeCam.cameraPosition = toSimd3(impl->currentCameraPos);
+                [shadowEncoder setRenderPipelineState:impl->terrainShadowPipeline];
                 for (const auto& tdc : impl->terrainDrawCalls) {
                     const GPUMesh* mesh = impl->meshes.get(tdc.meshHandle);
                     if (!mesh) continue;
                     BoundingSphere b = getMeshBounds(tdc.meshHandle);
                     if ((b.center - cc).length() > cullR + b.radius) continue;
 
-                    [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
+                    TerrainUniforms tu = {tdc.morphStart, tdc.morphEnd, {0.0f, 0.0f}};
                     [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
-                    [shadowEncoder setVertexBytes:&cascadeCam
+                    [shadowEncoder setVertexBytes:&terrainCascadeCam
                                            length:sizeof(CameraUniforms) atIndex:1];
-                    [shadowEncoder setVertexBytes:&terrainModelU
-                                           length:sizeof(ModelUniforms) atIndex:2];
+                    [shadowEncoder setVertexBytes:&tu
+                                           length:sizeof(TerrainUniforms) atIndex:2];
                     [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                               indexCount:mesh->indexCount
                                                indexType:MTLIndexTypeUInt32
