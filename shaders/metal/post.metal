@@ -626,10 +626,14 @@ fragment float4 fragmentComposite(
         return float4(ssr.rgb * ssr.a, 1.0);
     }
     if (params.debugView == 3) {
-        // Depth — linearized, white=near black=far (reverse-Z)
-        float linZ = linearizeReverseZ(depth, camera.nearPlane, camera.farPlane);
-        float lin = saturate(1.0 - (linZ - camera.nearPlane) /
-                                   (camera.farPlane - camera.nearPlane));
+        // Depth — linearized on a log scale so it reads usefully at any near/far
+        // ratio (a wide far plane otherwise pins a close scene to ~white).
+        // white = near, black = far/background.
+        float near = camera.nearPlane, far = camera.farPlane;
+        float linZ = max(linearizeReverseZ(depth, near, far), near);
+        float lin = (depth <= 0.0)
+            ? 0.0                                            // background
+            : saturate(1.0 - log2(linZ / near) / log2(far / near));
         return float4(lin, lin, lin, 1.0);
     }
     if (params.debugView == 4) {

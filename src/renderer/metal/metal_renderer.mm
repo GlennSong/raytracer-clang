@@ -1618,16 +1618,18 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             shadowDist = std::max(shadowDist, camNear * 2.0);
             Real lambda = shadowParams.splitLambda;
 
-            // World-space corners of the full view frustum (Metal NDC z in [0,1]).
+            // World-space corners of the full view frustum. The camera uses
+            // reverse-Z (ADR-0034 Phase 0), so in NDC the near plane is at z=1 and
+            // the far plane at z=0 — the opposite of the forward [0,1] convention.
             auto worldCorner = [&](float nx, float ny, float nz) -> Vec3 {
                 simd_float4 c = simd_mul(impl->cameraUniforms.invViewProjection,
                                          simd_make_float4(nx, ny, nz, 1.0f));
                 return Vec3(c.x / c.w, c.y / c.w, c.z / c.w);
             };
-            Vec3 nearC[4] = { worldCorner(-1,-1,0), worldCorner(1,-1,0),
-                              worldCorner(1,1,0),   worldCorner(-1,1,0) };
-            Vec3 farC[4]  = { worldCorner(-1,-1,1), worldCorner(1,-1,1),
+            Vec3 nearC[4] = { worldCorner(-1,-1,1), worldCorner(1,-1,1),
                               worldCorner(1,1,1),   worldCorner(-1,1,1) };
+            Vec3 farC[4]  = { worldCorner(-1,-1,0), worldCorner(1,-1,0),
+                              worldCorner(1,1,0),   worldCorner(-1,1,0) };
 
             float splitArr[RT_MAX_CASCADES] = {0};
             Real prevFar = camNear;
