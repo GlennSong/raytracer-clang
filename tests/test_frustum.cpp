@@ -139,3 +139,62 @@ TEST_CASE(bounding_volume_carries_model_space_box) {
     CHECK_APPROX(b.boxMax.z, 3.0, 1e-9);
     CHECK(b.radius > 3.0);                 // the sphere is much fatter
 }
+
+TEST_CASE(frustum_aabb_basic) {
+    Mat4 view = Mat4::lookAt(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.0, 0.1, 100.0);
+    Frustum f = Frustum::fromViewProjection(proj * view);
+
+    // Box at the origin, in front of the camera — visible.
+    CHECK(f.containsAABB(Vec3(-0.5, -0.5, -0.5), Vec3(0.5, 0.5, 0.5)));
+    // Box behind the camera — culled.
+    CHECK(!f.containsAABB(Vec3(-0.5, -0.5, 9.5), Vec3(0.5, 0.5, 10.5)));
+    // Box far to the side — culled.
+    CHECK(!f.containsAABB(Vec3(99.5, -0.5, -0.5), Vec3(100.5, 0.5, 0.5)));
+    // Box beyond the far plane — culled.
+    CHECK(!f.containsAABB(Vec3(-0.5, -0.5, -200.0), Vec3(0.5, 0.5, -150.0)));
+}
+
+TEST_CASE(frustum_aabb_beats_sphere_for_flat_terrain) {
+    // The motivating case (ADR-0034 Phase 1): a long, thin, flat slab sitting off
+    // to the right of the view. It is entirely outside the right frustum plane, but
+    // its bounding sphere is huge (radius ~ half its 400-unit length) and crosses
+    // that plane, so the sphere test wrongly keeps it; the tight box culls it.
+    Mat4 view = Mat4::lookAt(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.0, 0.1, 1000.0);
+    Frustum f = Frustum::fromViewProjection(proj * view);
+
+    // x in [128,132] stays right of the frustum edge (≈118 at the deepest z here);
+    // z spans ±200 so the bounding sphere radius is ≈200, far larger than the box.
+    Vec3 bmin(128.0, -0.05, -200.0), bmax(132.0, 0.05, 200.0);
+    Vec3 center((bmin.x + bmax.x) * 0.5, 0.0, 0.0);
+    Real radius = (bmax - bmin).length() * 0.5;
+
+    CHECK(f.containsSphere(center, radius));     // sphere is fooled
+    CHECK(!f.containsAABB(bmin, bmax));          // box is not
+}
+
+TEST_CASE(transformed_aabb_translation_and_scale) {
+    Vec3 outMin, outMax;
+    // Unit box scaled 2x and translated by (10, 0, -5).
+    Mat4 m = Mat4::trs(Vec3(10, 0, -5), Quat::identity(), Vec3(2, 2, 2));
+    transformedAABB(m, Vec3(-1, -1, -1), Vec3(1, 1, 1), outMin, outMax);
+    CHECK_APPROX(outMin.x, 8.0, EPS);
+    CHECK_APPROX(outMax.x, 12.0, EPS);
+    CHECK_APPROX(outMin.z, -7.0, EPS);
+    CHECK_APPROX(outMax.z, -3.0, EPS);
+    CHECK_APPROX(outMin.y, -2.0, EPS);
+    CHECK_APPROX(outMax.y, 2.0, EPS);
+}
+
+TEST_CASE(transformed_aabb_rotation_grows_box) {
+    Vec3 outMin, outMax;
+    // 45° about Y turns a unit box into one spanning ±sqrt(2) in x and z.
+    Mat4 m = Mat4::trs(Vec3(0, 0, 0),
+                       Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(45)),
+                       Vec3(1, 1, 1));
+    transformedAABB(m, Vec3(-1, -1, -1), Vec3(1, 1, 1), outMin, outMax);
+    CHECK_APPROX(outMax.x, std::sqrt(2.0), 1e-6);
+    CHECK_APPROX(outMin.x, -std::sqrt(2.0), 1e-6);
+    CHECK_APPROX(outMax.y, 1.0, 1e-6);   // unchanged about the rotation axis
+}

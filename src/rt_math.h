@@ -495,7 +495,33 @@ struct Frustum {
 
     static Frustum fromViewProjection(const Mat4& vp);
     bool containsSphere(const Vec3& center, Real radius) const;
+    // Axis-aligned box test (world space). Tighter than the bounding sphere for
+    // large/flat meshes — a terrain chunk's sphere swallows the sky, its box
+    // doesn't (ADR-0034 Phase 1). Conservative: returns true if the box is at
+    // least partially inside.
+    bool containsAABB(const Vec3& boxMin, const Vec3& boxMax) const;
 };
+
+// World-space AABB of a model-space box transformed by `m`: transform all eight
+// corners and take their min/max. Correct for any affine transform (translation,
+// rotation, scale), so it works for the cull path's per-object world bounds.
+inline void transformedAABB(const Mat4& m, const Vec3& boxMin, const Vec3& boxMax,
+                            Vec3& outMin, Vec3& outMax) {
+    bool first = true;
+    for (int i = 0; i < 8; i++) {
+        Vec3 corner((i & 1) ? boxMax.x : boxMin.x,
+                    (i & 2) ? boxMax.y : boxMin.y,
+                    (i & 4) ? boxMax.z : boxMin.z);
+        Vec3 p = m.transformPoint(corner);
+        if (first) { outMin = outMax = p; first = false; }
+        else {
+            outMin = Vec3(std::min(outMin.x, p.x), std::min(outMin.y, p.y),
+                          std::min(outMin.z, p.z));
+            outMax = Vec3(std::max(outMax.x, p.x), std::max(outMax.y, p.y),
+                          std::max(outMax.z, p.z));
+        }
+    }
+}
 
 constexpr Real PI = 3.14159265358979323846;
 
@@ -580,6 +606,19 @@ inline bool Frustum::containsSphere(const Vec3& center, Real radius) const {
     for (int i = 0; i < 6; i++) {
         Real dist = dot(normals[i], center) + distances[i];
         if (dist < -radius) return false;
+    }
+    return true;
+}
+
+inline bool Frustum::containsAABB(const Vec3& boxMin, const Vec3& boxMax) const {
+    for (int i = 0; i < 6; i++) {
+        const Vec3& n = normals[i];
+        // p-vertex: the box corner farthest along this plane's normal. If even it
+        // is behind the plane, the whole box is outside.
+        Vec3 p(n.x >= 0 ? boxMax.x : boxMin.x,
+               n.y >= 0 ? boxMax.y : boxMin.y,
+               n.z >= 0 ? boxMax.z : boxMin.z);
+        if (dot(n, p) + distances[i] < 0) return false;
     }
     return true;
 }

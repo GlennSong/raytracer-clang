@@ -69,13 +69,13 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (parent.valid())
                     model = worldMatrix(ctx.world, parent) * model;
             }
+            // Cull against the world-space AABB (tight for large/flat meshes like
+            // terrain chunks, where a bounding sphere swallows the sky and culls
+            // wrongly — ADR-0034 Phase 1).
             BoundingSphere bounds = ctx.renderer.getMeshBounds(r.mesh);
-            Vec3 worldCenter = model.transformPoint(bounds.center);
-            Vec3 cx(model.m[0][0], model.m[1][0], model.m[2][0]);
-            Vec3 cy(model.m[0][1], model.m[1][1], model.m[2][1]);
-            Vec3 cz(model.m[0][2], model.m[1][2], model.m[2][2]);
-            Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
-            if (!frustum.containsSphere(worldCenter, bounds.radius * maxScale))
+            Vec3 worldMin, worldMax;
+            transformedAABB(model, bounds.boxMin, bounds.boxMax, worldMin, worldMax);
+            if (!frustum.containsAABB(worldMin, worldMax))
                 return;
             ctx.renderer.drawMesh(r.mesh, model, r.material);
         });
