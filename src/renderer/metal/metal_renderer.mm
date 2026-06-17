@@ -2424,7 +2424,8 @@ void MetalRenderer::endFrame() {
     // Batching SSAO, SSR, and bloom into one compute encoder eliminates
     // per-encoder CPU overhead (~15 encoder create/destroy → 1).
     bool needsCompute = (impl->aoPipeline && impl->aoTexture && ssaoEnabled)
-                     || (impl->ssrPipeline && impl->ssrTexture && ssrEnabled)
+                     || (impl->ssrPipeline && impl->ssrTexture
+                         && (ssrEnabled || debugView == 2))
                      || (bloomEnabled && impl->bloomDownsamplePipeline
                          && impl->bloomUpsamplePipeline && impl->bloomMips[0])
                      || dofActive;
@@ -2495,7 +2496,10 @@ void MetalRenderer::endFrame() {
         }
 
         // --- SSR ---
-        if (impl->ssrPipeline && impl->ssrTexture && ssrEnabled) {
+        // Run SSR when enabled, or whenever the SSR debug view is active so its
+        // per-pixel diagnostic (see ssrRayMarch) renders even with SSR toggled off.
+        bool ssrDebug = (debugView == 2);
+        if (impl->ssrPipeline && impl->ssrTexture && (ssrEnabled || ssrDebug)) {
             int halfW = std::max(impl->framebufferWidth / 2, 1);
             int halfH = std::max(impl->framebufferHeight / 2, 1);
             MTLSize ssrGrid = MTLSizeMake(halfW, halfH, 1);
@@ -2509,12 +2513,15 @@ void MetalRenderer::endFrame() {
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
             SSRUniforms ssrP = {
                 ssrParams.maxRayDist, ssrParams.thickness, ssrParams.thicknessFar,
-                ssrParams.stride, ssrParams.blendStrength, ssrParams.maxRoughness, {}
+                ssrParams.stride, ssrParams.blendStrength, ssrParams.maxRoughness,
+                ssrDebug ? 1.0f : 0.0f, 0.0f
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
             [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
 
-            if (impl->ssrBlurHPipeline && impl->ssrBlurVPipeline && impl->ssrBlurTemp) {
+            // Skip the bilateral blur in debug mode — it would smear the flat
+            // color codes across surface edges and muddy the diagnostic.
+            if (!ssrDebug && impl->ssrBlurHPipeline && impl->ssrBlurVPipeline && impl->ssrBlurTemp) {
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->ssrBlurHPipeline];
                 [enc setTexture:impl->ssrTexture atIndex:0];

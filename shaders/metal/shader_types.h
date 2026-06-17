@@ -179,7 +179,10 @@ struct SSRUniforms {
     float stride;
     float blendStrength;
     float maxRoughness;   // SSR fades to 0 by this roughness (rough = no mirror)
-    float _pad[2];
+    float debug;          // !=0: write a color-coded outcome per pixel instead of
+                          // the reflected color, so the SSR debug view (2) shows
+                          // *where* SSR drops out. See ssrRayMarch for the legend.
+    float _pad;
 };
 
 struct SSAOUniforms {

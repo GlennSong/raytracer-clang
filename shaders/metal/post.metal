@@ -36,6 +36,16 @@ kernel void ssrRayMarch(
     float2 fullSize = camera.screenSize;
     uint2 fullMax = uint2(fullSize) - 1;
 
+    // Diagnostic mode (debug view 2): instead of the reflected color, write a
+    // flat color code (alpha 1) so the debug view shows exactly where SSR exits.
+    //   black   = sky / background (no surface)
+    //   red     = roughness gate: surface too rough to reflect
+    //   yellow  = ray points behind the camera (degenerate)
+    //   cyan    = ray too short on screen (< 1px) to march
+    //   blue    = marched the full ray, found no hit on screen
+    //   green   = SSR hit (a real reflection lands here)
+    bool dbg = params.debug != 0.0;
+
     // Read depth at full resolution
     uint2 depthCoord = min(uint2(uv * fullSize), fullMax);
     float depth = depthTex.read(depthCoord).x;
@@ -55,7 +65,10 @@ kernel void ssrRayMarch(
     // maxRoughness, killing the bogus forest-on-ground/foliage mirror look and
     // skipping the ray march entirely for the (common) rough pixels.
     float reflectivity = 1.0 - smoothstep(0.0, params.maxRoughness, normalSample.w);
-    if (reflectivity <= 0.0) { ssrResult.write(float4(0.0), gid); return; }
+    if (reflectivity <= 0.0) {
+        ssrResult.write(dbg ? float4(1.0, 0.0, 0.0, 1.0) : float4(0.0), gid);
+        return;
+    }
 
     float3 viewDir = normalize(viewPos);
     float3 reflectDir = reflect(viewDir, viewNormal);
@@ -70,7 +83,10 @@ kernel void ssrRayMarch(
     if (endProj.w <= 0.0) {
         // Ray goes behind camera — clip to near plane
         float t = (-viewPos.z - 0.1) / reflectDir.z;
-        if (t <= 0.0) { ssrResult.write(float4(0.0), gid); return; }
+        if (t <= 0.0) {
+            ssrResult.write(dbg ? float4(1.0, 1.0, 0.0, 1.0) : float4(0.0), gid);
+            return;
+        }
         rayEnd = viewPos + reflectDir * t * 0.99;
         endProj = camera.projection * float4(rayEnd, 1.0);
         maxRayDist = t * 0.99;
@@ -84,7 +100,10 @@ kernel void ssrRayMarch(
     float2 deltaUV = endScreenUV - startScreenUV;
     float2 deltaPixels = deltaUV * fullSize;
     float pixelDist = max(abs(deltaPixels.x), abs(deltaPixels.y));
-    if (pixelDist < 1.0) { ssrResult.write(float4(0.0), gid); return; }
+    if (pixelDist < 1.0) {
+        ssrResult.write(dbg ? float4(0.0, 1.0, 1.0, 1.0) : float4(0.0), gid);
+        return;
+    }
 
     const int MAX_STEPS = 48;
     const int BINARY_STEPS = 6;
@@ -166,9 +185,11 @@ kernel void ssrRayMarch(
     }
 
     if (!hit) {
-        ssrResult.write(float4(0.0), gid);
+        ssrResult.write(dbg ? float4(0.0, 0.0, 1.0, 1.0) : float4(0.0), gid);
         return;
     }
+
+    if (dbg) { ssrResult.write(float4(0.0, 1.0, 0.0, 1.0), gid); return; }
 
     uint2 hitCoord = min(uint2(hitUV * fullSize), fullMax);
     float3 hitColor = sceneColor.read(hitCoord).rgb;
