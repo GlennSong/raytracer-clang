@@ -53,8 +53,8 @@ CameraState FlyCameraController::cameraState(float aspect) const {
     Real fovRad = degreesToRadians(fovDegrees);
     state.orthoHeight = static_cast<float>(2.0 * 10.0 * std::tan(fovRad * 0.5));
     state.aspectRatio = aspect;
-    state.nearPlane = 0.1f;
-    state.farPlane = 1000.0f;
+    state.nearPlane = static_cast<float>(nearPlane);
+    state.farPlane = static_cast<float>(farPlane);
     return state;
 }
 

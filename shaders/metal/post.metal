@@ -705,9 +705,18 @@ fragment float4 fragmentComposite(
         hdrColor += bloom * params.bloomIntensity;
     }
 
-    // ACES filmic tone mapping
+    // Fitted ACES filmic tone mapping (Stephen Hill). RGB input/output matrices
+    // preserve saturation; a per-channel ACES curve desaturates (washes colors
+    // out). Matches the offline path tracer (path_tracer.cpp).
     float3 x = hdrColor;
-    float3 color = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    float3 ci = float3(dot(float3(0.59719, 0.35458, 0.04823), x),
+                       dot(float3(0.07600, 0.90834, 0.01566), x),
+                       dot(float3(0.02840, 0.13383, 0.83777), x));
+    float3 cf = (ci * (ci + 0.0245786) - 0.000090537) /
+                (ci * (0.983729 * ci + 0.432951) + 0.238081);
+    float3 color = float3(dot(float3( 1.60475, -0.53108, -0.07367), cf),
+                          dot(float3(-0.10208,  1.10813, -0.00605), cf),
+                          dot(float3(-0.00327, -0.07276,  1.07602), cf));
     color = saturate(color);
 
     // Gamma correction

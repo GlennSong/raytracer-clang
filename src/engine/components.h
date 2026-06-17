@@ -89,6 +89,12 @@ struct SourceSpec {
     std::string shape = "box";   // MeshBuilder shape; empty when meshFile is set
     Vec3 size{1, 1, 1};
     std::string meshFile;        // glTF path, level-relative ("mesh" in JSON)
+    // A procedural recipe entity (e.g. shape == "tree"): the raw JSON of the
+    // generator's parameter block (the "tree" object), kept verbatim so the
+    // entity round-trips through save/load. Empty for primitives and meshes.
+    // Without this the generated entity carries no document state and the
+    // LevelWriter drops it on save (silent data loss).
+    std::string recipe;
     bool hasPhysics = false;
     std::string motion = "static";
     Real friction = 0.5;

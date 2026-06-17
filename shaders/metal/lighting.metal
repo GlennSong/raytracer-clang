@@ -280,7 +280,13 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float3 emit = mat.emission;
     float ao = 1.0;
     uint tf = mat.textureFlags;
-    if (tf & 1u) albedo *= albedoMap.sample(texSampler, geom.texcoord).rgb;
+    if (tf & 1u) {
+        float4 base = albedoMap.sample(texSampler, geom.texcoord);
+        // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fragments under the leaf
+        // silhouette so cards stay crisp in the opaque pass.
+        if ((int(mat.flags) & 2) && base.a < 0.5) discard_fragment();
+        albedo *= base.rgb;
+    }
     if (tf & 2u) {
         float4 mr = metalRoughMap.sample(texSampler, geom.texcoord);
         rough *= mr.g;
@@ -390,6 +396,16 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         color += envReflection * fresnelTerm * 0.8;
     }
 
+    // Aerial-perspective fog (mirrors the offline tracer's Scene::fog): lerp the
+    // lit radiance toward the fog color by 1-exp(-density*dist), so distant
+    // terrain dissolves into atmosphere and the far clip / LOD seams hide. Done
+    // here in scene-referred linear space, before the composite exposure/tonemap.
+    if (lightData.fogDensity > 0.0) {
+        float dist = length(geom.worldPosition - camera.cameraPosition);
+        float f = 1.0 - exp(-lightData.fogDensity * dist);
+        color = mix(color, lightData.fogColor, f);
+    }
+
     // Exposure is applied once, uniformly, in the composite pass — sceneColor holds
     // linear scene-referred radiance, so do NOT pre-expose here.
     float3 viewN = normalize((camera.view * float4(normal, 0.0)).xyz);
@@ -430,6 +446,20 @@ vertex FragmentData vertexMainInstanced(
     GPUInstanceData inst = instances[iid];
     FragmentData out;
     float4 worldPos = inst.model * float4(vertices[vid].position, 1.0);
+
+    // Wind sway (FLAG_WIND): displace in the wind direction, weighted by height
+    // above the instance origin (base planted, tips move) and phase-offset by
+    // world position so a field doesn't sway in unison.
+    if (int(inst.flags) & 4) {
+        float baseY = inst.model[3].y;
+        float weight = saturate((worldPos.y - baseY) / max(camera.windHeight, 0.001));
+        weight *= weight;
+        float phase = camera.windTime * camera.windFrequency +
+                      dot(worldPos.xz, float2(0.15, 0.1));
+        float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
+        worldPos.xz += camera.windDir.xz * (camera.windAmplitude * weight * gust);
+    }
+
     out.position = camera.viewProjection * worldPos;
     out.worldPosition = worldPos.xyz;
     out.worldNormal = normalize((inst.normalMatrix * float4(vertices[vid].normal, 0.0)).xyz);

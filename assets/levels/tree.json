@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.46, 0.64, 0.86],
+    "hdr": "../env/tree_lined_driveway_1k.hdr"
+  },
+  "terrain": {
+    "seed": 7,
+    "size": 40,
+    "resolution": 64,
+    "heightScale": 1.5,
+    "noiseScale": 0.05,
+    "octaves": 4,
+    "warp": 0.2,
+    "material": {
+      "albedo": [1.0, 1.0, 1.0],
+      "roughness": 1.0
+    }
+  },
+  "entities": [
+    {
+      "name": "hero_oak",
+      "shape": "tree",
+      "position": [0, 0, 0],
+      "tree": {
+        "seed": 7,
+        "iterations": 7,
+        "trunkLength": 2.8,
+        "lengthFalloff": 0.86,
+        "leaderFalloff": 0.93,
+        "branchAngle": 36,
+        "angleJitter": 18,
+        "radiusScale": 2.0,
+        "pipeExponent": 2.4,
+        "terminalForks": 0,
+        "leavesPerTip": 13,
+        "leafSize": 0.22,
+        "leafThickness": 0.08,
+        "leafClump": 1.1,
+        "droop": 0.26,
+        "wander": 0.07,
+        "barkStyle": "oak",
+        "barkColor": [0.32, 0.23, 0.15],
+        "leafColor": [0.20, 0.46, 0.14]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
+    }
+  ],
+  "player": {
+    "position": [0, 2, 9],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.7, -0.4],
+      "color": [1.0, 0.93, 0.80],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.45,
+    "ambientMultiplier": 0.5
+  },
+  "reflectionProbes": [
+    {
+      "position": [0, 4, 0],
+      "radius": 25,
+      "boxMin": [-20, -1, -20],
+      "boxMax": [20, 12, 20]
+    }
+  ]
+}

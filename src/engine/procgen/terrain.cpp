@@ -1,7 +1,11 @@
 #include "terrain.h"
 #include "../mesh_builder.h"
+#include "lsystem.h"
+#include "skeleton.h"
+#include "../../curve.h"
 
 #include <algorithm>
+#include <string>
 
 namespace engine {
 
@@ -15,20 +19,121 @@ Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    (void)height;
-    const Vec3 grass(0.20, 0.38, 0.15);   // green
-    const Vec3 dirt(0.42, 0.30, 0.16);    // brown
-    const Vec3 rock(0.40, 0.38, 0.36);    // grey
+    // Richer, more saturated palette with a green -> olive -> earth gradient on
+    // flat ground, warm-grey rock on slopes, and snow on high gentle ground.
+    const Vec3 grass(0.13, 0.30, 0.07);    // deep green
+    const Vec3 dryGrass(0.34, 0.36, 0.12); // olive / dry meadow
+    const Vec3 dirt(0.30, 0.20, 0.10);     // rich earth brown
+    const Vec3 rock(0.29, 0.27, 0.25);     // warm grey
+    const Vec3 snow(0.90, 0.92, 0.96);
 
-    // Steep ground reads as rock; gentle ground is a patchy mix of grass and
-    // dirt chosen by the noise term, so it's green in places and brown in others
-    // rather than a uniform color.
     double slope = 1.0 - clamp01(normalUp);                 // 0 flat .. 1 vertical
-    double rockFactor = smoothstep(0.32, 0.60, slope);
-    double dirtFactor = smoothstep(-0.25, 0.25, noiseValue); // noise: grass<->dirt
-    Vec3 ground = mixv(grass, dirt, dirtFactor);
+    double rockFactor = smoothstep(0.30, 0.62, slope);
+
+    // Two-stop gradient over the noise term: green -> dry meadow -> earth, so the
+    // ground varies richly instead of a flat green/brown lerp.
+    double t = clamp01(noiseValue * 0.5 + 0.5);
+    Vec3 ground = t < 0.5 ? mixv(grass, dryGrass, t * 2.0)
+                          : mixv(dryGrass, dirt, (t - 0.5) * 2.0);
     Vec3 c = mixv(ground, rock, rockFactor);
+
+    // Snow on high, non-steep ground (absolute altitude — a no-op on low terrain,
+    // caps mountains). Snow doesn't cling to cliffs.
+    double snowFactor = smoothstep(74.0, 108.0, height) *
+                        (1.0 - smoothstep(0.42, 0.68, slope));
+    c = mixv(c, snow, snowFactor);
+
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
+}
+
+namespace {
+// Ridged multifractal (Musgrave): each octave is ridged (1-|noise|, sharpened)
+// and weighted by the previous octave, so detail concentrates on ridges and
+// valleys stay smooth — varied, sharp, irregular peaks instead of uniform bumps.
+// Returns ~[0,1].
+double ridgedMultifractal(const Noise& n, double x, double y, int octaves) {
+    double sum = 0.0, freq = 1.0, amp = 0.5, weight = 1.0, total = 0.0;
+    for (int o = 0; o < octaves; o++) {
+        double s = 1.0 - std::abs(n.noise2(x * freq, y * freq));   // ridge [0,1]
+        s *= s;                                                    // sharpen
+        s *= weight;                                               // feedback
+        weight = clamp01(s * 2.0);                                 // gate next octave
+        sum += s * amp;
+        total += amp;
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    return total > 0.0 ? sum / total : 0.0;
+}
+
+// Nearest distance from (x,z) to the spine polyline + the arc fraction [0,1] of
+// the closest point (for along-spine height variation). Arc is approximated by
+// segment index (the loader samples the spine ~uniformly).
+void spineQuery(const std::vector<Vec3>& spine, double x, double z,
+                double& dist, double& arc) {
+    dist = 1e30; arc = 0.0;
+    const int n = static_cast<int>(spine.size());
+    if (n == 1) {
+        double dx = x - spine[0].x, dz = z - spine[0].z;
+        dist = std::sqrt(dx * dx + dz * dz);
+        return;
+    }
+    for (int i = 1; i < n; i++) {
+        double ax = spine[i - 1].x, az = spine[i - 1].z;
+        double ex = spine[i].x - ax, ez = spine[i].z - az;
+        double seg2 = ex * ex + ez * ez;
+        double t = seg2 > 1e-9 ? ((x - ax) * ex + (z - az) * ez) / seg2 : 0.0;
+        t = clamp01(t);
+        double dx = x - (ax + ex * t), dz = z - (az + ez * t);
+        double d = std::sqrt(dx * dx + dz * dz);
+        if (d < dist) { dist = d; arc = (i - 1 + t) / (n - 1); }
+    }
+}
+}  // namespace
+
+std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls, int samples) {
+    if (controls.size() < 2) return controls;
+    Spline<Vec3> s = Spline<Vec3>::catmullRom(controls);
+    std::vector<Vec3> out;
+    const int n = std::max(2, samples);
+    for (int i = 0; i < n; i++)
+        out.push_back(s.eval(static_cast<double>(i) / (n - 1) * s.segments()));
+    return out;
+}
+
+std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
+                                           float falloff, float leaderFalloff,
+                                           int iterations, float height,
+                                           float depthFalloff, float angleJitter,
+                                           uint32_t seed) {
+    auto num = [](float v) { return std::to_string(v); };
+    // Planar binary-branch grammar (only +/- yaw, so it stays in one plane): a
+    // main leader throws off ± spurs that recurse. Reuses the parametric L-system.
+    ParametricLSystem g;
+    g.rule("A(l)", "F(l)[+(" + num(branchAngle) + ")A(l*" + num(falloff) + ")]" +
+                       "[-(" + num(branchAngle) + ")A(l*" + num(falloff) + ")]" +
+                       "A(l*" + num(leaderFalloff) + ")");
+    ModuleString s = g.expand("A(" + num(length) + ")", iterations, seed);
+
+    // Consumer #2 of the shared Skeleton: lay the turtle's (x,y) growth plane onto
+    // the ground (x,z); crest height falls by branch depth.
+    Skeleton skel = buildSkeleton(s, angleJitter, seed);
+    auto heightAt = [&](int depth) {
+        return height * std::pow(depthFalloff, static_cast<float>(depth));
+    };
+    std::vector<RidgeSegment> ridges;
+    for (size_t i = 1; i < skel.nodes.size(); i++) {
+        const SkeletonNode& n = skel.nodes[i];
+        if (n.parent < 0) continue;
+        const SkeletonNode& p = skel.nodes[n.parent];
+        RidgeSegment seg;
+        seg.a = Vec3(p.pos.x, 0.0, p.pos.y);   // y (turtle up) -> ground z
+        seg.b = Vec3(n.pos.x, 0.0, n.pos.y);
+        seg.ha = heightAt(p.depth);
+        seg.hb = heightAt(n.depth);
+        ridges.push_back(seg);
+    }
+    return ridges;
 }
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,
@@ -38,7 +143,73 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     double h = params.warp > 0.0
                    ? noise.warpedFbm2(nx, nz, params.warp, params.octaves)
                    : noise.fbm2(nx, nz, params.octaves);
-    return h * params.heightScale;
+    h *= params.heightScale;
+
+    // Mountain layer: a regional mask decides where it rises (range vs plains),
+    // then a domain-warped ridged multifractal gives irregular varied peaks.
+    if (params.mountainHeight > 0.0f) {
+        double mask = 1.0;
+        if (params.mountainMaskScale > 0.0) {
+            double m = noise.fbm2(worldX * params.mountainMaskScale,
+                                  worldZ * params.mountainMaskScale, 3);
+            mask = smoothstep(params.mountainMaskLo, params.mountainMaskHi, m);
+        }
+        if (mask > 1e-3) {
+            double wx = worldX * params.mountainScale;
+            double wz = worldZ * params.mountainScale;
+            // Domain warp the ridges so they meander instead of looking regular.
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double mh = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += mh * params.mountainHeight * mask;
+        }
+    }
+
+    // Spine-driven range: uplift falls off from the range axis (range -> foothills
+    // -> plains) and varies along it (tall massifs, low passes), shaping a
+    // ridged-multifractal relief.
+    if (!params.rangeSpine.empty() && params.rangeHeight > 0.0f) {
+        double dist, arc;
+        spineQuery(params.rangeSpine, worldX, worldZ, dist, arc);
+        double cross = 1.0 - smoothstep(0.0, params.rangeWidth, dist);
+        if (cross > 1e-3) {
+            double a = noise.noise2(arc * 7.0 + 0.5, 13.7);            // [-1,1]
+            double along = 1.0 - params.rangeVariation * (0.5 - 0.5 * a);
+            double wx = worldX * params.mountainScale;
+            double wz = worldZ * params.mountainScale;
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double relief = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += relief * params.rangeHeight * cross * along;
+        }
+    }
+
+    // Branching ridge network: uplift from the nearest ridge segment (its
+    // interpolated crest height), falling off with distance, shaped by the
+    // ridged multifractal. A main divide + spurs + sub-spurs.
+    if (!params.rangeRidges.empty()) {
+        double bestD = 1e30, crest = 0.0;
+        for (const RidgeSegment& seg : params.rangeRidges) {
+            double ex = seg.b.x - seg.a.x, ez = seg.b.z - seg.a.z;
+            double seg2 = ex * ex + ez * ez;
+            double t = seg2 > 1e-9
+                           ? ((worldX - seg.a.x) * ex + (worldZ - seg.a.z) * ez) / seg2
+                           : 0.0;
+            t = clamp01(t);
+            double dx = worldX - (seg.a.x + ex * t), dz = worldZ - (seg.a.z + ez * t);
+            double d = std::sqrt(dx * dx + dz * dz);
+            if (d < bestD) { bestD = d; crest = seg.ha + (seg.hb - seg.ha) * t; }
+        }
+        double cross = 1.0 - smoothstep(0.0, params.rangeWidth, bestD);
+        if (cross > 1e-3) {
+            double wx = worldX * params.mountainScale, wz = worldZ * params.mountainScale;
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double relief = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += relief * crest * cross;
+        }
+    }
+    return h;
 }
 
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
@@ -83,6 +254,58 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
         v.color = terrainColor(v.position.y, v.normal.y, nv);
     }
     return mesh;
+}
+
+RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
+                               float innerHalf, float outerHalf, int cells) {
+    RenderMesh mesh;
+    cells = std::max(2, cells);
+    const int n = cells + 1;
+    const float step = (outerHalf * 2.0f) / cells;
+
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++) {
+            float x = -outerHalf + i * step;
+            float z = -outerHalf + j * step;
+            float y = static_cast<float>(terrainHeight(params, noise, x, z));
+            mesh.vertices.push_back(Vertex(Vec3(x, y, z), Vec3(0, 1, 0)));
+        }
+    }
+    for (int j = 0; j < cells; j++) {
+        for (int i = 0; i < cells; i++) {
+            float x0 = -outerHalf + i * step, x1 = x0 + step;
+            float z0 = -outerHalf + j * step, z1 = z0 + step;
+            // Skip quads entirely inside the inner hole (left for the finer tile).
+            if (std::max(std::abs(x0), std::abs(x1)) <= innerHalf &&
+                std::max(std::abs(z0), std::abs(z1)) <= innerHalf)
+                continue;
+            uint32_t a = static_cast<uint32_t>(j * n + i);
+            uint32_t b = a + 1;
+            uint32_t c = a + static_cast<uint32_t>(n);
+            uint32_t d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+        }
+    }
+
+    MeshBuilder::recomputeNormals(mesh);
+    MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
+    for (Vertex& v : mesh.vertices) {
+        double nv = noise.noise2(v.position.x * 0.15, v.position.z * 0.15);
+        v.color = terrainColor(v.position.y, v.normal.y, nv);
+    }
+    return mesh;
+}
+
+std::vector<RenderMesh> generateTerrainLOD(const TerrainParams& params,
+                                           const Noise& noise, int levels, int cells) {
+    std::vector<RenderMesh> rings;
+    float inner = params.size * 0.5f;          // central tile edge
+    for (int l = 0; l < levels; l++) {
+        float outer = inner * 2.0f;            // each ring doubles the extent
+        rings.push_back(generateTerrainRing(params, noise, inner, outer, cells));
+        inner = outer;
+    }
+    return rings;
 }
 
 }  // namespace engine

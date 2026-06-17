@@ -348,6 +348,28 @@ building block, not a generator. Seedable (ADR-0021/0002).
 
 **Depends on:** Nothing. Pairs with the mesh builder (3.3).
 
+### 3.8 Curve library
+**Status:** Phase 1 done — `Spline<T>` Hermite kernel (Catmull-Rom, eval/
+derivative, arc-length, rotation-minimizing frames) in `src/curve.{h,cpp}`,
+covered by `tests/test_curve.cpp`; first consumer is the curved tree branch
+sweep (`growTree`). `AnimCurve` (F-curves) and SVG import remain (ADR-0031).
+**Why:** One curve primitive serves procgen (branch centerlines for the organic
+branches of ADR-0029 §3.5), animation (F-curves), and 2D vector / SVG import.
+Slotted into Tier 3 as a value-type building block alongside noise (3.7), not a
+generator. Pure math, no deps, Linux/CI-testable.
+
+**Decision (ADR-0031):** split a **math kernel** from its consumers. Kernel is a
+piecewise-cubic `Spline<T>` for `T ∈ {float, Vec2, Vec3}`, stored as Hermite
+knots (value + in/out tangent) — the canonical form Catmull-Rom, cubic Bezier,
+and keyframes all lower to; exposes `eval`/`tangent`. Per-consumer services layer
+on top in their own modules: `Path3` (arc-length LUT + rotation-minimizing frame,
+procgen), `AnimCurve` (time + tangent modes, animation), `Path2` + SVG parser
+(asset loading). **Phase 1 (now):** kernel + Catmull-Rom + arc-length + RMF,
+which immediately gives `growTree` continuous curved branches (ADR-0029 §3.5).
+AnimCurve and SVG follow when their domains need them.
+
+**Depends on:** Nothing. First consumer is the tree branch sweep (Tier 4 / B.1).
+
 ---
 
 ## Tier 4 — Procedural Generation
@@ -461,6 +483,16 @@ subsystem rather than the mesh/field pipeline.
 
 Items that become relevant as the world grows large.
 
+- **Open-world foundations** — a **bounded, curated** ~16 km world (GTA V / Horizon
+  model, single precision — *not* infinite Minecraft), where the small-world
+  assumption breaks distant terrain today. Phased: (0) reverse-Z depth + robust
+  sky/background classification + re-enable culling; (1) spatial partitioning
+  (sector grid/BVH) + chunked terrain with tight bounds + terrain LOD; (2) object
+  mesh LOD + foliage impostors; (3) sector streaming + HLOD/building impostors;
+  later, occlusion culling. The infinite/planetary apparatus (camera-relative
+  rendering, floating-origin rebasing) is the documented upgrade path, not on this
+  path. See `docs/open-world-foundations-plan.md` and ADR-0034; pairs with the
+  ADR-0027 content model (fields + recipes + per-tile overrides).
 - **Scene graph / spatial indexing** — BVH or octree for frustum culling and
   efficient queries over large generated worlds.
 - **LOD system** — distance-based level of detail for procgen meshes and

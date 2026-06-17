@@ -11,6 +11,8 @@ struct HitRecord {
     Vec3 normal;
     bool frontFace;
     int materialIndex;
+    double u = 0.0, v = 0.0;     // interpolated texture coords (meshes)
+    Vec3 color{1, 1, 1};         // interpolated vertex color (modulates albedo)
 
     void setFaceNormal(const Ray& ray, const Vec3& outwardNormal) {
         frontFace = dot(ray.direction, outwardNormal) < 0;
@@ -33,6 +35,13 @@ struct Sphere {
 struct Triangle {
     Vec3 v0, v1, v2;
     int materialIndex;
+
+    // Optional per-vertex attributes, barycentric-interpolated at the hit
+    // (mesh geometry sets them; primitives leave the defaults). Zero normals
+    // mean "use the flat face normal"; color defaults to white; uv to zero.
+    Vec3 n0, n1, n2;
+    Vec3 c0{1, 1, 1}, c1{1, 1, 1}, c2{1, 1, 1};
+    double uv0[2] = {0, 0}, uv1[2] = {0, 0}, uv2[2] = {0, 0};
 
     Triangle() : materialIndex(0) {}
     Triangle(const Vec3& v0, const Vec3& v1, const Vec3& v2, int matIdx = 0)

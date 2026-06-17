@@ -60,6 +60,50 @@ Any other letter is a no-op placeholder you can use in rules to carry structure
 - **Determinism:** the same parameters always produce the same tree. (Stochastic
   rules — random variety per tree — are a planned extension.)
 
+## Parametric trees — `shape: "tree"` (collidable hero objects)
+
+The char grammar above scatters as instanced vegetation. For a **single, real,
+collidable tree** you can bounce off or shoot at, use a `"shape": "tree"`
+entity in a level's `entities` array. It uses the *parametric* L-system
+(`ParametricLSystem`) + pipe-model taper + generalized-cylinder bark skinning
+(`src/engine/procgen/tree.{h,cpp}`), and spawns:
+
+- a **bark mesh** with a procedural bark texture and a static triangle
+  `MeshCollider` (the part you collide with), and
+- a separate **leaf-card mesh** (alpha-cut foliage, no collision).
+
+```json
+{
+  "name": "oak",
+  "shape": "tree",
+  "position": [-15, 0, -8],
+  "tree": {
+    "seed": 7,              // stochastic variant (angle jitter + leaf scatter)
+    "iterations": 6,        // branch orders (recursion depth)
+    "trunkLength": 1.7,     // length of the first internode
+    "lengthFalloff": 0.82,  // each child internode = parent * this
+    "branchAngle": 35,      // branch pitch away from parent (deg)
+    "angleJitter": 16,      // +/- random variation on every turn (deg)
+    "branchesPerNode": 2,   // children per node (2 = forking)
+    "phyllotaxis": 137.5,   // roll between successive children (golden angle)
+    "tipRadius": 0.018,     // terminal twig radius
+    "pipeExponent": 2.3,    // r_parent^n = sum(r_child^n); 2..3 (da Vinci)
+    "radiusScale": 1.4,     // overall thickness
+    "leaves": true,
+    "leafSize": 0.16,
+    "leavesPerTip": 4,
+    "barkColor": [0.32, 0.23, 0.15],
+    "leafColor": [0.20, 0.46, 0.14]
+  },
+  "physics": { "motion": "static", "friction": 0.8 }
+}
+```
+
+The same `seed` + params always grow the same tree (ADR-0002). Branch radius is
+**not** authored — it's solved bottom-up from the pipe model, so the trunk
+tapers correctly into hair-thin twigs. See `docs/lsystem-botany-plan.md` for the
+roadmap (tropisms, rotation-minimizing bark frames, more leaf/petal shapes).
+
 ## Planned extensions (not yet)
 
 - Stochastic rules (a symbol with several weighted replacements) so each tree

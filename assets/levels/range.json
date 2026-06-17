@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.52, 0.66, 0.86] },
+  "terrain": {
+    "seed": 12,
+    "size": 600,
+    "resolution": 340,
+    "heightScale": 5,
+    "noiseScale": 0.02,
+    "octaves": 6,
+    "warp": 0.2,
+    "mountainScale": 0.006,
+    "range": {
+      "length": 72,
+      "branchAngle": 42,
+      "falloff": 0.5,
+      "leaderFalloff": 0.93,
+      "iterations": 5,
+      "height": 145,
+      "depthFalloff": 0.58,
+      "angleJitter": 14,
+      "width": 95,
+      "seed": 5
+    },
+    "erode": true,
+    "erodeDroplets": 90000,
+    "erodeThermal": 12,
+    "erodeTalus": 1.0,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "player": {
+    "position": [0, 8, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.62, 0.34, 0.4],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}

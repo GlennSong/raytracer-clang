@@ -24,6 +24,7 @@ set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
 # ============================================================
 add_library(engine_core STATIC
     src/rt_math.cpp
+    src/curve.cpp
     src/log.cpp
     src/job_system.cpp
     src/renderer/settings.cpp
@@ -41,6 +42,9 @@ add_library(engine_core STATIC
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
     src/engine/procgen/lsystem.cpp
+    src/engine/procgen/skeleton.cpp
+    src/engine/procgen/tree.cpp
+    src/engine/procgen/erosion.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
     src/engine/procgen/sdf.cpp
@@ -208,6 +212,7 @@ add_executable(run_tests
     tests/test_noise.cpp
     tests/test_terrain.cpp
     tests/test_lsystem.cpp
+    tests/test_tree.cpp
     tests/test_rock.cpp
     tests/test_scatter.cpp
     tests/test_sdf.cpp

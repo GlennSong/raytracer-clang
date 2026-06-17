@@ -33,10 +33,17 @@ static json entityToJson(const Transform& t, const SourceSpec& spec,
     if (spec.id != 0) ent["id"] = spec.id;
     if (spec.parentId != 0) ent["parent"] = spec.parentId;
     if (!spec.name.empty()) ent["name"] = spec.name;
+    const bool isRecipe = !spec.recipe.empty();
     if (spec.isGroup()) {
         ent["group"] = true;   // null object: a named transform, no mesh
     } else if (!spec.meshFile.empty()) {
         ent["mesh"] = spec.meshFile;
+    } else if (isRecipe) {
+        // A procedural recipe entity (e.g. shape:"tree"): emit the shape and the
+        // verbatim recipe block (keyed by the shape name, as the loader reads
+        // it). The generator owns size and color, so neither is written here.
+        ent["shape"] = spec.shape;
+        ent[spec.shape] = json::parse(spec.recipe);
     } else {
         ent["shape"] = spec.shape;
         ent["size"] = vec3ToJson(spec.size);
@@ -54,7 +61,7 @@ static json entityToJson(const Transform& t, const SourceSpec& spec,
         };
     }
 
-    if (material) ent["material"] = materialToJson(*material);
+    if (material && !isRecipe) ent["material"] = materialToJson(*material);
 
     if (spec.hasPhysics) {
         json phys;

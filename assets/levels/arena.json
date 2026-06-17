@@ -143,6 +143,39 @@
       "position": [0, 3, -3],
       "scale": [1.5, 1.5, 1.5],
       "physics": { "motion": "static" }
+    },
+    {
+      "name": "oak",
+      "shape": "tree",
+      "position": [-15, 0, -8],
+      "tree": {
+        "seed": 7,
+        "iterations": 6,
+        "trunkLength": 1.7,
+        "branchAngle": 35,
+        "angleJitter": 16,
+        "radiusScale": 1.4,
+        "barkColor": [0.32, 0.23, 0.15],
+        "leafColor": [0.20, 0.46, 0.14]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
+    },
+    {
+      "name": "birch",
+      "shape": "tree",
+      "position": [16, 0, 9],
+      "tree": {
+        "seed": 23,
+        "iterations": 6,
+        "trunkLength": 1.9,
+        "branchAngle": 28,
+        "angleJitter": 12,
+        "branchesPerNode": 2,
+        "radiusScale": 1.1,
+        "barkColor": [0.78, 0.76, 0.70],
+        "leafColor": [0.40, 0.55, 0.18]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
     }
   ],
   "player": {

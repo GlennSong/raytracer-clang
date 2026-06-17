@@ -2,7 +2,9 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
+#include "procgen/erosion.h"
 #include "procgen/lsystem.h"
+#include "procgen/tree.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
 #ifdef RT_ENABLE_SCRIPTING
@@ -140,10 +142,115 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     return spec;
 }
 
+// A hero parametric tree (shape: "tree"): a real, collidable object you can
+// bounce off or shoot at, distinct from the instanced vegetation scatter. The
+// bark is one mesh (procedural bark texture, opaque) with a static triangle
+// MeshCollider; the leaves are a second entity at the same transform (alpha-cut
+// cards, no collision). docs/lsystem-botany-plan.md.
+static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
+                           AssetManager& assets, int index) {
+    TreeParams tp;
+    uint32_t seed = 0;
+    if (ent.contains("tree")) {
+        const auto& j = ent["tree"];
+        tp.iterations     = j.value("iterations", tp.iterations);
+        tp.trunkLength    = j.value("trunkLength", tp.trunkLength);
+        tp.lengthFalloff  = j.value("lengthFalloff", tp.lengthFalloff);
+        tp.leaderFalloff  = j.value("leaderFalloff", tp.leaderFalloff);
+        tp.branchAngle    = j.value("branchAngle", tp.branchAngle);
+        tp.angleJitter    = j.value("angleJitter", tp.angleJitter);
+        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
+        tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
+        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
+        tp.terminalForks  = j.value("terminalForks", tp.terminalForks);
+        tp.droop          = j.value("droop", tp.droop);
+        tp.wander         = j.value("wander", tp.wander);
+        tp.rootCount      = j.value("rootCount", tp.rootCount);
+        tp.rootSpread     = j.value("rootSpread", tp.rootSpread);
+        tp.leafClump      = j.value("leafClump", tp.leafClump);
+        tp.maxLeafCards   = j.value("maxLeafCards", tp.maxLeafCards);
+        tp.tipRadius      = j.value("tipRadius", tp.tipRadius);
+        tp.pipeExponent   = j.value("pipeExponent", tp.pipeExponent);
+        tp.radiusScale    = j.value("radiusScale", tp.radiusScale);
+        tp.ringSegments   = j.value("ringSegments", tp.ringSegments);
+        tp.leaves         = j.value("leaves", tp.leaves);
+        tp.leafSize       = j.value("leafSize", tp.leafSize);
+        tp.leavesPerTip   = j.value("leavesPerTip", tp.leavesPerTip);
+        tp.leafThickness  = j.value("leafThickness", tp.leafThickness);
+        tp.barkColor      = parseVec3(j.value("barkColor", json()), tp.barkColor);
+        tp.leafColor      = parseVec3(j.value("leafColor", json()), tp.leafColor);
+        seed              = j.value("seed", 0u);
+    }
+
+    TreeMesh tm = growTree(tp, seed);
+    if (tm.branches.vertices.empty()) return;
+
+    auto upload = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+
+    const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed);
+
+    // Bark entity: textured, collidable. It is the tree's *document* entity —
+    // it carries the SourceSpec (with the recipe) so the whole tree round-trips
+    // through the LevelWriter; the leaf entity is a runtime companion (no
+    // SourceSpec) regenerated from the recipe on load.
+    {
+        Entity e = world.create();
+        createEntityCommon(e, ent, world);
+
+        SourceSpec spec = buildSourceSpec(ent, "tree");
+        if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
+        world.add<SourceSpec>(e, spec);
+
+        Renderable r;
+        r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
+        r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
+        r.material.roughness = 1.0f;
+        // Per-species bark relief: value pattern (modulates vertex color) + normal map.
+        std::string styleName = ent.contains("tree")
+            ? ent["tree"].value("barkStyle", std::string("oak")) : "oak";
+        BarkMaps bm = barkMaps(barkStyleFromName(styleName), 256, seed);
+        r.material.albedoMap = upload(bm.albedo);
+        r.material.normalMap = upload(bm.normal);
+        if (ent.contains("material")) applyMaterial(ent["material"], r.material);
+        world.add<Renderable>(e, r);
+
+        MeshCollider mc;
+        mc.vertices = tm.collisionVertices;
+        mc.indices = tm.collisionIndices;
+        if (ent.contains("physics"))
+            mc.friction = ent["physics"].value("friction", mc.friction);
+        world.add<MeshCollider>(e, mc);
+    }
+
+    // Leaf entity: alpha-cut cards at the same transform, no collision.
+    if (!tm.leaves.vertices.empty()) {
+        Entity e = world.create();
+        createEntityCommon(e, ent, world);
+
+        Renderable r;
+        r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
+        r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
+        r.material.roughness = 0.7f;
+        r.material.albedoMap = upload(leafTexture(128));
+        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        world.add<Renderable>(e, r);
+    }
+}
+
 static void loadEntities(const json& entities, World& world, Renderer& renderer,
                          AssetManager& assets, const std::string& levelDir,
                          bool editorMode) {
+    int treeIndex = 0;
     for (auto& ent : entities) {
+        // Hero parametric tree: a collidable, textured object (not scatter).
+        if (ent.value("shape", std::string()) == "tree") {
+            loadTreeEntity(ent, world, renderer, assets, treeIndex++);
+            continue;
+        }
+
         // Group / null object: a named transform with no mesh, for parenting.
         if (ent.value("group", false) ||
             (ent.contains("shape") && ent["shape"].get<std::string>().empty()
@@ -345,6 +452,31 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.noiseScale  = t.value("noiseScale", p.noiseScale);
     p.octaves     = t.value("octaves", p.octaves);
     p.warp        = t.value("warp", p.warp);
+    p.mountainHeight = t.value("mountainHeight", p.mountainHeight);
+    p.mountainScale  = t.value("mountainScale", p.mountainScale);
+    p.mountainMaskScale = t.value("mountainMaskScale", p.mountainMaskScale);
+    p.mountainMaskLo = t.value("mountainMaskLo", p.mountainMaskLo);
+    p.mountainMaskHi = t.value("mountainMaskHi", p.mountainMaskHi);
+    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
+        std::vector<Vec3> ctl;
+        for (const auto& pt : t["rangeSpine"])
+            if (pt.is_array() && pt.size() >= 2)
+                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
+        p.rangeSpine = sampleRangeSpine(ctl);
+    }
+    p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
+    p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
+    p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
+    if (t.contains("range") && t["range"].is_object()) {
+        const auto& r = t["range"];
+        p.rangeRidges = buildRangeRidges(
+            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
+            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
+            r.value("iterations", 5), r.value("height", 130.0f),
+            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
+            r.value("seed", 0u));
+        p.rangeWidth = r.value("width", p.rangeWidth);
+    }
     return p;
 }
 
@@ -361,7 +493,22 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<Transform>(e, tr);
     world.add<PrevTransform>(e, PrevTransform{tr});
 
-    RenderMesh terrainMesh = generateTerrain(p, noise);
+    RenderMesh terrainMesh;
+    if (t.value("erode", false)) {
+        // Bake -> erode (drainage detail) -> mesh; the eroded grid is the source
+        // of truth for the mesh (and its collider) here.
+        Heightmap hm = bakeHeightmap(p, noise);
+        ErosionParams ep;
+        ep.seed = t.value("seed", 0u) + 1234u;
+        ep.droplets = t.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
+        ep.talus = t.value("erodeTalus", ep.talus);
+        erode(hm, ep);
+        terrainMesh = generateTerrainMesh(hm);
+    } else {
+        terrainMesh = generateTerrain(p, noise);
+    }
 
     // Static collision from the same geometry, so the player walks on the
     // terrain instead of falling through (PhysicsSystem makes one static mesh
@@ -381,6 +528,24 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
         r.material.roughness = 0.95f;
     }
     world.add<Renderable>(e, r);
+
+    // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a
+    // fraction of the triangle cost. Render-only (no collider — you never reach
+    // them); regenerated runtime objects, no SourceSpec.
+    int lodRings = t.value("lodRings", 0);
+    if (lodRings > 0) {
+        int lodCells = t.value("lodCells", 40);
+        std::vector<RenderMesh> rings = generateTerrainLOD(p, noise, lodRings, lodCells);
+        for (std::size_t i = 0; i < rings.size(); i++) {
+            Entity re = world.create();
+            world.add<Transform>(re, Transform{});
+            world.add<PrevTransform>(re, PrevTransform{Transform{}});
+            Renderable rr;
+            rr.mesh = assets.acquireMesh(rings[i], "terrain_lod" + std::to_string(i));
+            rr.material = r.material;
+            world.add<Renderable>(re, rr);
+        }
+    }
 }
 
 // Vegetation: generate a few "species" meshes (L-system trees, noise rocks)
@@ -390,12 +555,26 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // these are regenerated runtime objects, not document entities.
 static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
-                           AssetManager& assets, const std::string& levelDir,
+                           Renderer& renderer, AssetManager& assets,
+                           const std::string& levelDir,
                            const std::string& tag = "veg") {
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
-    struct Species { MeshHandle mesh; RenderMaterial material; };
-    std::vector<Species> species;
+    // A species variant is now a multi-part model (ADR-0032): each part is one
+    // {mesh, material} drawn as its own InstanceGroup over the shared transforms,
+    // so bark (opaque) and leaves (alpha-cut) — or any N parts — scatter together.
+    struct Part { MeshHandle mesh; RenderMaterial material; };
+    struct Variant {
+        std::vector<Part> parts;
+        float xzRadius = 0.0f;       // canopy footprint, for scatter spacing
+        float trunkHeight = 0.0f;    // measured mesh height (capsule collider)
+        float trunkRadius = 0.0f;    // measured base footprint (capsule collider)
+        bool collide = false;
+        float colliderRadius = 0.0f; // 0 = auto from trunkRadius
+        float colliderHeight = 0.0f; // 0 = auto from trunkHeight
+        double colliderFriction = 0.8;
+    };
+    std::vector<Variant> variantList;
     uint32_t vegSeed = veg.value("seed", 0u);
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -486,6 +665,15 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         RenderMaterial material;
         if (s.contains("material")) applyMaterial(s["material"], material);
 
+        // Optional per-trunk capsule collider for this species (forest trees you
+        // bounce off). Radius/height auto-measured from the mesh unless given.
+        bool spCollide = s.value("collide", false);
+        float spColRadius = s.value("colliderRadius", 0.0f);
+        float spColHeight = s.value("colliderHeight", 0.0f);
+        double spColFriction = s.value("colliderFriction", 0.8);
+        bool spWind = s.value("wind", false);   // FLAG_WIND sway for this species
+        if (spWind) material.flags |= RenderMaterial::FLAG_WIND;
+
         // Optional: this species' mesh comes from a Lua flora script (inline
         // chunk, or a level-relative .lua path), evaluated per variant.
         std::string scriptSpec = s.value("script", std::string());
@@ -514,35 +702,98 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
 
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
-            RenderMesh mesh;
+            Variant var;
+            var.collide = spCollide;
+            var.colliderRadius = spColRadius;
+            var.colliderHeight = spColHeight;
+            var.colliderFriction = spColFriction;
+            // Add one part; measure the canopy footprint (XZ radius, for scatter
+            // spacing) and the trunk capsule (mesh height + base footprint).
+            auto addPart = [&](const RenderMesh& m, const RenderMaterial& mat) {
+                if (m.vertices.empty()) return;
+                float r = 0.0f, maxY = 0.0f;
+                for (const Vertex& vert : m.vertices) {
+                    r = std::max(r, std::sqrt(static_cast<float>(
+                            vert.position.x * vert.position.x +
+                            vert.position.z * vert.position.z)));
+                    maxY = std::max(maxY, static_cast<float>(vert.position.y));
+                }
+                var.xzRadius = std::max(var.xzRadius, r);
+                var.trunkHeight = std::max(var.trunkHeight, maxY);
+                // Base footprint: widest XZ in the lowest fifth (the trunk).
+                float yThresh = 0.2f * maxY, baseR = 0.0f;
+                for (const Vertex& vert : m.vertices)
+                    if (vert.position.y <= yThresh)
+                        baseR = std::max(baseR, std::sqrt(static_cast<float>(
+                                vert.position.x * vert.position.x +
+                                vert.position.z * vert.position.z)));
+                var.trunkRadius = std::max(var.trunkRadius, baseR);
+                Part p;
+                p.mesh = assets.acquireMesh(
+                    m, tag + ":" + std::to_string(speciesIndex) + ":" +
+                           std::to_string(v) + ":" + std::to_string(var.parts.size()));
+                p.material = mat;
+                var.parts.push_back(p);
+            };
+
             if (hasScript) {
 #ifdef RT_ENABLE_SCRIPTING
                 ScriptVM& vm = ensureScriptVm();
                 vm.setGlobalNumber("seed", seed);   // the script reads `seed`
-                std::shared_ptr<RenderMesh> out;
+                std::vector<ScriptMeshPart> parts;
                 std::string err;
-                if (runProcgenMesh(vm, scriptSource, out, &err) && out) mesh = *out;
-                else LOG_ERROR << "flora script error: " << err;
+                if (runProcgenModel(vm, scriptSource, parts, &err)) {
+                    for (const ScriptMeshPart& sp : parts) {
+                        if (!sp.mesh) continue;
+                        RenderMaterial mat = material;   // species JSON default
+                        if (sp.hasMaterial) {
+                            mat = RenderMaterial();
+                            mat.albedo = sp.albedo;
+                            mat.roughness = sp.roughness;
+                            mat.metallic = sp.metallic;
+                            if (sp.alphaTest || sp.texture == "leaf")
+                                mat.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+                            if (sp.texture.rfind("bark", 0) == 0) {
+                                BarkMaps bm = barkMaps(barkStyleFromName(sp.texture), 256, seed);
+                                if (!bm.albedo.pixels.empty())
+                                    mat.albedoMap = renderer.uploadTexture(
+                                        bm.albedo.width, bm.albedo.height,
+                                        bm.albedo.channels, bm.albedo.pixels.data());
+                                if (!bm.normal.pixels.empty())
+                                    mat.normalMap = renderer.uploadTexture(
+                                        bm.normal.width, bm.normal.height,
+                                        bm.normal.channels, bm.normal.pixels.data());
+                            } else if (sp.texture == "leaf") {
+                                TextureData td = leafTexture(128);
+                                if (!td.pixels.empty())
+                                    mat.albedoMap = renderer.uploadTexture(
+                                        td.width, td.height, td.channels, td.pixels.data());
+                            }
+                        }
+                        if (spWind || sp.wind) mat.flags |= RenderMaterial::FLAG_WIND;
+                        addPart(*sp.mesh, mat);
+                    }
+                } else {
+                    LOG_ERROR << "flora script error: " << err;
+                }
 #endif
             } else if (kind == "rock") {
-                mesh = rockSdf ? generateRockSdf(rsp, seed)
-                               : generateRock(rp, Noise(seed));
+                addPart(rockSdf ? generateRockSdf(rsp, seed)
+                                : generateRock(rp, Noise(seed)),
+                        material);
             } else {
-                mesh = treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
-                                                 treeSmooth, treeRes, seed)
-                               : generateTree(sys, axiom, iterations, tp, seed);
+                RenderMesh mesh =
+                    treeSdf ? generateTreeSdf(sys, axiom, iterations, tp,
+                                              treeSmooth, treeRes, seed)
+                            : generateTree(sys, axiom, iterations, tp, seed);
                 MeshBuilder::bakeHeightColor(mesh, trunkColor, leafColor);
+                addPart(mesh, material);
             }
-            if (mesh.vertices.empty()) continue;
-            Species sp;
-            sp.mesh = assets.acquireMesh(
-                mesh, tag + ":" + std::to_string(speciesIndex) + ":" + std::to_string(v));
-            sp.material = material;
-            species.push_back(sp);
+            if (!var.parts.empty()) variantList.push_back(std::move(var));
         }
         speciesIndex++;
     }
-    if (species.empty()) return;
+    if (variantList.empty()) return;
 
     ScatterParams scatter;
     scatter.regionSize       = veg.value("region", 70.0f);
@@ -552,39 +803,90 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.maxScale         = veg.value("maxScale", 1.3f);
     scatter.densityScale     = veg.value("densityScale", 0.05);
     scatter.densityThreshold = veg.value("densityThreshold", -0.2f);
+    scatter.focus            = parseVec3(veg.value("focus", json()), Vec3(0, 0, 0));
+    scatter.focusRadius      = veg.value("focusRadius", 0.0f);
+    scatter.focusScale       = veg.value("focusScale", 1.0f);
+    scatter.focusClear       = veg.value("focusClear", 0.0f);
+    scatter.clusterCount     = veg.value("clusterCount", 0);
+    scatter.clusterRadius    = veg.value("clusterRadius", 6.0f);
     scatter.seed             = vegSeed;
+
+    // Footprint spacing so big meshes don't jumble: default to the largest
+    // canopy radius * max scale * a factor (<1 lets canopies overlap a little).
+    // A level may override with an explicit `spacing` (world units) or tune the
+    // `spacingFactor`.
+    float maxXz = 0.0f;
+    for (const Variant& var : variantList) maxXz = std::max(maxXz, var.xzRadius);
+    float spacingFactor = veg.value("spacingFactor", 0.9f);
+    scatter.minSpacing = veg.contains("spacing")
+                             ? veg.value("spacing", 0.0f)
+                             : maxXz * scatter.maxScale * spacingFactor;
 
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
 
-    // Collapse the placements into one InstanceGroup per species (ROADMAP Phase B
-    // instancing) instead of an entity per plant: the render system iterates a few
-    // groups and issues one instanced draw each. Plants carry no SourceSpec, so
-    // they were never document entities anyway (ADR-0022).
+    // One InstanceGroup per (variant, part): a variant's parts share the same
+    // per-instance transforms (ROADMAP Phase B instancing). Plants carry no
+    // SourceSpec, so they were never document entities anyway (ADR-0022).
     std::vector<std::vector<Mat4>> buckets =
-        bucketPlacementsBySpecies(placements, species.size(), vegSeed + 7u);
-    for (std::size_t si = 0; si < species.size(); ++si) {
+        bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
+    for (std::size_t si = 0; si < variantList.size(); ++si) {
         if (buckets[si].empty()) continue;
-        InstanceGroup g;
-        g.mesh = species[si].mesh;
-        g.material = species[si].material;
-        g.transforms = std::move(buckets[si]);
+        const std::vector<Mat4>& transforms = buckets[si];
 
-        // Coarse group bounds: centroid of instance origins + the spread + the
-        // mesh's own extent at the largest instance scale (one cheap cull volume).
+        // Coarse group bounds shared by the variant's parts: centroid of instance
+        // origins + the spread (the per-part mesh extent is added below).
         Vec3 centroid(0, 0, 0);
-        for (const Mat4& m : g.transforms)
+        for (const Mat4& m : transforms)
             centroid = centroid + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
-        centroid = centroid / static_cast<Real>(g.transforms.size());
+        centroid = centroid / static_cast<Real>(transforms.size());
         Real spread = 0;
-        for (const Mat4& m : g.transforms)
+        for (const Mat4& m : transforms)
             spread = std::max(spread,
                               (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - centroid).length());
-        BoundingSphere mb = assets.meshBounds(g.mesh);
-        g.boundsCenter = centroid;
-        g.boundsRadius = spread + (mb.center.length() + mb.radius) *
-                                      static_cast<Real>(scatter.maxScale);
 
-        world.add<InstanceGroup>(world.create(), g);
+        for (const Part& part : variantList[si].parts) {
+            InstanceGroup g;
+            g.mesh = part.mesh;
+            g.material = part.material;
+            g.transforms = transforms;
+            BoundingSphere mb = assets.meshBounds(g.mesh);
+            g.boundsCenter = centroid;
+            g.boundsRadius = spread + (mb.center.length() + mb.radius) *
+                                          static_cast<Real>(scatter.maxScale);
+            world.add<InstanceGroup>(world.create(), g);
+        }
+
+        // Per-trunk static capsule colliders (one body per instance) so you
+        // bounce off forest trees. Cheap vs the bark triangle soup; the
+        // InstanceGroups above stay render-only. No SourceSpec -> not serialized.
+        const Variant& var = variantList[si];
+        float colR = var.colliderRadius > 0.0f ? var.colliderRadius : var.trunkRadius;
+        float colH = var.colliderHeight > 0.0f ? var.colliderHeight : var.trunkHeight;
+        if (var.collide && colR > 1e-3f && colH > 1e-3f) {
+            for (const Mat4& m : transforms) {
+                Vec3 pos(m.m[0][3], m.m[1][3], m.m[2][3]);
+                Real s = Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length();   // uniform
+                float rr = colR * static_cast<float>(s);
+                float hh = colH * static_cast<float>(s);
+
+                Entity e = world.create();
+                Transform t;
+                t.position = Vec3(pos.x, pos.y + hh * 0.5, pos.z);
+                world.add<Transform>(e, t);
+                world.add<PrevTransform>(e, PrevTransform{t});
+
+                Collider c;
+                c.shape = ColliderShape::Capsule;
+                c.radius = rr;
+                c.halfHeight = std::max(0.0, hh * 0.5 - rr);
+                c.friction = var.colliderFriction;
+                world.add<Collider>(e, c);
+
+                RigidBody rb;
+                rb.motion = BodyMotion::Static;
+                world.add<RigidBody>(e, rb);
+            }
+        }
     }
 }
 
@@ -626,14 +928,14 @@ bool LevelLoader::load(const std::string& path,
         Noise terrainNoise(root["terrain"].value("seed", 0u));
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
-            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world, assets,
-                           levelDir, "veg");
+            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
+                           renderer, assets, levelDir, "veg");
         // A second, denser pass for ground cover (grass/flowers). Same scatter
         // generator with its own params — typically a low maxSlopeDeg so it lands
         // on the gentle, green ground (terrainColor reads steep slopes as rock).
         if (root.contains("foliage"))
-            loadVegetation(root["foliage"], terrainParams, terrainNoise, world, assets,
-                           levelDir, "foliage");
+            loadVegetation(root["foliage"], terrainParams, terrainNoise, world,
+                           renderer, assets, levelDir, "foliage");
     }
 
     if (root.contains("entities"))
@@ -651,6 +953,16 @@ bool LevelLoader::load(const std::string& path,
     // "hdr"; path is relative to the level file.
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
+        // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
+        // under "environment" alongside the sky; pushed to the renderer via the
+        // lighting block (setLights). density 0 = off.
+        if (env.contains("fog") && env["fog"].is_object()) {
+            const auto& f = env["fog"];
+            view.lighting.fog.enabled = true;
+            view.lighting.fog.density = f.value("density", 0.0f);
+            view.lighting.fog.color =
+                parseVec3(f.value("color", json()), view.lighting.fog.color);
+        }
         if (env.contains("hdr")) {
             std::string envPath = env["hdr"].get<std::string>();
             if (!envPath.empty() && envPath[0] != '/')

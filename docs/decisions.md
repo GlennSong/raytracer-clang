@@ -1505,6 +1505,565 @@ a generator graph too awkward to express as a Lua script.
 
 ---
 
+## ADR-0026 — Procedural objects are multi-output assets: mesh + rig + collision, Lua recipe, data instance
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** ADR-0021/0022 set the procgen substrate (generators are
+`(params, seed) -> content` over shared value types) and the realness spectrum
+(runtime-procedural / baked static asset / editable procedural instance);
+ADR-0025 made Lua the one authoring path. The first parametric tree
+(`src/engine/procgen/tree.{h,cpp}`, `growTree`) exposed two gaps the earlier
+ADRs left implicit:
+
+1. A real game object is **not one mesh**. A tree is a small prefab — a
+   *skinned* render mesh (bark + leaves), a **skeleton/rig**, a **collision**
+   representation, and **material/texture** bindings — that a maintainer expects
+   to sway in wind and animate. `growTree` already builds the branch node tree
+   (which *is* a bone skeleton) and currently discards it.
+2. The tree was wired in as a `shape:"tree"` JSON block that **inlines a recipe
+   into the level**, bypassing Lua. That is a second authoring path, against
+   ADR-0025.
+
+We need to pin how a procedural object is structured, authored, instanced, and
+edited before building more of it.
+
+**Decision.**
+1. **A generator emits a multi-output asset, not a bare `Mesh`.** A tree
+   generator returns a `TreeAsset`: skinned bark + leaf meshes, a **skeleton**
+   (bones = branch segments, derived from the L-system node tree), per-vertex
+   **skin weights** binding rings to bones, a **collision** representation, and
+   material refs. The skeleton is reused as the wind/animation rig — the rig is
+   a near-free byproduct of generation, not a separate authoring step.
+2. **Collision is its own representation, separate from the render mesh and from
+   sway.** Gameplay collision (bump/shoot) is a cheap static shape — a capsule
+   chain over the major limbs is preferred to a full triangle soup. Wind sway is
+   a *separate* concern layered on top, chosen per project from a cost ladder:
+   (a) vertex-shader wind (no rig/physics; the shipping default), (b) rig +
+   procedural wind animation, (c) rig + Jolt joints (a body+spring per bone — the
+   literal "physics object", expensive, rarely per-branch). The static collider
+   is kept regardless of which sway approach is used.
+3. **Four authoring layers, named and not collapsed:**
+   - **Operations** (C++): `growTree`, `lsystem`, `sdf`, mesh ops — the systems.
+   - **Recipe / generator asset** (Lua file under `assets/`): a composition plus
+     a **declared parameter schema** (names, types, ranges, defaults) = "a
+     species". Authored outside the engine.
+   - **Instance** (level/editor data): an asset ref + transform + seed +
+     param overrides. Pure data; not a grammar.
+   - **Baked asset** (optional): a frozen generator output (mesh/rig) on disk.
+4. **Lua authors recipes; data places instances** (refining ADR-0025's "Lua is
+   the authoring path"): the *recipe* is the Lua asset; the *instance* is data
+   that references it. The `shape:"tree"` JSON shortcut is removed in favor of an
+   entity that references a recipe asset.
+5. **The editor is the iteration surface.** A procedural instance becomes a real
+   document entity via a `ProcgenSource` component (recipe ref + seed + params);
+   the recipe's declared param schema drives the inspector, re-running the
+   generator on change. "Build by script" (author the Lua recipe) and "build in
+   the editor" (edit params/seed) are the same path with two front-ends. This
+   realizes ADR-0022's deferred *editable procedural instance* tier.
+
+**Alternatives considered.**
+- *Keep generators emitting a single `Mesh`* — rejected: forces rig/collision/
+  material to be re-derived or hand-authored per object; throws away the
+  skeleton the L-system already builds.
+- *Bind `growTree`'s current output to Lua now, defer the asset shape* — rejected
+  as premature: the binding would be reworked the moment rig + skin weights +
+  capsule collision + a param schema land; design the asset first.
+- *Per-branch Jolt joints as the default sway* — rejected as the default:
+  expensive and rarely how trees sway in shipping games; kept as an opt-in rung
+  on the cost ladder, not the baseline.
+- *Editor-only authoring (no text recipes)* — rejected: contradicts ADR-0025 and
+  blocks headless/scripted generation; the editor edits the same Lua/params.
+
+**Consequences / tech debt.**
+- `growTree` must be reshaped from `TreeMesh` to a `TreeAsset` (skeleton + skin
+  weights + collision + material); current consumers (the `shape:"tree"` entity)
+  change with it, and that JSON shortcut is removed.
+- Needs new engine pieces: a skinned-mesh + `Skeleton`/animator path, a
+  `ProcgenSource` component, a recipe-asset loader with a param schema, and Lua
+  bindings over the multi-output generator. Each is its own step.
+- Wind/skinning are not built; only the static collider exists today. The
+  shipped C++ generator, pipe-model taper, textures, and gameplay collider are
+  retained — this ADR adds layers around them.
+- A param-schema format must be chosen (likely declared in the Lua recipe), used
+  by both the editor inspector and the baker.
+
+**Revisit trigger.** When skinned meshes + a skeleton/animator exist, validate
+the `TreeAsset` shape against a second procedural asset (e.g. a building or a
+creature) before generalizing it; revisit the wind cost-ladder choice when a
+target platform's perf budget is known.
+
+---
+
+## ADR-0027 — The world is fields + recipes, streamed in deterministic tiles, authored as data
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** The world (terrain, biomes, scatter vegetation, water, later
+cities) is bigger than the current pieces — a single heightfield
+(`procgen/terrain.cpp`) with noise/slope scatter (`procgen/scatter.cpp`) baked
+into a level. We need a representation that an artist authors *and* that
+generates an open, streamed world, on the procgen substrate (ADR-0021) with Lua
+authoring (ADR-0025). Detail in `docs/world-system-plan.md`.
+
+**Decision.**
+1. **A world is a stack of *fields* + a set of *recipes* that read them.** Fields
+   are 2D rasters aligned to terrain (`height`, derived `slope`/`aspect`,
+   `moisture`, `temperature`, `biome id`, and N scatter-density masks). Recipes
+   (Lua) are `(region, fields, seed) -> content`: a forest = a scatter recipe
+   over a region weighted by masks; a river = a water recipe (+ carve); a city =
+   a building recipe that masks out nature.
+2. **Authoring is data, not code.** The editor edits regions, painted mask
+   layers (brushes -> raster assets), carve volumes, recipe params, and seeds —
+   all stowed as assets; Lua recipes are themselves assets; the world file
+   references them. "Build by script" and "build in editor" are one path, two
+   front-ends (extends ADR-0025).
+3. **Scatter/biome masks are procedurally seeded, then brush-paintable** raster
+   layers (not vertex colors), sampled by scatter *and* terrain-material splat.
+4. **A scatter region / biome is one entity** (footprint + recipe + masks),
+   expanding to instance groups at runtime; individual scattered props stay
+   render data, not entities (extends ADR-0022). Terrain, water bodies, and
+   carve edits are entities; fields/masks are paintable overlays.
+5. **Open-world via deterministic per-tile generation + sparse per-tile override
+   assets.** Each tile regenerates identically from `(tileCoord, worldSeed)`
+   (ADR-0002); human edits layer on top per tile. Streamed by distance with LOD.
+   Design for streaming now; implement against a fixed tile set first.
+6. **Terrain is a heightfield now; carving comes later via SDF edits.** A
+   heightfield cannot do caves/overhangs. When designed carving is needed,
+   subtract SDF volumes from terrain and re-mesh only affected chunks with the
+   existing `polygonizeSdf`. Full voxels only if runtime carve-anywhere becomes a
+   gameplay feature. Order: heightfield -> SDF-carve -> voxels.
+
+**Alternatives considered.**
+- *Author the world by hand-editing JSON / placing every object* — rejected: no
+  scale, no procedural reuse; the fields+recipes model is the whole point.
+- *Vertex-painted scatter weights* — rejected: tessellation-bound; raster masks
+  are resolution-independent and shared with material splat.
+- *Voxel terrain from the start* — rejected for now: heavy (memory, LOD, meshing)
+  and unneeded until runtime carving is a requirement; SDF-carve covers designed
+  carves first.
+- *Plant/turtle L-system for buildings* — rejected as the building paradigm:
+  buildings want a split/shape grammar (subdivide mass -> floors -> facade), a
+  cousin but distinct; deferred (world-system-plan §8).
+- *Thousands of tree entities for a forest* — rejected: a forest is one region
+  entity over instance groups (ADR-0022).
+
+**Consequences / tech debt.**
+- New subsystems implied (each its own step): a field/mask layer system, editor
+  brushes + overlay rendering, terrain tiling + a streaming manager with
+  per-tile overrides, a biome/material splat path, water, and (later) an
+  SDF-carve terrain path and a building grammar.
+- The current single-heightfield + baked-scatter level path is superseded by the
+  world file; it stays until the world system lands.
+- Streaming + determinism constrain every generator to be tile-local and
+  seed-reproducible.
+- Param-schema reuse with ADR-0026 (recipes declare params for the editor).
+
+**Revisit trigger.** Revisit voxels when runtime carving is a gameplay need;
+revisit the building generator paradigm once the scatter/plant recipes prove the
+Lua substrate; validate the tile/streaming design against the first real
+open-world scene.
+
+---
+
+## ADR-0028 — Generators are a layered Lua vocabulary; recipes compose via attach points
+**Status:** Pending · **Date:** 2026-06-15
+
+**Context.** A grammar (L-system) has its own declarative rules + a turtle. Open
+question: how much can general-purpose Lua (loops, functions, recursion,
+conditionals, noise) extend procgen *beyond* a grammar's own rules — e.g. a
+sakura = a branch grammar, a separate blossom variant populated onto the tree,
+the tree grouped into a grove; and buildings via a split grammar. Current state
+(ADR-0023): the L-system is already a C++ engine object exposed to Lua
+(`lsystem.create/rule/expand`, `turtle_mesh*`, `leaves`); `assets/scripts/flora.lua`
+already drives it with plain Lua — loops build the rule set, place leaf cards,
+and merge meshes. This ADR ratifies that model and extends it to composition and
+to a building grammar. Detail: `docs/lsystem-botany-plan.md`, `docs/world-system-plan.md` §8.
+
+**Decision.**
+1. **Three layers (already the shape of the code).**
+   - **L0 — primitives** (C++ exposed to Lua): `sdf.*`, `noise.*`, `mesh.*`, the
+     turtle, `polygonize`, `terrain`, `scatter`.
+   - **L1 — grammar interpreters** as engine objects exposed to Lua: the
+     L-system now; a **split/shape-grammar sibling later for buildings**. Rules
+     are declarative *data fed from Lua* (`sys:rule(...)`); hot expansion stays
+     in C++.
+   - **L2 — free Lua recipes**: full general-purpose code orchestrating L0/L1 and
+     *each other*. **A grammar is a tool called from Lua, never a wall** —
+     anything it can't express cleanly (field-weighted thinning, collision-aware
+     growth, spline bending) is written in Lua around it.
+2. **Recipes compose by calling recipes, connected through named attach points
+   (sockets)** — frames a parent asset exposes (terminal branch nodes, facade
+   panel anchors) that a child recipe populates. Attach points are flagged nodes
+   on the asset skeleton (extends ADR-0026). Blossom-on-branch, fruit-on-tree,
+   tree-in-grove, and prop-on-building are the same mechanism at different
+   scales. Child seeds derive from `parentSeed + attachIndex` (ADR-0002).
+3. **Building generation is a split/shape grammar implemented as an L1 sibling
+   helper** exposed to Lua (not a plant L-system, not a separate engine);
+   deferred, but slots into this model (ADR-0027; world-system-plan §8).
+4. **Organic branch geometry is generated at L0/L2, independent of the grammar:**
+   curved internodes (Catmull-Rom + rotation-minimizing frame, botany §3.5) plus
+   per-ring surface noise (bark bumps / fork swell) so branches read organic, not
+   straight tubes.
+
+**Alternatives considered.**
+- *Pure declarative grammar (everything as rewrite rules)* — rejected: blossom
+  placement, field-weighted thinning, composition, and collision-aware growth
+  want general code; a grammar alone can't.
+- *Grammar as a sealed engine that returns a finished asset (Lua only sets
+  params)* — rejected: forecloses composition and post-processing; the explicit
+  goal is Lua loops/functions in the loop.
+- *Buildings via a plant L-system* — rejected: paradigm mismatch (ADR-0027).
+- *Reimplement grammars in pure Lua* — rejected: expansion is hot; keep it C++,
+  expose as objects (ADR-0023).
+
+**Consequences / tech debt.**
+- New shared primitive: **attach points / sockets** on assets (ties to the
+  ADR-0026 skeleton) — needs a small API (`asset:attach_points(tag)`, a populate
+  helper) and a recipe-calls-recipe convention in the Lua layer.
+- The L1 grammar surface grows (parametric L-system in; split-grammar later) but
+  the L0/L2 contract stays stable — recipes don't change shape as grammars land.
+- Organic branches add a curvature + surface-noise pass to the cylinder skinner
+  (botany §3.5/§4.1).
+
+**Revisit trigger.** Revisit if composition needs a dependency/graph model beyond
+direct calls, or if the split-grammar wants a different substrate than it shares
+with the L-system.
+
+---
+
+## ADR-0029 — Branch skinning is generalized cylinders; SDF retained for fusion
+**Status:** Accepted (retroactive — describes shipped code) · **Date:** 2026-06-15
+
+**Context.** ADR-0021 made SDF + Surface Nets the geometric-modeling path. For
+tree *branches* that is the wrong default: `buildTurtleMeshSdf` floors capsule
+radius at ~1.5 grid cells (thin twigs vanish or balloon; cost O(resolution³)),
+Surface Nets emits no UVs/tangents (no bark texture — the clay look), and
+smooth-min rounds away forks. Phase 1 of `docs/lsystem-botany-plan.md` (§4.1)
+shipped a different path in `src/engine/procgen/tree.cpp` (`growTree`); this ADR
+ratifies it.
+
+**Decision.**
+1. **Branches are skinned as generalized cylinders** — sweep a ring of vertices
+   along each branch internode (`addTube` per node→child edge), ring radius from
+   the pipe model, **UVs flowing length × circumference** so bark textures and
+   tangents (normal maps) work. Cost O(branches × ring-verts); twigs are free; no
+   volumetric grid.
+2. **This sits *alongside* the SDF path, not replacing it.** It is a Mesh
+   generator in the ADR-0021 sense (produces the `Mesh` value type). SDF +
+   Surface Nets remains the path for **CSG / organic fusion** (rocks today; the
+   planned lower-trunk / root-flare / burl hybrid).
+3. **Radii by the pipe model** (da Vinci / Murray's law): a **bottom-up pass**
+   over the node tree (`assignRadii`), `r_parent^n = Σ r_child^n`, `n ≈ 2.3`,
+   with a tip-radius clamp. The forward `taper` heuristic stays as a fallback.
+4. **The bark mesh doubles as the static collider** (collision triangle soup =
+   branch vertices/indices; leaves excluded — you bounce off wood, not foliage).
+
+**Boundary (SDF vs cylinder).** Cylinders for all branches now; SDF smooth-union
+is reserved for the lower trunk / root flare / burls where fusion genuinely
+matters. That **hybrid is not yet implemented** — defining the seam is part of
+this decision, building it is owed (botany §4.1).
+
+**Refinement — implemented (2026-06-15).** Branches are now skinned as
+*continuous curved* limbs (ADR-0031): the skeleton is decomposed into chains
+(each node follows its straightest child as the apical leader; other children
+fork off, anchored at the joint), a Catmull-Rom curve is fit through each chain,
+sampled at even arc length, and swept with a **rotation-minimizing frame** —
+twist-free UVs and real curvature, replacing the per-segment `frameFor`/`addTube`
+path. Branch junctions still simply overlap (hidden under bark/foliage); the
+branch-collar flare + proper stitching remain later polish.
+
+**Alternatives considered.** Pure SDF (rejected — twigs, missing UVs, O(res³));
+metaballs (same UV/cost problems); kit-bashed disjoint cylinders
+(`buildTurtleMesh`) (rejected — self-intersecting joints, no continuity, poor
+collider).
+
+**Consequences / tech debt.** Two skinning paths to maintain. The trunk-flare
+SDF hybrid and the RMF/curvature pass are owed (botany §3.5, §4.1).
+
+**Revisit trigger.** Revisit the SDF/cylinder boundary when the trunk-flare
+hybrid is built, or if junction artifacts show through under foliage.
+
+---
+
+## ADR-0030 — Parametric L-system with expression-valued successor parameters
+**Status:** Accepted (retroactive — describes shipped code) · **Date:** 2026-06-15
+
+**Context.** The plain `char` `LSystem` cannot carry magnitudes — length/width/
+angle live in one global `TurtleParams`, so a self-similar grammar cannot taper
+per recursion. ABoP §1.10 parametric modules fix this. Botany plan §3.1 flagged
+an open decision: a **restricted subset** (parameters passed through, no
+expressions) vs **full arithmetic**. Phase 3a shipped `ParametricLSystem` in
+`src/engine/procgen/lsystem.{h,cpp}`; this ADR ratifies what was built.
+
+**Decision.**
+1. **Modules carry numeric parameters** (`Module` = symbol + `float` params;
+   `ModuleString` replaces the char string for this path). Both coexist: the
+   `char` `LSystem` stays for simple grammars, `ParametricLSystem` for trees.
+2. **Successor parameters are arithmetic *expressions* over the predecessor's
+   formal parameters** — we chose the **fuller** option, not the plan's
+   recommended restricted subset. Supported: `+ - * /`, parentheses, unary minus,
+   numeric literals, formal names; each compiles to a
+   `ParamExpr = std::function<float(params)>` (mirrors the `Sdf = std::function`
+   precedent, ADR-0021). E.g. `A(l,w)` →
+   `F(l,w)[+(30)A(l*0.7,w*0.6)][-(30)A(l*0.7,w*0.6)]`.
+3. **Productions match by symbol *and* parameter arity**; unmatched modules are
+   copied verbatim. Repeating a predecessor adds **weighted stochastic
+   alternatives** (seeded RNG), as in `LSystem` — deterministic per
+   `(params, seed)` (ADR-0002).
+
+**Why fuller than planned.** Tapering by depth (`l*0.7`, `w*0.6`) is the entire
+point and needs at least multiply; once an expression evaluator exists, full
+`+ - * /` is marginal extra effort and keeps length/width/angle math in the
+grammar instead of a second pass. The restricted subset would have forced taper
+back into the global `TurtleParams` — the very thing this replaces.
+
+**Alternatives considered.** Restricted pass-through parameters (rejected — can't
+express taper); a full embedded scripting expression language / Lua-per-rule
+(rejected — overkill on a hot path; four operators cover ABoP grammars); keep
+taper in `TurtleParams` only (rejected — global, not per-branch).
+
+**Consequences / tech debt.** A small expression parser/evaluator to maintain;
+published ABoP grammars become near copy-paste. The parametric system is now
+**exposed to Lua** (`lsystem.parametric` + `tree.skin`, ADR-0032) and supports
+**guarded productions** — `A(l):l<=t -> …` — added 2026-06-16: a production fires
+only when its condition holds. Guards are full boolean expressions —
+`A(l):l<=clear && l>term` — (`||` over `&&` over the six comparisons), so a single
+symbol can express a phase *range*. This makes **N-phase trees pure grammar**:
+`flora.phased_tree` (Lua) is a majestic three-phase tree — one symbol `A` with
+trunk / crown / terminal-cap rules — with **no engine code** beyond the generic
+guard support (the proof the language is robust to 4-, 6-, N-phase). Both
+`buildGrammar` (C++) and `flora.param_tree`/`phased_tree` (Lua) use guarded
+productions. Context-sensitivity (`a<b>c`) remains the one classic L-system
+feature still future (botany §3.6).
+
+**Revisit trigger.** Revisit if grammars need context-sensitivity (neighbor
+matching), or a second numeric type (e.g. vector parameters) in modules.
+
+---
+
+## ADR-0031 — Curves are a templated cubic Hermite kernel; consumers layer on top
+**Status:** Accepted (design ratified; implementation pending) · **Date:** 2026-06-15
+
+**Context.** Curves are wanted in at least three places: procgen geometry (branch
+centerlines for the §3.5 organic-branch work / ADR-0029), F-curves for animation
+(value-over-time channels), and 2D vector / SVG import. The branch-curvature work
+needs one *now*, so the representation is on the critical path rather than
+hypothetical. The failure mode is a single mega `Curve` class trying to serve all
+three: they disagree on fundamentals — parameter is **arc length** (procgen,
+even ring spacing) vs **time** (animation) vs **natural t** (vector); dimension is
+Vec3 vs scalar vs Vec2; animation needs tangent *modes* (stepped/auto/broken)
+the others don't.
+
+**Decision.** Split the **math kernel** from the **consumers**.
+
+1. **Kernel:** a piecewise-cubic `Spline<T>` templated on the value type
+   `T ∈ {float, Vec2, Vec3}` (it needs only `+` and `scalar *`, which the math
+   types already provide — same spirit as `Sdf`/`ParamExpr = std::function`).
+   Store each knot in **Hermite form (value + in/out tangent)** — the canonical
+   representation everything lowers to. The kernel exposes `eval(t)` and
+   `tangent(t)`; it lives in **core math** (dependency-free, near `rt_math`).
+2. **Authoring front-ends all lower to Hermite knots:**
+   - **Catmull-Rom** (pass-through points): tangent = `(p[i+1] − p[i−1]) / 2`
+     — for procgen skeletons; trivial authoring.
+   - **Cubic Bezier** (SVG, DCC tools): handles convert to Hermite tangents.
+   - **Keyframe** (animation): already *is* value + in/out tangent.
+3. **Per-consumer services layer on the kernel, each in its own module:**
+   - `Path3` (procgen): arc-length LUT (cumulative length → t) for even ring
+     spacing + the rotation-minimizing-frame helper. ← the ADR-0029 §3.5 dependency.
+   - `AnimCurve` (animation): time lookup + tangent modes — lives in animation,
+     **not** the kernel.
+   - `Path2` + an **SVG path parser**: lives in asset loading, not the kernel.
+
+**Phasing (YAGNI guard).** Phase 1 — the kernel + Catmull-Rom + arc-length + RMF
+helper — is built **now**, justified by the branch-curvature work, and is
+headless-testable (`make test`). `AnimCurve` and SVG import come **when their
+domains need them**; they are *proof the abstraction is right*, not work to do up
+front. Build the kernel and the procgen consumer; stub nothing else.
+
+**Alternatives considered.** A single mega `Curve` class (rejected — the
+parameterization semantics conflict, as above). Bespoke per-domain curves with no
+shared kernel (rejected — duplicates the cubic math three times; reuse is the
+whole point). NURBS / rational curves (rejected — overkill; cubics cover trees,
+animation, and SVG, whose elliptic arcs can be approximated by cubic Beziers).
+
+**Consequences / tech debt.** A small templated header kernel to maintain.
+Unifies every curve consumer on one evaluator. Ties directly into ADR-0029 §3.5:
+the continuous branch sweep is a `Path3` (Catmull-Rom through skeleton nodes) with
+an RMF. SVG arcs are cubic *approximations*, not exact, until/unless rational
+curves are added.
+
+**Revisit trigger.** Revisit if a consumer needs rational curves (exact conics /
+perspective-correct SVG arcs) or degree > 3.
+
+---
+
+## ADR-0032 — Procedural models are N material-parts; placement & scatter consume any N
+**Status:** Accepted · **Date:** 2026-06-15
+
+**Context.** The good tree is *two* meshes — opaque bark + alpha-cut leaves — but
+the vegetation scatter assumed **one mesh + one material per species**, so it
+couldn't place the new tree. Special-casing "two" is wrong: a tree might gain
+fruit/moss, a building has walls/glass/roof. The glTF importer already models
+this (`ImportedModel = vector<ImportedMesh{mesh, material}>`); procgen just
+didn't use it.
+
+**Decision.** A procedural asset is an **ordered list of parts**, each a
+`{geometry, material-intent}`; every placement path consumes any N.
+1. **Lua return shape:** a flora script returns a single `Mesh` (back-compat,
+   one part with the caller's default material) **or a list of parts** —
+   `{ mesh=, texture=("bark"|"leaf"), alpha_test=, albedo=, roughness=, metallic= }`.
+   `runProcgenModel` decodes both into `std::vector<ScriptMeshPart>`.
+2. **Material intent stays GPU-agnostic (ADR-0021/0026):** a part names a
+   *built-in procedural texture* and flags (`alpha_test`); the renderer-aware
+   loader generates + uploads it (`barkTexture`/`leafTexture`) and builds the
+   `RenderMaterial`. Procgen never touches the GPU.
+3. **Scatter emits one `InstanceGroup` per (variant, part)**, the parts sharing
+   the variant's per-instance transforms — N parts → N instanced draws, no new
+   renderer work (instancing already coalesces by mesh handle).
+4. **Footprint spacing:** `ScatterParams.minSpacing` (dart-throwing Poisson disk)
+   rejects candidates within a distance; the loader defaults it to the canopy
+   radius × maxScale × `spacingFactor`, so big meshes don't jumble.
+
+**Alternatives considered.** Special-case two submeshes (rejected — not general;
+the next asset breaks it). Merge bark+leaves into one mesh (rejected — can't mix
+an opaque and an alpha-tested material in one draw). A full material-asset system
+with shared material handles (deferred — overkill now; built-in texture names
+cover the cases, ADR-0021 "distill, don't design up front").
+
+**Consequences / tech debt.** `growTree`'s C++ `shape:"tree"` path still spawns
+its two entities by hand (could fold onto the same N-part path later). Static
+placement of arbitrary N-part Lua models isn't wired (only scatter is). Built-in
+texture *names* are a stopgap until a real texture/material binding. A scattered
+species may opt into a **per-trunk static capsule collider** (`collide: true`,
+auto-measured from the mesh or `colliderRadius`/`colliderHeight`), one body per
+instance — done. LOD for distant instances remains owed.
+
+**Revisit trigger.** Revisit when a part needs an authored (non-built-in)
+texture or a shared material across assets, or when N-part static placement is
+needed.
+
+---
+
+## ADR-0033 — `Skeleton` is a shared L-system value type; consumers attach meaning
+**Status:** Accepted · **Date:** 2026-06-17
+
+**Context.** Interpreting an L-system module string with a turtle yields a
+branching node structure. It lived privately in `tree.cpp` (`walkSkeleton`/
+`Node`), but the same structure is wanted by many generators — trees, mountain
+ridge networks, vegetation, rivers, roads, lightning. Branching is one general
+pattern, not a tree feature (ADR-0021).
+
+**Decision.** Extract a **domain-agnostic `Skeleton`** value type
+(`engine/procgen/skeleton.{h,cpp}`): `SkeletonNode` = `pos, heading, parent,
+depth (branch order), radius, distFromRoot, isTip`; `Skeleton` adds
+`childLists()`. `buildSkeleton(modules, angleJitter, rng|seed)` runs the 3D
+turtle. The skeleton carries **no domain meaning** — *consumers* attach it:
+- **Tree:** pipe-model radii + droop + generalized-cylinder skinning + leaves.
+- **Mountain range:** lay the turtle's (x,y) plane onto the ground (x,z), height
+  per node by `depth`, distance-to-nearest-segment → terrain uplift, then erosion
+  (`buildRangeRidges`).
+- Future: vegetation, rivers, roads — same skeleton, different reader.
+
+Distilled *from* two real consumers (tree refactor = byte-identical; branching
+ranges = new), per ADR-0021's "don't design the universal type up front."
+
+**Consequences.** A new shared value type alongside `Mesh`/`Field`/`Frame`. The
+tree's turtle is no longer private. **Owed:** expose `Skeleton` to Lua (a userdata
+from `lsystem`), so recipes build skeletons that any consumer (`tree.skin`,
+`terrain` ridges, scatter-along) reads — the "L-system makes skeletons for many
+things" goal.
+
+**Revisit trigger.** When a consumer needs non-tree graph topology (loops) or
+per-node attributes beyond the current set.
+
+---
+
+## ADR-0034 — A bounded, curated world (~16 km, single precision): reverse-Z, spatial partitioning, terrain + object LOD (impostors/HLOD), and sector streaming
+**Status:** Pending · **Date:** 2026-06-17
+
+**Context.** Distant-terrain work surfaced a cluster of failures — terrain past
+~99 m composited as sky (a fixed `depth >= 0.999` test that maps to ~99 m under a
+0.1 m near plane), frustum culling misjudging the one origin-centred terrain mesh,
+and LOD ring seams. The target was clarified: **not** an infinite Minecraft world,
+but a **bounded, artist-curated "place"** in the GTA V / Horizon Forbidden West
+mould — a large chunk of terrain (~16 km across) with forests, rivers, a city, and
+walk-to-able distant mountains, with room to grow. That target reshapes the
+solution: at ~16 km centred on the origin, **single-precision floats are exact to
+~1–2 mm**, so the heavy infinite-world machinery (camera-relative rendering,
+floating-origin rebasing, double GPU coords) is *not* needed; the real needs are
+correct depth, spatial partitioning, and aggressive LOD. ADR-0027 /
+`world-system-plan.md` cover the *content* model (fields + recipes, authored as
+data, per-tile overrides); this ADR owns the *coordinate, rendering, and
+LOD/streaming* foundation. Detail in `docs/open-world-foundations-plan.md`.
+
+**Decision.**
+1. **Bounded, single-precision, origin-centred world; budget ~16 km across**
+   (±8 km → ~1–2 mm float precision everywhere). No floating origin, no
+   camera-relative rendering, no double GPU coords. **No code may hardcode the
+   extent** — the world size is one constant (far plane + streaming-grid extent), so
+   growing to ~64–130 km later (still single precision, ~cm precision) is a
+   one-line change.
+2. **Reverse-Z depth + robust background classification.** Map near→1/far→0 on the
+   `Depth32Float` buffer for near-uniform precision across a wide (~16–20 km) far
+   plane; background becomes `depth <= 0` (the clear value), retiring the
+   `depth >= 0.999` magic constant everywhere (composite/SSR/SSAO/debug). Stop-gap
+   before reverse-Z lands: a linearized `linearDepth >= 0.999*far` test.
+3. **Spatial partitioning.** A sector grid (and/or BVH/octree) over the world for
+   correct frustum culling, streaming decisions, and later occlusion culling —
+   replacing the single origin-centred bounding sphere that misjudges large meshes.
+4. **Terrain is chunked with tight bounds + geometric LOD** (clipmaps or CDLOD,
+   chosen in a later ADR), replacing the origin-centred tile + concentric rings, so
+   culling is correct and seams stitch. **A walkable distant mountain is coarse
+   terrain LOD, not an impostor** (terrain is a continuous walkable surface).
+5. **Object LOD ladder: discrete mesh LOD → impostors/billboards → HLOD.** Discrete
+   per-object LOD meshes + terrain LOD first; then **foliage impostors** (billboard/
+   octahedral cards) for distant trees so a forest reaches the horizon cheaply; then
+   **HLOD** (merged simplified proxy meshes) + building impostors for the distant
+   city. Discrete props get impostors; walkable terrain does not.
+6. **Sector streaming of a bounded set.** Page authored/generated content in and out
+   by distance from the camera over the partition grid — the ADR-0027 §7 streaming
+   manager, but over a *finite* sector set, not an unbounded tile map.
+
+Phased, each independently shippable: **0** reverse-Z + sky test + re-enable cull;
+**1** spatial partition + chunked terrain w/ tight bounds + terrain LOD; **2** object
+mesh LOD + foliage impostors; **3** sector streaming + HLOD/building impostors;
+later, occlusion culling.
+
+**Alternatives considered.**
+- *Design for infinite/Minecraft from the start (camera-relative + floating origin +
+  double/int world coords)* — rejected for this target: over-built for a bounded
+  ~16 km world where single precision is already exact to ~mm; kept as the documented
+  **upgrade path** if we later go endless or planetary.
+- *64-bit integer universe coords (Star Citizen)* — rejected: planetary/space tier.
+- *Logarithmic depth* instead of reverse-Z — viable (space sims use it), but
+  reverse-Z is simpler with our existing float depth buffer and the cheaper win.
+- *Keep one big terrain mesh, just fix bounds/threshold* — rejected: patches symptoms,
+  doesn't partition/stream/LOD; won't host a city + forests at frame rate.
+- *Turn off the skybox for "true" rendering* — rejected: a skybox is the sky; the real
+  needs are robust sky classification (§2), terrain-to-horizon (§4), and atmospheric
+  blend (existing fog).
+- *Impostors for the distant mountain landform* — rejected: terrain is walkable, so it
+  is geometric LOD; impostors are for the discrete props on it and the distant city.
+
+**Consequences / tech debt.**
+- Reverse-Z touches every depth consumer (projection, clear, compare, skybox,
+  SSR/SSAO/temporal-AO/debug views) — they must flip together; Metal-only, so
+  user/viewer-verified, with the offline tracer (absolute world space, no far clip)
+  as the precision oracle.
+- Impostor/HLOD need an offline bake step (render-to-card / merge+decimate) and a
+  LOD-selection + crossfade path — a real chunk of the content pipeline.
+- Supersedes the concentric LOD rings (and their seam debt) once Phase 1 lands.
+- The temporary diagnostics on the current branch (camera near/far log; bypassed
+  per-object frustum cull) are reverted as Phase 0 begins.
+
+**Revisit trigger.** If the world wants to become **endless** (Minecraft) or
+**planetary/wrap-around** (walk around the world and return), revisit: that needs
+camera-relative rendering + floating-origin rebasing (endless) or a sphere/torus
+topology + cube-sphere terrain + atmospheric scattering (planetary) — extending this
+ADR, recorded as its own decision. Also revisit the world-size constant if ~16 km
+proves too small, and the depth scheme if a second backend lands.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -1530,7 +2089,15 @@ to be replaced; listed here so they stay visible.
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
+| `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
+| Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
+| ~~Forest uses the old SDF tree, not `growTree`~~ | ~~`assets/levels/forest.json`~~ | *Resolved (ADR-0032): `flora.param_tree` grows the real curved tree from a parametric grammar and returns a bark+leaf model; `loadVegetation` scatters N parts as N instance groups with footprint spacing + opt-in per-trunk capsule colliders; `forest.json` uses three collidable param-tree species. Owed: LOD for distant instances.* | Instanced LOD for distant plants |
+| Offline path tracer skips scatter + glTF | `src/level_scene.cpp` | The offline tracer now renders procgen terrain and the hero `shape:"tree"` (per-vertex normal/uv/color + alpha-cut leaf cards, for realtime↔offline parity), but not the `vegetation`/`foliage` scatter or glTF `mesh` entities — so `forest.json` renders terrain only offline | Expand scatter instances to triangles (or share the generator) + tessellate glTF offline |
+| ~~`ParametricLSystem` not exposed to Lua~~ | ~~`engine/scripting/procgen_bindings.cpp`~~ | *Resolved (ADR-0030): `lsystem.parametric()` (rule/expand with expression successors) + `tree.skin(modules, params, seed) -> bark, leaves` are bound; `growTree` was split into a grammar half and a reusable `skinTree`, so Lua authors the grammar and skins the real curved-cylinder tree. Covered by `procgen_script_skins_a_parametric_tree`.* | — |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
+| Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
+| Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
+| Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 
 ---
 

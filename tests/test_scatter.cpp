@@ -3,6 +3,7 @@
 #include "../src/engine/procgen/scatter.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
+#include <algorithm>
 #include <cmath>
 
 using namespace engine;  // namespace migration (ADR-0015)
@@ -34,6 +35,90 @@ TEST_CASE(scatter_is_deterministic_for_a_seed) {
             std::fabs(a[i].scale - b[i].scale) > 1e-6)
             same = false;
     CHECK(same);
+}
+
+TEST_CASE(scatter_min_spacing_keeps_instances_apart) {
+    // Footprint spacing: no two accepted placements are closer than minSpacing
+    // in XZ, and the constraint thins the result vs the unconstrained scatter.
+    ScatterParams sp;
+    sp.count = 600; sp.seed = 11; sp.regionSize = 60.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+
+    auto dense = scatterOnTerrain(sp, t, n);
+    sp.minSpacing = 5.0f;
+    auto spaced = scatterOnTerrain(sp, t, n);
+
+    CHECK(spaced.size() < dense.size());   // spacing rejects crowded candidates
+    CHECK(!spaced.empty());
+    bool ok = true;
+    for (size_t i = 0; i < spaced.size(); i++)
+        for (size_t j = i + 1; j < spaced.size(); j++) {
+            double dx = spaced[i].position.x - spaced[j].position.x;
+            double dz = spaced[i].position.z - spaced[j].position.z;
+            if (dx * dx + dz * dz < 5.0 * 5.0 - 1e-6) ok = false;
+        }
+    CHECK(ok);
+}
+
+TEST_CASE(scatter_focus_clears_center_and_steps_size_down_outward) {
+    // A hero focal point: a clearing around it, and instances scaled bigger near
+    // it (stepping down with distance) so the hero reads as the focus.
+    ScatterParams sp;
+    sp.count = 2000; sp.seed = 3; sp.regionSize = 100.0f;
+    sp.minScale = 1.0f; sp.maxScale = 1.0f;        // isolate the focus multiplier
+    sp.focusRadius = 40.0f; sp.focusScale = 2.0f; sp.focusClear = 10.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+    auto p = scatterOnTerrain(sp, t, n);
+    CHECK(!p.empty());
+
+    bool clear = true;
+    double nearSum = 0, farSum = 0;
+    int nearN = 0, farN = 0;
+    for (const auto& pl : p) {
+        double d = std::sqrt(pl.position.x * pl.position.x +
+                             pl.position.z * pl.position.z);
+        if (d < 10.0 - 1e-3) clear = false;        // keep-out honored
+        if (d < 18.0) { nearSum += pl.scale; nearN++; }
+        else if (d > 35.0) { farSum += pl.scale; farN++; }
+    }
+    CHECK(clear);
+    CHECK(nearN > 0 && farN > 0);
+    if (nearN && farN) CHECK(nearSum / nearN > farSum / farN);   // bigger near focus
+}
+
+TEST_CASE(scatter_clustering_clumps_placements) {
+    // The Thomas process clumps candidates around parent points, so the mean
+    // nearest-neighbour distance is far smaller than a uniform scatter of the
+    // same count — natural groves rather than even spacing.
+    auto avgNearest = [](const std::vector<Placement>& p) {
+        double sum = 0.0;
+        for (size_t i = 0; i < p.size(); i++) {
+            double best = 1e30;
+            for (size_t j = 0; j < p.size(); j++) {
+                if (i == j) continue;
+                double dx = p[i].position.x - p[j].position.x;
+                double dz = p[i].position.z - p[j].position.z;
+                best = std::min(best, dx * dx + dz * dz);
+            }
+            sum += std::sqrt(best);
+        }
+        return p.empty() ? 0.0 : sum / p.size();
+    };
+
+    ScatterParams sp;
+    sp.count = 400; sp.seed = 5; sp.regionSize = 80.0f;
+    TerrainParams t = flatTerrain();
+    Noise n(1);
+    double uniformNN = avgNearest(scatterOnTerrain(sp, t, n));
+
+    sp.clusterCount = 6; sp.clusterRadius = 4.0f;
+    auto clustered = scatterOnTerrain(sp, t, n);
+    double clusterNN = avgNearest(clustered);
+
+    CHECK(!clustered.empty());
+    CHECK(clusterNN < 0.6 * uniformNN);   // clumped => neighbours much closer
 }
 
 TEST_CASE(scatter_respects_region_surface_scale_and_yaw) {

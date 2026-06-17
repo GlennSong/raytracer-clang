@@ -21,6 +21,11 @@ struct Material {
     double ior;
     double metallic;
     bool checkerboard;   // world-space albedo checker (viewer material flag)
+    // Alpha-cut foliage (leaf cards): index into Scene::textures whose alpha is
+    // sampled at the hit's uv; below `alphaCutoff` the surface is transparent
+    // (the ray passes through). -1 = opaque. Mirrors the viewer's alpha test.
+    int alphaTex = -1;
+    double alphaCutoff = 0.5;
 
     Material()
         : type(MaterialType::DIFFUSE), albedo(0.8, 0.8, 0.8),

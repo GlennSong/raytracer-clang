@@ -46,10 +46,20 @@ bool Triangle::intersect(const Ray& ray, double tMin, double tMax, HitRecord& re
     double t = f * dot(edge2, q);
     if (t < tMin || t > tMax) return false;
 
+    // Barycentric weights: P = b0*v0 + u*v1 + v*v2 (Moller-Trumbore u,v).
+    double b0 = 1.0 - u - v;
     rec.t = t;
     rec.point = ray.at(t);
-    Vec3 outwardNormal = normalize(cross(edge1, edge2));
+
+    Vec3 smooth = n0 * b0 + n1 * u + n2 * v;
+    Vec3 outwardNormal = smooth.lengthSquared() > 1e-12
+                             ? normalize(smooth)
+                             : normalize(cross(edge1, edge2));
     rec.setFaceNormal(ray, outwardNormal);
+
+    rec.u = uv0[0] * b0 + uv1[0] * u + uv2[0] * v;
+    rec.v = uv0[1] * b0 + uv1[1] * u + uv2[1] * v;
+    rec.color = c0 * b0 + c1 * u + c2 * v;
     rec.materialIndex = materialIndex;
     return true;
 }

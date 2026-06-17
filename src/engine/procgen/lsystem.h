@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_LSYSTEM_H
 
 #include "../../renderer/renderer.h"   // RenderMesh
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +26,72 @@ struct LSystem {
     std::string expand(const std::string& axiom, int iterations,
                        uint32_t seed = 0) const;
 };
+
+// ---------------------------------------------------------------------------
+// Parametric L-system (ABoP §1.10). Modules carry numeric parameters, so a
+// production can shrink length / width / angle with recursion depth — the basis
+// of self-similar-but-tapering trees that the plain char grammar above cannot
+// express. Productions match by symbol *and* parameter arity; each successor
+// parameter is an arithmetic expression over the predecessor's parameters.
+// Several productions for one predecessor make it stochastic (weighted),
+// exactly like LSystem.
+
+// A module: a symbol plus numeric parameters, e.g. F(1.0, 0.3). The bracket
+// modules '[' and ']' (branch push / pop) and bare turn symbols carry none.
+struct Module {
+    char symbol = 0;
+    std::vector<float> params;
+};
+using ModuleString = std::vector<Module>;
+
+// A compiled successor-parameter expression, evaluated against the bound
+// predecessor parameters (mirrors the `Sdf = std::function` precedent).
+using ParamExpr = std::function<float(const std::vector<float>&)>;
+
+// A compiled production guard: a boolean condition over the bound predecessor
+// parameters (e.g. "l < 0.5"). Empty = always applies (ABoP guarded productions).
+using ParamPredicate = std::function<bool(const std::vector<float>&)>;
+
+class ParametricLSystem {
+public:
+    // Add a production. `predecessor` is a symbol with formal parameter names —
+    // "A(l,w)" (or just "A"), with an optional guard "A(l,w):l<0.5" so a rule
+    // fires only when the condition holds (ABoP guarded productions — used for
+    // terminal sprays once an internode gets short). `successor` is a module
+    // template whose parameters are expressions over those names, e.g.
+    //   "F(l,w)[+(30)A(l*0.7,w*0.6)][-(30)A(l*0.7,w*0.6)]"
+    // Supported expression syntax: + - * /, parentheses, unary minus, numeric
+    // literals, and the formal names. Repeat the same predecessor to add
+    // weighted stochastic alternatives.
+    void rule(const std::string& predecessor, const std::string& successor,
+              double weight = 1.0);
+
+    // Rewrite `iterations` times; `seed` selects the stochastic variant. Modules
+    // with no matching production (by symbol + arity) are copied verbatim.
+    ModuleString expand(const ModuleString& axiom, int iterations,
+                        uint32_t seed = 0) const;
+    ModuleString expand(const std::string& axiom, int iterations,
+                        uint32_t seed = 0) const;   // parses a literal axiom
+
+private:
+    struct ModuleTemplate {
+        char symbol = 0;
+        std::vector<ParamExpr> params;
+    };
+    struct Production {
+        std::vector<std::string> formals;
+        std::vector<ModuleTemplate> successor;
+        ParamPredicate condition;   // empty = unconditional; else a guard ("l<0.5")
+        double weight = 1.0;
+    };
+    std::unordered_map<char, std::vector<Production>> rules_;
+};
+
+// Parse a module string of numeric *literals* (e.g. an axiom "A(1,0.2)") into
+// modules. Parameter expressions are not allowed here — only an axiom.
+ModuleString parseModuleLiterals(const std::string& text);
+// Serialize modules back to compact text ("F(1,0.5)[+(30)A]") — tests/debug.
+std::string moduleString(const ModuleString& s);
 
 // 3D turtle interpretation parameters. The turtle grows along its local +Y;
 // branches taper as they nest. Standard symbols, interpreted by buildTurtleMesh:

@@ -128,3 +128,58 @@ TEST_CASE(level_scene_sidecar_camera_selection) {
     std::remove(SIDECAR_PATH);
     CHECK(!loadSidecarCamera(LEVEL_PATH, "", cam));
 }
+
+TEST_CASE(level_scene_grows_tree_and_terrain) {
+    TmpFiles cleanup;
+    writeFile(LEVEL_PATH, R"({
+      "version": 1,
+      "terrain": { "size": 16, "resolution": 16, "heightScale": 1.0 },
+      "entities": [
+        { "shape": "tree", "position": [0, 0, 0],
+          "tree": { "seed": 3, "iterations": 4 } }
+      ]
+    })");
+
+    Scene scene;
+    CHECK(LevelScene::load(LEVEL_PATH, scene));
+    CHECK(!scene.triangles.empty());   // terrain + bark + leaf cards
+    CHECK(!scene.textures.empty());    // leaf alpha texture
+    bool sawAlphaMat = false;
+    for (const auto& m : scene.materials) sawAlphaMat |= (m.alphaTex >= 0);
+    CHECK(sawAlphaMat);                 // the leaf material is alpha-cut
+}
+
+TEST_CASE(scene_alpha_cutout_and_vertex_color) {
+    Scene scene;
+    Texture tex;
+    tex.width = 1; tex.height = 1; tex.channels = 4;
+    tex.pixels = {255, 255, 255, 0};   // fully transparent texel
+    int alphaTex = scene.addTexture(tex);
+
+    Material clear = Material::pbr(Vec3(1, 1, 1), 0.0, 1.0);
+    clear.alphaTex = alphaTex;
+    int clearMat = scene.addMaterial(clear);
+    int solidMat = scene.addMaterial(Material::pbr(Vec3(1, 0, 0), 0.0, 1.0));
+
+    auto card = [](double z, int mat, Vec3 col) {
+        Triangle t(Vec3(-1, -1, z), Vec3(1, -1, z), Vec3(0, 2, z), mat);
+        t.c0 = t.c1 = t.c2 = col;
+        return t;
+    };
+    scene.addTriangle(card(-1, clearMat, Vec3(1, 1, 1)));        // near, transparent
+    scene.addTriangle(card(-2, solidMat, Vec3(0.2, 0.4, 0.6))); // far, opaque
+    scene.buildAccelerator();
+
+    Ray ray(Vec3(0, 0, 0), Vec3(0, 0, -1));
+    HitRecord rec;
+    CHECK(scene.intersectVisible(ray, 1e-3, 1e9, rec));
+    CHECK(rec.materialIndex == solidMat);     // passed through the clear card
+    CHECK_APPROX(rec.t, 2.0, 1e-6);
+    CHECK_APPROX(rec.color.x, 0.2, 1e-6);     // interpolated vertex color
+    CHECK_APPROX(rec.color.z, 0.6, 1e-6);
+
+    // Plain intersect is alpha-ignorant: it stops at the nearer card.
+    HitRecord near;
+    CHECK(scene.intersect(ray, 1e-3, 1e9, near));
+    CHECK(near.materialIndex == clearMat);
+}

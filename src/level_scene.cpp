@@ -1,6 +1,10 @@
 #include "level_scene.h"
 
 #include "engine/mesh_builder.h"
+#include "engine/procgen/terrain.h"
+#include "engine/procgen/erosion.h"
+#include "engine/procgen/tree.h"
+#include "engine/procgen/noise.h"
 #include "log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -49,8 +53,11 @@ int importMaterial(const json& ent, Scene& scene) {
     return scene.addMaterial(mat);
 }
 
-// Tessellated shape -> world-space triangles. The entity transform is applied
-// per vertex (scale, then rotate, then translate — matching Transform::matrix).
+// Tessellated mesh -> world-space triangles, carrying per-vertex normal, uv,
+// and color so the path tracer shades smooth and textured (alpha-cut foliage,
+// terrain slope coloring), matching the realtime renderer. The entity
+// transform is applied per vertex (scale, then rotate, then translate —
+// matching Transform::matrix); normals are rotated (uniform scale assumed).
 void addMeshAsTriangles(const RenderMesh& mesh, const Vec3& position,
                         const Quat& orientation, const Vec3& scale,
                         int matIdx, Scene& scene) {
@@ -59,15 +66,154 @@ void addMeshAsTriangles(const RenderMesh& mesh, const Vec3& position,
                     v.position.z * scale.z);
         return position + orientation.rotate(scaled);
     };
+    auto fill = [&](Triangle& tri, int slot, const Vertex& v) {
+        Vec3 n = orientation.rotate(v.normal);
+        Vec3 p = toWorld(v);
+        if (slot == 0) { tri.v0 = p; tri.n0 = n; tri.c0 = v.color; tri.uv0[0] = v.u; tri.uv0[1] = v.v; }
+        else if (slot == 1) { tri.v1 = p; tri.n1 = n; tri.c1 = v.color; tri.uv1[0] = v.u; tri.uv1[1] = v.v; }
+        else { tri.v2 = p; tri.n2 = n; tri.c2 = v.color; tri.uv2[0] = v.u; tri.uv2[1] = v.v; }
+    };
     for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-        scene.addTriangle(toWorld(mesh.vertices[mesh.indices[i]]),
-                          toWorld(mesh.vertices[mesh.indices[i + 1]]),
-                          toWorld(mesh.vertices[mesh.indices[i + 2]]), matIdx);
+        Triangle tri;
+        tri.materialIndex = matIdx;
+        fill(tri, 0, mesh.vertices[mesh.indices[i]]);
+        fill(tri, 1, mesh.vertices[mesh.indices[i + 1]]);
+        fill(tri, 2, mesh.vertices[mesh.indices[i + 2]]);
+        scene.addTriangle(tri);
     }
 }
 
 bool isIdentity(const Quat& q) {
     return q.x == 0.0 && q.y == 0.0 && q.z == 0.0;
+}
+
+// A procedural terrain block: regenerate the same mesh the engine does and add
+// it (vertex color carries the slope/height coloring; material albedo
+// multiplies it, so a white albedo lets the baked color show).
+void addTerrain(const json& t, Scene& scene) {
+    TerrainParams tp;
+    tp.size        = t.value("size", tp.size);
+    tp.resolution  = t.value("resolution", tp.resolution);
+    tp.heightScale = t.value("heightScale", tp.heightScale);
+    tp.noiseScale  = t.value("noiseScale", tp.noiseScale);
+    tp.octaves     = t.value("octaves", tp.octaves);
+    tp.warp        = t.value("warp", tp.warp);
+    tp.mountainHeight = t.value("mountainHeight", tp.mountainHeight);
+    tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
+    tp.mountainMaskScale = t.value("mountainMaskScale", tp.mountainMaskScale);
+    tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
+    tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
+    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
+        std::vector<Vec3> ctl;
+        for (const auto& pt : t["rangeSpine"])
+            if (pt.is_array() && pt.size() >= 2)
+                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
+        tp.rangeSpine = sampleRangeSpine(ctl);
+    }
+    tp.rangeWidth = t.value("rangeWidth", tp.rangeWidth);
+    tp.rangeHeight = t.value("rangeHeight", tp.rangeHeight);
+    tp.rangeVariation = t.value("rangeVariation", tp.rangeVariation);
+    if (t.contains("range") && t["range"].is_object()) {
+        const auto& r = t["range"];
+        tp.rangeRidges = buildRangeRidges(
+            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
+            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
+            r.value("iterations", 5), r.value("height", 130.0f),
+            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
+            r.value("seed", 0u));
+        tp.rangeWidth = r.value("width", tp.rangeWidth);
+    }
+    Noise noise(t.value("seed", 0u));
+    int matIdx = importMaterial(t, scene);
+    if (t.value("erode", false)) {
+        // Bake the analytic field to a grid, erode it (drainage detail), mesh it.
+        Heightmap hm = bakeHeightmap(tp, noise);
+        ErosionParams ep;
+        ep.seed = t.value("seed", 0u) + 1234u;
+        ep.droplets = t.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
+        ep.talus = t.value("erodeTalus", ep.talus);
+        erode(hm, ep);
+        addMeshAsTriangles(generateTerrainMesh(hm), Vec3(), Quat::identity(),
+                           Vec3(1, 1, 1), matIdx, scene);
+    } else {
+        addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
+                           Vec3(1, 1, 1), matIdx, scene);
+    }
+    // Distant LOD rings (mountains/hills out to the horizon).
+    int lodRings = t.value("lodRings", 0);
+    if (lodRings > 0) {
+        for (RenderMesh& ring :
+             generateTerrainLOD(tp, noise, lodRings, t.value("lodCells", 40)))
+            addMeshAsTriangles(ring, Vec3(), Quat::identity(), Vec3(1, 1, 1),
+                               matIdx, scene);
+    }
+}
+
+// A hero parametric tree (shape:"tree"): grow the same mesh the viewer does,
+// add bark (opaque) and leaves (alpha-cut cards) as separate materials. Color
+// is baked into the vertex color, so both materials use a white albedo — the
+// leaf texture's alpha drives the cutout (FLAG_ALPHA_TEST in the viewer).
+void addTree(const json& ent, Scene& scene) {
+    TreeParams tp;
+    uint32_t seed = 0;
+    if (ent.contains("tree")) {
+        const auto& j = ent["tree"];
+        tp.iterations      = j.value("iterations", tp.iterations);
+        tp.trunkLength     = j.value("trunkLength", tp.trunkLength);
+        tp.lengthFalloff   = j.value("lengthFalloff", tp.lengthFalloff);
+        tp.leaderFalloff   = j.value("leaderFalloff", tp.leaderFalloff);
+        tp.branchAngle     = j.value("branchAngle", tp.branchAngle);
+        tp.angleJitter     = j.value("angleJitter", tp.angleJitter);
+        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
+        tp.phyllotaxis     = j.value("phyllotaxis", tp.phyllotaxis);
+        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
+        tp.terminalForks   = j.value("terminalForks", tp.terminalForks);
+        tp.droop           = j.value("droop", tp.droop);
+        tp.wander          = j.value("wander", tp.wander);
+        tp.rootCount       = j.value("rootCount", tp.rootCount);
+        tp.rootSpread      = j.value("rootSpread", tp.rootSpread);
+        tp.leafClump       = j.value("leafClump", tp.leafClump);
+        tp.maxLeafCards    = j.value("maxLeafCards", tp.maxLeafCards);
+        tp.tipRadius       = j.value("tipRadius", tp.tipRadius);
+        tp.pipeExponent    = j.value("pipeExponent", tp.pipeExponent);
+        tp.radiusScale     = j.value("radiusScale", tp.radiusScale);
+        tp.ringSegments    = j.value("ringSegments", tp.ringSegments);
+        tp.leaves          = j.value("leaves", tp.leaves);
+        tp.leafSize        = j.value("leafSize", tp.leafSize);
+        tp.leavesPerTip    = j.value("leavesPerTip", tp.leavesPerTip);
+        tp.leafThickness   = j.value("leafThickness", tp.leafThickness);
+        tp.barkColor       = parseVec3(j.value("barkColor", json()), tp.barkColor);
+        tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
+        seed               = j.value("seed", 0u);
+    }
+
+    Vec3 position = parseVec3(ent.value("position", json()));
+    Quat orientation = parseOrientation(ent);
+    Vec3 scale = parseVec3(ent.value("scale", json()), Vec3(1, 1, 1));
+
+    TreeMesh tm = growTree(tp, seed);
+    if (tm.branches.vertices.empty()) return;
+
+    int barkMat = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 1.0));
+    addMeshAsTriangles(tm.branches, position, orientation, scale, barkMat, scene);
+
+    if (!tm.leaves.vertices.empty()) {
+        TextureData leaf = leafTexture(128);
+        Texture tex;
+        tex.width = leaf.width;
+        tex.height = leaf.height;
+        tex.channels = leaf.channels;
+        tex.pixels = std::move(leaf.pixels);
+        int alphaTex = scene.addTexture(std::move(tex));
+
+        Material leafMat = Material::pbr(Vec3(1, 1, 1), 0.0, 0.7);
+        leafMat.alphaTex = alphaTex;
+        int leafMatIdx = scene.addMaterial(leafMat);
+        addMeshAsTriangles(tm.leaves, position, orientation, scale, leafMatIdx,
+                           scene);
+    }
 }
 
 }  // namespace
@@ -87,10 +233,18 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         return false;
     }
 
+    // Procedural terrain (top-level block, regenerated from its recipe).
+    if (root.contains("terrain")) addTerrain(root["terrain"], scene);
+
     int skipped = 0;
     for (const auto& ent : root.value("entities", json::array())) {
         if (ent.contains("mesh")) {
             skipped++;   // glTF models aren't tessellated offline yet
+            continue;
+        }
+        // Hero parametric tree: bark + alpha-cut leaf cards (matches the viewer).
+        if (ent.value("shape", std::string()) == "tree") {
+            addTree(ent, scene);
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",
@@ -164,6 +318,14 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                              scene.environment.skyHorizon);
         scene.environment.skyHorizon = sky;
         scene.environment.skyZenith = sky;
+        // Aerial-perspective fog (defaults its color to the sky for a seamless
+        // horizon): "fog": { "density": 0.0008, "color": [r,g,b] }.
+        if (env.contains("fog") && env["fog"].is_object()) {
+            const auto& f = env["fog"];
+            scene.fog.enabled = true;
+            scene.fog.density = f.value("density", 0.0);
+            scene.fog.color = parseVec3(f.value("color", json()), sky);
+        }
         hdr = env.value("hdr", std::string());
         if (!hdr.empty() && outHdrPath) {
             // Resolve relative to the level file, like the viewer's loader.

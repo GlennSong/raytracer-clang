@@ -20,10 +20,18 @@ SRCS = \
 	$(SRC_DIR)/material.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
-	$(SRC_DIR)/engine/model_importer.cpp
+	$(SRC_DIR)/engine/model_importer.cpp \
+	$(SRC_DIR)/engine/procgen/noise.cpp \
+	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/procgen/sdf.cpp \
+	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/skeleton.cpp \
+	$(SRC_DIR)/engine/procgen/tree.cpp \
+	$(SRC_DIR)/engine/procgen/erosion.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -60,9 +68,11 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
 	$(TEST_DIR)/test_lsystem.cpp \
+	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
-	$(TEST_DIR)/test_sdf.cpp
+	$(TEST_DIR)/test_sdf.cpp \
+	$(TEST_DIR)/test_curve.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -89,6 +99,9 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
+	$(SRC_DIR)/engine/procgen/skeleton.cpp \
+	$(SRC_DIR)/engine/procgen/tree.cpp \
+	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
@@ -97,6 +110,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/rt_math.cpp

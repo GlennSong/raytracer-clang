@@ -41,6 +41,155 @@ local SPECIES = {
               rules = { "F[+X][-X]FX", "FF[+X]X", "F[-X][/X]FX" } },
 }
 
+-- Parametric-grammar species (ADR-0030/0032): each defines a *parametric*
+-- L-system (successor params are expressions over the predecessor's) plus skin
+-- params, grown by flora.param_tree into the real curved generalized-cylinder
+-- tree (bark + alpha-cut leaves). Structurally distinct, not just retuned:
+-- oak is broad and drooping, pine a narrow whorled conifer, birch slender/weepy.
+local PARAM_SPECIES = {
+    oak = { iterations = 6, length = 2.2, width = 0.14, angle = 40,
+            falloff = 0.76, leader_falloff = 0.88, branches = 2,
+            terminal_fraction = 0.34, terminal_forks = 3,
+            droop = 0.26, wander = 0.08, angle_jitter = 20, ring_segments = 6,
+            tip_radius = 0.02, pipe_exponent = 2.4, radius_scale = 1.6,
+            leaves_per_tip = 5, leaf_size = 0.18, leaf_thickness = 0.05,
+            bark_color = { 0.32, 0.23, 0.15 }, leaf_color = { 0.20, 0.46, 0.13 } },
+    pine = { iterations = 7, length = 1.5, width = 0.13, angle = 68,
+             falloff = 0.62, leader_falloff = 0.92, branches = 3,
+             terminal_fraction = 0.3, terminal_forks = 3,
+             droop = 0.12, wander = 0.05, angle_jitter = 14, ring_segments = 6,
+             tip_radius = 0.018, pipe_exponent = 2.3, radius_scale = 1.4,
+             leaves_per_tip = 5, leaf_size = 0.12, leaf_thickness = 0.04,
+             bark_color = { 0.28, 0.19, 0.12 }, leaf_color = { 0.12, 0.34, 0.16 } },
+    birch = { iterations = 6, length = 2.0, width = 0.1, angle = 32,
+              falloff = 0.78, leader_falloff = 0.9, branches = 2,
+              terminal_fraction = 0.34, terminal_forks = 3,
+              droop = 0.36, wander = 0.11, angle_jitter = 22, ring_segments = 6,
+              tip_radius = 0.016, pipe_exponent = 2.3, radius_scale = 1.1,
+              leaves_per_tip = 5, leaf_size = 0.15, leaf_thickness = 0.045,
+              bark_color = { 0.78, 0.76, 0.70 }, leaf_color = { 0.42, 0.55, 0.18 } },
+}
+
+-- Grow a tree from a parametric grammar built out of the species params, and
+-- return it as a MODEL: a list of {mesh, material} parts (bark opaque + leaf
+-- alpha-cut), which the vegetation loader scatters as separate instance groups.
+function flora.param_tree(seed, opts)
+    opts = opts or {}
+    local s = PARAM_SPECIES[opts.species or "oak"] or PARAM_SPECIES.oak
+    local function pick(k) if opts[k] ~= nil then return opts[k] else return s[k] end end
+
+    local angle, fall, lead = pick("angle"), pick("falloff"), pick("leader_falloff")
+    local branches, roll = pick("branches"), 137.5
+    local sys = lsystem.parametric()
+
+    -- Structural growth while the internode is long: lay an internode, spawn
+    -- `branches` golden-angle side branches (pitched away + shrunk), continue a
+    -- central leader.
+    local struct = "F(l,w)"
+    for _ = 1, branches do
+        struct = struct .. string.format("/(%g)[&(%g)A(l*%g,w*0.6)]", roll, angle, fall)
+    end
+    struct = struct .. string.format("/(%g)A(l*%g,w*0.75)", roll, lead)
+
+    -- Terminal spray once short (guarded): more forks, wider pitch, faster shrink
+    -- => branch ends fork repeatedly into dense short tipped twigs.
+    local thresh = pick("length") * (pick("terminal_fraction") or 0.34)
+    local tforks = pick("terminal_forks") or 3
+    local term = "F(l,w)"
+    for _ = 1, tforks do
+        term = term .. string.format("/(%g)[&(%g)A(l*0.7,w*0.55)]", roll, angle * 1.3)
+    end
+    term = term .. string.format("/(%g)A(l*0.7,w*0.6)", roll)
+
+    sys:rule(string.format("A(l,w):l>%g", thresh), struct)
+    sys:rule(string.format("A(l,w):l<=%g", thresh), term)
+    local modules = sys:expand(
+        string.format("A(%g,%g)", pick("length"), pick("width")),
+        pick("iterations"), seed)
+
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = pick("tip_radius"), pipe_exponent = pick("pipe_exponent"),
+        radius_scale = pick("radius_scale"), ring_segments = pick("ring_segments"),
+        droop = pick("droop"), wander = pick("wander"),
+        angle_jitter = pick("angle_jitter"),
+        leaves_per_tip = pick("leaves_per_tip"), leaf_size = pick("leaf_size"),
+        leaf_thickness = pick("leaf_thickness"),
+        bark_color = pick("bark_color"), leaf_color = pick("leaf_color"),
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark_" .. (opts.species or "oak"),
+                      roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
+    end
+    return parts
+end
+
+-- A majestic THREE-PHASE tree, defined entirely in the grammar (no engine
+-- changes): one symbol A with three guarded productions selected by internode
+-- length l (ADR-0030 guards + && ranges). Demonstrates that N-phase structure is
+-- pure Lua.
+--   Phase 1  l > clear      : bare clear trunk (leader only, no branches)
+--   Phase 2  term < l <= clear : scaffold crown (limbs + leader)
+--   Phase 3  l <= term      : terminal twig sprays (thin => leaf-clad), so the
+--                             crown caps with foliage and nothing pokes out bare.
+-- Thresholds are fractions of trunk length; trunk vs crown use different falloffs
+-- (a tall dominant trunk, a faster-capping crown).
+function flora.phased_tree(seed, opts)
+    opts = opts or {}
+    local len   = opts.length or 2.6
+    local clr   = len * (opts.clear_fraction or 0.6)
+    local trm   = len * (opts.terminal_fraction or 0.2)
+    local trunkFall = opts.trunk_falloff or 0.84
+    local crownFall = opts.crown_falloff or 0.82
+    local sideFall  = opts.side_falloff or 0.62
+    local angle = opts.angle or 42
+    local branches = opts.branches or 2
+    local roll = 137.5
+
+    local sys = lsystem.parametric()
+    -- Phase 1: bare clear trunk.
+    sys:rule(string.format("A(l):l>%g", clr),
+             string.format("F(l)/(%g)A(l*%g)", roll, trunkFall))
+    -- Phase 2: scaffold crown (single-symbol range guard via &&).
+    local crown = "F(l)"
+    for _ = 1, branches do
+        crown = crown .. string.format("/(%g)[&(%g)A(l*%g)]", roll, angle, sideFall)
+    end
+    crown = crown .. string.format("/(%g)A(l*%g)", roll, crownFall)
+    sys:rule(string.format("A(l):l<=%g && l>%g", clr, trm), crown)
+    -- Phase 3: terminal sprays — fork into short thin twigs (leaf-clad by
+    -- leaf_thickness), capping every end including the leader's tip.
+    local ta = angle * 1.4
+    sys:rule(string.format("A(l):l<=%g", trm),
+             string.format("F(l)/(%g)[&(%g)A(l*0.6)]/(%g)[&(-%g)A(l*0.6)]/(%g)A(l*0.6)",
+                           roll, ta, roll, ta, roll))
+
+    local modules = sys:expand(string.format("A(%g)", len),
+                               opts.iterations or 12, seed)
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = opts.tip_radius or 0.02,
+        pipe_exponent = opts.pipe_exponent or 2.4,
+        radius_scale = opts.radius_scale or 1.7,
+        ring_segments = opts.ring_segments or 6,
+        droop = opts.droop or 0.12, wander = opts.wander or 0.06,
+        leaves_per_tip = opts.leaves_per_tip or 4,
+        leaf_size = opts.leaf_size or 0.2,
+        leaf_thickness = opts.leaf_thickness or 0.06,
+        leaf_clump = opts.leaf_clump or 1.0,
+        bark_color = opts.bark_color or { 0.30, 0.22, 0.14 },
+        leaf_color = opts.leaf_color or { 0.20, 0.46, 0.13 },
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
+    end
+    return parts
+end
+
 -- A tapered, welded trunk/branches with real (oriented) leaf cards instead of
 -- blobs. `opts.species` picks a preset; individual fields override it.
 function flora.tree(seed, opts)
@@ -123,19 +272,27 @@ end
 
 -- A clump of grass blades (thin cards), bent and rotated, dark at the base to
 -- light at the tip.
+-- A dense grass *patch* (not a lone tuft): many blades spread over a disc, so a
+-- handful of overlapping instances read as a continuous field. `radius` is the
+-- patch size; `blades` the count within it.
 function flora.grass(seed, opts)
     opts = opts or {}
     math.randomseed(seed)
-    local n = opts.blades or 6
-    local h = opts.height or 0.4
+    local n = opts.blades or 45
+    local h = opts.height or 0.45
+    local radius = opts.radius or 1.5
     local lo = opts.color_low or { 0.10, 0.28, 0.06 }
     local hi = opts.color_high or { 0.32, 0.55, 0.16 }
     local blades = {}
     for _ = 1, n do
-        local b = mesh.translate(mesh.box({ 0.02, h, 0.006 }), { 0, h * 0.5, 0 })
-        b = mesh.rotate_z(b, (math.random() - 0.5) * 0.7)      -- bend
+        local bh = h * (0.6 + math.random() * 0.8)             -- varied height
+        local b = mesh.translate(mesh.box({ 0.022, bh, 0.006 }), { 0, bh * 0.5, 0 })
+        b = mesh.rotate_z(b, (math.random() - 0.5) * 0.8)      -- bend
         b = mesh.rotate_y(b, math.random() * 2 * math.pi)      -- face anywhere
-        b = mesh.translate(b, { (math.random() - 0.5) * 0.14, 0, (math.random() - 0.5) * 0.14 })
+        -- Uniform-area placement over the disc (sqrt keeps it from clumping center).
+        local rr = radius * math.sqrt(math.random())
+        local a = math.random() * 2 * math.pi
+        b = mesh.translate(b, { rr * math.cos(a), 0, rr * math.sin(a) })
         blades[#blades + 1] = mesh.bake_height_color(b, lo, hi)
     end
     return mesh.merge(blades)

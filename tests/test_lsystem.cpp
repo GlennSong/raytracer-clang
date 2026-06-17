@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/lsystem.h"
+#include "../src/engine/procgen/skeleton.h"
 #include "../src/engine/mesh_builder.h"
 #include <string>
 
@@ -108,6 +109,115 @@ TEST_CASE(lsystem_single_production_ignores_seed) {
     CHECK(sys.expand("F", 3, 1) == sys.expand("F", 3, 99));   // no choice = deterministic
 }
 
+// ---------------------------------------------------------------------------
+// Parametric L-system
+
+TEST_CASE(parametric_parse_and_serialize_round_trip) {
+    ModuleString m = parseModuleLiterals("F(1,0.5)[+(30)A]");
+    CHECK(m.size() == 5);                       // F ( [ + A ] -> F, [, +, A, ]
+    CHECK(m[0].symbol == 'F');
+    CHECK(m[0].params.size() == 2);
+    CHECK_APPROX(m[0].params[0], 1.0, 1e-6);
+    CHECK_APPROX(m[0].params[1], 0.5, 1e-6);
+    CHECK(m[1].symbol == '[');
+    CHECK(m[1].params.empty());
+    CHECK(m[2].symbol == '+');
+    CHECK_APPROX(m[2].params[0], 30.0, 1e-6);
+    CHECK(moduleString(m) == "F(1,0.5)[+(30)A]");
+}
+
+TEST_CASE(parametric_expression_shrinks_params_with_depth) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)A(l*0.5)");           // F is left verbatim; A recurses
+    ModuleString s = pls.expand("A(1)", 3);
+    // A(1) -> F(1)A(.5) -> F(1)F(.5)A(.25) -> F(1)F(.5)F(.25)A(.125)
+    CHECK(s.size() == 4);
+    CHECK(s[0].symbol == 'F'); CHECK_APPROX(s[0].params[0], 1.0,   1e-6);
+    CHECK(s[1].symbol == 'F'); CHECK_APPROX(s[1].params[0], 0.5,   1e-6);
+    CHECK(s[2].symbol == 'F'); CHECK_APPROX(s[2].params[0], 0.25,  1e-6);
+    CHECK(s[3].symbol == 'A'); CHECK_APPROX(s[3].params[0], 0.125, 1e-6);
+}
+
+TEST_CASE(parametric_guarded_production_fires_on_condition) {
+    // Two guarded rules partition by magnitude: grow while long, then switch to
+    // a different (terminal) production once the parameter drops below threshold.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>0.5", "F(l)A(l*0.5)");   // structural: keep shrinking
+    pls.rule("A(l):l<=0.5", "T(l)");          // terminal: emit a T and stop
+    ModuleString s = pls.expand("A(1)", 5);
+    // A(1)->F(1)A(.5); A(.5)->T(.5) (0.5 is not >0.5). So: F(1) T(0.5).
+    CHECK(s.size() == 2);
+    CHECK(s[0].symbol == 'F'); CHECK_APPROX(s[0].params[0], 1.0, 1e-6);
+    CHECK(s[1].symbol == 'T'); CHECK_APPROX(s[1].params[0], 0.5, 1e-6);
+}
+
+TEST_CASE(parametric_guard_supports_and_ranges) {
+    // A single symbol can express a phase RANGE with &&, so the three-phase tree
+    // (trunk / crown / terminal) is one symbol with three guarded rules.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>3",          "H(l)");   // high
+    pls.rule("A(l):l>1 && l<=3",  "M(l)");   // mid band
+    pls.rule("A(l):l<=1",         "L(l)");   // low
+    CHECK(pls.expand("A(5)", 1)[0].symbol == 'H');
+    CHECK(pls.expand("A(2)", 1)[0].symbol == 'M');
+    CHECK(pls.expand("A(0.5)", 1)[0].symbol == 'L');
+}
+
+TEST_CASE(parametric_three_phase_grammar_sequences_by_length) {
+    // The majestic tree is ONE symbol with three guarded rules (trunk / crown /
+    // terminal) — no engine support, pure grammar. Verify the phases sequence:
+    // a bare trunk run (F, no branches) before any '[' branch appears.
+    ParametricLSystem pls;
+    pls.rule("A(l):l>2",            "F(l)A(l*0.8)");            // trunk: bare leader
+    pls.rule("A(l):l<=2 && l>0.5",  "F(l)[+(30)A(l*0.6)]A(l*0.7)"); // crown: branches
+    pls.rule("A(l):l<=0.5",         "F(l)");                    // terminal: cap
+    std::string str = moduleString(pls.expand("A(5)", 8));
+
+    size_t firstF = str.find('F');
+    size_t firstBranch = str.find('[');
+    CHECK(firstF != std::string::npos);
+    CHECK(firstBranch != std::string::npos);        // a crown formed (branches)
+    CHECK(firstBranch > firstF);                    // trunk drawn before branching
+    // The clear-trunk run: at least two bare internodes before the first branch.
+    CHECK(str.find("F(", str.find("F(") + 1) < firstBranch);
+}
+
+TEST_CASE(parametric_full_arithmetic_expression) {
+    ParametricLSystem pls;
+    pls.rule("A(l,w)", "F(l*2-1, w/2 + 0.1)");
+    ModuleString s = pls.expand("A(3,1)", 1);
+    CHECK(s.size() == 1);
+    CHECK_APPROX(s[0].params[0], 5.0, 1e-5);    // 3*2-1
+    CHECK_APPROX(s[0].params[1], 0.6, 1e-5);    // 1/2+0.1
+}
+
+TEST_CASE(parametric_matches_by_arity) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)");                    // one-arg A
+    pls.rule("A",    "X");                       // zero-arg A
+    CHECK(moduleString(pls.expand("A(2)", 1)) == "F(2)");
+    CHECK(moduleString(pls.expand("A", 1)) == "X");
+}
+
+TEST_CASE(parametric_passes_through_unmatched_modules) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)[+(25)A(l*0.7)]");
+    ModuleString s = pls.expand("A(1)", 1);
+    // The '[', '+', ']' have no rules and must survive with their params intact.
+    CHECK(moduleString(s) == "F(1)[+(25)A(0.7)]");
+}
+
+TEST_CASE(parametric_stochastic_varies_by_seed) {
+    ParametricLSystem pls;
+    pls.rule("A(l)", "F(l)[+(30)A(l*0.7)]", 1.0);
+    pls.rule("A(l)", "F(l)[-(30)A(l*0.7)]", 1.0);
+    std::string a = moduleString(pls.expand("A(1)", 5, 1));
+    std::string b = moduleString(pls.expand("A(1)", 5, 1));
+    std::string c = moduleString(pls.expand("A(1)", 5, 7));
+    CHECK(a == b);                              // deterministic per seed
+    CHECK(a != c);                             // different seed -> different tree
+}
+
 TEST_CASE(turtle_leaf_symbol_adds_blob_geometry) {
     TurtleParams p;
     p.leafRadius = 0.5f;
@@ -121,4 +231,21 @@ TEST_CASE(turtle_leaf_symbol_adds_blob_geometry) {
     // With leafRadius 0, L is skipped.
     p.leafRadius = 0.0f;
     CHECK(turtleSegments("FL", p).size() == 1);
+}
+
+TEST_CASE(skeleton_turtle_builds_branches_tips_and_depth) {
+    // The agnostic turtle -> Skeleton: F advances, [ ] is a branch (depth+1),
+    // a trailing A marks a tip. Shared by trees, ridges, vegetation.
+    ModuleString m = parseModuleLiterals("F(1)[+(30)F(1)A]F(1)A");
+    Skeleton s = buildSkeleton(m, 0.0f, 0);
+    CHECK(s.nodes.size() == 4u);              // root + 3 F segments
+    int maxDepth = 0, tips = 0;
+    for (const SkeletonNode& n : s.nodes) {
+        if (n.depth > maxDepth) maxDepth = n.depth;
+        if (n.isTip) tips++;
+    }
+    CHECK(maxDepth >= 1);                      // the bracket made a deeper branch
+    CHECK(tips == 2);                          // two A tips
+    std::vector<std::vector<int>> ch = s.childLists();
+    CHECK(!ch[0].empty());                     // root has a child
 }

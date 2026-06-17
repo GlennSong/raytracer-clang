@@ -17,6 +17,8 @@ public:
     Real fovDegrees = 60.0;
     Real moveSpeed = 5.0;
     Real boostMultiplier = 4.0;
+    Real nearPlane = 0.1;
+    Real farPlane = 8000.0;   // large enough for distant LOD terrain (view distance)
     bool positionLocked = false;
 
     void update(const CameraInput& input, Real dt) override;

@@ -150,6 +150,75 @@ TEST_CASE(procgen_script_builds_a_full_lsystem_tree) {
     CHECK(tree->indices.size() % 3 == 0);
 }
 
+TEST_CASE(procgen_script_skins_a_parametric_tree) {
+    // The grammar-first path (ADR-0030): a script defines a *parametric* grammar
+    // (successor params are expressions over the predecessor's), expands it, and
+    // skins the modules into the real tree (curved generalized-cylinder bark +
+    // alpha-cut leaf cards) via tree.skin — the same generator the C++ growTree
+    // uses, now driven entirely from Lua.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> bark;
+    std::string err;
+    const char* code = R"LUA(
+        local sys = lsystem.parametric()
+        sys:rule("A(l,w)",
+          "F(l,w)/(137.5)[&(38)A(l*0.8,w*0.6)]/(137.5)[&(38)A(l*0.8,w*0.6)]/(137.5)A(l*0.85,w*0.7)")
+        local modules = sys:expand("A(1.4,0.12)", 5, 7)
+        local bark, leaves = tree.skin(modules,
+            { ring_segments = 6, droop = 0.2, leaves_per_tip = 4,
+              bark_color = {0.3, 0.2, 0.13}, leaf_color = {0.2, 0.45, 0.13} }, 7)
+        assert(leaves ~= nil, "expected leaf cards")
+        return bark
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, bark, &err));
+    if (!bark) { CHECK(false); return; }
+    CHECK(bark->vertices.size() > 100);     // a swept canopy of branches
+    CHECK(bark->indices.size() % 3 == 0);
+}
+
+TEST_CASE(procgen_model_returns_multiple_parts) {
+    // Multi-part model (ADR-0032): a script returns a list of {mesh, material}
+    // parts — here bark (opaque, bark texture) + leaves (alpha-cut, leaf texture)
+    // from one tree. The loader turns each into its own InstanceGroup.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::vector<ScriptMeshPart> parts;
+    std::string err;
+    const char* code = R"LUA(
+        local sys = lsystem.parametric()
+        sys:rule("A(l,w)", "F(l,w)/(137.5)[&(40)A(l*0.8,w*0.6)]/(137.5)A(l*0.85,w*0.7)")
+        local modules = sys:expand("A(1.2,0.1)", 4, 5)
+        local bark, leaves = tree.skin(modules, { droop = 0.2, leaves_per_tip = 3 }, 5)
+        return {
+            { mesh = bark,   texture = "bark" },
+            { mesh = leaves, texture = "leaf", alpha_test = true, roughness = 0.6 },
+        }
+    )LUA";
+    CHECK(runProcgenModel(vm, code, parts, &err));
+    CHECK(parts.size() == 2u);
+    if (parts.size() == 2) {
+        CHECK(parts[0].texture == "bark");
+        CHECK(parts[0].mesh && !parts[0].mesh->vertices.empty());
+        CHECK(parts[0].hasMaterial);
+        CHECK(parts[1].texture == "leaf");
+        CHECK(parts[1].alphaTest);
+        CHECK(parts[1].mesh && !parts[1].mesh->vertices.empty());
+    }
+}
+
+TEST_CASE(procgen_model_single_mesh_is_one_default_part) {
+    // Back-compat: a bare single-mesh return is one part with no material of its
+    // own (the caller applies the species' default).
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::vector<ScriptMeshPart> parts;
+    std::string err;
+    CHECK(runProcgenModel(vm, "return mesh.box({1, 1, 1})", parts, &err));
+    CHECK(parts.size() == 1u);
+    if (!parts.empty()) CHECK(!parts[0].hasMaterial);
+}
+
 TEST_CASE(procgen_script_kitbashes_meshes) {
     // mesh primitives + transform + merge: two boxes welded into one buffer.
     ScriptVM vm;

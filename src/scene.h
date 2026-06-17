@@ -7,6 +7,7 @@
 #include "kdtree.h"
 #include <vector>
 #include <limits>
+#include <cstdint>
 
 namespace engine {
 
@@ -61,25 +62,51 @@ struct EnvironmentLight {
     Vec3 radiance(const Vec3& unitDir) const;
 };
 
+// A CPU image whose alpha channel drives alpha-cut foliage. Row-major,
+// `channels` bytes per texel; alpha is the last channel.
+struct Texture {
+    int width = 0, height = 0, channels = 0;
+    std::vector<uint8_t> pixels;
+    double sampleAlpha(double u, double v) const;   // clamped, nearest
+};
+
+// Distance (aerial-perspective) fog: surfaces fade toward `color` with distance
+// from the camera, so far terrain dissolves into atmosphere — depth cue, and it
+// hides the far clip / LOD seams. `density` is the exponential rate (0 = off).
+struct Fog {
+    bool   enabled = false;
+    Vec3   color{0.6, 0.7, 0.82};
+    double density = 0.0;
+};
+
 class Scene {
 public:
     std::vector<Sphere> spheres;
     std::vector<Triangle> triangles;
     std::vector<Quad> quads;
     std::vector<Material> materials;
+    std::vector<Texture> textures;
     KdTree kdTree;
     EnvironmentLight environment;
+    Fog fog;
     std::vector<SceneLight> lights;
 
     int addMaterial(const Material& mat);
+    int addTexture(Texture tex);
     void addSphere(const Vec3& center, double radius, int matIdx);
     void addTriangle(const Vec3& v0, const Vec3& v1, const Vec3& v2, int matIdx);
+    void addTriangle(const Triangle& tri) { triangles.push_back(tri); }
     void addQuad(const Vec3& corner, const Vec3& edge1, const Vec3& edge2, int matIdx);
     void addMeshSphere(const Vec3& center, double radius, int matIdx,
                        int stacks = 16, int slices = 32);
 
     void buildAccelerator();
     bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;
+    // Nearest hit that survives alpha-cut testing: a hit on a sub-cutoff texel
+    // is skipped and the ray continues. Use for camera, bounce, and shadow rays
+    // so leaf cards read as silhouettes (and cast dappled shadows).
+    bool intersectVisible(const Ray& ray, double tMin, double tMax,
+                          HitRecord& rec) const;
     Vec3 tracePath(const Ray& ray, int maxBounces) const;
 
     // Direct light at a surface point: one light sampled uniformly, BRDF
