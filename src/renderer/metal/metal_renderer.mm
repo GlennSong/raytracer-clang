@@ -2148,6 +2148,35 @@ void MetalRenderer::endFrame() {
                                          indexBuffer:mesh->indexBuffer
                                    indexBufferOffset:0];
             }
+
+            // CDLOD terrain casters (ADR-0036): render the selected nodes into the
+            // cascade so ridges shadow their own far slopes (and the map isn't empty
+            // in terrain-only scenes). Nodes are world-space (identity transform);
+            // cast from the un-morphed base position — the slight LOD-morph mismatch
+            // is absorbed by the depth/normal bias. Same cascade sphere cull.
+            {
+                ModelUniforms terrainModelU;
+                terrainModelU.model = toSimd(Mat4());
+                terrainModelU.normalMatrix = toSimd(Mat4());
+                for (const auto& tdc : impl->terrainDrawCalls) {
+                    const GPUMesh* mesh = impl->meshes.get(tdc.meshHandle);
+                    if (!mesh) continue;
+                    BoundingSphere b = getMeshBounds(tdc.meshHandle);
+                    if ((b.center - cc).length() > cullR + b.radius) continue;
+
+                    [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
+                    [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+                    [shadowEncoder setVertexBytes:&cascadeCam
+                                           length:sizeof(CameraUniforms) atIndex:1];
+                    [shadowEncoder setVertexBytes:&terrainModelU
+                                           length:sizeof(ModelUniforms) atIndex:2];
+                    [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                              indexCount:mesh->indexCount
+                                               indexType:MTLIndexTypeUInt32
+                                             indexBuffer:mesh->indexBuffer
+                                       indexBufferOffset:0];
+                }
+            }
             [shadowEncoder endEncoding];
         }
     }

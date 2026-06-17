@@ -51,6 +51,12 @@ float sampleCascade(depth2d_array<float> shadowMap, sampler smp, uint slice,
     float2 uv = ndc.xy * 0.5 + 0.5;
     uv.y = 1.0 - uv.y;  // Metal texture origin is top-left
     if (uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1) return 1.0;
+    // Outside the cascade's depth range (closer than its near plane or beyond its
+    // far plane) the fragment isn't covered by this cascade — treat as lit, not
+    // shadowed. Without this, terrain that pokes past the ortho far plane (tall
+    // mountains, or the cascade fit sliding as the camera moves) reads as a hard
+    // shadowed square. The forward-Z light depth is in [0,1].
+    if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
     float texelSize = 1.0 / float(shadowData.shadowMapSize);
     return sampleShadowPCF(shadowMap, smp, slice, uv, ndc.z, texelSize,
                            shadowData.pcfRadius);
