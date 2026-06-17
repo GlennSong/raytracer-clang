@@ -199,8 +199,14 @@ kernel void ssrRayMarch(
     float confidence = edgeFade.x * edgeFade.y;
     confidence *= 1.0 - saturate(hitDist / maxRayDist);
 
+    // Grazing-angle emphasis, but with a high floor instead of a dielectric F0.
+    // A pure 0.04 + ... Schlick term crushes head-on reflections to ~4%, and SSR
+    // has no per-pixel metalness to recover the metal/smooth surfaces it gates in
+    // — so head-on hits (cubes, wedge, the metal torus) went invisible. Keep the
+    // grazing boost; let the roughness gate (reflectivity) + blendStrength shape
+    // the overall intensity.
     float NdotV = saturate(dot(viewNormal, -viewDir));
-    float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
+    float fresnel = mix(0.7, 1.0, pow(1.0 - NdotV, 5.0));
     confidence *= fresnel * reflectivity;
 
     // Diagnostic: green brightness == the real confidence (alpha) that the
