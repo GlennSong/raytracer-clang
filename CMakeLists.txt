@@ -42,6 +42,7 @@ add_library(engine_core STATIC
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
     src/engine/procgen/lsystem.cpp
+    src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/rock.cpp

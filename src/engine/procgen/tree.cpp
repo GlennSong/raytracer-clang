@@ -1,5 +1,6 @@
 #include "tree.h"
 #include "lsystem.h"
+#include "skeleton.h"
 #include "../../rt_math.h"
 #include "../../curve.h"
 
@@ -67,75 +68,14 @@ ParametricLSystem buildGrammar(const TreeParams& p) {
 }
 
 // --- branch skeleton -------------------------------------------------------
-
-struct Node {
-    Vec3 pos;
-    Vec3 heading{0, 1, 0};   // turtle heading at this node (for leaf orientation)
-    int  parent = -1;
-    int  childCount = 0;
-    float radius = 0.0f;     // filled by the pipe model
-    float distFromRoot = 0.0f;
-    bool isTip = false;
-};
-
-// Walk the expanded module string into a node tree, applying angle jitter from
-// the seeded RNG (so each tree differs but reproducibly).
-std::vector<Node> walkSkeleton(const ModuleString& s, const TreeParams& p,
-                               std::mt19937& rng) {
-    std::vector<Node> nodes;
-    nodes.push_back(Node{});   // root at origin, heading +Y
-
-    struct State { int node; Mat4 orient; };
-    State st{0, Mat4::identity()};
-    std::vector<State> stack;
-
-    std::uniform_real_distribution<float> jit(-p.angleJitter, p.angleJitter);
-    auto turn = [&](char axis, float deg) {
-        double a = (deg + jit(rng)) * PI / 180.0;
-        switch (axis) {
-            case 'Z': st.orient = st.orient * Mat4::rotateZ(a); break;
-            case 'X': st.orient = st.orient * Mat4::rotateX(a); break;
-            case 'Y': st.orient = st.orient * Mat4::rotateY(a); break;
-        }
-    };
-
-    for (const Module& m : s) {
-        float arg = m.params.empty() ? 0.0f : m.params[0];
-        switch (m.symbol) {
-            case 'F': {
-                Vec3 heading = st.orient.transformDirection(Vec3(0, 1, 0));
-                Node n;
-                n.parent = st.node;
-                n.pos = nodes[st.node].pos + heading * arg;
-                n.heading = heading;
-                n.distFromRoot = nodes[st.node].distFromRoot + arg;
-                nodes[st.node].childCount++;
-                st.node = static_cast<int>(nodes.size());
-                nodes.push_back(n);
-                break;
-            }
-            case 'A':   // an unexpanded apex => a twig tip (leaf attachment)
-            case 'L':
-                nodes[st.node].isTip = true;
-                break;
-            case '+': turn('Z',  arg); break;
-            case '-': turn('Z', -arg); break;
-            case '&': turn('X',  arg); break;
-            case '^': turn('X', -arg); break;
-            case '/': turn('Y',  arg); break;
-            case '\\': turn('Y', -arg); break;
-            case '[': stack.push_back(st); break;
-            case ']': if (!stack.empty()) { st = stack.back(); stack.pop_back(); } break;
-            default: break;
-        }
-    }
-    return nodes;
-}
+// The turtle interpretation now lives in the shared, domain-agnostic
+// skeleton.{h,cpp} (buildSkeleton -> Skeleton/SkeletonNode); the tree-specific
+// steps below (pipe-model radii, droop, skinning, leaves) are consumers of it.
 
 // Pipe model: a node carrying no children gets the tip radius; an internal node
 // combines its children's cross-sections, r = (sum r_child^n)^(1/n). Nodes are
 // in DFS pre-order, so a reverse pass sees every child before its parent.
-void assignRadii(std::vector<Node>& nodes, const TreeParams& p) {
+void assignRadii(std::vector<SkeletonNode>& nodes, const TreeParams& p) {
     std::vector<float> sumPow(nodes.size(), 0.0f);
     const float n = p.pipeExponent;
     for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; i--) {
@@ -158,7 +98,7 @@ void assignRadii(std::vector<Node>& nodes, const TreeParams& p) {
 // lateral child bends from its *own* direction, preserving the branch angle.
 // Runs in parent-before-child order, so children inherit the bent positions and
 // joints stay connected; the thick ~vertical trunk (thin~0) barely moves.
-void shapeBranches(std::vector<Node>& nodes, const TreeParams& p, std::mt19937& rng) {
+void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::mt19937& rng) {
     if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f)) return;
 
     // Apical (straightest) child per node, from the original geometry.
@@ -320,7 +260,8 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
 TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed) {
     std::mt19937 rng(seed);
 
-    std::vector<Node> nodes = walkSkeleton(s, params, rng);
+    Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
+    std::vector<SkeletonNode>& nodes = skel.nodes;
     assignRadii(nodes, params);
     shapeBranches(nodes, params, rng);
 
@@ -422,7 +363,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         std::uniform_real_distribution<float> vary(0.8f, 1.15f);
         std::uniform_real_distribution<float> off(-1.0f, 1.0f);
         int cards = 0;
-        for (const Node& n : nodes) {
+        for (const SkeletonNode& n : nodes) {
             bool leafy = n.isTip ||
                          (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
             if (!leafy) continue;

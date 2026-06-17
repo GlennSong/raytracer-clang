@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/lsystem.h"
+#include "../src/engine/procgen/skeleton.h"
 #include "../src/engine/mesh_builder.h"
 #include <string>
 
@@ -230,4 +231,21 @@ TEST_CASE(turtle_leaf_symbol_adds_blob_geometry) {
     // With leafRadius 0, L is skipped.
     p.leafRadius = 0.0f;
     CHECK(turtleSegments("FL", p).size() == 1);
+}
+
+TEST_CASE(skeleton_turtle_builds_branches_tips_and_depth) {
+    // The agnostic turtle -> Skeleton: F advances, [ ] is a branch (depth+1),
+    // a trailing A marks a tip. Shared by trees, ridges, vegetation.
+    ModuleString m = parseModuleLiterals("F(1)[+(30)F(1)A]F(1)A");
+    Skeleton s = buildSkeleton(m, 0.0f, 0);
+    CHECK(s.nodes.size() == 4u);              // root + 3 F segments
+    int maxDepth = 0, tips = 0;
+    for (const SkeletonNode& n : s.nodes) {
+        if (n.depth > maxDepth) maxDepth = n.depth;
+        if (n.isTip) tips++;
+    }
+    CHECK(maxDepth >= 1);                      // the bracket made a deeper branch
+    CHECK(tips == 2);                          // two A tips
+    std::vector<std::vector<int>> ch = s.childLists();
+    CHECK(!ch[0].empty());                     // root has a child
 }
