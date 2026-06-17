@@ -2,9 +2,9 @@
   "cameras": [
     {
       "name": "Vista",
-      "position": [0, 120, 240],
-      "forward": [0, -0.26, -0.965],
-      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 240 }
+      "position": [360, 150, 150],
+      "forward": [-0.93, -0.30, 0.20],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 320 }
     }
   ]
 }

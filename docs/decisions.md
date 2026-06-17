@@ -1943,6 +1943,40 @@ needed.
 
 ---
 
+## ADR-0033 — `Skeleton` is a shared L-system value type; consumers attach meaning
+**Status:** Accepted · **Date:** 2026-06-17
+
+**Context.** Interpreting an L-system module string with a turtle yields a
+branching node structure. It lived privately in `tree.cpp` (`walkSkeleton`/
+`Node`), but the same structure is wanted by many generators — trees, mountain
+ridge networks, vegetation, rivers, roads, lightning. Branching is one general
+pattern, not a tree feature (ADR-0021).
+
+**Decision.** Extract a **domain-agnostic `Skeleton`** value type
+(`engine/procgen/skeleton.{h,cpp}`): `SkeletonNode` = `pos, heading, parent,
+depth (branch order), radius, distFromRoot, isTip`; `Skeleton` adds
+`childLists()`. `buildSkeleton(modules, angleJitter, rng|seed)` runs the 3D
+turtle. The skeleton carries **no domain meaning** — *consumers* attach it:
+- **Tree:** pipe-model radii + droop + generalized-cylinder skinning + leaves.
+- **Mountain range:** lay the turtle's (x,y) plane onto the ground (x,z), height
+  per node by `depth`, distance-to-nearest-segment → terrain uplift, then erosion
+  (`buildRangeRidges`).
+- Future: vegetation, rivers, roads — same skeleton, different reader.
+
+Distilled *from* two real consumers (tree refactor = byte-identical; branching
+ranges = new), per ADR-0021's "don't design the universal type up front."
+
+**Consequences.** A new shared value type alongside `Mesh`/`Field`/`Frame`. The
+tree's turtle is no longer private. **Owed:** expose `Skeleton` to Lua (a userdata
+from `lsystem`), so recipes build skeletons that any consumer (`tree.skin`,
+`terrain` ridges, scatter-along) reads — the "L-system makes skeletons for many
+things" goal.
+
+**Revisit trigger.** When a consumer needs non-tree graph topology (loops) or
+per-node attributes beyond the current set.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

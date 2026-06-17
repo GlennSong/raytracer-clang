@@ -467,6 +467,16 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
     p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
     p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
+    if (t.contains("range") && t["range"].is_object()) {
+        const auto& r = t["range"];
+        p.rangeRidges = buildRangeRidges(
+            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
+            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
+            r.value("iterations", 5), r.value("height", 130.0f),
+            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
+            r.value("seed", 0u));
+        p.rangeWidth = r.value("width", p.rangeWidth);
+    }
     return p;
 }
 

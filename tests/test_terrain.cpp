@@ -224,3 +224,30 @@ TEST_CASE(terrain_spine_range_rises_and_falls_to_plains) {
     CHECK(offSpine < 25.0);           // plains far from it (just hills)
     CHECK(onSpine > offSpine * 2.0);
 }
+
+TEST_CASE(branching_range_builds_multi_depth_ridge_network) {
+    // Consumer #2 of the Skeleton: a branching ridge network with varied crest
+    // heights (main divide tall, spurs lower), driving terrain uplift.
+    std::vector<RidgeSegment> ridges =
+        buildRangeRidges(60, 38, 0.55f, 0.9f, 4, 130, 0.6f, 0.0f, 3);
+    CHECK(ridges.size() > 4u);          // it branched (not a single ridge)
+    float hmin = 1e9f, hmax = -1e9f;
+    for (const RidgeSegment& s : ridges) {
+        hmin = std::min({hmin, s.ha, s.hb});
+        hmax = std::max({hmax, s.ha, s.hb});
+    }
+    CHECK(hmax > hmin * 1.3f);          // depth falloff -> varied heights
+
+    TerrainParams p; p.size = 600; p.heightScale = 4; p.rangeWidth = 120;
+    p.mountainScale = 0.01; p.rangeRidges = ridges;
+    Noise n(3);
+    double maxNear = -1e9, far = -1e9;
+    for (int j = 0; j < 60; j++)
+        for (int i = 0; i < 60; i++) {
+            double x = -150 + i * 5.0, z = -10 + j * 5.0;   // around the network
+            maxNear = std::max(maxNear, terrainHeight(p, n, x, z));
+        }
+    far = terrainHeight(p, n, 290.0, 290.0);   // far corner = plains
+    CHECK(maxNear > 40.0);              // the range rises
+    CHECK(far < 20.0);                  // plains beyond the network
+}

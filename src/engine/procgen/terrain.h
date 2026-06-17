@@ -7,6 +7,13 @@
 
 namespace engine {
 
+// One ridge axis segment of a (possibly branching) mountain range: a ground-plane
+// segment a->b with per-endpoint crest height.
+struct RidgeSegment {
+    Vec3  a, b;          // ground positions (x, 0, z)
+    float ha = 0.0f, hb = 0.0f;
+};
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).
@@ -38,7 +45,22 @@ struct TerrainParams {
     float rangeWidth = 220.0f;     // cross-axis falloff distance (to plains)
     float rangeHeight = 0.0f;      // peak uplift on the spine (0 = off)
     float rangeVariation = 0.55f;  // 0..1 along-spine height variation
+
+    // A BRANCHING range: a ridge network (compiled from an L-system skeleton by
+    // the loader). Each segment is a ridge axis with per-endpoint height (tall
+    // main divide -> lower spurs by branch depth). Empty = no branching range.
+    std::vector<RidgeSegment> rangeRidges;
 };
+
+// Build a branching ridge network from a planar L-system skeleton (consumer #2
+// of the shared Skeleton): a main divide throws off spur ridges, sub-spurs, etc.
+// Height falls by branch depth (depthFalloff). Lays the turtle's growth plane
+// (x, y) onto the ground (x, z). Feeds TerrainParams::rangeRidges.
+std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
+                                           float falloff, float leaderFalloff,
+                                           int iterations, float height,
+                                           float depthFalloff, float angleJitter,
+                                           uint32_t seed);
 
 // Sample the terrain height at a world (x, z). The single source of truth for
 // the surface — the mesh is built from it, and scatter/placement queries it

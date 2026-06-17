@@ -1,8 +1,11 @@
 #include "terrain.h"
 #include "../mesh_builder.h"
+#include "lsystem.h"
+#include "skeleton.h"
 #include "../../curve.h"
 
 #include <algorithm>
+#include <string>
 
 namespace engine {
 
@@ -98,6 +101,41 @@ std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls, int sample
     return out;
 }
 
+std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
+                                           float falloff, float leaderFalloff,
+                                           int iterations, float height,
+                                           float depthFalloff, float angleJitter,
+                                           uint32_t seed) {
+    auto num = [](float v) { return std::to_string(v); };
+    // Planar binary-branch grammar (only +/- yaw, so it stays in one plane): a
+    // main leader throws off ± spurs that recurse. Reuses the parametric L-system.
+    ParametricLSystem g;
+    g.rule("A(l)", "F(l)[+(" + num(branchAngle) + ")A(l*" + num(falloff) + ")]" +
+                       "[-(" + num(branchAngle) + ")A(l*" + num(falloff) + ")]" +
+                       "A(l*" + num(leaderFalloff) + ")");
+    ModuleString s = g.expand("A(" + num(length) + ")", iterations, seed);
+
+    // Consumer #2 of the shared Skeleton: lay the turtle's (x,y) growth plane onto
+    // the ground (x,z); crest height falls by branch depth.
+    Skeleton skel = buildSkeleton(s, angleJitter, seed);
+    auto heightAt = [&](int depth) {
+        return height * std::pow(depthFalloff, static_cast<float>(depth));
+    };
+    std::vector<RidgeSegment> ridges;
+    for (size_t i = 1; i < skel.nodes.size(); i++) {
+        const SkeletonNode& n = skel.nodes[i];
+        if (n.parent < 0) continue;
+        const SkeletonNode& p = skel.nodes[n.parent];
+        RidgeSegment seg;
+        seg.a = Vec3(p.pos.x, 0.0, p.pos.y);   // y (turtle up) -> ground z
+        seg.b = Vec3(n.pos.x, 0.0, n.pos.y);
+        seg.ha = heightAt(p.depth);
+        seg.hb = heightAt(n.depth);
+        ridges.push_back(seg);
+    }
+    return ridges;
+}
+
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
@@ -143,6 +181,32 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
             double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
             double relief = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
             h += relief * params.rangeHeight * cross * along;
+        }
+    }
+
+    // Branching ridge network: uplift from the nearest ridge segment (its
+    // interpolated crest height), falling off with distance, shaped by the
+    // ridged multifractal. A main divide + spurs + sub-spurs.
+    if (!params.rangeRidges.empty()) {
+        double bestD = 1e30, crest = 0.0;
+        for (const RidgeSegment& seg : params.rangeRidges) {
+            double ex = seg.b.x - seg.a.x, ez = seg.b.z - seg.a.z;
+            double seg2 = ex * ex + ez * ez;
+            double t = seg2 > 1e-9
+                           ? ((worldX - seg.a.x) * ex + (worldZ - seg.a.z) * ez) / seg2
+                           : 0.0;
+            t = clamp01(t);
+            double dx = worldX - (seg.a.x + ex * t), dz = worldZ - (seg.a.z + ez * t);
+            double d = std::sqrt(dx * dx + dz * dz);
+            if (d < bestD) { bestD = d; crest = seg.ha + (seg.hb - seg.ha) * t; }
+        }
+        double cross = 1.0 - smoothstep(0.0, params.rangeWidth, bestD);
+        if (cross > 1e-3) {
+            double wx = worldX * params.mountainScale, wz = worldZ * params.mountainScale;
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double relief = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += relief * crest * cross;
         }
     }
     return h;

@@ -113,6 +113,16 @@ void addTerrain(const json& t, Scene& scene) {
     tp.rangeWidth = t.value("rangeWidth", tp.rangeWidth);
     tp.rangeHeight = t.value("rangeHeight", tp.rangeHeight);
     tp.rangeVariation = t.value("rangeVariation", tp.rangeVariation);
+    if (t.contains("range") && t["range"].is_object()) {
+        const auto& r = t["range"];
+        tp.rangeRidges = buildRangeRidges(
+            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
+            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
+            r.value("iterations", 5), r.value("height", 130.0f),
+            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
+            r.value("seed", 0u));
+        tp.rangeWidth = r.value("width", tp.rangeWidth);
+    }
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
     if (t.value("erode", false)) {
