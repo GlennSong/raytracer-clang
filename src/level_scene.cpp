@@ -100,6 +100,9 @@ void addTerrain(const json& t, Scene& scene) {
     tp.warp        = t.value("warp", tp.warp);
     tp.mountainHeight = t.value("mountainHeight", tp.mountainHeight);
     tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
+    tp.mountainMaskScale = t.value("mountainMaskScale", tp.mountainMaskScale);
+    tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
+    tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
     if (t.value("erode", false)) {

@@ -16,11 +16,18 @@ struct TerrainParams {
     double noiseScale = 0.02;  // frequency: multiplies world coords before noise
     int   octaves = 5;
     double warp = 0.0;         // domain-warp amount (0 = plain FBM)
-    // Long-range relief: a low-frequency ridged layer added on top, so distant
-    // terrain reads as mountains / rolling hills while the high-frequency octaves
-    // above give near detail. 0 = off.
+    // Long-range relief: a ridged-MULTIFRACTAL layer (varied, sharp, irregular
+    // peaks — not uniform bumps), domain-warped, added on top of the hill octaves.
+    // 0 = off.
     float  mountainHeight = 0.0f;
     double mountainScale = 0.004;
+    // Regional mask: where mountains rise vs grassland. A large-scale field gates
+    // the mountain layer (smoothstep maskLo..maskHi over it), so a range sits in
+    // part of the map and plains/foothills elsewhere. 0 scale = mountains
+    // everywhere (no regions).
+    double mountainMaskScale = 0.0;
+    float  mountainMaskLo = -0.12f;
+    float  mountainMaskHi = 0.30f;
 };
 
 // Sample the terrain height at a world (x, z). The single source of truth for

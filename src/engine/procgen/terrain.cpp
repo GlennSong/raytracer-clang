@@ -42,6 +42,27 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }
 
+namespace {
+// Ridged multifractal (Musgrave): each octave is ridged (1-|noise|, sharpened)
+// and weighted by the previous octave, so detail concentrates on ridges and
+// valleys stay smooth — varied, sharp, irregular peaks instead of uniform bumps.
+// Returns ~[0,1].
+double ridgedMultifractal(const Noise& n, double x, double y, int octaves) {
+    double sum = 0.0, freq = 1.0, amp = 0.5, weight = 1.0, total = 0.0;
+    for (int o = 0; o < octaves; o++) {
+        double s = 1.0 - std::abs(n.noise2(x * freq, y * freq));   // ridge [0,1]
+        s *= s;                                                    // sharpen
+        s *= weight;                                               // feedback
+        weight = clamp01(s * 2.0);                                 // gate next octave
+        sum += s * amp;
+        total += amp;
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    return total > 0.0 ? sum / total : 0.0;
+}
+}  // namespace
+
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
@@ -50,12 +71,25 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
                    ? noise.warpedFbm2(nx, nz, params.warp, params.octaves)
                    : noise.fbm2(nx, nz, params.octaves);
     h *= params.heightScale;
-    // Long-range ridged mountain layer (low frequency, always-positive relief).
+
+    // Mountain layer: a regional mask decides where it rises (range vs plains),
+    // then a domain-warped ridged multifractal gives irregular varied peaks.
     if (params.mountainHeight > 0.0f) {
-        double m = noise.fbm2(worldX * params.mountainScale,
-                              worldZ * params.mountainScale, 4);
-        double ridge = 1.0 - std::abs(m);          // [0,1], peaks where m ~ 0
-        h += ridge * ridge * params.mountainHeight;
+        double mask = 1.0;
+        if (params.mountainMaskScale > 0.0) {
+            double m = noise.fbm2(worldX * params.mountainMaskScale,
+                                  worldZ * params.mountainMaskScale, 3);
+            mask = smoothstep(params.mountainMaskLo, params.mountainMaskHi, m);
+        }
+        if (mask > 1e-3) {
+            double wx = worldX * params.mountainScale;
+            double wz = worldZ * params.mountainScale;
+            // Domain warp the ridges so they meander instead of looking regular.
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double mh = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += mh * params.mountainHeight * mask;
+        }
     }
     return h;
 }

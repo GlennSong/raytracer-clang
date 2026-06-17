@@ -454,6 +454,9 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.warp        = t.value("warp", p.warp);
     p.mountainHeight = t.value("mountainHeight", p.mountainHeight);
     p.mountainScale  = t.value("mountainScale", p.mountainScale);
+    p.mountainMaskScale = t.value("mountainMaskScale", p.mountainMaskScale);
+    p.mountainMaskLo = t.value("mountainMaskLo", p.mountainMaskLo);
+    p.mountainMaskHi = t.value("mountainMaskHi", p.mountainMaskHi);
     return p;
 }
 

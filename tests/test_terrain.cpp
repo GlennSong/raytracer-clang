@@ -184,3 +184,24 @@ TEST_CASE(erosion_carves_the_heightfield_within_bounds) {
     CHECK(diff / baked.h.size() > 1e-3);          // it actually changed the field
     CHECK(erodedMax <= bakedMax + 2.0);           // erosion wears down, not up
 }
+
+TEST_CASE(terrain_mountain_mask_creates_grassland_regions) {
+    // Without a mask, mountains rise everywhere; with one, large areas stay low
+    // (grassland) while a range sits elsewhere -> spatial biome variation.
+    TerrainParams base; base.size = 600; base.heightScale = 5; base.octaves = 5;
+    base.mountainHeight = 120; base.mountainScale = 0.006;
+    TerrainParams masked = base;
+    masked.mountainMaskScale = 0.003; masked.mountainMaskLo = -0.05f;
+    masked.mountainMaskHi = 0.22f;
+    Noise n(12);
+    int baseLow = 0, maskedLow = 0, total = 0;
+    const double grass = 12.0;   // ~ grassland height (hills, no mountains)
+    for (int i = 0; i < 3000; i++) {
+        double x = -300 + (i * 37 % 600), z = -300 + (i * 53 % 600);
+        if (terrainHeight(base, n, x, z) < grass) baseLow++;
+        if (terrainHeight(masked, n, x, z) < grass) maskedLow++;
+        total++;
+    }
+    CHECK(maskedLow > baseLow * 2);     // mask opens up grassland
+    CHECK(maskedLow > total / 6);       // a meaningful grassland fraction
+}
