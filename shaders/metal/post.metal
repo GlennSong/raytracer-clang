@@ -38,12 +38,14 @@ kernel void ssrRayMarch(
 
     // Diagnostic mode (debug view 2): instead of the reflected color, write a
     // flat color code (alpha 1) so the debug view shows exactly where SSR exits.
-    //   black   = sky / background (no surface)
-    //   red     = roughness gate: surface too rough to reflect
-    //   yellow  = ray points behind the camera (degenerate)
-    //   cyan    = ray too short on screen (< 1px) to march
-    //   blue    = marched the full ray, found no hit on screen
-    //   green   = SSR hit (a real reflection lands here)
+    //   black     = sky / background (no surface)
+    //   red       = roughness gate: surface too rough to reflect
+    //   yellow    = ray points behind the camera (degenerate)
+    //   cyan      = ray too short on screen (< 1px) to march
+    //   blue      = marched the full ray, found no hit on screen
+    //   green     = SSR hit; brightness == the confidence (alpha) the composite
+    //               blends by. Bright green reaches the screen; near-black green
+    //               means the confidence term is crushing an otherwise-valid hit.
     bool dbg = params.debug != 0.0;
 
     // Read depth at full resolution
@@ -189,8 +191,6 @@ kernel void ssrRayMarch(
         return;
     }
 
-    if (dbg) { ssrResult.write(float4(0.0, 1.0, 0.0, 1.0), gid); return; }
-
     uint2 hitCoord = min(uint2(hitUV * fullSize), fullMax);
     float3 hitColor = sceneColor.read(hitCoord).rgb;
 
@@ -202,6 +202,12 @@ kernel void ssrRayMarch(
     float NdotV = saturate(dot(viewNormal, -viewDir));
     float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
     confidence *= fresnel * reflectivity;
+
+    // Diagnostic: green brightness == the real confidence (alpha) that the
+    // composite blends by. A bright green hit means SSR is reaching the screen;
+    // a near-black green means confidence (fresnel/edge/distance) is crushing it
+    // even though the ray hit. Pre-blur, pre-blend — see ssrBlurH/composite.
+    if (dbg) { ssrResult.write(float4(0.0, confidence, 0.0, 1.0), gid); return; }
 
     ssrResult.write(float4(hitColor, confidence), gid);
 }
