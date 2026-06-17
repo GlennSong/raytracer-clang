@@ -2,6 +2,7 @@
 
 #include "engine/mesh_builder.h"
 #include "engine/procgen/terrain.h"
+#include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
 #include "engine/procgen/noise.h"
 #include "log.h"
@@ -101,8 +102,22 @@ void addTerrain(const json& t, Scene& scene) {
     tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
-    addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
-                       Vec3(1, 1, 1), matIdx, scene);
+    if (t.value("erode", false)) {
+        // Bake the analytic field to a grid, erode it (drainage detail), mesh it.
+        Heightmap hm = bakeHeightmap(tp, noise);
+        ErosionParams ep;
+        ep.seed = t.value("seed", 0u) + 1234u;
+        ep.droplets = t.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
+        ep.talus = t.value("erodeTalus", ep.talus);
+        erode(hm, ep);
+        addMeshAsTriangles(generateTerrainMesh(hm), Vec3(), Quat::identity(),
+                           Vec3(1, 1, 1), matIdx, scene);
+    } else {
+        addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
+                           Vec3(1, 1, 1), matIdx, scene);
+    }
     // Distant LOD rings (mountains/hills out to the horizon).
     int lodRings = t.value("lodRings", 0);
     if (lodRings > 0) {

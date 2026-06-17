@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/terrain.h"
+#include "../src/engine/procgen/erosion.h"
 #include "../src/engine/procgen/noise.h"
 #include <algorithm>
 #include <cmath>
@@ -158,4 +159,28 @@ TEST_CASE(terrain_lod_rings_double_in_extent) {
         CHECK(maxAbs > prev * 1.5f);   // each ring extends well beyond the last
         prev = maxAbs;
     }
+}
+
+TEST_CASE(erosion_carves_the_heightfield_within_bounds) {
+    TerrainParams p; p.size = 200; p.resolution = 96;
+    p.heightScale = 10; p.octaves = 6; p.mountainHeight = 40; p.mountainScale = 0.01;
+    Noise n(7);
+    Heightmap baked = bakeHeightmap(p, n);
+
+    Heightmap eroded = baked;
+    ErosionParams ep; ep.droplets = 8000; ep.seed = 9; ep.thermalIterations = 6;
+    erode(eroded, ep);
+
+    CHECK(eroded.h.size() == baked.h.size());
+    double diff = 0.0, bakedMax = -1e9, erodedMax = -1e9;
+    bool finite = true;
+    for (size_t i = 0; i < baked.h.size(); i++) {
+        diff += std::fabs(eroded.h[i] - baked.h[i]);
+        bakedMax = std::max(bakedMax, (double)baked.h[i]);
+        erodedMax = std::max(erodedMax, (double)eroded.h[i]);
+        if (!std::isfinite(eroded.h[i])) finite = false;
+    }
+    CHECK(finite);
+    CHECK(diff / baked.h.size() > 1e-3);          // it actually changed the field
+    CHECK(erodedMax <= bakedMax + 2.0);           // erosion wears down, not up
 }

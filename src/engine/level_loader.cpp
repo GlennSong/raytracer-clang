@@ -2,6 +2,7 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
+#include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
 #include "procgen/rock.h"
@@ -469,7 +470,22 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<Transform>(e, tr);
     world.add<PrevTransform>(e, PrevTransform{tr});
 
-    RenderMesh terrainMesh = generateTerrain(p, noise);
+    RenderMesh terrainMesh;
+    if (t.value("erode", false)) {
+        // Bake -> erode (drainage detail) -> mesh; the eroded grid is the source
+        // of truth for the mesh (and its collider) here.
+        Heightmap hm = bakeHeightmap(p, noise);
+        ErosionParams ep;
+        ep.seed = t.value("seed", 0u) + 1234u;
+        ep.droplets = t.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
+        ep.talus = t.value("erodeTalus", ep.talus);
+        erode(hm, ep);
+        terrainMesh = generateTerrainMesh(hm);
+    } else {
+        terrainMesh = generateTerrain(p, noise);
+    }
 
     // Static collision from the same geometry, so the player walks on the
     // terrain instead of falling through (PhysicsSystem makes one static mesh
