@@ -38,6 +38,8 @@ public:
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
     void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
+    void drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                     float morphStart, float morphEnd) override;
     void endFrame() override;
 
     void initDebugUi(void* windowHandle) override;

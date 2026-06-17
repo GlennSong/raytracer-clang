@@ -185,6 +185,15 @@ struct SSRUniforms {
     float _pad;
 };
 
+// CDLOD terrain (ADR-0036): the per-node morph band. The terrain vertex shader
+// lerps a vertex toward its baked morph target (in Vertex::tangent) by morphK,
+// which ramps 0->1 as the camera distance crosses [morphStart, morphEnd].
+struct TerrainUniforms {
+    float morphStart;
+    float morphEnd;
+    float _pad[2];
+};
+
 struct SSAOUniforms {
     float   radius;
     float   intensity;

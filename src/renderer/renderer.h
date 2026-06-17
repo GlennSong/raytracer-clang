@@ -293,6 +293,20 @@ public:
         for (const Mat4& m : transforms) drawMesh(handle, m, material);
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
+
+    // Draw one CDLOD terrain node (ADR-0036): a world-space mesh (identity
+    // transform) whose vertices carry a baked morph target in Vertex::tangent.
+    // morphStart/morphEnd is the camera-distance band over which the terrain
+    // vertex shader morphs the node toward the coarser level. The default falls
+    // back to a plain draw (no morph) so backends without a terrain pipeline still
+    // render the node.
+    virtual void drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                             float morphStart, float morphEnd) {
+        (void)morphStart;
+        (void)morphEnd;
+        drawMesh(handle, Mat4(), material);
+    }
+
     virtual void endFrame() = 0;
 
     // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a

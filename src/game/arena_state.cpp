@@ -7,6 +7,7 @@
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
+#include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
@@ -61,6 +62,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<MotionSystem>();
     addSystem<DayNightSystem>();
+    addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036), before RenderSystem
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
 }

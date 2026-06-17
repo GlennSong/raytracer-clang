@@ -6,6 +6,7 @@
 #include "../systems/dev_control_system.h"
 #include "../systems/camera_system.h"
 #include "../systems/camera_panel_system.h"
+#include "../systems/terrain_lod_system.h"
 #include "../systems/render_system.h"
 #include "../../log.h"
 
@@ -19,6 +20,7 @@ EditorState::EditorState(Window& window, Renderer& renderer,
       levelFile(std::move(levelFile)) {
     addSystem<DevControlSystem>();   // Esc quits the app from the editor
     auto& camSys = addSystem<CameraSystem>();
+    addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036)
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
     addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),

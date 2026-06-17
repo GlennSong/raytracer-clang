@@ -436,6 +436,34 @@ vertex VertexOut vertexMain(
     return out;
 }
 
+// CDLOD terrain (ADR-0036). The node mesh is world-space (identity model); its
+// `tangent` holds the morph-target position — the height this vertex collapses to
+// on the next-coarser grid. Morph by camera distance so a node has already matched
+// the coarser silhouette by the time its parent takes over (no pop, no crack). The
+// output is the same VertexOut as vertexMain, so it feeds the shared lit fragment.
+vertex VertexOut terrainVertexMain(
+    const device Vertex* vertices [[buffer(0)]],
+    constant CameraUniforms& camera [[buffer(1)]],
+    constant TerrainUniforms& terrain [[buffer(2)]],
+    uint vid [[vertex_id]]
+) {
+    float3 pos = float3(vertices[vid].position);
+    float3 morphTarget = float3(vertices[vid].tangent);
+    float dist = distance(camera.cameraPosition, pos);
+    float k = saturate((dist - terrain.morphStart) /
+                       max(terrain.morphEnd - terrain.morphStart, 1e-3));
+    float3 worldPos = mix(pos, morphTarget, k);
+
+    VertexOut out;
+    out.position = camera.viewProjection * float4(worldPos, 1.0);
+    out.worldPosition = worldPos;
+    out.worldNormal = normalize(float3(vertices[vid].normal));
+    out.worldTangent = float3(1.0, 0.0, 0.0);   // unused: terrain has no normal map
+    out.texcoord = vertices[vid].texcoord;
+    out.vertexColor = vertices[vid].color;
+    return out;
+}
+
 vertex FragmentData vertexMainInstanced(
     const device Vertex* vertices [[buffer(0)]],
     constant CameraUniforms& camera [[buffer(1)]],

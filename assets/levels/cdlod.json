@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.52, 0.66, 0.86] },
+  "terrain": {
+    "seed": 21,
+    "heightScale": 16,
+    "noiseScale": 0.004,
+    "octaves": 6,
+    "warp": 0.25,
+    "mountainHeight": 240,
+    "mountainScale": 0.0016,
+    "mountainMaskScale": 0.0008,
+    "mountainMaskLo": -0.10,
+    "mountainMaskHi": 0.34,
+    "rangeSpine": [[-1800, -600], [-600, 200], [700, -200], [1800, 700]],
+    "rangeWidth": 520,
+    "rangeHeight": 300,
+    "rangeVariation": 0.6,
+    "cdlod": {
+      "worldHalf": 2048,
+      "numLods": 7,
+      "gridRes": 32,
+      "rangeFactor": 2.5
+    },
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "player": {
+    "position": [0, 120, 200],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.62, 0.34, 0.4],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}

@@ -60,6 +60,7 @@ struct MetalRenderer::Impl {
     id<MTLDevice> device;
     id<MTLCommandQueue> commandQueue;
     id<MTLRenderPipelineState> opaquePipeline;
+    id<MTLRenderPipelineState> terrainPipeline;   // CDLOD vertex morph (ADR-0036)
     id<MTLRenderPipelineState> transparentPipeline;
     id<MTLRenderPipelineState> opaqueInstancedPipeline;
     id<MTLRenderPipelineState> transparentInstancedPipeline;
@@ -217,6 +218,16 @@ struct MetalRenderer::Impl {
 
     std::vector<DrawCall> opaqueDrawCalls;
     std::vector<DrawCall> transparentDrawCalls;
+
+    // CDLOD terrain nodes (ADR-0036): drawn with the morph pipeline after opaque.
+    struct TerrainDrawCall {
+        MeshHandle meshHandle;
+        RenderMaterial material;
+        float morphStart;
+        float morphEnd;
+    };
+    std::vector<TerrainDrawCall> terrainDrawCalls;
+
     Vec3 currentCameraPos;
     RenderStats lastStats;
 
@@ -315,6 +326,19 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     if (!impl->opaquePipeline) {
         NSLog(@"Pipeline error: %@", error);
         return false;
+    }
+
+    // CDLOD terrain pipeline (ADR-0036): the morph vertex shader feeding the shared
+    // lit fragment, same MRT/depth as opaque (drawn in the opaque pass). Optional —
+    // a missing function just disables CDLOD draws (drawTerrain no-ops).
+    id<MTLFunction> terrainVertexFunc = [library newFunctionWithName:@"terrainVertexMain"];
+    if (terrainVertexFunc) {
+        pipelineDesc.vertexFunction = terrainVertexFunc;
+        pipelineDesc.fragmentFunction = fragmentFunc;
+        impl->terrainPipeline = [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                                             error:&error];
+        if (!impl->terrainPipeline) NSLog(@"Terrain pipeline error: %@", error);
+        pipelineDesc.vertexFunction = vertexFunc;   // restore for the pipelines below
     }
 
     // Opaque instanced pipeline
@@ -1478,6 +1502,7 @@ RenderStats MetalRenderer::getRenderStats() const {
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
+    impl->terrainDrawCalls.clear();
     // Advance the dynamic-buffer ring so this frame writes a slot the GPU isn't
     // still reading for an in-flight earlier frame (fixes instance tearing —
     // trees popping to a neighbor's transform for a frame).
@@ -2046,6 +2071,17 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     }
 }
 
+void MetalRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                                float morphStart, float morphEnd) {
+    // No terrain pipeline (shader function absent) -> fall back to a plain draw so
+    // the node still renders, just without the morph.
+    if (!impl->terrainPipeline) {
+        drawMesh(handle, Mat4(), material);
+        return;
+    }
+    impl->terrainDrawCalls.push_back({handle, material, morphStart, morphEnd});
+}
+
 void MetalRenderer::endFrame() {
     if (!impl->currentDrawable || !impl->currentPassDesc) return;
 
@@ -2381,6 +2417,52 @@ void MetalRenderer::endFrame() {
 
     issuePass(impl->opaqueDrawCalls, impl->opaquePipeline,
               impl->opaqueInstancedPipeline, impl->depthStateOpaque);
+
+    // CDLOD terrain nodes (ADR-0036). Opaque, so drawn here with the morph pipeline,
+    // reusing the shadow/probe/IBL/light bindings already set on this encoder. Each
+    // node is a world-space mesh (no model matrix); the vertex shader morphs it by
+    // camera distance using the per-node band in TerrainUniforms.
+    if (impl->terrainPipeline && !impl->terrainDrawCalls.empty()) {
+        [impl->currentEncoder setRenderPipelineState:impl->terrainPipeline];
+        [impl->currentEncoder setDepthStencilState:impl->depthStateOpaque];
+        for (const auto& tdc : impl->terrainDrawCalls) {
+            const GPUMesh* mesh = impl->meshes.get(tdc.meshHandle);
+            if (!mesh) continue;
+
+            uint32_t tf = computeTextureFlags(tdc.material);
+            MaterialUniforms matU;
+            matU.albedo = {static_cast<float>(tdc.material.albedo.x),
+                           static_cast<float>(tdc.material.albedo.y),
+                           static_cast<float>(tdc.material.albedo.z)};
+            matU.metallic = tdc.material.metallic;
+            matU.roughness = tdc.material.roughness;
+            matU.opacity = tdc.material.opacity;
+            matU.flags = static_cast<float>(tdc.material.flags);
+            matU.textureFlags = tf;
+            matU.emission = {static_cast<float>(tdc.material.emission.x),
+                             static_cast<float>(tdc.material.emission.y),
+                             static_cast<float>(tdc.material.emission.z)};
+            bindMaterialTextures(tdc.material, tf);
+
+            TerrainUniforms tu = {tdc.morphStart, tdc.morphEnd, {0.0f, 0.0f}};
+            [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+            [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
+                                          length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setVertexBytes:&tu
+                                          length:sizeof(TerrainUniforms) atIndex:2];
+            [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
+                                            length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setFragmentBytes:&matU
+                                            length:sizeof(MaterialUniforms) atIndex:3];
+            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+            [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                             indexCount:mesh->indexCount
+                                              indexType:MTLIndexTypeUInt32
+                                            indexBuffer:mesh->indexBuffer
+                                      indexBufferOffset:0];
+            stats.drawCalls++;
+        }
+    }
 
     std::sort(impl->transparentDrawCalls.begin(), impl->transparentDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {

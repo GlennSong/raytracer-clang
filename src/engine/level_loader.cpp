@@ -529,8 +529,40 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
     }
 }
 
+// CDLOD heightfield terrain (ADR-0036, open-world Phase 1c): stamp a single
+// TerrainLodConfig the TerrainLodSystem drives each frame (selection + morph +
+// streaming-ready cache), instead of static chunk entities. Opt-in via the terrain
+// block's "cdlod" key (an object of overrides, or `true` for defaults). Render-only
+// for now (no colliders — a flythrough; near-node colliders are a follow-up).
+static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world) {
+    TerrainLodConfig cfg;
+    cfg.params = p;
+    cfg.seed = t.value("seed", 0u);
+    const json& c = t["cdlod"];
+    if (c.is_object()) {
+        cfg.worldHalf = c.value("worldHalf", cfg.worldHalf);
+        cfg.numLods = c.value("numLods", cfg.numLods);
+        cfg.gridRes = c.value("gridRes", cfg.gridRes);
+        cfg.rangeFactor = c.value("rangeFactor", cfg.rangeFactor);
+    }
+    if (t.contains("material")) applyMaterial(t["material"], cfg.material);
+    else {
+        cfg.material.albedo = Vec3(0.42, 0.5, 0.32);
+        cfg.material.roughness = 0.95f;
+    }
+    Entity e = world.create();
+    world.add<TerrainLodConfig>(e, cfg);
+}
+
 static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& t,
                         World& world, AssetManager& assets) {
+    bool wantCdlod = t.contains("cdlod") &&
+                     (t["cdlod"].is_object() ||
+                      (t["cdlod"].is_boolean() && t["cdlod"].get<bool>()));
+    if (wantCdlod) {
+        loadCdlodTerrain(p, t, world);
+        return;
+    }
     if (t.contains("chunks") && t["chunks"].get<int>() > 0) {
         loadChunkedTerrain(p, noise, t, world, assets);
         return;

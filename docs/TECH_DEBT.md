@@ -7,6 +7,17 @@ when fixed (git history is the archive).
 ## Rendering / performance
 
 **Open follow-ups (rough priority — detail in the notes below):**
+0. **CDLOD terrain — viewer-unverified + interim gaps (ADR-0036, Phase 1c).** The
+   CPU core (selection + morph) is unit-tested, but the Metal terrain pipeline /
+   morph vertex shader, the engine `TerrainLodSystem`, and the level wiring are
+   **Metal/viewer-only and unverified on Linux** — needs a viewer pass on
+   `assets/levels/cdlod.json` (morphing should be seamless, no popping/cracks at LOD
+   boundaries; the far field should coarsen). Interim gaps to close after it reads
+   right: (a) CDLOD nodes carry **no colliders** (render-only flythrough) — near
+   nodes need them to walk on; (b) terrain is **not a shadow caster** (not in the
+   shadow pass), only a receiver; (c) **normals are not morphed** (height only), so
+   lighting can shift subtly mid-morph; (d) node meshes are cached and never evicted
+   (distance/budget eviction is Phase 3 streaming).
 1. **`lightBuffer` frame-in-flight ring** — last known CPU/GPU race; same fix as
    the instance buffer (ring `MAX_FRAMES_IN_FLIGHT` deep, index per `beginFrame`).
    Subtle light tearing, not geometry pops. ~10 min, low risk.

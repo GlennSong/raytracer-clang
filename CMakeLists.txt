@@ -41,6 +41,7 @@ add_library(engine_core STATIC
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
+    src/engine/procgen/terrain_lod.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
@@ -72,6 +73,7 @@ add_library(engine_core STATIC
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
+    src/engine/systems/terrain_lod_system.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)

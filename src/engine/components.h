@@ -4,6 +4,7 @@
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "physics/physics_world.h"
+#include "procgen/terrain.h"
 #include "world.h"
 #include <cstdint>
 #include <string>
@@ -64,6 +65,22 @@ struct InstanceGroup {
     std::vector<Mat4> transforms;   // world matrices, one per instance
     Vec3 boundsCenter;              // world-space group bounds (coarse cull)
     Real boundsRadius = 0;
+};
+
+// CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
+// terrain block opts in via "cdlod", the loader stamps this instead of static chunk
+// entities, and TerrainLodSystem reads it each frame to select a quadtree of nodes
+// by camera distance, cache/upload their meshes, frustum-cull, and draw them with
+// vertex morphing. Carries the same height field (TerrainParams + seed) as the
+// static terrain so the surface is identical.
+struct TerrainLodConfig {
+    TerrainParams params;          // shared height field
+    uint32_t seed = 0;
+    float worldHalf = 1024.0f;     // half-extent of the square world (XZ, origin-centred)
+    int   numLods = 6;             // quadtree depth (level 0 = finest)
+    int   gridRes = 32;            // grid cells per node (forced even)
+    float rangeFactor = 2.5f;      // LOD range = leafNodeSize * this (>= 2)
+    RenderMaterial material;
 };
 
 // Associates an entity with a local player slot (ADR-0010). This is the only
