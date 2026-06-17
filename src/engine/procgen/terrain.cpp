@@ -1,5 +1,6 @@
 #include "terrain.h"
 #include "../mesh_builder.h"
+#include "../../curve.h"
 
 #include <algorithm>
 
@@ -61,7 +62,41 @@ double ridgedMultifractal(const Noise& n, double x, double y, int octaves) {
     }
     return total > 0.0 ? sum / total : 0.0;
 }
+
+// Nearest distance from (x,z) to the spine polyline + the arc fraction [0,1] of
+// the closest point (for along-spine height variation). Arc is approximated by
+// segment index (the loader samples the spine ~uniformly).
+void spineQuery(const std::vector<Vec3>& spine, double x, double z,
+                double& dist, double& arc) {
+    dist = 1e30; arc = 0.0;
+    const int n = static_cast<int>(spine.size());
+    if (n == 1) {
+        double dx = x - spine[0].x, dz = z - spine[0].z;
+        dist = std::sqrt(dx * dx + dz * dz);
+        return;
+    }
+    for (int i = 1; i < n; i++) {
+        double ax = spine[i - 1].x, az = spine[i - 1].z;
+        double ex = spine[i].x - ax, ez = spine[i].z - az;
+        double seg2 = ex * ex + ez * ez;
+        double t = seg2 > 1e-9 ? ((x - ax) * ex + (z - az) * ez) / seg2 : 0.0;
+        t = clamp01(t);
+        double dx = x - (ax + ex * t), dz = z - (az + ez * t);
+        double d = std::sqrt(dx * dx + dz * dz);
+        if (d < dist) { dist = d; arc = (i - 1 + t) / (n - 1); }
+    }
+}
 }  // namespace
+
+std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls, int samples) {
+    if (controls.size() < 2) return controls;
+    Spline<Vec3> s = Spline<Vec3>::catmullRom(controls);
+    std::vector<Vec3> out;
+    const int n = std::max(2, samples);
+    for (int i = 0; i < n; i++)
+        out.push_back(s.eval(static_cast<double>(i) / (n - 1) * s.segments()));
+    return out;
+}
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
@@ -89,6 +124,25 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
             double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
             double mh = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
             h += mh * params.mountainHeight * mask;
+        }
+    }
+
+    // Spine-driven range: uplift falls off from the range axis (range -> foothills
+    // -> plains) and varies along it (tall massifs, low passes), shaping a
+    // ridged-multifractal relief.
+    if (!params.rangeSpine.empty() && params.rangeHeight > 0.0f) {
+        double dist, arc;
+        spineQuery(params.rangeSpine, worldX, worldZ, dist, arc);
+        double cross = 1.0 - smoothstep(0.0, params.rangeWidth, dist);
+        if (cross > 1e-3) {
+            double a = noise.noise2(arc * 7.0 + 0.5, 13.7);            // [-1,1]
+            double along = 1.0 - params.rangeVariation * (0.5 - 0.5 * a);
+            double wx = worldX * params.mountainScale;
+            double wz = worldZ * params.mountainScale;
+            double ox = noise.noise2(wx + 5.2, wz + 1.3) * 0.6;
+            double oz = noise.noise2(wx + 9.1, wz + 4.7) * 0.6;
+            double relief = ridgedMultifractal(noise, wx + ox, wz + oz, 6);
+            h += relief * params.rangeHeight * cross * along;
         }
     }
     return h;

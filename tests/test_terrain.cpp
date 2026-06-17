@@ -205,3 +205,22 @@ TEST_CASE(terrain_mountain_mask_creates_grassland_regions) {
     CHECK(maskedLow > baseLow * 2);     // mask opens up grassland
     CHECK(maskedLow > total / 6);       // a meaningful grassland fraction
 }
+
+TEST_CASE(terrain_spine_range_rises_and_falls_to_plains) {
+    // A spine-driven range: high uplift on the axis, falling to grassland beyond
+    // rangeWidth -> a range with neighboring plains.
+    TerrainParams p; p.size = 600; p.heightScale = 5; p.octaves = 5;
+    p.rangeHeight = 120; p.rangeWidth = 150; p.mountainScale = 0.006;
+    p.rangeSpine = sampleRangeSpine(
+        {Vec3(-300, 0, 0), Vec3(0, 0, 0), Vec3(300, 0, 0)});  // axis along x at z=0
+    Noise n(3);
+    double onSpine = -1e9, offSpine = -1e9;
+    for (int i = 0; i < 60; i++) {
+        double x = -290 + i * 9.8;
+        onSpine = std::max(onSpine, terrainHeight(p, n, x, 0.0));      // on the axis
+        offSpine = std::max(offSpine, terrainHeight(p, n, x, 290.0));  // far away
+    }
+    CHECK(onSpine > 50.0);            // range rises on the spine
+    CHECK(offSpine < 25.0);           // plains far from it (just hills)
+    CHECK(onSpine > offSpine * 2.0);
+}

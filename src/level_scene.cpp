@@ -103,6 +103,16 @@ void addTerrain(const json& t, Scene& scene) {
     tp.mountainMaskScale = t.value("mountainMaskScale", tp.mountainMaskScale);
     tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
     tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
+    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
+        std::vector<Vec3> ctl;
+        for (const auto& pt : t["rangeSpine"])
+            if (pt.is_array() && pt.size() >= 2)
+                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
+        tp.rangeSpine = sampleRangeSpine(ctl);
+    }
+    tp.rangeWidth = t.value("rangeWidth", tp.rangeWidth);
+    tp.rangeHeight = t.value("rangeHeight", tp.rangeHeight);
+    tp.rangeVariation = t.value("rangeVariation", tp.rangeVariation);
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
     if (t.value("erode", false)) {

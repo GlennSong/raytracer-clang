@@ -3,6 +3,7 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "noise.h"
+#include <vector>
 
 namespace engine {
 
@@ -28,6 +29,15 @@ struct TerrainParams {
     double mountainMaskScale = 0.0;
     float  mountainMaskLo = -0.12f;
     float  mountainMaskHi = 0.30f;
+    // A mountain RANGE driven by a spine curve (range axis), instead of (or on
+    // top of) the regional mask: uplift falls off with distance from the spine
+    // (range -> foothills -> plains) and varies along it (tall massifs, low
+    // passes). `rangeSpine` is a polyline of (x,_,z) points (sampled from the
+    // authored control curve by the loader); empty = no range.
+    std::vector<Vec3> rangeSpine;
+    float rangeWidth = 220.0f;     // cross-axis falloff distance (to plains)
+    float rangeHeight = 0.0f;      // peak uplift on the spine (0 = off)
+    float rangeVariation = 0.55f;  // 0..1 along-spine height variation
 };
 
 // Sample the terrain height at a world (x, z). The single source of truth for
@@ -35,6 +45,11 @@ struct TerrainParams {
 // directly (height, and slope via finite differences) without needing the mesh.
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ);
+
+// Sample a smooth spine polyline from authored control points (Catmull-Rom) for
+// TerrainParams::rangeSpine. Points are (x, 0, z).
+std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls,
+                                   int samples = 80);
 
 // Height/slope-based ground color (ROADMAP 4 Phase D): grass on low flats, rock
 // on steep or high ground, plus a noise term to break up the bands. `normalUp`
