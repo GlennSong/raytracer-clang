@@ -1977,80 +1977,90 @@ per-node attributes beyond the current set.
 
 ---
 
-## ADR-0034 — Open worlds: double world coords + camera-relative rendering + floating origin + reverse-Z; terrain streams as deterministic, tightly-bounded chunks
+## ADR-0034 — A bounded, curated world (~16 km, single precision): reverse-Z, spatial partitioning, terrain + object LOD (impostors/HLOD), and sector streaming
 **Status:** Pending · **Date:** 2026-06-17
 
 **Context.** Distant-terrain work surfaced a cluster of failures — terrain past
 ~99 m composited as sky (a fixed `depth >= 0.999` test that maps to ~99 m under a
 0.1 m near plane), frustum culling misjudging the one origin-centred terrain mesh,
-LOD ring seams, and latent far-field vertex/camera jitter and z-fighting. These
-are one root cause: *the engine assumes a small world centred on the origin.* The
-target is **infinite procedural terrain** (Minecraft-like; walk forever,
-deterministic chunks). ADR-0027 / `world-system-plan.md` cover the *content* model
-(fields + recipes + deterministic tiles); this ADR owns the *coordinate,
-precision, and rendering* foundation they don't. Detail in
-`docs/open-world-foundations-plan.md`.
+and LOD ring seams. The target was clarified: **not** an infinite Minecraft world,
+but a **bounded, artist-curated "place"** in the GTA V / Horizon Forbidden West
+mould — a large chunk of terrain (~16 km across) with forests, rivers, a city, and
+walk-to-able distant mountains, with room to grow. That target reshapes the
+solution: at ~16 km centred on the origin, **single-precision floats are exact to
+~1–2 mm**, so the heavy infinite-world machinery (camera-relative rendering,
+floating-origin rebasing, double GPU coords) is *not* needed; the real needs are
+correct depth, spatial partitioning, and aggressive LOD. ADR-0027 /
+`world-system-plan.md` cover the *content* model (fields + recipes, authored as
+data, per-tile overrides); this ADR owns the *coordinate, rendering, and
+LOD/streaming* foundation. Detail in `docs/open-world-foundations-plan.md`.
 
 **Decision.**
-1. **World simulation positions stay `double`** (already true: `Real=double`,
-   `Vec3`/`Mat4` double, narrowed to float only at GPU upload). Authoritative and
-   exact well beyond Minecraft scale — no bespoke 64-bit integer "universe" layer
-   (that is the planetary/space tier, deferred).
-2. **Chunks are addressed by integer tile coords** (`i64`), regenerating
-   identically from `(tileCoord, worldSeed)` (ADR-0002, ADR-0027 §5) — unbounded
-   map, rebase-invariant content.
-3. **Camera-relative rendering.** Translate the world by `-cameraPosition` in
-   double, *then* narrow to float; the GPU sees the camera at the origin, so vertex
-   precision is excellent at any absolute position. Lands at the existing
-   `CameraState`/`setCamera`/`drawMesh` seam.
-4. **Floating-origin rebasing.** When the player crosses a threshold (~4 km),
-   shift all `Transform`s + Jolt bodies + the streaming anchor by the offset and
-   reset the player near zero — keeps float-internal subsystems (Jolt) near the
-   origin. Pure translation; velocities invariant; content deterministic by tile
-   coord, not render origin.
-5. **Reverse-Z depth + robust background classification.** Map near→1/far→0 on the
-   `Depth32Float` buffer for near-uniform far-field precision; background becomes
-   `depth <= 0` (the clear), retiring the `depth >= 0.999` magic constant
-   everywhere (composite/SSR/SSAO/debug). Stop-gap before reverse-Z: a linearized
-   `linearDepth >= 0.999*far` test.
-6. **Terrain streams as deterministic, tightly-bounded chunks** with per-chunk LOD
-   (clipmaps or CDLOD — chosen in a later ADR), replacing the origin-centred tile +
-   concentric rings, so culling is correct and seams stitch. This *is* the
-   ADR-0027 §7 streaming manager, with the added constraint that chunks are
-   camera-relative and tightly bounded.
+1. **Bounded, single-precision, origin-centred world; budget ~16 km across**
+   (±8 km → ~1–2 mm float precision everywhere). No floating origin, no
+   camera-relative rendering, no double GPU coords. **No code may hardcode the
+   extent** — the world size is one constant (far plane + streaming-grid extent), so
+   growing to ~64–130 km later (still single precision, ~cm precision) is a
+   one-line change.
+2. **Reverse-Z depth + robust background classification.** Map near→1/far→0 on the
+   `Depth32Float` buffer for near-uniform precision across a wide (~16–20 km) far
+   plane; background becomes `depth <= 0` (the clear value), retiring the
+   `depth >= 0.999` magic constant everywhere (composite/SSR/SSAO/debug). Stop-gap
+   before reverse-Z lands: a linearized `linearDepth >= 0.999*far` test.
+3. **Spatial partitioning.** A sector grid (and/or BVH/octree) over the world for
+   correct frustum culling, streaming decisions, and later occlusion culling —
+   replacing the single origin-centred bounding sphere that misjudges large meshes.
+4. **Terrain is chunked with tight bounds + geometric LOD** (clipmaps or CDLOD,
+   chosen in a later ADR), replacing the origin-centred tile + concentric rings, so
+   culling is correct and seams stitch. **A walkable distant mountain is coarse
+   terrain LOD, not an impostor** (terrain is a continuous walkable surface).
+5. **Object LOD ladder: discrete mesh LOD → impostors/billboards → HLOD.** Discrete
+   per-object LOD meshes + terrain LOD first; then **foliage impostors** (billboard/
+   octahedral cards) for distant trees so a forest reaches the horizon cheaply; then
+   **HLOD** (merged simplified proxy meshes) + building impostors for the distant
+   city. Discrete props get impostors; walkable terrain does not.
+6. **Sector streaming of a bounded set.** Page authored/generated content in and out
+   by distance from the camera over the partition grid — the ADR-0027 §7 streaming
+   manager, but over a *finite* sector set, not an unbounded tile map.
 
 Phased, each independently shippable: **0** reverse-Z + sky test + re-enable cull;
-**1** camera-relative rendering; **2** chunked/streamed terrain; **3** floating
-origin. 0 and 1 are foundation for any scale.
+**1** spatial partition + chunked terrain w/ tight bounds + terrain LOD; **2** object
+mesh LOD + foliage impostors; **3** sector streaming + HLOD/building impostors;
+later, occlusion culling.
 
 **Alternatives considered.**
-- *64-bit integer universe coords from the start (Star Citizen)* — rejected as
-  over-scoped: doubles + floating origin cover Minecraft-scale; revisit for
-  planetary/space.
+- *Design for infinite/Minecraft from the start (camera-relative + floating origin +
+  double/int world coords)* — rejected for this target: over-built for a bounded
+  ~16 km world where single precision is already exact to ~mm; kept as the documented
+  **upgrade path** if we later go endless or planetary.
+- *64-bit integer universe coords (Star Citizen)* — rejected: planetary/space tier.
 - *Logarithmic depth* instead of reverse-Z — viable (space sims use it), but
   reverse-Z is simpler with our existing float depth buffer and the cheaper win.
-- *Keep one big terrain mesh, just fix bounds/threshold* — rejected: patches the
-  symptoms, not the small-world assumption; doesn't scale or stream.
-- *Turn off the skybox for "true" rendering* — rejected: a skybox is the sky; the
-  real needs are robust sky classification (§5), terrain-to-horizon (§6), and
-  atmospheric blend (existing fog).
+- *Keep one big terrain mesh, just fix bounds/threshold* — rejected: patches symptoms,
+  doesn't partition/stream/LOD; won't host a city + forests at frame rate.
+- *Turn off the skybox for "true" rendering* — rejected: a skybox is the sky; the real
+  needs are robust sky classification (§2), terrain-to-horizon (§4), and atmospheric
+  blend (existing fog).
+- *Impostors for the distant mountain landform* — rejected: terrain is walkable, so it
+  is geometric LOD; impostors are for the discrete props on it and the distant city.
 
 **Consequences / tech debt.**
 - Reverse-Z touches every depth consumer (projection, clear, compare, skybox,
   SSR/SSAO/temporal-AO/debug views) — they must flip together; Metal-only, so
   user/viewer-verified, with the offline tracer (absolute world space, no far clip)
   as the precision oracle.
-- Camera-relative rendering adds a per-object/instance double subtraction at
-  submit.
-- Rebasing demands cross-subsystem atomicity (ECS + Jolt + streaming) on a
-  fixed-update boundary; Jolt origin-shift ergonomics need a spike.
-- Supersedes the concentric LOD rings (and their seam debt) once Phase 2 lands.
+- Impostor/HLOD need an offline bake step (render-to-card / merge+decimate) and a
+  LOD-selection + crossfade path — a real chunk of the content pipeline.
+- Supersedes the concentric LOD rings (and their seam debt) once Phase 1 lands.
 - The temporary diagnostics on the current branch (camera near/far log; bypassed
   per-object frustum cull) are reverted as Phase 0 begins.
 
-**Revisit trigger.** Going planetary/space (cube-sphere terrain, atmospheric
-scattering, possibly 64-bit/int universe coords) extends this rather than replacing
-it; revisit the depth scheme if a second backend or HDR depth needs differ.
+**Revisit trigger.** If the world wants to become **endless** (Minecraft) or
+**planetary/wrap-around** (walk around the world and return), revisit: that needs
+camera-relative rendering + floating-origin rebasing (endless) or a sphere/torus
+topology + cube-sphere terrain + atmospheric scattering (planetary) — extending this
+ADR, recorded as its own decision. Also revisit the world-size constant if ~16 km
+proves too small, and the depth scheme if a second backend lands.
 
 ---
 
