@@ -339,8 +339,6 @@ static void loadPlayer(const json& player, World& world) {
     Transform t;
     if (player.contains("position"))
         t.position = parseVec3(player["position"]);
-    world.add<Transform>(e, t);
-    world.add<PrevTransform>(e, PrevTransform{t});
 
     Collider c;
     if (player.contains("collider")) {
@@ -359,6 +357,26 @@ static void loadPlayer(const json& player, World& world) {
         }
     }
     c.friction = player.value("friction", 0.5);
+
+    // CDLOD terrain: snap the spawn to just above the surface at its XZ. The
+    // collider is a thin triangle mesh, so a tall drop (the authored y far above
+    // the ground) builds up enough speed to tunnel through it in one step, and a y
+    // below the surface spawns embedded — either reads as "fell through". Scoped to
+    // CDLOD (static-chunk levels have no TerrainLodConfig and keep the authored y).
+    const TerrainLodConfig* tc = nullptr;
+    world.each<TerrainLodConfig>(
+        [&](Entity, TerrainLodConfig& cfg) { if (!tc) tc = &cfg; });
+    if (tc) {
+        Noise noise(tc->seed);
+        double surface = terrainHeight(tc->params, noise, t.position.x, t.position.z);
+        double clearance = c.radius +
+                           (c.shape == ColliderShape::Capsule ? c.halfHeight : 0.0) +
+                           1.0;   // drop ~1 m onto the surface, no tunnelling
+        t.position.y = surface + clearance;
+    }
+
+    world.add<Transform>(e, t);
+    world.add<PrevTransform>(e, PrevTransform{t});
     world.add<Collider>(e, c);
 
     RigidBody rb;
