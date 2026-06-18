@@ -24,6 +24,29 @@
     },
     "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
   },
+  "vegetation": {
+    "seed": 7,
+    "region": 700,
+    "count": 600,
+    "maxSlopeDeg": 30,
+    "minScale": 0.6,
+    "maxScale": 1.3,
+    "spacingFactor": 0.9,
+    "densityScale": 0.04,
+    "densityThreshold": -0.4,
+    "focus": [0, 0, 200],
+    "focusRadius": 160,
+    "focusScale": 1.6,
+    "focusClear": 8,
+    "clusterCount": 14,
+    "clusterRadius": 18,
+    "species": [
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='oak'})",  "variants": 3, "collide": true },
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='pine'})", "variants": 3, "collide": true },
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='birch'})","variants": 3, "collide": true },
+      { "kind": "rock", "variants": 3, "material": { "albedo": [0.5, 0.5, 0.52], "roughness": 1.0 } }
+    ]
+  },
   "player": {
     "position": [0, 120, 200],
     "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
