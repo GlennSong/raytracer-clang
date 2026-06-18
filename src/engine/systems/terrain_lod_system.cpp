@@ -58,6 +58,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
 
     Noise noise(cfg->seed);
+    ++frame_;
     for (const LodNode& node : nodes) {
         int64_t key = nodeKey(node);
         auto it = cache_.find(key);
@@ -71,11 +72,24 @@ void TerrainLodSystem::render(FrameContext& ctx) {
             cached.boundsMax = built.boundsMax;
             it = cache_.emplace(key, cached).first;
         }
-        const CachedNode& cn = it->second;
+        CachedNode& cn = it->second;
+        cn.lastUsed = frame_;   // in the cut this frame (keep it cached)
         if (!frustum.containsAABB(cn.boundsMin, cn.boundsMax)) continue;
 
         MorphRange m = lodMorphRange(node.level, ranges);
         ctx.renderer.drawTerrain(cn.mesh, cfg->material, m.start, m.end);
+    }
+
+    // Evict node meshes that have been out of the cut for a while (the player moved
+    // away). The cut itself is bounded, so this keeps the cache ~ a few recent cuts
+    // instead of every node ever visited.
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        if (frame_ - it->second.lastUsed > kEvictAfterFrames) {
+            ctx.assets.releaseMesh(it->second.mesh);
+            it = cache_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 

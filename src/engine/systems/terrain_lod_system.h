@@ -37,8 +37,14 @@ private:
         MeshHandle mesh;
         Vec3 boundsMin;
         Vec3 boundsMax;
+        uint64_t lastUsed = 0;   // frame this node was last in the selected cut
     };
     std::unordered_map<int64_t, CachedNode> cache_;
+    uint64_t frame_ = 0;
+    // Release a node's GPU mesh after it has been out of the cut this many frames.
+    // Generous enough that turning around / LOD-flip flicker doesn't thrash the
+    // cache, small enough to bound memory as the player explores.
+    static constexpr uint64_t kEvictAfterFrames = 180;
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body
