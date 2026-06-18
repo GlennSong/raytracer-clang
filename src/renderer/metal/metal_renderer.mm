@@ -164,9 +164,9 @@ struct MetalRenderer::Impl {
     LensParams currentLens;
 
     // Screen-space ambient occlusion (SSAO/GTAO)
-    id<MTLTexture> aoTexture;          // R16Float — full-res AO result
-    id<MTLTexture> aoBlurTemp;         // R16Float — full-res blur ping-pong / temporal out
-    id<MTLTexture> aoHistory;          // R16Float — previous frame's resolved AO
+    id<MTLTexture> aoTexture;          // R16Float — half-res AO result
+    id<MTLTexture> aoBlurTemp;         // R16Float — half-res blur ping-pong / temporal out
+    id<MTLTexture> aoHistory;          // R16Float — half-res previous frame's resolved AO
     id<MTLComputePipelineState> aoPipeline;
     id<MTLComputePipelineState> aoBlurHPipeline;
     id<MTLComputePipelineState> aoBlurVPipeline;
@@ -895,11 +895,14 @@ void MetalRenderer::resize(int width, int height) {
     impl->ssrTexture = [impl->device newTextureWithDescriptor:ssrDesc];
     impl->ssrBlurTemp = [impl->device newTextureWithDescriptor:ssrDesc];
 
-    // AO textures (full resolution — fewer samples per pixel instead of half-res)
+    // AO textures (half resolution — SSAO is the dominant frame cost at full res;
+    // ¼ the pixels across all four AO passes, upsampled bilinearly in the
+    // composite. The AO kernels map their half-res coords to the full-res
+    // depth/normal G-buffer.)
     MTLTextureDescriptor* aoDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatR16Float
-                                     width:width
-                                    height:height
+                                     width:halfW
+                                    height:halfH
                                  mipmapped:NO];
     aoDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
     aoDesc.storageMode = MTLStorageModePrivate;
@@ -2777,11 +2780,9 @@ void MetalRenderer::endFrame() {
         id<MTLComputeCommandEncoder> enc = [impl->currentCommandBuffer computeCommandEncoder];
         MTLSize group = MTLSizeMake(8, 8, 1);
 
-        // --- SSAO ---
+        // --- SSAO (half resolution; see aoTexture allocation) ---
         if (impl->aoPipeline && impl->aoTexture && ssaoEnabled) {
-            int fullW = impl->framebufferWidth;
-            int fullH = impl->framebufferHeight;
-            MTLSize aoGrid = MTLSizeMake(fullW, fullH, 1);
+            MTLSize aoGrid = MTLSizeMake(impl->aoTexture.width, impl->aoTexture.height, 1);
 
             [enc setComputePipelineState:impl->aoPipeline];
             [enc setTexture:impl->depthTexture atIndex:0];

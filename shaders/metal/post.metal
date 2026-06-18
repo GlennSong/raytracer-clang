@@ -328,6 +328,14 @@ kernel void ssrBlurV(
 // --- Screen-Space Ambient Occlusion (GTAO) ---
 // Full-resolution compute with fewer samples per pixel.
 
+// AO runs at half the G-buffer resolution. Map an AO-buffer integer coord to the
+// matching full-res depth/normal texel center, so the AO kernels read the
+// G-buffer at the right place regardless of the AO/G-buffer size ratio.
+static inline uint2 aoCoordToGBuffer(uint2 aoCoord, float2 aoSize, uint2 gbSize) {
+    return min(uint2((float2(aoCoord) + 0.5) / aoSize * float2(gbSize)),
+               gbSize - uint2(1));
+}
+
 kernel void gtaoCompute(
     texture2d<float, access::read> depthTex [[texture(0)]],
     texture2d<float, access::write> aoResult [[texture(1)]],
@@ -339,7 +347,10 @@ kernel void gtaoCompute(
     uint2 texSize = uint2(aoResult.get_width(), aoResult.get_height());
     if (gid.x >= texSize.x || gid.y >= texSize.y) return;
 
-    float depth = depthTex.read(gid).x;
+    // AO is half-res; sample depth/normal at the matching full-res G-buffer texel.
+    uint2 gbSize = uint2(depthTex.get_width(), depthTex.get_height());
+    uint2 centerCoord = aoCoordToGBuffer(gid, float2(texSize), gbSize);
+    float depth = depthTex.read(centerCoord).x;
 
     // Sky pixels — no occlusion (reverse-Z background = cleared far value 0)
     if (depth <= 0.0) {
@@ -355,9 +366,7 @@ kernel void gtaoCompute(
     // Use the real view-space normal from the G-buffer (same encoding as SSR).
     // Reconstructing the normal from depth neighbours sprays garbage normals over
     // thin/edgy geometry (foliage), which made AO crawl and block under motion.
-    float3 viewNormal = normalize(normalTex.read(gid).xyz * 2.0 - 1.0);
-
-    uint2 maxCoord = texSize - 1;   // clamp for sample reads below
+    float3 viewNormal = normalize(normalTex.read(centerCoord).xyz * 2.0 - 1.0);
 
     const int NUM_DIRECTIONS = aoParams.directions;
     const int NUM_STEPS = aoParams.steps;
@@ -391,7 +400,7 @@ kernel void gtaoCompute(
 
             if (any(sampleUV < float2(0.0)) || any(sampleUV > float2(1.0))) continue;
 
-            uint2 sampleCoord = min(uint2(sampleUV * float2(texSize)), maxCoord);
+            uint2 sampleCoord = min(uint2(sampleUV * float2(gbSize)), gbSize - uint2(1));
             float sampleDepth = depthTex.read(sampleCoord).x;
             if (sampleDepth <= 0.0) continue;   // reverse-Z background
 
@@ -430,8 +439,11 @@ kernel void aoBlurH(
     uint h = output.get_height();
     if (gid.x >= w || gid.y >= h) return;
 
+    // AO is half-res; read depth at the matching full-res G-buffer texel.
+    uint2 gbSize = uint2(depthTex.get_width(), depthTex.get_height());
+    float2 aoSize = float2(w, h);
     float centerAO = input.read(gid).r;
-    float centerDepth = depthTex.read(gid).x;
+    float centerDepth = depthTex.read(aoCoordToGBuffer(gid, aoSize, gbSize)).x;
 
     float total = centerAO;
     float weightSum = 1.0;
@@ -441,7 +453,7 @@ kernel void aoBlurH(
         if (i == 0) continue;
         uint2 coord = uint2(clamp(int(gid.x) + i, 0, int(w) - 1), gid.y);
         float sampleAO = input.read(coord).r;
-        float sampleDepth = depthTex.read(coord).x;
+        float sampleDepth = depthTex.read(aoCoordToGBuffer(coord, aoSize, gbSize)).x;
 
         float spatial = exp(-float(i * i) / 8.0);
         float depthW = bilateralDepthWeight(centerDepth, sampleDepth,
@@ -467,8 +479,11 @@ kernel void aoBlurV(
     uint h = output.get_height();
     if (gid.x >= w || gid.y >= h) return;
 
+    // AO is half-res; read depth at the matching full-res G-buffer texel.
+    uint2 gbSize = uint2(depthTex.get_width(), depthTex.get_height());
+    float2 aoSize = float2(w, h);
     float centerAO = input.read(gid).r;
-    float centerDepth = depthTex.read(gid).x;
+    float centerDepth = depthTex.read(aoCoordToGBuffer(gid, aoSize, gbSize)).x;
 
     float total = centerAO;
     float weightSum = 1.0;
@@ -478,7 +493,7 @@ kernel void aoBlurV(
         if (i == 0) continue;
         uint2 coord = uint2(gid.x, clamp(int(gid.y) + i, 0, int(h) - 1));
         float sampleAO = input.read(coord).r;
-        float sampleDepth = depthTex.read(coord).x;
+        float sampleDepth = depthTex.read(aoCoordToGBuffer(coord, aoSize, gbSize)).x;
 
         float spatial = exp(-float(i * i) / 8.0);
         float depthW = bilateralDepthWeight(centerDepth, sampleDepth,
@@ -511,8 +526,10 @@ kernel void aoTemporal(
     uint2 size = uint2(resolvedAO.get_width(), resolvedAO.get_height());
     if (gid.x >= size.x || gid.y >= size.y) return;
 
+    // AO is half-res; read depth at the matching full-res G-buffer texel.
+    uint2 gbSize = uint2(depthTex.get_width(), depthTex.get_height());
     float cur = currentAO.read(gid).r;
-    float depth = depthTex.read(gid).x;
+    float depth = depthTex.read(aoCoordToGBuffer(gid, float2(size), gbSize)).x;
 
     // No history to blend (first frame / resize), or sky: pass current through.
     if (t.alpha <= 0.0 || depth <= 0.0) {   // reverse-Z background
