@@ -37,6 +37,12 @@ struct GPUMesh {
 
 static constexpr uint32_t MAX_INSTANCES = 4096;
 
+// Shadow casters for every cascade share one buffer encoded into a single
+// command buffer, so their instance data must all coexist until commit (a
+// cascade can't reuse the region an earlier cascade's draws still reference) —
+// size it for the summed caster count across all cascades, not just one.
+static constexpr uint32_t SHADOW_MAX_INSTANCES = 16384;
+
 // Dynamic per-frame GPU buffers (instance transforms) are ring-buffered this
 // many deep so the CPU writing frame N+1 never stomps data the GPU is still
 // reading for frame N. nextDrawable caps the CPU at ~maximumDrawableCount (3)
@@ -69,6 +75,7 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
     id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
+    id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
     int frameIndex = 0;                                   // advances each beginFrame
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
@@ -666,9 +673,13 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     }
 
     // Instance data buffer
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         impl->instanceBuffers[i] = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
                                                             options:MTLResourceStorageModeShared];
+        impl->shadowInstanceBuffers[i] =
+            [impl->device newBufferWithLength:SHADOW_MAX_INSTANCES * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
+    }
 
     // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
     impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
@@ -2121,6 +2132,22 @@ void MetalRenderer::endFrame() {
 
     // --- Shadow pass: one depth-array slice per cascade ---
     if (impl->shadowEnabled && impl->shadowPipeline) {
+        // Batch identical-mesh casters into instanced shadow draws. The color
+        // pass already instances the forest; the shadow pass used to redraw each
+        // instance individually per cascade (the draw-call explosion). Sort once
+        // by mesh so runs are contiguous — the color pass re-sorts by distance
+        // later, so this doesn't disturb it. Shadow casters use a dedicated
+        // instance buffer (the color pass's is filled afterward; sharing would
+        // alias, since both are read at GPU-execution time, after all CPU writes).
+        std::stable_sort(impl->opaqueDrawCalls.begin(), impl->opaqueDrawCalls.end(),
+                         [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
+                             return a.meshHandle < b.meshHandle;
+                         });
+        id<MTLBuffer> shadowInstBuffer = impl->shadowInstanceBuffers[impl->frameIndex];
+        GPUInstanceData* shadowInstBuf =
+            static_cast<GPUInstanceData*>([shadowInstBuffer contents]);
+        uint32_t shadowInstOffset = 0;  // accumulates across all cascades
+
         for (int c = 0; c < impl->activeCascadeCount; c++) {
             MTLRenderPassDescriptor* shadowPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
             shadowPassDesc.depthAttachment.texture = impl->shadowMap;
@@ -2145,33 +2172,56 @@ void MetalRenderer::endFrame() {
             Vec3 cc = impl->cascadeCenter[c];
             Real cullR = impl->cascadeRadius[c] * 2.0;
 
-            for (auto& dc : impl->opaqueDrawCalls) {
-                const GPUMesh* mesh = impl->meshes.get(dc.meshHandle);
-                if (!mesh) continue;
+            // One instanced draw per mesh: compact the run's casters that pass
+            // the cascade cull into a contiguous instance range, then draw them
+            // in a single call. Single-mesh casters (props, hero objects) go
+            // through the same path with instanceCount 1 — the instanced shadow
+            // shader reads instances[0].model, so no separate non-instanced path
+            // is needed. Falls back to nothing only if the instanced pipeline is
+            // absent (creation logged a failure at init).
+            if (impl->shadowInstancedPipeline) {
+                for (size_t bi = 0; bi < impl->opaqueDrawCalls.size(); ) {
+                    MeshHandle batchMesh = impl->opaqueDrawCalls[bi].meshHandle;
+                    size_t batchStart = bi;
+                    while (bi < impl->opaqueDrawCalls.size() &&
+                           impl->opaqueDrawCalls[bi].meshHandle == batchMesh)
+                        bi++;
 
-                BoundingSphere b = getMeshBounds(dc.meshHandle);
-                const Mat4& m = dc.transform;
-                Vec3 wc = m.transformPoint(b.center);
-                Real maxScale = std::max({Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
-                                          Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
-                                          Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
-                if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+                    const GPUMesh* mesh = impl->meshes.get(batchMesh);
+                    if (!mesh) continue;
+                    BoundingSphere b = getMeshBounds(batchMesh);
 
-                ModelUniforms modelU;
-                modelU.model = toSimd(dc.transform);
-                modelU.normalMatrix = inverseTranspose(modelU.model);
+                    uint32_t runStart = shadowInstOffset;
+                    uint32_t runCount = 0;
+                    for (size_t j = batchStart; j < bi; j++) {
+                        if (shadowInstOffset >= SHADOW_MAX_INSTANCES) break;
+                        const Mat4& m = impl->opaqueDrawCalls[j].transform;
+                        Vec3 wc = m.transformPoint(b.center);
+                        Real maxScale = std::max(
+                            {Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
+                             Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
+                             Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
+                        if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+                        shadowInstBuf[shadowInstOffset].model = toSimd(m);
+                        shadowInstOffset++;
+                        runCount++;
+                    }
+                    if (runCount == 0) continue;
 
-                [shadowEncoder setRenderPipelineState:impl->shadowPipeline];
-                [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
-                [shadowEncoder setVertexBytes:&cascadeCam
-                                       length:sizeof(CameraUniforms) atIndex:1];
-                [shadowEncoder setVertexBytes:&modelU
-                                       length:sizeof(ModelUniforms) atIndex:2];
-                [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                          indexCount:mesh->indexCount
-                                           indexType:MTLIndexTypeUInt32
-                                         indexBuffer:mesh->indexBuffer
-                                   indexBufferOffset:0];
+                    [shadowEncoder setRenderPipelineState:impl->shadowInstancedPipeline];
+                    [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+                    [shadowEncoder setVertexBytes:&cascadeCam
+                                           length:sizeof(CameraUniforms) atIndex:1];
+                    [shadowEncoder setVertexBuffer:shadowInstBuffer
+                                            offset:runStart * sizeof(GPUInstanceData)
+                                           atIndex:2];
+                    [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                              indexCount:mesh->indexCount
+                                               indexType:MTLIndexTypeUInt32
+                                             indexBuffer:mesh->indexBuffer
+                                       indexBufferOffset:0
+                                           instanceCount:runCount];
+                }
             }
 
             // CDLOD terrain casters (ADR-0036): render the selected nodes into the
