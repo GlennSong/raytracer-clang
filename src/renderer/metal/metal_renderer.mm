@@ -2665,7 +2665,7 @@ void MetalRenderer::endFrame() {
 
     issuePass(impl->opaqueDrawCalls, impl->opaquePipeline,
               impl->opaqueInstancedPipeline, impl->depthStateOpaque,
-              /*skipFoliage=*/impl->depthPrepassEnabled);
+              /*skipFoliage=*/depthPrepassEnabled);
 
     // CDLOD terrain nodes (ADR-0036). Opaque, so drawn here with the morph pipeline,
     // reusing the shadow/probe/IBL/light bindings already set on this encoder. Each
@@ -2717,7 +2717,7 @@ void MetalRenderer::endFrame() {
     // Alpha-cut foliage: depth prepass + early-Z lit pass (kills leaf overdraw).
     // Drawn here, after solids + terrain, so leaves occlude against them and the
     // shaded background shows through alpha holes. Off -> drawn in issuePass above.
-    if (impl->depthPrepassEnabled) issueFoliage();
+    if (depthPrepassEnabled) issueFoliage();
 
     std::sort(impl->transparentDrawCalls.begin(), impl->transparentDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
