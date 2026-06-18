@@ -226,6 +226,7 @@ struct RenderStats {
     uint32_t instancedDrawCalls = 0;
     uint32_t totalInstances = 0;
     uint32_t entitiesSubmitted = 0;
+    uint32_t trianglesDrawn = 0;   // color pass only (excludes shadow casters)
 };
 
 enum class CameraProjection { Perspective, Orthographic };

@@ -2376,6 +2376,7 @@ void MetalRenderer::endFrame() {
                                   indexBufferOffset:0];
         stats.drawCalls++;
         stats.totalInstances++;
+        stats.trianglesDrawn += mesh->indexCount / 3;
     };
 
     auto issuePass = [&](std::vector<Impl::DrawCall>& drawCalls,
@@ -2452,6 +2453,7 @@ void MetalRenderer::endFrame() {
             stats.drawCalls++;
             stats.instancedDrawCalls++;
             stats.totalInstances += batchSize;
+            stats.trianglesDrawn += (mesh->indexCount / 3) * batchSize;
             instanceOffset += batchSize;
         }
     };
@@ -2516,6 +2518,7 @@ void MetalRenderer::endFrame() {
                                             indexBuffer:mesh->indexBuffer
                                       indexBufferOffset:0];
             stats.drawCalls++;
+            stats.trianglesDrawn += mesh->indexCount / 3;
         }
     }
 

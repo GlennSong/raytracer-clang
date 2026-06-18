@@ -127,6 +127,8 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     uint32_t culled = static_cast<uint32_t>(ctx.world.entityCount()) - rs.entitiesSubmitted;
     ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
+    ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,
+                rs.trianglesDrawn / 1e6);
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",
