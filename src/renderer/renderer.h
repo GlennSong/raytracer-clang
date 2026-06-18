@@ -328,6 +328,14 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
+    // Depth prepass for alpha-cut foliage (perf). Foliage uses discard, which
+    // forces late depth testing — every overlapping leaf card runs the full lit
+    // shader (huge overdraw close-up). When on, foliage is drawn twice: a cheap
+    // depth-only prepass that writes the nearest leaf depth, then the lit pass
+    // with early depth tests + an Equal/no-write depth state, so only the
+    // front-most leaf per pixel is shaded. Off = legacy single-pass foliage.
+    bool depthPrepassEnabled = true;
+
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
     // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
     int debugView = 0;

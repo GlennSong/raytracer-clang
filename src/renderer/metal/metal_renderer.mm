@@ -43,6 +43,11 @@ static constexpr uint32_t MAX_INSTANCES = 4096;
 // size it for the summed caster count across all cascades, not just one.
 static constexpr uint32_t SHADOW_MAX_INSTANCES = 16384;
 
+// Foliage (alpha-cut) instances are rendered twice in the main pass — depth
+// prepass then lit — from one buffer filled once, so both reads see the same
+// transforms. Sized for the frustum-visible foliage instances.
+static constexpr uint32_t FOLIAGE_MAX_INSTANCES = 8192;
+
 // Dynamic per-frame GPU buffers (instance transforms) are ring-buffered this
 // many deep so the CPU writing frame N+1 never stomps data the GPU is still
 // reading for frame N. nextDrawable caps the CPU at ~maximumDrawableCount (3)
@@ -70,12 +75,16 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> transparentPipeline;
     id<MTLRenderPipelineState> opaqueInstancedPipeline;
     id<MTLRenderPipelineState> transparentInstancedPipeline;
+    id<MTLRenderPipelineState> foliageDepthPipeline;   // alpha-cut depth prepass (perf)
+    id<MTLRenderPipelineState> foliageLitPipeline;     // foliage lit w/ early depth test
     id<MTLDepthStencilState> depthStateOpaque;        // reverse-Z: Greater, write
+    id<MTLDepthStencilState> depthStateFoliageLit;    // reverse-Z: Equal, no write (prepass)
     id<MTLDepthStencilState> depthStateTransparent;   // reverse-Z: Greater, no write
     id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
     id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
+    id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
     int frameIndex = 0;                                   // advances each beginFrame
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
@@ -357,6 +366,37 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     if (!impl->opaqueInstancedPipeline) {
         NSLog(@"Instanced pipeline error: %@", error);
         return false;
+    }
+
+    // Foliage depth-prepass + lit pipelines (perf — alpha-cut overdraw). Both
+    // reuse vertexMainInstanced (same depth as the lit pass, so the Equal test in
+    // the lit stage is exact). The lit fragment carries [[early_fragment_tests]].
+    // A missing function just leaves the pointers nil and the renderer falls back
+    // to the legacy single-pass foliage path (depthPrepassEnabled has no effect).
+    {
+        id<MTLFunction> foliageDepthFunc =
+            [library newFunctionWithName:@"fragmentFoliageDepthInstanced"];
+        id<MTLFunction> foliageLitFunc =
+            [library newFunctionWithName:@"fragmentMainInstancedFoliage"];
+        if (foliageDepthFunc && foliageLitFunc) {
+            // Lit variant: same MRT, normal color writes.
+            pipelineDesc.vertexFunction = vertexInstancedFunc;
+            pipelineDesc.fragmentFunction = foliageLitFunc;
+            impl->foliageLitPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
+            if (!impl->foliageLitPipeline) NSLog(@"Foliage lit pipeline error: %@", error);
+
+            // Depth-only variant: void fragment, disable color writes on both MRT
+            // attachments. Restore the write mask afterward for the pipelines below.
+            pipelineDesc.fragmentFunction = foliageDepthFunc;
+            pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
+            pipelineDesc.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
+            impl->foliageDepthPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
+            if (!impl->foliageDepthPipeline) NSLog(@"Foliage depth pipeline error: %@", error);
+            pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+            pipelineDesc.colorAttachments[1].writeMask = MTLColorWriteMaskAll;
+        }
     }
 
     // Transparent pipeline (alpha blending)
@@ -679,6 +719,9 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->shadowInstanceBuffers[i] =
             [impl->device newBufferWithLength:SHADOW_MAX_INSTANCES * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
+        impl->foliageInstanceBuffers[i] =
+            [impl->device newBufferWithLength:FOLIAGE_MAX_INSTANCES * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
     }
 
     // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
@@ -772,6 +815,13 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateTransparent = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Foliage lit pass (depth prepass on): only the fragment whose depth equals
+    // the prepass-written nearest leaf passes; no write (the prepass owns depth).
+    depthDesc.depthCompareFunction = MTLCompareFunctionEqual;
+    depthDesc.depthWriteEnabled = NO;
+    impl->depthStateFoliageLit = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+    depthDesc.depthCompareFunction = MTLCompareFunctionGreater;  // restore for the states below
 
     // Wireframe overlay: draw edges that pass an equal-or-nearer depth test
     // without writing depth, so lines sit on the visible surface they belong to.
@@ -2432,7 +2482,8 @@ void MetalRenderer::endFrame() {
     auto issuePass = [&](std::vector<Impl::DrawCall>& drawCalls,
                          id<MTLRenderPipelineState> singlePipeline,
                          id<MTLRenderPipelineState> instancedPipeline,
-                         id<MTLDepthStencilState> depthState) {
+                         id<MTLDepthStencilState> depthState,
+                         bool skipFoliage) {
         if (drawCalls.empty()) return;
 
         [impl->currentEncoder setDepthStencilState:depthState];
@@ -2459,6 +2510,12 @@ void MetalRenderer::endFrame() {
 
             const GPUMesh* mesh = impl->meshes.get(batchMesh);
             if (!mesh) continue;
+
+            // Alpha-cut foliage is drawn by the depth-prepass path (issueFoliage)
+            // when enabled — skip it here so it isn't also drawn single-pass.
+            if (skipFoliage &&
+                (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_ALPHA_TEST))
+                continue;
 
             if (batchSize == 1) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
@@ -2508,6 +2565,90 @@ void MetalRenderer::endFrame() {
         }
     };
 
+    // Foliage depth prepass + lit (perf). Called after solids + terrain have
+    // populated depth/color, so leaves occlude correctly and the shaded
+    // background shows through their alpha-cut holes. opaqueDrawCalls is already
+    // mesh-sorted (issuePass sorted it), so foliage batches are contiguous. All
+    // foliage goes through the instanced path (a lone tree is instanceCount 1).
+    auto issueFoliage = [&]() {
+        if (!impl->foliageDepthPipeline || !impl->foliageLitPipeline) return;
+
+        id<MTLBuffer> fBuf = impl->foliageInstanceBuffers[impl->frameIndex];
+        GPUInstanceData* fData = static_cast<GPUInstanceData*>([fBuf contents]);
+        uint32_t fOff = 0;
+
+        struct FoliageBatch { const GPUMesh* mesh; RenderMaterial material;
+                              uint32_t offset; uint32_t count; };
+        std::vector<FoliageBatch> batches;
+        auto& dcs = impl->opaqueDrawCalls;
+
+        // Phase 1 — depth-only prepass: write the nearest leaf depth per pixel
+        // (Greater + write), alpha-cut so silhouette holes don't write depth.
+        [impl->currentEncoder setRenderPipelineState:impl->foliageDepthPipeline];
+        [impl->currentEncoder setDepthStencilState:impl->depthStateOpaque];
+        size_t i = 0;
+        while (i < dcs.size()) {
+            MeshHandle bm = dcs[i].meshHandle;
+            size_t start = i;
+            while (i < dcs.size() && dcs[i].meshHandle == bm) i++;
+            if (!(int(dcs[start].material.flags) & RenderMaterial::FLAG_ALPHA_TEST)) continue;
+
+            const GPUMesh* mesh = impl->meshes.get(bm);
+            if (!mesh) continue;
+            if (fOff >= FOLIAGE_MAX_INSTANCES) break;
+
+            uint32_t offset = fOff;
+            uint32_t count = 0;
+            for (size_t j = start; j < i && fOff < FOLIAGE_MAX_INSTANCES; j++) {
+                fData[fOff++] = fillInstanceData(dcs[j]);
+                count++;
+            }
+            batches.push_back({mesh, dcs[start].material, offset, count});
+
+            [impl->currentEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
+            [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
+                                          length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setVertexBuffer:fBuf
+                                           offset:offset * sizeof(GPUInstanceData) atIndex:2];
+            bindMaterialTextures(dcs[start].material, 0);  // albedo (tex 3) + sampler 2 for the cut
+            [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                             indexCount:mesh->indexCount
+                                              indexType:MTLIndexTypeUInt32
+                                            indexBuffer:mesh->indexBuffer
+                                      indexBufferOffset:0
+                                          instanceCount:count];
+        }
+
+        if (batches.empty()) return;
+
+        // Phase 2 — lit: Equal/no-write + early depth tests, so only the front-most
+        // leaf per pixel is shaded. Shadow/probe/IBL bindings from the top of the
+        // main pass are still live; bind camera + lights + material per batch.
+        [impl->currentEncoder setRenderPipelineState:impl->foliageLitPipeline];
+        [impl->currentEncoder setDepthStencilState:impl->depthStateFoliageLit];
+        for (const auto& b : batches) {
+            [impl->currentEncoder setVertexBuffer:b.mesh->vertexBuffer offset:0 atIndex:0];
+            [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
+                                          length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setVertexBuffer:fBuf
+                                           offset:b.offset * sizeof(GPUInstanceData) atIndex:2];
+            [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
+                                            length:sizeof(CameraUniforms) atIndex:1];
+            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+            bindMaterialTextures(b.material, computeTextureFlags(b.material));
+            [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                             indexCount:b.mesh->indexCount
+                                              indexType:MTLIndexTypeUInt32
+                                            indexBuffer:b.mesh->indexBuffer
+                                      indexBufferOffset:0
+                                          instanceCount:b.count];
+            stats.drawCalls++;
+            stats.instancedDrawCalls++;
+            stats.totalInstances += b.count;
+            stats.trianglesDrawn += (b.mesh->indexCount / 3) * b.count;
+        }
+    };
+
     stats.entitiesSubmitted = static_cast<uint32_t>(
         impl->opaqueDrawCalls.size() + impl->transparentDrawCalls.size());
 
@@ -2523,7 +2664,8 @@ void MetalRenderer::endFrame() {
               });
 
     issuePass(impl->opaqueDrawCalls, impl->opaquePipeline,
-              impl->opaqueInstancedPipeline, impl->depthStateOpaque);
+              impl->opaqueInstancedPipeline, impl->depthStateOpaque,
+              /*skipFoliage=*/impl->depthPrepassEnabled);
 
     // CDLOD terrain nodes (ADR-0036). Opaque, so drawn here with the morph pipeline,
     // reusing the shadow/probe/IBL/light bindings already set on this encoder. Each
@@ -2572,13 +2714,19 @@ void MetalRenderer::endFrame() {
         }
     }
 
+    // Alpha-cut foliage: depth prepass + early-Z lit pass (kills leaf overdraw).
+    // Drawn here, after solids + terrain, so leaves occlude against them and the
+    // shaded background shows through alpha holes. Off -> drawn in issuePass above.
+    if (impl->depthPrepassEnabled) issueFoliage();
+
     std::sort(impl->transparentDrawCalls.begin(), impl->transparentDrawCalls.end(),
               [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
                   return a.distanceToCamera > b.distanceToCamera;
               });
 
     issuePass(impl->transparentDrawCalls, impl->transparentPipeline,
-              impl->transparentInstancedPipeline, impl->depthStateTransparent);
+              impl->transparentInstancedPipeline, impl->depthStateTransparent,
+              /*skipFoliage=*/false);
 
     // Wireframe overlay (mode 2): re-draw opaque geometry as lines on top of the
     // shaded image. Non-instanced (issueSingleDraw uses model bytes, not the

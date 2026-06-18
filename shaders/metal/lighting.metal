@@ -576,3 +576,62 @@ fragment GBufferOut fragmentMainInstanced(
                         emissiveMap, prefilteredEnv, irradianceEnv,
                         shadowSampler, envSampler, texSampler);
 }
+
+// --- Foliage depth prepass (perf) ---
+// Alpha-cut foliage is shaded by fragmentMainInstanced, which calls
+// discard_fragment() — that forces LATE depth testing, so every overlapping leaf
+// card close-up runs the full lit shader (severe overdraw). Splitting foliage
+// into a depth prepass + an early-depth-tested lit pass shades each pixel once.
+//
+// Prepass: depth-only (returns void), does only the leaf alpha cut so silhouette
+// holes don't write depth. Reuses vertexMainInstanced, so the depth it writes
+// matches the lit pass bit-for-bit (same wind sway) and the Equal test is exact.
+fragment void fragmentFoliageDepthInstanced(
+    FragmentData in [[stage_in]],
+    texture2d<float> albedoMap [[texture(3)]],
+    sampler texSampler [[sampler(2)]]
+) {
+    if ((uint(in.textureFlags) & 1u) && (int(in.flags) & 2)) {
+        if (albedoMap.sample(texSampler, in.texcoord).a < 0.5) discard_fragment();
+    }
+}
+
+// Lit pass: identical to fragmentMainInstanced, but [[early_fragment_tests]] runs
+// the Equal depth test (against the prepass) BEFORE this expensive shader, so
+// occluded leaves are rejected unshaded. Depth write is off in this pass, so the
+// early test is safe despite the alpha-cut discard inside shadeSurface (the
+// front-most leaf that won the prepass always passes its own alpha test).
+[[early_fragment_tests]]
+fragment GBufferOut fragmentMainInstancedFoliage(
+    FragmentData in [[stage_in]],
+    constant CameraUniforms& camera [[buffer(1)]],
+    device const LightUniforms& lightData [[buffer(4)]],
+    constant ShadowUniforms& shadowData [[buffer(5)]],
+    constant ProbeUniforms& probeParams [[buffer(6)]],
+    device const GPUReflectionProbe* probes [[buffer(7)]],
+    constant EnvUniforms& env [[buffer(8)]],
+    depth2d_array<float> shadowMap [[texture(0)]],
+    texturecube_array<float> cubemapArray [[texture(1)]],
+    texture2d<float> brdfLUT [[texture(2)]],
+    texture2d<float> albedoMap [[texture(3)]],
+    texture2d<float> metalRoughMap [[texture(4)]],
+    texture2d<float> normalMap [[texture(5)]],
+    texture2d<float> aoMap [[texture(6)]],
+    texture2d<float> emissiveMap [[texture(7)]],
+    texturecube<float> prefilteredEnv [[texture(8)]],
+    texturecube<float> irradianceEnv [[texture(9)]],
+    sampler shadowSampler [[sampler(0)]],
+    sampler envSampler [[sampler(1)]],
+    sampler texSampler [[sampler(2)]]
+) {
+    SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
+                            in.worldTangent, in.texcoord};
+    SurfaceMaterial mat = {in.albedo * in.vertexColor, in.metallic, in.roughness,
+                           in.opacity, in.flags, in.emission, in.textureFlags};
+    return shadeSurface(geom, mat, camera, lightData, shadowData,
+                        probeParams, probes, env,
+                        shadowMap, cubemapArray, brdfLUT,
+                        albedoMap, metalRoughMap, normalMap, aoMap,
+                        emissiveMap, prefilteredEnv, irradianceEnv,
+                        shadowSampler, envSampler, texSampler);
+}

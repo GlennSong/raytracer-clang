@@ -211,6 +211,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
 
     if (ImGui::CollapsingHeader("Other")) {
         ImGui::Checkbox("Reflection Probes", &ctx.renderer.reflectionProbesEnabled);
+        ImGui::Checkbox("Foliage Depth Prepass", &ctx.renderer.depthPrepassEnabled);
         const char* fpsOptions[] = {"Uncapped", "30", "60"};
         int fpsIdx = (ctx.renderer.targetFps == 30) ? 1 : (ctx.renderer.targetFps == 60) ? 2 : 0;
         if (ImGui::Combo("FPS Cap", &fpsIdx, fpsOptions, 3)) {
