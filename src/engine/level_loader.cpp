@@ -913,6 +913,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.clusterCount     = veg.value("clusterCount", 0);
     scatter.clusterRadius    = veg.value("clusterRadius", 6.0f);
     scatter.seed             = vegSeed;
+    float vegDrawDistance    = veg.value("drawDistance", 0.0f);  // 0 = unlimited
 
     // Footprint spacing so big meshes don't jumble: default to the largest
     // canopy radius * max scale * a factor (<1 lets canopies overlap a little).
@@ -959,6 +960,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             g.boundsCenter = centroid;
             g.boundsRadius = spread + (mb.center.length() + mb.radius) *
                                           static_cast<Real>(scatter.maxScale);
+            g.drawDistance = vegDrawDistance;
             world.add<InstanceGroup>(world.create(), g);
         }
 

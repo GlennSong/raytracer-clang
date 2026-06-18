@@ -65,6 +65,10 @@ struct InstanceGroup {
     std::vector<Mat4> transforms;   // world matrices, one per instance
     Vec3 boundsCenter;              // world-space group bounds (coarse cull)
     Real boundsRadius = 0;
+    // Per-instance draw distance (0 = unlimited): instances farther than this from
+    // the camera are not drawn. Distant L-system trees/rocks dominate the triangle
+    // budget, so a finite radius is the cheapest large fps win in a big world.
+    Real drawDistance = 0;
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a

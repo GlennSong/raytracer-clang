@@ -8,11 +8,15 @@ namespace engine {
 
 std::vector<Mat4> frustumCullInstances(const std::vector<Mat4>& transforms,
                                        const Frustum& frustum,
-                                       const Vec3& meshCenter, Real meshRadius) {
+                                       const Vec3& meshCenter, Real meshRadius,
+                                       const Vec3& cameraPos, Real maxDistance) {
     std::vector<Mat4> visible;
     visible.reserve(transforms.size());
+    Real maxDistSq = maxDistance * maxDistance;
     for (const Mat4& m : transforms) {
         Vec3 center = m.transformPoint(meshCenter);
+        if (maxDistance > 0 && (center - cameraPos).lengthSquared() > maxDistSq)
+            continue;
         Vec3 cx(m.m[0][0], m.m[1][0], m.m[2][0]);
         Vec3 cy(m.m[0][1], m.m[1][1], m.m[2][1]);
         Vec3 cz(m.m[0][2], m.m[1][2], m.m[2][2]);
@@ -87,9 +91,15 @@ void RenderSystem::render(FrameContext& ctx) {
         [&](Entity, InstanceGroup& g) {
             if (g.transforms.empty()) return;
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
+            // Whole-group distance reject: skip if the nearest point of the group's
+            // bounds is beyond the draw distance (cheap before the per-instance pass).
+            if (g.drawDistance > 0 &&
+                (g.boundsCenter - cam.position).length() - g.boundsRadius > g.drawDistance)
+                return;
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
             std::vector<Mat4> visible =
-                frustumCullInstances(g.transforms, frustum, mb.center, mb.radius);
+                frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
+                                     cam.position, g.drawDistance);
             if (!visible.empty())
                 ctx.renderer.drawMeshInstanced(g.mesh, visible, g.material);
         });
