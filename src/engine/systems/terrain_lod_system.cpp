@@ -1,11 +1,15 @@
 #include "terrain_lod_system.h"
+#include "physics_system.h"
 #include "../components.h"
 #include "../asset_manager.h"
 #include "../procgen/terrain_lod.h"
 #include "../procgen/noise.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace engine {
 
@@ -73,6 +77,77 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         MorphRange m = lodMorphRange(node.level, ranges);
         ctx.renderer.drawTerrain(cn.mesh, cfg->material, m.start, m.end);
     }
+}
+
+// Static collider window: keep a triangle-mesh body under the leaf-level nodes
+// around the player so they walk on the surface, freeing nodes that fall outside
+// the window. Bodies are owned directly (addMesh/removeBody), not via ECS, so there
+// is no entity/body churn. Runs only with physics (play mode).
+void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
+    if (!physics_) return;
+
+    const TerrainLodConfig* cfg = nullptr;
+    ctx.world.each<TerrainLodConfig>(
+        [&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    if (!cfg) return;
+
+    // Centre the window on the player (the entity PlayerSystem drives).
+    Vec3 player;
+    bool found = false;
+    ctx.world.each<Transform, ControlledBy>(
+        [&](Entity, Transform& t, ControlledBy&) {
+            if (!found) { player = t.position; found = true; }
+        });
+    if (!found) return;
+
+    const int levels = std::max(1, cfg->numLods);
+    const int leafCount = 1 << (levels - 1);                  // leaf cells per side
+    const float worldHalf = cfg->worldHalf;
+    const float leafSize = (worldHalf * 2.0f) / static_cast<float>(leafCount);
+    const float radius =
+        cfg->colliderRadius > 0.0f ? cfg->colliderRadius : leafSize * 1.5f;
+
+    auto cellIndex = [&](float w) {
+        return static_cast<int>(std::floor((w + worldHalf) / leafSize));
+    };
+    int ix0 = std::max(0, cellIndex(static_cast<float>(player.x) - radius));
+    int ix1 = std::min(leafCount - 1, cellIndex(static_cast<float>(player.x) + radius));
+    int iz0 = std::max(0, cellIndex(static_cast<float>(player.z) - radius));
+    int iz1 = std::min(leafCount - 1, cellIndex(static_cast<float>(player.z) + radius));
+
+    const double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
+    Noise noise(cfg->seed);
+
+    std::unordered_set<int64_t> desired;
+    for (int iz = iz0; iz <= iz1; iz++) {
+        for (int ix = ix0; ix <= ix1; ix++) {
+            LodNode node{-worldHalf + ix * leafSize, -worldHalf + iz * leafSize,
+                         leafSize, 0};
+            int64_t key = nodeKey(node);
+            desired.insert(key);
+            if (colliders_.count(key)) continue;
+
+            LodNodeMesh built = generateLodNodeMesh(cfg->params, noise, node,
+                                                    cfg->gridRes, normalEps);
+            std::vector<Vec3> verts;
+            verts.reserve(built.mesh.vertices.size());
+            for (const Vertex& v : built.mesh.vertices) verts.push_back(v.position);
+            PhysicsBodyId id = physics_->physicsWorld().addMesh(
+                verts, built.mesh.indices, Vec3(0, 0, 0), 0.8);
+            if (id != INVALID_PHYSICS_BODY) colliders_[key] = id;
+        }
+    }
+    for (auto it = colliders_.begin(); it != colliders_.end();) {
+        if (desired.count(it->first)) { ++it; continue; }
+        physics_->physicsWorld().removeBody(it->second);
+        it = colliders_.erase(it);
+    }
+}
+
+void TerrainLodSystem::onStop(FrameContext&) {
+    if (!physics_) return;
+    for (auto& kv : colliders_) physics_->physicsWorld().removeBody(kv.second);
+    colliders_.clear();
 }
 
 }  // namespace engine

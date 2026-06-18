@@ -81,6 +81,10 @@ struct TerrainLodConfig {
     int   gridRes = 32;            // grid cells per node (forced even)
     float rangeFactor = 2.5f;      // LOD range = leafNodeSize * this (>= 2)
     RenderMaterial material;
+    // Static collider window: leaf-level nodes within this distance of the player
+    // get a triangle-mesh collider so the player walks on the surface. 0 = derive
+    // (~1.5 leaf nodes). The window follows the player; far colliders are freed.
+    float colliderRadius = 0.0f;
 };
 
 // Associates an entity with a local player slot (ADR-0010). This is the only

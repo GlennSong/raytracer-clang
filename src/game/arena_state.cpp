@@ -62,7 +62,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<MotionSystem>();
     addSystem<DayNightSystem>();
-    addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036), before RenderSystem
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
+#else
+    addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
+#endif
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
 }

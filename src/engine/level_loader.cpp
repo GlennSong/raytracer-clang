@@ -535,8 +535,9 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c): stamp a single
 // TerrainLodConfig the TerrainLodSystem drives each frame (selection + morph +
 // streaming-ready cache), instead of static chunk entities. Opt-in via the terrain
-// block's "cdlod" key (an object of overrides, or `true` for defaults). Render-only
-// for now (no colliders — a flythrough; near-node colliders are a follow-up).
+// block's "cdlod" key (an object of overrides, or `true` for defaults). The
+// TerrainLodSystem also maintains a moving window of near-node colliders (ADR-0036)
+// so the player walks on the surface.
 static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world) {
     TerrainLodConfig cfg;
     cfg.params = p;
@@ -547,6 +548,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
         cfg.numLods = c.value("numLods", cfg.numLods);
         cfg.gridRes = c.value("gridRes", cfg.gridRes);
         cfg.rangeFactor = c.value("rangeFactor", cfg.rangeFactor);
+        cfg.colliderRadius = c.value("colliderRadius", cfg.colliderRadius);
     }
     if (t.contains("material")) applyMaterial(t["material"], cfg.material);
     else {

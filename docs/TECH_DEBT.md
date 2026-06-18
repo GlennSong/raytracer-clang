@@ -12,12 +12,17 @@ when fixed (git history is the archive).
    morph vertex shader, the engine `TerrainLodSystem`, and the level wiring are
    **Metal/viewer-only and unverified on Linux** — needs a viewer pass on
    `assets/levels/cdlod.json` (morphing should be seamless, no popping/cracks at LOD
-   boundaries; the far field should coarsen). Interim gaps to close after it reads
-   right: (a) CDLOD nodes carry **no colliders** (render-only flythrough) — near
-   nodes need them to walk on; (b) terrain is **not a shadow caster** (not in the
-   shadow pass), only a receiver; (c) **normals are not morphed** (height only), so
-   lighting can shift subtly mid-morph; (d) node meshes are cached and never evicted
-   (distance/budget eviction is Phase 3 streaming).
+   boundaries; the far field should coarsen). Closed since the first cut (each
+   viewer-verified): terrain **shadow casting** (morphing caster pipeline) + the
+   empty-cascade/depth-range artifact; **seamless normals** across LOD (world-
+   consistent eps); **camera-centered cascades** (shadows stable when turning); and
+   **near-node colliders** — `TerrainLodSystem` owns a moving window of static
+   triangle-mesh bodies around the player (addMesh/removeBody), so you walk on the
+   surface. Remaining interim gaps: (a) **normals are not morphed** (height only), so
+   lighting can shift subtly mid-morph; (b) render node meshes are cached and never
+   evicted (distance/budget eviction is Phase 3 streaming); (c) colliders use the
+   un-morphed leaf geometry — exact under the player (morph ≈ 0 there), a slight
+   mismatch only out at the window edge.
 1. **`lightBuffer` frame-in-flight ring** — last known CPU/GPU race; same fix as
    the instance buffer (ring `MAX_FRAMES_IN_FLIGHT` deep, index per `beginFrame`).
    Subtle light tearing, not geometry pops. ~10 min, low risk.

@@ -3,11 +3,14 @@
 
 #include "../system.h"
 #include "../../renderer/renderer.h"   // MeshHandle
+#include "../physics/physics_world.h"  // PhysicsBodyId
 
 #include <cstdint>
 #include <unordered_map>
 
 namespace engine {
+
+class PhysicsSystem;
 
 // Drives CDLOD heightfield terrain (ADR-0036). Each frame: read the level's
 // TerrainLodConfig, select the quadtree node cut for the camera, lazily generate +
@@ -15,10 +18,19 @@ namespace engine {
 // submit the visible nodes via Renderer::drawTerrain with their morph bands. The
 // vertex morph (Metal terrain pipeline) hides the seams between adjacent LOD levels.
 //
-// Node meshes are cached and kept; distance/budget eviction is Phase 3 streaming.
+// When constructed with a PhysicsSystem (play, not edit), it also maintains a moving
+// window of static triangle-mesh colliders for the leaf-level nodes near the player,
+// so the player walks on the surface. The window follows the player; nodes that fall
+// outside it are freed (addMesh / removeBody directly, so no ECS body churn).
+//
+// Node render meshes are cached and kept; distance/budget eviction is Phase 3.
 class TerrainLodSystem : public System {
 public:
-    void render(FrameContext& ctx) override;
+    explicit TerrainLodSystem(PhysicsSystem* physics = nullptr) : physics_(physics) {}
+
+    void fixedUpdate(FrameContext& ctx) override;   // collider window
+    void render(FrameContext& ctx) override;          // selection + draw
+    void onStop(FrameContext& ctx) override;          // free collider bodies
 
 private:
     struct CachedNode {
@@ -27,6 +39,9 @@ private:
         Vec3 boundsMax;
     };
     std::unordered_map<int64_t, CachedNode> cache_;
+
+    PhysicsSystem* physics_ = nullptr;
+    std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body
 };
 
 }  // namespace engine
