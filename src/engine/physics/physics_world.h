@@ -48,7 +48,7 @@ public:
     PhysicsBodyId addCapsule(Real halfHeight, Real radius, const Vec3& position,
                              const Quat& orientation, BodyMotion motion,
                              Real restitution = 0.0, Real friction = 0.2,
-                             bool lockRotation = false);
+                             bool lockRotation = false, bool continuous = false);
     // A static triangle mesh (terrain, baked geometry). vertices/indices are in
     // world space; the body is always static. Indexed triangles, 3 indices each.
     PhysicsBodyId addMesh(const std::vector<Vec3>& vertices,

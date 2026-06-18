@@ -200,12 +200,16 @@ JPH::ObjectLayer toLayer(BodyMotion m) {
 PhysicsBodyId createBody(JPH::BodyInterface& bodies, const JPH::Shape* shape,
                          const Vec3& position, const Quat& orientation,
                          BodyMotion motion, Real restitution, Real friction,
-                         bool lockRotation = false) {
+                         bool lockRotation = false, bool continuous = false) {
     JPH::BodyCreationSettings settings(shape, toJoltR(position),
                                        toJolt(orientation), toMotionType(motion),
                                        toLayer(motion));
     settings.mRestitution = static_cast<float>(restitution);
     settings.mFriction = static_cast<float>(friction);
+    // Continuous collision (linear sweep) for fast movers — keeps the player from
+    // tunnelling through thin terrain colliders on a long fall.
+    if (continuous)
+        settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
     if (lockRotation) {
         settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX |
                                 JPH::EAllowedDOFs::TranslationY |
@@ -247,14 +251,14 @@ PhysicsBodyId PhysicsWorld::addCapsule(Real halfHeight, Real radius,
                                         const Vec3& position,
                                         const Quat& orientation, BodyMotion motion,
                                         Real restitution, Real friction,
-                                        bool lockRotation) {
+                                        bool lockRotation, bool continuous) {
     if (!impl) return INVALID_PHYSICS_BODY;
     JPH::CapsuleShapeSettings shapeSettings(static_cast<float>(halfHeight),
                                              static_cast<float>(radius));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) return INVALID_PHYSICS_BODY;
     return createBody(impl->bodies(), result.Get(), position, orientation, motion,
-                      restitution, friction, lockRotation);
+                      restitution, friction, lockRotation, continuous);
 }
 
 PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,

@@ -29,7 +29,8 @@ void PhysicsSystem::createBodies(World& world) {
                     rb.bodyId = physics.addCapsule(c.halfHeight, c.radius,
                                                    t.position, t.orientation,
                                                    rb.motion, c.restitution,
-                                                   c.friction, rb.lockRotation);
+                                                   c.friction, rb.lockRotation,
+                                                   rb.continuousCollision);
                     break;
                 default:
                     rb.bodyId = physics.addBox(c.halfExtent, t.position,

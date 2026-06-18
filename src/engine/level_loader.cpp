@@ -382,6 +382,7 @@ static void loadPlayer(const json& player, World& world) {
     RigidBody rb;
     rb.motion = BodyMotion::Dynamic;
     rb.lockRotation = true;
+    rb.continuousCollision = true;   // don't tunnel through terrain on a long fall
     world.add<RigidBody>(e, rb);
     world.add<ControlledBy>(e, ControlledBy{0});
 }
