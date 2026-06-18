@@ -1694,9 +1694,15 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
                     corners[k]     = nearC[k] + (farC[k] - nearC[k]) * fN;
                     corners[k + 4] = nearC[k] + (farC[k] - nearC[k]) * fF;
                 }
-                Vec3 center(0, 0, 0);
-                for (auto& p : corners) center = center + p;
-                center = center * (1.0 / 8.0);
+                // Camera-centered cascade fit: center on the camera eye, not the
+                // frustum-slice centroid, so the covered region depends only on
+                // position — not look direction — and shadows no longer pop as you
+                // turn. The radius (distance to the slice's far corners) is
+                // orientation-independent for a rigid frustum, so the sphere still
+                // encloses the whole view cone out to this split. Costs resolution
+                // vs a tight frustum fit (half the sphere is behind the camera), the
+                // accepted trade for stability.
+                Vec3 center = impl->currentCameraPos;
                 Real radius = 0.01;   // floor avoids a zero-size ortho / snap div-by-0
                 for (auto& p : corners) radius = std::max(radius, (p - center).length());
                 radius = std::ceil(radius * 16.0) / 16.0;   // quantize to limit jitter
