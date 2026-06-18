@@ -4,7 +4,6 @@
 #include "../asset_manager.h"
 #include "../procgen/terrain_lod.h"
 #include "../procgen/noise.h"
-#include "../../log.h"
 
 #include <algorithm>
 #include <cmath>
@@ -142,13 +141,6 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
         if (desired.count(it->first)) { ++it; continue; }
         physics_->physicsWorld().removeBody(it->second);
         it = colliders_.erase(it);
-    }
-
-    if (colliders_.size() != loggedColliders_) {
-        loggedColliders_ = colliders_.size();
-        LOG_INFO << "[cdlod] collider window: " << colliders_.size()
-                 << " bodies, player=(" << player.x << ", " << player.y << ", "
-                 << player.z << "), leafSize=" << leafSize << ", radius=" << radius;
     }
 }
 
