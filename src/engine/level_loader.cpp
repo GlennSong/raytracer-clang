@@ -373,6 +373,11 @@ static void loadPlayer(const json& player, World& world) {
                            (c.shape == ColliderShape::Capsule ? c.halfHeight : 0.0) +
                            1.0;   // drop ~1 m onto the surface, no tunnelling
         t.position.y = surface + clearance;
+        LOG_INFO << "[cdlod] spawn snap: surface=" << surface
+                 << " spawnY=" << t.position.y
+                 << " at (" << t.position.x << ", " << t.position.z << ")";
+    } else {
+        LOG_INFO << "[cdlod] spawn snap skipped: no TerrainLodConfig found";
     }
 
     world.add<Transform>(e, t);

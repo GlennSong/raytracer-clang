@@ -5,6 +5,7 @@
 #include "../../renderer/renderer.h"   // MeshHandle
 #include "../physics/physics_world.h"  // PhysicsBodyId
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 
@@ -42,6 +43,7 @@ private:
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body
+    size_t loggedColliders_ = static_cast<size_t>(-1);       // diagnostic throttle
 };
 
 }  // namespace engine
