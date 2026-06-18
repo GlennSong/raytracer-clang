@@ -926,6 +926,9 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                              : maxXz * scatter.maxScale * spacingFactor;
 
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
+    LOG_INFO << "[veg] " << tag << ": " << placements.size() << " placements"
+             << " (count=" << scatter.count << ", region=" << scatter.regionSize
+             << ", maxSlopeDeg=" << scatter.maxSlopeDeg << ")";
 
     // One InstanceGroup per (variant, part): a variant's parts share the same
     // per-instance transforms (ROADMAP Phase B instancing). Plants carry no
