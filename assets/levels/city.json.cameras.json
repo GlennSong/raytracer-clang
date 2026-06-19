@@ -8,9 +8,9 @@
     },
     {
       "name": "Street",
-      "position": [120, 6, 120],
-      "forward": [-0.72, 0.05, -0.70],
-      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 120 }
+      "position": [150, 10, 38],
+      "forward": [-0.96, -0.03, -0.26],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
     }
   ]
 }
