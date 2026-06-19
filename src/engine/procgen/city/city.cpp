@@ -136,12 +136,13 @@ void emitFlatPolygon(RenderMesh& mesh, const Poly2& poly, Real y, const Vec3& co
 // skirt only ever fills down). This is the curb/retaining edge that lets a flat
 // block meet sloping ground (ADR-0038; the user's "human-built, not draped").
 void emitRetainingSkirt(RenderMesh& mesh, const Poly2& poly, Real topY,
-                        const CityParams& cp, const Vec3& col) {
+                        const std::function<Real(const Vec2&)>& bottomAt,
+                        const Vec3& col) {
     const std::size_t cnt = poly.size();
     for (std::size_t i = 0; i < cnt; ++i) {
         Vec2 a = poly[i], b = poly[(i + 1) % cnt];
-        Real ya = std::min(cityGroundAt(cp, a), topY) - 0.05;
-        Real yb = std::min(cityGroundAt(cp, b), topY) - 0.05;
+        Real ya = std::min(bottomAt(a), topY) - 0.05;
+        Real yb = std::min(bottomAt(b), topY) - 0.05;
         if (topY - ya < 0.05 && topY - yb < 0.05) continue;
         Vec3 ba(a.x, ya, a.y), bb(b.x, yb, b.y);
         Vec3 ta(a.x, topY, a.y), tb(b.x, topY, b.y);
@@ -220,6 +221,46 @@ void emitStairs(RenderMesh& mesh, const Vec3& mid, const Vec2& outDir, Real topY
         for (uint32_t idx : box.indices) mesh.indices.push_back(base + idx);
     }
     (void)side;
+}
+
+// A street lamp post: a thin pole + a bright lamp-head box (street furniture).
+void emitLamp(RenderMesh& out, const Vec3& base) {
+    Vec3 poleCol(0.16, 0.16, 0.18), lampCol(1.0, 0.88, 0.55);
+    Real h = 4.6;
+    auto place = [&](RenderMesh m, const Vec3& col, Real y) {
+        for (Vertex& v : m.vertices) v.color = col;
+        MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
+        MeshBuilder::append(out, m);
+    };
+    place(MeshBuilder::cylinder(0.07f, static_cast<float>(h), 6), poleCol, h * 0.5);
+    place(MeshBuilder::box(Vec3(0.5, 0.2, 0.32)), lampCol, h);
+}
+
+// A zebra crosswalk centred at `center`, bars perpendicular to pedestrian travel
+// (i.e. running along the road `dir`), repeated across the road width. Flat at y.
+void emitCrosswalk(RenderMesh& mesh, const Vec2& center, const Vec2& dir,
+                   Real roadW, Real y, const Vec3& col) {
+    Vec2 d = normalize(dir), across = perp(d);
+    Real depth = 2.6, bar = 0.55, gap = 0.5;
+    int n = std::max(1, static_cast<int>(roadW / (bar + gap)));
+    Vec3 nrm(0, 1, 0);
+    for (int i = 0; i < n; ++i) {
+        Real s = -roadW * 0.5 + bar * 0.5 + i * (bar + gap);
+        if (std::fabs(s) > roadW * 0.5 - bar * 0.4) continue;
+        Vec2 bc = center + across * s;
+        auto corner = [&](Real ld, Real la) {
+            Vec2 p = bc + d * (depth * 0.5 * ld) + across * (bar * 0.5 * la);
+            return Vec3(p.x, y + 0.03, p.y);
+        };
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        auto v = [&](const Vec3& p) { Vertex vt(p, nrm, Vec3(d.x, 0, d.y), 0, 0); vt.color = col; return vt; };
+        mesh.vertices.push_back(v(corner(-1, -1)));
+        mesh.vertices.push_back(v(corner(1, -1)));
+        mesh.vertices.push_back(v(corner(1, 1)));
+        mesh.vertices.push_back(v(corner(-1, 1)));
+        mesh.indices.insert(mesh.indices.end(),
+                            {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
 }
 
 // A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
@@ -316,11 +357,41 @@ CityModel generateCity(const CityParams& cp) {
     for (const RoadEdge& e : graph.edges) {
         Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
         Real yA = nodeGrade[e.a], yB = nodeGrade[e.b];
-        Real w = std::min(static_cast<Real>(e.width), Real(12.0));
+        Real w = 12.0;   // fill the corridor (= 2 x apron setback), so road meets curb
         emitFlatRoad(model.roads, a, b, yA, yB, w, asphaltCol);
         emitLaneLine(model.roads, a, b, yA, yB, 0.0, 0.22, yellow);          // centre
         emitLaneLine(model.roads, a, b, yA, yB, w * 0.5 - 0.5, 0.16, white); // edges
         emitLaneLine(model.roads, a, b, yA, yB, -(w * 0.5 - 0.5), 0.16, white);
+    }
+
+    // Street furniture: lamp posts along the verges (alternating sides), and zebra
+    // crosswalks on each approach to an intersection (degree >= 3 node).
+    std::vector<int> degree(nNodes, 0);
+    for (const RoadEdge& e : graph.edges) { ++degree[e.a]; ++degree[e.b]; }
+    for (const RoadEdge& e : graph.edges) {
+        Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
+        Vec2 d = b - a; Real len = d.length();
+        if (len < 18) continue;
+        d = d / len;
+        Vec2 nrm = perp(d);
+        Real w = 12.0;   // fill the corridor (= 2 x apron setback), so road meets curb
+        Real yA = nodeGrade[e.a], yB = nodeGrade[e.b];
+        // Lamp posts every ~30 m, alternating verge side.
+        Real off = w * 0.5 + 1.3;
+        int nl = std::max(1, static_cast<int>(len / 30.0));
+        for (int k = 1; k < nl; ++k) {
+            Real t = static_cast<Real>(k) / nl;
+            Vec2 on = lerp(a, b, t);
+            Real y = yA + (yB - yA) * t;
+            Real side = (k % 2 == 0) ? 1.0 : -1.0;
+            Vec2 p = on + nrm * (off * side);
+            emitLamp(model.props, Vec3(p.x, y, p.y));
+        }
+        // Crosswalks at intersection ends (set back from the node).
+        if (degree[e.a] >= 3)
+            emitCrosswalk(model.roads, a + d * 5.0, d, w, yA, white);
+        if (degree[e.b] >= 3)
+            emitCrosswalk(model.roads, b - d * 5.0, d, w, yB, white);
     }
 
     Rng rng(cp.seed);
@@ -370,12 +441,14 @@ CityModel generateCity(const CityParams& cp) {
         } else {
             gradeY = cp.baseY + 0.15;
         }
-        // Paved apron (sidewalk + block interior), flat at grade, with a curb/
-        // retaining skirt down to the street/terrain.
-        Poly2 apron = inset(block, 6.5);
+        // Paved apron (sidewalk + block interior), flat at grade, snapped to the
+        // road edge so the sidewalk meets the curb meets the carriageway with no
+        // grass gap. The curb/retaining skirt drops to the STREET grade (gradeAt),
+        // not the raw terrain, so it reads as an engineered curb.
+        Poly2 apron = inset(block, 6.0);
         if (apron.size() >= 3) {
             emitFlatPolygon(model.pavement, apron, gradeY, sidewalkCol);
-            emitRetainingSkirt(model.pavement, apron, gradeY, cp, retainCol);
+            emitRetainingSkirt(model.pavement, apron, gradeY, gradeAt, retainCol);
             // Steps where the curb is too tall to be a plain wall — one short run
             // mid-edge per long, steep block edge (a stoop down to the street).
             const std::size_t an = apron.size();

@@ -224,6 +224,15 @@ TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.15, 1e-6);
 }
 
+TEST_CASE(city_has_street_furniture) {
+    // Lamp posts + crosswalks are added regardless of tree scatter.
+    CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 5;
+    cp.scatterTrees = false;
+    CityModel m = generateCity(cp);
+    CHECK(!m.props.vertices.empty());      // lamp posts (props) without any trees
+    CHECK(!m.roads.vertices.empty());      // roads + lane lines + crosswalks
+}
+
 TEST_CASE(city_buildings_have_valid_box_colliders) {
     CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 5;
     cp.groundAt = [](const Vec2& p) { return 0.3 * p.x; };   // sloped, to vary baseY
