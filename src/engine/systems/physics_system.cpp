@@ -55,6 +55,16 @@ void PhysicsSystem::createBodies(World& world) {
             if (mc.bodyId != INVALID_PHYSICS_BODY) created = true;
         });
 
+    // Character controllers (the player): a kinematic capsule that steps up curbs
+    // and stairs. Not a simulated body, so PlayerSystem drives it each step.
+    world.each<Transform, CharacterController>(
+        [this, &created](Entity, Transform& t, CharacterController& cc) {
+            if (cc.characterId != INVALID_CHARACTER) return;
+            cc.characterId = physics.addCharacter(cc.halfHeight, cc.radius,
+                                                  t.position, cc.stepHeight);
+            if (cc.characterId != INVALID_CHARACTER) created = true;
+        });
+
     // Apply initial velocities outside iteration
     for (auto& nb : newBodies) {
         physics.setLinearVelocity(nb.id, nb.velocity);

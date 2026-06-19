@@ -9,32 +9,35 @@ void PlayerSystem::onStart(FrameContext&) {
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
-    // Detached freecam (cam_detach): the movement axes drive the fly camera,
-    // not the player — otherwise WASD would walk the player while you fly.
-    if (!camera.positionLocked) return;
+    Real dt = ctx.clock.fixedStep();
 
-    ctx.world.each<Transform, RigidBody, ControlledBy>(
-        [&](Entity e, Transform&, RigidBody& rb, ControlledBy&) {
+    ctx.world.each<Transform, CharacterController, ControlledBy>(
+        [&](Entity e, Transform& t, CharacterController& cc, ControlledBy&) {
             playerEntity = e;
-            if (rb.bodyId == INVALID_PHYSICS_BODY) return;
+            if (cc.characterId == INVALID_CHARACTER) return;
 
-            Real forward = ctx.actions.axis("cam_forward");
-            Real right = ctx.actions.axis("cam_right");
+            // Detached freecam (cam_detach): the movement axes drive the fly
+            // camera, not the player — otherwise WASD would walk the player while
+            // you fly. Pass zero intent so the character still settles under
+            // gravity but holds its ground.
+            Vec3 desired;
+            if (camera.positionLocked) {
+                Real forward = ctx.actions.axis("cam_forward");
+                Real right = ctx.actions.axis("cam_right");
 
-            Vec3 camForward = camera.forward();
-            camForward.y = 0;
-            camForward = normalize(camForward);
-            Vec3 camRight = camera.right();
+                Vec3 camForward = camera.forward();
+                camForward.y = 0;
+                camForward = normalize(camForward);
+                Vec3 camRight = camera.right();
 
-            Vec3 moveDir = camForward * forward + camRight * right;
-            Real len = moveDir.length();
-            if (len > 1.0) moveDir = moveDir / len;
+                Vec3 moveDir = camForward * forward + camRight * right;
+                Real len = moveDir.length();
+                if (len > 1.0) moveDir = moveDir / len;
+                desired = moveDir * moveSpeed;
+            }
 
-            Vec3 vel = moveDir * moveSpeed;
-            Vec3 currentVel = physicsSys.physicsWorld().getLinearVelocity(rb.bodyId);
-            vel.y = currentVel.y;
-
-            physicsSys.physicsWorld().setLinearVelocity(rb.bodyId, vel);
+            physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
+            t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
         });
 }
 

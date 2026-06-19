@@ -89,7 +89,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
 
 #if defined(RT_ENABLE_PHYSICS) && defined(RT_ENABLE_SCRIPTING)
     // Attach the Lua gun (ADR-0024) to the player and bind its fire action. The
-    // player is the entity PlayerSystem drives (Transform + RigidBody +
+    // player is the entity PlayerSystem drives (Transform + CharacterController +
     // ControlledBy). Collected first, then tagged, so we never add a component
     // mid-iteration (World::each contract, ADR-0006).
     ctx.actions.bindButton("fire", MouseButton::Left);
@@ -100,8 +100,8 @@ void ArenaState::onEnter(FrameContext& ctx) {
             LOG_WARN << "assets/scripts/gun.lua not found; player has no gun";
         } else {
             std::vector<Entity> players;
-            ctx.world.each<Transform, RigidBody, ControlledBy>(
-                [&](Entity e, Transform&, RigidBody&, ControlledBy&) {
+            ctx.world.each<Transform, ControlledBy>(
+                [&](Entity e, Transform&, ControlledBy&) {
                     players.push_back(e);
                 });
             for (Entity e : players) {

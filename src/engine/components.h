@@ -160,6 +160,19 @@ struct RigidBody {
     bool continuousCollision = false;
 };
 
+// A kinematic capsule character controller (ADR-0012). Unlike a dynamic
+// RigidBody capsule, it collide-and-slides and steps up ledges up to stepHeight
+// (curbs, sidewalks, stairs, low cubes) instead of being stopped by them. The
+// PhysicsSystem creates the controller from this + the entity's Transform;
+// PlayerSystem drives it. radius/halfHeight describe the same capsule a Capsule
+// Collider would, and `position` (the Transform) is the capsule centre.
+struct CharacterController {
+    Real radius = 0.3;
+    Real halfHeight = 0.4;
+    Real stepHeight = 0.4;   // tallest ledge it can walk up in one step
+    CharacterId characterId = INVALID_CHARACTER;
+};
+
 // A static triangle-mesh collider (terrain, and later any baked static geometry)
 // the PhysicsSystem turns into one static Jolt mesh body. Separate from Collider
 // because it owns geometry (CPU triangles in world space), not just dimensions.

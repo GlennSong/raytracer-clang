@@ -130,6 +130,81 @@ TEST_CASE(physics_invalid_body_is_safe) {
     world.shutdown();
 }
 
+// --- Character controller (CharacterVirtual) ---------------------------------
+namespace {
+// Walk a character with a fixed desired velocity for N frames (gravity is
+// applied inside moveCharacter — this mirrors PlayerSystem::fixedUpdate).
+void walk(PhysicsWorld& world, CharacterId c, const Vec3& vel, int frames) {
+    for (int i = 0; i < frames; i++) world.moveCharacter(c, vel, 1.0 / 60.0);
+}
+}  // namespace
+
+TEST_CASE(character_settles_on_floor) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);   // top at y=0
+    // Capsule: halfHeight 0.4, radius 0.3 -> bottom is 0.7 below the centre, so a
+    // grounded centre rests at y=0.7. Spawn it a little above and let it drop.
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 2.0, 0));
+    CHECK(c != INVALID_CHARACTER);
+    world.optimizeBroadPhase();
+
+    walk(world, c, Vec3(), 180);   // ~3s of no input
+    Real y = world.characterPosition(c).y;
+    CHECK_APPROX(y, 0.7, 0.1);     // resting on the floor, not through it
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    world.shutdown();
+}
+
+TEST_CASE(character_steps_up_a_curb) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);   // top at y=0, walkable everywhere
+    // A 0.3 m kerb (top at y=0.3) starting at x=5 — lower than the 0.4 m default
+    // step height, so the controller should climb onto it.
+    world.addBox(Vec3(5, 0.15, 5), Vec3(10, 0.15, 0), Quat::identity(),
+                 BodyMotion::Static);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 0.9, 0));
+    world.optimizeBroadPhase();
+
+    walk(world, c, Vec3(), 60);          // settle on the floor first
+    CHECK_APPROX(world.characterPosition(c).y, 0.7, 0.1);
+
+    walk(world, c, Vec3(2.5, 0, 0), 240);   // stroll toward and onto the kerb
+    Vec3 p = world.characterPosition(c);
+    CHECK(p.x > 6.0);    // walked past the kerb edge at x=5
+    CHECK(p.y > 0.95);   // climbed the 0.3 m step (centre ~1.0 on top)
+    world.shutdown();
+}
+
+TEST_CASE(character_blocked_by_tall_wall) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    // An 0.8 m step — well above the 0.4 m step height, so it acts as a wall.
+    world.addBox(Vec3(5, 0.4, 5), Vec3(10, 0.4, 0), Quat::identity(),
+                 BodyMotion::Static);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 0.9, 0));
+    world.optimizeBroadPhase();
+
+    walk(world, c, Vec3(), 60);
+    walk(world, c, Vec3(2.5, 0, 0), 240);
+    Vec3 p = world.characterPosition(c);
+    CHECK(p.x < 5.0);    // stopped at the wall face (kerb edge at x=5)
+    CHECK(p.y < 0.9);    // did not climb onto the 0.8 m ledge
+    world.shutdown();
+}
+
+TEST_CASE(character_invalid_handle_is_safe) {
+    PhysicsWorld world;
+    world.initialize();
+    CHECK(approxEqual(world.characterPosition(INVALID_CHARACTER), Vec3()));
+    CHECK(world.characterGroundState(INVALID_CHARACTER) == GroundState::InAir);
+    world.moveCharacter(INVALID_CHARACTER, Vec3(1, 0, 0), 1.0 / 60.0);
+    world.removeCharacter(INVALID_CHARACTER);
+    world.shutdown();
+}
+
 // Run the same scene on our JobSystem (the JoltJobAdapter path) and confirm the
 // result matches the single-threaded path bit-for-bit, and is itself
 // repeatable. This exercises the adapter end-to-end and pins down that routing

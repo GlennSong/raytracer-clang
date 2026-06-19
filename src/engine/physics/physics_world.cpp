@@ -14,10 +14,12 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 
@@ -152,6 +154,15 @@ struct PhysicsWorld::Impl {
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhase;
     ObjectLayerPairFilterImpl objectVsObject;
     JPH::PhysicsSystem physicsSystem;
+
+    // Virtual characters live outside the body simulation, so we own them here.
+    // The handle is the index; entries are never compacted (removeCharacter just
+    // releases the ref) so existing CharacterIds stay valid.
+    struct Character {
+        JPH::Ref<JPH::CharacterVirtual> controller;
+        float stepHeight = 0.4f;
+    };
+    std::vector<Character> characters;
 
     JPH::BodyInterface& bodies() { return physicsSystem.GetBodyInterface(); }
     const JPH::BodyInterface& bodies() const {
@@ -315,6 +326,116 @@ Quat PhysicsWorld::bodyOrientation(PhysicsBodyId id) const {
 
 void PhysicsWorld::setGravity(const Vec3& gravity) {
     if (impl) impl->physicsSystem.SetGravity(toJolt(gravity));
+}
+
+CharacterId PhysicsWorld::addCharacter(Real halfHeight, Real radius,
+                                       const Vec3& position, Real stepHeight,
+                                       Real maxSlopeDegrees) {
+    if (!impl) return INVALID_CHARACTER;
+    JPH::CapsuleShapeSettings shapeSettings(static_cast<float>(halfHeight),
+                                            static_cast<float>(radius));
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) return INVALID_CHARACTER;
+
+    JPH::Ref<JPH::CharacterVirtualSettings> settings =
+        new JPH::CharacterVirtualSettings();
+    settings->mShape = result.Get();
+    settings->mMaxSlopeAngle =
+        JPH::DegreesToRadians(static_cast<float>(maxSlopeDegrees));
+    // Keep the capsule from catching on the inner edges of the baked walk-surface
+    // mesh — the curb/sidewalk colliders are stitched triangle strips.
+    settings->mEnhancedInternalEdgeRemoval = true;
+    // The "feet" plane sits a hair below the capsule's bottom hemisphere, so a
+    // contact has to be roughly underneath to count as ground (not a wall).
+    settings->mSupportingVolume =
+        JPH::Plane(JPH::Vec3::sAxisY(),
+                   -static_cast<float>(halfHeight + radius) + 0.05f);
+
+    Impl::Character ch;
+    ch.stepHeight = static_cast<float>(stepHeight);
+    ch.controller = new JPH::CharacterVirtual(settings, toJoltR(position),
+                                              JPH::Quat::sIdentity(),
+                                              &impl->physicsSystem);
+    impl->characters.push_back(std::move(ch));
+    return static_cast<CharacterId>(impl->characters.size() - 1);
+}
+
+void PhysicsWorld::removeCharacter(CharacterId id) {
+    if (!impl || id >= impl->characters.size()) return;
+    impl->characters[id].controller = nullptr;   // release the ref, keep the slot
+}
+
+void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) {
+    if (!impl || id >= impl->characters.size()) return;
+    JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch) return;
+
+    const JPH::Vec3 up = JPH::Vec3::sAxisY();
+    JPH::Vec3 current = ch->GetLinearVelocity();
+    JPH::Vec3 desired = toJolt(velocity);
+    desired.SetComponent(1, 0.0f);   // horizontal intent only; we own the vertical
+
+    // On flat ground, hold vertical velocity at zero so it doesn't accumulate;
+    // otherwise carry it and integrate gravity so the character falls/settles.
+    JPH::Vec3 newVel;
+    if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
+        newVel = desired;
+    } else {
+        newVel = desired + up * current.Dot(up);
+    }
+    newVel += impl->physicsSystem.GetGravity() * static_cast<float>(dt);
+    ch->SetLinearVelocity(newVel);
+
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mWalkStairsStepUp = up * impl->characters[id].stepHeight;
+    // Step down by at least the step-up height so descending a curb keeps the
+    // character grounded instead of briefly going airborne each step.
+    settings.mStickToFloorStepDown =
+        -up * std::max(impl->characters[id].stepHeight, 0.5f);
+
+    ch->ExtendedUpdate(static_cast<float>(dt), impl->physicsSystem.GetGravity(),
+                       settings,
+                       impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(
+                           Layers::MOVING),
+                       impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING),
+                       {}, {}, impl->tempAllocator);
+}
+
+Vec3 PhysicsWorld::characterPosition(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return Vec3();
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    return ch ? fromJolt(ch->GetPosition()) : Vec3();
+}
+
+Vec3 PhysicsWorld::characterVelocity(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return Vec3();
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch) return Vec3();
+    JPH::Vec3 v = ch->GetLinearVelocity();
+    return Vec3(static_cast<Real>(v.GetX()), static_cast<Real>(v.GetY()),
+                static_cast<Real>(v.GetZ()));
+}
+
+GroundState PhysicsWorld::characterGroundState(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return GroundState::InAir;
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch) return GroundState::InAir;
+    switch (ch->GetGroundState()) {
+        case JPH::CharacterBase::EGroundState::OnGround:
+            return GroundState::OnGround;
+        case JPH::CharacterBase::EGroundState::OnSteepGround:
+            return GroundState::OnSteepGround;
+        case JPH::CharacterBase::EGroundState::NotSupported:
+            return GroundState::NotSupported;
+        default:
+            return GroundState::InAir;
+    }
+}
+
+void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
+    if (!impl || id >= impl->characters.size()) return;
+    if (JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr())
+        ch->SetPosition(toJoltR(position));
 }
 
 void PhysicsWorld::optimizeBroadPhase() {

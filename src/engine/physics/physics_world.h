@@ -20,6 +20,16 @@ enum class BodyMotion { Static, Kinematic, Dynamic };
 using PhysicsBodyId = uint32_t;
 constexpr PhysicsBodyId INVALID_PHYSICS_BODY = 0xFFFFFFFFu;
 
+// Opaque handle to a virtual character controller (an index into the world's
+// character list). Distinct from PhysicsBodyId — a CharacterVirtual is a
+// kinematic collide-and-slide proxy, not a simulated rigid body, so it can step
+// up curbs and stairs instead of bouncing off them.
+using CharacterId = uint32_t;
+constexpr CharacterId INVALID_CHARACTER = 0xFFFFFFFFu;
+
+// Mirrors Jolt's CharacterBase::EGroundState through the Jolt-free seal.
+enum class GroundState { OnGround, OnSteepGround, NotSupported, InAir };
+
 class JobSystem;   // our thread pool (src/job_system.h)
 
 class PhysicsWorld {
@@ -62,6 +72,23 @@ public:
     Quat bodyOrientation(PhysicsBodyId id) const;
 
     void setGravity(const Vec3& gravity);
+
+    // --- Character controller (CharacterVirtual) -----------------------------
+    // A capsule controller that walks the world by collide-and-slide and steps up
+    // ledges up to stepHeight (curbs, stairs, low cubes) instead of being blocked
+    // by them. `position` is the capsule centre, matching the Capsule collider
+    // convention. Returns INVALID_CHARACTER on failure.
+    CharacterId addCharacter(Real halfHeight, Real radius, const Vec3& position,
+                             Real stepHeight = 0.4, Real maxSlopeDegrees = 50.0);
+    void removeCharacter(CharacterId id);
+    // Drive the character for one step: `velocity` is the desired horizontal
+    // velocity (y is ignored — gravity and ground-sticking are applied here), dt
+    // the step length. Call once per fixed update.
+    void moveCharacter(CharacterId id, const Vec3& velocity, Real dt);
+    Vec3 characterPosition(CharacterId id) const;
+    Vec3 characterVelocity(CharacterId id) const;
+    GroundState characterGroundState(CharacterId id) const;
+    void setCharacterPosition(CharacterId id, const Vec3& position);
 
     // Call once after the initial static bodies are added.
     void optimizeBroadPhase();

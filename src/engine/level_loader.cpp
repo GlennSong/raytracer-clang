@@ -493,50 +493,34 @@ static void loadPlayer(const json& player, World& world) {
     if (player.contains("position"))
         t.position = parseVec3(player["position"]);
 
-    Collider c;
+    // The player walks on a CharacterVirtual (collide-and-slide capsule that
+    // steps up curbs/stairs), not a dynamic rigid body — a dynamic capsule is
+    // stopped dead by a kerb. The collider block keeps the same capsule
+    // dimensions it always had.
+    CharacterController cc;
     if (player.contains("collider")) {
         auto& col = player["collider"];
-        std::string shape = col.value("shape", "capsule");
-        if (shape == "capsule") {
-            c.shape = ColliderShape::Capsule;
-            c.radius = col.value("radius", 0.3);
-            c.halfHeight = col.value("halfHeight", 0.4);
-        } else if (shape == "sphere") {
-            c.shape = ColliderShape::Sphere;
-            c.radius = col.value("radius", 0.5);
-        } else {
-            c.shape = ColliderShape::Box;
-            c.halfExtent = parseVec3(col["halfExtent"], Vec3(0.5, 0.5, 0.5));
-        }
+        cc.radius = col.value("radius", 0.3);
+        cc.halfHeight = col.value("halfHeight", 0.4);
     }
-    c.friction = player.value("friction", 0.5);
+    cc.stepHeight = player.value("stepHeight", 0.45);
 
-    // CDLOD terrain: snap the spawn to just above the surface at its XZ. The
-    // collider is a thin triangle mesh, so a tall drop (the authored y far above
-    // the ground) builds up enough speed to tunnel through it in one step, and a y
-    // below the surface spawns embedded — either reads as "fell through". Scoped to
-    // CDLOD (static-chunk levels have no TerrainLodConfig and keep the authored y).
+    // CDLOD terrain: snap the spawn to just above the surface at its XZ so the
+    // character settles onto the ground rather than spawning embedded (below the
+    // surface) or falling from far above. Scoped to CDLOD (static-chunk levels
+    // have no TerrainLodConfig and keep the authored y).
     const TerrainLodConfig* tc = nullptr;
     world.each<TerrainLodConfig>(
         [&](Entity, TerrainLodConfig& cfg) { if (!tc) tc = &cfg; });
     if (tc) {
         Noise noise(tc->seed);
         double surface = terrainHeight(tc->params, noise, t.position.x, t.position.z);
-        double clearance = c.radius +
-                           (c.shape == ColliderShape::Capsule ? c.halfHeight : 0.0) +
-                           1.0;   // drop ~1 m onto the surface, no tunnelling
-        t.position.y = surface + clearance;
+        t.position.y = surface + cc.radius + cc.halfHeight + 1.0;   // drop ~1 m on
     }
 
     world.add<Transform>(e, t);
     world.add<PrevTransform>(e, PrevTransform{t});
-    world.add<Collider>(e, c);
-
-    RigidBody rb;
-    rb.motion = BodyMotion::Dynamic;
-    rb.lockRotation = true;
-    rb.continuousCollision = true;   // don't tunnel through terrain on a long fall
-    world.add<RigidBody>(e, rb);
+    world.add<CharacterController>(e, cc);
     world.add<ControlledBy>(e, ControlledBy{0});
 }
 
