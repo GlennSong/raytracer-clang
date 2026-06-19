@@ -6,6 +6,22 @@ session.
 
 ## Current state (all on main)
 
+- **City generation (latest, ADR-0038, `docs/city-generation-plan.md`)** — the
+  Tier-4 Phase D city, headless and deterministic, under
+  `src/engine/procgen/city/`: a **split/shape grammar** (`shape_grammar`) grows a
+  walkable, windowed mid-rise from scope ops (split/repeat/comp/inset/extrude/
+  roof/hollow/opening); the **road→block→parcel pipeline** (`road_network` =
+  deformed-grid + planarize + half-edge DCEL block faces; `parcel` = recursive-OBB
+  lots; `polygon` = 2D geometry); and the **city region recipe** (`city`) with
+  district zoning (downtown towers → midtown → residential + parks). Lua
+  `building.*` authoring (`assets/scripts/city.lua`), offline render via
+  `shape:"city"` (`assets/levels/city.json` → `./raytracer --level ... --camera
+  Skyline`), and an HLOD proxy. Covered by `tests/test_city.cpp` (+
+  `test_script_vm`). **Owed (Phase 4, needs a GPU / spatial partition):** impostor
+  bake + HLOD swap, sector streaming + cross-tile roads, terrain coupling, and the
+  Metal viewer render (the "City Arena"). See the city rows in `TECH_DEBT`/the ADR
+  register.
+
 - **Open-world Phase 1 + interactive render budget (latest session)** — chunked
   terrain → CDLOD heightfield (ADR-0035/0036), vegetation scatter, and a perf +
   look pass (**ADR-0037**), all viewer-verified with the user: foliage depth

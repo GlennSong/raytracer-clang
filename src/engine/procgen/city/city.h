@@ -49,6 +49,12 @@ struct CityModel {
     RenderMesh roads;         // flat road + sidewalk surface
     RenderMesh ground;        // ground plane under the city
 
+    // HLOD proxy (ADR-0034 §5 / ADR-0038 §6): every building's coarse mass box
+    // merged into one mesh — the cheap distant-city draw. Orders of magnitude
+    // fewer triangles than the detailed parts; swap to it past a distance, or use
+    // it as the source for an impostor-card bake (the bake itself needs a GPU).
+    RenderMesh hlodProxy;
+
     std::vector<CityBuilding> buildings;
     std::vector<Poly2> blocks;     // extracted block footprints (debug / collision)
     int blockCount = 0;

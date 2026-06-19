@@ -144,6 +144,7 @@ CityModel generateCity(const CityParams& cp) {
                 if (mi < 0 || mi >= static_cast<int>(model.parts.size())) continue;
                 MeshBuilder::append(model.parts[mi], part);
             }
+            MeshBuilder::append(model.hlodProxy, bm.proxy);   // distant-city LOD
             model.buildings.push_back({centroid(site), bm.height, dist});
         }
     }

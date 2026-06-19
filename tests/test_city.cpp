@@ -191,6 +191,18 @@ TEST_CASE(city_downtown_is_taller_than_residential) {
     CHECK(maxDowntown > 40.0);                    // downtown towers exist
 }
 
+TEST_CASE(city_hlod_proxy_is_far_cheaper_than_detail) {
+    CityParams cp; cp.extent = 300; cp.cellSize = 100; cp.seed = 11;
+    CityModel m = generateCity(cp);
+    std::size_t detailTris = 0;
+    for (const RenderMesh& p : m.parts) detailTris += p.indices.size() / 3;
+    std::size_t proxyTris = m.hlodProxy.indices.size() / 3;
+    CHECK(proxyTris > 0);
+    CHECK(proxyTris == m.buildings.size() * 12);   // one 12-tri box per building
+    // The whole-city HLOD is an order of magnitude lighter than the detail.
+    CHECK(proxyTris * 10 < detailTris);
+}
+
 TEST_CASE(city_parks_leave_blocks_empty) {
     CityParams cp; cp.extent = 400; cp.cellSize = 95; cp.parkFraction = 0.3; cp.seed = 3;
     CityModel m = generateCity(cp);

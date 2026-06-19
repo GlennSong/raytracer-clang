@@ -2272,7 +2272,11 @@ ground-bounce ambient.
 ---
 
 ## ADR-0038 — City generation: a split/shape grammar over a road→block→parcel pipeline, as a world recipe
-**Status:** Pending · **Date:** 2026-06-19
+**Status:** Accepted — Phases 0–3 **implemented** (the headless generation pipeline
+under `src/engine/procgen/city/`, Lua `building.*` authoring, offline-tracer
+`shape:"city"` render, and the HLOD proxy; covered by `tests/test_city.cpp` +
+`tests/test_script_vm.cpp`). Impostor-card bake, sector streaming, and cross-tile
+roads (Phase 4) deferred — they need a GPU and the spatial partition. · **Date:** 2026-06-19
 
 **Context.** The ROADMAP's Tier 4 Phase D names "City / road layout" as a
 capstone application, and ADR-0027 §8 / ADR-0028 §3 already sketched the paradigm
@@ -2362,12 +2366,28 @@ interiors the language goes. Full design and phasing in
   (ADR-0021), not the static-geometry pipeline.
 
 **Consequences / tech debt.**
-- New subsystems (each its own step): the **shape-grammar interpreter**
-  (`procgen/city/` or `procgen/building.*`), **road-graph generation + planarize
-  + half-edge face extraction**, **parcel subdivision**, the **city region
-  recipe**, and new Lua globals (`building`/`roads`/`parcels`) in
-  `procgen_bindings.cpp`. Most is pure data, headless-testable (cf. `test_flora`,
-  `test_script_vm`); only the final render needs macOS.
+- New subsystems (**built**): the **shape-grammar interpreter**
+  (`procgen/city/shape_grammar.*`), **road-graph generation + planarize +
+  half-edge face extraction** (`road_network.*`), **parcel subdivision**
+  (`parcel.*`), 2D geometry (`polygon.*`), the **city region recipe** (`city.*`),
+  and a Lua `building.*` global in `procgen_bindings.cpp`. All headless,
+  deterministic, and tested; the offline tracer renders `shape:"city"`. The
+  detailed full-size city is heavy (~3 M triangles at 800 m) — which is exactly
+  why the HLOD/impostor ladder below exists.
+- **A `roads`/`parcels` Lua surface is not yet exposed** — only `building.*` is
+  (the centerpiece); the full road→block→parcel pipeline is C++/level-JSON-driven.
+  A Lua surface for authoring road graphs + a city as a *world region recipe*
+  (ADR-0027) is the next authoring step.
+- **Phase 4 (deferred, needs a GPU / spatial partition):** building **impostor-card
+  bake** (render-to-octahedral-atlas) and **HLOD swap/crossfade** — the generator
+  emits the inputs (a coarse per-building proxy and a merged `CityModel::hlodProxy`,
+  headless-tested) but the bake and LOD selection are Metal-side (ADR-0034 §5).
+  **Sector streaming + cross-tile road stitching** (ADR-0027 §5) — the city
+  generates whole today (Forest-Arena style); per-tile generation with a global
+  graph clipped per tile is owed.
+- The **offline tracer bakes the detailed city** (no LOD — it is the quality
+  oracle); per-vertex colour carries hue on white materials (the tree convention),
+  so glass reads reflective via metallic/roughness only.
 - **Cross-tile roads** are the hard streaming problem (the graph is city-global,
   not tile-local): first cut generates a bounded city region *whole* (Forest-Arena
   style); per-tile clipping + boundary stitching is deferred to Phase 4 (ADR-0027
@@ -2423,6 +2443,10 @@ to be replaced; listed here so they stay visible.
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
+| City generates whole, not streamed | `engine/procgen/city/city.cpp` (`generateCity`) | Phase 3 (ADR-0038) builds a bounded city in one pass (Forest-Arena style); the road graph is city-global, not tile-local | Per-tile generation with the global graph clipped per tile + boundary stitching (ADR-0027 §5 streaming) |
+| City impostor/HLOD bake is unbuilt | `engine/procgen/city/`, renderer | The generator emits a coarse per-building proxy + a merged `CityModel::hlodProxy` (headless-tested), but the **impostor-card bake** (render-to-octahedral-atlas) and **HLOD swap/crossfade** are GPU/Metal work, gated on the spatial partition | Impostor bake + LOD-selection/crossfade (ADR-0034 §5); same lever as the owed distant-tree impostors |
+| City Lua surface is buildings-only | `engine/scripting/procgen_bindings.cpp` (`building.*`) | Only the split/shape grammar is Lua-exposed; the road→block→parcel pipeline + the city are C++/level-JSON-driven, not yet a Lua **world region recipe** (ADR-0027) | A `roads`/`parcels`/`city` Lua surface so a city is an authorable region recipe like flora |
+| City is flat + detached from terrain/world | `engine/procgen/city/city.cpp`, `src/level_scene.cpp` | The city sits on its own ground plane at `baseY`; it doesn't sample terrain height, mask natural scatter under its footprint, or render in the Metal viewer yet | Sit foundations/roads on `terrainHeight`, suppress scatter under the footprint, add a viewer render path (the "City Arena", ADR-0027/0038 §6) |
 
 ---
 

@@ -327,27 +327,39 @@ Each phase is independently shippable and headless-testable except the final
 render (ADR design principle 4). Ordered so the most reusable, most exciting
 piece (the shape grammar) lands first and each phase has something to look at.
 
-- **Phase 0 — The building shape grammar (standalone).** The L1 interpreter +
-  the `split`/`repeat`/`comp`/`inset`/`extrude`/`roof`/`hollow`/`opening` ops,
-  Lua-exposed. Hero target: a **mid-rise mixed-use block** (ground-floor retail +
-  4–6 residential floors + roof) — it exercises the most of the vocabulary and
-  reads "city"; a skyscraper follows as the `repeat`/setback scale test. The
-  ground floor is a **walkable shell** (hollowed, real door opening). → multi-part
-  mesh, no city yet. *Proves the centerpiece the way one tree proved `growTree`.*
-  Headless tests + a `city.lua`/`building.lua` recipe; the look needs macOS.
-- **Phase 1 — Lot → building.** Recursive-OBB parcel subdivision; generate a
-  hand-specified block polygon's worth of buildings (occupancy, type selection,
-  setbacks, terrain foundation). A street of houses, still no road generation.
-- **Phase 2 — Roads → blocks.** The road graph (deformed-grid bootstrap →
-  agent/L-system growth), planar face extraction → block polygons, fed into
-  Phase 1. A generated neighborhood with a street network.
-- **Phase 3 — The City Arena.** The integration target (mirrors "The Forest"):
-  the city as one region recipe over a `district` field, masking nature, snapped
-  to terrain, street furniture scattered, multiple districts, under the existing
-  sky/fog/day-night. Most of it headless; final render macOS.
-- **Phase 4 — Scale.** Building LOD chain + HLOD/building impostors (ADR-0034
-  §5), per-tile generation + cross-tile road stitching (ADR-0027 §5 streaming),
-  occlusion culling. Only now, when the city is big enough to need it.
+**Status (June 2026): Phases 0–3 implemented** under `src/engine/procgen/city/`
+(`polygon`, `shape_grammar`, `parcel`, `road_network`, `city`), deterministic and
+tested (`tests/test_city.cpp`), with a Lua `building.*` authoring surface
+(`tests/test_script_vm.cpp`, `assets/scripts/city.lua`) and an offline render
+(`shape:"city"`, `assets/levels/city.json`). HLOD proxy emitted. Phase 4
+(impostor bake, streaming, cross-tile roads) deferred — needs a GPU / the spatial
+partition.
+
+- **Phase 0 — The building shape grammar (standalone). ✅ Done.** The interpreter
+  + the `split`/`repeat`/`comp`/`inset`/`extrude`/`roof`/`hollow`/`opening` ops
+  (`shape_grammar.{h,cpp}`), Lua-exposed (`building.grow`/`building.height`). Hero:
+  a **mid-rise mixed-use block** with a **walkable ground shell** (hollowed, real
+  entrance opening), windowed floors, parapet roof; a skyscraper is the same with
+  big `floors` + setbacks. Multi-part mesh (wall/glass/trim/roof/door) + attach
+  points + a coarse proxy. `assets/scripts/city.lua` is the recipe.
+- **Phase 1 — Lot → building. ✅ Done.** Recursive-OBB parcel subdivision
+  (`parcel.{h,cpp}`) with frontage; occupancy/type/setback per district.
+- **Phase 2 — Roads → blocks. ✅ Done.** A road graph + deformed-grid generator,
+  planarize (split crossings), and half-edge DCEL block-face extraction
+  (`road_network.{h,cpp}`). (Agent/L-system/tensor-field road *growth* is the
+  open upgrade past the grid bootstrap — §9.)
+- **Phase 3 — The City. ✅ Done (headless + offline render).** `city.{h,cpp}` ties
+  it together with district zoning (downtown towers → midtown → residential +
+  parks); `shape:"city"` renders it offline (`assets/levels/city.json`).
+  *Remaining for a "City Arena" parity with The Forest:* sit it on terrain, mask
+  natural scatter under the footprint, scatter street furniture, run it as a
+  proper ADR-0027 world *region recipe* — and the viewer (Metal) render.
+- **Phase 4 — Scale. ⏳ Deferred (needs a GPU / spatial partition).** The
+  generator already emits the inputs — a coarse per-building proxy and a merged
+  `CityModel::hlodProxy` (headless-tested). Owed: the **impostor-card bake**
+  (render-to-atlas) + **HLOD swap/crossfade** (Metal, ADR-0034 §5), and **sector
+  streaming + cross-tile road stitching** (ADR-0027 §5 — the city generates whole
+  today). Only worth it when the city is large enough to need it.
 
 **ADR-0038** ("City generation: a split/shape grammar over a road→block→parcel
 pipeline, as a world recipe") records the decisions in §3–§6 against the
