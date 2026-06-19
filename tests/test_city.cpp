@@ -179,16 +179,19 @@ TEST_CASE(city_generates_deterministically) {
     CHECK(!a.parts.empty());
 }
 
-TEST_CASE(city_downtown_is_taller_than_residential) {
+TEST_CASE(city_highrise_is_taller_than_residential) {
     CityParams cp; cp.extent = 400; cp.cellSize = 95; cp.seed = 7;
     CityModel m = generateCity(cp);
-    Real maxDowntown = 0, maxResidential = 0;
+    Real maxHigh = 0, maxResidential = 0;
+    bool industrial = false;
     for (const CityBuilding& b : m.buildings) {
-        if (b.district == District::Downtown) maxDowntown = std::max(maxDowntown, b.height);
+        if (b.district == District::HighRise) maxHigh = std::max(maxHigh, b.height);
         if (b.district == District::Residential) maxResidential = std::max(maxResidential, b.height);
+        if (b.district == District::Industrial) industrial = true;
     }
-    CHECK(maxDowntown > maxResidential);
-    CHECK(maxDowntown > 40.0);                    // downtown towers exist
+    CHECK(maxHigh > maxResidential);
+    CHECK(maxHigh > 40.0);                         // high-rise towers exist
+    CHECK(industrial);                             // the industrial zone is populated
 }
 
 TEST_CASE(city_drapes_on_terrain_foundations_track_ground) {

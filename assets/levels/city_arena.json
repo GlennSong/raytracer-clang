@@ -5,12 +5,12 @@
   },
   "terrain": {
     "seed": 21,
-    "size": 460,
-    "resolution": 220,
-    "heightScale": 13,
-    "noiseScale": 0.011,
-    "octaves": 4,
-    "warp": 0.25,
+    "size": 560,
+    "resolution": 260,
+    "heightScale": 24,
+    "noiseScale": 0.015,
+    "octaves": 5,
+    "warp": 0.3,
     "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
   },
   "entities": [
@@ -20,13 +20,13 @@
       "position": [0, 0, 0],
       "city": {
         "onTerrain": true,
-        "extent": 165,
-        "cellSize": 82,
-        "roadJitter": 0.13,
-        "downtownRadius": 78,
-        "midtownRadius": 165,
-        "parkFraction": 0.12,
-        "buildChance": 0.9,
+        "extent": 200,
+        "cellSize": 80,
+        "roadJitter": 0.12,
+        "downtownRadius": 82,
+        "midtownRadius": 180,
+        "parkFraction": 0.1,
+        "buildChance": 0.92,
         "scatterTrees": true,
         "seed": 11
       }

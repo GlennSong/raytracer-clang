@@ -72,6 +72,9 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
                    Vec3(rng.range(-0.04, 0.04), rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
         case FacadeStyle::GlassCurtain:
             return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+        case FacadeStyle::Metal:
+            // Cool steel / corrugated siding (industrial).
+            return lerp(Vec3(0.46, 0.50, 0.54), Vec3(0.56, 0.58, 0.60), t);
         case FacadeStyle::Concrete:
         default:
             return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
@@ -230,7 +233,7 @@ Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height) {
 
 namespace {
 
-enum class FacadeMode { Residential, Retail, Entrance };
+enum class FacadeMode { Residential, Retail, Entrance, Solid };
 
 // Subdivide one face into window bays. Wall margins around each window read as
 // mullions/piers; the window is recessed by `inset` (Glass). In Entrance mode the
@@ -246,9 +249,14 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     Real bw = fr.width / bays;
     Real fh = fr.height;
 
-    Real sill = (mode == FacadeMode::Retail) ? 0.4 : human::WINDOW_SILL;
-    Real head = std::min(fh - 0.4, (mode == FacadeMode::Retail) ? fh - 0.4 : human::WINDOW_HEAD);
-    Real margin = std::min(bw * 0.22, Real(0.6));
+    Real sill, head, margin;
+    if (mode == FacadeMode::Solid) {           // warehouse: small high clerestory
+        sill = fh * 0.66; head = fh * 0.84; margin = std::min(bw * 0.36, Real(1.4));
+    } else {
+        sill = (mode == FacadeMode::Retail) ? 0.4 : human::WINDOW_SILL;
+        head = std::min(fh - 0.4, (mode == FacadeMode::Retail) ? fh - 0.4 : human::WINDOW_HEAD);
+        margin = std::min(bw * 0.22, Real(0.6));
+    }
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
 
     int centreBay = bays / 2;
@@ -349,7 +357,9 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
     // entrance on the front face (ADR-0038 §4).
     Real gh = params.groundHeight;
     Scope ground = storeyScope(y, gh);
-    FacadeMode groundMode = params.groundRetail ? FacadeMode::Retail : FacadeMode::Residential;
+    FacadeMode groundMode = params.solidFacade ? FacadeMode::Solid
+                          : params.groundRetail ? FacadeMode::Retail
+                                                : FacadeMode::Residential;
     for (int side = 0; side < 4; ++side) {
         FacadeMode mode = (side == 0 && params.walkableGround) ? FacadeMode::Entrance : groundMode;
         emitFacade(out, ground, side, mode, params, wallColor);
@@ -402,7 +412,9 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         }
         Real fh = params.floorHeight;
         Scope storey = storeyScope(y, fh);
-        FacadeMode mode = params.curtainWall ? FacadeMode::Retail : FacadeMode::Residential;
+        FacadeMode mode = params.solidFacade ? FacadeMode::Solid
+                        : params.curtainWall ? FacadeMode::Retail
+                                             : FacadeMode::Residential;
         for (int side = 0; side < 4; ++side)
             emitFacade(out, storey, side, mode, params, wallColor);
         if (i == params.floors / 2) {

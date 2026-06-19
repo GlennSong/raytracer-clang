@@ -17,7 +17,18 @@ namespace engine {
 // residential, plus parks). Deterministic for the seed (ADR-0002). Headless: the
 // generation is pure data; only the final render needs a backend.
 
-enum class District : uint8_t { Downtown, Midtown, Residential, Park, Count };
+// Zoned areas of the city (the "define areas: residential, commercial, high-rise,
+// industrial" axis). Laid out by radial falloff from the centre plus an industrial
+// wedge; each maps to a building-archetype distribution (archetypeFor in city.cpp).
+// Coastal is reserved for when water lands (it would key off a shoreline field).
+enum class District : uint8_t {
+    HighRise,      // downtown core: glass/metal towers with setbacks
+    Commercial,    // office mid-rises, retail ground floors
+    Residential,   // brick/stucco walk-ups and rowhouses
+    Industrial,    // low, wide metal warehouses
+    Park,          // green space + trees
+    Count
+};
 
 struct CityParams {
     Vec2 center{0, 0};

@@ -25,16 +25,21 @@ uint32_t hash2(int a, uint32_t seed) {
 
 // Building parameters drawn for a district (ADR-0038 §7: downtown towers grade
 // down to residential; parks build nothing).
-// Pick a facade style for a district (downtown: glass towers + concrete; midtown:
-// brick + concrete; residential: brick/stucco/painted). Variety per building.
+// Pick a facade style for a district. The style distribution is the visible half
+// of an archetype: high-rise = glass/metal towers, commercial = concrete/glass/
+// brick offices, residential = brick/stucco/painted walk-ups, industrial = metal.
 FacadeStyle styleForDistrict(District d, Rng& rng) {
     Real r = rng.unit();
     switch (d) {
-        case District::Downtown:
-            return r < 0.55 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
-        case District::Midtown:
-            return r < 0.5 ? FacadeStyle::Brick
-                 : (r < 0.8 ? FacadeStyle::Concrete : FacadeStyle::Stucco);
+        case District::HighRise:
+            return r < 0.6 ? FacadeStyle::GlassCurtain
+                 : (r < 0.85 ? FacadeStyle::Metal : FacadeStyle::Concrete);
+        case District::Commercial:
+            return r < 0.4 ? FacadeStyle::Concrete
+                 : (r < 0.65 ? FacadeStyle::GlassCurtain
+                 : (r < 0.9 ? FacadeStyle::Brick : FacadeStyle::Stucco));
+        case District::Industrial:
+            return FacadeStyle::Metal;
         case District::Residential:
         default:
             return r < 0.45 ? FacadeStyle::Brick
@@ -42,6 +47,10 @@ FacadeStyle styleForDistrict(District d, Rng& rng) {
     }
 }
 
+// The building-archetype library (the "variety of buildings" axis): each district
+// draws a building from architecturally-grounded parameters — floor counts and
+// heights, facade system, setbacks, massing, ornamentation. This is the C++
+// vocabulary the Lua city.lua archetypes mirror (ADR-0028).
 BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     BuildingParams p;
     p.seed = rng.next() ^ seed;
@@ -49,64 +58,87 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     p.wallColor = facadeColor(style, p.seed);
     p.curtainWall = (style == FacadeStyle::GlassCurtain);
     switch (d) {
-        case District::Downtown:
-            p.floors = rng.irange(12, 38);
+        case District::HighRise:                 // glass/metal towers
+            p.floors = rng.irange(16, 45);
             p.groundRetail = true;
-            p.bayWidth = rng.range(3.6, 4.6);
-            if (p.floors > 20) { p.setbackFloors = 8; p.setbackEvery = rng.range(2.0, 4.0); }
+            p.floorHeight = rng.range(3.6, 4.0);  // taller commercial floors
+            p.bayWidth = rng.range(3.8, 4.8);
+            if (p.floors > 22) { p.setbackFloors = rng.irange(7, 11); p.setbackEvery = rng.range(2.0, 4.5); }
             break;
-        case District::Midtown:
-            p.floors = rng.irange(4, 9);
+        case District::Commercial:               // office mid-rises
+            p.floors = rng.irange(5, 13);
             p.groundRetail = true;
-            p.bayWidth = rng.range(3.2, 4.0);
+            p.floorHeight = rng.range(3.4, 3.8);
+            p.bayWidth = rng.range(3.2, 4.2);
+            break;
+        case District::Industrial:               // low, wide metal warehouses
+            p.floors = rng.irange(1, 2);
+            p.groundRetail = false;
+            p.solidFacade = true;
+            p.groundHeight = rng.range(6.0, 9.0);  // tall single volume
+            p.floorHeight = rng.range(4.5, 6.0);
+            p.bayWidth = rng.range(7.0, 11.0);     // few big bays
             break;
         case District::Residential:
-        default:
-            p.floors = rng.irange(1, 3);
-            p.groundRetail = false;
+        default:                                 // brick/stucco walk-ups
+            p.floors = rng.irange(2, 5);
+            p.groundRetail = (rng.unit() < 0.25);  // occasional corner shop
+            p.floorHeight = rng.range(3.0, 3.4);
             p.bayWidth = rng.range(3.0, 3.6);
             break;
     }
 
-    // Ornamentation: a glass curtain wall stays clean; traditional masonry gets a
-    // base course, a cornice over the ground floor, an awning, and — on shorter
-    // brick/concrete buildings — pilasters framing the bays (heavy on tall towers).
-    bool glassy = p.curtainWall;
-    p.baseCourse = true;
-    p.stringCourse = !glassy;
-    p.awning = !glassy;
-    p.pilasters = !glassy && p.floors <= 12 &&
+    // Ornamentation by archetype: a glass curtain wall and a metal shed stay
+    // clean; traditional masonry gets a base course, a ground-floor cornice, an
+    // awning, and — on shorter brick/concrete buildings — pilasters.
+    bool plain = p.curtainWall || p.solidFacade;
+    p.baseCourse = !p.solidFacade;
+    p.stringCourse = !plain;
+    p.awning = !plain;
+    p.pilasters = !plain && p.floors <= 12 &&
                   (style == FacadeStyle::Brick || style == FacadeStyle::Concrete);
-    p.trimColor = glassy ? Vec3(0.50, 0.52, 0.55)
+    p.parapet = p.solidFacade ? 0.0 : human::PARAPET;
+    p.trimColor = plain ? Vec3(0.50, 0.52, 0.55)
                 : (style == FacadeStyle::Brick ? Vec3(0.84, 0.82, 0.76)
                                                : Vec3(0.78, 0.77, 0.73));
     return p;
 }
 
-// A draped ribbon along an edge: a quad of `width`, each end at the ground height
-// there + yBias, vertex-coloured `col`. Flat terrain -> flat; rolling terrain ->
-// follows it (gentle slopes; a long road over a big hill would need subdivision).
+// A terrain-conforming ribbon along an edge: subdivided into ~7 m segments, each
+// of the four corners sampled to the ground height there (+ yBias). The road thus
+// undulates over hills *and* banks across cross-slopes — flat where the ground is
+// flat (NYC), rolling up/down steep inclines where it isn't (San Francisco).
+// Per-segment normals so steep roads shade correctly.
 void emitRibbon(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
                 Real width, const Vec3& col, Real yBias) {
     Vec2 dir = b - a;
     Real len = dir.length();
     if (len < 1e-4) return;
     dir = dir / len;
-    Vec2 n = perp(dir) * (width * 0.5);
-    Real ya = cityGroundAt(cp, a) + yBias, yb = cityGroundAt(cp, b) + yBias;
-    Vec3 normal(0, 1, 0);
-    Vec3 p0(a.x - n.x, ya, a.y - n.y), p1(a.x + n.x, ya, a.y + n.y);
-    Vec3 p2(b.x + n.x, yb, b.y + n.y), p3(b.x - n.x, yb, b.y - n.y);
-    uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-    auto v = [&](const Vec3& p, float u, float vv) {
-        Vertex vert(p, normal, Vec3(dir.x, 0, dir.y), u, vv); vert.color = col; return vert;
+    Vec2 half = perp(dir) * (width * 0.5);
+    int segs = std::max(1, static_cast<int>(std::ceil(len / 7.0)));
+    auto corner = [&](const Vec2& c, Real side) {
+        Vec2 p = c + half * side;
+        return Vec3(p.x, cityGroundAt(cp, p) + yBias, p.y);
     };
-    mesh.vertices.push_back(v(p0, 0, 0));
-    mesh.vertices.push_back(v(p1, 1, 0));
-    mesh.vertices.push_back(v(p2, 1, 1));
-    mesh.vertices.push_back(v(p3, 0, 1));
-    mesh.indices.insert(mesh.indices.end(),
-                        {base, base + 1, base + 2, base, base + 2, base + 3});
+    for (int i = 0; i < segs; ++i) {
+        Vec2 c0 = lerp(a, b, static_cast<Real>(i) / segs);
+        Vec2 c1 = lerp(a, b, static_cast<Real>(i + 1) / segs);
+        Vec3 l0 = corner(c0, -1), r0 = corner(c0, 1);
+        Vec3 r1 = corner(c1, 1), l1 = corner(c1, -1);
+        Vec3 nrm = normalize(cross(r0 - l0, l1 - l0));
+        if (nrm.y < 0) nrm = nrm * -1;
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        auto v = [&](const Vec3& p) {
+            Vertex vert(p, nrm, Vec3(dir.x, 0, dir.y), 0, 0); vert.color = col; return vert;
+        };
+        mesh.vertices.push_back(v(l0));
+        mesh.vertices.push_back(v(r0));
+        mesh.vertices.push_back(v(r1));
+        mesh.vertices.push_back(v(l1));
+        mesh.indices.insert(mesh.indices.end(),
+                            {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
 }
 
 // A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
@@ -140,8 +172,11 @@ District districtAt(const CityParams& params, const Vec2& p, int blockIndex) {
     if (hash2(blockIndex, params.seed) % 1000 < params.parkFraction * 1000)
         return District::Park;
     Real d = (p - params.center).length();
-    if (d < params.downtownRadius) return District::Downtown;
-    if (d < params.midtownRadius) return District::Midtown;
+    if (d < params.downtownRadius) return District::HighRise;
+    if (d < params.midtownRadius) return District::Commercial;
+    // Outer ring: an industrial zone clustered on the west edge (a believable
+    // "area"), the rest residential. Coastal would key off a shoreline field.
+    if (p.x - params.center.x < -0.28 * params.extent) return District::Industrial;
     return District::Residential;
 }
 
@@ -207,8 +242,12 @@ CityModel generateCity(const CityParams& cp) {
 
         ParcelParams pp;
         pp.seed = hash2(bi, cp.seed ^ 0xabcdu);
-        pp.targetArea = (dist == District::Downtown) ? 900 : (dist == District::Midtown ? 520 : 360);
-        pp.minArea = (dist == District::Downtown) ? 280 : 110;
+        pp.targetArea = (dist == District::HighRise) ? 900
+                      : (dist == District::Commercial) ? 520
+                      : (dist == District::Industrial) ? 1500   // big warehouse lots
+                      : 340;
+        pp.minArea = (dist == District::HighRise) ? 280
+                   : (dist == District::Industrial) ? 600 : 110;
         std::vector<Lot> lots = subdivideBlock(foot, pp, static_cast<int>(dist));
         model.lotCount += static_cast<int>(lots.size());
 

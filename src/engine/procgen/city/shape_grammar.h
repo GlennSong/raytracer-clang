@@ -47,7 +47,7 @@ enum class PartId : uint8_t {
 // the building to an all-glass facade. A future layer can swap in tiled
 // procedural brick/concrete *textures* with world-scaled UVs.
 enum class FacadeStyle : uint8_t {
-    Concrete, Brick, Stucco, Painted, GlassCurtain, Count
+    Concrete, Brick, Stucco, Painted, GlassCurtain, Metal, Count
 };
 
 // A seeded wall colour for a style (brick reds, concrete greys, stucco creams,
@@ -111,6 +111,8 @@ struct BuildingParams {
     Real  parapet = human::PARAPET;
     Vec3  wallColor{0.72, 0.70, 0.66};
     bool  curtainWall = false;   // all-glass facade (downtown towers)
+    bool  solidFacade = false;   // mostly-solid walls + a high clerestory strip
+                                 // (warehouses/industrial): few windows, no glass bays
     // Facade ornamentation (the "decorative bricks, pillars, awnings" axis).
     // Traditional styles (brick/stucco/concrete) switch these on; a glass curtain
     // wall leaves them off for a clean skin.
