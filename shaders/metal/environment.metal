@@ -18,9 +18,15 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     float skyBlend = saturate(dir.y);
     float3 sky = mix(env.skyHorizon, env.skyZenith, pow(skyBlend, 0.5));
 
-    // Soft ground plane below horizon
+    // Below the horizon, hold the horizon haze for a band before fading to the
+    // ground tint deeper down. On a finite/flat world this lets distant terrain
+    // (faded toward the fog/horizon color) dissolve seamlessly into the sky from
+    // high vantage points, instead of meeting a hard ground-colored band where
+    // the terrain mesh ends.
+    float3 lowerHaze = mix(env.skyHorizon, env.skyGround,
+                           smoothstep(0.0, -0.4, dir.y));
     float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
-    float3 col = mix(env.skyGround, sky, horizonBlend);
+    float3 col = mix(lowerHaze, sky, horizonBlend);
 
     // Sun disc and glow — `skySunIntensity` is 0 at night, so they vanish.
     float disc = env.skySunIntensity;
