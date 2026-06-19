@@ -1,6 +1,7 @@
 #include "city.h"
 
 #include "parcel.h"
+#include "../tree.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -260,28 +261,49 @@ void emitCrosswalk(RenderMesh& mesh, const Vec2& center, const Vec2& dir,
 }
 
 // A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
-// it bakes on a white material like the rest of the city. Planted at `base` (its
-// foot), facing +Y. ~80 triangles; for street/park scatter, not a hero asset.
-void emitTree(RenderMesh& out, const Vec3& base, Real height, Real canopy,
-              uint32_t seed) {
-    Vec3 trunkCol(0.32, 0.22, 0.14), leafCol(0.20, 0.42, 0.16);
-    Real trunkH = height * 0.45, trunkR = height * 0.04;
-    auto place = [&](RenderMesh m, const Vec3& col, Real y) {
-        for (Vertex& v : m.vertices) v.color = col;
-        MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
-        MeshBuilder::append(out, m);
-    };
-    // Cylinder + cone are centre-origin (y from -h/2..+h/2); translate by half
-    // their height so the foot/base lands where intended.
-    place(MeshBuilder::cylinder(static_cast<float>(trunkR),
-                                static_cast<float>(trunkH), 7), trunkCol, trunkH * 0.5);
-    Real leafSeed = (seed % 7) * 0.03;
-    Real h0 = canopy * 0.9, h1 = canopy * 0.7;
-    place(MeshBuilder::cone(static_cast<float>(canopy * (0.62 + leafSeed)),
-                            static_cast<float>(h0), 8), leafCol, trunkH + h0 * 0.5);
-    place(MeshBuilder::cone(static_cast<float>(canopy * (0.42 + leafSeed)),
-                            static_cast<float>(h1), 8), leafCol,
-          trunkH + canopy * 0.4 + h1 * 0.5);
+// it bakes on a white material like the rest of the city. A real L-system tree
+// (procgen/tree growTree — generalized-cylinder branches) with a stylized blob
+// canopy instead of alpha-cut leaf cards (those need their own textured material;
+// the city props bake into one vertex-coloured mesh). Generated a few times and
+// reused, since hundreds are scattered.
+RenderMesh makeCityTree(uint32_t seed) {
+    TreeParams tp;
+    tp.iterations = 3;          // low order: a believable street tree, ~light mesh
+    tp.trunkLength = 1.8f;
+    tp.branchAngle = 34.0f;
+    tp.angleJitter = 20.0f;
+    tp.ringSegments = 4;
+    tp.leaves = false;          // canopy added as blobs below
+    TreeMesh tm = growTree(tp, seed ? seed : 1u);
+    RenderMesh out = tm.branches;
+    for (Vertex& v : out.vertices) v.color = Vec3(0.34, 0.24, 0.15);   // bark
+
+    if (out.vertices.empty()) return out;
+    Vec3 lo = out.vertices[0].position, hi = lo;
+    for (const Vertex& v : out.vertices) { lo = minVec(lo, v.position); hi = maxVec(hi, v.position); }
+    Real spanY = std::max(hi.y - lo.y, Real(1.0));
+    Real rad = std::max({hi.x - lo.x, hi.z - lo.z, spanY * 0.6}) * 0.55;
+    Vec3 crown((lo.x + hi.x) * 0.5, hi.y - spanY * 0.28, (lo.z + hi.z) * 0.5);
+    Vec3 leaf(0.20, 0.42, 0.16);
+    Rng br(seed ^ 0x99u);
+    for (int i = 0; i < 5; ++i) {
+        Vec3 off(br.range(-rad * 0.5, rad * 0.5), br.range(-spanY * 0.12, spanY * 0.28),
+                 br.range(-rad * 0.5, rad * 0.5));
+        RenderMesh blob = MeshBuilder::sphere(static_cast<float>(rad * br.range(0.55, 0.85)), 5, 7);
+        for (Vertex& v : blob.vertices) v.color = leaf * br.range(0.85, 1.1);
+        MeshBuilder::transform(blob, Mat4::translate(crown.x + off.x, crown.y + off.y, crown.z + off.z));
+        MeshBuilder::append(out, blob);
+    }
+    return out;
+}
+
+// Place a copy of a pre-generated tree at `base`, scaled + yawed.
+void placeCityTree(RenderMesh& out, const RenderMesh& variant, const Vec3& base,
+                   Real scale, Real yaw) {
+    RenderMesh t = variant;
+    MeshBuilder::transform(t, Mat4::trs(base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                                        Vec3(scale, scale, scale)));
+    MeshBuilder::append(out, t);
 }
 
 }  // namespace
@@ -392,6 +414,18 @@ CityModel generateCity(const CityParams& cp) {
 
     Rng rng(cp.seed);
 
+    // Pre-generate a few real (L-system) trees once; placements reuse them.
+    std::vector<RenderMesh> treeVar;
+    if (cp.scatterTrees)
+        for (int i = 0; i < 3; ++i) treeVar.push_back(makeCityTree(cp.seed * 7u + i + 1));
+    auto plantTree = [&](const Vec2& p, Rng& tr) {
+        if (treeVar.empty()) return;
+        placeCityTree(model.props, treeVar[tr.next() % treeVar.size()],
+                      Vec3(p.x, cityGroundAt(cp, p), p.y), tr.range(1.0, 1.7),
+                      tr.range(0, 6.283));
+        ++model.treeCount;
+    };
+
     // 4. Per block: inset to the buildable footprint, subdivide into lots, grow a
     //    building per occupied lot (ADR-0038 §3).
     for (int bi = 0; bi < model.blockCount; ++bi) {
@@ -409,10 +443,7 @@ CityModel generateCity(const CityParams& cp) {
                     for (int k = 0; k < n * 3 && model.treeCount < 100000; ++k) {
                         Vec2 p(prng.range(lo.x, hi.x), prng.range(lo.y, hi.y));
                         if (!pointInPolygon(green, p)) continue;
-                        Real h = prng.range(5.0, 8.5);
-                        emitTree(model.props, Vec3(p.x, cityGroundAt(cp, p), p.y), h,
-                                 h * 0.45, prng.next());
-                        ++model.treeCount;
+                        plantTree(p, prng);
                     }
                 }
             }
@@ -425,17 +456,22 @@ CityModel generateCity(const CityParams& cp) {
         bool oldTown = dist != District::HighRise && dist != District::Industrial &&
                        (c - oldTownC).length() < cp.extent * 0.24;
 
-        // Flat block grade tied to the street grades: the pad sits a curb height
-        // (0.15 m) above the highest adjacent intersection, so every block meets
-        // its streets with a consistent curb. The whole block — apron + every
-        // building — shares this one level, the way a real graded block does.
-        Real gradeY = cp.baseY;
+        // Flat block grade = a true leveled foundation: the pad sits a curb above
+        // the HIGHEST ACTUAL terrain anywhere under the block (sampling the
+        // interior, not just the smoothed street grades), so terrain never pokes
+        // up through the flat apron or building floors. The retaining skirt then
+        // fills down to the street, terracing the block into the hillside.
+        Real gradeY = cp.baseY + 0.15;
         if (cp.groundAt) {
             Real mx = -1e30;
-            for (const Vec2& v : block) mx = std::max(mx, gradeAt(v));
-            gradeY = mx + 0.15;
-        } else {
-            gradeY = cp.baseY + 0.15;
+            for (const Vec2& v : block) mx = std::max(mx, cityGroundAt(cp, v));
+            Vec2 lo, hi; bounds(block, lo, hi);
+            for (int gyi = 0; gyi <= 5; ++gyi)
+                for (int gxi = 0; gxi <= 5; ++gxi) {
+                    Vec2 p(lo.x + (hi.x - lo.x) * gxi / 5.0, lo.y + (hi.y - lo.y) * gyi / 5.0);
+                    if (pointInPolygon(block, p)) mx = std::max(mx, cityGroundAt(cp, p));
+                }
+            gradeY = mx + 0.2;
         }
         // Paved apron (sidewalk + block interior), flat at grade, snapped to the
         // road edge so the sidewalk meets the curb meets the carriageway with no
@@ -535,12 +571,9 @@ CityModel generateCity(const CityParams& cp) {
                 Real t = (k + (trng.unit() - 0.5) * 0.3) * cp.streetTreeSpacing;
                 Vec2 on = a + d * t;
                 for (Real s : {Real(1), Real(-1)}) {
-                    if (trng.unit() < 0.25) continue;        // gappy, not a hedge
+                    if (trng.unit() < 0.45) continue;        // gappy, not a hedge
                     Vec2 p = on + nrm * (verge * s);
-                    Real h = trng.range(4.5, 7.0);
-                    emitTree(model.props, Vec3(p.x, cityGroundAt(cp, p), p.y), h,
-                             h * 0.4, trng.next());
-                    ++model.treeCount;
+                    plantTree(p, trng);
                 }
             }
         }

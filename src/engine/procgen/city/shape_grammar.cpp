@@ -297,8 +297,19 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
                      materialFor(PartId::Door, wallColor).albedo);
         } else {
             Vec3 in = fr.n * (-p.windowInset);
-            emitQuad(glass, fr.at(wx0, openSill) + in, fr.at(wx1, openSill) + in,
-                     fr.at(wx1, openHead) + in, fr.at(wx0, openHead) + in, fr.n,
+            // Window reveals (jambs/sill/lintel): close the recess between the wall
+            // opening and the inset glass, so you don't see straight through the
+            // (hollow) building around the glass. Four quads from the opening edge
+            // back to the glass, normals facing into the recess.
+            Vec3 oBL = fr.at(wx0, openSill), oBR = fr.at(wx1, openSill);
+            Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
+            Vec3 gBL = oBL + in, gBR = oBR + in, gTL = oTL + in, gTR = oTR + in;
+            Vec3 rev = wallColor * 0.82;
+            emitQuad(wall, oTL, oTR, gTR, gTL, fr.v * -1, rev);   // lintel (faces down)
+            emitQuad(wall, oBL, oBR, gBR, gBL, fr.v,      rev);   // sill   (faces up)
+            emitQuad(wall, oBL, oTL, gTL, gBL, fr.h,      rev);   // left jamb (faces +h)
+            emitQuad(wall, oBR, oTR, gTR, gBR, fr.h * -1, rev);   // right jamb
+            emitQuad(glass, gBL, gBR, gTR, gTL, fr.n,
                      materialFor(PartId::Glass, wallColor).albedo);
         }
     }
