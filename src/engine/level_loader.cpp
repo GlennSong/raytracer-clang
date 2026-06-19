@@ -280,6 +280,21 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
     }
 
     CityModel m = generateCity(cp);
+
+    // Document entity: carries the SourceSpec (recipe) so the city round-trips
+    // through the editor's save-then-load. LevelWriter only serialises entities
+    // with a SourceSpec, so without this the city vanishes the instant Play
+    // reloads the level — while the top-level "terrain" block survives, leaving
+    // "just terrain". The render/collider entities below are runtime companions
+    // (regenerated from this recipe on load), exactly like the tree's leaf entity.
+    {
+        Entity doc = world.create();
+        createEntityCommon(doc, ent, world);
+        SourceSpec spec = buildSourceSpec(ent, "city");
+        if (ent.contains("city")) spec.recipe = ent["city"].dump();
+        world.add<SourceSpec>(doc, spec);
+    }
+
     const std::string key = "city:" + std::to_string(index);
     auto spawnMesh = [&](const RenderMesh& mesh, const std::string& tag,
                          float metallic, float roughness) {
@@ -310,9 +325,19 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         MeshCollider mc;
         mc.friction = 0.9;
         auto addTris = [&](const RenderMesh& rm) {
-            uint32_t base = static_cast<uint32_t>(mc.vertices.size());
-            for (const Vertex& v : rm.vertices) mc.vertices.push_back(v.position);
-            for (uint32_t idx : rm.indices) mc.indices.push_back(base + idx);
+            for (std::size_t i = 0; i + 2 < rm.indices.size(); i += 3) {
+                const Vec3& a = rm.vertices[rm.indices[i]].position;
+                const Vec3& b = rm.vertices[rm.indices[i + 1]].position;
+                const Vec3& c = rm.vertices[rm.indices[i + 2]].position;
+                if (cross(b - a, c - a).length() < 1e-5) continue;   // skip degenerate
+                uint32_t base = static_cast<uint32_t>(mc.vertices.size());
+                mc.vertices.push_back(a);
+                mc.vertices.push_back(b);
+                mc.vertices.push_back(c);
+                mc.indices.push_back(base);
+                mc.indices.push_back(base + 1);
+                mc.indices.push_back(base + 2);
+            }
         };
         addTris(m.pavement);
         addTris(m.roads);
