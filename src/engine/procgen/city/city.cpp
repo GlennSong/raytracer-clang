@@ -25,47 +25,75 @@ uint32_t hash2(int a, uint32_t seed) {
 
 // Building parameters drawn for a district (ADR-0038 §7: downtown towers grade
 // down to residential; parks build nothing).
+// Pick a facade style for a district (downtown: glass towers + concrete; midtown:
+// brick + concrete; residential: brick/stucco/painted). Variety per building.
+FacadeStyle styleForDistrict(District d, Rng& rng) {
+    Real r = rng.unit();
+    switch (d) {
+        case District::Downtown:
+            return r < 0.55 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
+        case District::Midtown:
+            return r < 0.5 ? FacadeStyle::Brick
+                 : (r < 0.8 ? FacadeStyle::Concrete : FacadeStyle::Stucco);
+        case District::Residential:
+        default:
+            return r < 0.45 ? FacadeStyle::Brick
+                 : (r < 0.75 ? FacadeStyle::Stucco : FacadeStyle::Painted);
+    }
+}
+
 BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     BuildingParams p;
     p.seed = rng.next() ^ seed;
+    FacadeStyle style = styleForDistrict(d, rng);
+    p.wallColor = facadeColor(style, p.seed);
+    p.curtainWall = (style == FacadeStyle::GlassCurtain);
     switch (d) {
         case District::Downtown:
             p.floors = rng.irange(12, 38);
             p.groundRetail = true;
             p.bayWidth = rng.range(3.6, 4.6);
             if (p.floors > 20) { p.setbackFloors = 8; p.setbackEvery = rng.range(2.0, 4.0); }
-            p.wallColor = Vec3(0.62, 0.64, 0.68);
             break;
         case District::Midtown:
             p.floors = rng.irange(4, 9);
             p.groundRetail = true;
             p.bayWidth = rng.range(3.2, 4.0);
-            p.wallColor = Vec3(0.70, 0.66, 0.60);
             break;
         case District::Residential:
         default:
             p.floors = rng.irange(1, 3);
             p.groundRetail = false;
             p.bayWidth = rng.range(3.0, 3.6);
-            p.wallColor = Vec3(0.74, 0.71, 0.64);
             break;
     }
+
+    // Ornamentation: a glass curtain wall stays clean; traditional masonry gets a
+    // base course, a cornice over the ground floor, an awning, and — on shorter
+    // brick/concrete buildings — pilasters framing the bays (heavy on tall towers).
+    bool glassy = p.curtainWall;
+    p.baseCourse = true;
+    p.stringCourse = !glassy;
+    p.awning = !glassy;
+    p.pilasters = !glassy && p.floors <= 12 &&
+                  (style == FacadeStyle::Brick || style == FacadeStyle::Concrete);
+    p.trimColor = glassy ? Vec3(0.50, 0.52, 0.55)
+                : (style == FacadeStyle::Brick ? Vec3(0.84, 0.82, 0.76)
+                                               : Vec3(0.78, 0.77, 0.73));
     return p;
 }
 
-// A road ribbon for one edge: a quad of `width` centred on the centreline, with
-// each end draped to the ground height there (+ a small bias). Flat terrain ->
-// a flat ribbon; rolling terrain -> the road follows it (gentle slopes; a long
-// road over a big hill would need subdivision, out of scope).
-void emitRoad(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
-              Real width) {
+// A draped ribbon along an edge: a quad of `width`, each end at the ground height
+// there + yBias, vertex-coloured `col`. Flat terrain -> flat; rolling terrain ->
+// follows it (gentle slopes; a long road over a big hill would need subdivision).
+void emitRibbon(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
+                Real width, const Vec3& col, Real yBias) {
     Vec2 dir = b - a;
     Real len = dir.length();
     if (len < 1e-4) return;
     dir = dir / len;
     Vec2 n = perp(dir) * (width * 0.5);
-    Real ya = cityGroundAt(cp, a) + 0.05, yb = cityGroundAt(cp, b) + 0.05;
-    Vec3 col(0.13, 0.13, 0.14);
+    Real ya = cityGroundAt(cp, a) + yBias, yb = cityGroundAt(cp, b) + yBias;
     Vec3 normal(0, 1, 0);
     Vec3 p0(a.x - n.x, ya, a.y - n.y), p1(a.x + n.x, ya, a.y + n.y);
     Vec3 p2(b.x + n.x, yb, b.y + n.y), p3(b.x - n.x, yb, b.y - n.y);
@@ -131,9 +159,18 @@ CityModel generateCity(const CityParams& cp) {
     model.blocks = extractBlocks(graph);
     model.blockCount = static_cast<int>(model.blocks.size());
 
-    // Road surface (draped on the ground).
-    for (const RoadEdge& e : graph.edges)
-        emitRoad(model.roads, cp, graph.nodes[e.a].pos, graph.nodes[e.b].pos, e.width);
+    // Pave the street corridor (ADR-0038 §3.5): a light **sidewalk** ribbon
+    // filling the gap between blocks (so the inter-block space reads as paved
+    // city, not grass), then the dark **asphalt** carriageway on top. Both drape
+    // on the ground. Parks (handled below) overlay green on their block.
+    Real corridor = (8.0 + cp.sidewalk) * 2.0;     // ~ block-to-block gap
+    Vec3 sidewalkCol(0.50, 0.50, 0.49), asphaltCol(0.13, 0.13, 0.14);
+    for (const RoadEdge& e : graph.edges) {
+        emitRibbon(model.roads, cp, graph.nodes[e.a].pos, graph.nodes[e.b].pos,
+                   corridor, sidewalkCol, 0.03);
+        emitRibbon(model.roads, cp, graph.nodes[e.a].pos, graph.nodes[e.b].pos,
+                   e.width, asphaltCol, 0.06);
+    }
 
     Rng rng(cp.seed);
 

@@ -57,6 +57,27 @@ FaceRect faceOf(const Scope& s, int side) {
 
 }  // namespace
 
+Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
+    Rng rng(seed ? seed : 1u);
+    Real t = rng.unit();
+    switch (style) {
+        case FacadeStyle::Brick:
+            // Warm reds/browns, some buff.
+            return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
+        case FacadeStyle::Stucco:
+            return lerp(Vec3(0.86, 0.82, 0.72), Vec3(0.80, 0.74, 0.60), t);
+        case FacadeStyle::Painted:
+            // Muted pastels (residential).
+            return lerp(Vec3(0.74, 0.78, 0.78), Vec3(0.80, 0.72, 0.66), t) +
+                   Vec3(rng.range(-0.04, 0.04), rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
+        case FacadeStyle::GlassCurtain:
+            return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+        case FacadeStyle::Concrete:
+        default:
+            return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
+    }
+}
+
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
     RenderMaterial m;
     switch (id) {
@@ -270,6 +291,30 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
         }
     }
 
+    // Pilasters: thin vertical piers proud of the wall at each bay boundary. Per
+    // storey they stack into continuous full-height pillars. A box projecting
+    // outward by `proud`, under Trim.
+    if (p.pilasters && mode != FacadeMode::Entrance) {
+        RenderMesh trim;
+        Real proud = 0.18, pw = 0.5;
+        Vec3 up = storey.axis[1];
+        for (int b = 0; b <= bays; ++b) {
+            Real x = std::min(std::max(b * bw, pw * 0.5), fr.width - pw * 0.5);
+            Vec3 c0 = fr.at(x, 0), c1 = fr.at(x, fr.height);
+            Vec3 along = normalize(fr.h) * (pw * 0.5);
+            Vec3 outv = fr.n * proud;
+            // Front quad + two returns of the pier (a shallow box face).
+            emitQuad(trim, c0 - along + outv, c0 + along + outv,
+                     c1 + along + outv, c1 - along + outv, fr.n, p.trimColor);
+            emitQuad(trim, c0 + along, c0 + along + outv, c1 + along + outv,
+                     c1 + along, fr.h, p.trimColor);
+            emitQuad(trim, c0 - along + outv, c0 - along, c1 - along,
+                     c1 - along + outv, fr.h * -1, p.trimColor);
+            (void)up;
+        }
+        appendToPart(out, PartId::Trim, trim);
+    }
+
     appendToPart(out, PartId::Wall, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Door, door);
@@ -313,10 +358,37 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
     emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
                        {r, Vec3(0, 1, 0), f}, Vec3(width, 0.1, depth)},
             PartId::Ground, materialFor(PartId::Ground, wallColor).albedo);
+
+    // Base course / foundation: a wider, darker plinth the building rises from
+    // (real buildings sit on a visible base, not flush on the ground).
+    auto bandScope = [&](Real yb, Real h, Real grow) {
+        return Scope{Vec3(footOrigin.x - (r.x + f.x) * 0, yb, footOrigin.z) -
+                         r * grow - f * grow,
+                     {r, Vec3(0, 1, 0), f},
+                     Vec3(width + 2 * grow, h, depth + 2 * grow)};
+    };
+    if (params.baseCourse)
+        emitBox(out, bandScope(baseY, std::min(Real(0.8), gh * 0.2), 0.22),
+                PartId::Trim, params.trimColor * 0.8);
     {
         FaceRect ef = faceOf(ground, 0);
         out.attaches.push_back({ef.at(ef.width * 0.5, 0), ef.n, "entrance"});
+        // Awning: a projecting ledge over the entrance (ground floor).
+        if (params.awning) {
+            Real dw = std::min(human::DOOR_WIDTH + 1.6, ef.width * 0.5);
+            Vec3 c = ef.at(ef.width * 0.5, human::DOOR_HEIGHT + 0.15);
+            Vec3 across = ef.h, out_n = ef.n;
+            Scope a;
+            a.axis[0] = across; a.axis[1] = Vec3(0, 1, 0); a.axis[2] = out_n;
+            a.size = Vec3(dw, 0.18, 1.3);
+            a.origin = c - across * (dw * 0.5);
+            emitBox(out, a, PartId::Detail, params.trimColor);
+        }
     }
+    // String course / cornice: an oversailing band capping the ground floor
+    // (separates the taller retail/lobby base from the floors above).
+    if (params.stringCourse)
+        emitBox(out, bandScope(y - 0.18, 0.36, 0.14), PartId::Trim, params.trimColor);
     y += gh;
 
     // Upper residential floors, with optional setbacks.
@@ -330,8 +402,9 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         }
         Real fh = params.floorHeight;
         Scope storey = storeyScope(y, fh);
+        FacadeMode mode = params.curtainWall ? FacadeMode::Retail : FacadeMode::Residential;
         for (int side = 0; side < 4; ++side)
-            emitFacade(out, storey, side, FacadeMode::Residential, params, wallColor);
+            emitFacade(out, storey, side, mode, params, wallColor);
         if (i == params.floors / 2) {
             FaceRect ff = faceOf(storey, 0);
             out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});

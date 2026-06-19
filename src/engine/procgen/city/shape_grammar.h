@@ -41,6 +41,19 @@ enum class PartId : uint8_t {
     Wall, Glass, Trim, Roof, Door, Ground, Detail, Count
 };
 
+// Facade material style (the "different facades like brick or concrete" axis).
+// At the merged-model scale, style varies the wall *colour* per building (carried
+// in vertex colour, so it works on one shared material); GlassCurtain also flips
+// the building to an all-glass facade. A future layer can swap in tiled
+// procedural brick/concrete *textures* with world-scaled UVs.
+enum class FacadeStyle : uint8_t {
+    Concrete, Brick, Stucco, Painted, GlassCurtain, Count
+};
+
+// A seeded wall colour for a style (brick reds, concrete greys, stucco creams,
+// painted pastels). Deterministic for the seed.
+Vec3 facadeColor(FacadeStyle style, uint32_t seed);
+
 // One scope: an oriented box. axis[] are unit and mutually perpendicular; size[i]
 // is the full extent along axis[i]. origin is the corner where all three local
 // coordinates are zero (the min corner of the box in its own frame).
@@ -97,6 +110,15 @@ struct BuildingParams {
     int   setbackFloors = 0;     // floors between setbacks (0 = none)
     Real  parapet = human::PARAPET;
     Vec3  wallColor{0.72, 0.70, 0.66};
+    bool  curtainWall = false;   // all-glass facade (downtown towers)
+    // Facade ornamentation (the "decorative bricks, pillars, awnings" axis).
+    // Traditional styles (brick/stucco/concrete) switch these on; a glass curtain
+    // wall leaves them off for a clean skin.
+    bool  baseCourse = true;     // a wider, darker plinth — the foundation/base
+    bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
+    bool  pilasters = false;     // vertical piers framing each bay (run full height)
+    bool  awning = true;         // a projecting ledge over the entrance
+    Vec3  trimColor{0.40, 0.38, 0.35};
     uint32_t seed = 0;
 };
 
