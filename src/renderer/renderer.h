@@ -384,8 +384,8 @@ public:
         float intensity = 0.8f;
         float bias      = 0.05f;
         float aoFloor   = 0.15f;   // darkest the composite AO multiply can go
-        int directions  = 6;       // more angular samples -> less banding
-        int steps       = 8;       // denser radial samples -> smoother (less blocky)
+        int directions  = 4;       // angular samples -> less banding (live-tunable)
+        int steps       = 5;       // radial samples -> smoother (live-tunable)
         float temporal  = 0.9f;    // history blend weight: higher = steadier but
                                    // more ghosting in motion; 0 disables temporal AO
     } ssaoParams;
