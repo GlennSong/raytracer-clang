@@ -2194,6 +2194,83 @@ clipmap replaces CPU node meshing if churn dominates a profile.
 
 ---
 
+## ADR-0037 — Interactive render budget + display-agnostic tone/grade pipeline
+**Status:** Accepted · **Date:** 2026-06-19
+
+**Context.** Standing in the CDLOD forest fell to 12–15 fps and the image read
+washed out; from a high peak the finite world's terrain edge showed a hard band
+below the horizon. This ADR records the perf + look pass that followed — all
+**viewer-verified with the user** on `cdlod.json`/`arena.json` (arena reached a
+solid 60; the dense terrain view is tunable to 60), separate from the terrain ADRs.
+
+**Decision.**
+1. **Foliage depth prepass (alpha-cut overdraw).** Alpha-cut leaves shade via
+   `discard_fragment()`, which forces *late* depth testing, so close-up every
+   overlapping leaf card ran the full lit shader. Split foliage into a depth-only
+   prepass (writes the nearest leaf depth; alpha cut only) + a lit pass with
+   `[[early_fragment_tests]]` and an **Equal / no-write** depth state, so each
+   pixel shades once. Both stages reuse `vertexMainInstanced` from one instance
+   buffer, so depths match bit-for-bit (incl. wind sway) and the Equal test is
+   exact. Scoped to **foliage only** (not all opaque) to avoid the "vanish on
+   depth mismatch" cliff; solids and the shadow pass are untouched. Runtime-gated
+   by `depthPrepassEnabled`.
+2. **SSAO at half resolution + temporal rotation jitter.** Profiling found SSAO
+   the dominant frame cost (~33 ms full-res; toggling it took the arena 20→60).
+   Run all four AO passes (GTAO + 2 blurs + temporal) at **half res** — the
+   composite already upsamples via normalized sampling, as SSR has all along;
+   the kernels map their half-res coords to the full-res G-buffer
+   (`aoCoordToGBuffer`). GTAO default dropped 48→20 samples; a per-frame
+   golden-angle **rotation** that the temporal resolve averages keeps low
+   direction counts banding-free. Directions/Steps stay live sliders.
+3. **Display-agnostic tone/grade pipeline (HDR-ready).** The composite is
+   `grade → view transform → encode`. The **grade** (contrast in log2 around
+   middle grey + saturation around luma) runs in **scene-linear, before the tone
+   map**, so it is independent of the output encode and carries over unchanged to
+   a future HDR output path. The **view transform** is selectable: ACES (existing)
+   or **AgX** (minimal fit — gentler highlight rolloff, far less hue skew). A raw
+   **gamma slider was deliberately rejected** — gamma is the *encode* step (sRGB
+   2.2 today, PQ/EDR under HDR), not an artistic control. Grade defaults neutral.
+4. **Atmosphere wiring.** Aerial fog (already in the lit shader, just configured
+   too weakly) got live overlay controls + a **"Match Sky"** button; the
+   procedural sky now **holds the horizon haze for a band below the horizon**
+   (fading to the ground tint only at steep angles), so a finite world's far
+   terrain dissolves into sky instead of meeting a hard ground band. A
+   `vegetationDrawDistance` override lets draw distance be balanced against fog
+   live (pull trees in to where fog hides them).
+5. **HDR environment hygiene.** Levels with no `"hdr"` key now **clear** any
+   previously-bound environment map on load (the renderer is reused across loads,
+   so a prior level's HDR sky used to persist); a runtime `environmentMapEnabled`
+   toggle forces the procedural sky for A/B.
+
+**Alternatives considered.**
+- *Depth prepass for all opaque (not just foliage)* — rejected: Equal-depth needs
+  bit-identical transforms for **every** opaque draw or geometry vanishes;
+  foliage-only confines the blast radius and is where the overdraw actually is.
+- *Contrast/gamma on the final SDR pixels* — rejected: breaks under HDR; the grade
+  belongs in linear before the tone map (the Blender/OCIO model).
+- *Tree impostors/LOD for the forest* — deferred; the next scaling lever as density
+  grows (ADR-0034 impostors/HLOD).
+
+**Consequences / tech debt.**
+- All of the above is **Metal-only, verified in the viewer this session, not on
+  Linux/CI** (the standing macOS verification gap). AgX bakes its own display
+  encode and was **not** bit-checked against ACES on-device — flagged in TECH_DEBT.
+- The grade is HDR-ready but the **output path is still SDR** (clamp + 2.2); true
+  HDR display (extended-range layer + PQ/EDR) is unbuilt.
+- The sky's below-horizon **ground tint double-serves** as ambient ground-bounce
+  (procedural IBL samples it by surface normal) *and* skybox color; the haze change
+  pulled undersides slightly bluer. Decoupling is a follow-up.
+- The **offline path tracer keeps its own ACES** and gains no grade/AgX — viewer
+  and offline tone now differ.
+- SSAO in a **full-coverage view** (dense terrain, no sky) still costs ~16 ms at
+  half res — a blur/temporal floor, not sample count.
+
+**Revisit trigger.** HDR display output (the grade slots in unchanged);
+distant-tree impostors/HLOD when forest density grows; AgX look presets; decoupled
+ground-bounce ambient.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

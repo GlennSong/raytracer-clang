@@ -148,6 +148,40 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   `AssetManager` (ROADMAP 3.1, `docs/asset-system-plan.md`): refcounted, deduped
   mesh ownership with `release` on overwrite and `clear()` on world teardown.
 
+**ADR-0037 follow-ups (perf + tone/grade pass — all Metal-only, viewer-verified, not on CI):**
+- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post.metal`)
+  bakes its own ~2.2 display encode (the minimal-fit convention) and was *not*
+  bit-compared to ACES on-device. If AgX reads noticeably darker/brighter than
+  ACES at neutral grade, it's a one-line gamma-convention fix. Eyeball on a bright
+  outdoor scene.
+- **HDR display output is unbuilt.** The composite grade runs in scene-linear
+  before the tone map specifically so it's display-agnostic (ADR-0037), but output
+  is still SDR (`saturate` + `pow(1/2.2)`). True HDR = extended-range `CAMetalLayer`
+  (`wantsExtendedDynamicRangeContent` + RGBA16F + EDR colorspace) and swap the
+  encode (gamma→PQ/EDR); the grade carries over untouched.
+- **Sky ground tint double-serves lighting + skybox.** `env.skyGround` is both the
+  below-horizon sky color *and* (in procedural mode) the ambient ground-bounce
+  (`envIrradiance` point-samples `sampleEnvironment(normal)`). The ADR-0037 haze
+  blend pulled downward-facing normals bluer. To decouple: keep haze for the
+  skybox view ray, use the real earthy tint for the irradiance/normal path.
+- **SSAO floor in full-coverage views.** Half-res SSAO (ADR-0037) still costs
+  ~16 ms when the screen is all terrain/foliage (no sky early-out) — that's the
+  two blurs + temporal resolve, not GTAO samples. Lever: fold/​shrink the blur, or
+  a coarser temporal. Sky-heavy views are already 60.
+- **Foliage prepass instance cap.** `FOLIAGE_MAX_INSTANCES = 8192`
+  (`metal_renderer.mm`); foliage beyond it is silently dropped from the prepass+lit
+  pass for the frame. Generous for a frustum, but a very dense close forest could
+  hit it — grow the buffer or fall back to the single-pass path on overflow.
+- **Live-tuned look values not all baked.** Fog density/color and
+  `vegetationDrawDistance` are *level-owned* (live-tunable, **not** persisted to
+  settings.json) — bake chosen values into the level JSON. Tonemap op + grade +
+  bloom + SSAO params *are* persisted to settings.json. `cdlod.json` ships fog
+  `density 0.005`; `chunked.json` `0.0025` — both first-pass guesses.
+- **Distant-tree LOD/impostors still owed.** Fog + draw distance hide the far
+  forest but we still pay full cost for what's drawn; impostors/HLOD (ADR-0034) are
+  the structural scaling lever as density grows. The foliage prepass and SSAO work
+  bought headroom but didn't address geometry/vertex throughput.
+
 ## Offline tracer
 
 - **glTF ("mesh") entities are skipped** by the level importer — offline

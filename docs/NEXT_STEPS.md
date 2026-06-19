@@ -6,6 +6,15 @@ session.
 
 ## Current state (all on main)
 
+- **Open-world Phase 1 + interactive render budget (latest session)** — chunked
+  terrain → CDLOD heightfield (ADR-0035/0036), vegetation scatter, and a perf +
+  look pass (**ADR-0037**), all viewer-verified with the user: foliage depth
+  prepass (alpha-cut overdraw), half-res SSAO + temporal jitter (the arena went
+  20→60; dense terrain tunable to 60), a display-agnostic grade + selectable
+  ACES/AgX tone map, aerial fog with live controls + below-horizon haze, a
+  vegetation draw-distance slider, and HDR-env hygiene (clear on level load +
+  runtime toggle). Caveats live in `docs/TECH_DEBT.md` (AgX encode unverified,
+  HDR output unbuilt, ground-tint coupling, distant-tree impostors still owed).
 - **Virtual cameras** (docs/virtual-camera-plan.md, ROADMAP 3.4): placeable
   `SceneCamera` entities, viewport switching (V/B/X, C places, F detaches in
   game), physical `LensParams`, camera sidecar persistence, offline renders
@@ -170,16 +179,23 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
    - Tech debt with on-device pointers in docs/TECH_DEBT.md: realtime DOF
      (dofGather), the ~20fps dip (bisect via Debug-panel pass toggles +
      Xcode GPU capture).
-2. **Editor quality of life, remaining**: multi-select, camera frustum
+   - ADR-0037 follow-ups to eyeball: AgX vs ACES brightness at neutral grade
+     (gamma-convention check); fog/grade values to bake into level JSON.
+2. **Render scaling + look (ADR-0037 follow-ups, docs/TECH_DEBT.md)**: distant-
+   tree impostors/HLOD (the geometry/vertex lever the prepass+SSAO work didn't
+   touch); HDR display output (grade is already HDR-ready — add the extended-range
+   layer + PQ/EDR encode); optional decoupled ground-bounce ambient; AgX look
+   presets. Lower SSAO blur/temporal floor if dense-terrain views still dip.
+4. **Editor quality of life, remaining**: multi-select, camera frustum
    gizmos, axes indicator (grid landed; duplicate shortcut and dirty-save
    prompts landed in the Qt shell).
-3. **Asset pipeline (A4 continuation / ROADMAP 3.1)**: cook HDR -> prebaked
+5. **Asset pipeline (A4 continuation / ROADMAP 3.1)**: cook HDR -> prebaked
    cubemap + extracted sun at import (also cuts load time); asset manifest.
-4. **Phase 6 — iPhone virtual camera**: needs a research/planning pass first
+6. **Phase 6 — iPhone virtual camera**: needs a research/planning pass first
    (ARKit pose streaming options vs existing VCam protocols), then the
    PoseSource seam + CameraPuppetSystem + mock replay source
    (docs/virtual-camera-plan.md sketches it).
-5. **Vulkan backend** (Tier 5): the seam + [0,1] depth are ready; the real
+7. **Vulkan backend** (Tier 5): the seam + [0,1] depth are ready; the real
    decision is shader strategy (dual-source vs SPIRV-Cross/slang
    single-source) — decide before writing.
 
