@@ -330,7 +330,169 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
 
 }  // namespace
 
+// --- Curved (cylindrical) tower -------------------------------------------
+
+// A vertical tube (cylinder wall) y0..y1 at `radius`, `sides` facets, outward
+// normals, into part `pid` with vertex colour `col`.
+static void emitTube(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y0,
+                     Real y1, int sides, PartId pid, const Vec3& col) {
+    RenderMesh m;
+    for (int i = 0; i < sides; ++i) {
+        Real a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
+        Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
+        Vec3 n = normalize(d0 + d1);
+        emitQuad(m, cXZ + d0 * radius + Vec3(0, y0, 0),
+                    cXZ + d1 * radius + Vec3(0, y0, 0),
+                    cXZ + d1 * radius + Vec3(0, y1, 0),
+                    cXZ + d0 * radius + Vec3(0, y1, 0), n, col);
+    }
+    appendToPart(out, pid, m);
+}
+
+// A horizontal disc cap at height y (normal up or down).
+static void emitDisc(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y,
+                     int sides, PartId pid, const Vec3& col, bool up) {
+    RenderMesh m;
+    Vec3 c = cXZ + Vec3(0, y, 0);
+    Vec3 n(0, up ? 1 : -1, 0);
+    for (int i = 0; i < sides; ++i) {
+        Real a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
+        Vec3 p0 = c + Vec3(std::cos(a0), 0, std::sin(a0)) * radius;
+        Vec3 p1 = c + Vec3(std::cos(a1), 0, std::sin(a1)) * radius;
+        uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        auto v = [&](const Vec3& p) { Vertex vt(p, n, Vec3(1, 0, 0), 0, 0); vt.color = col; return vt; };
+        m.vertices.push_back(v(c));
+        m.vertices.push_back(v(up ? p0 : p1));
+        m.vertices.push_back(v(up ? p1 : p0));
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+    }
+    appendToPart(out, pid, m);
+}
+
+static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
+    BuildingMesh out;
+    Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
+    Real baseY = scope.origin.y;
+    Real R = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
+    int sides = std::max(16, p.sides);
+    Vec3 wall = p.wallColor;
+    Vec3 glass = materialFor(PartId::Glass, wall).albedo;
+    Real y = baseY;
+
+    Real gh = p.groundHeight;
+    emitTube(out, cXZ, R, y, y + 0.5, sides, PartId::Trim, p.trimColor);          // base ring
+    emitTube(out, cXZ, R * 0.99, y + 0.5, y + gh - 0.3, sides, PartId::Glass, glass);  // lobby glass
+    emitTube(out, cXZ, R, y + gh - 0.3, y + gh, sides, PartId::Trim, p.trimColor);     // cornice ring
+    y += gh;
+    for (int i = 0; i < p.floors; ++i) {
+        Real fh = p.floorHeight;
+        emitTube(out, cXZ, R, y, y + 0.9, sides, PartId::Wall, wall);             // spandrel band
+        emitTube(out, cXZ, R * 0.985, y + 0.9, y + fh, sides, PartId::Glass, glass);  // window band
+        y += fh;
+    }
+    emitDisc(out, cXZ, R, y, sides, PartId::Roof, materialFor(PartId::Roof, wall).albedo, true);
+    emitTube(out, cXZ, R, y, y + p.parapet * 0.7, sides, PartId::Trim, p.trimColor);  // parapet
+    out.height = (y + p.parapet * 0.7) - baseY;
+
+    BuildingMesh sc;
+    emitBox(sc, Scope{scope.origin, {scope.axis[0], Vec3(0, 1, 0), scope.axis[2]},
+                      Vec3(scope.size.x, out.height, scope.size.z)}, PartId::Wall, wall);
+    if (!sc.parts.empty()) out.proxy = sc.parts.front();
+    out.attaches.push_back({cXZ + Vec3(0, y, 0), Vec3(0, 1, 0), "roof"});
+    return out;
+}
+
+// --- Pagoda (tiered, flared upturned roofs) --------------------------------
+
+// A flared hip roof over a square of half-width `halfW` centred at cXZ, eave at
+// `eaveY`: deep eaves (overhang), a concave sweep up to the apex, and the corners
+// lifted (`cornerLift`) for the iconic upturned-corner silhouette.
+static void emitFlaredRoof(BuildingMesh& out, const Vec3& cXZ, Real eaveY, Real halfW,
+                           Real overhang, Real rise, Real cornerLift, const Vec3& tile) {
+    RenderMesh m;
+    Real e = halfW + overhang;
+    auto ring = [&](int k, Real radial, Real frac) {       // k: 0..7 around the square
+        Real ang = PI * 0.25 * k;
+        Real cx = std::cos(ang), cz = std::sin(ang);
+        Real s = 1.0 / std::max(std::fabs(cx), std::fabs(cz));   // project dir onto square
+        Vec3 p = cXZ + Vec3(cx, 0, cz) * (e * radial * s);
+        bool corner = (k % 2 == 1);
+        p.y = eaveY + (radial >= 0.99 ? (corner ? cornerLift : 0.0) : rise * frac);
+        return p;
+    };
+    Vec3 apex = cXZ + Vec3(0, eaveY + rise, 0);
+    for (int k = 0; k < 8; ++k) {
+        Vec3 e0 = ring(k, 1.0, 0), e1 = ring((k + 1) % 8, 1.0, 0);
+        Vec3 m0 = ring(k, 0.42, 0.62), m1 = ring((k + 1) % 8, 0.42, 0.62);
+        Vec3 n = normalize(cross(e1 - e0, m0 - e0)); if (n.y < 0) n = n * -1;
+        emitQuad(m, e0, e1, m1, m0, n, tile);              // eave -> mid (concave skirt)
+        Vec3 tn = normalize(cross(m1 - m0, apex - m0)); if (tn.y < 0) tn = tn * -1;
+        uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        auto v = [&](const Vec3& p) { Vertex vt(p, tn, Vec3(1, 0, 0), 0, 0); vt.color = tile; return vt; };
+        m.vertices.push_back(v(m0)); m.vertices.push_back(v(m1)); m.vertices.push_back(v(apex));
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});   // mid -> apex
+    }
+    appendToPart(out, PartId::Roof, m);
+}
+
+static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
+    BuildingMesh out;
+    Rng rng(p.seed);
+    Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
+    Real baseY = scope.origin.y;
+    const Vec3 r(1, 0, 0), f(0, 0, 1);             // world-aligned (grid city)
+    Real w0 = std::min(scope.size.x, scope.size.z) * 0.5 * 0.78;
+
+    Vec3 wallCol(0.62, 0.13, 0.11);                // vermillion
+    Vec3 colCol(0.42, 0.08, 0.07);                 // darker red columns/trim
+    Vec3 tile = (rng.unit() < 0.4) ? Vec3(0.16, 0.28, 0.46)   // imperial blue
+                                   : Vec3(0.13, 0.40, 0.25);  // jade green
+    Vec3 gold(0.80, 0.64, 0.20);
+
+    auto boxAt = [&](Real cy, Real h, Real hw, PartId pid, const Vec3& col) {
+        emitBox(out, Scope{cXZ + Vec3(0, cy, 0) - r * hw - f * hw,
+                           {r, Vec3(0, 1, 0), f}, Vec3(hw * 2, h, hw * 2)}, pid, col);
+    };
+
+    int tiers = std::max(2, p.tiers);
+    Real shrink = 0.80, tierH = std::max(Real(2.8), p.floorHeight);
+    Real y = baseY;
+
+    boxAt(y, 0.7, w0 + 0.6, PartId::Ground, Vec3(0.52, 0.50, 0.46));   // stone podium
+    y += 0.7;
+
+    Real w = w0;
+    for (int t = 0; t < tiers; ++t) {
+        boxAt(y, tierH, w, PartId::Wall, wallCol);                     // red tier body
+        // Corner columns (the temple posts) + a dark lattice screen per face.
+        for (int sx = -1; sx <= 1; sx += 2)
+            for (int sz = -1; sz <= 1; sz += 2)
+                emitBox(out, Scope{cXZ + Vec3(sx * w - 0.16, y, sz * w - 0.16),
+                                   {r, Vec3(0, 1, 0), f}, Vec3(0.32, tierH, 0.32)},
+                        PartId::Trim, colCol);
+        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.18, 0.10, 0.06));
+        y += tierH;
+        // Flared roof at the top of this tier (deep eaves, upturned corners).
+        emitFlaredRoof(out, cXZ, y, w, w * 0.55, w * 0.62, w * 0.16, tile);
+        w *= shrink;
+    }
+    // Gold finial: a stacked post + bead spire.
+    boxAt(y, 1.6, 0.16, PartId::Detail, gold);
+    emitBox(out, Scope{cXZ + Vec3(-0.35, y + 1.6, -0.35), {r, Vec3(0, 1, 0), f},
+                       Vec3(0.7, 0.7, 0.7)}, PartId::Detail, gold);
+    out.height = (y + 2.3) - baseY;
+
+    BuildingMesh sc;
+    emitBox(sc, Scope{Vec3(cXZ.x - w0, baseY, cXZ.z - w0), {r, Vec3(0, 1, 0), f},
+                      Vec3(w0 * 2, out.height, w0 * 2)}, PartId::Wall, wallCol);
+    if (!sc.parts.empty()) out.proxy = sc.parts.front();
+    out.attaches.push_back({cXZ + Vec3(0, y, 0), Vec3(0, 1, 0), "roof"});
+    return out;
+}
+
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
+    if (params.shape == BuildingShape::Cylinder) return growCylinder(scope, params);
+    if (params.shape == BuildingShape::Pagoda)   return growPagoda(scope, params);
     BuildingMesh out;
     Rng rng(params.seed);
 

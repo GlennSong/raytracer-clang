@@ -11,6 +11,12 @@
       "position": [40, 26, 215],
       "forward": [-0.12, -0.16, -0.98],
       "lens": { "focalLength": 38, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 }
+    },
+    {
+      "name": "OldTown",
+      "position": [150, 46, -150],
+      "forward": [-0.55, -0.33, 0.77],
+      "lens": { "focalLength": 40, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
     }
   ]
 }

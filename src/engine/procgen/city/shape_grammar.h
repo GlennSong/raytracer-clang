@@ -54,6 +54,14 @@ enum class FacadeStyle : uint8_t {
 // painted pastels). Deterministic for the seed.
 Vec3 facadeColor(FacadeStyle style, uint32_t seed);
 
+// Building massing — not every building is a box (curved towers, tiered pagodas).
+// The grammar dispatches on this in growBuilding.
+enum class BuildingShape : uint8_t {
+    Box,        // the orthogonal split-grammar building
+    Cylinder,   // a round tower: cylindrical mass with wrapped glass banding
+    Pagoda,     // East-Asian tiered mass with flared, upturned-corner tile roofs
+};
+
 // One scope: an oriented box. axis[] are unit and mutually perpendicular; size[i]
 // is the full extent along axis[i]. origin is the corner where all three local
 // coordinates are zero (the min corner of the box in its own frame).
@@ -121,6 +129,9 @@ struct BuildingParams {
     bool  pilasters = false;     // vertical piers framing each bay (run full height)
     bool  awning = true;         // a projecting ledge over the entrance
     Vec3  trimColor{0.40, 0.38, 0.35};
+    BuildingShape shape = BuildingShape::Box;
+    int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)
+    int   sides = 32;            // cylinder: facets around the round mass
     uint32_t seed = 0;
 };
 

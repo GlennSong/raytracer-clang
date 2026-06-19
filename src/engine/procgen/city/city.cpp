@@ -88,6 +88,13 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
             break;
     }
 
+    // Massing variety (not every building is a box): some high-rise towers are
+    // round (curved glass), and an "old town" pocket builds tiered pagodas.
+    if (d == District::HighRise && p.curtainWall && rng.unit() < 0.35) {
+        p.shape = BuildingShape::Cylinder;
+        p.sides = 36;
+    }
+
     // Ornamentation by archetype: a glass curtain wall and a metal shed stay
     // clean; traditional masonry gets a base course, a ground-floor cornice, an
     // awning, and — on shorter brick/concrete buildings — pilasters.
@@ -236,6 +243,12 @@ CityModel generateCity(const CityParams& cp) {
             continue;
         }
 
+        // "Old town" pocket (off-centre, low-rise): builds tiered pagodas — a
+        // clustered East-Asian quarter rather than scattering them at random.
+        Vec2 oldTownC = cp.center + Vec2(cp.extent * 0.42, -cp.extent * 0.34);
+        bool oldTown = dist != District::HighRise && dist != District::Industrial &&
+                       (c - oldTownC).length() < cp.extent * 0.24;
+
         Real roadInset = 8.0 + cp.sidewalk;   // half a local road + sidewalk
         Poly2 foot = inset(block, roadInset);
         if (foot.size() < 3 || area(foot) < 60) continue;
@@ -259,6 +272,12 @@ CityModel generateCity(const CityParams& cp) {
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
 
             BuildingParams bp = paramsForDistrict(dist, rng, cp.seed);
+            if (oldTown) {
+                bp.shape = BuildingShape::Pagoda;
+                bp.tiers = 3 + 2 * static_cast<int>(rng.next() % 3);   // 3 / 5 / 7
+                bp.floorHeight = rng.range(3.0, 3.8);
+                bp.curtainWall = false; bp.solidFacade = false;
+            }
             // Foundation sits at the MIN ground height under the footprint, so a
             // building on a slope never floats (its uphill side is buried, its
             // downhill side flush) — ADR-0038 §3.4.4.
