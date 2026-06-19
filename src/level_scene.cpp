@@ -4,6 +4,7 @@
 #include "engine/procgen/terrain.h"
 #include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
+#include "engine/procgen/city/city.h"
 #include "engine/procgen/noise.h"
 #include "log.h"
 #include <nlohmann/json.hpp>
@@ -231,6 +232,45 @@ void addTree(const json& ent, Scene& scene) {
     }
 }
 
+// A procedural city (shape:"city", ADR-0038): regenerate the same CityModel the
+// engine does and bake it. Each material part uses a white albedo so the baked
+// per-vertex color shows (the tree convention); the material carries only
+// metallic/roughness, so glass reads reflective. The whole city is placed at the
+// entity position (its XZ centre, baseY = position.y).
+void addCity(const json& ent, Scene& scene) {
+    CityParams cp;
+    Vec3 pos = parseVec3(ent.value("position", json()));
+    cp.center = {pos.x, pos.z};
+    cp.baseY = pos.y;
+    if (ent.contains("city")) {
+        const auto& j = ent["city"];
+        cp.extent         = j.value("extent", cp.extent);
+        cp.cellSize       = j.value("cellSize", cp.cellSize);
+        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
+        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
+        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
+        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
+        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
+        cp.buildChance    = j.value("buildChance", cp.buildChance);
+        cp.seed           = j.value("seed", cp.seed);
+    }
+
+    CityModel m = generateCity(cp);
+    auto bake = [&](const RenderMesh& mesh, int metallicRoughnessFrom) {
+        RenderMaterial rm = materialFor(static_cast<PartId>(metallicRoughnessFrom),
+                                        Vec3(1, 1, 1));
+        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), rm.metallic, rm.roughness));
+        addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
+    };
+    for (const RenderMesh& part : m.parts) bake(part, part.materialIndex);
+    int roadMat = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.9));
+    addMeshAsTriangles(m.roads, Vec3(), Quat::identity(), Vec3(1, 1, 1), roadMat, scene);
+    int groundMat = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 1.0));
+    addMeshAsTriangles(m.ground, Vec3(), Quat::identity(), Vec3(1, 1, 1), groundMat, scene);
+    LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount
+             << " blocks";
+}
+
 }  // namespace
 
 bool LevelScene::load(const std::string& levelPath, Scene& scene,
@@ -260,6 +300,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Hero parametric tree: bark + alpha-cut leaf cards (matches the viewer).
         if (ent.value("shape", std::string()) == "tree") {
             addTree(ent, scene);
+            continue;
+        }
+        // Procedural city (ADR-0038): roads + buildings baked from the recipe.
+        if (ent.value("shape", std::string()) == "city") {
+            addCity(ent, scene);
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",

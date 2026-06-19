@@ -1,0 +1,16 @@
+{
+  "cameras": [
+    {
+      "name": "Skyline",
+      "position": [185, 95, 200],
+      "forward": [-0.62, -0.42, -0.66],
+      "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 260 }
+    },
+    {
+      "name": "Street",
+      "position": [120, 6, 120],
+      "forward": [-0.72, 0.05, -0.70],
+      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 120 }
+    }
+  ]
+}
