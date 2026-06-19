@@ -1,0 +1,201 @@
+#include "test_framework.h"
+
+#include "../src/engine/procgen/city/polygon.h"
+#include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/parcel.h"
+#include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/city.h"
+#include <algorithm>
+#include <cmath>
+
+using namespace engine;  // namespace migration (ADR-0015)
+
+namespace {
+Poly2 square(Real s) {
+    return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW
+}
+bool hasPart(const BuildingMesh& bm, PartId id) {
+    for (const RenderMesh& p : bm.parts)
+        if (p.materialIndex == static_cast<int>(id)) return true;
+    return false;
+}
+}  // namespace
+
+// --- polygon ----------------------------------------------------------------
+
+TEST_CASE(polygon_area_centroid_and_winding) {
+    Poly2 sq = square(10);
+    CHECK_APPROX(area(sq), 100.0, 1e-9);
+    CHECK(isCCW(sq));
+    Vec2 c = centroid(sq);
+    CHECK_APPROX(c.x, 5.0, 1e-9);
+    CHECK_APPROX(c.y, 5.0, 1e-9);
+    // A CW ring has negative signed area; ensureCCW flips it.
+    Poly2 cw = {{0, 0}, {0, 10}, {10, 10}, {10, 0}};
+    CHECK(signedArea(cw) < 0);
+    ensureCCW(cw);
+    CHECK(isCCW(cw));
+}
+
+TEST_CASE(polygon_point_in_polygon) {
+    Poly2 sq = square(10);
+    CHECK(pointInPolygon(sq, {5, 5}));
+    CHECK(!pointInPolygon(sq, {15, 5}));
+    CHECK(!pointInPolygon(sq, {-1, 5}));
+}
+
+TEST_CASE(polygon_convex_hull) {
+    Poly2 pts = {{0, 0}, {10, 0}, {10, 10}, {0, 10}, {5, 5}, {3, 7}};  // +2 interior
+    Poly2 hull = convexHull(pts);
+    CHECK(hull.size() == 4);                 // interior points dropped
+    CHECK_APPROX(area(hull), 100.0, 1e-9);
+}
+
+TEST_CASE(polygon_obb_of_axis_aligned_rect) {
+    Poly2 rect = {{0, 0}, {20, 0}, {20, 6}, {0, 6}};
+    OBB2 obb = orientedBoundingBox(rect);
+    CHECK_APPROX(obb.center.x, 10.0, 1e-6);
+    CHECK_APPROX(obb.center.y, 3.0, 1e-6);
+    // Long axis half-extent ~10, short ~3.
+    Real lo = obb.half[obb.longAxis()], sh = obb.half[1 - obb.longAxis()];
+    CHECK_APPROX(lo, 10.0, 1e-6);
+    CHECK_APPROX(sh, 3.0, 1e-6);
+}
+
+TEST_CASE(polygon_inset_shrinks_area) {
+    Poly2 sq = square(20);
+    Poly2 in = inset(sq, 2.0);
+    CHECK(in.size() == 4);
+    // Inset of a 20x20 square by 2 -> 16x16.
+    CHECK_APPROX(area(in), 256.0, 1e-6);
+    // Over-inset past the medial axis collapses to empty.
+    CHECK(inset(sq, 11.0).empty());
+}
+
+TEST_CASE(polygon_split_by_line) {
+    Poly2 sq = square(10);
+    Poly2 left, right;
+    splitByLine(sq, {5, 5}, {0, 1}, left, right);   // vertical line x=5
+    CHECK(left.size() >= 3);
+    CHECK(right.size() >= 3);
+    CHECK_APPROX(area(left) + area(right), 100.0, 1e-6);
+    CHECK_APPROX(area(left), 50.0, 1e-6);
+}
+
+// --- shape grammar (Phase 0) ------------------------------------------------
+
+TEST_CASE(grammar_grows_a_multipart_building) {
+    BuildingParams p; p.floors = 5; p.seed = 3;
+    Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
+    BuildingMesh bm = growBuilding(s, p);
+    CHECK(bm.parts.size() >= 3);                 // wall + glass + roof at least
+    CHECK(hasPart(bm, PartId::Wall));
+    CHECK(hasPart(bm, PartId::Glass));
+    // 5 floors * 3.2 + 4.5 ground + 1.1 parapet = 21.6 m.
+    CHECK_APPROX(bm.height, 5 * 3.2 + 4.5 + 1.1, 1e-6);
+    CHECK(!bm.proxy.vertices.empty());           // coarse LOD proxy emitted
+    CHECK(!bm.attaches.empty());
+}
+
+TEST_CASE(grammar_walkable_ground_punches_a_door) {
+    BuildingParams p; p.floors = 3; p.walkableGround = true; p.seed = 1;
+    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
+    BuildingMesh bm = growBuilding(s, p);
+    CHECK(hasPart(bm, PartId::Door));            // a real entrance opening
+    bool entrance = false;
+    for (const AttachPoint& a : bm.attaches) if (a.tag == "entrance") entrance = true;
+    CHECK(entrance);
+}
+
+TEST_CASE(grammar_taller_with_more_floors_and_deterministic) {
+    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
+    BuildingParams a; a.floors = 4; a.seed = 7;
+    BuildingParams b; b.floors = 12; b.seed = 7;
+    CHECK(growBuilding(s, b).height > growBuilding(s, a).height);
+    // Same seed + params -> identical geometry.
+    BuildingMesh m1 = growBuilding(s, a);
+    BuildingMesh m2 = growBuilding(s, a);
+    CHECK(m1.parts.size() == m2.parts.size());
+    CHECK(m1.merged().vertices.size() == m2.merged().vertices.size());
+}
+
+// --- parcels (Phase 1) ------------------------------------------------------
+
+TEST_CASE(parcel_subdivides_into_lots_conserving_area) {
+    Poly2 block = square(100);                   // 10,000 m^2
+    ParcelParams pp; pp.targetArea = 420; pp.seed = 5;
+    std::vector<Lot> lots = subdivideBlock(block, pp);
+    CHECK(lots.size() > 5);
+    Real total = 0;
+    for (const Lot& l : lots) {
+        total += l.area;
+        CHECK(l.area > 0);
+        CHECK_APPROX(l.frontage.length(), 1.0, 1e-6);
+    }
+    CHECK_APPROX(total, 10000.0, 1.0);           // partition conserves area
+}
+
+TEST_CASE(parcel_is_deterministic) {
+    Poly2 block = square(80);
+    ParcelParams pp; pp.seed = 9;
+    CHECK(subdivideBlock(block, pp).size() == subdivideBlock(block, pp).size());
+}
+
+// --- road network (Phase 2) -------------------------------------------------
+
+TEST_CASE(road_grid_blocks_equal_cells) {
+    GridRoadParams gp; gp.extent = 200; gp.cellSize = 100; gp.jitter = 0; gp.seed = 1;
+    RoadGraph g = gridRoads(gp);
+    CHECK(g.nodes.size() == 25);                 // 5x5 node grid
+    RoadGraph pg = planarize(g);
+    std::vector<Poly2> blocks = extractBlocks(pg);
+    CHECK(blocks.size() == 16);                  // 4x4 cells
+    Real total = 0;
+    for (const Poly2& b : blocks) { total += area(b); CHECK(isCCW(b)); }
+    CHECK_APPROX(total, 400.0 * 400.0, 1.0);     // faces tile the region exactly
+}
+
+TEST_CASE(road_planarize_splits_a_crossing) {
+    // Two crossing segments forming an X: planarize must insert the centre node
+    // and split both edges into 4.
+    RoadGraph g;
+    int a = g.addNode({-10, 0}), b = g.addNode({10, 0});
+    int c = g.addNode({0, -10}), d = g.addNode({0, 10});
+    g.addEdge(a, b); g.addEdge(c, d);
+    RoadGraph pg = planarize(g);
+    CHECK(pg.nodes.size() == 5);                 // 4 ends + 1 crossing
+    CHECK(pg.edges.size() == 4);                 // each segment split in two
+}
+
+// --- city (Phase 3) ---------------------------------------------------------
+
+TEST_CASE(city_generates_deterministically) {
+    CityParams cp; cp.extent = 300; cp.cellSize = 100; cp.seed = 42;
+    CityModel a = generateCity(cp);
+    CityModel b = generateCity(cp);
+    CHECK(a.buildings.size() == b.buildings.size());
+    CHECK(a.blockCount == b.blockCount);
+    CHECK(a.buildings.size() > 0);
+    CHECK(!a.parts.empty());
+}
+
+TEST_CASE(city_downtown_is_taller_than_residential) {
+    CityParams cp; cp.extent = 400; cp.cellSize = 95; cp.seed = 7;
+    CityModel m = generateCity(cp);
+    Real maxDowntown = 0, maxResidential = 0;
+    for (const CityBuilding& b : m.buildings) {
+        if (b.district == District::Downtown) maxDowntown = std::max(maxDowntown, b.height);
+        if (b.district == District::Residential) maxResidential = std::max(maxResidential, b.height);
+    }
+    CHECK(maxDowntown > maxResidential);
+    CHECK(maxDowntown > 40.0);                    // downtown towers exist
+}
+
+TEST_CASE(city_parks_leave_blocks_empty) {
+    CityParams cp; cp.extent = 400; cp.cellSize = 95; cp.parkFraction = 0.3; cp.seed = 3;
+    CityModel m = generateCity(cp);
+    // With 30% parks, fewer buildings than a no-park run of the same seed.
+    CityParams cp2 = cp; cp2.parkFraction = 0.0;
+    CityModel m2 = generateCity(cp2);
+    CHECK(m.buildings.size() < m2.buildings.size());
+}

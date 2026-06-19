@@ -32,7 +32,12 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
-	$(SRC_DIR)/engine/procgen/erosion.cpp
+	$(SRC_DIR)/engine/procgen/erosion.cpp \
+	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
+	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
+	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
+	$(SRC_DIR)/engine/procgen/city/city.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -74,7 +79,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
 	$(TEST_DIR)/test_sdf.cpp \
-	$(TEST_DIR)/test_curve.cpp
+	$(TEST_DIR)/test_curve.cpp \
+	$(TEST_DIR)/test_city.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -108,6 +114,11 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
+	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
+	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
+	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
+	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

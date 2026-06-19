@@ -1,0 +1,68 @@
+#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_CITY_H
+#define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_H
+
+#include "polygon.h"
+#include "road_network.h"
+#include "shape_grammar.h"
+#include "../../../renderer/renderer.h"
+#include <cstdint>
+#include <vector>
+
+namespace engine {
+
+// The city region recipe (ADR-0038 §1, §7 Phase 3): assemble the whole pipeline
+// — roads → planarize → block faces → parcels → per-lot buildings — into a
+// renderable model, with district-driven zoning (downtown towers → midtown →
+// residential, plus parks). Deterministic for the seed (ADR-0002). Headless: the
+// generation is pure data; only the final render needs a backend.
+
+enum class District : uint8_t { Downtown, Midtown, Residential, Park, Count };
+
+struct CityParams {
+    Vec2 center{0, 0};
+    Real extent = 400;        // half-size of the city square (m)
+    Real cellSize = 95;       // target block spacing (m)
+    Real baseY = 0;           // ground elevation (later: sample terrain)
+    Real roadJitter = 0.16;
+    Real sidewalk = 3.0;      // extra inset beyond the road half-width
+    Real downtownRadius = 130;// district falloff from the centre
+    Real midtownRadius = 300;
+    Real parkFraction = 0.10; // fraction of blocks left as parks
+    Real buildChance = 0.9;   // per-lot occupancy (some lots become plazas)
+    uint32_t seed = 1;
+};
+
+// One placed building: its world meshes are already baked into the model parts,
+// but we keep the footprint + summary so consumers can collide / inspect / LOD.
+struct CityBuilding {
+    Vec2 site;                // footprint centroid (world XZ)
+    Real height = 0;
+    District district = District::Residential;
+};
+
+struct CityModel {
+    // Geometry merged by material class across every building (one mesh per
+    // non-empty PartId), so the whole city is a handful of draws. Each part keeps
+    // its own materialIndex (== the PartId it was emitted under); map it to a
+    // RenderMaterial with materialFor(static_cast<PartId>(part.materialIndex)).
+    std::vector<RenderMesh> parts;
+    RenderMesh roads;         // flat road + sidewalk surface
+    RenderMesh ground;        // ground plane under the city
+
+    std::vector<CityBuilding> buildings;
+    std::vector<Poly2> blocks;     // extracted block footprints (debug / collision)
+    int blockCount = 0;
+    int lotCount = 0;
+
+    RenderMesh mergedBuildings() const;   // all building parts in one mesh
+};
+
+CityModel generateCity(const CityParams& params);
+
+// District at a world-XZ point, by radial falloff from the centre + a seeded park
+// scatter. Exposed for tests and for terrain-material/biome coupling.
+District districtAt(const CityParams& params, const Vec2& p, int blockIndex);
+
+}  // namespace engine
+
+#endif

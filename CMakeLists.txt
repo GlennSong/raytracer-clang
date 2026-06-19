@@ -49,6 +49,11 @@ add_library(engine_core STATIC
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
     src/engine/procgen/sdf.cpp
+    src/engine/procgen/city/polygon.cpp
+    src/engine/procgen/city/shape_grammar.cpp
+    src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/road_network.cpp
+    src/engine/procgen/city/city.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -218,6 +223,7 @@ add_executable(run_tests
     tests/test_rock.cpp
     tests/test_scatter.cpp
     tests/test_sdf.cpp
+    tests/test_city.cpp
     tests/test_instancing.cpp
     ${CORE_SOURCES}
 )
