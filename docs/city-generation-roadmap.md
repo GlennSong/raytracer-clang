@@ -62,10 +62,20 @@ road grades (engineered slopes along the network)
          → steps/stairs where the grade break is too steep to ramp
 ```
 
-We just started this: blocks are now flat graded pads with curb/retaining skirts
-(`city.cpp`). The missing pieces are a **road-grade solver** (propagate consistent
-grades along the graph so streets are flat across width and gently sloped along
-length) and **steps** at steep grade breaks.
+**Done.** Blocks are flat graded pads with curb/retaining skirts, a **road-grade
+solver** propagates consistent grades along the graph (flat across width, gently
+sloped along length), and **steps** descend steep grade breaks (`city.cpp`). And
+the *terrain is now actually cut/filled to the city*: `generateCity` emits
+`TerrainFlatten` footprints (a ramp per road segment, a pad per block) which the
+loaders feed into `TerrainParams::flatten`, so `terrainHeight` grades the ground
+flat under the city — mesh, collider, and CDLOD field alike (ADR-0038). Roads
+carry a slab thickness so they stand proud of the cut ground. What's left here is
+finer civil detail: embankment/retaining-wall geometry on the cut faces (right now
+the skirt + falloff blend handle it), and proper kerb ramps at crossings.
+
+The player walks the result on a **Jolt `CharacterVirtual` controller** with
+step-up (`physics_world.cpp`), so curbs, the sidewalk, stoops and low boxes are
+climbable instead of walls.
 
 ---
 

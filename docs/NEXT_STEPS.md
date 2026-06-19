@@ -17,13 +17,19 @@ session.
   `building.*` authoring (`assets/scripts/city.lua`), offline render via
   `shape:"city"`, and an HLOD proxy. The **City Arena**
   (`assets/levels/city_arena.json` → `./raytracer --level ... --camera Arena`)
-  drapes the city on rolling terrain — foundations at the min ground height under
-  each footprint (terraced, no floating), roads following the ground, street/park
-  trees — under the sky. Covered by `tests/test_city.cpp` (+ `test_script_vm`).
-  **Owed:** the Metal **viewer** render path; suppressing an external forest
-  scatter under the footprint; Phase 4 (impostor bake + HLOD swap, sector
-  streaming + cross-tile roads — GPU / spatial-partition gated). See the city rows
-  in the ADR register.
+  drapes the city on rolling terrain. The terrain is now **cut/filled to the city**
+  (not the reverse): `generateCity` emits `TerrainFlatten` footprints (a ramp per
+  road segment, a pad per block) that the loaders feed into `TerrainParams::flatten`,
+  so `terrainHeight` grades the ground flat under the roads/blocks — mesh, collider
+  and CDLOD field alike — and roads carry a slab thickness so they stand proud of
+  the ground. The player walks it on a **Jolt `CharacterVirtual` controller** with
+  step-up (curbs/sidewalks/stoops/low boxes are climbable). Both the viewer and the
+  offline path spawn the city. Covered by `tests/test_city.cpp`, `test_terrain.cpp`
+  (flatten), `tests/test_physics.cpp` (character), `test_script_vm`.
+  **Owed:** procedural facade textures (brick/concrete via a shader + world UVs,
+  Metal-side); suppressing an external forest scatter under the footprint; Phase 4
+  (impostor bake + HLOD swap, sector streaming + cross-tile roads — GPU /
+  spatial-partition gated). See the city rows in the ADR register.
 
 - **Open-world Phase 1 + interactive render budget (latest session)** — chunked
   terrain → CDLOD heightfield (ADR-0035/0036), vegetation scatter, and a perf +
