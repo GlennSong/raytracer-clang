@@ -337,3 +337,4 @@ TEST_CASE(terrain_chunk_collider_flag_by_radius) {
     for (const TerrainChunk& c : chunks) if (c.collider) withCollider++;
     CHECK(withCollider == 4);   // the four chunks straddling the origin
 }
+

@@ -208,9 +208,9 @@ TEST_CASE(city_drapes_on_terrain_foundations_track_ground) {
     Real lo = 1e30, hi = -1e30;
     for (const CityBuilding& b : m.buildings) {
         lo = std::min(lo, b.baseY); hi = std::max(hi, b.baseY);
-        // Foundation matches the ramp at the building's site (min over footprint
-        // <= centre sample), within the ramp's variation across a footprint.
-        CHECK(b.baseY <= 0.5 * b.site.x + 1e-6);
+        // The podium floor sits at the highest footprint corner, so it tracks the
+        // ramp at the site within the footprint's half-width (lots are < ~50 m).
+        CHECK(std::fabs(b.baseY - 0.5 * b.site.x) < 28.0);
     }
     CHECK(hi - lo > 50.0);                      // buildings span the ramp
 }
@@ -220,7 +220,22 @@ TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     CityModel m = generateCity(cp);            // no sampler -> flat
     CHECK(!m.ground.vertices.empty());         // flat city gets a ground plane
     CHECK(m.treeCount > 0);
-    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.0, 1e-9);
+    // Flat ground: the podium floor is just the small +0.05 lift above grade.
+    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.05, 1e-6);
+}
+
+TEST_CASE(city_buildings_have_valid_box_colliders) {
+    CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 5;
+    cp.groundAt = [](const Vec2& p) { return 0.3 * p.x; };   // sloped, to vary baseY
+    CityModel m = generateCity(cp);
+    CHECK(!m.buildings.empty());
+    for (const CityBuilding& b : m.buildings) {
+        CHECK(b.boxHalf.x > 0.1 && b.boxHalf.y > 0.1 && b.boxHalf.z > 0.1);
+        // Box centre sits half the height above the foundation.
+        CHECK_APPROX(b.boxCenter.y, b.baseY + b.height * 0.5, 1e-6);
+        // Box centre (the OBB centre) is near the footprint site.
+        CHECK(distance(Vec2(b.boxCenter.x, b.boxCenter.z), b.site) < 6.0);
+    }
 }
 
 TEST_CASE(city_hlod_proxy_is_far_cheaper_than_detail) {

@@ -2,6 +2,7 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
+#include "procgen/city/city.h"
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -66,6 +67,8 @@ static MeshHandle getOrCreateMesh(const std::string& shape, const json& sizeJ,
     if (!handle.valid()) LOG_ERROR << "Unknown shape: " << shape;
     return handle;
 }
+
+static TerrainParams parseTerrainParams(const json& t);   // defined below
 
 static Collider buildCollider(const std::string& shape, const json& sizeJ,
                                const json& physics) {
@@ -240,14 +243,117 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
     }
 }
 
-static void loadEntities(const json& entities, World& world, Renderer& renderer,
-                         AssetManager& assets, const std::string& levelDir,
-                         bool editorMode) {
+// A procedural city (shape:"city", ADR-0038): spawn the generated geometry as
+// renderable entities (one per material part + roads + trees + ground) and a
+// static Box collider per building, so the player walks the streets and bumps
+// into buildings. Optionally draped on the level's terrain (the City Arena),
+// which already carries its own walk-surface MeshCollider.
+static void loadCityEntity(const json& ent, const json& root, World& world,
+                           Renderer& renderer, AssetManager& assets, int index) {
+    (void)renderer;
+    CityParams cp;
+    Vec3 pos = parseVec3(ent.value("position", json()));
+    cp.center = {pos.x, pos.z};
+    cp.baseY = pos.y;
+    bool onTerrain = false;
+    if (ent.contains("city")) {
+        const auto& j = ent["city"];
+        cp.extent         = j.value("extent", cp.extent);
+        cp.cellSize       = j.value("cellSize", cp.cellSize);
+        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
+        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
+        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
+        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
+        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
+        cp.buildChance    = j.value("buildChance", cp.buildChance);
+        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
+        cp.seed           = j.value("seed", cp.seed);
+        onTerrain         = j.value("onTerrain", false);
+    }
+    if (onTerrain && root.contains("terrain")) {
+        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+        Real base = cp.baseY;
+        cp.groundAt = [tp, noise, base](const Vec2& p) {
+            return base + terrainHeight(*tp, *noise, p.x, p.y);
+        };
+    }
+
+    CityModel m = generateCity(cp);
+    const std::string key = "city:" + std::to_string(index);
+    auto spawnMesh = [&](const RenderMesh& mesh, const std::string& tag,
+                         float metallic, float roughness) {
+        if (mesh.vertices.empty()) return;
+        Entity e = world.create();
+        Transform t;                       // city geometry is already world-space
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
+        r.material.albedo = Vec3(1, 1, 1);     // hue carried in vertex colour
+        r.material.metallic = metallic;
+        r.material.roughness = roughness;
+        world.add<Renderable>(e, r);
+    };
+    for (std::size_t i = 0; i < m.parts.size(); ++i) {
+        RenderMaterial rm = materialFor(static_cast<PartId>(m.parts[i].materialIndex), Vec3(1, 1, 1));
+        spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness);
+    }
+    spawnMesh(m.roads, "roads", 0.0f, 0.9f);
+    spawnMesh(m.props, "props", 0.0f, 0.85f);
+    spawnMesh(m.ground, "ground", 0.0f, 1.0f);
+
+    // A static Box collider per building (walk-into-it physics).
+    for (const CityBuilding& b : m.buildings) {
+        Entity e = world.create();
+        Transform t;
+        t.position = b.boxCenter;
+        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), b.yaw);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Collider c;
+        c.shape = ColliderShape::Box;
+        c.halfExtent = b.boxHalf;
+        c.friction = 0.8;
+        world.add<Collider>(e, c);
+        RigidBody rb;
+        rb.motion = BodyMotion::Static;
+        world.add<RigidBody>(e, rb);
+    }
+    // Flat (no-terrain) city: a big static floor so the player has ground.
+    if (!m.ground.vertices.empty()) {
+        Entity e = world.create();
+        Transform t;
+        t.position = Vec3(cp.center.x, cp.baseY - 0.5, cp.center.y);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Collider c;
+        c.shape = ColliderShape::Box;
+        c.halfExtent = Vec3(cp.extent + cp.cellSize, 0.5, cp.extent + cp.cellSize);
+        c.friction = 0.9;
+        world.add<Collider>(e, c);
+        RigidBody rb;
+        rb.motion = BodyMotion::Static;
+        world.add<RigidBody>(e, rb);
+    }
+    LOG_INFO << "City (viewer): " << m.buildings.size() << " buildings, "
+             << m.parts.size() << " draw parts, + colliders";
+}
+
+static void loadEntities(const json& entities, const json& root, World& world,
+                         Renderer& renderer, AssetManager& assets,
+                         const std::string& levelDir, bool editorMode) {
     int treeIndex = 0;
+    int cityIndex = 0;
     for (auto& ent : entities) {
         // Hero parametric tree: a collidable, textured object (not scatter).
         if (ent.value("shape", std::string()) == "tree") {
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
+            continue;
+        }
+        // Procedural city: renderable geometry + per-building colliders.
+        if (ent.value("shape", std::string()) == "city") {
+            loadCityEntity(ent, root, world, renderer, assets, cityIndex++);
             continue;
         }
 
@@ -1047,7 +1153,7 @@ bool LevelLoader::load(const std::string& path,
     }
 
     if (root.contains("entities"))
-        loadEntities(root["entities"], world, renderer, assets, levelDir, editorMode);
+        loadEntities(root["entities"], root, world, renderer, assets, levelDir, editorMode);
 
     if (root.contains("player"))
         (editorMode ? loadPlayerSpawn(root["player"], world, assets)

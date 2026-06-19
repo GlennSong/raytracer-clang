@@ -65,6 +65,11 @@ struct CityBuilding {
     Real baseY = 0;           // foundation elevation (tracks terrain)
     Real height = 0;
     District district = District::Residential;
+    // An oriented bounding box for a static collider (walk-into-it physics): the
+    // viewer spawns one Box collider per building from these (ADR-0038 walkable).
+    Vec3 boxCenter;           // world centre of the box
+    Vec3 boxHalf;             // half-extents in the building's local frame
+    Real yaw = 0;             // rotation about +Y (radians)
 };
 
 struct CityModel {

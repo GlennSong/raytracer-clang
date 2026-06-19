@@ -111,41 +111,43 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     return p;
 }
 
-// A terrain-conforming ribbon along an edge: subdivided into ~7 m segments, each
-// of the four corners sampled to the ground height there (+ yBias). The road thus
-// undulates over hills *and* banks across cross-slopes — flat where the ground is
-// flat (NYC), rolling up/down steep inclines where it isn't (San Francisco).
-// Per-segment normals so steep roads shade correctly.
+// A terrain-conforming ribbon along an edge, tessellated into a grid (~3.5 m
+// along × ~4 m across) with *every* vertex sampled to the ground height there
+// (+ yBias). The paved surface thus hugs the terrain in both directions — it
+// rolls up/down hills (SF) and never lets a cross-slope bulge poke through a wide
+// sidewalk — while staying flat where the ground is flat (NYC). Per-cell normals.
 void emitRibbon(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
                 Real width, const Vec3& col, Real yBias) {
     Vec2 dir = b - a;
     Real len = dir.length();
     if (len < 1e-4) return;
     dir = dir / len;
-    Vec2 half = perp(dir) * (width * 0.5);
-    int segs = std::max(1, static_cast<int>(std::ceil(len / 7.0)));
-    auto corner = [&](const Vec2& c, Real side) {
-        Vec2 p = c + half * side;
+    Vec2 across = perp(dir);
+    int segs = std::max(1, static_cast<int>(std::ceil(len / 3.5)));
+    int lanes = std::max(1, static_cast<int>(std::ceil(width / 4.0)));
+    auto vert = [&](Real t, Real s) {                 // t in [0,1] along, s in [-.5,.5]
+        Vec2 p = lerp(a, b, t) + across * (width * s);
         return Vec3(p.x, cityGroundAt(cp, p) + yBias, p.y);
     };
-    for (int i = 0; i < segs; ++i) {
-        Vec2 c0 = lerp(a, b, static_cast<Real>(i) / segs);
-        Vec2 c1 = lerp(a, b, static_cast<Real>(i + 1) / segs);
-        Vec3 l0 = corner(c0, -1), r0 = corner(c0, 1);
-        Vec3 r1 = corner(c1, 1), l1 = corner(c1, -1);
-        Vec3 nrm = normalize(cross(r0 - l0, l1 - l0));
-        if (nrm.y < 0) nrm = nrm * -1;
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        auto v = [&](const Vec3& p) {
-            Vertex vert(p, nrm, Vec3(dir.x, 0, dir.y), 0, 0); vert.color = col; return vert;
-        };
-        mesh.vertices.push_back(v(l0));
-        mesh.vertices.push_back(v(r0));
-        mesh.vertices.push_back(v(r1));
-        mesh.vertices.push_back(v(l1));
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 2, base, base + 2, base + 3});
-    }
+    for (int i = 0; i < segs; ++i)
+        for (int j = 0; j < lanes; ++j) {
+            Real t0 = static_cast<Real>(i) / segs, t1 = static_cast<Real>(i + 1) / segs;
+            Real s0 = -0.5 + static_cast<Real>(j) / lanes;
+            Real s1 = -0.5 + static_cast<Real>(j + 1) / lanes;
+            Vec3 p00 = vert(t0, s0), p10 = vert(t1, s0), p11 = vert(t1, s1), p01 = vert(t0, s1);
+            Vec3 nrm = normalize(cross(p10 - p00, p01 - p00));
+            if (nrm.y < 0) nrm = nrm * -1;
+            uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+            auto v = [&](const Vec3& p) {
+                Vertex vert2(p, nrm, Vec3(dir.x, 0, dir.y), 0, 0); vert2.color = col; return vert2;
+            };
+            mesh.vertices.push_back(v(p00));
+            mesh.vertices.push_back(v(p10));
+            mesh.vertices.push_back(v(p11));
+            mesh.vertices.push_back(v(p01));
+            mesh.indices.insert(mesh.indices.end(),
+                                {base, base + 1, base + 2, base, base + 2, base + 3});
+        }
 }
 
 // A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
@@ -278,13 +280,34 @@ CityModel generateCity(const CityParams& cp) {
                 bp.floorHeight = rng.range(3.0, 3.8);
                 bp.curtainWall = false; bp.solidFacade = false;
             }
-            // Foundation sits at the MIN ground height under the footprint, so a
-            // building on a slope never floats (its uphill side is buried, its
-            // downhill side flush) — ADR-0038 §3.4.4.
-            Real baseY = cityGroundAt(cp, centroid(site));
-            for (const Vec2& v : site) baseY = std::min(baseY, cityGroundAt(cp, v));
-            Scope scope = scopeFromFootprint(site, baseY, 10.0 /*unused*/);
+            // Building podium (ADR-0038): the floor sits at the HIGHEST footprint
+            // corner (just above it), so terrain never pokes up through the
+            // building; a foundation skirt fills the gap down to the LOWEST corner
+            // on the downhill side, levelling the site like a real podium.
+            Real minY = 1e30, maxY = -1e30;
+            for (const Vec2& v : site) {
+                Real g = cityGroundAt(cp, v);
+                minY = std::min(minY, g); maxY = std::max(maxY, g);
+            }
+            Real padY = maxY + 0.05;
+            Scope scope = scopeFromFootprint(site, padY, 10.0 /*unused*/);
             BuildingMesh bm = growBuilding(scope, bp);
+
+            // Foundation skirt down to the lowest corner (all shapes), so nothing
+            // floats on the downhill side.
+            if (padY - minY > 0.25) {
+                Vec3 fc = scope.corner(0.5, 0, 0.5);
+                RenderMesh skirt = MeshBuilder::box(
+                    Vec3(scope.size.x + 0.3, padY - minY + 0.1, scope.size.z + 0.3));
+                MeshBuilder::transform(skirt,
+                    Mat4::trs(Vec3(fc.x, (minY - 0.05 + padY) * 0.5, fc.z),
+                              Quat::fromAxisAngle(Vec3(0, 1, 0),
+                                  std::atan2(scope.axis[2].x, scope.axis[2].z)),
+                              Vec3(1, 1, 1)));
+                for (Vertex& v : skirt.vertices) v.color = bp.trimColor * 0.7;
+                MeshBuilder::append(model.parts[static_cast<int>(PartId::Trim)], skirt);
+            }
+            Real baseY = padY;
 
             for (const RenderMesh& part : bm.parts) {
                 int mi = part.materialIndex;
@@ -292,7 +315,17 @@ CityModel generateCity(const CityParams& cp) {
                 MeshBuilder::append(model.parts[mi], part);
             }
             MeshBuilder::append(model.hlodProxy, bm.proxy);   // distant-city LOD
-            model.buildings.push_back({centroid(site), baseY, bm.height, dist});
+
+            Vec3 footC = scope.corner(0.5, 0, 0.5);
+            CityBuilding cb;
+            cb.site = centroid(site);
+            cb.baseY = baseY;
+            cb.height = bm.height;
+            cb.district = dist;
+            cb.boxCenter = Vec3(footC.x, baseY + bm.height * 0.5, footC.z);
+            cb.boxHalf = Vec3(scope.size.x * 0.5, bm.height * 0.5, scope.size.z * 0.5);
+            cb.yaw = std::atan2(scope.axis[2].x, scope.axis[2].z);
+            model.buildings.push_back(cb);
         }
     }
 
