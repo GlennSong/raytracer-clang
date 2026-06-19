@@ -8,6 +8,8 @@
 #include "../procgen/tree.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
+#include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/polygon.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -420,6 +422,60 @@ int l_plsystem_expand(lua_State* L) {
     return 1;
 }
 
+bool optBoolField(lua_State* L, int idx, const char* key, bool fallback) {
+    idx = lua_absindex(L, idx);
+    lua_getfield(L, idx, key);
+    bool v = lua_isnil(L, -1) ? fallback : (lua_toboolean(L, -1) != 0);
+    lua_pop(L, 1);
+    return v;
+}
+
+// --- building.* : the split/shape grammar (ADR-0038 §2, ADR-0028 L1 grammar) ---
+
+BuildingParams readBuildingParams(lua_State* L, int idx) {
+    BuildingParams p;
+    if (lua_isnoneornil(L, idx)) return p;
+    luaL_checktype(L, idx, LUA_TTABLE);
+    p.floors        = static_cast<int>(optField(L, idx, "floors", p.floors));
+    p.groundRetail  = optBoolField(L, idx, "ground_retail", p.groundRetail);
+    p.floorHeight   = static_cast<Real>(optField(L, idx, "floor_height", p.floorHeight));
+    p.groundHeight  = static_cast<Real>(optField(L, idx, "ground_height", p.groundHeight));
+    p.bayWidth      = static_cast<Real>(optField(L, idx, "bay_width", p.bayWidth));
+    p.windowInset   = static_cast<Real>(optField(L, idx, "window_inset", p.windowInset));
+    p.walkableGround= optBoolField(L, idx, "walkable_ground", p.walkableGround);
+    p.setbackEvery  = static_cast<Real>(optField(L, idx, "setback_every", p.setbackEvery));
+    p.setbackFloors = static_cast<int>(optField(L, idx, "setback_floors", p.setbackFloors));
+    p.parapet       = static_cast<Real>(optField(L, idx, "parapet", p.parapet));
+    p.seed          = static_cast<uint32_t>(optField(L, idx, "seed", 0));
+    return p;
+}
+
+// building.grow{ floors=, width=, depth=, seed=, ... } -> mesh
+// Grows the split/shape-grammar building over a rectangular footprint and returns
+// the merged mesh (per-vertex colours baked, so wall/glass/roof read on a single
+// material). Lua authors the grammar params; the rewrite/emit loop stays in C++.
+int l_building_grow(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
+    Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
+    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
+                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
+    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
+    BuildingMesh bm = growBuilding(s, p);
+    pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
+    return 1;
+}
+
+// building.height{...} -> number : the grown height in metres (no mesh). Cheap
+// query for layout code that places a building before committing geometry.
+int l_building_height(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Poly2 foot = {{-9, -7}, {9, -7}, {9, 7}, {-9, 7}};
+    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
+    lua_pushnumber(L, growBuilding(s, p).height);
+    return 1;
+}
+
 // Read an optional {x,y,z} field; fall back if absent/not a table.
 Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
     idx = lua_absindex(L, idx);
@@ -713,6 +769,14 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kTreeFns);
     lua_setglobal(L, "tree");
+
+    static const luaL_Reg kBuildingFns[] = {
+        {"grow", l_building_grow},
+        {"height", l_building_height},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kBuildingFns);
+    lua_setglobal(L, "building");
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");

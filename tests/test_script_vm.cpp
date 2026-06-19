@@ -101,6 +101,32 @@ TEST_CASE(procgen_script_matches_the_cpp_substrate) {
     CHECK(viaScript->indices.size() == viaCpp.indices.size());
 }
 
+TEST_CASE(procgen_script_grows_a_building) {
+    // ADR-0038/0028: the split/shape grammar is an L1 sibling exposed to Lua, the
+    // same way the L-system is. building.grow returns a mesh; taller floors -> more
+    // geometry; building.height is a cheap query.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        return building.grow{ floors = 6, width = 18, depth = 14,
+                              ground_retail = true, walkable_ground = true, seed = 3 }
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() > 100);
+    CHECK(mesh->indices.size() % 3 == 0);
+
+    double h6 = 0, h12 = 0;
+    CHECK(vm.doString("h6  = building.height{ floors = 6 }"));
+    CHECK(vm.doString("h12 = building.height{ floors = 12 }"));
+    CHECK(vm.getGlobalNumber("h6", h6));
+    CHECK(vm.getGlobalNumber("h12", h12));
+    CHECK(h12 > h6);
+    CHECK_APPROX(h6, 6 * 3.2 + 4.5 + 1.1, 1e-6);   // matches the C++ grammar
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);
