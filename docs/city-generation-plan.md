@@ -94,17 +94,43 @@ A graph of **nodes** (intersections) and **edges** (road segments, each a
 - **Reuse:** `Spline<Vec3>`, `terrainHeight`, `MeshBuilder` sweep.
 
 ### 3.2 City blocks — the faces of the graph
-A block is an **enclosed face** of the planar road graph (a minimal cycle).
+**This is the heart of "roads → city blocks": a city block is literally an
+enclosed face of the road network.** Roads are the *lines*; the blocks are the
+*holes between the lines*. Once the road graph is planar, extracting blocks is a
+classic computational-geometry operation, no extra authoring.
 
-- **Method:** planar-graph face extraction — sort each node's incident edges by
-  angle, walk "next clockwise edge" half-edges to trace minimal cycles; discard
-  the outer face. Standard, robust, O(E).
-- **Inset** each face polygon inward by the bordering road half-widths +
-  sidewalk → the block's **buildable footprint** polygon.
-- **Output:** a set of block polygons, each tagged with a `district` sampled at
-  its centroid (downtown / residential / commercial / industrial / park).
-- **Edge cases:** non-planar overpasses (defer — keep the graph planar first);
-  degenerate slivers (drop below a min area).
+The road graph must first be **planar** (a 2D graph in the XZ plane — terrain
+height is sampled *after*, so an overpass is not a true crossing). Planarize:
+wherever two road segments intersect, insert a node and split both edges, so the
+only adjacencies are at shared endpoints. Snap near-coincident nodes. Now:
+
+- **Block = minimal cycle (face) of the planar graph.** Build a **half-edge**
+  (doubly-connected edge list): each undirected road becomes two opposite
+  directed half-edges. At every node, sort incident half-edges by angle. Trace a
+  face by repeatedly taking, at each node you arrive at, the **next half-edge
+  clockwise** from the one you came in on (the `next = twin → rotate CW`
+  traversal). Each closed traversal is one face; mark half-edges used so each is
+  visited once. Discard the single **outer face** (the unbounded one, identified
+  by negative signed area / largest perimeter). Every remaining face is a city
+  block. O(E log E) for the angular sorts; robust and deterministic.
+- **Block footprint = inset face polygon.** Inset each block polygon inward by
+  the bordering road's half-width + sidewalk width (a per-edge straight-skeleton
+  offset, or a simple per-edge push for convex-ish blocks). That gap *is* the
+  street + sidewalk; the inset interior is the **buildable footprint** the
+  parcel subdivision (§3.3) then carves.
+- **Tag each block** with a `district` sampled at its centroid (downtown /
+  residential / commercial / industrial / park) — drives zoning, height, and
+  whether it builds at all.
+- **Edge cases:** dead-end roads (a half-edge with no enclosing cycle — they
+  contribute to a face boundary but enclose nothing, handled naturally by the
+  traversal); degenerate slivers (drop blocks below a min area); non-planar
+  overpasses (defer — keep the graph planar first, ADR-0027-style); concave or
+  ring-shaped blocks (the inset + parcel step must tolerate non-convex polygons).
+
+So the dependency is strict and one-directional: **road graph → planarize →
+faces → blocks → (inset) footprints → parcels → buildings.** Get the road graph
+right and the blocks fall out for free; this is why §3.1's road network is the
+real lever, and why even the deformed-grid bootstrap already yields usable blocks.
 
 ### 3.3 Parcels / lots — subdivide a block
 Split each block footprint into building **lots**, each fronting a street.
@@ -176,9 +202,17 @@ A small, composable op set covers most architecture:
 - `extrude(h)` — turn a footprint polygon into a prism (lot → mass).
 - `roof(type, pitch)` — flat / hip / gable / mansard cap on the current scope.
 - `taper` / `setback(atHeight)` — ziggurat/Art-Deco towers.
+- `hollow(wallThickness)` — emit the scope as walls + floor + ceiling around a
+  void instead of a solid mass: the **walkable-shell** op. A hollowed ground
+  floor / lobby / atrium is an enterable open volume (no rooms — that's Tier C).
+- `opening(door|arch|garage)` on a wall part — punch a real hole (a passable
+  doorway, sized to human clearance) rather than paint a door on a solid. The
+  player rig fits through it.
 - `instance(assetId)` / `prim(box|cylinder|...)` — emit geometry (a window
-  asset, a door, a wall quad with a material).
-- `attach(tag)` — flag an attach point for prop population (ADR-0028 §2).
+  asset, a door leaf, a wall quad with a material).
+- `attach(tag)` — flag an attach point for prop population (ADR-0028 §2), **and
+  expose each floor as a `plate` scope** so a future interior-layout generator
+  can fill it (the Tier-C seam, §4.6).
 - `material(name)` — set the emitted part's material (wall/glass/concrete/trim).
 
 A facade rule then reads like CGA:
@@ -199,6 +233,25 @@ Window  → inset(0.1) extrude(-0.1) material("glass") prim(quad)
   `assets/scripts/city.lua` (cf. `flora.lua`).
 - **Headless-tested** like `test_flora.cpp` / `test_script_vm.cpp`: a known
   recipe → deterministic vertex/part counts; a script-vs-C++ equivalence check.
+
+### 4.6 Scope decision (June 2026): walkable shells, not interiors
+Decided with the user: the building language targets **Tier A+B — facades plus
+walkable shells**, not Tier C interiors. The grammar emits detailed exteriors
+*and* can `hollow` a mass + `opening` real doorways so the ground floor / lobby /
+atrium is an **enterable open volume** at human scale. It does **not** generate
+rooms, hallways, connected doors, or reachable layouts — that is a separate
+*floor-plan synthesis* generator (graph + reachability constraints; e.g. Merrell
+et al.), a different paradigm from the facade grammar.
+
+The seam is designed now so Tier C drops in later without a redesign: the grammar
+exposes each floor as a **`plate` scope** + attach points (ADR-0028 §2). A future
+interior generator is a recipe that *fills* a plate scope — the same
+recipe-calls-recipe composition as blossoms-on-a-branch. **Human scale is a
+first-class constraint**: split sizes are real meters (floor-to-floor ~3–4 m,
+door clearance ~2.1 m, sill ~0.9 m, railing ~1.1 m), and part of this work is
+pinning those + the player eye/clearance as named constants the grammar reads
+(today the convention is loose). A door the grammar punches is a door the player
+rig fits through.
 
 ### 4.5 Geometry strategy
 Rectilinear buildings are **kit-bashed** (`MeshBuilder::append` of wall/window
@@ -275,10 +328,13 @@ render (ADR design principle 4). Ordered so the most reusable, most exciting
 piece (the shape grammar) lands first and each phase has something to look at.
 
 - **Phase 0 — The building shape grammar (standalone).** The L1 interpreter +
-  the `split`/`repeat`/`comp`/`inset`/`extrude`/`roof` ops, Lua-exposed, one
-  hero building from a footprint+params → multi-part mesh. No city. *Proves the
-  centerpiece the way one tree proved `growTree`.* Headless tests + a
-  `building.lua` recipe; the look needs macOS.
+  the `split`/`repeat`/`comp`/`inset`/`extrude`/`roof`/`hollow`/`opening` ops,
+  Lua-exposed. Hero target: a **mid-rise mixed-use block** (ground-floor retail +
+  4–6 residential floors + roof) — it exercises the most of the vocabulary and
+  reads "city"; a skyscraper follows as the `repeat`/setback scale test. The
+  ground floor is a **walkable shell** (hollowed, real door opening). → multi-part
+  mesh, no city yet. *Proves the centerpiece the way one tree proved `growTree`.*
+  Headless tests + a `city.lua`/`building.lua` recipe; the look needs macOS.
 - **Phase 1 — Lot → building.** Recursive-OBB parcel subdivision; generate a
   hand-specified block polygon's worth of buildings (occupancy, type selection,
   setbacks, terrain foundation). A street of houses, still no road generation.
