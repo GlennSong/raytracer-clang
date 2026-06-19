@@ -111,45 +111,6 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     return p;
 }
 
-// A terrain-conforming ribbon along an edge, tessellated into a grid (~3.5 m
-// along × ~4 m across) with *every* vertex sampled to the ground height there
-// (+ yBias). The paved surface thus hugs the terrain in both directions — it
-// rolls up/down hills (SF) and never lets a cross-slope bulge poke through a wide
-// sidewalk — while staying flat where the ground is flat (NYC). Per-cell normals.
-void emitRibbon(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
-                Real width, const Vec3& col, Real yBias) {
-    Vec2 dir = b - a;
-    Real len = dir.length();
-    if (len < 1e-4) return;
-    dir = dir / len;
-    Vec2 across = perp(dir);
-    int segs = std::max(1, static_cast<int>(std::ceil(len / 3.5)));
-    int lanes = std::max(1, static_cast<int>(std::ceil(width / 4.0)));
-    auto vert = [&](Real t, Real s) {                 // t in [0,1] along, s in [-.5,.5]
-        Vec2 p = lerp(a, b, t) + across * (width * s);
-        return Vec3(p.x, cityGroundAt(cp, p) + yBias, p.y);
-    };
-    for (int i = 0; i < segs; ++i)
-        for (int j = 0; j < lanes; ++j) {
-            Real t0 = static_cast<Real>(i) / segs, t1 = static_cast<Real>(i + 1) / segs;
-            Real s0 = -0.5 + static_cast<Real>(j) / lanes;
-            Real s1 = -0.5 + static_cast<Real>(j + 1) / lanes;
-            Vec3 p00 = vert(t0, s0), p10 = vert(t1, s0), p11 = vert(t1, s1), p01 = vert(t0, s1);
-            Vec3 nrm = normalize(cross(p10 - p00, p01 - p00));
-            if (nrm.y < 0) nrm = nrm * -1;
-            uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-            auto v = [&](const Vec3& p) {
-                Vertex vert2(p, nrm, Vec3(dir.x, 0, dir.y), 0, 0); vert2.color = col; return vert2;
-            };
-            mesh.vertices.push_back(v(p00));
-            mesh.vertices.push_back(v(p10));
-            mesh.vertices.push_back(v(p11));
-            mesh.vertices.push_back(v(p01));
-            mesh.indices.insert(mesh.indices.end(),
-                                {base, base + 1, base + 2, base, base + 2, base + 3});
-        }
-}
-
 // A flat, horizontal paved polygon at height `y` (centroid fan), vertex-coloured.
 // The block apron / sidewalk: a real street is graded FLAT, so this does NOT drape
 // — the terrain is cut/filled to meet it (emitRetainingSkirt).
@@ -195,6 +156,70 @@ void emitRetainingSkirt(RenderMesh& mesh, const Poly2& poly, Real topY,
         mesh.indices.insert(mesh.indices.end(),
                             {base, base + 2, base + 1, base, base + 3, base + 2});
     }
+}
+
+// A flat road carriageway between two graded endpoints (yA..yB): flat ACROSS its
+// width at each point, gently sloped ALONG its length — a human-built street, not
+// a sheet draped over the terrain. Per-segment normals.
+void emitFlatRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real yA, Real yB,
+                  Real width, const Vec3& col) {
+    Vec2 dir = b - a;
+    Real len = dir.length();
+    if (len < 1e-4) return;
+    dir = dir / len;
+    Vec2 across = perp(dir) * (width * 0.5);
+    int segs = std::max(1, static_cast<int>(std::ceil(len / 8.0)));
+    for (int i = 0; i < segs; ++i) {
+        Real t0 = static_cast<Real>(i) / segs, t1 = static_cast<Real>(i + 1) / segs;
+        Real y0 = yA + (yB - yA) * t0, y1 = yA + (yB - yA) * t1;
+        Vec2 c0 = lerp(a, b, t0), c1 = lerp(a, b, t1);
+        Vec3 l0(c0.x - across.x, y0, c0.y - across.y), r0(c0.x + across.x, y0, c0.y + across.y);
+        Vec3 r1(c1.x + across.x, y1, c1.y + across.y), l1(c1.x - across.x, y1, c1.y - across.y);
+        Vec3 n = normalize(cross(r0 - l0, l1 - l0)); if (n.y < 0) n = n * -1;
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        auto v = [&](const Vec3& p) { Vertex vt(p, n, Vec3(dir.x, 0, dir.y), 0, 0); vt.color = col; return vt; };
+        mesh.vertices.push_back(v(l0));
+        mesh.vertices.push_back(v(r0));
+        mesh.vertices.push_back(v(r1));
+        mesh.vertices.push_back(v(l1));
+        mesh.indices.insert(mesh.indices.end(),
+                            {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
+}
+
+// A painted line along a street (lane/centre marking): a thin flat road, offset
+// from the centreline by `offset`, raised slightly so it reads on the asphalt.
+void emitLaneLine(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real yA, Real yB,
+                  Real offset, Real lineWidth, const Vec3& col) {
+    Vec2 dir = b - a;
+    if (dir.lengthSquared() < 1e-8) return;
+    Vec2 n = perp(normalize(dir)) * offset;
+    emitFlatRoad(mesh, a + n, b + n, yA + 0.02, yB + 0.02, lineWidth, col);
+}
+
+// A short stair run from `topY` (sidewalk/apron) down to `botY` (street), centred
+// at `mid`, facing `out` (toward the street), `width` wide. Treads ~0.16 m high.
+void emitStairs(RenderMesh& mesh, const Vec3& mid, const Vec2& outDir, Real topY,
+                Real botY, Real width, const Vec3& col) {
+    Real drop = topY - botY;
+    int steps = std::max(2, static_cast<int>(std::ceil(drop / 0.16)));
+    Real rise = drop / steps, tread = 0.3;
+    Vec2 o = normalize(outDir);
+    Vec2 side = perp(o);
+    for (int s = 0; s < steps; ++s) {
+        Real y = topY - rise * (s + 1);
+        Vec2 c = Vec2(mid.x, mid.z) + o * (tread * s + tread * 0.5);
+        RenderMesh box = MeshBuilder::box(Vec3(width, rise + 0.02, tread));
+        Real yaw = std::atan2(o.x, o.y);
+        MeshBuilder::transform(box, Mat4::trs(Vec3(c.x, y + rise * 0.5, c.y),
+                                              Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                                              Vec3(1, 1, 1)));
+        for (Vertex& v : box.vertices) v.color = col;
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.insert(mesh.vertices.end(), box.vertices.begin(), box.vertices.end());
+        for (uint32_t idx : box.indices) mesh.indices.push_back(base + idx);
+    }
+    (void)side;
 }
 
 // A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
@@ -250,15 +275,53 @@ CityModel generateCity(const CityParams& cp) {
     model.blocks = extractBlocks(graph);
     model.blockCount = static_cast<int>(model.blocks.size());
 
-    // Asphalt carriageways down the road centrelines (between the block aprons).
-    // Roads still follow the ground along their length, but each block is graded
-    // FLAT (below), so the street is flat across its width with curbed aprons —
-    // human-built, not a draped sheet (the user's note).
+    // Road-grade solver: assign each intersection an elevation, then Laplacian-
+    // smooth it along the graph so connected streets share gentle, consistent
+    // grades (engineered, not following every bump). Streets are then flat across
+    // their width and gently sloped between these node grades — human-built.
+    const int nNodes = static_cast<int>(graph.nodes.size());
+    std::vector<Real> nodeGrade(nNodes);
+    for (int i = 0; i < nNodes; ++i) nodeGrade[i] = cityGroundAt(cp, graph.nodes[i].pos);
+    if (cp.groundAt) {
+        std::vector<std::vector<int>> adj(nNodes);
+        for (const RoadEdge& e : graph.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
+        std::vector<Real> next(nodeGrade);
+        // Light smoothing: remove local bumps for gentle grades, but keep the
+        // broad slope (heavy smoothing would flatten the hills — not wanted).
+        for (int iter = 0; iter < 5; ++iter) {
+            for (int i = 0; i < nNodes; ++i) {
+                if (adj[i].empty()) continue;
+                Real avg = 0; for (int j : adj[i]) avg += nodeGrade[j];
+                avg /= adj[i].size();
+                next[i] = nodeGrade[i] * 0.5 + avg * 0.5;
+            }
+            nodeGrade.swap(next);
+        }
+    }
+    // Nearest-node grade at any XZ (block vertices ARE nodes, so this is exact).
+    auto gradeAt = [&](const Vec2& p) {
+        if (!cp.groundAt) return cp.baseY;
+        int best = 0; Real bestD = 1e30;
+        for (int i = 0; i < nNodes; ++i) {
+            Real d = (graph.nodes[i].pos - p).lengthSquared();
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return nodeGrade[best];
+    };
+
+    // Flat carriageways between graded intersections, with painted lane lines: a
+    // yellow centre line + white edge lines.
     Vec3 sidewalkCol(0.52, 0.52, 0.50), asphaltCol(0.12, 0.12, 0.13),
-         retainCol(0.40, 0.40, 0.40);
-    for (const RoadEdge& e : graph.edges)
-        emitRibbon(model.roads, cp, graph.nodes[e.a].pos, graph.nodes[e.b].pos,
-                   e.width, asphaltCol, 0.05);
+         retainCol(0.42, 0.42, 0.42), yellow(0.72, 0.62, 0.12), white(0.78, 0.78, 0.76);
+    for (const RoadEdge& e : graph.edges) {
+        Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
+        Real yA = nodeGrade[e.a], yB = nodeGrade[e.b];
+        Real w = std::min(static_cast<Real>(e.width), Real(12.0));
+        emitFlatRoad(model.roads, a, b, yA, yB, w, asphaltCol);
+        emitLaneLine(model.roads, a, b, yA, yB, 0.0, 0.22, yellow);          // centre
+        emitLaneLine(model.roads, a, b, yA, yB, w * 0.5 - 0.5, 0.16, white); // edges
+        emitLaneLine(model.roads, a, b, yA, yB, -(w * 0.5 - 0.5), 0.16, white);
+    }
 
     Rng rng(cp.seed);
 
@@ -295,23 +358,39 @@ CityModel generateCity(const CityParams& cp) {
         bool oldTown = dist != District::HighRise && dist != District::Industrial &&
                        (c - oldTownC).length() < cp.extent * 0.24;
 
-        // Flat block grade: the pad height = the highest ground under the block
-        // (so terrain never pokes through the flat apron); a retaining skirt fills
-        // down to the ground around the edge. The whole block — apron + every
+        // Flat block grade tied to the street grades: the pad sits a curb height
+        // (0.15 m) above the highest adjacent intersection, so every block meets
+        // its streets with a consistent curb. The whole block — apron + every
         // building — shares this one level, the way a real graded block does.
         Real gradeY = cp.baseY;
-        {
+        if (cp.groundAt) {
             Real mx = -1e30;
-            for (const Vec2& v : block) mx = std::max(mx, cityGroundAt(cp, v));
-            mx = std::max(mx, cityGroundAt(cp, c));
-            gradeY = (cp.groundAt ? mx : cp.baseY) + 0.12;
+            for (const Vec2& v : block) mx = std::max(mx, gradeAt(v));
+            gradeY = mx + 0.15;
+        } else {
+            gradeY = cp.baseY + 0.15;
         }
         // Paved apron (sidewalk + block interior), flat at grade, with a curb/
-        // retaining skirt down to the terrain.
+        // retaining skirt down to the street/terrain.
         Poly2 apron = inset(block, 6.5);
         if (apron.size() >= 3) {
             emitFlatPolygon(model.pavement, apron, gradeY, sidewalkCol);
             emitRetainingSkirt(model.pavement, apron, gradeY, cp, retainCol);
+            // Steps where the curb is too tall to be a plain wall — one short run
+            // mid-edge per long, steep block edge (a stoop down to the street).
+            const std::size_t an = apron.size();
+            for (std::size_t i = 0; i < an; ++i) {
+                Vec2 ea = apron[i], eb = apron[(i + 1) % an];
+                Real elen = distance(ea, eb);
+                if (elen < 9.0) continue;
+                Vec2 emid = lerp(ea, eb, 0.5);
+                Real streetY = gradeAt(emid);
+                if (gradeY - streetY < 0.7) continue;            // gentle: wall is fine
+                Vec2 outDir = perp(normalize(eb - ea)) * -1;     // toward the street (CCW: outward = -left)
+                emitStairs(model.pavement, Vec3(emid.x, 0, emid.y), outDir,
+                           gradeY, streetY + 0.05, std::min(Real(4.0), elen * 0.4),
+                           sidewalkCol * 0.96);
+            }
         }
 
         Real roadInset = 8.0 + cp.sidewalk;   // half a local road + sidewalk

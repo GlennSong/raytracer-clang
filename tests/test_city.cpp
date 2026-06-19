@@ -220,8 +220,8 @@ TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     CityModel m = generateCity(cp);            // no sampler -> flat
     CHECK(!m.ground.vertices.empty());         // flat city gets a ground plane
     CHECK(m.treeCount > 0);
-    // Flat ground: every building sits on the block grade, the small +0.12 lift.
-    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.12, 1e-6);
+    // Flat ground: every building sits on the block grade, the curb +0.15 lift.
+    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.15, 1e-6);
 }
 
 TEST_CASE(city_buildings_have_valid_box_colliders) {
