@@ -76,16 +76,21 @@ substrate (grammar + scope ops + scatter + grading + Lua).
 
 ### A. Possible now (small, build on what exists)
 
+> **Done since this doc was written:** flat lane'd streets (road-grade solver +
+> `emitFlatRoad` + painted lane lines), **steps** on tall curbs, **lamp posts**
+> along verges, **zebra crosswalks** at intersections, tighter curbs (apron snaps
+> to the carriageway). Remaining items below.
+
 | Idea | Approach |
 | --- | --- |
-| **Steps / stairwells** on steep inclines | Where a block's curb/retaining skirt exceeds a step height, emit a stair run (repeated box treads) instead of a plain wall. We already have the grade break; it's a geometry helper. |
-| **Lamp posts, hydrants, signage, street plants** | Scatter prop meshes along road verges (exactly like the street-tree pass) and onto facade attach points (ADR-0028 §2). Cheap kit-bashed meshes. |
+| ~~**Steps / stairwells** on steep inclines~~ ✅ | Done: a stair run descends mid-edge where a block's curb exceeds 0.7 m. |
+| **Hydrants, signage, street plants** (lamp posts ✅) | Scatter prop meshes along road verges (like the street-tree/lamp pass) and onto facade attach points (ADR-0028 §2). Cheap kit-bashed meshes. |
 | **Parking lots & garages** | A parking lot = a flat apron block variant with painted stalls + a few car boxes. A garage = a `solidFacade` building with open-deck floors (a parking archetype). Both are archetype/block-program additions. |
 | **More architectural styles** (European/Eastern/Western) | Extend `FacadeStyle` + the archetype library with param presets (mansard roofs, sash-window rhythms, balconies, brackets). Pure parameters over the grammar. |
 | **Designed parks** | A park block-program: paths (flat apron strips), tree clusters, benches/fountains (prop meshes), a pond (flat blue quad). Composition of existing primitives. |
 | **Block "landscaping" phase** | A *block program* step: decide a block's content — building / plaza / park / parking / civic — by district + shape, before parcelling. A small policy layer over the current per-lot loop. |
 | **Odd-block points of interest** | Detect non-rectangular blocks (OBB aspect/area, intersection wedges) and switch placement: a single hero building, a courtyard ring, or a radial fan instead of street-aligned rows. A parcel/placement branch. |
-| **Crosswalks / lane lines** (geometry) | Thin striped quads on the asphalt at intersections and centrelines. Reads as markings without textures. |
+| ~~**Crosswalks / lane lines** (geometry)~~ ✅ | Done: yellow centre + white edge lane lines on every street; zebra crosswalks on intersection approaches. |
 
 ### B. Near-term (needs a design pass, then a focused build)
 
@@ -117,12 +122,12 @@ crowds — all gated on the above and the spatial-partition work (ADR-0034).
 A coherent path that front-loads visible "human-built" wins and the one big
 subsystem that reframes everything else:
 
-1. **Finish the street/grading layer** (B): road-grade solver → flat lane'd
-   streets with curbs + **steps** (A) at steep breaks. This is what most makes the
-   city read as built, and it's the natural continuation of what just landed.
-2. **Street furniture + block programs** (A): lamp posts, hydrants, signage,
-   crosswalks (geometry), parking, designed parks, odd-block POIs. Lots of cheap
-   visible variety.
+1. ~~**Finish the street/grading layer**~~ ✅ Done: road-grade solver, flat
+   lane'd streets, curbs, steps. The city reads as built.
+2. **Street furniture + block programs** (A): lamp posts ✅ + crosswalks ✅ done;
+   remaining — hydrants/signage, **parking**, **designed parks**, **odd-block
+   POIs**, and a **block-program** step (decide building/plaza/park/parking by
+   district + shape). Lots of cheap visible variety; the natural next slice.
 3. **Procedural textures** (B): asphalt+markings, brick/concrete facades — the
    jump from "flat-shaded massing" to "surfaced city" (viewer-first).
 4. **Water** (C): the big subsystem — rivers, coast, ocean waves, piers/bridges.
