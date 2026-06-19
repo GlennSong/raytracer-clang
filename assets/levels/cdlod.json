@@ -1,6 +1,9 @@
 {
   "version": 1,
-  "environment": { "skyColor": [0.52, 0.66, 0.86] },
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86],
+    "fog": { "density": 0.005, "color": [0.62, 0.71, 0.84] }
+  },
   "terrain": {
     "seed": 21,
     "heightScale": 16,

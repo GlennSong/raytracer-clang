@@ -336,6 +336,11 @@ public:
     // front-most leaf per pixel is shaded. Off = legacy single-pass foliage.
     bool depthPrepassEnabled = true;
 
+    // Vegetation draw-distance override (live tuning, to balance against fog).
+    // 0 = use each scatter group's level-set drawDistance; >0 overrides all
+    // groups this session. Applied by RenderSystem's per-instance cull.
+    float vegetationDrawDistance = 0.0f;
+
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
     // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
     int debugView = 0;

@@ -91,15 +91,20 @@ void RenderSystem::render(FrameContext& ctx) {
         [&](Entity, InstanceGroup& g) {
             if (g.transforms.empty()) return;
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
+            // Live override (slider) wins over the level's per-group value; 0 = use
+            // the level value. Lets draw distance be balanced against fog at runtime.
+            Real drawDist = ctx.renderer.vegetationDrawDistance > 0.0f
+                                ? static_cast<Real>(ctx.renderer.vegetationDrawDistance)
+                                : g.drawDistance;
             // Whole-group distance reject: skip if the nearest point of the group's
             // bounds is beyond the draw distance (cheap before the per-instance pass).
-            if (g.drawDistance > 0 &&
-                (g.boundsCenter - cam.position).length() - g.boundsRadius > g.drawDistance)
+            if (drawDist > 0 &&
+                (g.boundsCenter - cam.position).length() - g.boundsRadius > drawDist)
                 return;
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
             std::vector<Mat4> visible =
                 frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
-                                     cam.position, g.drawDistance);
+                                     cam.position, drawDist);
             if (!visible.empty())
                 ctx.renderer.drawMeshInstanced(g.mesh, visible, g.material);
         });

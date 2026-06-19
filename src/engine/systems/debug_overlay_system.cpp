@@ -185,6 +185,13 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             fog.color = Vec3(fogCol[0], fogCol[1], fogCol[2]);
         if (ImGui::Button("Match Sky##fog"))
             fog.color = lit.sky.horizonColor;
+
+        // Vegetation draw distance — pull trees in to where the fog hides them so
+        // we stop paying to render the far field. 0 = use the level's value.
+        ImGui::SliderFloat("Veg Draw Dist", &ctx.renderer.vegetationDrawDistance,
+                           0.0f, 1500.0f, "%.0f m");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(0=level)");
     }
 
     if (ImGui::CollapsingHeader("SSAO")) {
