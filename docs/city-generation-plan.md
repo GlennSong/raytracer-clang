@@ -4,8 +4,8 @@ A design for procedural cities: roads → blocks → parcels → buildings, plus
 "shape language" that grows a building, and where impostors fit. This is the
 detail behind **ROADMAP Tier 4 Phase D** ("City / road layout"),
 **`world-system-plan.md` §8 / §11.7** (City), and **ADR-0028 §3** (a split/shape
-grammar as an L1 sibling of the L-system). Nothing here is built yet; this is the
-plan to react to before an ADR is minted and work starts.
+grammar as an L1 sibling of the L-system). The decisions here are ratified by
+**ADR-0038** (Pending). Nothing is built yet; this is the plan behind that ADR.
 
 > **The headline:** the city paradigm is already half-decided by our ADRs, and
 > it is *not* the plant L-system that grows the trees. A building wants a
@@ -349,9 +349,9 @@ piece (the shape grammar) lands first and each phase has something to look at.
   §5), per-tile generation + cross-tile road stitching (ADR-0027 §5 streaming),
   occlusion culling. Only now, when the city is big enough to need it.
 
-A first ADR ("City generation: a split/shape grammar + road→block→parcel
-pipeline, a region recipe over the world system") should be minted when Phase 0
-build starts, recording the decisions in §3–§6 against the alternatives below.
+**ADR-0038** ("City generation: a split/shape grammar over a road→block→parcel
+pipeline, as a world recipe") records the decisions in §3–§6 against the
+alternatives below; it is Pending until Phase 0 build starts.
 
 ---
 

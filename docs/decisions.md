@@ -2271,6 +2271,124 @@ ground-bounce ambient.
 
 ---
 
+## ADR-0038 — City generation: a split/shape grammar over a road→block→parcel pipeline, as a world recipe
+**Status:** Pending · **Date:** 2026-06-19
+
+**Context.** The ROADMAP's Tier 4 Phase D names "City / road layout" as a
+capstone application, and ADR-0027 §8 / ADR-0028 §3 already sketched the paradigm
+(a split/shape grammar, not a plant L-system; a city as a region recipe that
+masks out nature). With the plant/scatter recipes now proving the Lua substrate
+(ADR-0028/0032), it is time to fix the *shape* of city generation before building
+it: how buildings are grown, how roads produce blocks, how it sits in the world
+system, and — the question that most changes the design — how far into building
+interiors the language goes. Full design and phasing in
+`docs/city-generation-plan.md`.
+
+**Decision.**
+1. **A city is one region recipe over the world system (ADR-0027), not thousands
+   of entities.** `(region, fields, seed) -> content`: it reads a `district`/
+   density field (procedural + brush-paintable), **suppresses the natural scatter
+   recipes** under its footprint, snaps to `terrainHeight`, and expands to
+   instance groups + generated meshes at load (per-tile when streaming lands).
+   Individual buildings/props stay render data, not document entities (ADR-0022).
+2. **Buildings are grown by a split/shape grammar (CityEngine CGA), an L1 engine
+   interpreter exposed to Lua — a sibling of the L-system, ratifying ADR-0028
+   §3.** It rewrites a **scope** (an oriented box + frame) by ops
+   `split`/`repeat`/`comp`/`inset`/`extrude`/`roof`/`taper`/`setback`/`hollow`/
+   `opening`/`prim`/`instance`/`attach`/`material`, emitting multi-part meshes
+   (`ScriptMeshPart[]`, ADR-0032). Rules are declarative data fed from Lua; the
+   rewrite/emit loop stays hot in C++ (ADR-0023/0028 §1). This is a *different
+   interpreter* from the turtle L-system — additive branch growth cannot express
+   recursive mass subdivision — sharing only the substrate (seeded RNG, params,
+   mesh output).
+3. **Roads → blocks → parcels → buildings is a strict one-directional pipeline,
+   and a city block is an enclosed face of the planar road graph.** Roads are a
+   graph of nodes + `Spline<Vec3>` edges (curve lib, ADR-0031); planarize at
+   crossings; extract minimal-cycle faces via a **half-edge (DCEL) next-CW
+   traversal**, discarding the outer face; inset each face by road half-width to
+   the buildable footprint; subdivide into lots by **recursive OBB split**; grow
+   a building per lot via the grammar. Get the road graph right and blocks/lots
+   fall out mechanically — so the road network is the design lever.
+4. **Scope is Tier A+B — facades plus walkable shells, not interiors** (decided
+   with the user). The grammar emits detailed exteriors *and* can `hollow` a mass
+   + `opening` real doorways so a ground floor / lobby / atrium is an enterable
+   open volume at human scale. It does **not** generate rooms, hallways, connected
+   doors, or reachable layouts — that is a separate *floor-plan synthesis*
+   generator (graph + reachability constraints), a different paradigm. The seam is
+   designed now: the grammar exposes each floor as a **`plate` scope** + attach
+   points (ADR-0028 §2), so a future Tier-C interior generator *fills* a plate
+   without redesign.
+5. **Human scale is a first-class, metric constraint.** The world is broadly
+   metric (Jolt gravity; 1 unit ≈ 1 m); grammar split sizes are real meters
+   (floor-to-floor ~3–4 m, door clearance ~2.1 m, sill ~0.9 m, railing ~1.1 m),
+   pinned as named constants the grammar and the player rig share. A door the
+   grammar punches is a door the player fits through.
+6. **Impostors/HLOD are render-scale LOD (ADR-0034 §5), after generation, designed
+   for now.** Generation produces the meshes; the distant-city draw is a discrete
+   LOD → HLOD (merged proxy) → building-impostor (octahedral card baked from the
+   mesh) ladder, gated on the spatial partition (ADR-0035/0036). The grammar emits
+   a coarse proxy + a clean silhouette alongside the full mesh so the LOD bake is
+   cheap later; repeated types collapse into `InstanceGroup`s (the free first LOD
+   via `drawDistance`).
+7. **Phased grammar-first** (`city-generation-plan.md` §7): **0** the building
+   grammar standalone (hero: a **mid-rise mixed-use block**; skyscraper as the
+   `repeat`/setback scale test); **1** lot→building (parcels, occupancy); **2**
+   roads→blocks (deformed-grid bootstrap → agent/L-system growth); **3** the "City
+   Arena" integration target (mirrors the Forest Arena); **4** LOD/impostors +
+   per-tile streaming with cross-tile road stitching.
+
+**Alternatives considered.**
+- *Buildings via the plant L-system* — rejected (ADR-0027/0028): paradigm
+  mismatch; additive turtle growth can't express recursive mass subdivision.
+- *A node graph for the grammar instead of Lua* — deferred (ADR-0025): Lua is the
+  one procgen authoring path; a visual editor, if ever, emits Lua.
+- *Design full interiors (Tier C) now* — rejected with the user: floor-plan
+  synthesis is a distinct, research-grade generator (connectivity + reachability);
+  walkable shells deliver enterable space at a fraction of the cost, and the
+  plate-scope seam keeps Tier C open.
+- *Pure-grid roads forever* — rejected as the *target* (fine as the Phase-2
+  bootstrap): real cities want density-driven arterials and terrain-aware bends.
+- *Voronoi/Poisson parcels* — rejected as default: recursive OBB gives
+  street-aligned rows that read as blocks; Voronoi is an organic *variant*.
+- *Generate blocks directly (not from roads)* — rejected: blocks are a *derived*
+  consequence of the road graph; deriving them keeps roads and blocks consistent
+  by construction.
+- *Thousands of building entities* — rejected (ADR-0022/0027 §4): one region
+  entity over instance groups + generated meshes.
+- *Impostors as part of generation* — rejected: a render-scale LOD concern baked
+  *from* generated meshes (ADR-0034 §5), gated on the spatial partition.
+- *Traffic/agent simulation* — out of scope (world-system-plan §8: "generated, no
+  simulation"); any future agent sim lives on the temporal-generator track
+  (ADR-0021), not the static-geometry pipeline.
+
+**Consequences / tech debt.**
+- New subsystems (each its own step): the **shape-grammar interpreter**
+  (`procgen/city/` or `procgen/building.*`), **road-graph generation + planarize
+  + half-edge face extraction**, **parcel subdivision**, the **city region
+  recipe**, and new Lua globals (`building`/`roads`/`parcels`) in
+  `procgen_bindings.cpp`. Most is pure data, headless-testable (cf. `test_flora`,
+  `test_script_vm`); only the final render needs macOS.
+- **Cross-tile roads** are the hard streaming problem (the graph is city-global,
+  not tile-local): first cut generates a bounded city region *whole* (Forest-Arena
+  style); per-tile clipping + boundary stitching is deferred to Phase 4 (ADR-0027
+  §5).
+- **Human-scale constants are loose today** (the player eye-height offset is 0.7);
+  pinning the metric reference is part of this work.
+- **Impostor/HLOD bake** is a real chunk of the content pipeline (render-to-card /
+  merge+decimate + LOD selection/crossfade), owed when the city is large enough to
+  need it — same lever as the distant-tree impostors already owed (ADR-0034/0037).
+- Interiors (Tier C), curved/non-rectilinear masses beyond `taper`/`setback`, and
+  interior streaming are explicitly **not** in this decision.
+
+**Revisit trigger.** When enterable **interiors with sensible layouts** (Tier C)
+become a goal — design the floor-plan generator that fills plate scopes; when the
+road network needs to graduate past the deformed-grid bootstrap (agent/L-system vs.
+tensor fields, `city-generation-plan.md` §9); when **cross-tile road stitching** is
+needed for streaming (ADR-0027 §5); or if the split grammar wants a substrate it
+does not share with the L-system (ADR-0028 revisit).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
