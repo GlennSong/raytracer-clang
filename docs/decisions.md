@@ -2272,11 +2272,13 @@ ground-bounce ambient.
 ---
 
 ## ADR-0038 — City generation: a split/shape grammar over a road→block→parcel pipeline, as a world recipe
-**Status:** Accepted — Phases 0–3 **implemented** (the headless generation pipeline
-under `src/engine/procgen/city/`, Lua `building.*` authoring, offline-tracer
-`shape:"city"` render, and the HLOD proxy; covered by `tests/test_city.cpp` +
-`tests/test_script_vm.cpp`). Impostor-card bake, sector streaming, and cross-tile
-roads (Phase 4) deferred — they need a GPU and the spatial partition. · **Date:** 2026-06-19
+**Status:** Accepted — Phases 0–3 **implemented**, including the **City Arena**
+(the city draped on terrain with street/park trees, `assets/levels/city_arena.json`):
+the headless generation pipeline under `src/engine/procgen/city/`, Lua `building.*`
+authoring, offline-tracer `shape:"city"` render, and the HLOD proxy; covered by
+`tests/test_city.cpp` + `tests/test_script_vm.cpp`. The Metal viewer render,
+impostor-card bake, sector streaming, and cross-tile roads (Phase 4) deferred —
+they need a GPU and the spatial partition. · **Date:** 2026-06-19
 
 **Context.** The ROADMAP's Tier 4 Phase D names "City / road layout" as a
 capstone application, and ADR-0027 §8 / ADR-0028 §3 already sketched the paradigm
@@ -2446,7 +2448,7 @@ to be replaced; listed here so they stay visible.
 | City generates whole, not streamed | `engine/procgen/city/city.cpp` (`generateCity`) | Phase 3 (ADR-0038) builds a bounded city in one pass (Forest-Arena style); the road graph is city-global, not tile-local | Per-tile generation with the global graph clipped per tile + boundary stitching (ADR-0027 §5 streaming) |
 | City impostor/HLOD bake is unbuilt | `engine/procgen/city/`, renderer | The generator emits a coarse per-building proxy + a merged `CityModel::hlodProxy` (headless-tested), but the **impostor-card bake** (render-to-octahedral-atlas) and **HLOD swap/crossfade** are GPU/Metal work, gated on the spatial partition | Impostor bake + LOD-selection/crossfade (ADR-0034 §5); same lever as the owed distant-tree impostors |
 | City Lua surface is buildings-only | `engine/scripting/procgen_bindings.cpp` (`building.*`) | Only the split/shape grammar is Lua-exposed; the road→block→parcel pipeline + the city are C++/level-JSON-driven, not yet a Lua **world region recipe** (ADR-0027) | A `roads`/`parcels`/`city` Lua surface so a city is an authorable region recipe like flora |
-| City is flat + detached from terrain/world | `engine/procgen/city/city.cpp`, `src/level_scene.cpp` | The city sits on its own ground plane at `baseY`; it doesn't sample terrain height, mask natural scatter under its footprint, or render in the Metal viewer yet | Sit foundations/roads on `terrainHeight`, suppress scatter under the footprint, add a viewer render path (the "City Arena", ADR-0027/0038 §6) |
+| City viewer render + natural-scatter masking owed | `engine/procgen/city/city.cpp`, `src/level_scene.cpp` | *The City Arena landed: the city drapes on terrain (foundations at the min ground height under each footprint; roads follow it) with street/park trees, rendered offline (`assets/levels/city_arena.json`).* Still owed: a **Metal viewer** render path, and **suppressing a surrounding forest scatter under the city footprint** (today the city carries its own trees; it doesn't yet mask an external scatter recipe, ADR-0027 §1) | Viewer render path; a city-footprint mask the terrain scatter reads |
 
 ---
 

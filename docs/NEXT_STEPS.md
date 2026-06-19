@@ -15,12 +15,15 @@ session.
   lots; `polygon` = 2D geometry); and the **city region recipe** (`city`) with
   district zoning (downtown towers → midtown → residential + parks). Lua
   `building.*` authoring (`assets/scripts/city.lua`), offline render via
-  `shape:"city"` (`assets/levels/city.json` → `./raytracer --level ... --camera
-  Skyline`), and an HLOD proxy. Covered by `tests/test_city.cpp` (+
-  `test_script_vm`). **Owed (Phase 4, needs a GPU / spatial partition):** impostor
-  bake + HLOD swap, sector streaming + cross-tile roads, terrain coupling, and the
-  Metal viewer render (the "City Arena"). See the city rows in `TECH_DEBT`/the ADR
-  register.
+  `shape:"city"`, and an HLOD proxy. The **City Arena**
+  (`assets/levels/city_arena.json` → `./raytracer --level ... --camera Arena`)
+  drapes the city on rolling terrain — foundations at the min ground height under
+  each footprint (terraced, no floating), roads following the ground, street/park
+  trees — under the sky. Covered by `tests/test_city.cpp` (+ `test_script_vm`).
+  **Owed:** the Metal **viewer** render path; suppressing an external forest
+  scatter under the footprint; Phase 4 (impostor bake + HLOD swap, sector
+  streaming + cross-tile roads — GPU / spatial-partition gated). See the city rows
+  in the ADR register.
 
 - **Open-world Phase 1 + interactive render budget (latest session)** — chunked
   terrain → CDLOD heightfield (ADR-0035/0036), vegetation scatter, and a perf +

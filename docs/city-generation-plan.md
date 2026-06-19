@@ -348,12 +348,15 @@ partition.
   planarize (split crossings), and half-edge DCEL block-face extraction
   (`road_network.{h,cpp}`). (Agent/L-system/tensor-field road *growth* is the
   open upgrade past the grid bootstrap — §9.)
-- **Phase 3 — The City. ✅ Done (headless + offline render).** `city.{h,cpp}` ties
-  it together with district zoning (downtown towers → midtown → residential +
-  parks); `shape:"city"` renders it offline (`assets/levels/city.json`).
-  *Remaining for a "City Arena" parity with The Forest:* sit it on terrain, mask
-  natural scatter under the footprint, scatter street furniture, run it as a
-  proper ADR-0027 world *region recipe* — and the viewer (Metal) render.
+- **Phase 3 — The City + City Arena. ✅ Done (headless + offline render).**
+  `city.{h,cpp}` ties it together with district zoning (downtown towers → midtown
+  → residential + parks). The **City Arena** (`assets/levels/city_arena.json`,
+  `--camera Arena`) drapes the city on terrain — foundations at the min ground
+  height under each footprint (no floating on slopes; terraced into hills), roads
+  following the ground, street + park trees scattered on it — under the sky, the
+  Forest Arena's city counterpart. *Remaining:* the Metal **viewer** render,
+  suppressing an external forest scatter under the footprint, and running it as a
+  formal ADR-0027 world *region recipe*.
 - **Phase 4 — Scale. ⏳ Deferred (needs a GPU / spatial partition).** The
   generator already emits the inputs — a coarse per-building proxy and a merged
   `CityModel::hlodProxy` (headless-tested). Owed: the **impostor-card bake**
