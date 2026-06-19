@@ -191,6 +191,35 @@ TEST_CASE(city_downtown_is_taller_than_residential) {
     CHECK(maxDowntown > 40.0);                    // downtown towers exist
 }
 
+TEST_CASE(city_drapes_on_terrain_foundations_track_ground) {
+    // City Arena (ADR-0038 §6): with a ground sampler, foundations sit on the
+    // terrain (a ramp -> a spread of base elevations), there is no flat ground
+    // plane, and street/park trees are scattered.
+    CityParams cp; cp.extent = 280; cp.cellSize = 95; cp.seed = 4;
+    cp.groundAt = [](const Vec2& p) { return 0.5 * p.x; };   // linear ramp
+    CityModel m = generateCity(cp);
+    CHECK(m.ground.vertices.empty());          // terrain is the ground
+    CHECK(m.treeCount > 0);
+    CHECK(!m.props.vertices.empty());
+
+    Real lo = 1e30, hi = -1e30;
+    for (const CityBuilding& b : m.buildings) {
+        lo = std::min(lo, b.baseY); hi = std::max(hi, b.baseY);
+        // Foundation matches the ramp at the building's site (min over footprint
+        // <= centre sample), within the ramp's variation across a footprint.
+        CHECK(b.baseY <= 0.5 * b.site.x + 1e-6);
+    }
+    CHECK(hi - lo > 50.0);                      // buildings span the ramp
+}
+
+TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
+    CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 2;
+    CityModel m = generateCity(cp);            // no sampler -> flat
+    CHECK(!m.ground.vertices.empty());         // flat city gets a ground plane
+    CHECK(m.treeCount > 0);
+    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.0, 1e-9);
+}
+
 TEST_CASE(city_hlod_proxy_is_far_cheaper_than_detail) {
     CityParams cp; cp.extent = 300; cp.cellSize = 100; cp.seed = 11;
     CityModel m = generateCity(cp);

@@ -6,6 +6,7 @@
 #include "shape_grammar.h"
 #include "../../../renderer/renderer.h"
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace engine {
@@ -30,12 +31,27 @@ struct CityParams {
     Real parkFraction = 0.10; // fraction of blocks left as parks
     Real buildChance = 0.9;   // per-lot occupancy (some lots become plazas)
     uint32_t seed = 1;
+
+    // The City Arena (ADR-0027/0038 §6): drape the city on terrain. When set,
+    // building foundations sit on the ground (at the min terrain height under
+    // their footprint, so they never float on a slope) and roads follow it; when
+    // null the city is flat at baseY and gets its own ground plane. Sampler is
+    // world-XZ -> height. Kept out of the deterministic seed path (pure function).
+    std::function<Real(const Vec2&)> groundAt;
+
+    bool scatterTrees = true;     // street + park trees on terrain/ground
+    Real streetTreeSpacing = 26;  // metres between street trees along a road
 };
+
+inline Real cityGroundAt(const CityParams& cp, const Vec2& p) {
+    return cp.groundAt ? cp.groundAt(p) : cp.baseY;
+}
 
 // One placed building: its world meshes are already baked into the model parts,
 // but we keep the footprint + summary so consumers can collide / inspect / LOD.
 struct CityBuilding {
     Vec2 site;                // footprint centroid (world XZ)
+    Real baseY = 0;           // foundation elevation (tracks terrain)
     Real height = 0;
     District district = District::Residential;
 };
@@ -46,8 +62,10 @@ struct CityModel {
     // its own materialIndex (== the PartId it was emitted under); map it to a
     // RenderMaterial with materialFor(static_cast<PartId>(part.materialIndex)).
     std::vector<RenderMesh> parts;
-    RenderMesh roads;         // flat road + sidewalk surface
-    RenderMesh ground;        // ground plane under the city
+    RenderMesh roads;         // road + sidewalk surface (draped on terrain if set)
+    RenderMesh ground;        // ground plane under the city (empty when on terrain)
+    RenderMesh props;         // street + park trees (vertex-coloured, on the ground)
+    int treeCount = 0;
 
     // HLOD proxy (ADR-0034 §5 / ADR-0038 §6): every building's coarse mass box
     // merged into one mesh — the cheap distant-city draw. Orders of magnitude

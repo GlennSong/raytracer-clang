@@ -88,10 +88,9 @@ bool isIdentity(const Quat& q) {
     return q.x == 0.0 && q.y == 0.0 && q.z == 0.0;
 }
 
-// A procedural terrain block: regenerate the same mesh the engine does and add
-// it (vertex color carries the slope/height coloring; material albedo
-// multiplies it, so a white albedo lets the baked color show).
-void addTerrain(const json& t, Scene& scene) {
+// Parse a terrain JSON block into TerrainParams (shared by addTerrain and the
+// city's ground-height sampler, so the city drapes onto the exact same surface).
+TerrainParams parseTerrainParams(const json& t) {
     TerrainParams tp;
     tp.size        = t.value("size", tp.size);
     tp.resolution  = t.value("resolution", tp.resolution);
@@ -124,6 +123,14 @@ void addTerrain(const json& t, Scene& scene) {
             r.value("seed", 0u));
         tp.rangeWidth = r.value("width", tp.rangeWidth);
     }
+    return tp;
+}
+
+// A procedural terrain block: regenerate the same mesh the engine does and add
+// it (vertex color carries the slope/height coloring; material albedo
+// multiplies it, so a white albedo lets the baked color show).
+void addTerrain(const json& t, Scene& scene) {
+    TerrainParams tp = parseTerrainParams(t);
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
     // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
@@ -237,11 +244,12 @@ void addTree(const json& ent, Scene& scene) {
 // per-vertex color shows (the tree convention); the material carries only
 // metallic/roughness, so glass reads reflective. The whole city is placed at the
 // entity position (its XZ centre, baseY = position.y).
-void addCity(const json& ent, Scene& scene) {
+void addCity(const json& ent, const json& root, Scene& scene) {
     CityParams cp;
     Vec3 pos = parseVec3(ent.value("position", json()));
     cp.center = {pos.x, pos.z};
     cp.baseY = pos.y;
+    bool onTerrain = false;
     if (ent.contains("city")) {
         const auto& j = ent["city"];
         cp.extent         = j.value("extent", cp.extent);
@@ -252,23 +260,37 @@ void addCity(const json& ent, Scene& scene) {
         cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
         cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
         cp.buildChance    = j.value("buildChance", cp.buildChance);
+        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
         cp.seed           = j.value("seed", cp.seed);
+        onTerrain         = j.value("onTerrain", false);
+    }
+
+    // City Arena (ADR-0038 §6): drape onto the level's terrain. The shared_ptr
+    // keeps the params/noise alive for the sampler closure the model may hold.
+    if (onTerrain && root.contains("terrain")) {
+        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+        Real base = cp.baseY;
+        cp.groundAt = [tp, noise, base](const Vec2& p) {
+            return base + terrainHeight(*tp, *noise, p.x, p.y);
+        };
     }
 
     CityModel m = generateCity(cp);
-    auto bake = [&](const RenderMesh& mesh, int metallicRoughnessFrom) {
-        RenderMaterial rm = materialFor(static_cast<PartId>(metallicRoughnessFrom),
-                                        Vec3(1, 1, 1));
-        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), rm.metallic, rm.roughness));
+    auto bake = [&](const RenderMesh& mesh, float metallic, float roughness) {
+        if (mesh.vertices.empty()) return;
+        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), metallic, roughness));
         addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
     };
-    for (const RenderMesh& part : m.parts) bake(part, part.materialIndex);
-    int roadMat = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.9));
-    addMeshAsTriangles(m.roads, Vec3(), Quat::identity(), Vec3(1, 1, 1), roadMat, scene);
-    int groundMat = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 1.0));
-    addMeshAsTriangles(m.ground, Vec3(), Quat::identity(), Vec3(1, 1, 1), groundMat, scene);
+    for (const RenderMesh& part : m.parts) {
+        RenderMaterial rm = materialFor(static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
+        bake(part, rm.metallic, rm.roughness);
+    }
+    bake(m.roads, 0.0f, 0.9f);
+    bake(m.ground, 0.0f, 1.0f);
+    bake(m.props, 0.0f, 0.85f);     // trees (vertex-coloured)
     LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount
-             << " blocks";
+             << " blocks, " << m.treeCount << " trees";
 }
 
 }  // namespace
@@ -302,9 +324,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             addTree(ent, scene);
             continue;
         }
-        // Procedural city (ADR-0038): roads + buildings baked from the recipe.
+        // Procedural city (ADR-0038): roads + buildings baked from the recipe,
+        // optionally draped on the level's terrain (the City Arena).
         if (ent.value("shape", std::string()) == "city") {
-            addCity(ent, scene);
+            addCity(ent, root, scene);
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",

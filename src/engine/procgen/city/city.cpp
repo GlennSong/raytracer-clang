@@ -53,18 +53,22 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     return p;
 }
 
-// A flat road ribbon for one edge: a quad of `width` centred on the centreline,
-// at ground + a small bias so it sits above the ground plane.
-void emitRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real width, Real y) {
+// A road ribbon for one edge: a quad of `width` centred on the centreline, with
+// each end draped to the ground height there (+ a small bias). Flat terrain ->
+// a flat ribbon; rolling terrain -> the road follows it (gentle slopes; a long
+// road over a big hill would need subdivision, out of scope).
+void emitRoad(RenderMesh& mesh, const CityParams& cp, const Vec2& a, const Vec2& b,
+              Real width) {
     Vec2 dir = b - a;
     Real len = dir.length();
     if (len < 1e-4) return;
     dir = dir / len;
     Vec2 n = perp(dir) * (width * 0.5);
+    Real ya = cityGroundAt(cp, a) + 0.05, yb = cityGroundAt(cp, b) + 0.05;
     Vec3 col(0.13, 0.13, 0.14);
     Vec3 normal(0, 1, 0);
-    Vec3 p0(a.x - n.x, y, a.y - n.y), p1(a.x + n.x, y, a.y + n.y);
-    Vec3 p2(b.x + n.x, y, b.y + n.y), p3(b.x - n.x, y, b.y - n.y);
+    Vec3 p0(a.x - n.x, ya, a.y - n.y), p1(a.x + n.x, ya, a.y + n.y);
+    Vec3 p2(b.x + n.x, yb, b.y + n.y), p3(b.x - n.x, yb, b.y - n.y);
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     auto v = [&](const Vec3& p, float u, float vv) {
         Vertex vert(p, normal, Vec3(dir.x, 0, dir.y), u, vv); vert.color = col; return vert;
@@ -75,6 +79,31 @@ void emitRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real width, Real y
     mesh.vertices.push_back(v(p3, 0, 1));
     mesh.indices.insert(mesh.indices.end(),
                         {base, base + 1, base + 2, base, base + 2, base + 3});
+}
+
+// A cheap stylized tree (trunk cylinder + two foliage cones), vertex-coloured so
+// it bakes on a white material like the rest of the city. Planted at `base` (its
+// foot), facing +Y. ~80 triangles; for street/park scatter, not a hero asset.
+void emitTree(RenderMesh& out, const Vec3& base, Real height, Real canopy,
+              uint32_t seed) {
+    Vec3 trunkCol(0.32, 0.22, 0.14), leafCol(0.20, 0.42, 0.16);
+    Real trunkH = height * 0.45, trunkR = height * 0.04;
+    auto place = [&](RenderMesh m, const Vec3& col, Real y) {
+        for (Vertex& v : m.vertices) v.color = col;
+        MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
+        MeshBuilder::append(out, m);
+    };
+    // Cylinder + cone are centre-origin (y from -h/2..+h/2); translate by half
+    // their height so the foot/base lands where intended.
+    place(MeshBuilder::cylinder(static_cast<float>(trunkR),
+                                static_cast<float>(trunkH), 7), trunkCol, trunkH * 0.5);
+    Real leafSeed = (seed % 7) * 0.03;
+    Real h0 = canopy * 0.9, h1 = canopy * 0.7;
+    place(MeshBuilder::cone(static_cast<float>(canopy * (0.62 + leafSeed)),
+                            static_cast<float>(h0), 8), leafCol, trunkH + h0 * 0.5);
+    place(MeshBuilder::cone(static_cast<float>(canopy * (0.42 + leafSeed)),
+                            static_cast<float>(h1), 8), leafCol,
+          trunkH + canopy * 0.4 + h1 * 0.5);
 }
 
 }  // namespace
@@ -102,10 +131,9 @@ CityModel generateCity(const CityParams& cp) {
     model.blocks = extractBlocks(graph);
     model.blockCount = static_cast<int>(model.blocks.size());
 
-    // Road surface.
+    // Road surface (draped on the ground).
     for (const RoadEdge& e : graph.edges)
-        emitRoad(model.roads, graph.nodes[e.a].pos, graph.nodes[e.b].pos,
-                 e.width, cp.baseY + 0.03);
+        emitRoad(model.roads, cp, graph.nodes[e.a].pos, graph.nodes[e.b].pos, e.width);
 
     Rng rng(cp.seed);
 
@@ -115,7 +143,26 @@ CityModel generateCity(const CityParams& cp) {
         const Poly2& block = model.blocks[bi];
         Vec2 c = centroid(block);
         District dist = districtAt(cp, c, bi);
-        if (dist == District::Park) continue;
+        if (dist == District::Park) {
+            // Parks get trees instead of buildings (ADR-0038 §3.5).
+            if (cp.scatterTrees) {
+                Poly2 green = inset(block, 6.0);
+                if (green.size() >= 3) {
+                    Rng prng(hash2(bi, cp.seed ^ 0x70a7u));
+                    int n = std::max(2, static_cast<int>(area(green) / 140.0));
+                    Vec2 lo, hi; bounds(green, lo, hi);
+                    for (int k = 0; k < n * 3 && model.treeCount < 100000; ++k) {
+                        Vec2 p(prng.range(lo.x, hi.x), prng.range(lo.y, hi.y));
+                        if (!pointInPolygon(green, p)) continue;
+                        Real h = prng.range(5.0, 8.5);
+                        emitTree(model.props, Vec3(p.x, cityGroundAt(cp, p), p.y), h,
+                                 h * 0.45, prng.next());
+                        ++model.treeCount;
+                    }
+                }
+            }
+            continue;
+        }
 
         Real roadInset = 8.0 + cp.sidewalk;   // half a local road + sidewalk
         Poly2 foot = inset(block, roadInset);
@@ -136,7 +183,12 @@ CityModel generateCity(const CityParams& cp) {
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
 
             BuildingParams bp = paramsForDistrict(dist, rng, cp.seed);
-            Scope scope = scopeFromFootprint(site, cp.baseY, 10.0 /*unused*/);
+            // Foundation sits at the MIN ground height under the footprint, so a
+            // building on a slope never floats (its uphill side is buried, its
+            // downhill side flush) — ADR-0038 §3.4.4.
+            Real baseY = cityGroundAt(cp, centroid(site));
+            for (const Vec2& v : site) baseY = std::min(baseY, cityGroundAt(cp, v));
+            Scope scope = scopeFromFootprint(site, baseY, 10.0 /*unused*/);
             BuildingMesh bm = growBuilding(scope, bp);
 
             for (const RenderMesh& part : bm.parts) {
@@ -145,15 +197,46 @@ CityModel generateCity(const CityParams& cp) {
                 MeshBuilder::append(model.parts[mi], part);
             }
             MeshBuilder::append(model.hlodProxy, bm.proxy);   // distant-city LOD
-            model.buildings.push_back({centroid(site), bm.height, dist});
+            model.buildings.push_back({centroid(site), baseY, bm.height, dist});
         }
     }
 
-    // Ground plane under the whole city.
-    Real g = cp.extent + cp.cellSize;
-    model.ground = MeshBuilder::plane(static_cast<float>(g * 2), static_cast<float>(g * 2));
-    MeshBuilder::transform(model.ground, Mat4::translate(cp.center.x, cp.baseY, cp.center.y));
-    for (Vertex& v : model.ground.vertices) v.color = Vec3(0.22, 0.23, 0.20);
+    // Street trees: walk each road and plant a tree on each verge at intervals,
+    // just outside the carriageway (in the sidewalk gap, before the building
+    // setback), draped on the ground (ADR-0038 §3.5).
+    if (cp.scatterTrees) {
+        Rng trng(cp.seed ^ 0x57eeu);
+        for (const RoadEdge& e : graph.edges) {
+            Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
+            Vec2 d = b - a; Real len = d.length();
+            if (len < cp.streetTreeSpacing * 1.4) continue;   // skip short stubs
+            d = d / len;
+            Vec2 nrm = perp(d);
+            Real verge = e.width * 0.5 + 1.8;
+            int n = static_cast<int>(len / cp.streetTreeSpacing);
+            for (int k = 1; k < n; ++k) {
+                Real t = (k + (trng.unit() - 0.5) * 0.3) * cp.streetTreeSpacing;
+                Vec2 on = a + d * t;
+                for (Real s : {Real(1), Real(-1)}) {
+                    if (trng.unit() < 0.25) continue;        // gappy, not a hedge
+                    Vec2 p = on + nrm * (verge * s);
+                    Real h = trng.range(4.5, 7.0);
+                    emitTree(model.props, Vec3(p.x, cityGroundAt(cp, p), p.y), h,
+                             h * 0.4, trng.next());
+                    ++model.treeCount;
+                }
+            }
+        }
+    }
+
+    // Ground plane under the whole city — only when flat (on terrain, the terrain
+    // mesh is the ground; the city drapes onto it).
+    if (!cp.groundAt) {
+        Real g = cp.extent + cp.cellSize;
+        model.ground = MeshBuilder::plane(static_cast<float>(g * 2), static_cast<float>(g * 2));
+        MeshBuilder::transform(model.ground, Mat4::translate(cp.center.x, cp.baseY, cp.center.y));
+        for (Vertex& v : model.ground.vertices) v.color = Vec3(0.22, 0.23, 0.20);
+    }
 
     // Drop empty parts so consumers don't bind material slots with no geometry.
     model.parts.erase(
