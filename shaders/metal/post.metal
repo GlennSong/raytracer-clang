@@ -375,8 +375,11 @@ kernel void gtaoCompute(
     float bias = aoParams.bias;
 
     // Per-pixel rotation: interleaved gradient noise (Jimenez, SIGGRAPH 2014)
-    // Produces well-distributed values in [0, 2π] with no visible tiling
+    // Produces well-distributed values in [0, 2π] with no visible tiling.
+    // Plus a per-frame rotation (aoParams.frameRotation) so the temporal resolve
+    // averages directions across frames — few directions then look banding-free.
     float rotAngle = fract(52.9829189 * fract(0.06711056 * float(gid.x) + 0.00583715 * float(gid.y))) * 2.0 * M_PI_F;
+    rotAngle += aoParams.frameRotation;
 
     // Screen-space pixel radius (adapts to depth). Capped at 32px: the world
     // radius projects to hundreds of px up close, so a large cap + few steps put

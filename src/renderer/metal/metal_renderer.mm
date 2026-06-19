@@ -86,6 +86,7 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
     id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
     int frameIndex = 0;                                   // advances each beginFrame
+    uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
     CAMetalLayer* metalLayer;
     NSWindow* nsWindow;
     id<MTLTexture> depthTexture;
@@ -1584,6 +1585,7 @@ void MetalRenderer::beginFrame() {
     // still reading for an in-flight earlier frame (fixes instance tearing —
     // trees popping to a neighbor's transform for a frame).
     impl->frameIndex = (impl->frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
+    impl->frameCount++;
 
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
@@ -2789,9 +2791,14 @@ void MetalRenderer::endFrame() {
             [enc setTexture:impl->aoTexture atIndex:1];
             [enc setTexture:impl->viewNormalTexture atIndex:2];   // real normals (no depth recon)
             [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
+            // Per-frame rotation by the golden angle: successive frames sample
+            // well-distributed directions the temporal resolve averages, so a low
+            // direction count reads banding-free once it converges (~10 frames).
+            float aoFrameRotation =
+                static_cast<float>(impl->frameCount & 1023u) * 2.39996323f;
             SSAOUniforms aoP = {
                 ssaoParams.radius, ssaoParams.intensity, ssaoParams.bias,
-                ssaoParams.directions, ssaoParams.steps, {}
+                ssaoParams.directions, ssaoParams.steps, aoFrameRotation, {}
             };
             [enc setBytes:&aoP length:sizeof(aoP) atIndex:1];
             [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];

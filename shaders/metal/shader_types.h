@@ -200,7 +200,9 @@ struct SSAOUniforms {
     float   bias;
     int32_t directions;
     int32_t steps;
-    float   _pad[3];
+    float   frameRotation;   // per-frame rotation offset (rad); temporal resolve
+                             // averages it, so few directions look banding-free
+    float   _pad[2];
 };
 
 // Temporal AO reprojection (kills foliage flicker from G-buffer aliasing).
