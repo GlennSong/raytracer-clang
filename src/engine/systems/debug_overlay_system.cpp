@@ -169,6 +169,22 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
                          static_cast<float>(sa.tint.z)};
         if (ImGui::ColorEdit3("Tint##shadow", tint))
             sa.tint = Vec3(tint[0], tint[1], tint[2]);
+
+        // Aerial-perspective fog (level-owned, like the rest of lighting). Fades
+        // distant geometry toward the fog color by 1-exp(-density*dist) — a depth
+        // cue that also hides the terrain/LOD cull edge. Tune live, then bake the
+        // value you like into the level JSON (not persisted to settings.json).
+        ImGui::SeparatorText("Fog");
+        auto& fog = lit.fog;
+        ImGui::Checkbox("Enabled##fog", &fog.enabled);
+        ImGui::SliderFloat("Density##fog", &fog.density, 0.0f, 0.02f, "%.5f");
+        float fogCol[3] = {static_cast<float>(fog.color.x),
+                           static_cast<float>(fog.color.y),
+                           static_cast<float>(fog.color.z)};
+        if (ImGui::ColorEdit3("Color##fog", fogCol))
+            fog.color = Vec3(fogCol[0], fogCol[1], fogCol[2]);
+        if (ImGui::Button("Match Sky##fog"))
+            fog.color = lit.sky.horizonColor;
     }
 
     if (ImGui::CollapsingHeader("SSAO")) {
