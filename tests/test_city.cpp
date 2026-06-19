@@ -216,6 +216,29 @@ TEST_CASE(city_drapes_on_terrain_foundations_track_ground) {
     CHECK(hi - lo > 50.0);                      // buildings span the ramp
 }
 
+TEST_CASE(city_on_terrain_emits_flatten_footprints) {
+    // On terrain, the city hands back cut/fill footprints so the loader can grade
+    // the terrain flat under the roads and blocks. A flat city emits none.
+    CityParams flat; flat.extent = 200; flat.cellSize = 95; flat.seed = 5;
+    CHECK(generateCity(flat).flatten.empty());
+
+    CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 5;
+    cp.groundAt = [](const Vec2& p) { return 4.0 * std::sin(p.x * 0.01); };
+    CityModel m = generateCity(cp);
+    CHECK(!m.flatten.empty());
+
+    // Each footprint is a sane polygon with a tight AABB, and its target plane
+    // sits within the terrain's height range (it grades to the road/block grade,
+    // not to some wild value).
+    for (const TerrainFlatten& f : m.flatten) {
+        CHECK(f.polygon.size() >= 3);
+        CHECK(f.maxX >= f.minX);
+        CHECK(f.maxZ >= f.minZ);
+        double cx = (f.minX + f.maxX) * 0.5, cz = (f.minZ + f.maxZ) * 0.5;
+        CHECK(std::fabs(f.planeY(cx, cz)) < 10.0);   // within +/- the 4 m relief + curb
+    }
+}
+
 TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 2;
     CityModel m = generateCity(cp);            // no sampler -> flat

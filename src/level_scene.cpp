@@ -129,8 +129,10 @@ TerrainParams parseTerrainParams(const json& t) {
 // A procedural terrain block: regenerate the same mesh the engine does and add
 // it (vertex color carries the slope/height coloring; material albedo
 // multiplies it, so a white albedo lets the baked color show).
-void addTerrain(const json& t, Scene& scene) {
+void addTerrain(const json& t, Scene& scene,
+                const std::vector<TerrainFlatten>& flatten = {}) {
     TerrainParams tp = parseTerrainParams(t);
+    tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene);
     // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
@@ -244,7 +246,17 @@ void addTree(const json& ent, Scene& scene) {
 // per-vertex color shows (the tree convention); the material carries only
 // metallic/roughness, so glass reads reflective. The whole city is placed at the
 // entity position (its XZ centre, baseY = position.y).
-void addCity(const json& ent, const json& root, Scene& scene) {
+// Build the CityModel from an entity recipe, draping onto the level terrain when
+// the recipe asks for it. Split from the baking step so the loader can pull the
+// model's terrain cut/fill footprints (model.flatten) out and feed them into the
+// terrain mesh *before* it's built (the terrain has to know where the city
+// levels it). isCity()/onTerrain let the loader decide whether to pre-generate.
+bool cityIsOnTerrain(const json& ent) {
+    return ent.value("shape", std::string()) == "city" && ent.contains("city") &&
+           ent["city"].value("onTerrain", false);
+}
+
+CityModel generateCityModel(const json& ent, const json& root) {
     CityParams cp;
     Vec3 pos = parseVec3(ent.value("position", json()));
     cp.center = {pos.x, pos.z};
@@ -267,6 +279,8 @@ void addCity(const json& ent, const json& root, Scene& scene) {
 
     // City Arena (ADR-0038 §6): drape onto the level's terrain. The shared_ptr
     // keeps the params/noise alive for the sampler closure the model may hold.
+    // The sampler reads the *base* terrain (no flatten) so the city decides its
+    // grades from natural ground; its flatten footprints then cut the mesh.
     if (onTerrain && root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
@@ -275,8 +289,10 @@ void addCity(const json& ent, const json& root, Scene& scene) {
             return base + terrainHeight(*tp, *noise, p.x, p.y);
         };
     }
+    return generateCity(cp);
+}
 
-    CityModel m = generateCity(cp);
+void bakeCityModel(const CityModel& m, Scene& scene) {
     auto bake = [&](const RenderMesh& mesh, float metallic, float roughness) {
         if (mesh.vertices.empty()) return;
         int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), metallic, roughness));
@@ -311,8 +327,26 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         return false;
     }
 
+    // A city draped on the terrain has to be generated BEFORE the terrain mesh:
+    // it computes its road/block grades from the natural ground, then hands back
+    // cut/fill footprints (flatten) that the terrain is built around so the
+    // ground meets the carriageways instead of poking through. Pre-generate the
+    // first such city here; the entity loop reuses the cached model (keyed by
+    // pointer) so it isn't generated twice.
+    const json* cityEnt = nullptr;
+    CityModel cityModel;
+    std::vector<TerrainFlatten> cityFlatten;
+    for (const auto& ent : root.value("entities", json::array())) {
+        if (cityIsOnTerrain(ent)) {
+            cityEnt = &ent;
+            cityModel = generateCityModel(ent, root);
+            cityFlatten = cityModel.flatten;
+            break;
+        }
+    }
+
     // Procedural terrain (top-level block, regenerated from its recipe).
-    if (root.contains("terrain")) addTerrain(root["terrain"], scene);
+    if (root.contains("terrain")) addTerrain(root["terrain"], scene, cityFlatten);
 
     int skipped = 0;
     for (const auto& ent : root.value("entities", json::array())) {
@@ -328,7 +362,8 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Procedural city (ADR-0038): roads + buildings baked from the recipe,
         // optionally draped on the level's terrain (the City Arena).
         if (ent.value("shape", std::string()) == "city") {
-            addCity(ent, root, scene);
+            if (&ent == cityEnt) bakeCityModel(cityModel, scene);     // pre-generated
+            else bakeCityModel(generateCityModel(ent, root), scene);  // flat city
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",

@@ -248,9 +248,18 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
 // static Box collider per building, so the player walks the streets and bumps
 // into buildings. Optionally draped on the level's terrain (the City Arena),
 // which already carries its own walk-surface MeshCollider.
-static void loadCityEntity(const json& ent, const json& root, World& world,
-                           Renderer& renderer, AssetManager& assets, int index) {
-    (void)renderer;
+// True for a city entity that drapes on the level terrain (so the loader knows
+// to pre-generate it before building the terrain — its cut/fill footprints have
+// to be baked into the terrain mesh).
+static bool cityIsOnTerrain(const json& ent) {
+    return ent.value("shape", std::string()) == "city" && ent.contains("city") &&
+           ent["city"].value("onTerrain", false);
+}
+
+// Build the CityModel from an entity recipe (no ECS side effects). Separated from
+// the spawn so the loader can pull model.flatten and grade the terrain to it
+// before the terrain mesh is built.
+static CityModel cityModelFromEntity(const json& ent, const json& root) {
     CityParams cp;
     Vec3 pos = parseVec3(ent.value("position", json()));
     cp.center = {pos.x, pos.z};
@@ -278,8 +287,18 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
             return base + terrainHeight(*tp, *noise, p.x, p.y);
         };
     }
+    return generateCity(cp);
+}
 
-    CityModel m = generateCity(cp);
+static void loadCityEntity(const json& ent, const json& root, World& world,
+                           Renderer& renderer, AssetManager& assets, int index,
+                           const CityModel* precomputed = nullptr) {
+    (void)renderer;
+    // Reuse the model the loader pre-generated for terrain cut/fill, or build it
+    // now (flat cities, which need no terrain grading).
+    CityModel local;
+    if (!precomputed) local = cityModelFromEntity(ent, root);
+    const CityModel& m = precomputed ? *precomputed : local;
 
     // Document entity: carries the SourceSpec (recipe) so the city round-trips
     // through the editor's save-then-load. LevelWriter only serialises entities
@@ -369,14 +388,20 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
     }
     // Flat (no-terrain) city: a big static floor so the player has ground.
     if (!m.ground.vertices.empty()) {
+        Vec3 pos = parseVec3(ent.value("position", json()));
+        Real extent = 400, cellSize = 95;
+        if (ent.contains("city")) {
+            extent = ent["city"].value("extent", extent);
+            cellSize = ent["city"].value("cellSize", cellSize);
+        }
         Entity e = world.create();
         Transform t;
-        t.position = Vec3(cp.center.x, cp.baseY - 0.5, cp.center.y);
+        t.position = Vec3(pos.x, pos.y - 0.5, pos.z);
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Collider c;
         c.shape = ColliderShape::Box;
-        c.halfExtent = Vec3(cp.extent + cp.cellSize, 0.5, cp.extent + cp.cellSize);
+        c.halfExtent = Vec3(extent + cellSize, 0.5, extent + cellSize);
         c.friction = 0.9;
         world.add<Collider>(e, c);
         RigidBody rb;
@@ -389,7 +414,9 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
 
 static void loadEntities(const json& entities, const json& root, World& world,
                          Renderer& renderer, AssetManager& assets,
-                         const std::string& levelDir, bool editorMode) {
+                         const std::string& levelDir, bool editorMode,
+                         const json* cityEnt = nullptr,
+                         const CityModel* cityModel = nullptr) {
     int treeIndex = 0;
     int cityIndex = 0;
     for (auto& ent : entities) {
@@ -398,9 +425,12 @@ static void loadEntities(const json& entities, const json& root, World& world,
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
             continue;
         }
-        // Procedural city: renderable geometry + per-building colliders.
+        // Procedural city: renderable geometry + per-building colliders. Reuse the
+        // model the loader pre-generated for terrain cut/fill (so it isn't built
+        // twice and the geometry matches the graded terrain exactly).
         if (ent.value("shape", std::string()) == "city") {
-            loadCityEntity(ent, root, world, renderer, assets, cityIndex++);
+            const CityModel* pre = (&ent == cityEnt) ? cityModel : nullptr;
+            loadCityEntity(ent, root, world, renderer, assets, cityIndex++, pre);
             continue;
         }
 
@@ -1166,10 +1196,29 @@ bool LevelLoader::load(const std::string& path,
     else
         levelDir = ".";
 
+    // A city draped on the terrain is generated BEFORE the terrain: it grades its
+    // roads/blocks off the natural ground, then returns cut/fill footprints the
+    // terrain is built around (so the ground meets the carriageways). The same
+    // model is reused when the entity is spawned below.
+    const json* cityEnt = nullptr;
+    CityModel cityModel;
+    std::vector<TerrainFlatten> cityFlatten;
+    if (root.contains("entities")) {
+        for (const auto& ent : root["entities"]) {
+            if (cityIsOnTerrain(ent)) {
+                cityEnt = &ent;
+                cityModel = cityModelFromEntity(ent, root);
+                cityFlatten = cityModel.flatten;
+                break;
+            }
+        }
+    }
+
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     if (root.contains("terrain")) {
         TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
+        terrainParams.flatten = cityFlatten;   // grade flat under the city
         Noise terrainNoise(root["terrain"].value("seed", 0u));
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
@@ -1184,7 +1233,8 @@ bool LevelLoader::load(const std::string& path,
     }
 
     if (root.contains("entities"))
-        loadEntities(root["entities"], root, world, renderer, assets, levelDir, editorMode);
+        loadEntities(root["entities"], root, world, renderer, assets, levelDir,
+                     editorMode, cityEnt, &cityModel);
 
     if (root.contains("player"))
         (editorMode ? loadPlayerSpawn(root["player"], world, assets)

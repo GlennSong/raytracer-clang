@@ -174,12 +174,13 @@ void emitRetainingSkirt(RenderMesh& mesh, const Poly2& poly, Real topY,
 // width at each point, gently sloped ALONG its length — a human-built street, not
 // a sheet draped over the terrain. Per-segment normals.
 void emitFlatRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real yA, Real yB,
-                  Real width, const Vec3& col) {
+                  Real width, const Vec3& col, Real thickness = 0.0) {
     Vec2 dir = b - a;
     Real len = dir.length();
     if (len < 1e-4) return;
     dir = dir / len;
-    Vec2 across = perp(dir) * (width * 0.5);
+    Vec2 u = perp(dir);                  // unit across (toward the right kerb)
+    Vec2 across = u * (width * 0.5);
     int segs = std::max(1, static_cast<int>(std::ceil(len / 8.0)));
     for (int i = 0; i < segs; ++i) {
         Real t0 = static_cast<Real>(i) / segs, t1 = static_cast<Real>(i + 1) / segs;
@@ -189,6 +190,15 @@ void emitFlatRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real yA, Real 
         Vec3 r1(c1.x + across.x, y1, c1.y + across.y), l1(c1.x - across.x, y1, c1.y - across.y);
         Vec3 n = normalize(cross(r0 - l0, l1 - l0)); if (n.y < 0) n = n * -1;
         pushQuad(mesh, l0, r0, r1, l1, n, col);
+        // A slab of `thickness`: vertical kerb lips down each long edge so the
+        // carriageway stands proud of the (cut-to-grade) ground instead of being
+        // coplanar with it (no z-fighting, and it reads as a built road).
+        if (thickness > 0.0) {
+            Vec3 down(0, -thickness, 0);
+            Vec3 rl(u.x, 0, u.y);   // outward on the right edge, inward-flip on left
+            pushQuad(mesh, r0, r1, r1 + down, r0 + down, rl, col);          // right kerb
+            pushQuad(mesh, l1, l0, l0 + down, l1 + down, rl * -1, col);     // left kerb
+        }
     }
 }
 
@@ -372,14 +382,22 @@ CityModel generateCity(const CityParams& cp) {
     // yellow centre line + white edge lines.
     Vec3 sidewalkCol(0.52, 0.52, 0.50), asphaltCol(0.12, 0.12, 0.13),
          retainCol(0.42, 0.42, 0.42), yellow(0.72, 0.62, 0.12), white(0.78, 0.78, 0.76);
+    const Real roadThickness = 0.12;   // carriageway slab depth over the cut ground
     for (const RoadEdge& e : graph.edges) {
         Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
         Real yA = nodeGrade[e.a], yB = nodeGrade[e.b];
         Real w = 12.0;   // fill the corridor (= 2 x apron setback), so road meets curb
-        emitFlatRoad(model.roads, a, b, yA, yB, w, asphaltCol);
+        emitFlatRoad(model.roads, a, b, yA, yB, w, asphaltCol, roadThickness);
         emitLaneLine(model.roads, a, b, yA, yB, 0.0, 0.22, yellow);          // centre
         emitLaneLine(model.roads, a, b, yA, yB, w * 0.5 - 0.5, 0.16, white); // edges
         emitLaneLine(model.roads, a, b, yA, yB, -(w * 0.5 - 0.5), 0.16, white);
+        // Cut/fill the terrain to the carriageway grade (just under the slab) so
+        // the ground meets the road instead of poking through it. A touch wider
+        // than the road so the kerb lips land on level earth.
+        if (cp.groundAt)
+            model.flatten.push_back(makeFlattenRamp(
+                Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), yA - roadThickness,
+                yB - roadThickness, w * 0.5 + 0.5, 5.0));
     }
 
     // Street furniture: lamp posts along the verges (alternating sides), and zebra
@@ -456,22 +474,19 @@ CityModel generateCity(const CityParams& cp) {
         bool oldTown = dist != District::HighRise && dist != District::Industrial &&
                        (c - oldTownC).length() < cp.extent * 0.24;
 
-        // Flat block grade = a true leveled foundation: the pad sits a curb above
-        // the HIGHEST ACTUAL terrain anywhere under the block (sampling the
-        // interior, not just the smoothed street grades), so terrain never pokes
-        // up through the flat apron or building floors. The retaining skirt then
-        // fills down to the street, terracing the block into the hillside.
+        // Flat block grade = a true leveled foundation. Now that the terrain is
+        // CUT to the city grades (model.flatten), the pad no longer has to clear
+        // the highest raw-terrain bump under the block (which made sidewalks tower
+        // over the street on rolling ground). It sits one curb above the highest
+        // adjacent STREET grade — the smoothed, engineered road elevations — so the
+        // sidewalk is a consistent curb height all the way round.
+        const Real curbHeight = 0.18;
+        const Real apronThickness = 0.12;
         Real gradeY = cp.baseY + 0.15;
         if (cp.groundAt) {
             Real mx = -1e30;
-            for (const Vec2& v : block) mx = std::max(mx, cityGroundAt(cp, v));
-            Vec2 lo, hi; bounds(block, lo, hi);
-            for (int gyi = 0; gyi <= 5; ++gyi)
-                for (int gxi = 0; gxi <= 5; ++gxi) {
-                    Vec2 p(lo.x + (hi.x - lo.x) * gxi / 5.0, lo.y + (hi.y - lo.y) * gyi / 5.0);
-                    if (pointInPolygon(block, p)) mx = std::max(mx, cityGroundAt(cp, p));
-                }
-            gradeY = mx + 0.2;
+            for (const Vec2& v : block) mx = std::max(mx, gradeAt(v));
+            gradeY = mx + curbHeight;
         }
         // Paved apron (sidewalk + block interior), flat at grade, snapped to the
         // road edge so the sidewalk meets the curb meets the carriageway with no
@@ -481,6 +496,16 @@ CityModel generateCity(const CityParams& cp) {
         if (apron.size() >= 3) {
             emitFlatPolygon(model.pavement, apron, gradeY, sidewalkCol);
             emitRetainingSkirt(model.pavement, apron, gradeY, gradeAt, retainCol);
+            // Grade the terrain flat under the apron, a sidewalk-thickness below
+            // its surface, so the block sits on level earth (no poke-through) and
+            // the apron stands proud of the ground.
+            if (cp.groundAt) {
+                std::vector<Vec3> fp;
+                fp.reserve(apron.size());
+                for (const Vec2& v : apron) fp.push_back(Vec3(v.x, 0, v.y));
+                model.flatten.push_back(
+                    makeFlattenPad(std::move(fp), gradeY - apronThickness, 5.0));
+            }
             // Steps where the curb is too tall to be a plain wall — one short run
             // mid-edge per long, steep block edge (a stoop down to the street).
             const std::size_t an = apron.size();

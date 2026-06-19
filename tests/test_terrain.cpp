@@ -22,6 +22,71 @@ TEST_CASE(terrain_mesh_has_grid_topology) {
     CHECK(maxIdx < m.vertices.size());
 }
 
+TEST_CASE(terrain_flatten_pad_levels_ground) {
+    TerrainParams p;
+    p.heightScale = 20.0f;   // bumpy ground so flattening is visible
+    p.noiseScale = 0.05;
+    Noise noise(7);
+
+    // A 40x40 pad centred at the origin, graded flat to y = 3.
+    std::vector<Vec3> square = {{-20, 0, -20}, {20, 0, -20}, {20, 0, 20}, {-20, 0, 20}};
+    p.flatten.push_back(makeFlattenPad(square, 3.0, 6.0));
+
+    // Inside the pad the ground is exactly the target, regardless of the noise.
+    CHECK_APPROX(terrainHeight(p, noise, 0, 0), 3.0, 1e-9);
+    CHECK_APPROX(terrainHeight(p, noise, 10, -8), 3.0, 1e-9);
+
+    // Far outside, the natural terrain is untouched.
+    double natural = [&] {
+        TerrainParams q = p; q.flatten.clear();
+        return terrainHeight(q, noise, 100, 100);
+    }();
+    CHECK_APPROX(terrainHeight(p, noise, 100, 100), natural, 1e-9);
+
+    // On the falloff skirt (3 m outside the edge) the height sits between the pad
+    // and the natural ground — a blended ramp, not a cliff.
+    double edge = terrainHeight(p, noise, 23, 0);
+    double naturalEdge = [&] {
+        TerrainParams q = p; q.flatten.clear();
+        return terrainHeight(q, noise, 23, 0);
+    }();
+    CHECK(std::min(3.0, naturalEdge) - 1e-6 <= edge);
+    CHECK(edge <= std::max(3.0, naturalEdge) + 1e-6);
+}
+
+TEST_CASE(terrain_flatten_ramp_follows_road_grade) {
+    TerrainParams p;
+    p.heightScale = 15.0f;
+    Noise noise(3);
+
+    // A road corridor from (0,0) climbing to (100,0), grade 2 -> 12.
+    p.flatten.push_back(
+        makeFlattenRamp(Vec3(0, 0, 0), Vec3(100, 0, 0), 2.0, 12.0, 6.0, 5.0));
+
+    CHECK_APPROX(terrainHeight(p, noise, 0, 0), 2.0, 1e-6);    // start grade
+    CHECK_APPROX(terrainHeight(p, noise, 50, 0), 7.0, 1e-6);   // midpoint
+    CHECK_APPROX(terrainHeight(p, noise, 100, 0), 12.0, 1e-6); // end grade
+    // Across the corridor (within the half-width) the grade holds.
+    CHECK_APPROX(terrainHeight(p, noise, 50, 4), 7.0, 1e-6);
+}
+
+TEST_CASE(terrain_flatten_mesh_conforms) {
+    TerrainParams p;
+    p.resolution = 32;
+    p.size = 100.0f;
+    p.heightScale = 18.0f;
+    p.noiseScale = 0.06;
+    Noise noise(11);
+    std::vector<Vec3> square = {{-15, 0, -15}, {15, 0, -15}, {15, 0, 15}, {-15, 0, 15}};
+    p.flatten.push_back(makeFlattenPad(square, 1.5, 5.0));
+
+    RenderMesh m = generateTerrain(p, noise);
+    for (const Vertex& v : m.vertices) {
+        if (std::abs(v.position.x) <= 14.0 && std::abs(v.position.z) <= 14.0)
+            CHECK_APPROX(v.position.y, 1.5, 1e-4);   // vertices land on the pad
+    }
+}
+
 TEST_CASE(terrain_flat_when_height_zero) {
     TerrainParams p;
     p.resolution = 8;

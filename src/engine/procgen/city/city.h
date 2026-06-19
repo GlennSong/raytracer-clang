@@ -4,6 +4,7 @@
 #include "polygon.h"
 #include "road_network.h"
 #include "shape_grammar.h"
+#include "../terrain.h"
 #include "../../../renderer/renderer.h"
 #include <cstdint>
 #include <functional>
@@ -94,6 +95,12 @@ struct CityModel {
     std::vector<Poly2> blocks;     // extracted block footprints (debug / collision)
     int blockCount = 0;
     int lotCount = 0;
+
+    // Cut/fill footprints for the terrain under the roads and block aprons: the
+    // loader feeds these into TerrainParams::flatten so the terrain mesh, its
+    // collider and the CDLOD field all grade flat where the city sits, instead of
+    // the raw noise poking up through the carriageway. Empty for a flat city.
+    std::vector<TerrainFlatten> flatten;
 
     RenderMesh mergedBuildings() const;   // all building parts in one mesh
 };

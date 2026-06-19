@@ -20,6 +20,119 @@ double smoothstep(double e0, double e1, double x) {
 Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
+namespace {
+// 2D point-in-polygon (ray cast) over a footprint's XZ, and the distance from a
+// point to the polygon's boundary — together they drive the flatten falloff.
+bool pointInFootprint(const std::vector<Vec3>& poly, double x, double z) {
+    bool in = false;
+    size_t n = poly.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        double xi = poly[i].x, zi = poly[i].z;
+        double xj = poly[j].x, zj = poly[j].z;
+        if (((zi > z) != (zj > z)) &&
+            (x < (xj - xi) * (z - zi) / (zj - zi) + xi))
+            in = !in;
+    }
+    return in;
+}
+double distanceToFootprint(const std::vector<Vec3>& poly, double x, double z) {
+    double best = std::numeric_limits<double>::max();
+    size_t n = poly.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        double ax = poly[j].x, az = poly[j].z;
+        double bx = poly[i].x, bz = poly[i].z;
+        double ex = bx - ax, ez = bz - az;
+        double len2 = ex * ex + ez * ez;
+        double t = len2 > 1e-12 ? ((x - ax) * ex + (z - az) * ez) / len2 : 0.0;
+        t = clamp01(t);
+        double dx = x - (ax + ex * t), dz = z - (az + ez * t);
+        best = std::min(best, std::sqrt(dx * dx + dz * dz));
+    }
+    return best;
+}
+
+// Blend the flatten footprints over a natural height. The strongest (closest)
+// footprint wins, so overlapping road/block stamps don't fight; inside a
+// footprint the weight is 1 (fully levelled), easing to 0 across `falloff`.
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base) {
+    double result = base;
+    double bestW = 0.0;
+    for (const TerrainFlatten& r : regions) {
+        if (r.polygon.size() < 3) continue;
+        if (x < r.minX - r.falloff || x > r.maxX + r.falloff ||
+            z < r.minZ - r.falloff || z > r.maxZ + r.falloff)
+            continue;
+        double w;
+        if (pointInFootprint(r.polygon, x, z)) {
+            w = 1.0;
+        } else {
+            double d = distanceToFootprint(r.polygon, x, z);
+            if (d >= r.falloff) continue;
+            w = 1.0 - smoothstep(0.0, r.falloff, d);
+        }
+        if (w > bestW) {
+            bestW = w;
+            result = base + (r.planeY(x, z) - base) * w;
+            if (bestW >= 1.0) break;   // fully inside — nothing can beat it
+        }
+    }
+    return result;
+}
+}  // namespace
+
+static void footprintBounds(TerrainFlatten& f) {
+    f.minX = f.minZ = std::numeric_limits<double>::max();
+    f.maxX = f.maxZ = std::numeric_limits<double>::lowest();
+    for (const Vec3& p : f.polygon) {
+        f.minX = std::min(f.minX, static_cast<double>(p.x));
+        f.maxX = std::max(f.maxX, static_cast<double>(p.x));
+        f.minZ = std::min(f.minZ, static_cast<double>(p.z));
+        f.maxZ = std::max(f.maxZ, static_cast<double>(p.z));
+    }
+}
+
+TerrainFlatten makeFlattenPad(std::vector<Vec3> polygon, double targetY,
+                              double falloff) {
+    TerrainFlatten f;
+    f.polygon = std::move(polygon);
+    f.c = targetY;
+    f.falloff = falloff;
+    footprintBounds(f);
+    return f;
+}
+
+TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double yB,
+                               double halfWidth, double falloff) {
+    TerrainFlatten f;
+    f.falloff = falloff;
+    double ex = b.x - a.x, ez = b.z - a.z;
+    double len = std::sqrt(ex * ex + ez * ez);
+    if (len < 1e-6) {
+        // Degenerate segment: fall back to a constant square pad at yA.
+        f.c = yA;
+        double hw = std::max(halfWidth, 0.5);
+        f.polygon = {Vec3(a.x - hw, 0, a.z - hw), Vec3(a.x + hw, 0, a.z - hw),
+                     Vec3(a.x + hw, 0, a.z + hw), Vec3(a.x - hw, 0, a.z + hw)};
+        footprintBounds(f);
+        return f;
+    }
+    double ux = ex / len, uz = ez / len;        // along the segment
+    double px = -uz, pz = ux;                    // across (left normal)
+    // Height varies linearly along u: y = yA + k * (u . (p - a)). Expand into a
+    // plane in world XZ so the terrain ramps exactly with the road.
+    double k = (yB - yA) / len;
+    f.dx = k * ux;
+    f.dz = k * uz;
+    f.c = yA - (f.dx * a.x + f.dz * a.z);
+    f.polygon = {Vec3(a.x + px * halfWidth, 0, a.z + pz * halfWidth),
+                 Vec3(b.x + px * halfWidth, 0, b.z + pz * halfWidth),
+                 Vec3(b.x - px * halfWidth, 0, b.z - pz * halfWidth),
+                 Vec3(a.x - px * halfWidth, 0, a.z - pz * halfWidth)};
+    footprintBounds(f);
+    return f;
+}
+
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
     // Richer, more saturated palette with a green -> olive -> earth gradient on
     // flat ground, warm-grey rock on slopes, and snow on high gentle ground.
@@ -211,6 +324,11 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
             h += relief * crest * cross;
         }
     }
+
+    // City cut/fill: grade the ground flat under roads and blocks (applied last so
+    // it overrides every relief layer there).
+    if (!params.flatten.empty())
+        h = applyFlatten(params.flatten, worldX, worldZ, h);
     return h;
 }
 

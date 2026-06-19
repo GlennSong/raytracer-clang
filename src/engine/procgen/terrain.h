@@ -14,6 +14,31 @@ struct RidgeSegment {
     float ha = 0.0f, hb = 0.0f;
 };
 
+// A footprint where the terrain is graded flat — cut where the natural ground is
+// too high, filled where it's too low — to a target surface, so a road or city
+// block sits on level earth instead of the raw noise (ADR-0038). The target is a
+// plane y = c + dx*x + dz*z: a constant pad for a block (dx=dz=0), or a ramp for
+// a road segment that climbs along its length. Inside `polygon` the height is
+// forced to the plane; within `falloff` metres outside, it eases back to the
+// natural terrain (smoothstep) so the cut blends in rather than leaving a cliff.
+struct TerrainFlatten {
+    std::vector<Vec3> polygon;   // world footprint; uses .x and .z (.y ignored)
+    double c = 0.0, dx = 0.0, dz = 0.0;
+    double falloff = 6.0;
+    // Tight XZ AABB, filled by the makers; queries quick-reject against it
+    // (expanded by falloff) before the per-edge polygon test.
+    double minX = 0, minZ = 0, maxX = 0, maxZ = 0;
+    double planeY(double x, double z) const { return c + dx * x + dz * z; }
+};
+
+// A constant-height pad over a polygon (a city block apron sits flat at targetY).
+TerrainFlatten makeFlattenPad(std::vector<Vec3> polygon, double targetY,
+                              double falloff = 6.0);
+// A ramped corridor for a road segment a->b carrying heights yA..yB across a
+// rectangle of the given half-width (so the terrain follows the road's grade).
+TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double yB,
+                               double halfWidth, double falloff = 6.0);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).
@@ -50,6 +75,13 @@ struct TerrainParams {
     // the loader). Each segment is a ridge axis with per-endpoint height (tall
     // main divide -> lower spurs by branch depth). Empty = no branching range.
     std::vector<RidgeSegment> rangeRidges;
+
+    // Cut/fill footprints (ADR-0038): where a city road or block sits, the raw
+    // noise is graded flat to a target surface so the ground doesn't poke through
+    // the carriageway and the road sits on level earth. Applied last in
+    // terrainHeight, so the mesh, the collider, the CDLOD field and every
+    // placement query all see the same levelled ground. Empty = pristine terrain.
+    std::vector<TerrainFlatten> flatten;
 };
 
 // Build a branching ridge network from a planar L-system skeleton (consumer #2
