@@ -1081,7 +1081,15 @@ bool LevelLoader::load(const std::string& path,
             bool driveSun = env.value("driveSun", true);
             renderer.setEnvironmentMap(EnvironmentLoader::loadEnvironmentMap(
                 envPath, renderer, driveSun ? &view.lighting.sun : nullptr));
+        } else {
+            // No HDR in this level: clear any map a previously loaded level bound,
+            // otherwise its cubemap/IBL persists (the renderer is reused across
+            // loads) and you get a stale HDR sky you can't turn off.
+            renderer.setEnvironmentMap(TextureHandle{});
         }
+    } else {
+        // No "environment" object at all — also clear any stale env map.
+        renderer.setEnvironmentMap(TextureHandle{});
     }
 
     if (root.contains("reflectionProbes")) {

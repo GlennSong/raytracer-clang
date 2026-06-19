@@ -2353,7 +2353,8 @@ void MetalRenderer::endFrame() {
     // irradiance cubes drive ambient/specular when an HDR is bound; in
     // procedural mode the shader evaluates the analytic sky instead.
     {
-        bool hasIBL = impl->envPrefilteredCube && impl->envIrradianceCube;
+        bool hasIBL = impl->envPrefilteredCube && impl->envIrradianceCube
+                      && environmentMapEnabled;
         EnvUniforms litEnv = {hasIBL ? 1 : 0, 0, Impl::ENV_PREFILTER_MIPS - 1, {0}};
         [impl->currentEncoder setFragmentBytes:&litEnv length:sizeof(litEnv) atIndex:8];
         [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envPrefilteredCube
@@ -2371,11 +2372,12 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        EnvUniforms envU = {impl->environmentCubemap ? 1 : 0,
+        id<MTLTexture> envCube = environmentMapEnabled ? impl->environmentCubemap : nil;
+        EnvUniforms envU = {envCube ? 1 : 0,
                             impl->skyCloudsEnabled ? 1 : 0, 0, {0}};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
-        [impl->currentEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
-                                                                            : impl->defaultCubemap)
+        [impl->currentEncoder setFragmentTexture:(envCube ? envCube
+                                                          : impl->defaultCubemap)
                                          atIndex:0];
         [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
@@ -3004,7 +3006,8 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams.envMode = impl->environmentCubemap ? 1 : 0;
+        id<MTLTexture> compEnvCube = environmentMapEnabled ? impl->environmentCubemap : nil;
+        compositeParams.envMode = compEnvCube ? 1 : 0;
         compositeParams.aoFloor = ssaoParams.aoFloor;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
@@ -3012,8 +3015,8 @@ void MetalRenderer::endFrame() {
         // HDR map is bound, the baked environment cubemap — matching the skybox/IBL.
         // (Cube orientation is unit-tested; the old equirect workaround is gone.)
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        [compEncoder setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
-                                                                   : impl->defaultCubemap)
+        [compEncoder setFragmentTexture:(compEnvCube ? compEnvCube
+                                                     : impl->defaultCubemap)
                                 atIndex:6];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];

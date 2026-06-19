@@ -328,6 +328,11 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
+    // HDR environment map (baked cubemap + IBL). When off, the renderer ignores a
+    // bound HDR and falls back to the procedural sky + analytic IBL. Levels with no
+    // "hdr" key clear it on load; this is the live override.
+    bool environmentMapEnabled = true;
+
     // Depth prepass for alpha-cut foliage (perf). Foliage uses discard, which
     // forces late depth testing — every overlapping leaf card runs the full lit
     // shader (huge overdraw close-up). When on, foliage is drawn twice: a cheap
