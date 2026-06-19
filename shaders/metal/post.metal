@@ -655,6 +655,65 @@ kernel void bloomUpsample(
 
 // --- Composite pass: tone map + gamma from HDR scene texture to LDR drawable ---
 
+// Color grade applied in scene-linear, BEFORE the tone map (the "Look" stage, in
+// Blender terms) — so it is display-agnostic and survives an SDR->HDR output swap.
+// Both ops are identity at the neutral defaults (contrast=1, saturation=1).
+float3 applyGrade(float3 x, float contrast, float saturation) {
+    // Saturation around Rec.709 luma.
+    float luma = dot(x, float3(0.2126, 0.7152, 0.0722));
+    x = max(luma + saturation * (x - luma), 0.0);
+    // Contrast in log2 around middle grey (0.18): a filmic S-curve that behaves
+    // consistently across the whole HDR range (no crushed/blown ends).
+    const float grey = 0.18;
+    float3 lx = log2(max(x, 1e-5));
+    lx = (lx - log2(grey)) * contrast + log2(grey);
+    return exp2(lx);
+}
+
+// ACES filmic (Stephen Hill fit) — RGB matrices preserve saturation. Returns a
+// final sRGB-encoded color (the display encode is folded in).
+float3 tonemapACES(float3 x) {
+    float3 ci = float3(dot(float3(0.59719, 0.35458, 0.04823), x),
+                       dot(float3(0.07600, 0.90834, 0.01566), x),
+                       dot(float3(0.02840, 0.13383, 0.83777), x));
+    float3 cf = (ci * (ci + 0.0245786) - 0.000090537) /
+                (ci * (0.983729 * ci + 0.432951) + 0.238081);
+    float3 c = float3(dot(float3( 1.60475, -0.53108, -0.07367), cf),
+                      dot(float3(-0.10208,  1.10813, -0.00605), cf),
+                      dot(float3(-0.00327, -0.07276,  1.07602), cf));
+    return pow(saturate(c), float3(1.0 / 2.2));
+}
+
+// AgX (minimal fit, Benjamin Wrensch / Troy Sobotka) — a modern film view
+// transform: gentle highlight rolloff with far less hue skew than ACES. The
+// log+sigmoid produces a ~2.2 display-encoded result, so it's returned directly
+// (the encode is built in), matching tonemapACES's contract.
+float3 agxContrastApprox(float3 x) {
+    float3 x2 = x * x;
+    float3 x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4
+         - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+
+float3 tonemapAgX(float3 val) {
+    const float3x3 agxMat = float3x3(
+        float3(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+        float3(0.0784335999999992, 0.878468636469772, 0.0784336),
+        float3(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+    const float3x3 agxMatInv = float3x3(
+        float3(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+        float3(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+        float3(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+    const float minEv = -12.47393;
+    const float maxEv = 4.026069;
+    val = agxMat * val;
+    val = clamp(log2(max(val, 1e-10)), minEv, maxEv);
+    val = (val - minEv) / (maxEv - minEv);
+    val = agxContrastApprox(val);   // -> AgX display-encoded [0,1]
+    val = agxMatInv * saturate(val);
+    return saturate(val);
+}
+
 struct CompositeOut {
     float4 position [[position]];
     float2 uv;
@@ -792,23 +851,12 @@ fragment float4 fragmentComposite(
         hdrColor += bloom * params.bloomIntensity;
     }
 
-    // Fitted ACES filmic tone mapping (Stephen Hill). RGB input/output matrices
-    // preserve saturation; a per-channel ACES curve desaturates (washes colors
-    // out). Matches the offline path tracer (path_tracer.cpp).
-    float3 x = hdrColor;
-    float3 ci = float3(dot(float3(0.59719, 0.35458, 0.04823), x),
-                       dot(float3(0.07600, 0.90834, 0.01566), x),
-                       dot(float3(0.02840, 0.13383, 0.83777), x));
-    float3 cf = (ci * (ci + 0.0245786) - 0.000090537) /
-                (ci * (0.983729 * ci + 0.432951) + 0.238081);
-    float3 color = float3(dot(float3( 1.60475, -0.53108, -0.07367), cf),
-                          dot(float3(-0.10208,  1.10813, -0.00605), cf),
-                          dot(float3(-0.00327, -0.07276,  1.07602), cf));
-    color = saturate(color);
-
-    // Gamma correction
-    color = pow(color, float3(1.0 / 2.2));
-
+    // Color grade (the "Look": contrast + saturation) in scene-linear, then the
+    // tone map / view transform. Both stages run before the display encode, which
+    // each tone mapper folds in — see applyGrade/tonemapACES/tonemapAgX.
+    hdrColor = applyGrade(hdrColor, params.gradeContrast, params.gradeSaturation);
+    float3 color = (params.tonemapOp == 1) ? tonemapAgX(hdrColor)
+                                           : tonemapACES(hdrColor);
     return float4(color, 1.0);
 }
 

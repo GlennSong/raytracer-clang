@@ -3009,6 +3009,9 @@ void MetalRenderer::endFrame() {
         id<MTLTexture> compEnvCube = environmentMapEnabled ? impl->environmentCubemap : nil;
         compositeParams.envMode = compEnvCube ? 1 : 0;
         compositeParams.aoFloor = ssaoParams.aoFloor;
+        compositeParams.tonemapOp = tonemapOperator;
+        compositeParams.gradeContrast = gradeParams.contrast;
+        compositeParams.gradeSaturation = gradeParams.saturation;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         // Sky for composite sky pixels: day/night procedural (+clouds) or, when an

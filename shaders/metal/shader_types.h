@@ -234,6 +234,10 @@ struct CompositeUniforms {
     float   bloomIntensity;
     int32_t envMode;        // 0=procedural sky (+clouds), 1=HDR equirect
     float   aoFloor;        // darkest the AO multiply can go
+    int32_t tonemapOp;      // 0=ACES, 1=AgX (the "view transform" / film curve)
+    float   gradeContrast;  // log-space contrast around middle grey (1 = neutral)
+    float   gradeSaturation;// saturation around luma (1 = neutral)
+    float   _pad[1];
 };
 
 // Final lens-warp pass (virtual-camera plan Phase 4): Brown radial distortion,

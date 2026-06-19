@@ -368,6 +368,15 @@ public:
         float intensity = 0.3f;
     } bloomParams;
 
+    // Tone mapping + color grade (the composite "Look" + view transform). The
+    // grade (contrast/saturation) runs in scene-linear before the tone map, so it
+    // is display-agnostic (HDR-ready). Tone map: 0 = ACES, 1 = AgX.
+    int tonemapOperator = 0;
+    struct GradeParams {
+        float contrast   = 1.0f;   // log-space contrast around middle grey
+        float saturation = 1.0f;   // saturation around luma
+    } gradeParams;
+
     // Compact stats HUD visible during gameplay
     bool showHud = false;
 

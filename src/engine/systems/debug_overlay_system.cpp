@@ -44,6 +44,13 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
     bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
 
+    ctx.renderer.tonemapOperator =
+        static_cast<int>(s.getDouble("tonemap.op", ctx.renderer.tonemapOperator));
+    ctx.renderer.gradeParams.contrast =
+        static_cast<float>(s.getDouble("grade.contrast", ctx.renderer.gradeParams.contrast));
+    ctx.renderer.gradeParams.saturation =
+        static_cast<float>(s.getDouble("grade.saturation", ctx.renderer.gradeParams.saturation));
+
     ctx.renderer.showHud = s.getBool("hud.show", ctx.renderer.showHud);
     ctx.renderer.targetFps = static_cast<int>(s.getDouble("targetFps", ctx.renderer.targetFps));
 }
@@ -81,6 +88,10 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("bloom.knee", bloom.knee);
     s.setDouble("bloom.intensity", bloom.intensity);
 
+    s.setDouble("tonemap.op", ctx.renderer.tonemapOperator);
+    s.setDouble("grade.contrast", ctx.renderer.gradeParams.contrast);
+    s.setDouble("grade.saturation", ctx.renderer.gradeParams.saturation);
+
     s.setBool("hud.show", ctx.renderer.showHud);
     s.setDouble("targetFps", ctx.renderer.targetFps);
 
@@ -92,6 +103,8 @@ void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {
     ctx.renderer.ssrParams = Renderer::SSRParams{};
     ctx.renderer.shadowParams = Renderer::ShadowParams{};
     ctx.renderer.bloomParams = Renderer::BloomParams{};
+    ctx.renderer.tonemapOperator = 0;
+    ctx.renderer.gradeParams = Renderer::GradeParams{};
     ctx.view.lighting.exposure = 1.0f;
     ctx.view.lighting.ambientMultiplier = 0.3f;
     ctx.view.lighting.sun.intensity = 4.7f;  // illuminance units (ADR-0017 Phase 1)
@@ -230,6 +243,18 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::SliderFloat("Threshold", &bloom.threshold, 0.0f, 3.0f);
         ImGui::SliderFloat("Knee", &bloom.knee, 0.0f, 1.0f);
         ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 2.0f);
+    }
+
+    if (ImGui::CollapsingHeader("Tonemap / Grade")) {
+        // View transform (the film curve). ACES = punchy; AgX = gentler highlights,
+        // less hue skew (Blender 4's default).
+        const char* tmNames[] = {"ACES", "AgX"};
+        ImGui::Combo("View Transform", &ctx.renderer.tonemapOperator, tmNames, 2);
+        // The "Look": graded in scene-linear before the tone map (HDR-safe). 1.0 is
+        // neutral — raise contrast to de-wash, saturation to re-punch color.
+        auto& grade = ctx.renderer.gradeParams;
+        ImGui::SliderFloat("Contrast", &grade.contrast, 0.5f, 2.0f);
+        ImGui::SliderFloat("Saturation", &grade.saturation, 0.0f, 2.0f);
     }
 
     if (ImGui::CollapsingHeader("Other")) {
