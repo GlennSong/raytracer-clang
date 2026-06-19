@@ -78,7 +78,8 @@ struct CityModel {
     // its own materialIndex (== the PartId it was emitted under); map it to a
     // RenderMaterial with materialFor(static_cast<PartId>(part.materialIndex)).
     std::vector<RenderMesh> parts;
-    RenderMesh roads;         // road + sidewalk surface (draped on terrain if set)
+    RenderMesh roads;         // asphalt carriageways (between block aprons)
+    RenderMesh pavement;      // flat graded block aprons (sidewalk) + retaining skirts
     RenderMesh ground;        // ground plane under the city (empty when on terrain)
     RenderMesh props;         // street + park trees (vertex-coloured, on the ground)
     int treeCount = 0;

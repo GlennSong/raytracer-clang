@@ -208,9 +208,9 @@ TEST_CASE(city_drapes_on_terrain_foundations_track_ground) {
     Real lo = 1e30, hi = -1e30;
     for (const CityBuilding& b : m.buildings) {
         lo = std::min(lo, b.baseY); hi = std::max(hi, b.baseY);
-        // The podium floor sits at the highest footprint corner, so it tracks the
-        // ramp at the site within the footprint's half-width (lots are < ~50 m).
-        CHECK(std::fabs(b.baseY - 0.5 * b.site.x) < 28.0);
+        // The building sits on its block's flat grade (max ground over the whole
+        // block), so it tracks the ramp within a block half-width (~50 m).
+        CHECK(std::fabs(b.baseY - 0.5 * b.site.x) < 60.0);
     }
     CHECK(hi - lo > 50.0);                      // buildings span the ramp
 }
@@ -220,8 +220,8 @@ TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     CityModel m = generateCity(cp);            // no sampler -> flat
     CHECK(!m.ground.vertices.empty());         // flat city gets a ground plane
     CHECK(m.treeCount > 0);
-    // Flat ground: the podium floor is just the small +0.05 lift above grade.
-    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.05, 1e-6);
+    // Flat ground: every building sits on the block grade, the small +0.12 lift.
+    for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.12, 1e-6);
 }
 
 TEST_CASE(city_buildings_have_valid_box_colliders) {

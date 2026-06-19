@@ -287,6 +287,7 @@ void addCity(const json& ent, const json& root, Scene& scene) {
         bake(part, rm.metallic, rm.roughness);
     }
     bake(m.roads, 0.0f, 0.9f);
+    bake(m.pavement, 0.0f, 0.95f);  // flat graded aprons + curbs
     bake(m.ground, 0.0f, 1.0f);
     bake(m.props, 0.0f, 0.85f);     // trees (vertex-coloured)
     LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount

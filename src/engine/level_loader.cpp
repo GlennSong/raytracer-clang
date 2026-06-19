@@ -300,8 +300,30 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness);
     }
     spawnMesh(m.roads, "roads", 0.0f, 0.9f);
+    spawnMesh(m.pavement, "pavement", 0.0f, 0.95f);
     spawnMesh(m.props, "props", 0.0f, 0.85f);
     spawnMesh(m.ground, "ground", 0.0f, 1.0f);
+
+    // Walk-surface collider: the flat block aprons + roads are a static triangle
+    // mesh the player walks on (the curbed pads, level per block).
+    {
+        MeshCollider mc;
+        mc.friction = 0.9;
+        auto addTris = [&](const RenderMesh& rm) {
+            uint32_t base = static_cast<uint32_t>(mc.vertices.size());
+            for (const Vertex& v : rm.vertices) mc.vertices.push_back(v.position);
+            for (uint32_t idx : rm.indices) mc.indices.push_back(base + idx);
+        };
+        addTris(m.pavement);
+        addTris(m.roads);
+        if (!mc.indices.empty()) {
+            Entity e = world.create();
+            Transform t;
+            world.add<Transform>(e, t);
+            world.add<PrevTransform>(e, PrevTransform{t});
+            world.add<MeshCollider>(e, mc);
+        }
+    }
 
     // A static Box collider per building (walk-into-it physics).
     for (const CityBuilding& b : m.buildings) {
