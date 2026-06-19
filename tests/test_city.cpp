@@ -5,6 +5,7 @@
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/city.h"
+#include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
 
@@ -222,6 +223,37 @@ TEST_CASE(city_flat_keeps_ground_plane_and_trees) {
     CHECK(m.treeCount > 0);
     // Flat ground: every building sits on the block grade, the curb +0.15 lift.
     for (const CityBuilding& b : m.buildings) CHECK_APPROX(b.baseY, 0.15, 1e-6);
+}
+
+TEST_CASE(city_winding_matches_engine_convention) {
+    // MeshBuilder::box renders correctly under the viewer's back-face culling: its
+    // triangles wind so the geometric normal opposes the shading normal
+    // (geo·normal <= 0). The city's buildings/roads/pavement MUST follow the same
+    // convention or they render inside-out in the viewer — and the offline tracer
+    // is two-sided, so this test is the only place a flipped winding is caught.
+    auto wrong = [](const RenderMesh& m) {
+        int bad = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vertex& a = m.vertices[m.indices[i]];
+            const Vertex& b = m.vertices[m.indices[i + 1]];
+            const Vertex& c = m.vertices[m.indices[i + 2]];
+            if (dot(cross(b.position - a.position, c.position - a.position), a.normal) > 1e-6) ++bad;
+        }
+        return bad;
+    };
+    CHECK(wrong(MeshBuilder::box(Vec3(2, 2, 2))) == 0);     // the convention itself
+    CityParams cp; cp.extent = 160; cp.cellSize = 85; cp.seed = 11;
+    cp.groundAt = [](const Vec2& p) { return 6.0 * std::sin(p.x * 0.01); };
+    CityModel m = generateCity(cp);
+    for (const RenderMesh& part : m.parts) CHECK(wrong(part) == 0);  // buildings
+    CHECK(wrong(m.roads) == 0);
+    CHECK(wrong(m.pavement) == 0);
+    // Curved + tiered masses too.
+    Scope s = scopeFromFootprint({{-12, -10}, {12, -10}, {12, 10}, {-12, 10}}, 0, 10);
+    BuildingParams cyl; cyl.shape = BuildingShape::Cylinder; cyl.floors = 8;
+    BuildingParams pag; pag.shape = BuildingShape::Pagoda; pag.tiers = 5;
+    CHECK(wrong(growBuilding(s, cyl).merged()) == 0);
+    CHECK(wrong(growBuilding(s, pag).merged()) == 0);
 }
 
 TEST_CASE(city_has_street_furniture) {

@@ -116,9 +116,13 @@ void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
     mesh.vertices.push_back(vtx(b, 1, 0));
     mesh.vertices.push_back(vtx(c, 1, 1));
     mesh.vertices.push_back(vtx(d, 0, 1));
-    // Orient the two triangles so their geometric normal agrees with `normal`.
+    // Engine winding convention (matches MeshBuilder::box, which renders correctly
+    // under the viewer's back-face culling): the triangle's geometric normal points
+    // OPPOSITE the outward shading `normal` (geo·normal < 0). The offline path
+    // tracer is two-sided so it never caught this; the Metal viewer culls, so a
+    // flipped winding renders the building inside-out.
     Vec3 geo = cross(b - a, c - a);
-    if (dot(geo, normal) >= 0)
+    if (dot(geo, normal) <= 0)
         mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
     else
         mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1, base, base + 3, base + 2});

@@ -111,6 +111,28 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     return p;
 }
 
+// Engine winding convention: a triangle's geometric normal points OPPOSITE the
+// outward shading normal (geo·normal < 0), matching MeshBuilder::box — required
+// for the viewer's back-face culling (the offline tracer is two-sided, so it
+// never reveals a flipped winding). All hand-wound city surfaces go through these.
+void pushTri(RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c,
+             const Vec3& nrm, const Vec3& col) {
+    Vec3 geo = cross(b - a, c - a);
+    uint32_t base = static_cast<uint32_t>(m.vertices.size());
+    auto v = [&](const Vec3& p) { Vertex vt(p, nrm, Vec3(1, 0, 0), 0, 0); vt.color = col; return vt; };
+    if (dot(geo, nrm) <= 0) {
+        m.vertices.push_back(v(a)); m.vertices.push_back(v(b)); m.vertices.push_back(v(c));
+    } else {
+        m.vertices.push_back(v(a)); m.vertices.push_back(v(c)); m.vertices.push_back(v(b));
+    }
+    m.indices.push_back(base); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
+}
+void pushQuad(RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c,
+              const Vec3& d, const Vec3& nrm, const Vec3& col) {
+    pushTri(m, a, b, c, nrm, col);
+    pushTri(m, a, c, d, nrm, col);
+}
+
 // A flat, horizontal paved polygon at height `y` (centroid fan), vertex-coloured.
 // The block apron / sidewalk: a real street is graded FLAT, so this does NOT drape
 // — the terrain is cut/filled to meet it (emitRetainingSkirt).
@@ -121,12 +143,7 @@ void emitFlatPolygon(RenderMesh& mesh, const Poly2& poly, Real y, const Vec3& co
     const std::size_t cnt = poly.size();
     for (std::size_t i = 0; i < cnt; ++i) {
         Vec2 a = poly[i], b = poly[(i + 1) % cnt];
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, n, Vec3(1, 0, 0), 0, 0); vt.color = col; return vt; };
-        mesh.vertices.push_back(v(center));
-        mesh.vertices.push_back(v(Vec3(a.x, y, a.y)));
-        mesh.vertices.push_back(v(Vec3(b.x, y, b.y)));
-        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
+        pushTri(mesh, center, Vec3(a.x, y, a.y), Vec3(b.x, y, b.y), n, col);
     }
 }
 
@@ -148,14 +165,7 @@ void emitRetainingSkirt(RenderMesh& mesh, const Poly2& poly, Real topY,
         Vec3 ta(a.x, topY, a.y), tb(b.x, topY, b.y);
         Vec2 dir = normalize(b - a);
         Vec3 nrm(dir.y, 0, -dir.x);           // outward (pad interior on the left)
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, nrm, Vec3(dir.x, 0, dir.y), 0, 0); vt.color = col; return vt; };
-        mesh.vertices.push_back(v(ba));
-        mesh.vertices.push_back(v(bb));
-        mesh.vertices.push_back(v(tb));
-        mesh.vertices.push_back(v(ta));
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 2, base + 1, base, base + 3, base + 2});
+        pushQuad(mesh, ba, bb, tb, ta, nrm, col);
     }
 }
 
@@ -177,14 +187,7 @@ void emitFlatRoad(RenderMesh& mesh, const Vec2& a, const Vec2& b, Real yA, Real 
         Vec3 l0(c0.x - across.x, y0, c0.y - across.y), r0(c0.x + across.x, y0, c0.y + across.y);
         Vec3 r1(c1.x + across.x, y1, c1.y + across.y), l1(c1.x - across.x, y1, c1.y - across.y);
         Vec3 n = normalize(cross(r0 - l0, l1 - l0)); if (n.y < 0) n = n * -1;
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, n, Vec3(dir.x, 0, dir.y), 0, 0); vt.color = col; return vt; };
-        mesh.vertices.push_back(v(l0));
-        mesh.vertices.push_back(v(r0));
-        mesh.vertices.push_back(v(r1));
-        mesh.vertices.push_back(v(l1));
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 2, base, base + 2, base + 3});
+        pushQuad(mesh, l0, r0, r1, l1, n, col);
     }
 }
 
@@ -252,14 +255,7 @@ void emitCrosswalk(RenderMesh& mesh, const Vec2& center, const Vec2& dir,
             Vec2 p = bc + d * (depth * 0.5 * ld) + across * (bar * 0.5 * la);
             return Vec3(p.x, y + 0.03, p.y);
         };
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, nrm, Vec3(d.x, 0, d.y), 0, 0); vt.color = col; return vt; };
-        mesh.vertices.push_back(v(corner(-1, -1)));
-        mesh.vertices.push_back(v(corner(1, -1)));
-        mesh.vertices.push_back(v(corner(1, 1)));
-        mesh.vertices.push_back(v(corner(-1, 1)));
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 2, base, base + 2, base + 3});
+        pushQuad(mesh, corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1), nrm, col);
     }
 }
 
