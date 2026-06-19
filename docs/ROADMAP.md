@@ -469,6 +469,9 @@ Each composes Phases A–C:
 - **Procedural clouds** — volumetric FBM, raymarched (renderer-side).
 - **City / road layout** — split-grammar buildings, road networks (L-systems /
   tensor fields / agent-based), lot subdivision. Converges B.1 + B.2 + meshing.
+  Full design: `docs/city-generation-plan.md` (roads → blocks → parcels →
+  buildings; the split/shape grammar as an L1 sibling of the L-system; impostors
+  as the render-scale LOD ladder, ADR-0034 §5).
 - **Procedural planet** — cube-sphere quadtree LOD + spherical terrain +
   atmosphere. The capstone.
 
