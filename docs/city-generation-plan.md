@@ -409,3 +409,74 @@ alternatives below; it is Pending until Phase 0 build starts.
 - **District field authoring:** procedural-only first, or brush-paintable
   districts from the start (ADR-0027 §3)?
 - **Interiors:** explicitly far future (world-system-plan §8); exterior-only now.
+
+---
+
+## 10. Status & backlog — consolidation (June 2026)
+
+Where the city system actually stands after the build sprint, and the organized
+plan for what's next. All of the below is **headless, deterministic, tested**
+(`tests/test_city.cpp` + `tests/test_script_vm.cpp`) and renders through the
+offline path tracer; the Metal viewer path is the main thing not yet wired.
+
+### Built
+
+**Pipeline & layout**
+- Road graph (deformed grid) → planarize → half-edge block faces → recursive-OBB
+  parcels → per-lot buildings. `polygon` / `road_network` / `parcel` / `city`.
+- Zoning into five areas — **HighRise, Commercial, Residential, Industrial,
+  Park** — by radial falloff + a west-side industrial wedge + an off-centre
+  "old town" pagoda pocket. (Coastal reserved for water.)
+- Paved streets: sidewalk corridor + asphalt carriageway, terrain-conforming.
+
+**Buildings (the grammar)**
+- Split/shape grammar over an oriented `Scope`: floors/bays/windows, walkable
+  ground shell with a real entrance opening, parapet roof.
+- **Massing** (`BuildingShape`): Box, **Cylinder** (round glass tower),
+  **Pagoda** (tiered, flared upturned-corner roofs, finial).
+- **Facade styles** (`FacadeStyle`): Concrete / Brick / Stucco / Painted /
+  GlassCurtain / Metal, seeded colour palettes, a Solid (warehouse) facade mode.
+- **Ornamentation:** base-course/foundation, ground-floor cornice, entrance
+  awning, pilasters — switched on by archetype (masonry yes, glass/metal no).
+- **Archetypes per zone:** glass/metal towers (16–45 fl, setbacks) · office
+  mid-rises (5–13, retail) · brick/stucco walk-ups (2–5) · metal warehouses
+  (1–2, big lots).
+
+**World integration (the City Arena)**
+- Drapes on terrain: foundations at min ground height under each footprint (no
+  floating; terraced into hills), roads conform up/down inclines (SF) and flat
+  where flat (NYC). Street + park trees. `assets/levels/city_arena.json`.
+- Offline render (`shape:"city"`), Lua `building.grow`/`building.height`, HLOD
+  proxy + `CityModel::hlodProxy`.
+
+### File map
+`src/engine/procgen/city/{polygon,shape_grammar,parcel,road_network,city}.{h,cpp}`
+· Lua surface in `src/engine/scripting/procgen_bindings.cpp` · offline bake in
+`src/level_scene.cpp` (`addCity`) · `assets/scripts/city.lua` ·
+`assets/levels/city{,_arena}.json`.
+
+### Backlog — prioritized
+
+1. **Walkability + colliders** *(structural; viewer-gated to actually walk).*
+   Generate per-building box colliders + a ground/road collider, wire the city
+   into `level_loader` (the viewer/ECS path, not just the offline tracer) as
+   Renderable + collider entities. Headless-buildable + Jolt-testable; *walking*
+   needs the Metal viewer (macOS).
+2. **Lua authoring layer** *(answers "should this be Lua?").* Expose the new
+   building params (shape/style/curtainWall/solidFacade/ornamentation/tiers) to
+   Lua; expand `city.lua` into a real archetype library. Keep the hot path
+   (grammar rewrite, road faces, polygon ops) in C++ (ADR-0028 §1).
+3. **Metal viewer render path** — the city in the actual game, not just offline
+   (its own macOS-gated chunk; pairs with (1)).
+4. **Procedural facade textures** — tiled brick/concrete albedo+normal (à la
+   `barkMaps`) with world-scaled UVs, so facades read as material up close.
+5. **More massing & realism** — curved/parametric facades beyond the cylinder,
+   richer pagoda bodies (bracket sets, balustrades), row-house stoops, podium+
+   tower commercial; more believable block interiors (courtyards, alleys).
+6. **Scale (Phase 4)** — building impostor bake + HLOD swap/crossfade, sector
+   streaming + cross-tile roads. GPU / spatial-partition gated.
+7. **Coastal / water** — a shoreline field drives a Coastal zone + waterfront;
+   needs the water system first (world-system-plan §5).
+
+Recommended order: **(1) or (2) next** (pick one — both are owed and structural),
+then (3); defer (4)–(7) until the core authoring/runtime loop is solid.
