@@ -111,6 +111,9 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Metal:
             m.albedo = wallColor; m.metallic = 0.55f; m.roughness = 0.45f;
             m.setSurface(RenderMaterial::Surface::CorrugatedMetal); break;
+        case PartId::Wood:
+            m.albedo = {0.52, 0.40, 0.27}; m.metallic = 0.0f; m.roughness = 0.85f;
+            m.setSurface(RenderMaterial::Surface::WoodSiding); break;
         case PartId::Wall:
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
@@ -540,6 +543,48 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
     return out;
 }
 
+// Rooftop crown (ADR-0040 Pass B): a mechanical penthouse/bulkhead set back on
+// the roof, plus the iconic timber water tank on a leg frame — what makes a top
+// read as a real building, not an extruded box. `roofY` is the roof slab level;
+// footOrigin/width/depth/r/f describe the (possibly set-back) roof footprint.
+static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
+                      Real depth, const Vec3& r, const Vec3& f, Real roofY,
+                      const BuildingParams& p, Rng& rng) {
+    const Vec3 up(0, 1, 0);
+    // Mechanical penthouse: a smaller set-back box (elevator overrun + plant).
+    if (p.floors >= 4 && width > 5 && depth > 5) {
+        Real pw = width * rng.range(0.35, 0.55);
+        Real pd = depth * rng.range(0.35, 0.55);
+        Real ph = rng.range(2.5, 4.0);
+        Vec3 po = footOrigin + r * ((width - pw) * rng.range(0.15, 0.6)) +
+                  f * ((depth - pd) * rng.range(0.15, 0.6));
+        emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(pw, ph, pd)},
+                PartId::Trim, p.trimColor * 0.85);
+    }
+    // Timber water tank: a tube on four legs with a flat top — the NYC rooftop
+    // tank, on masonry mid-rises. The wood surface makes it read as timber.
+    if (p.floors >= 3 && p.floors <= 20 && !p.curtainWall && width > 4 && depth > 4 &&
+        rng.unit() < 0.65) {
+        Real tr = std::min(rng.range(1.2, 1.7), std::min(width, depth) * 0.22);
+        Real th = rng.range(2.6, 3.4), legH = rng.range(1.6, 2.4);
+        Real ix = tr + 0.6, iz = tr + 0.6;   // keep the tank fully on the roof
+        Vec3 tc = footOrigin + r * (ix + (width - 2 * ix) * rng.unit()) +
+                  f * (iz + (depth - 2 * iz) * rng.unit());
+        tc.y = 0;
+        Real tankBase = roofY + legH;
+        Vec3 woodCol = materialFor(PartId::Wood, p.wallColor).albedo;
+        for (int lx = -1; lx <= 1; lx += 2)
+            for (int lz = -1; lz <= 1; lz += 2) {
+                Vec3 lc = tc + r * (lx * tr * 0.7) + f * (lz * tr * 0.7);
+                emitBox(out, Scope{Vec3(lc.x, roofY, lc.z) - r * 0.08 - f * 0.08,
+                                   {r, up, f}, Vec3(0.16, legH, 0.16)},
+                        PartId::Wood, woodCol * 0.85);
+            }
+        emitTube(out, tc, tr, tankBase, tankBase + th, 14, PartId::Wood, woodCol);
+        emitDisc(out, tc, tr, tankBase + th, 14, PartId::Wood, woodCol * 1.05, true);
+    }
+}
+
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
     if (params.shape == BuildingShape::Cylinder) return growCylinder(scope, params);
     if (params.shape == BuildingShape::Pagoda)   return growPagoda(scope, params);
@@ -675,6 +720,8 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         emitShell(out, para, PartId::Trim, materialFor(PartId::Trim, wallColor).albedo,
                   false, false);
     }
+    // Crown: mechanical penthouse + rooftop water tank (ADR-0040 Pass B).
+    emitCrown(out, footOrigin, width, depth, r, f, y, params, rng);
     out.attaches.push_back({Vec3(footOrigin.x, y, footOrigin.z) +
                                 r * (width * 0.5) + f * (depth * 0.5),
                             Vec3(0, 1, 0), "roof"});

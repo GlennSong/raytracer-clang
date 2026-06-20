@@ -558,6 +558,16 @@ CityModel generateCity(const CityParams& cp) {
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
 
             BuildingParams bp = paramsForDistrict(dist, rng, cp.seed);
+            // A round tower needs a big, squarish lot or it ends up a pencil — only
+            // keep the cylinder when the footprint can carry a wide one, else build
+            // a box (ADR-0040).
+            if (bp.shape == BuildingShape::Cylinder) {
+                Vec2 lo, hi; bounds(site, lo, hi);
+                Real w = hi.x - lo.x, dpt = hi.y - lo.y;
+                Real diam = std::min(w, dpt);
+                Real aspect = std::max(w, dpt) / std::max(Real(0.1), diam);
+                if (diam < 18.0 || aspect > 1.35) bp.shape = BuildingShape::Box;
+            }
             // Face the street: the lot sits inside the block, so the direction
             // from the block centre out to the lot points toward the perimeter
             // road. The entrance is placed on the face most aligned with it.

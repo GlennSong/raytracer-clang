@@ -42,6 +42,7 @@ enum class PartId : uint8_t {
     // Wall surfaces shaded with a procedural material from the library
     // (materialFor packs the Surface id into the RenderMaterial flags).
     Brick, Concrete, Stucco, Metal,
+    Wood,    // rooftop water tanks, timber details
     Count
 };
 
