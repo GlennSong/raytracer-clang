@@ -257,6 +257,42 @@ namespace {
 
 enum class FacadeMode { Residential, Retail, Entrance, Solid };
 
+// A curtain-wall storey (ADR-0040 Pass B): a continuous glass skin, not punched
+// windows — an opaque spandrel band hiding the floor slab, vision glass above,
+// and a proud steel mullion/transom grid. This is what a glass tower actually
+// is (a skin hung off a frame), and it reads far better than flat panels.
+void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
+                     const Vec3& wallColor) {
+    FaceRect fr = faceOf(storey, side);
+    Real fh = fr.height, W = fr.width;
+    if (W < 0.5 || fh < 0.5) return;
+    RenderMesh glass, mull;
+    Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    Vec3 spandrelCol = glassCol * 0.45;          // opaque shadow-box band
+    Vec3 mullCol(0.34, 0.36, 0.40);              // steel mullions
+    Real spandrelH = std::min(Real(0.9), fh * 0.30);
+
+    emitQuad(glass, fr.at(0, 0), fr.at(W, 0), fr.at(W, spandrelH), fr.at(0, spandrelH),
+             fr.n, spandrelCol);                 // spandrel (floor-slab band)
+    emitQuad(glass, fr.at(0, spandrelH), fr.at(W, spandrelH), fr.at(W, fh), fr.at(0, fh),
+             fr.n, glassCol);                     // vision glass
+
+    Vec3 outv = fr.n * 0.06;
+    const Real mw = 0.08;
+    int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
+    for (int b = 0; b <= bays; ++b) {            // vertical mullions
+        Real x = std::min(std::max(b * W / bays, mw * 0.5), W - mw * 0.5);
+        emitQuad(mull, fr.at(x - mw * 0.5, 0) + outv, fr.at(x + mw * 0.5, 0) + outv,
+                 fr.at(x + mw * 0.5, fh) + outv, fr.at(x - mw * 0.5, fh) + outv, fr.n, mullCol);
+    }
+    for (Real ty : {spandrelH, fh - 0.04}) {     // transoms (spandrel line + head)
+        emitQuad(mull, fr.at(0, ty - mw * 0.5) + outv, fr.at(W, ty - mw * 0.5) + outv,
+                 fr.at(W, ty + mw * 0.5) + outv, fr.at(0, ty + mw * 0.5) + outv, fr.n, mullCol);
+    }
+    appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
+}
+
 // Subdivide one face into window bays. Wall margins around each window read as
 // mullions/piers; the window is recessed by `inset` (Glass). In Entrance mode the
 // centre bay is a real door-height opening (no fill) so the shell is enterable.
@@ -672,11 +708,11 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
             emitBox(out, a, PartId::Detail, params.trimColor);
         }
     }
-    // String course / cornice: an oversailing band capping the ground floor
-    // (separates the taller retail/lobby base from the floors above, and caps the
-    // base piers). Wraps the whole perimeter — a cornice runs over the entrance.
+    // String course / cornice: a prominent oversailing band capping the base
+    // (separates the taller retail/lobby base from the shaft, and caps the base
+    // piers). Wraps the whole perimeter — a cornice runs over the entrance.
     if (params.stringCourse) {
-        Real grow = 0.14, h = 0.36, yb = y - 0.18;
+        Real grow = 0.20, h = 0.45, yb = y - 0.22;
         Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * grow - f * grow,
                  {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * grow, h, depth + 2 * grow)};
         emitBox(out, sc, PartId::Trim, params.trimColor);
@@ -700,10 +736,11 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         Real fh = params.floorHeight;
         Scope storey = storeyScope(y, fh);
         FacadeMode mode = params.solidFacade ? FacadeMode::Solid
-                        : params.curtainWall ? FacadeMode::Retail
                                              : FacadeMode::Residential;
-        for (int side = 0; side < 4; ++side)
-            emitFacade(out, storey, side, mode, upper, wallColor);
+        for (int side = 0; side < 4; ++side) {
+            if (params.curtainWall) emitCurtainWall(out, storey, side, wallColor);
+            else emitFacade(out, storey, side, mode, upper, wallColor);
+        }
         if (i == params.floors / 2) {
             FaceRect ff = faceOf(storey, 0);
             out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
@@ -711,6 +748,15 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         y += fh;
     }
 
+    // Top cornice: a projecting band capping the shaft (mirrors the base course),
+    // so the shaft reads as framed between base and crown — the tripartite line a
+    // masonry building always has. Glass towers get a clean cap instead.
+    if (params.stringCourse && !params.curtainWall) {
+        Real grow = 0.22, h = 0.5, yb = y - 0.5;
+        Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * grow - f * grow,
+                 {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * grow, h, depth + 2 * grow)};
+        emitBox(out, sc, PartId::Trim, params.trimColor);
+    }
     // Roof: a flat slab + a parapet railing around the perimeter (ADR-0038 §4).
     emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
                        {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
