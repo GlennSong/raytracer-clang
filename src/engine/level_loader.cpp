@@ -6,6 +6,7 @@
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
+#include "procgen/surface_maps.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
 #ifdef RT_ENABLE_SCRIPTING
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <memory>
 #include <unordered_map>
+#include <array>
 #include <iterator>
 #include <tuple>
 #include <utility>
@@ -59,6 +61,30 @@ static RenderMaterial parseMaterial(const json& j) {
     RenderMaterial mat;
     applyMaterial(j, mat);
     return mat;
+}
+
+// Rewrite a mesh's UVs (and tangent) to a world-planar tiling frame, so a baked
+// tiling texture set repeats at human scale over world-space geometry: v = height
+// up a wall, u = horizontal run; horizontal faces lay it in XZ. The tangent is
+// set along U so a tangent-space normal map resolves correctly. Matches the
+// offline tracer's surfFrame (ADR-0039 Phase B).
+static void applyWorldPlanarUVs(RenderMesh& mesh, double scale) {
+    for (Vertex& vert : mesh.vertices) {
+        const Vec3& p = vert.position;
+        const Vec3& n = vert.normal;
+        double u, v; Vec3 T;
+        if (std::fabs(n.y) > 0.5) {
+            u = p.x * scale; v = p.z * scale; T = Vec3(1, 0, 0);
+        } else {
+            double tx = n.z, tz = -n.x, tl = std::sqrt(tx * tx + tz * tz);
+            if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
+            tx /= tl; tz /= tl;
+            u = (p.x * tx + p.z * tz) * scale; v = p.y * scale; T = Vec3(tx, 0, tz);
+        }
+        vert.u = static_cast<float>(u);
+        vert.v = static_cast<float>(v);
+        vert.tangent = T;
+    }
 }
 
 // A named material library: the level's top-level "materials" table, so entities
@@ -348,32 +374,61 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         world.add<SourceSpec>(doc, spec);
     }
 
+    using Surface = RenderMaterial::Surface;
     const std::string key = "city:" + std::to_string(index);
+
+    // One bake+upload per surface, shared across the whole city (every brick
+    // building binds the same uploaded set). Mirrors the offline SurfaceTexCache.
+    auto upload = [&](const TextureData& td) -> TextureHandle {
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+    auto surfaceSet = [&, cache = std::unordered_map<int, std::array<TextureHandle, 4>>()]
+                      (Surface surf) mutable -> std::array<TextureHandle, 4> {
+        int id = static_cast<int>(surf);
+        auto it = cache.find(id);
+        if (it != cache.end()) return it->second;
+        SurfaceMaps mp = surfaceMaps(surf, 256, 1337u);
+        std::array<TextureHandle, 4> h{upload(mp.albedo), upload(mp.normal),
+                                       upload(mp.mr), upload(mp.ao)};
+        cache[id] = h;
+        return h;
+    };
+
     auto spawnMesh = [&](const RenderMesh& mesh, const std::string& tag,
-                         float metallic, float roughness, uint32_t flags = 0) {
+                         float metallic, float roughness, Surface surface) {
         if (mesh.vertices.empty()) return;
         Entity e = world.create();
         Transform t;                       // city geometry is already world-space
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;
-        r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
         r.material.albedo = Vec3(1, 1, 1);     // hue carried in vertex colour
         r.material.metallic = metallic;
         r.material.roughness = roughness;
-        r.material.flags = flags;              // e.g. FLAG_BRICK for masonry walls
+        if (surface != Surface::None) {
+            // Textured: world-planar tiling UVs (so the baked set tiles at human
+            // scale, tangent aligned to U for the normal map), and bind the maps.
+            RenderMesh tiled = mesh;
+            applyWorldPlanarUVs(tiled, 1.0 / surfaceWorldTileSize(surface));
+            r.mesh = assets.acquireMesh(tiled, key + ":" + tag);
+            std::array<TextureHandle, 4> h = surfaceSet(surface);
+            r.material.albedoMap = h[0];
+            r.material.normalMap = h[1];
+            r.material.metallicRoughnessMap = h[2];
+            r.material.aoMap = h[3];
+        } else {
+            r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
+        }
         world.add<Renderable>(e, r);
     };
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
         RenderMaterial rm = materialFor(static_cast<PartId>(m.parts[i].materialIndex), Vec3(1, 1, 1));
-        spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness, rm.flags);
+        spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness, rm.surface());
     }
-    spawnMesh(m.roads, "roads", 0.0f, 0.9f,
-              RenderMaterial::surfaceBits(RenderMaterial::Surface::Asphalt));
-    spawnMesh(m.pavement, "pavement", 0.0f, 0.95f,
-              RenderMaterial::surfaceBits(RenderMaterial::Surface::Pavement));
-    spawnMesh(m.props, "props", 0.0f, 0.85f);
-    spawnMesh(m.ground, "ground", 0.0f, 1.0f);
+    spawnMesh(m.roads, "roads", 0.0f, 0.9f, Surface::Asphalt);
+    spawnMesh(m.pavement, "pavement", 0.0f, 0.95f, Surface::Pavement);
+    spawnMesh(m.props, "props", 0.0f, 0.85f, Surface::None);
+    spawnMesh(m.ground, "ground", 0.0f, 1.0f, Surface::None);
 
     // Walk-surface collider: the flat block aprons + roads are a static triangle
     // mesh the player walks on (the curbed pads, level per block).
