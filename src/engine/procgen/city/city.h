@@ -75,6 +75,20 @@ struct CityBuilding {
                               // (a box would circumscribe it and keep you away)
 };
 
+// A set of placements sharing one prototype mesh (ADR-0041): the backend-neutral
+// instancing payload. The viewer turns each into an InstanceGroup entity; the
+// offline tracer turns each into a MeshProto + SceneInstances. So ~600 street
+// trees cost one prototype, not 600 baked copies. The proto is vertex-coloured;
+// `alphaFoliage` selects the alpha-cut leaf material (leaf texture) over the
+// opaque default.
+struct CityInstanceGroup {
+    RenderMesh proto;
+    std::vector<Mat4> transforms;   // world matrices, one per instance
+    float metallic = 0.0f;
+    float roughness = 0.85f;
+    bool  alphaFoliage = false;
+};
+
 struct CityModel {
     // Geometry merged by material class across every building (one mesh per
     // non-empty PartId), so the whole city is a handful of draws. Each part keeps
@@ -84,7 +98,8 @@ struct CityModel {
     RenderMesh roads;         // asphalt carriageways (between block aprons)
     RenderMesh pavement;      // flat graded block aprons (sidewalk) + retaining skirts
     RenderMesh ground;        // ground plane under the city (empty when on terrain)
-    RenderMesh props;         // street + park trees (vertex-coloured, on the ground)
+    RenderMesh props;         // lamps, signals, tree pits (baked, vertex-coloured)
+    std::vector<CityInstanceGroup> instanceGroups;   // instanced props (trees)
     int treeCount = 0;
 
     // HLOD proxy (ADR-0034 §5 / ADR-0038 §6): every building's coarse mass box

@@ -164,6 +164,26 @@ void addMeshAsTriangles(const RenderMesh& mesh, const Vec3& position,
     }
 }
 
+// A prototype's triangles in LOCAL space (identity transform), for an instanced
+// proto (ADR-0041). Mirrors addMeshAsTriangles' per-vertex attribute copy.
+std::vector<Triangle> meshProtoTriangles(const RenderMesh& mesh, int matIdx) {
+    std::vector<Triangle> out;
+    auto fill = [&](Triangle& tri, int slot, const Vertex& v) {
+        if (slot == 0) { tri.v0 = v.position; tri.n0 = v.normal; tri.t0 = v.tangent; tri.c0 = v.color; tri.uv0[0] = v.u; tri.uv0[1] = v.v; }
+        else if (slot == 1) { tri.v1 = v.position; tri.n1 = v.normal; tri.t1 = v.tangent; tri.c1 = v.color; tri.uv1[0] = v.u; tri.uv1[1] = v.v; }
+        else { tri.v2 = v.position; tri.n2 = v.normal; tri.t2 = v.tangent; tri.c2 = v.color; tri.uv2[0] = v.u; tri.uv2[1] = v.v; }
+    };
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        Triangle tri;
+        tri.materialIndex = matIdx;
+        fill(tri, 0, mesh.vertices[mesh.indices[i]]);
+        fill(tri, 1, mesh.vertices[mesh.indices[i + 1]]);
+        fill(tri, 2, mesh.vertices[mesh.indices[i + 2]]);
+        out.push_back(tri);
+    }
+    return out;
+}
+
 bool isIdentity(const Quat& q) {
     return q.x == 0.0 && q.y == 0.0 && q.z == 0.0;
 }
@@ -431,7 +451,23 @@ void bakeCityModel(const CityModel& m, Scene& scene) {
     bake(m.roads, 0.0f, 0.9f, S::Asphalt);
     bake(m.pavement, 0.0f, 0.95f, S::Pavement);   // sidewalk slabs
     bake(m.ground, 0.0f, 1.0f, S::None);
-    bake(m.props, 0.0f, 0.85f, S::None);          // trees (vertex-coloured)
+    bake(m.props, 0.0f, 0.85f, S::None);          // lamps, signals, tree pits
+
+    // Instanced props (ADR-0041): each group is one BLAS proto + N placements.
+    for (const CityInstanceGroup& g : m.instanceGroups) {
+        if (g.proto.indices.empty() || g.transforms.empty()) continue;
+        Material mat = Material::pbr(Vec3(1, 1, 1), g.metallic, g.roughness);
+        if (g.alphaFoliage) {                     // alpha-cut leaf cards
+            TextureData leaf = leafTexture(128);
+            Texture tex;
+            tex.width = leaf.width; tex.height = leaf.height;
+            tex.channels = leaf.channels; tex.pixels = std::move(leaf.pixels);
+            mat.alphaTex = scene.addTexture(std::move(tex));
+        }
+        int mi = scene.addMaterial(mat);
+        int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
+        for (const Mat4& xf : g.transforms) scene.addInstance(proto, xf);
+    }
     LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount
              << " blocks, " << m.treeCount << " trees";
 }

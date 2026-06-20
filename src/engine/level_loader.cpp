@@ -456,6 +456,37 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
     spawnMesh(m.props, "props", 0.0f, 0.85f, Surface::None);
     spawnMesh(m.ground, "ground", 0.0f, 1.0f, Surface::None);
 
+    // Instanced props (ADR-0041): each group becomes one InstanceGroup entity —
+    // a shared mesh + material drawn over N world matrices (the existing
+    // instanced-draw path), so the city's ~600 street trees are a handful of
+    // batches, not baked geometry.
+    for (std::size_t gi = 0; gi < m.instanceGroups.size(); ++gi) {
+        const CityInstanceGroup& cg = m.instanceGroups[gi];
+        if (cg.proto.vertices.empty() || cg.transforms.empty()) continue;
+        InstanceGroup g;
+        g.mesh = assets.acquireMesh(cg.proto, key + ":inst" + std::to_string(gi));
+        g.material.albedo = Vec3(1, 1, 1);       // hue carried in vertex colour
+        g.material.metallic = cg.metallic;
+        g.material.roughness = cg.roughness;
+        if (cg.alphaFoliage) {
+            g.material.albedoMap = upload(leafTexture(128));
+            g.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        }
+        g.transforms = cg.transforms;
+        Vec3 centroid(0, 0, 0);
+        for (const Mat4& t : cg.transforms)
+            centroid = centroid + Vec3(t.m[0][3], t.m[1][3], t.m[2][3]);
+        centroid = centroid / static_cast<Real>(cg.transforms.size());
+        Real spread = 0;
+        for (const Mat4& t : cg.transforms)
+            spread = std::max(spread,
+                              (Vec3(t.m[0][3], t.m[1][3], t.m[2][3]) - centroid).length());
+        BoundingSphere mb = assets.meshBounds(g.mesh);
+        g.boundsCenter = centroid;
+        g.boundsRadius = spread + (mb.center.length() + mb.radius) * 1.5;
+        world.add<InstanceGroup>(world.create(), g);
+    }
+
     // Walk-surface collider: the flat block aprons + roads are a static triangle
     // mesh the player walks on (the curbed pads, level per block).
     {
