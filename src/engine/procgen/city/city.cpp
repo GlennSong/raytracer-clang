@@ -28,24 +28,27 @@ uint32_t hash2(int a, uint32_t seed) {
 // down to residential; parks build nothing).
 // Pick a facade style for a district. The style distribution is the visible half
 // of an archetype: high-rise = glass/metal towers, commercial = concrete/glass/
-// brick offices, residential = brick/stucco/painted walk-ups, industrial = metal.
-FacadeStyle styleForDistrict(District d, Rng& rng) {
+// Cladding follows the structural system, which follows height (ADR-0040):
+// load-bearing masonry doesn't scale, so ~12 storeys is where the wall stops
+// holding the building up and becomes a lightweight curtain wall hung off a
+// frame — glass + metal/precast, never brick. Corrugated metal is industrial
+// only. So material is chosen by storey count, not the district directly.
+FacadeStyle styleForHeight(District d, int floors, Rng& rng) {
+    if (d == District::Industrial) return FacadeStyle::Metal;   // corrugated sheds
     Real r = rng.unit();
-    switch (d) {
-        case District::HighRise:
-            return r < 0.6 ? FacadeStyle::GlassCurtain
-                 : (r < 0.85 ? FacadeStyle::Metal : FacadeStyle::Concrete);
-        case District::Commercial:
-            return r < 0.4 ? FacadeStyle::Concrete
-                 : (r < 0.65 ? FacadeStyle::GlassCurtain
-                 : (r < 0.9 ? FacadeStyle::Brick : FacadeStyle::Stucco));
-        case District::Industrial:
-            return FacadeStyle::Metal;
-        case District::Residential:
-        default:
-            return r < 0.45 ? FacadeStyle::Brick
-                 : (r < 0.75 ? FacadeStyle::Stucco : FacadeStyle::Painted);
+    if (floors >= 12) {
+        // High / super-tall: a glass curtain wall, or a precast/stone-clad
+        // concrete frame. No masonry — you can't hang brick this high.
+        return r < 0.62 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
     }
+    if (floors >= 5) {
+        // Mid-rise framed: precast/concrete or masonry infill, the odd glass box.
+        return r < 0.42 ? FacadeStyle::Concrete
+             : (r < 0.80 ? FacadeStyle::Brick : FacadeStyle::GlassCurtain);
+    }
+    // Low-rise load-bearing masonry: brick walk-ups, stucco, painted.
+    return r < 0.5 ? FacadeStyle::Brick
+         : (r < 0.8 ? FacadeStyle::Stucco : FacadeStyle::Painted);
 }
 
 // The building-archetype library (the "variety of buildings" axis): each district
@@ -55,17 +58,7 @@ FacadeStyle styleForDistrict(District d, Rng& rng) {
 BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     BuildingParams p;
     p.seed = rng.next() ^ seed;
-    FacadeStyle style = styleForDistrict(d, rng);
-    p.wallColor = facadeColor(style, p.seed);
-    p.curtainWall = (style == FacadeStyle::GlassCurtain);
-    // Pick the wall's procedural material from the library by facade style.
-    switch (style) {
-        case FacadeStyle::Brick:    p.wallPart = PartId::Brick;    break;
-        case FacadeStyle::Concrete: p.wallPart = PartId::Concrete; break;
-        case FacadeStyle::Stucco:   p.wallPart = PartId::Stucco;   break;
-        case FacadeStyle::Metal:    p.wallPart = PartId::Metal;    break;
-        default:                    p.wallPart = PartId::Wall;     break;  // Painted/Glass
-    }
+    // Massing first (floor count + dimensions), so cladding can follow height.
     switch (d) {
         case District::HighRise:                 // glass/metal towers
             p.floors = rng.irange(16, 45);
@@ -97,6 +90,19 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
             break;
     }
 
+    // Cladding follows the now-known height (ADR-0040): tall ⇒ glass/precast,
+    // short ⇒ masonry, never a 40-storey brick tower.
+    FacadeStyle style = styleForHeight(d, p.floors, rng);
+    p.wallColor = facadeColor(style, p.seed);
+    p.curtainWall = (style == FacadeStyle::GlassCurtain);
+    switch (style) {
+        case FacadeStyle::Brick:    p.wallPart = PartId::Brick;    break;
+        case FacadeStyle::Concrete: p.wallPart = PartId::Concrete; break;
+        case FacadeStyle::Stucco:   p.wallPart = PartId::Stucco;   break;
+        case FacadeStyle::Metal:    p.wallPart = PartId::Metal;    break;
+        default:                    p.wallPart = PartId::Wall;     break;  // Painted/Glass
+    }
+
     // Massing variety (not every building is a box): some high-rise towers are
     // round (curved glass), and an "old town" pocket builds tiered pagodas.
     if (d == District::HighRise && p.curtainWall && rng.unit() < 0.35) {
@@ -106,12 +112,13 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
 
     // Ornamentation by archetype: a glass curtain wall and a metal shed stay
     // clean; traditional masonry gets a base course, a ground-floor cornice, an
-    // awning, and — on shorter brick/concrete buildings — pilasters.
+    // awning, and — on shorter masonry buildings — base piers (pilasters live on
+    // the base only, ADR-0040; growBuilding caps them with the string course).
     bool plain = p.curtainWall || p.solidFacade;
     p.baseCourse = !p.solidFacade;
     p.stringCourse = !plain;
     p.awning = !plain;
-    p.pilasters = !plain && p.floors <= 12 &&
+    p.pilasters = !plain && p.floors <= 8 &&
                   (style == FacadeStyle::Brick || style == FacadeStyle::Concrete);
     p.parapet = p.solidFacade ? 0.0 : human::PARAPET;
     p.trimColor = plain ? Vec3(0.50, 0.52, 0.55)
@@ -482,19 +489,16 @@ CityModel generateCity(const CityParams& cp) {
         bool oldTown = dist != District::HighRise && dist != District::Industrial &&
                        (c - oldTownC).length() < cp.extent * 0.24;
 
-        // Flat block grade = a true leveled foundation. Now that the terrain is
-        // CUT to the city grades (model.flatten), the pad no longer has to clear
-        // the highest raw-terrain bump under the block (which made sidewalks tower
-        // over the street on rolling ground). It sits one curb above the highest
-        // adjacent STREET grade — the smoothed, engineered road elevations — so the
-        // sidewalk is a consistent curb height all the way round.
-        const Real curbHeight = 0.18;
+        // Flat block grade. The terrain is CUT to the pad (model.flatten), so the
+        // pad sits at the block-CENTROID street grade plus a low curb — not the
+        // highest adjacent corner, which made the foundation tower over the street
+        // and poke up at the entrance on rolling ground (ADR-0040). One curb high,
+        // so the building meets the sidewalk cleanly.
+        const Real curbHeight = 0.12;
         const Real apronThickness = 0.12;
-        Real gradeY = cp.baseY + 0.15;
+        Real gradeY = cp.baseY + 0.12;
         if (cp.groundAt) {
-            Real mx = -1e30;
-            for (const Vec2& v : block) mx = std::max(mx, gradeAt(v));
-            gradeY = mx + curbHeight;
+            gradeY = gradeAt(c) + curbHeight;
         }
         // Paved apron (sidewalk + block interior), flat at grade, snapped to the
         // road edge so the sidewalk meets the curb meets the carriageway with no

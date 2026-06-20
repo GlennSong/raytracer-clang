@@ -2458,6 +2458,57 @@ the city's materials are converted to baked-texture assets too.
 
 ---
 
+## ADR-0040 — Building realism: height drives structure & cladding; tripartite composition
+**Status:** Accepted — **Pass A** (street-level fixes + the height→material rule)
+**implemented**; **Pass B** (material palettes, base/shaft/crown differentiation,
+curtain-wall mullions/spandrels, a crown kit) planned. · **Date:** 2026-06-20
+
+**Context.** The generated buildings read as a uniform mid-rise field. Three
+reasons, all of which violate how real buildings work:
+1. **Material is a per-district dice roll independent of height** — a 40-storey
+   brick tower is possible. In reality material follows the *structural system*,
+   which follows *height*: load-bearing masonry doesn't scale (the Monadnock
+   Building's 6-foot brick base is why), so around ~12 storeys the wall stops
+   holding the building up and becomes a lightweight **curtain wall** hung off a
+   frame — which wants to be glass + metal. Short ⇒ brick/stone with punched
+   windows; tall ⇒ glass-and-metal skin on a frame.
+2. **No base/shaft/crown reading** — the base looks like the shaft, so buildings
+   are extruded boxes. A real building has a heavier base (lobby/retail, bigger
+   openings, a capping cornice), a repetitive shaft, and a distinct crown.
+3. **Street-level defects** — the graded **pad sits too high** and the
+   **base-course plinth runs across the entrance**, clipping the doorway ("the
+   foundation eats the base"); **pilasters run full height arbitrarily** instead
+   of being a deliberate base element or a vertical-expression style.
+
+**Decision.** Couple material and form to height, the way real construction does:
+- **Height → structure → cladding bands** (the master rule). Cladding is chosen
+  by storey count, not independently: low (1–4) masonry brick/stone/stucco with
+  *punched windows*; mid (5–11) framed masonry/precast (brick/concrete); high
+  (12–24) and super-tall (25+) a **glass curtain wall** (glass + metal/precast),
+  never brick. Corrugated metal stays an **industrial** cladding only.
+- **Material-family coherence.** A building draws its wall/trim from one coherent
+  family; the only legitimate second treatment is a different *base* (Pass B),
+  never brick mixed into a glass tower.
+- **Tripartite composition.** Base ≠ shaft ≠ crown. Pass A keeps the taller
+  glassy ground floor + capping string-course; Pass B differentiates base
+  material/treatment and adds a crown kit (parapet for low; mechanical
+  penthouse + rooftop water tank + cap for tall).
+- **Pilasters are compositional, not default.** Restricted to the **base** (piers
+  framing the storefront, capped by the base cornice) — full-height piers become
+  an explicit "vertical expression" style in Pass B, never sprinkled.
+- **Street-level corrections.** Lower the block pad so the building meets the
+  sidewalk; the base course **steps around the entrance bay** and is sized to the
+  building rather than a flat tall plinth.
+
+**Consequences.** Variety now comes from *district → height → structural system →
+cladding*, with controlled randomness *within* a coherent family — diversity that
+obeys the same constraints real buildings do, instead of random mixing. Pass A is
+mostly rule-coupling + bug-fix (no new geometry kinds). Pass B adds the palette
+system, base/shaft/crown geometry, curtain-wall mullion/spandrel detail, and the
+crown kit — the items ADR-0038's facade work deferred.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

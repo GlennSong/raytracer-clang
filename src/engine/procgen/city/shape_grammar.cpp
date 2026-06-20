@@ -563,17 +563,25 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
                        {r, Vec3(0, 1, 0), f}, Vec3(width, 0.1, depth)},
             PartId::Ground, materialFor(PartId::Ground, wallColor).albedo);
 
-    // Base course / foundation: a wider, darker plinth the building rises from
-    // (real buildings sit on a visible base, not flush on the ground).
-    auto bandScope = [&](Real yb, Real h, Real grow) {
-        return Scope{Vec3(footOrigin.x - (r.x + f.x) * 0, yb, footOrigin.z) -
-                         r * grow - f * grow,
-                     {r, Vec3(0, 1, 0), f},
-                     Vec3(width + 2 * grow, h, depth + 2 * grow)};
-    };
-    if (params.baseCourse)
-        emitBox(out, bandScope(baseY, std::min(Real(0.8), gh * 0.2), 0.22),
-                PartId::Trim, params.trimColor * 0.8);
+    // Base course / water-table: a low band the building rises from. Emitted
+    // per face and skipped on the entrance side (ADR-0040) so it steps around
+    // the doorway instead of clipping it ("the foundation eats the base").
+    if (params.baseCourse) {
+        const Real bh = std::min(Real(0.45), gh * 0.12);   // water-table height
+        const Real proud = 0.1;
+        Vec3 col = params.trimColor * 0.8;
+        RenderMesh band;
+        for (int side = 0; side < 4; ++side) {
+            if (side == 0 && params.walkableGround) continue;   // entrance breaks it
+            FaceRect fr = faceOf(ground, side);
+            Vec3 out = fr.n * proud;
+            Vec3 b0 = fr.at(0, 0), b1 = fr.at(fr.width, 0);
+            Vec3 t0 = fr.at(0, bh), t1 = fr.at(fr.width, bh);
+            emitQuad(band, b0 + out, b1 + out, t1 + out, t0 + out, fr.n, col);  // face
+            emitQuad(band, t0 + out, t1 + out, t1, t0, fr.v, col);              // top ledge
+        }
+        appendToPart(out, PartId::Trim, band);
+    }
     {
         FaceRect ef = faceOf(ground, 0);
         out.attaches.push_back({ef.at(ef.width * 0.5, 0), ef.n, "entrance"});
@@ -590,10 +598,20 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         }
     }
     // String course / cornice: an oversailing band capping the ground floor
-    // (separates the taller retail/lobby base from the floors above).
-    if (params.stringCourse)
-        emitBox(out, bandScope(y - 0.18, 0.36, 0.14), PartId::Trim, params.trimColor);
+    // (separates the taller retail/lobby base from the floors above, and caps the
+    // base piers). Wraps the whole perimeter — a cornice runs over the entrance.
+    if (params.stringCourse) {
+        Real grow = 0.14, h = 0.36, yb = y - 0.18;
+        Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * grow - f * grow,
+                 {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * grow, h, depth + 2 * grow)};
+        emitBox(out, sc, PartId::Trim, params.trimColor);
+    }
     y += gh;
+
+    // Upper floors carry no pilasters — base piers belong to the base only
+    // (ADR-0040), capped by the string course above.
+    BuildingParams upper = params;
+    upper.pilasters = false;
 
     // Upper residential floors, with optional setbacks.
     for (int i = 0; i < params.floors; ++i) {
@@ -610,7 +628,7 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
                         : params.curtainWall ? FacadeMode::Retail
                                              : FacadeMode::Residential;
         for (int side = 0; side < 4; ++side)
-            emitFacade(out, storey, side, mode, params, wallColor);
+            emitFacade(out, storey, side, mode, upper, wallColor);
         if (i == params.floors / 2) {
             FaceRect ff = faceOf(storey, 0);
             out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
