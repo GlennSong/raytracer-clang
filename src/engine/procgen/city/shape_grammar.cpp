@@ -304,12 +304,20 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
         wallQuad(wx1, x1, openSill, openHead);               // right pier
 
         if (entrance) {
-            // A real opening: a recessed dark threshold so it reads as a doorway
-            // you can pass through (ADR-0038 §4).
-            Vec3 in = fr.n * -0.15;
-            emitQuad(door, fr.at(wx0, 0) + in, fr.at(wx1, 0) + in,
-                     fr.at(wx1, openHead) + in, fr.at(wx0, openHead) + in, fr.n,
-                     materialFor(PartId::Door, wallColor).albedo);
+            // A recessed doorway, closed like the windows: jambs + lintel +
+            // threshold connect the wall opening back to the door leaf, so you
+            // can't see through the gap into the hollow shell (a unified mesh).
+            Vec3 in = fr.n * -0.18;
+            Vec3 oBL = fr.at(wx0, 0), oBR = fr.at(wx1, 0);
+            Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
+            Vec3 dBL = oBL + in, dBR = oBR + in, dTL = oTL + in, dTR = oTR + in;
+            Vec3 rev = wallColor * 0.7;
+            emitQuad(wall, oTL, oTR, dTR, dTL, fr.v * -1, rev);   // lintel (faces down)
+            emitQuad(wall, oBL, oBR, dBR, dBL, fr.v, rev);        // threshold (faces up)
+            emitQuad(wall, oBL, oTL, dTL, dBL, fr.h, rev);        // left jamb
+            emitQuad(wall, oBR, oTR, dTR, dBR, fr.h * -1, rev);   // right jamb
+            emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
+                     materialFor(PartId::Door, wallColor).albedo);   // the door leaf
         } else {
             Vec3 in = fr.n * (-p.windowInset);
             // Window reveals (jambs/sill/lintel): close the recess between the wall
@@ -406,20 +414,30 @@ static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
     Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
     Real baseY = scope.origin.y;
     Real R = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
-    int sides = std::max(16, p.sides);
+    int sides = std::max(20, p.sides);
     Vec3 wall = p.wallColor;
     Vec3 glass = materialFor(PartId::Glass, wall).albedo;
     Real y = baseY;
-
     Real gh = p.groundHeight;
+
+    // Round towers are stout, not needle-thin (Marina City / Torre Agbar read at
+    // roughly height ≈ 5x diameter). Cap the storey count to that slenderness so a
+    // small round lot doesn't become a pencil (ADR-0040).
+    Real diameter = 2 * R;
+    int maxFloors = std::max(4, static_cast<int>((5.0 * diameter - gh) / p.floorHeight));
+    int floors = std::min(p.floors, maxFloors);
+
+    // All bands share one radius — a continuous shell, so there are no radial
+    // gaps between the spandrel and window rings to see through (the old inset
+    // left open slots and lit the hollow interior).
     emitTube(out, cXZ, R, y, y + 0.5, sides, PartId::Trim, p.trimColor);          // base ring
-    emitTube(out, cXZ, R * 0.99, y + 0.5, y + gh - 0.3, sides, PartId::Glass, glass);  // lobby glass
-    emitTube(out, cXZ, R, y + gh - 0.3, y + gh, sides, PartId::Trim, p.trimColor);     // cornice ring
+    emitTube(out, cXZ, R, y + 0.5, y + gh - 0.3, sides, PartId::Glass, glass);    // lobby glass
+    emitTube(out, cXZ, R, y + gh - 0.3, y + gh, sides, PartId::Trim, p.trimColor); // cornice ring
     y += gh;
-    for (int i = 0; i < p.floors; ++i) {
+    for (int i = 0; i < floors; ++i) {
         Real fh = p.floorHeight;
         emitTube(out, cXZ, R, y, y + 0.9, sides, PartId::Wall, wall);             // spandrel band
-        emitTube(out, cXZ, R * 0.985, y + 0.9, y + fh, sides, PartId::Glass, glass);  // window band
+        emitTube(out, cXZ, R, y + 0.9, y + fh, sides, PartId::Glass, glass);      // window band
         y += fh;
     }
     emitDisc(out, cXZ, R, y, sides, PartId::Roof, materialFor(PartId::Roof, wall).albedo, true);
@@ -547,15 +565,27 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
 
     Real y = baseY;
 
+    // Entrance side: the face whose outward normal points most toward the street
+    // (params.faceDir), so the door faces the road, not an alley (ADR-0040). Side
+    // normals follow faceOf: 0=+f, 1=-f, 2=+r, 3=-r.
+    Vec3 sideNormal[4] = {f, f * -1, r, r * -1};
+    int entranceSide = 0;
+    Real bestDot = -1e30;
+    for (int s = 0; s < 4; ++s) {
+        Real dp = sideNormal[s].x * params.faceDir.x + sideNormal[s].z * params.faceDir.z;
+        if (dp > bestDot) { bestDot = dp; entranceSide = s; }
+    }
+
     // Ground floor: taller, glassy retail (or lobby), walkable shell with a real
-    // entrance on the front face (ADR-0038 §4).
+    // entrance on the street-facing face (ADR-0038 §4).
     Real gh = params.groundHeight;
     Scope ground = storeyScope(y, gh);
     FacadeMode groundMode = params.solidFacade ? FacadeMode::Solid
                           : params.groundRetail ? FacadeMode::Retail
                                                 : FacadeMode::Residential;
     for (int side = 0; side < 4; ++side) {
-        FacadeMode mode = (side == 0 && params.walkableGround) ? FacadeMode::Entrance : groundMode;
+        FacadeMode mode = (side == entranceSide && params.walkableGround)
+                              ? FacadeMode::Entrance : groundMode;
         emitFacade(out, ground, side, mode, params, wallColor);
     }
     // Ground slab you can stand on.
@@ -572,7 +602,7 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         Vec3 col = params.trimColor * 0.8;
         RenderMesh band;
         for (int side = 0; side < 4; ++side) {
-            if (side == 0 && params.walkableGround) continue;   // entrance breaks it
+            if (side == entranceSide && params.walkableGround) continue;   // entrance breaks it
             FaceRect fr = faceOf(ground, side);
             Vec3 out = fr.n * proud;
             Vec3 b0 = fr.at(0, 0), b1 = fr.at(fr.width, 0);
@@ -583,7 +613,7 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         appendToPart(out, PartId::Trim, band);
     }
     {
-        FaceRect ef = faceOf(ground, 0);
+        FaceRect ef = faceOf(ground, entranceSide);
         out.attaches.push_back({ef.at(ef.width * 0.5, 0), ef.n, "entrance"});
         // Awning: a projecting ledge over the entrance (ground floor).
         if (params.awning) {

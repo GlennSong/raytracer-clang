@@ -71,6 +71,8 @@ struct CityBuilding {
     Vec3 boxCenter;           // world centre of the box
     Vec3 boxHalf;             // half-extents in the building's local frame
     Real yaw = 0;             // rotation about +Y (radians)
+    bool round = false;       // cylindrical mass -> collide as a vertical capsule
+                              // (a box would circumscribe it and keep you away)
 };
 
 struct CityModel {

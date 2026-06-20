@@ -131,6 +131,9 @@ struct BuildingParams {
     // Which part the facade walls are emitted under — picks the wall's procedural
     // material (Brick/Concrete/Stucco/Metal from the library, or the flat Wall).
     PartId wallPart = PartId::Wall;
+    // World XZ direction toward the street, so the entrance is placed on the face
+    // that points at the road (not into an alley/courtyard). Default +Z.
+    Vec3  faceDir{0, 0, 1};
     bool  baseCourse = true;     // a wider, darker plinth — the foundation/base
     bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
     bool  pilasters = false;     // vertical piers framing each bay (run full height)

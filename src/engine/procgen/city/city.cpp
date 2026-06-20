@@ -558,6 +558,15 @@ CityModel generateCity(const CityParams& cp) {
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
 
             BuildingParams bp = paramsForDistrict(dist, rng, cp.seed);
+            // Face the street: the lot sits inside the block, so the direction
+            // from the block centre out to the lot points toward the perimeter
+            // road. The entrance is placed on the face most aligned with it.
+            Vec2 sc = centroid(site);
+            Vec2 fd = sc - c;
+            if (fd.lengthSquared() > 1e-6) {
+                fd = normalize(fd);
+                bp.faceDir = Vec3(fd.x, 0, fd.y);
+            }
             if (oldTown) {
                 bp.shape = BuildingShape::Pagoda;
                 bp.tiers = 3 + 2 * static_cast<int>(rng.next() % 3);   // 3 / 5 / 7
@@ -587,6 +596,11 @@ CityModel generateCity(const CityParams& cp) {
             cb.boxCenter = Vec3(footC.x, baseY + bm.height * 0.5, footC.z);
             cb.boxHalf = Vec3(scope.size.x * 0.5, bm.height * 0.5, scope.size.z * 0.5);
             cb.yaw = std::atan2(scope.axis[2].x, scope.axis[2].z);
+            cb.round = (bp.shape == BuildingShape::Cylinder);
+            if (cb.round) {   // collider radius = the cylinder's radius, not the lot box
+                Real rad = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
+                cb.boxHalf.x = cb.boxHalf.z = rad;
+            }
             model.buildings.push_back(cb);
         }
     }

@@ -496,8 +496,16 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Collider c;
-        c.shape = ColliderShape::Box;
-        c.halfExtent = b.boxHalf;
+        if (b.round) {
+            // A vertical capsule is round in plan, so you can walk right up to the
+            // cylinder wall instead of being held off by a circumscribing box.
+            c.shape = ColliderShape::Capsule;
+            c.radius = b.boxHalf.x;
+            c.halfHeight = std::max(Real(0.1), b.boxHalf.y - b.boxHalf.x);
+        } else {
+            c.shape = ColliderShape::Box;
+            c.halfExtent = b.boxHalf;
+        }
         c.friction = 0.8;
         world.add<Collider>(e, c);
         RigidBody rb;
