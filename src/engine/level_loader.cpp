@@ -87,6 +87,32 @@ static void applyWorldPlanarUVs(RenderMesh& mesh, double scale) {
     }
 }
 
+// One bake+upload per surface, shared across a level load (every brick entity
+// binds the same uploaded set). The cache keys on the surface id.
+using SurfaceTexCache = std::unordered_map<int, std::array<TextureHandle, 4>>;
+static std::array<TextureHandle, 4> bakeSurfaceTextures(
+    Renderer& renderer, RenderMaterial::Surface surf, SurfaceTexCache& cache) {
+    int id = static_cast<int>(surf);
+    auto it = cache.find(id);
+    if (it != cache.end()) return it->second;
+    SurfaceMaps mp = surfaceMaps(surf, 256, 1337u);
+    auto up = [&](const TextureData& td) {
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+    std::array<TextureHandle, 4> h{up(mp.albedo), up(mp.normal), up(mp.mr), up(mp.ao)};
+    cache[id] = h;
+    return h;
+}
+// Bind a baked set onto a material and clear the analytic surface bits (the
+// textures drive the look now).
+static void bindSurfaceMaps(RenderMaterial& mat, const std::array<TextureHandle, 4>& h) {
+    mat.albedoMap = h[0];
+    mat.normalMap = h[1];
+    mat.metallicRoughnessMap = h[2];
+    mat.aoMap = h[3];
+    mat.flags &= ~RenderMaterial::SURFACE_MASK;
+}
+
 // A named material library: the level's top-level "materials" table, so entities
 // can reference a shared material by name ("material": "brickWall") instead of
 // repeating an inline block (ADR-0039).
@@ -510,6 +536,7 @@ static void loadEntities(const json& entities, const json& root, World& world,
                          const json* cityEnt = nullptr,
                          const CityModel* cityModel = nullptr) {
     MaterialTable materials = buildMaterialTable(root);   // named "materials" table
+    SurfaceTexCache surfaceTex;   // one bake+upload per surface across the load
     int treeIndex = 0;
     int cityIndex = 0;
     for (auto& ent : entities) {
@@ -577,11 +604,21 @@ static void loadEntities(const json& entities, const json& root, World& world,
         createEntityCommon(e, ent, world);
         world.add<SourceSpec>(e, buildSourceSpec(ent, shape));
 
-        MeshHandle meshHandle = getOrCreateMesh(shape, sizeJ, assets);
         Renderable r;
-        r.mesh = meshHandle;
         if (ent.contains("material"))
             r.material = resolveMaterial(ent["material"], materials);
+        RenderMaterial::Surface surf = r.material.surface();
+        if (surf != RenderMaterial::Surface::None) {
+            // A material with a baked surface: give this entity its own mesh with
+            // planar tiling UVs (the texture tiles at human scale) and bind the
+            // baked PBR set, rather than the shared, untextured primitive.
+            RenderMesh mesh = MeshBuilder::shape(shape, parseVec3(sizeJ, Vec3(1, 1, 1)));
+            applyWorldPlanarUVs(mesh, 1.0 / surfaceWorldTileSize(surf));
+            r.mesh = assets.acquireMesh(mesh, "");   // unkeyed: per-entity UVs
+            bindSurfaceMaps(r.material, bakeSurfaceTextures(renderer, surf, surfaceTex));
+        } else {
+            r.mesh = getOrCreateMesh(shape, sizeJ, assets);
+        }
         world.add<Renderable>(e, r);
 
         addPhysics(e, ent, shape, world);
