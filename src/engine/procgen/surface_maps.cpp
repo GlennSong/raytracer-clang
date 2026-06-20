@@ -275,7 +275,10 @@ SurfaceMaps surfaceMaps(Surface surface, int size, uint32_t seed) {
         x = ((x % size) + size) % size; y = ((y % size) + size) % size;
         return hgt[static_cast<size_t>(y) * size + x];
     };
-    const double strength = size * 0.010;
+    // Bump strength scales with resolution so the relief reads the same at any
+    // size. Kept strong: facades should visibly catch light on the mortar/joint
+    // grooves, not look like a flat decal.
+    const double strength = size * 0.035;
     for (int y = 0; y < size; ++y)
         for (int x = 0; x < size; ++x) {
             size_t i = static_cast<size_t>(y) * size + x;
@@ -285,13 +288,14 @@ SurfaceMaps surfaceMaps(Surface surface, int size, uint32_t seed) {
             m.normal.pixels[i * 3 + 0] = u8(n.x * 0.5 + 0.5);
             m.normal.pixels[i * 3 + 1] = u8(n.y * 0.5 + 0.5);
             m.normal.pixels[i * 3 + 2] = u8(n.z * 0.5 + 0.5);
-            // AO: how much this texel sits below a small neighbourhood average.
+            // AO: how far this texel sits below a small neighbourhood average —
+            // darkens the recessed joints/crevices.
             double avg = 0;
             for (int dj = -2; dj <= 2; ++dj)
                 for (int di = -2; di <= 2; ++di) avg += H(x + di, y + dj);
             avg /= 25.0;
-            double ao = 1.0 - clamp01((avg - hgt[i]) * 1.6);
-            m.ao.pixels[i] = u8(0.4 + 0.6 * ao);
+            double ao = 1.0 - clamp01((avg - hgt[i]) * 4.0);
+            m.ao.pixels[i] = u8(0.2 + 0.8 * ao);
         }
     return m;
 }
