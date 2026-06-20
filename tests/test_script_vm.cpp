@@ -237,6 +237,50 @@ TEST_CASE(procgen_script_composes_a_model) {
     CHECK(insts == 3);
 }
 
+TEST_CASE(procgen_script_decorates_the_road_network) {
+    // ADR-0042 Phase 3: the road→block solver is exposed (city.layout) so a Lua
+    // recipe places props along the real street network and returns a model. The
+    // solver stays C++; the recipe just decorates its output.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    double nodes = 0, edges = 0, blocks = 0, placed = 0;
+    CHECK(vm.doString(R"LUA(
+        local L = city.layout{ extent = 200, cell_size = 95, seed = 5 }
+        nnodes = #L.nodes
+        nedges = #L.edges
+        nblocks = #L.blocks
+        -- the layout is real geometry: a node has world x/z, an edge indexes nodes
+        ok = (L.nodes[1].x ~= nil) and (L.edges[1].a >= 1) and (#L.blocks[1] >= 3)
+    )LUA"));
+    bool ok = false;
+    CHECK(vm.getGlobalBool("ok", ok));
+    CHECK(ok);
+    CHECK(vm.getGlobalNumber("nnodes", nodes)); CHECK(nodes > 0);
+    CHECK(vm.getGlobalNumber("nedges", edges)); CHECK(edges > 0);
+    CHECK(vm.getGlobalNumber("nblocks", blocks)); CHECK(blocks > 0);
+
+    // A recipe places one lamp per road segment and returns a model; the instance
+    // count equals the edge count (every segment got a lamp).
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local L = city.layout{ extent = 200, cell_size = 95, seed = 5 }
+        local p = {}
+        for _, e in ipairs(L.edges) do
+            local a, b = L.nodes[e.a], L.nodes[e.b]
+            p[#p + 1] = { pos = { (a.x + b.x) * 0.5, 0, (a.z + b.z) * 0.5 } }
+        end
+        local m = model.new()
+        m:add_instances(streetfurniture.lamp{}, p)
+        placed = m:instance_count()
+        return m
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    CHECK(mesh && !mesh->vertices.empty());
+    CHECK(vm.getGlobalNumber("placed", placed));
+    CHECK(placed == edges);                        // one lamp per road segment
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);

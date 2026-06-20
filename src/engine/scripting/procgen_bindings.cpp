@@ -10,6 +10,7 @@
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/street_kit.h"
+#include "../procgen/city/road_network.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/proc_model.h"
 #include "../mesh_builder.h"
@@ -655,6 +656,67 @@ int l_mesh_quad(lua_State* L) {
     return 1;
 }
 
+// --- city.* : the road→block layout solver, exposed for decoration (ADR-0042
+// Phase 3). A recipe asks for the street layout and places props along it; the
+// solver (an algorithm, not a recipe) stays in C++.
+
+// Push a ground-plane point as a { x =, z = } table.
+void pushPoint(lua_State* L, const Vec2& p) {
+    lua_createtable(L, 0, 2);
+    lua_pushnumber(L, p.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, p.y); lua_setfield(L, -2, "z");   // Vec2.y == world z
+}
+
+// city.layout{ extent=, cell_size=, jitter=, dropout=, seed= } -> a layout table
+//   { nodes = {{x,z}...}, edges = {{a,b,width}...}, blocks = {{{x,z}...}...} }.
+// Node indices in edges are 1-based (Lua convention).
+int l_city_layout(lua_State* L) {
+    GridRoadParams gp;
+    if (lua_istable(L, 1)) {
+        gp.extent   = static_cast<Real>(optField(L, 1, "extent", gp.extent));
+        gp.cellSize = static_cast<Real>(optField(L, 1, "cell_size", gp.cellSize));
+        gp.jitter   = static_cast<Real>(optField(L, 1, "jitter", gp.jitter));
+        gp.dropout  = static_cast<Real>(optField(L, 1, "dropout", gp.dropout));
+        gp.seed     = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+    }
+    RoadGraph g = planarize(gridRoads(gp));
+    std::vector<Poly2> blocks = extractBlocks(g);
+
+    lua_createtable(L, 0, 3);
+
+    lua_createtable(L, static_cast<int>(g.nodes.size()), 0);
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+        pushPoint(L, g.nodes[i].pos);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "nodes");
+
+    lua_createtable(L, static_cast<int>(g.edges.size()), 0);
+    for (std::size_t i = 0; i < g.edges.size(); ++i) {
+        const RoadEdge& e = g.edges[i];
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, e.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, e.b + 1); lua_setfield(L, -2, "b");
+        lua_pushnumber(L, e.width);  lua_setfield(L, -2, "width");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "edges");
+
+    lua_createtable(L, static_cast<int>(blocks.size()), 0);
+    for (std::size_t i = 0; i < blocks.size(); ++i) {
+        const Poly2& poly = blocks[i];
+        lua_createtable(L, static_cast<int>(poly.size()), 0);
+        for (std::size_t j = 0; j < poly.size(); ++j) {
+            pushPoint(L, poly[j]);
+            lua_seti(L, -2, static_cast<lua_Integer>(j + 1));
+        }
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "blocks");
+
+    return 1;
+}
+
 // --- model.* : the composable procedural model value (ADR-0042 Phase 3) --------
 // A Model accumulates part meshes + instance groups, so a recipe can return a
 // whole block/scene, not just one mesh. Models compose via :merge, so parts nest
@@ -1095,6 +1157,13 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kModelFns);
     lua_setglobal(L, "model");
+
+    static const luaL_Reg kCityFns[] = {
+        {"layout", l_city_layout},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kCityFns);
+    lua_setglobal(L, "city");
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");
