@@ -42,6 +42,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
+	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
@@ -126,6 +127,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
+	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \

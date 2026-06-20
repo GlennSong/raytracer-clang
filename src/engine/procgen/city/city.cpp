@@ -1,6 +1,7 @@
 #include "city.h"
 
 #include "parcel.h"
+#include "street_kit.h"
 #include "../tree.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
@@ -420,20 +421,27 @@ CityModel generateCity(const CityParams& cp) {
                 yB - roadThickness, w * 0.5 + 0.5, 5.0));
     }
 
-    // Street furniture: lamp posts along the verges (alternating sides), and zebra
-    // crosswalks on each approach to an intersection (degree >= 3 node).
+    // Street furniture. Lamp posts run along the verges mid-block; intersections
+    // get a coordinated kit (crosswalks + stop bars + corner traffic signals)
+    // driven off the junction node, so a 4-way crossing reads as one engineered
+    // intersection instead of four crosswalks fighting in the middle (Phase 2).
+    const Real corridorHalf = 6.0;     // = apron setback, so road meets curb
+    const Real roadW = 12.0;
     std::vector<int> degree(nNodes, 0);
-    for (const RoadEdge& e : graph.edges) { ++degree[e.a]; ++degree[e.b]; }
+    std::vector<std::vector<int>> incident(nNodes);   // node -> neighbour nodes
+    for (const RoadEdge& e : graph.edges) {
+        ++degree[e.a]; ++degree[e.b];
+        incident[e.a].push_back(e.b); incident[e.b].push_back(e.a);
+    }
+    // Mid-block lamp posts along each edge, alternating verge side.
     for (const RoadEdge& e : graph.edges) {
         Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
         Vec2 d = b - a; Real len = d.length();
         if (len < 18) continue;
         d = d / len;
         Vec2 nrm = perp(d);
-        Real w = 12.0;   // fill the corridor (= 2 x apron setback), so road meets curb
         Real yA = nodeGrade[e.a], yB = nodeGrade[e.b];
-        // Lamp posts every ~30 m, alternating verge side.
-        Real off = w * 0.5 + 1.3;
+        Real off = roadW * 0.5 + 1.3;
         int nl = std::max(1, static_cast<int>(len / 30.0));
         for (int k = 1; k < nl; ++k) {
             Real t = static_cast<Real>(k) / nl;
@@ -443,11 +451,30 @@ CityModel generateCity(const CityParams& cp) {
             Vec2 p = on + nrm * (off * side);
             emitLamp(model.props, Vec3(p.x, y, p.y));
         }
-        // Crosswalks at intersection ends (set back from the node).
-        if (degree[e.a] >= 3)
-            emitCrosswalk(model.roads, a + d * 5.0, d, w, yA, white);
-        if (degree[e.b] >= 3)
-            emitCrosswalk(model.roads, b - d * 5.0, d, w, yB, white);
+    }
+    // Coordinated intersection decoration at every junction (degree >= 3). For
+    // each arm: a crosswalk set just outside the curb returns, a stop bar behind
+    // it, and a traffic signal + walk button on the near-right corner.
+    const Real crossSet = corridorHalf + 1.4;    // crosswalk centre, clear of corner
+    for (int ni = 0; ni < nNodes; ++ni) {
+        if (degree[ni] < 3) continue;
+        Vec2 node = graph.nodes[ni].pos;
+        Real y = nodeGrade[ni];
+        for (int oj : incident[ni]) {
+            Vec2 other = graph.nodes[oj].pos;
+            Vec2 toNode = node - other;              // travel toward the node
+            Real len = toNode.length();
+            if (len < 2 * crossSet + 3.0) continue;  // arm too short to mark
+            Vec2 d = toNode / len;                   // approach direction
+            Vec2 cwCenter = node - d * crossSet;     // crosswalk across this arm
+            emitCrosswalk(model.roads, cwCenter, d, roadW, y, white);
+            emitStopBar(model.roads, node - d * (crossSet + 1.6), d, roadW, y, white);
+            // Near-right corner (drive-on-the-right): back from the node along the
+            // arm and out to the right kerb. Signal head faces approaching traffic.
+            Vec2 right(d.y, -d.x);
+            Vec2 corner = node - d * corridorHalf + right * (corridorHalf + 0.6);
+            emitTrafficSignal(model.props, Vec3(corner.x, y, corner.y), d * -1);
+        }
     }
 
     Rng rng(cp.seed);
@@ -509,7 +536,10 @@ CityModel generateCity(const CityParams& cp) {
         // road edge so the sidewalk meets the curb meets the carriageway with no
         // grass gap. The curb/retaining skirt drops to the STREET grade (gradeAt),
         // not the raw terrain, so it reads as an engineered curb.
-        Poly2 apron = inset(block, 6.0);
+        // Round the apron corners: the sidewalk corners ARE the intersection
+        // corners, so a constant-radius fillet gives the rounded curb returns a
+        // real street has (Phase 2 street kit) instead of knife-edge corners.
+        Poly2 apron = roundPolygonCorners(inset(block, 6.0), 4.0, 4);
         if (apron.size() >= 3) {
             emitFlatPolygon(model.pavement, apron, gradeY, sidewalkCol);
             emitRetainingSkirt(model.pavement, apron, gradeY, gradeAt, retainCol);

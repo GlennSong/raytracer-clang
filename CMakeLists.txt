@@ -54,6 +54,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/road_network.cpp
+    src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/city.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp

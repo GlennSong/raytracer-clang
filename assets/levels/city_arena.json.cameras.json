@@ -17,6 +17,12 @@
       "position": [150, 46, -150],
       "forward": [-0.55, -0.33, 0.77],
       "lens": { "focalLength": 40, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
+    },
+    {
+      "name": "Intersection",
+      "position": [26, 8, 42],
+      "forward": [-0.69, -0.21, -0.69],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 28 }
     }
   ]
 }
