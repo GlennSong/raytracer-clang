@@ -296,9 +296,12 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     if (tf & 16u) emit *= emissiveMap.sample(texSampler, geom.texcoord).rgb;
     if (!(tf & 1u) && (int(mat.flags) & 1)) albedo = applyCheckerboard(albedo, geom.worldPosition);
     // Procedural surface library: a Surface id packed into flag bits 8..15
-    // (brick/concrete/asphalt/...) shades the untextured facade in world space.
+    // (brick/concrete/asphalt/...) shades the facade in world space — but only
+    // when there's no baked albedo map, so a textured material (which keeps the
+    // flag as provenance for save/load) lets its textures drive the look.
     uint surfId = (uint(mat.flags) >> 8) & 0xFFu;
-    if (surfId != 0u) albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal));
+    if (surfId != 0u && !(tf & 1u))
+        albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal));
 
     float3 normal = normalize(geom.worldNormal);
     if (tf & 4u) {

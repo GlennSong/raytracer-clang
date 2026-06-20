@@ -24,6 +24,10 @@ static json materialToJson(RenderMaterial& m) {
     json mat;
     JsonWriteVisitor writer(mat);
     describeProperties(m, writer);
+    // The procedural surface isn't a described property (it's packed in flags);
+    // write it explicitly so an inline textured material round-trips (ADR-0039).
+    if (m.surface() != RenderMaterial::Surface::None)
+        mat["surface"] = surfaceName(m.surface());
     return mat;
 }
 

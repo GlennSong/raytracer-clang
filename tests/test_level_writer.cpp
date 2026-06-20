@@ -203,6 +203,24 @@ TEST_CASE(level_writer_preserves_surface_through_play_save) {
     CHECK(root["entities"][0]["material"] == "brick");
 }
 
+TEST_CASE(level_writer_serializes_inline_surface) {
+    // An inline (unnamed) textured material round-trips its surface: the writer
+    // emits "surface" so a Play save→reload re-bakes the textures.
+    TmpFile cleanup;
+    World world;
+    Entity e = addBox(world, Vec3(0, 0, 0));
+    Renderable* r = world.get<Renderable>(e);
+    r->material.albedo = Vec3(1, 1, 1);
+    r->material.setSurface(RenderMaterial::Surface::Cobblestone);   // textured, no name
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    const json& mat = root["entities"][0]["material"];
+    CHECK(mat.is_object());                       // inline, not a named reference
+    CHECK(mat["surface"] == "cobblestone");       // surface survived the round-trip
+}
+
 TEST_CASE(level_writer_preserves_unowned_sections) {
     TmpFile cleanup;
     {

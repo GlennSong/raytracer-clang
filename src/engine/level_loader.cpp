@@ -103,14 +103,14 @@ static std::array<TextureHandle, 4> bakeSurfaceTextures(
     cache[id] = h;
     return h;
 }
-// Bind a baked set onto a material and clear the analytic surface bits (the
-// textures drive the look now).
+// Bind a baked set onto a material. The surface flag is kept as provenance (so
+// it round-trips through save/load); the shader skips the analytic applySurface
+// when an albedo map is present, so the textures drive the look, not the flag.
 static void bindSurfaceMaps(RenderMaterial& mat, const std::array<TextureHandle, 4>& h) {
     mat.albedoMap = h[0];
     mat.normalMap = h[1];
     mat.metallicRoughnessMap = h[2];
     mat.aoMap = h[3];
-    mat.flags &= ~RenderMaterial::SURFACE_MASK;
 }
 
 // A named material library: the level's top-level "materials" table, so entities

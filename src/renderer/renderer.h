@@ -122,6 +122,25 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     return S::None;
 }
 
+// Canonical name for a surface, so an authored material's "surface" round-trips
+// through save/load (the inverse of surfaceFromName).
+inline const char* surfaceName(RenderMaterial::Surface s) {
+    using S = RenderMaterial::Surface;
+    switch (s) {
+        case S::Brick:           return "brick";
+        case S::Concrete:        return "concrete";
+        case S::Stucco:          return "stucco";
+        case S::RoofTile:        return "rooftile";
+        case S::RoofShingle:     return "shingle";
+        case S::CorrugatedMetal: return "corrugated";
+        case S::Asphalt:         return "asphalt";
+        case S::Pavement:        return "pavement";
+        case S::Cobblestone:     return "cobblestone";
+        case S::WoodSiding:      return "wood";
+        default:                 return "";
+    }
+}
+
 struct RenderMesh {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
