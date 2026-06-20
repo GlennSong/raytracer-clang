@@ -2411,6 +2411,53 @@ does not share with the L-system (ADR-0028 revisit).
 
 ---
 
+## ADR-0039 — Materials as named assets; procedural surfaces baked to shared tiling textures
+**Status:** Accepted — **Phase A** (named material library) and **Phase B**
+(bake procedural surfaces to a PBR texture set, offline sampling) **implemented**;
+the Metal-viewer bind of the baked maps and runtime `Renderable → MaterialHandle`
+indirection deferred (viewer is macOS-gated; the indirection is a wide call-site
+change). Covered by `tests/test_surface_maps.cpp`, `tests/test_level_writer.cpp`
+(named table round-trip). · **Date:** 2026-06-20
+
+**Context.** Material variation rode entirely on per-vertex colour, then on a
+world-space *analytic* surface library (brick/concrete/…) evaluated per pixel in
+the lighting shader, selected by an id packed into material flag bits. Two
+problems a production engine wouldn't have: (1) materials weren't *assets* —
+every entity inlined its own block, none were shared/named; (2) a per-pixel
+pattern `switch` in the lighting megashader doesn't scale, gives no
+mip-filtering (distant facades alias), and produces only colour — no relief,
+roughness, or AO, so a "brick" wall looked like a flat sticker.
+
+**Decision.**
+- **Materials are named assets (Phase A).** The level gains a top-level
+  `"materials"` table; an entity's `"material"` is a string reference or an
+  inline object. Both loaders resolve and **dedup** (referencing entities share
+  one material); `SourceSpec.materialName` carries the reference so `LevelWriter`
+  round-trips it (definition emitted once into the table). No runtime handle
+  indirection yet — the resolved value still lands on the existing
+  `RenderMaterial`/`Scene` material, so there is no renderer change.
+- **Procedural surfaces are baked to shared tiling textures (Phase B).** The
+  analytic functions become CPU bakers (`surfaceMaps`, mirroring `barkMaps`):
+  one run produces a seamless **albedo + normal + metallic-roughness + AO +
+  height** set per surface; every material that wants "brick" samples the one
+  shared set. This is how modern engines use procedural materials — bake once,
+  share, sample with mip-filtering — instead of per-pixel pattern math. A brick
+  wall now carries real **relief (normal)**, matte mortar (**roughness**) and
+  crevice **AO**. The offline tracer gained albedo/normal/MR/AO sampling (it had
+  none) with a world-planar tiling frame, so it previews the baked materials.
+
+**Consequences / deferred.** The Metal viewer already samples
+albedo/normal/MR/AO, so binding the baked maps there is mostly loader work, but
+it needs a world-planar (or world-scaled-UV) tiling decision and is macOS-gated,
+so it's unverified and deferred. True runtime `Renderable → MaterialHandle`
+indirection (so editing a material asset propagates to all users) is a wide
+change — material is embedded by value across ~dozens of call sites and edited
+through a `World`-only registry hook — and is deferred behind the verifiable
+data layer. The analytic `applySurface` remains as the city's in-code path until
+the city's materials are converted to baked-texture assets too.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
