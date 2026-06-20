@@ -9,6 +9,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iostream>
 
 namespace engine {
@@ -41,6 +42,28 @@ static void readVec2(const uint8_t* ptr, float& u, float& v) {
     const float* f = reinterpret_cast<const float*>(ptr);
     u = f[0];
     v = f[1];
+}
+
+// A glTF node's local transform: an explicit column-major matrix, or TRS.
+static Mat4 nodeMatrix(const tinygltf::Node& node) {
+    if (node.matrix.size() == 16) {
+        Mat4 m;
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                m.m[r][c] = static_cast<Real>(node.matrix[c * 4 + r]);
+        return m;
+    }
+    Vec3 t = node.translation.size() == 3
+                 ? Vec3(node.translation[0], node.translation[1], node.translation[2])
+                 : Vec3();
+    Quat q = node.rotation.size() == 4
+                 ? Quat(node.rotation[0], node.rotation[1], node.rotation[2],
+                        node.rotation[3])
+                 : Quat::identity();
+    Vec3 s = node.scale.size() == 3
+                 ? Vec3(node.scale[0], node.scale[1], node.scale[2])
+                 : Vec3(1, 1, 1);
+    return Mat4::trs(t, q, s);
 }
 
 // Decode a glTF texture index to a CPU image (tinygltf already decoded it).
@@ -128,7 +151,26 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
 
     CpuModel result;
 
-    for (const auto& mesh : model.meshes) {
+    // Place meshes by the node graph: a glTF mesh sits where its node puts it
+    // (the helmet's root node rotates it Z-up -> Y-up). Walk the scene, recording
+    // each mesh's accumulated world transform; meshes with no node stay identity.
+    std::vector<Mat4> meshWorld(model.meshes.size(), Mat4::identity());
+    {
+        std::function<void(int, const Mat4&)> walk = [&](int ni, const Mat4& parent) {
+            if (ni < 0 || ni >= static_cast<int>(model.nodes.size())) return;
+            const auto& node = model.nodes[ni];
+            Mat4 world = parent * nodeMatrix(node);
+            if (node.mesh >= 0 && node.mesh < static_cast<int>(meshWorld.size()))
+                meshWorld[node.mesh] = world;
+            for (int c : node.children) walk(c, world);
+        };
+        int sceneIdx = model.defaultScene >= 0 ? model.defaultScene : 0;
+        if (sceneIdx < static_cast<int>(model.scenes.size()))
+            for (int root : model.scenes[sceneIdx].nodes) walk(root, Mat4::identity());
+    }
+
+    for (size_t meshIdx = 0; meshIdx < model.meshes.size(); ++meshIdx) {
+        const auto& mesh = model.meshes[meshIdx];
         for (const auto& prim : mesh.primitives) {
             if (prim.mode != -1 && prim.mode != TINYGLTF_MODE_TRIANGLES)
                 continue;
@@ -241,6 +283,18 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
                 mat.normalTex = extractGltfImage(model, gmat.normalTexture.index);
                 mat.emissiveTex = extractGltfImage(model, gmat.emissiveTexture.index);
                 mat.aoTex = extractGltfImage(model, gmat.occlusionTexture.index);
+            }
+
+            // Bake the node's world transform into the geometry (positions as
+            // points, normals/tangents as directions), so every backend gets the
+            // model already placed — no scene-graph handling needed downstream.
+            const Mat4& W = meshWorld[meshIdx];
+            for (Vertex& vtx : renderMesh.vertices) {
+                vtx.position = W.transformPoint(vtx.position);
+                Vec3 nn = W.transformDirection(vtx.normal);
+                if (nn.lengthSquared() > 1e-12) vtx.normal = normalize(nn);
+                Vec3 tt = W.transformDirection(vtx.tangent);
+                if (tt.lengthSquared() > 1e-12) vtx.tangent = normalize(tt);
             }
 
             result.meshes.push_back({std::move(renderMesh), std::move(mat)});
