@@ -179,6 +179,30 @@ TEST_CASE(level_writer_emits_named_materials_table) {
     CHECK(inlineObjs == 1);    // the inline one stays inline
 }
 
+TEST_CASE(level_writer_preserves_surface_through_play_save) {
+    // The Play loop saves then reloads. A textured material's "surface" lives
+    // only in the named table (binding the baked set clears the runtime flag),
+    // so the writer must keep the existing definition or Play loses the textures.
+    TmpFile cleanup;
+    {
+        std::ofstream f(TMP_PATH);
+        f << R"({"version":1,"materials":{"brick":{"albedo":[1,1,1],"surface":"brick"}}})";
+    }
+
+    World world;
+    Entity e = addBox(world, Vec3(0, 0, 0));
+    world.get<SourceSpec>(e)->materialName = "brick";
+    // Runtime material as it looks after the loader bound textures: no surface.
+    world.get<Renderable>(e)->material.albedo = Vec3(1, 1, 1);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    CHECK(root["materials"]["brick"].contains("surface"));
+    CHECK(root["materials"]["brick"]["surface"] == "brick");   // survived the round-trip
+    CHECK(root["entities"][0]["material"] == "brick");
+}
+
 TEST_CASE(level_writer_preserves_unowned_sections) {
     TmpFile cleanup;
     {

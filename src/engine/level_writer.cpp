@@ -108,7 +108,15 @@ bool LevelWriter::save(const std::string& path, World& world) {
     assignMissingDocumentIds(world);
 
     json entities = json::array();
-    json materials = json::object();   // named material assets, collected from refs
+    // Preserve the document's existing named-material table: its definitions
+    // carry authoring-only fields the runtime RenderMaterial drops once it's
+    // resolved — most importantly "surface", which binding the baked texture set
+    // clears. Reconstructing from runtime state here would strip it, so a Play
+    // (save-then-reload) would lose the textures (ADR-0039). We keep originals
+    // and only synthesize entries for references not already defined.
+    json materials = (root.contains("materials") && root["materials"].is_object())
+                         ? root["materials"]
+                         : json::object();
     world.each<Transform, SourceSpec>(
         [&](Entity e, Transform& t, SourceSpec& spec) {
             Renderable* r = world.get<Renderable>(e);
