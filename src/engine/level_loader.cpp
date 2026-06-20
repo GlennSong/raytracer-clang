@@ -49,6 +49,10 @@ static void applyMaterial(const json& j, RenderMaterial& mat) {
                 mat.flags |= RenderMaterial::FLAG_CHECKERBOARD;
         }
     }
+    // Procedural surface from the library ("brick", "concrete", "asphalt", ...).
+    if (j.value("brick", false)) mat.setSurface(RenderMaterial::Surface::Brick);
+    if (j.contains("surface"))
+        mat.setSurface(surfaceFromName(j["surface"].get<std::string>()));
 }
 
 static RenderMaterial parseMaterial(const json& j) {
@@ -334,8 +338,10 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         RenderMaterial rm = materialFor(static_cast<PartId>(m.parts[i].materialIndex), Vec3(1, 1, 1));
         spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness, rm.flags);
     }
-    spawnMesh(m.roads, "roads", 0.0f, 0.9f);
-    spawnMesh(m.pavement, "pavement", 0.0f, 0.95f);
+    spawnMesh(m.roads, "roads", 0.0f, 0.9f,
+              RenderMaterial::surfaceBits(RenderMaterial::Surface::Asphalt));
+    spawnMesh(m.pavement, "pavement", 0.0f, 0.95f,
+              RenderMaterial::surfaceBits(RenderMaterial::Surface::Pavement));
     spawnMesh(m.props, "props", 0.0f, 0.85f);
     spawnMesh(m.ground, "ground", 0.0f, 1.0f);
 

@@ -58,7 +58,14 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     FacadeStyle style = styleForDistrict(d, rng);
     p.wallColor = facadeColor(style, p.seed);
     p.curtainWall = (style == FacadeStyle::GlassCurtain);
-    p.brick = (style == FacadeStyle::Brick);   // shade these walls as masonry
+    // Pick the wall's procedural material from the library by facade style.
+    switch (style) {
+        case FacadeStyle::Brick:    p.wallPart = PartId::Brick;    break;
+        case FacadeStyle::Concrete: p.wallPart = PartId::Concrete; break;
+        case FacadeStyle::Stucco:   p.wallPart = PartId::Stucco;   break;
+        case FacadeStyle::Metal:    p.wallPart = PartId::Metal;    break;
+        default:                    p.wallPart = PartId::Wall;     break;  // Painted/Glass
+    }
     switch (d) {
         case District::HighRise:                 // glass/metal towers
             p.floors = rng.irange(16, 45);

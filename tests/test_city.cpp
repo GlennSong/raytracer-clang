@@ -98,27 +98,30 @@ TEST_CASE(grammar_grows_a_multipart_building) {
     CHECK(!bm.attaches.empty());
 }
 
-TEST_CASE(grammar_brick_routes_walls_to_masonry_part) {
+TEST_CASE(grammar_wall_part_picks_procedural_material) {
     Scope s = scopeFromFootprint(square(18), 0.0, 16.0);
-    // A brick building shades its walls as masonry: wall geometry goes to the
-    // Brick part, not the flat Wall part.
-    BuildingParams brick; brick.floors = 4; brick.seed = 7; brick.brick = true;
+    // A facade routes its wall geometry to its chosen procedural part (here
+    // brick), not the flat Wall part.
+    BuildingParams brick; brick.floors = 4; brick.seed = 7; brick.wallPart = PartId::Brick;
     BuildingMesh bm = growBuilding(s, brick);
     CHECK(hasPart(bm, PartId::Brick));
     CHECK(!hasPart(bm, PartId::Wall));
 
-    // A plain building keeps the flat Wall material.
-    BuildingParams plain; plain.floors = 4; plain.seed = 7; plain.brick = false;
+    // The default keeps the flat Wall material.
+    BuildingParams plain; plain.floors = 4; plain.seed = 7;
     BuildingMesh pm = growBuilding(s, plain);
     CHECK(hasPart(pm, PartId::Wall));
     CHECK(!hasPart(pm, PartId::Brick));
 
-    // The Brick material carries FLAG_BRICK (world-space procedural masonry) and
-    // is otherwise a matte wall; the plain Wall material does not.
-    RenderMaterial bmat = materialFor(PartId::Brick, Vec3(0.5, 0.25, 0.18));
-    RenderMaterial wmat = materialFor(PartId::Wall, Vec3(0.5, 0.25, 0.18));
-    CHECK((bmat.flags & RenderMaterial::FLAG_BRICK) != 0);
-    CHECK((wmat.flags & RenderMaterial::FLAG_BRICK) == 0);
+    // Each facade part carries its Surface id (world-space procedural material);
+    // the flat Wall carries none.
+    using S = RenderMaterial::Surface;
+    Vec3 c(0.5, 0.25, 0.18);
+    CHECK(materialFor(PartId::Brick, c).surface() == S::Brick);
+    CHECK(materialFor(PartId::Concrete, c).surface() == S::Concrete);
+    CHECK(materialFor(PartId::Stucco, c).surface() == S::Stucco);
+    CHECK(materialFor(PartId::Metal, c).surface() == S::CorrugatedMetal);
+    CHECK(materialFor(PartId::Wall, c).surface() == S::None);
 }
 
 TEST_CASE(grammar_walkable_ground_punches_a_door) {

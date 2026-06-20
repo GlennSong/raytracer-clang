@@ -21,10 +21,12 @@ struct Material {
     double ior;
     double metallic;
     bool checkerboard;   // world-space albedo checker (viewer material flag)
-    // World-space procedural running-bond brick (mortar joints + per-brick colour
-    // jitter), evaluated at the hit point like checkerboard. Mirrors the viewer's
-    // FLAG_BRICK / applyBrick so the offline tracer previews the same facade.
-    bool brick = false;
+    // World-space procedural surface from the library (brick / concrete / roof
+    // tile / asphalt / ...), evaluated at the hit point like checkerboard.
+    // Mirrors the viewer's RenderMaterial::Surface and applySurface() so the
+    // offline tracer previews the same facades. 0 = none. Keep these ids in
+    // lockstep with renderer.h Surface and the shaders' SURFACE_* constants.
+    int surface = 0;
     // Alpha-cut foliage (leaf cards): index into Scene::textures whose alpha is
     // sampled at the hit's uv; below `alphaCutoff` the surface is transparent
     // (the ray passes through). -1 = opaque. Mirrors the viewer's alpha test.

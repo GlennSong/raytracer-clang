@@ -97,11 +97,20 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Detail:
             m.albedo = wallColor * 0.8; m.metallic = 0.1f; m.roughness = 0.6f; break;
         case PartId::Brick:
-            // A wall, but shaded with world-space procedural masonry. Albedo stays
-            // white so the brick base colour rides in vertex colour like every
-            // other city part; the shader/tracer draw the mortar + per-brick jitter.
+            // A wall, but shaded with a world-space procedural material from the
+            // library. Albedo stays the wall colour (which rides in vertex colour
+            // for the merged city mesh); the shader/tracer add the surface detail.
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.88f;
-            m.flags |= RenderMaterial::FLAG_BRICK; break;
+            m.setSurface(RenderMaterial::Surface::Brick); break;
+        case PartId::Concrete:
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.92f;
+            m.setSurface(RenderMaterial::Surface::Concrete); break;
+        case PartId::Stucco:
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.85f;
+            m.setSurface(RenderMaterial::Surface::Stucco); break;
+        case PartId::Metal:
+            m.albedo = wallColor; m.metallic = 0.55f; m.roughness = 0.45f;
+            m.setSurface(RenderMaterial::Surface::CorrugatedMetal); break;
         case PartId::Wall:
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
@@ -344,9 +353,9 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
         appendToPart(out, PartId::Trim, trim);
     }
 
-    // Brick buildings route their wall surface to the masonry part (shaded with
-    // procedural brick); everyone else stays on the flat Wall material.
-    appendToPart(out, p.brick ? PartId::Brick : PartId::Wall, wall);
+    // The wall surface goes to the building's chosen facade part (procedural
+    // brick/concrete/stucco/metal, or the flat Wall).
+    appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Door, door);
 }

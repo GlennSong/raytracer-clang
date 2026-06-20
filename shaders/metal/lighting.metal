@@ -295,8 +295,10 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     if (tf & 8u) ao = aoMap.sample(texSampler, geom.texcoord).r;
     if (tf & 16u) emit *= emissiveMap.sample(texSampler, geom.texcoord).rgb;
     if (!(tf & 1u) && (int(mat.flags) & 1)) albedo = applyCheckerboard(albedo, geom.worldPosition);
-    // FLAG_BRICK (8): world-space procedural masonry on the (untextured) facade.
-    if (int(mat.flags) & 8) albedo = applyBrick(albedo, geom.worldPosition, normalize(geom.worldNormal));
+    // Procedural surface library: a Surface id packed into flag bits 8..15
+    // (brick/concrete/asphalt/...) shades the untextured facade in world space.
+    uint surfId = (uint(mat.flags) >> 8) & 0xFFu;
+    if (surfId != 0u) albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal));
 
     float3 normal = normalize(geom.worldNormal);
     if (tf & 4u) {

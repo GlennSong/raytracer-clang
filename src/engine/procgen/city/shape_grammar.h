@@ -39,7 +39,9 @@ constexpr Real PARAPET           = 1.1;   // roof-edge railing height
 // distinct PBR materials (ADR-0032). Maps to a RenderMaterial in materialFor().
 enum class PartId : uint8_t {
     Wall, Glass, Trim, Roof, Door, Ground, Detail,
-    Brick,   // a wall surface shaded with procedural masonry (materialFor sets FLAG_BRICK)
+    // Wall surfaces shaded with a procedural material from the library
+    // (materialFor packs the Surface id into the RenderMaterial flags).
+    Brick, Concrete, Stucco, Metal,
     Count
 };
 
@@ -126,7 +128,9 @@ struct BuildingParams {
     // Facade ornamentation (the "decorative bricks, pillars, awnings" axis).
     // Traditional styles (brick/stucco/concrete) switch these on; a glass curtain
     // wall leaves them off for a clean skin.
-    bool  brick = false;         // shade walls as procedural masonry (FacadeStyle::Brick)
+    // Which part the facade walls are emitted under — picks the wall's procedural
+    // material (Brick/Concrete/Stucco/Metal from the library, or the flat Wall).
+    PartId wallPart = PartId::Wall;
     bool  baseCourse = true;     // a wider, darker plinth — the foundation/base
     bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
     bool  pilasters = false;     // vertical piers framing each bay (run full height)

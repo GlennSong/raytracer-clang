@@ -32,7 +32,8 @@ int importMaterial(const json& ent, Scene& scene) {
     Vec3 albedo(0.8, 0.8, 0.8);
     double roughness = 0.5, metallic = 0.0;
     Vec3 emission(0, 0, 0);
-    bool checkerboard = false, brick = false;
+    bool checkerboard = false;
+    int surface = 0;
     if (ent.contains("material")) {
         const auto& m = ent["material"];
         albedo = parseVec3(m.value("albedo", json()), albedo);
@@ -42,7 +43,9 @@ int importMaterial(const json& ent, Scene& scene) {
         // Current documents spell the flag as a bool (property-layer JSON);
         // pre-migration ones used a "flags" array. Read both.
         checkerboard = m.value("checkerboard", false);
-        brick = m.value("brick", false);   // world-space procedural masonry
+        if (m.value("brick", false)) surface = 1;   // back-compat alias
+        if (m.contains("surface"))
+            surface = static_cast<int>(surfaceFromName(m["surface"].get<std::string>()));
         if (m.contains("flags"))
             for (const auto& f : m["flags"])
                 checkerboard |= (f == "checkerboard");
@@ -52,7 +55,7 @@ int importMaterial(const json& ent, Scene& scene) {
     // Full PBR parameters, shaded with the viewer's GGX model in tracePath.
     Material mat = Material::pbr(albedo, metallic, roughness);
     mat.checkerboard = checkerboard;
-    mat.brick = brick;
+    mat.surface = surface;
     return scene.addMaterial(mat);
 }
 
@@ -296,20 +299,20 @@ CityModel generateCityModel(const json& ent, const json& root) {
 
 void bakeCityModel(const CityModel& m, Scene& scene) {
     auto bake = [&](const RenderMesh& mesh, float metallic, float roughness,
-                    bool brick = false) {
+                    int surface = 0) {
         if (mesh.vertices.empty()) return;
         Material mat = Material::pbr(Vec3(1, 1, 1), metallic, roughness);
-        mat.brick = brick;   // world-space procedural masonry (PartId::Brick)
+        mat.surface = surface;   // world-space procedural material from the library
         int mi = scene.addMaterial(mat);
         addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
     };
     for (const RenderMesh& part : m.parts) {
-        PartId pid = static_cast<PartId>(part.materialIndex);
-        RenderMaterial rm = materialFor(pid, Vec3(1, 1, 1));
-        bake(part, rm.metallic, rm.roughness, pid == PartId::Brick);
+        RenderMaterial rm = materialFor(static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
+        bake(part, rm.metallic, rm.roughness, static_cast<int>(rm.surface()));
     }
-    bake(m.roads, 0.0f, 0.9f);
-    bake(m.pavement, 0.0f, 0.95f);  // flat graded aprons + curbs
+    using S = RenderMaterial::Surface;
+    bake(m.roads, 0.0f, 0.9f, static_cast<int>(S::Asphalt));
+    bake(m.pavement, 0.0f, 0.95f, static_cast<int>(S::Pavement));  // sidewalk slabs
     bake(m.ground, 0.0f, 1.0f);
     bake(m.props, 0.0f, 0.85f);     // trees (vertex-coloured)
     LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount

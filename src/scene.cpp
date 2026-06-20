@@ -74,58 +74,159 @@ Vec3 applyCheckerboard(const Vec3& albedo, const Vec3& worldPos) {
     return (((cx + cz) & 1) != 0) ? albedo * 0.3 : albedo;
 }
 
-// Hash a brick's (column, row) index to [0,1] for per-brick colour jitter. Kept
-// identical to common.metal's hash21 so both renderers vary the same bricks.
-double brickHash(double a, double b) {
+// --- Procedural surface library --------------------------------------------
+// Analytic, world-space materials a city needs (brick, concrete, roof tiles,
+// asphalt, ...), evaluated at the hit point. Each is kept byte-for-byte in step
+// with common.metal's applySurface so the offline tracer previews exactly what
+// the Metal viewer draws. All take a base albedo (the material/vertex colour)
+// and return the patterned albedo. See material.h Surface ids.
+double surfHash(double a, double b) {   // == common.metal hash21
     double s = std::sin(a * 12.9898 + b * 78.233) * 43758.5453;
     return s - std::floor(s);
 }
+double surfTile(double x, double m) { return x - m * std::floor(x / m); }  // [0,m)
+double surfStep(double e0, double e1, double x) {
+    double t = std::clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+double surfVNoise(double x, double y) {            // value noise, bilinear
+    double xi = std::floor(x), yi = std::floor(y), xf = x - xi, yf = y - yi;
+    double a = surfHash(xi, yi), b = surfHash(xi + 1, yi);
+    double c = surfHash(xi, yi + 1), d = surfHash(xi + 1, yi + 1);
+    double ux = xf * xf * (3 - 2 * xf), uy = yf * yf * (3 - 2 * yf);
+    return a * (1 - ux) * (1 - uy) + b * ux * (1 - uy) +
+           c * (1 - ux) * uy + d * ux * uy;
+}
+double surfFbm(double x, double y) {               // ~[0,1]
+    double v = 0, amp = 0.5, f = 1;
+    for (int i = 0; i < 4; ++i) { v += amp * surfVNoise(x * f, y * f); f *= 2; amp *= 0.5; }
+    return v;
+}
+// Facade coords: v = height up a wall, u = horizontal run; horizontal surfaces
+// (roofs/ground) lay the pattern in the XZ plane.
+void surfPlane(const Vec3& p, const Vec3& n, double& u, double& v) {
+    if (std::fabs(n.y) > 0.5) { u = p.x; v = p.z; return; }
+    double tx = n.z, tz = -n.x, tl = std::sqrt(tx * tx + tz * tz);
+    if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
+    u = p.x * (tx / tl) + p.z * (tz / tl);
+    v = p.y;
+}
 
-// World-space running-bond brick (the viewer's common.metal applyBrick, kept in
-// lockstep). `albedo` is the brick base colour (from facadeColor/vertex colour);
-// the mortar joints darken to a neutral grey and each brick takes a small colour
-// jitter, so a wall reads as masonry up close instead of a flat panel.
-Vec3 applyBrick(const Vec3& albedo, const Vec3& worldPos, const Vec3& normal) {
-    // Brick plane coords: v = height, u = horizontal run along the facade. On a
-    // vertical wall the horizontal tangent is perpendicular to the (horizontal)
-    // normal in XZ; near-horizontal surfaces fall back to a top-down layout.
-    double u, v;
-    if (std::fabs(normal.y) > 0.9) {
-        u = worldPos.x; v = worldPos.z;
-    } else {
-        double tx = normal.z, tz = -normal.x;
-        double tl = std::sqrt(tx * tx + tz * tz);
-        if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
-        tx /= tl; tz /= tl;
-        u = worldPos.x * tx + worldPos.z * tz;
-        v = worldPos.y;
-    }
-
-    const double courseH = 0.075;   // brick + bed-joint height
-    const double brickL  = 0.20;    // brick + head-joint length
-    const double mortar  = 0.011;   // joint half-width
-
+Vec3 surfBrick(const Vec3& base, double u, double v) {
+    const double courseH = 0.075, brickL = 0.20, mortar = 0.011;
     double row = std::floor(v / courseH);
-    double offset = (std::fmod(std::fabs(row), 2.0) < 1.0) ? 0.0 : brickL * 0.5;
-    double uu = u + offset;
-    double col = std::floor(uu / brickL);
-
-    double fy = v - row * courseH;
-    double fx = uu - col * brickL;
+    double off = (std::fmod(std::fabs(row), 2.0) < 1.0) ? 0.0 : brickL * 0.5;
+    double uu = u + off, col = std::floor(uu / brickL);
+    double fy = v - row * courseH, fx = uu - col * brickL;
     double joint = std::min(std::min(fy, courseH - fy), std::min(fx, brickL - fx));
-
-    // Per-brick value jitter, with an occasional darker "burnt header" for
-    // character, and a faint within-brick gradient so faces aren't dead flat.
-    double h = brickHash(col, row);
-    double h2 = brickHash(col * 1.7 + 3.1, row * 0.9 + 5.7);
+    double h = surfHash(col, row), h2 = surfHash(col * 1.7 + 3.1, row * 0.9 + 5.7);
     double shade = 0.74 + 0.46 * h;
     if (h2 < 0.12) shade *= 0.6;
     shade *= 0.94 + 0.12 * (fx / brickL);
-    Vec3 brickCol = albedo * shade;
     Vec3 mortarCol(0.30, 0.29, 0.27);
+    double t = std::clamp((joint - mortar) / 0.004, 0.0, 1.0);
+    return mortarCol + (base * shade - mortarCol) * t;
+}
+Vec3 surfConcrete(const Vec3& base, double u, double v) {
+    double n = surfFbm(u * 0.6, v * 0.6), fine = surfVNoise(u * 9.0, v * 9.0);
+    double shade = 0.84 + 0.22 * n + 0.06 * (fine - 0.5);
+    double gu = surfTile(u, 3.0); gu = std::min(gu, 3.0 - gu);
+    double gv = surfTile(v, 3.0); gv = std::min(gv, 3.0 - gv);
+    double jt = surfStep(0.015, 0.04, std::min(gu, gv));   // control joints
+    return base * shade * (0.74 + 0.26 * jt);
+}
+Vec3 surfStucco(const Vec3& base, double u, double v) {
+    double n = surfFbm(u * 3.0, v * 3.0), fine = surfVNoise(u * 22.0, v * 22.0);
+    return base * (0.90 + 0.12 * (n - 0.5) + 0.10 * (fine - 0.5));
+}
+Vec3 surfRoofTile(const Vec3& base, double u, double v) {
+    const double tileW = 0.18, rowH = 0.32;
+    double row = std::floor(v / rowH);
+    double off = (std::fmod(std::fabs(row), 2.0) < 1.0) ? 0.0 : tileW * 0.5;
+    double uu = u + off, col = std::floor(uu / tileW);
+    double fx = uu - col * tileW, fy = v - row * rowH;
+    double curve = std::sin(PI * (fx / tileW));               // barrel crown
+    double valley = surfStep(0.0, 0.02, std::min(fx, tileW - fx));
+    double lap = surfStep(0.0, 0.05, fy);                     // head-lap shadow
+    double h = surfHash(col, row);
+    double shade = (0.55 + 0.5 * curve) * (0.85 + 0.30 * h) * valley * (0.6 + 0.4 * lap);
+    return base * shade;
+}
+Vec3 surfShingle(const Vec3& base, double u, double v) {
+    const double tabW = 0.30, rowH = 0.14;
+    double row = std::floor(v / rowH);
+    double off = (std::fmod(std::fabs(row), 2.0) < 1.0) ? 0.0 : tabW * 0.5;
+    double uu = u + off, col = std::floor(uu / tabW);
+    double fx = uu - col * tabW, fy = v - row * rowH;
+    double h = surfHash(col, row);
+    double key = surfStep(0.0, 0.012, std::min(fx, tabW - fx));
+    double shadow = surfStep(0.0, 0.03, fy);
+    return base * (0.82 + 0.32 * h) * (0.55 + 0.45 * key) * (0.5 + 0.5 * shadow);
+}
+Vec3 surfCorrugated(const Vec3& base, double u, double v) {
+    const double ribW = 0.12;
+    double rib = std::cos(2.0 * PI * u / ribW);
+    double shade = 0.72 + 0.28 * rib;
+    double rust = surfFbm(u * 1.5, v * 0.6);
+    double rmask = std::clamp((rust - 0.62) / 0.18, 0.0, 1.0) * 0.45;
+    Vec3 rustCol(0.40, 0.22, 0.12);
+    return base * shade * (1 - rmask) + rustCol * rmask;
+}
+Vec3 surfAsphalt(const Vec3& base, double u, double v) {
+    double spk = surfVNoise(u * 30.0, v * 30.0), patch = surfFbm(u * 0.4, v * 0.4);
+    double shade = std::clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    return base * shade;
+}
+Vec3 surfPavement(const Vec3& base, double u, double v) {
+    const double slab = 1.2;
+    double su = surfTile(u, slab), sv = surfTile(v, slab);
+    double joint = std::min(std::min(su, slab - su), std::min(sv, slab - sv));
+    double h = surfHash(std::floor(u / slab), std::floor(v / slab));
+    double spk = surfVNoise(u * 26.0, v * 26.0);
+    double shade = 0.90 + 0.12 * (h - 0.5) + 0.06 * (spk - 0.5);
+    double jt = surfStep(0.02, 0.05, joint);
+    return base * shade * (0.6 + 0.4 * jt);
+}
+Vec3 surfCobble(const Vec3& base, double u, double v) {
+    const double cell = 0.18;
+    double cu = u / cell, cv = v / cell, iu = std::floor(cu), iv = std::floor(cv);
+    double best = 1e9, bh = 0;
+    for (int dj = -1; dj <= 1; ++dj)
+        for (int di = -1; di <= 1; ++di) {
+            double ci = iu + di, cj = iv + dj;
+            double jx = surfHash(ci, cj), jy = surfHash(ci + 5.2, cj + 1.7);
+            double px = ci + 0.5 + (jx - 0.5) * 0.7, py = cj + 0.5 + (jy - 0.5) * 0.7;
+            double dx = cu - px, dy = cv - py, d = dx * dx + dy * dy;
+            if (d < best) { best = d; bh = surfHash(ci + 9.1, cj + 4.3); }
+        }
+    double stone = surfStep(0.0, 0.12, 0.62 - std::sqrt(best));
+    Vec3 mortar(0.32, 0.30, 0.27);
+    return mortar + (base * (0.7 + 0.6 * bh) - mortar) * stone;
+}
+Vec3 surfWood(const Vec3& base, double u, double v) {
+    const double boardH = 0.18;
+    double row = std::floor(v / boardH), fy = v - row * boardH;
+    double h = surfHash(row, 3.0), grain = surfVNoise(u * 40.0, row * 9.0 + v * 2.0);
+    double shadow = surfStep(0.0, 0.02, fy);
+    return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
+}
 
-    double t = std::clamp((joint - mortar) / 0.004, 0.0, 1.0);   // 0 joint .. 1 face
-    return mortarCol + (brickCol - mortarCol) * t;
+// Dispatch a Surface id (material.h / renderer.h Surface) to its pattern.
+Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n) {
+    double u, v; surfPlane(worldPos, n, u, v);
+    switch (id) {
+        case 1:  return surfBrick(base, u, v);
+        case 2:  return surfConcrete(base, u, v);
+        case 3:  return surfStucco(base, u, v);
+        case 4:  return surfRoofTile(base, u, v);
+        case 5:  return surfShingle(base, u, v);
+        case 6:  return surfCorrugated(base, u, v);
+        case 7:  return surfAsphalt(base, u, v);
+        case 8:  return surfPavement(base, u, v);
+        case 9:  return surfCobble(base, u, v);
+        case 10: return surfWood(base, u, v);
+        default: return base;
+    }
 }
 
 }  // namespace
@@ -428,7 +529,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                                ? applyCheckerboard(mat.albedo, rec.point)
                                : mat.albedo) *
                           rec.color;
-            if (mat.brick) albedo = applyBrick(albedo, rec.point, rec.normal);
+            if (mat.surface) albedo = applySurface(mat.surface, albedo, rec.point, rec.normal);
 
             radiance += throughput * sampleDirectLight(rec.point, n, v, albedo,
                                                        mat.metallic,

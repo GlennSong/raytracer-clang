@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -70,9 +71,27 @@ struct RenderMaterial {
     // function, weighted by height above the instance origin (base planted, tips
     // move). For grass/foliage; applied on the instanced draw path.
     static constexpr uint32_t FLAG_WIND = 4;
-    // World-space procedural running-bond brick (applyBrick in the shader /
-    // scene.cpp), for untextured masonry facades. No map needed.
-    static constexpr uint32_t FLAG_BRICK = 8;
+
+    // World-space procedural surface library (applySurface in common.metal /
+    // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,
+    // ... — chosen by an id packed into bits 8..15 of `flags`, so it rides the
+    // existing material path with no texture maps. 0 = none. Keep the ids in
+    // lockstep with material.h's Surface and the shaders' SURFACE_* constants.
+    enum class Surface : uint32_t {
+        None = 0, Brick, Concrete, Stucco, RoofTile, RoofShingle,
+        CorrugatedMetal, Asphalt, Pavement, Cobblestone, WoodSiding,
+    };
+    static constexpr uint32_t SURFACE_SHIFT = 8;
+    static constexpr uint32_t SURFACE_MASK = 0xFF00u;
+    static constexpr uint32_t surfaceBits(Surface s) {
+        return static_cast<uint32_t>(s) << SURFACE_SHIFT;
+    }
+    Surface surface() const {
+        return static_cast<Surface>((flags & SURFACE_MASK) >> SURFACE_SHIFT);
+    }
+    void setSurface(Surface s) {
+        flags = (flags & ~SURFACE_MASK) | surfaceBits(s);
+    }
 
     TextureHandle albedoMap;
     TextureHandle normalMap;
@@ -84,6 +103,24 @@ struct RenderMaterial {
         : albedo(0.8, 0.8, 0.8), metallic(0.0), roughness(0.5),
           opacity(1.0), emission(0, 0, 0), flags(0) {}
 };
+
+// Map a level-format surface name ("brick", "concrete", "asphalt", ...) to its
+// Surface id. Shared by both loaders so the offline tracer and the viewer agree.
+// Returns Surface::None for an unknown name.
+inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
+    using S = RenderMaterial::Surface;
+    if (s == "brick") return S::Brick;
+    if (s == "concrete") return S::Concrete;
+    if (s == "stucco" || s == "plaster") return S::Stucco;
+    if (s == "rooftile" || s == "roof_tile" || s == "tile") return S::RoofTile;
+    if (s == "shingle" || s == "roofshingle") return S::RoofShingle;
+    if (s == "corrugated" || s == "corrugatedmetal" || s == "metal") return S::CorrugatedMetal;
+    if (s == "asphalt") return S::Asphalt;
+    if (s == "pavement" || s == "sidewalk") return S::Pavement;
+    if (s == "cobblestone" || s == "cobble") return S::Cobblestone;
+    if (s == "wood" || s == "woodsiding" || s == "siding") return S::WoodSiding;
+    return S::None;
+}
 
 struct RenderMesh {
     std::vector<Vertex> vertices;
