@@ -68,6 +68,8 @@ struct Texture {
     int width = 0, height = 0, channels = 0;
     std::vector<uint8_t> pixels;
     double sampleAlpha(double u, double v) const;   // clamped, nearest
+    Vec3 sampleRGB(double u, double v) const;        // wrapped (tiling), bilinear
+    double sampleR(double u, double v) const;        // wrapped, bilinear (ch 0)
 };
 
 // Distance (aerial-perspective) fog: surfaces fade toward `color` with distance

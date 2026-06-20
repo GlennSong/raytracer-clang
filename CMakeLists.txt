@@ -45,6 +45,7 @@ add_library(engine_core STATIC
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
+    src/engine/procgen/surface_maps.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
@@ -224,6 +225,7 @@ add_executable(run_tests
     tests/test_scatter.cpp
     tests/test_sdf.cpp
     tests/test_city.cpp
+    tests/test_surface_maps.cpp
     tests/test_instancing.cpp
     ${CORE_SOURCES}
 )

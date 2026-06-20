@@ -4,6 +4,7 @@
 #include "engine/procgen/terrain.h"
 #include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
+#include "engine/procgen/surface_maps.h"
 #include "engine/procgen/city/city.h"
 #include "engine/procgen/noise.h"
 #include "log.h"
@@ -29,9 +30,18 @@ Quat parseOrientation(const json& ent) {
     return Quat::fromAxisAngle(axis, degreesToRadians(o.value("angleDeg", 0.0)));
 }
 
+int addSurfaceTexture(Scene& scene, const TextureData& td) {
+    Texture t;
+    t.width = td.width; t.height = td.height; t.channels = td.channels;
+    t.pixels = td.pixels;
+    return scene.addTexture(std::move(t));
+}
+
 // Build a Material from a material JSON block (the body shared by an inline
-// "material" object and a named entry in the top-level "materials" table).
-Material materialFromJson(const json& m) {
+// "material" object and a named entry in the top-level "materials" table). A
+// "surface" bakes the procedural PBR texture set (albedo/normal/MR/AO) once and
+// binds it (ADR-0039 Phase B); the maps tile by the surface's world tile size.
+Material materialFromJson(const json& m, Scene& scene) {
     Vec3 albedo = parseVec3(m.value("albedo", json()), Vec3(0.8, 0.8, 0.8));
     double roughness = m.value("roughness", 0.5);
     double metallic = m.value("metallic", 0.0);
@@ -49,6 +59,18 @@ Material materialFromJson(const json& m) {
     Material mat = Material::pbr(albedo, metallic, roughness);
     mat.checkerboard = checkerboard;
     mat.surface = surface;
+    if (surface != 0 && m.value("textured", true)) {
+        auto surf = static_cast<RenderMaterial::Surface>(surface);
+        SurfaceMaps maps = surfaceMaps(surf, m.value("textureSize", 256),
+                                       m.value("seed", 0u));
+        mat.albedoTex = addSurfaceTexture(scene, maps.albedo);
+        mat.normalTex = addSurfaceTexture(scene, maps.normal);
+        mat.mrTex = addSurfaceTexture(scene, maps.mr);
+        mat.aoTex = addSurfaceTexture(scene, maps.ao);
+        double tile = m.value("tileSize", surfaceWorldTileSize(surf));
+        mat.texScale = tile > 1e-6 ? 1.0 / tile : 1.0;
+        mat.surface = 0;   // textured: the analytic path is replaced by the maps
+    }
     return mat;
 }
 
@@ -61,7 +83,7 @@ MaterialTable buildMaterialTable(const json& root, Scene& scene) {
     MaterialTable table;
     if (!root.contains("materials") || !root["materials"].is_object()) return table;
     for (auto it = root["materials"].begin(); it != root["materials"].end(); ++it)
-        table[it.key()] = scene.addMaterial(materialFromJson(it.value()));
+        table[it.key()] = scene.addMaterial(materialFromJson(it.value(), scene));
     return table;
 }
 
@@ -77,9 +99,9 @@ int importMaterial(const json& ent, Scene& scene, const MaterialTable& table) {
                      << "' not found in the materials table; using default";
             return scene.addMaterial(Material::pbr(Vec3(0.8, 0.8, 0.8), 0.0, 0.5));
         }
-        if (m.is_object()) return scene.addMaterial(materialFromJson(m));
+        if (m.is_object()) return scene.addMaterial(materialFromJson(m, scene));
     }
-    return scene.addMaterial(materialFromJson(json::object()));
+    return scene.addMaterial(materialFromJson(json::object(), scene));
 }
 
 // Tessellated mesh -> world-space triangles, carrying per-vertex normal, uv,

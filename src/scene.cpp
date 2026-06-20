@@ -112,6 +112,23 @@ void surfPlane(const Vec3& p, const Vec3& n, double& u, double& v) {
     v = p.y;
 }
 
+// The world-planar tiling frame for texture sampling: tile UV (scaled) plus the
+// tangent (T, along u) and bitangent (B, along v) so a tangent-space normal map
+// can be rotated into world space. Matches surfPlane's u/v axes.
+void surfFrame(const Vec3& p, const Vec3& n, double scale, double& u, double& v,
+               Vec3& T, Vec3& B) {
+    if (std::fabs(n.y) > 0.5) {
+        u = p.x * scale; v = p.z * scale;
+        T = Vec3(1, 0, 0); B = Vec3(0, 0, 1);
+    } else {
+        double tx = n.z, tz = -n.x, tl = std::sqrt(tx * tx + tz * tz);
+        if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
+        tx /= tl; tz /= tl;
+        u = (p.x * tx + p.z * tz) * scale; v = p.y * scale;
+        T = Vec3(tx, 0, tz); B = Vec3(0, 1, 0);
+    }
+}
+
 Vec3 surfBrick(const Vec3& base, double u, double v) {
     const double courseH = 0.075, brickL = 0.20, mortar = 0.011;
     double row = std::floor(v / courseH);
@@ -373,6 +390,41 @@ double Texture::sampleAlpha(double u, double v) const {
     return pixels[i] / 255.0;
 }
 
+namespace {
+// Bilinear fetch with wrapping (for tiling textures); reads up to 3 channels.
+void texFetchWrapped(const Texture& t, double u, double v, double out[3]) {
+    double fx = (u - std::floor(u)) * t.width - 0.5;
+    double fy = (v - std::floor(v)) * t.height - 0.5;
+    int x0 = static_cast<int>(std::floor(fx)), y0 = static_cast<int>(std::floor(fy));
+    double tx = fx - x0, ty = fy - y0;
+    auto px = [&](int x, int y, int c) {
+        x = ((x % t.width) + t.width) % t.width;
+        y = ((y % t.height) + t.height) % t.height;
+        int ch = std::min(c, t.channels - 1);
+        return t.pixels[(static_cast<size_t>(y) * t.width + x) * t.channels + ch] / 255.0;
+    };
+    for (int c = 0; c < 3; ++c) {
+        double a = px(x0, y0, c) * (1 - tx) + px(x0 + 1, y0, c) * tx;
+        double b = px(x0, y0 + 1, c) * (1 - tx) + px(x0 + 1, y0 + 1, c) * tx;
+        out[c] = a * (1 - ty) + b * ty;
+    }
+}
+}  // namespace
+
+Vec3 Texture::sampleRGB(double u, double v) const {
+    if (pixels.empty() || channels < 1) return Vec3(1, 1, 1);
+    double c[3];
+    texFetchWrapped(*this, u, v, c);
+    return Vec3(c[0], c[1], c[2]);
+}
+
+double Texture::sampleR(double u, double v) const {
+    if (pixels.empty() || channels < 1) return 1.0;
+    double c[3];
+    texFetchWrapped(*this, u, v, c);
+    return c[0];
+}
+
 int Scene::addMaterial(const Material& mat) {
     materials.push_back(mat);
     return static_cast<int>(materials.size()) - 1;
@@ -531,23 +583,44 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
             // indirect bounce.
             Vec3 n = rec.normal;
             Vec3 v = -normalize(currentRay.direction);
+            double rough = mat.roughness, metal = mat.metallic;
             Vec3 albedo = (mat.checkerboard
                                ? applyCheckerboard(mat.albedo, rec.point)
                                : mat.albedo) *
                           rec.color;
-            if (mat.surface) albedo = applySurface(mat.surface, albedo, rec.point, rec.normal);
+            if (mat.albedoTex >= 0 || mat.normalTex >= 0 || mat.mrTex >= 0 ||
+                mat.aoTex >= 0) {
+                // Baked PBR texture set, sampled with a world-planar tiling UV.
+                double tu, tv; Vec3 T, B;
+                surfFrame(rec.point, rec.normal, mat.texScale, tu, tv, T, B);
+                if (mat.albedoTex >= 0)
+                    albedo = albedo * textures[mat.albedoTex].sampleRGB(tu, tv);
+                if (mat.mrTex >= 0) {
+                    Vec3 mr = textures[mat.mrTex].sampleRGB(tu, tv);
+                    rough = std::clamp(mr.y, 0.04, 1.0);
+                    metal = mr.z;
+                }
+                if (mat.aoTex >= 0)
+                    albedo = albedo * textures[mat.aoTex].sampleR(tu, tv);  // cheap AO
+                if (mat.normalTex >= 0) {
+                    Vec3 tn = textures[mat.normalTex].sampleRGB(tu, tv) * 2.0 -
+                              Vec3(1, 1, 1);
+                    n = normalize(T * tn.x + B * tn.y + rec.normal * tn.z);
+                }
+            } else if (mat.surface) {
+                albedo = applySurface(mat.surface, albedo, rec.point, rec.normal);
+            }
 
             radiance += throughput * sampleDirectLight(rec.point, n, v, albedo,
-                                                       mat.metallic,
-                                                       mat.roughness);
+                                                       metal, rough);
 
-            Vec3 f0 = f0For(albedo, mat.metallic);
+            Vec3 f0 = f0For(albedo, metal);
             double specWeight = luminanceOf(f0);
-            double diffWeight = luminanceOf(albedo) * (1.0 - mat.metallic);
+            double diffWeight = luminanceOf(albedo) * (1.0 - metal);
             double pSpec = std::clamp(
                 specWeight / std::max(specWeight + diffWeight, 1e-6), 0.05, 1.0);
 
-            double a = std::max(mat.roughness * mat.roughness, 0.002);
+            double a = std::max(rough * rough, 0.002);
             double a2 = a * a;
             if (randomDouble() < pSpec) {
                 // Sample the GGX NDF for a half-vector around the normal.
@@ -581,7 +654,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                 // parity tracers.
                 Vec3 l = randomCosineHemisphere(n);
                 throughput = throughput * albedo *
-                             ((1.0 - mat.metallic) / (1.0 - pSpec));
+                             ((1.0 - metal) / (1.0 - pSpec));
                 currentRay = Ray(rec.point, l);
             }
         } else if (mat.type == MaterialType::METAL) {

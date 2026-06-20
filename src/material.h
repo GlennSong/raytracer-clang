@@ -27,6 +27,12 @@ struct Material {
     // offline tracer previews the same facades. 0 = none. Keep these ids in
     // lockstep with renderer.h Surface and the shaders' SURFACE_* constants.
     int surface = 0;
+    // Baked PBR texture set (indices into Scene::textures; -1 = none), sampled
+    // with a world-planar tiling UV = worldCoord * texScale. When albedoTex is
+    // set the surface is textured (mirrors the viewer's albedo/normal/MR/AO
+    // maps) and the analytic `surface` path is skipped.
+    int albedoTex = -1, normalTex = -1, mrTex = -1, aoTex = -1;
+    double texScale = 1.0;
     // Alpha-cut foliage (leaf cards): index into Scene::textures whose alpha is
     // sampled at the hit's uv; below `alphaCutoff` the surface is transparent
     // (the ray passes through). -1 = opaque. Mirrors the viewer's alpha test.

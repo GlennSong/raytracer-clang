@@ -36,6 +36,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
+	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
@@ -84,7 +85,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_scatter.cpp \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
-	$(TEST_DIR)/test_city.cpp
+	$(TEST_DIR)/test_city.cpp \
+	$(TEST_DIR)/test_surface_maps.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -114,6 +116,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
+	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
