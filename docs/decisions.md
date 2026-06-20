@@ -2509,6 +2509,79 @@ crown kit — the items ADR-0038's facade work deferred.
 
 ---
 
+## ADR-0041 — Instancing as engine-wide infrastructure: a path-tracer BLAS/TLAS to match the realtime instance groups
+**Status:** Accepted — **Phase 1** (path-tracer BLAS/TLAS + a backend-neutral
+instance payload) **in progress**; **Phase 2** (city emits props as instances;
+both backends consume them) planned. · **Date:** 2026-06-20
+
+**Context.** The procedural city merge-bakes every repeated street object — ~600
+street trees, plus lamp posts and traffic signals — into one giant vertex-coloured
+mesh per material class. That is why the city trees are deliberately crippled
+(`makeCityTree` disables real leaves and fakes the canopy with sphere blobs): a
+real L-system tree with alpha-cut leaf cards, multiplied by ~600 baked copies,
+explodes the triangle budget, and the single prop mesh has no slot for a separate
+alpha-tested leaf material. The fix the user asked for ("actual trees, like the
+CDLOD demo") is blocked on *how the city is split into meshes*, not on the
+renderers — both the path tracer and the realtime viewer can already draw a full
+leaf-card tree (the hero `shape:"tree"` / forest scatter).
+
+Crucially, the realtime half of instancing **already exists**: `InstanceGroup`
+(components.h / renderer.h) carries a shared `MeshHandle` + one `RenderMaterial`
++ a list of world matrices, and `Renderer::drawMeshInstanced` coalesces them into
+one instanced draw (`vertexMainInstanced`); `loadVegetation` scatters the forest
+this way. The gaps are therefore narrow and specific:
+1. **The path tracer has no instancing at all.** `Scene` is a flat triangle soup
+   under one kd-tree; scatter instances are skipped offline (tech-debt register:
+   "Expand scatter instances to triangles or share the generator"). 600 trees ×
+   thousands of triangles each, expanded to triangles, is both slow to build and
+   memory-heavy.
+2. **The city doesn't use instance groups** for its props — it bakes them.
+
+**Decision.** Make instancing a first-class, backend-neutral concept the
+procgen layer emits and *both* renderers consume, and give the path tracer the
+two-level acceleration structure that makes it pay off — the standard solution
+(a BLAS per unique mesh, a TLAS over placements; ray is transformed into instance
+space, not the geometry into the world).
+
+- **Path tracer (Phase 1, this slice).** A `MeshProto` is a prototype mesh
+  (triangles in local space + its own kd-tree **BLAS** + local bounds), built
+  once. A `SceneInstance` references a proto by index and carries `worldFromLocal`
+  + the cached `localFromWorld` inverse + a normal matrix + a world AABB. `Scene`
+  gains `protos` + `instances` + an **`InstanceBVH` (TLAS)** over the instance
+  AABBs. On a query the ray walks the TLAS; for each candidate the ray is mapped
+  into the proto's local frame (origin and **un-normalised** direction, so the
+  hit `t` is shared between frames), intersected against the BLAS, and the local
+  hit (point/normal/tangent) is mapped back to world. Alpha-cut visibility,
+  vertex colour, UVs and per-proto materials all flow through unchanged. The
+  legacy flat-triangle path is untouched, so existing scenes (Cornell box,
+  textured arena) render identically; instances are purely additive.
+- **Backend-neutral payload (Phase 1).** Generators hand back instance groups as
+  *(prototype mesh, material descriptor, world matrices)* — the same shape as the
+  realtime `InstanceGroup`, but renderer-agnostic. The viewer loader turns each
+  into an `InstanceGroup` entity (existing path); the offline loader turns each
+  into a `MeshProto` + `SceneInstance`s (new path). One generator output, two
+  thin adapters — paying down the duplicated-bake seam that ADR-0038's two
+  loaders otherwise force.
+- **City (Phase 2).** `makeCityTree` grows a *real* tree (bark + alpha-cut leaf
+  cards, thicker trunk/limbs), kept as a handful of variant protos. Street trees,
+  lamp posts and traffic signals become instance groups (one proto, many
+  matrices) instead of baked geometry — so the triangle budget is one tree, not
+  600. Trees get curated, evenly-spaced rows on the verge with tree pits, the
+  remaining items from the user's tree feedback.
+
+**Consequences.** The path tracer stops paying memory/build cost linear in
+instance count (one BLAS shared by all placements), and the offline render
+finally shows the scattered foliage it currently drops. The city's "objects on
+the street" and, later, repeated building archetypes become cheap to multiply —
+the foundation for growing city complexity. The same instancing substrate serves
+every procgen project (forests, rock fields, cities), not just this one. Cost:
+the TLAS adds a second acceleration structure and a per-instance ray transform
+(a few matrix-vector products on the candidates the TLAS returns); negligible
+beside the BLAS traversal it gates. Phase 1 is offline-testable headless; the
+realtime instanced draw path already exists and stays as-is.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

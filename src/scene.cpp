@@ -479,9 +479,24 @@ void Scene::addMeshSphere(const Vec3& center, double radius, int matIdx,
     }
 }
 
+int Scene::addProto(std::vector<Triangle> tris) {
+    protos.emplace_back();
+    protos.back().triangles = std::move(tris);
+    protos.back().build();
+    return static_cast<int>(protos.size()) - 1;
+}
+
+void Scene::addInstance(int proto, const Mat4& toWorld) {
+    if (proto < 0 || proto >= static_cast<int>(protos.size())) return;
+    instances.push_back(makeInstance(proto, toWorld, protos[proto]));
+}
+
 void Scene::buildAccelerator() {
     if (!triangles.empty()) {
         kdTree.build(triangles);
+    }
+    if (!instances.empty()) {
+        tlas.build(instances);
     }
 }
 
@@ -516,6 +531,15 @@ bool Scene::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) 
 
     for (const auto& quad : quads) {
         if (quad.intersect(ray, tMin, closest, tempRec)) {
+            hitAnything = true;
+            closest = tempRec.t;
+            rec = tempRec;
+        }
+    }
+
+    // Instanced geometry (ADR-0041): the TLAS, gated by the running nearest hit.
+    if (!tlas.isEmpty()) {
+        if (tlas.intersect(instances, protos, ray, tMin, closest, tempRec)) {
             hitAnything = true;
             closest = tempRec.t;
             rec = tempRec;

@@ -5,6 +5,7 @@
 #include "geometry.h"
 #include "material.h"
 #include "kdtree.h"
+#include "instance.h"
 #include <vector>
 #include <limits>
 #include <cstdint>
@@ -89,6 +90,11 @@ public:
     std::vector<Material> materials;
     std::vector<Texture> textures;
     KdTree kdTree;
+    // Instancing (ADR-0041): prototype meshes (BLAS) placed by many instances,
+    // gated by a TLAS. Additive to the flat soup above — empty for legacy scenes.
+    std::vector<MeshProto> protos;
+    std::vector<SceneInstance> instances;
+    InstanceBVH tlas;
     EnvironmentLight environment;
     Fog fog;
     std::vector<SceneLight> lights;
@@ -101,6 +107,12 @@ public:
     void addQuad(const Vec3& corner, const Vec3& edge1, const Vec3& edge2, int matIdx);
     void addMeshSphere(const Vec3& center, double radius, int matIdx,
                        int stacks = 16, int slices = 32);
+
+    // Instancing (ADR-0041). addProto builds a prototype's BLAS and returns its
+    // index; addInstance places it with a local->world transform. buildAccelerator
+    // then builds the TLAS over all instances.
+    int  addProto(std::vector<Triangle> tris);
+    void addInstance(int proto, const Mat4& toWorld);
 
     void buildAccelerator();
     bool intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) const;

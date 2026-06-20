@@ -174,6 +174,7 @@ set(CORE_SOURCES
     src/material.cpp
     src/scene.cpp
     src/kdtree.cpp
+    src/instance.cpp
     src/level_scene.cpp
     src/path_tracer.cpp
 )
@@ -229,6 +230,7 @@ add_executable(run_tests
     tests/test_surface_maps.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp
+    tests/test_instance_tlas.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
