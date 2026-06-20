@@ -61,6 +61,34 @@ static RenderMaterial parseMaterial(const json& j) {
     return mat;
 }
 
+// A named material library: the level's top-level "materials" table, so entities
+// can reference a shared material by name ("material": "brickWall") instead of
+// repeating an inline block (ADR-0039).
+using MaterialTable = std::unordered_map<std::string, RenderMaterial>;
+
+static MaterialTable buildMaterialTable(const json& root) {
+    MaterialTable table;
+    if (root.contains("materials") && root["materials"].is_object())
+        for (auto it = root["materials"].begin(); it != root["materials"].end(); ++it)
+            table[it.key()] = parseMaterial(it.value());
+    return table;
+}
+
+// Resolve an entity's material value onto `base`: a string references the named
+// table; an object is an inline material/override; absent leaves base unchanged.
+static RenderMaterial resolveMaterial(const json& matJson, const MaterialTable& table,
+                                      RenderMaterial base = RenderMaterial()) {
+    if (matJson.is_string()) {
+        auto it = table.find(matJson.get<std::string>());
+        if (it != table.end()) return it->second;
+        LOG_WARN << "Material reference '" << matJson.get<std::string>()
+                 << "' not found in the materials table; using default";
+        return base;
+    }
+    if (matJson.is_object()) applyMaterial(matJson, base);
+    return base;
+}
+
 // Primitive meshes are deduped + refcounted by the AssetManager: identical
 // shape+size share one GPU upload across the whole level (and across loads,
 // since the manager persists), and the caller clears it before each load so the
@@ -138,6 +166,8 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     spec.name = ent.value("name", std::string());
     spec.shape = shape;
     spec.size = parseVec3(ent.value("size", json()), Vec3(1, 1, 1));
+    if (ent.contains("material") && ent["material"].is_string())
+        spec.materialName = ent["material"].get<std::string>();   // shared asset ref
     if (ent.contains("physics")) {
         const auto& phys = ent["physics"];
         spec.hasPhysics = true;
@@ -424,6 +454,7 @@ static void loadEntities(const json& entities, const json& root, World& world,
                          const std::string& levelDir, bool editorMode,
                          const json* cityEnt = nullptr,
                          const CityModel* cityModel = nullptr) {
+    MaterialTable materials = buildMaterialTable(root);   // named "materials" table
     int treeIndex = 0;
     int cityIndex = 0;
     for (auto& ent : entities) {
@@ -468,9 +499,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
                 r.mesh = model.meshes[i].meshHandle;
                 r.material = model.meshes[i].material;
                 // Present keys override the imported material; absent ones
-                // keep it (JsonReadVisitor's missing-key semantics).
+                // keep it (JsonReadVisitor's missing-key semantics). A string
+                // value swaps in a shared material from the named table.
                 if (ent.contains("material"))
-                    applyMaterial(ent["material"], r.material);
+                    r.material = resolveMaterial(ent["material"], materials, r.material);
                 world.add<Renderable>(e, r);
 
                 if (i == 0) {
@@ -494,7 +526,7 @@ static void loadEntities(const json& entities, const json& root, World& world,
         Renderable r;
         r.mesh = meshHandle;
         if (ent.contains("material"))
-            r.material = parseMaterial(ent["material"]);
+            r.material = resolveMaterial(ent["material"], materials);
         world.add<Renderable>(e, r);
 
         addPhysics(e, ent, shape, world);

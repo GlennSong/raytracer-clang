@@ -120,6 +120,10 @@ struct SourceSpec {
     // Without this the generated entity carries no document state and the
     // LevelWriter drops it on save (silent data loss).
     std::string recipe;
+    // Reference into the level's named "materials" table (ADR-0039). When set,
+    // the entity shares that material asset; LevelWriter emits "material": <name>
+    // and the table, instead of an inline material block. Empty = inline material.
+    std::string materialName;
     bool hasPhysics = false;
     std::string motion = "static";
     Real friction = 0.5;

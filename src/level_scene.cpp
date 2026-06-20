@@ -7,6 +7,7 @@
 #include "engine/procgen/city/city.h"
 #include "engine/procgen/noise.h"
 #include "log.h"
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -28,35 +29,57 @@ Quat parseOrientation(const json& ent) {
     return Quat::fromAxisAngle(axis, degreesToRadians(o.value("angleDeg", 0.0)));
 }
 
-int importMaterial(const json& ent, Scene& scene) {
-    Vec3 albedo(0.8, 0.8, 0.8);
-    double roughness = 0.5, metallic = 0.0;
-    Vec3 emission(0, 0, 0);
-    bool checkerboard = false;
+// Build a Material from a material JSON block (the body shared by an inline
+// "material" object and a named entry in the top-level "materials" table).
+Material materialFromJson(const json& m) {
+    Vec3 albedo = parseVec3(m.value("albedo", json()), Vec3(0.8, 0.8, 0.8));
+    double roughness = m.value("roughness", 0.5);
+    double metallic = m.value("metallic", 0.0);
+    Vec3 emission = parseVec3(m.value("emission", json()), Vec3(0, 0, 0));
+    bool checkerboard = m.value("checkerboard", false);
     int surface = 0;
-    if (ent.contains("material")) {
-        const auto& m = ent["material"];
-        albedo = parseVec3(m.value("albedo", json()), albedo);
-        roughness = m.value("roughness", roughness);
-        metallic = m.value("metallic", metallic);
-        emission = parseVec3(m.value("emission", json()), emission);
-        // Current documents spell the flag as a bool (property-layer JSON);
-        // pre-migration ones used a "flags" array. Read both.
-        checkerboard = m.value("checkerboard", false);
-        if (m.value("brick", false)) surface = 1;   // back-compat alias
-        if (m.contains("surface"))
-            surface = static_cast<int>(surfaceFromName(m["surface"].get<std::string>()));
-        if (m.contains("flags"))
-            for (const auto& f : m["flags"])
-                checkerboard |= (f == "checkerboard");
-    }
+    if (m.value("brick", false)) surface = 1;   // back-compat alias
+    if (m.contains("surface"))
+        surface = static_cast<int>(surfaceFromName(m["surface"].get<std::string>()));
+    if (m.contains("flags"))
+        for (const auto& f : m["flags"])
+            checkerboard |= (f == "checkerboard");
     if (emission.lengthSquared() > 0.0)
-        return scene.addMaterial(Material::emissive(emission, 1.0));
-    // Full PBR parameters, shaded with the viewer's GGX model in tracePath.
+        return Material::emissive(emission, 1.0);
     Material mat = Material::pbr(albedo, metallic, roughness);
     mat.checkerboard = checkerboard;
     mat.surface = surface;
-    return scene.addMaterial(mat);
+    return mat;
+}
+
+// A named material library: the level's top-level "materials" table parsed once
+// into Scene material indices, so entities can reference a shared material by
+// name ("material": "brickWall") instead of repeating an inline block.
+using MaterialTable = std::unordered_map<std::string, int>;
+
+MaterialTable buildMaterialTable(const json& root, Scene& scene) {
+    MaterialTable table;
+    if (!root.contains("materials") || !root["materials"].is_object()) return table;
+    for (auto it = root["materials"].begin(); it != root["materials"].end(); ++it)
+        table[it.key()] = scene.addMaterial(materialFromJson(it.value()));
+    return table;
+}
+
+// Resolve an entity's material to a Scene index: a string is a reference into the
+// named table; an object is an inline material; absent is the default.
+int importMaterial(const json& ent, Scene& scene, const MaterialTable& table) {
+    if (ent.contains("material")) {
+        const auto& m = ent["material"];
+        if (m.is_string()) {
+            auto it = table.find(m.get<std::string>());
+            if (it != table.end()) return it->second;
+            LOG_WARN << "Material reference '" << m.get<std::string>()
+                     << "' not found in the materials table; using default";
+            return scene.addMaterial(Material::pbr(Vec3(0.8, 0.8, 0.8), 0.0, 0.5));
+        }
+        if (m.is_object()) return scene.addMaterial(materialFromJson(m));
+    }
+    return scene.addMaterial(materialFromJson(json::object()));
 }
 
 // Tessellated mesh -> world-space triangles, carrying per-vertex normal, uv,
@@ -134,12 +157,12 @@ TerrainParams parseTerrainParams(const json& t) {
 // A procedural terrain block: regenerate the same mesh the engine does and add
 // it (vertex color carries the slope/height coloring; material albedo
 // multiplies it, so a white albedo lets the baked color show).
-void addTerrain(const json& t, Scene& scene,
+void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                 const std::vector<TerrainFlatten>& flatten = {}) {
     TerrainParams tp = parseTerrainParams(t);
     tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
     Noise noise(t.value("seed", 0u));
-    int matIdx = importMaterial(t, scene);
+    int matIdx = importMaterial(t, scene, materials);
     // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
     // offline tracer has no far clip or culling, so this is the same surface as
     // the single mesh — the parity oracle for the viewer's chunked path.
@@ -354,8 +377,12 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         }
     }
 
+    // Named material library: the top-level "materials" table, parsed once so
+    // entities can reference shared materials by name (ADR-0039).
+    MaterialTable materials = buildMaterialTable(root, scene);
+
     // Procedural terrain (top-level block, regenerated from its recipe).
-    if (root.contains("terrain")) addTerrain(root["terrain"], scene, cityFlatten);
+    if (root.contains("terrain")) addTerrain(root["terrain"], scene, materials, cityFlatten);
 
     int skipped = 0;
     for (const auto& ent : root.value("entities", json::array())) {
@@ -389,7 +416,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         Vec3 position = parseVec3(ent.value("position", json()));
         Vec3 scale = parseVec3(ent.value("scale", json()), Vec3(1, 1, 1));
         Quat orientation = parseOrientation(ent);
-        int matIdx = importMaterial(ent, scene);
+        int matIdx = importMaterial(ent, scene, materials);
 
         // Same size semantics as the viewer's loader: spheres/cylinders/cones
         // use size.x as radius, size.y as height where applicable.

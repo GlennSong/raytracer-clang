@@ -28,7 +28,7 @@ static json materialToJson(RenderMaterial& m) {
 }
 
 static json entityToJson(const Transform& t, const SourceSpec& spec,
-                         RenderMaterial* material) {
+                         RenderMaterial* material, json& materialsTable) {
     json ent;
     if (spec.id != 0) ent["id"] = spec.id;
     if (spec.parentId != 0) ent["parent"] = spec.parentId;
@@ -61,7 +61,17 @@ static json entityToJson(const Transform& t, const SourceSpec& spec,
         };
     }
 
-    if (material && !isRecipe) ent["material"] = materialToJson(*material);
+    if (material && !isRecipe) {
+        if (!spec.materialName.empty()) {
+            // Shared material asset: reference it by name and register the
+            // definition once in the top-level table (ADR-0039).
+            ent["material"] = spec.materialName;
+            if (!materialsTable.contains(spec.materialName))
+                materialsTable[spec.materialName] = materialToJson(*material);
+        } else {
+            ent["material"] = materialToJson(*material);   // inline material
+        }
+    }
 
     if (spec.hasPhysics) {
         json phys;
@@ -98,13 +108,16 @@ bool LevelWriter::save(const std::string& path, World& world) {
     assignMissingDocumentIds(world);
 
     json entities = json::array();
+    json materials = json::object();   // named material assets, collected from refs
     world.each<Transform, SourceSpec>(
         [&](Entity e, Transform& t, SourceSpec& spec) {
             Renderable* r = world.get<Renderable>(e);
             entities.push_back(
-                entityToJson(t, spec, r ? &r->material : nullptr));
+                entityToJson(t, spec, r ? &r->material : nullptr, materials));
         });
     root["entities"] = entities;
+    if (!materials.empty()) root["materials"] = materials;
+    else root.erase("materials");
 
     // The editor's PlayerSpawn entity writes back into the "player" block the
     // game loader reads — moving the green capsule moves where you start.

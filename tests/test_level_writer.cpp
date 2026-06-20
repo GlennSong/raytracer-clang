@@ -139,6 +139,46 @@ TEST_CASE(level_writer_serializes_document_entities_only) {
     CHECK_APPROX(ent["physics"]["friction"].get<double>(), 0.7, 1e-9);
 }
 
+TEST_CASE(level_writer_emits_named_materials_table) {
+    TmpFile cleanup;
+    World world;
+
+    // Two entities sharing one named material asset (SourceSpec.materialName),
+    // plus one with an inline material.
+    for (int i = 0; i < 2; ++i) {
+        Entity e = addBox(world, Vec3(i, 0, 0));
+        world.get<SourceSpec>(e)->materialName = "brickWall";
+        Renderable* r = world.get<Renderable>(e);
+        r->material.albedo = Vec3(0.6, 0.3, 0.2);
+        r->material.roughness = 0.85f;
+        r->material.setSurface(RenderMaterial::Surface::Brick);
+    }
+    Entity inlineBox = addBox(world, Vec3(5, 0, 0));
+    world.get<Renderable>(inlineBox)->material.albedo = Vec3(0.1, 0.8, 0.2);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+
+    // The shared material is referenced by name and defined once in the table.
+    CHECK(root.contains("materials"));
+    CHECK(root["materials"].contains("brickWall"));
+    CHECK_APPROX(root["materials"]["brickWall"]["albedo"][0].get<double>(), 0.6, 1e-6);
+
+    int refs = 0, inlineObjs = 0;
+    for (const json& ent : root["entities"]) {
+        if (!ent.contains("material")) continue;
+        if (ent["material"].is_string()) {
+            CHECK(ent["material"] == "brickWall");
+            refs++;
+        } else if (ent["material"].is_object()) {
+            inlineObjs++;
+        }
+    }
+    CHECK(refs == 2);          // both shared entities reference the name
+    CHECK(inlineObjs == 1);    // the inline one stays inline
+}
+
 TEST_CASE(level_writer_preserves_unowned_sections) {
     TmpFile cleanup;
     {
