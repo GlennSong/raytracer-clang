@@ -86,7 +86,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
 	$(TEST_DIR)/test_city.cpp \
-	$(TEST_DIR)/test_surface_maps.cpp
+	$(TEST_DIR)/test_surface_maps.cpp \
+	$(TEST_DIR)/test_model_importer.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \

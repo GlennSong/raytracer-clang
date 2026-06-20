@@ -226,6 +226,7 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
+    tests/test_model_importer.cpp
     tests/test_instancing.cpp
     ${CORE_SOURCES}
 )

@@ -43,27 +43,20 @@ static void readVec2(const uint8_t* ptr, float& u, float& v) {
     v = f[1];
 }
 
-static TextureHandle uploadGltfTexture(const tinygltf::Model& model,
-                                       int textureIndex,
-                                       Renderer& renderer,
-                                       std::unordered_map<int, TextureHandle>& texCache) {
-    if (textureIndex < 0) return TextureHandle{};
-
-    auto it = texCache.find(textureIndex);
-    if (it != texCache.end()) return it->second;
-
+// Decode a glTF texture index to a CPU image (tinygltf already decoded it).
+static CpuImage extractGltfImage(const tinygltf::Model& model, int textureIndex) {
+    CpuImage out;
+    if (textureIndex < 0) return out;
     const auto& tex = model.textures[textureIndex];
     if (tex.source < 0 || tex.source >= static_cast<int>(model.images.size()))
-        return TextureHandle{};
-
+        return out;
     const auto& img = model.images[tex.source];
-    if (img.image.empty() || img.width <= 0 || img.height <= 0)
-        return TextureHandle{};
-
-    TextureHandle handle = renderer.uploadTexture(
-        img.width, img.height, img.component, img.image.data());
-    texCache[textureIndex] = handle;
-    return handle;
+    if (img.image.empty() || img.width <= 0 || img.height <= 0) return out;
+    out.width = img.width;
+    out.height = img.height;
+    out.channels = img.component;
+    out.pixels = img.image;
+    return out;
 }
 
 static void computeTangents(std::vector<Vertex>& vertices,
@@ -113,10 +106,7 @@ bool ModelImporter::validate(const std::string& path, std::string& error) {
     return ok;
 }
 
-ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
-    auto cached = cache.find(path);
-    if (cached != cache.end()) return cached->second;
-
+CpuModel ModelImporter::loadCpu(const std::string& path) {
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string err, warn;
@@ -136,8 +126,7 @@ ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
         return {};
     }
 
-    std::unordered_map<int, TextureHandle> texCache;
-    ImportedModel result;
+    CpuModel result;
 
     for (const auto& mesh : model.meshes) {
         for (const auto& prim : mesh.primitives) {
@@ -227,15 +216,15 @@ ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
                     std::swap(renderMesh.indices[i + 1], renderMesh.indices[i + 2]);
             }
 
-            // Material
-            RenderMaterial mat;
+            // Material — factors + decoded texture images (CPU; uploaded later).
+            CpuMaterial mat;
             if (prim.material >= 0 && prim.material < static_cast<int>(model.materials.size())) {
                 const auto& gmat = model.materials[prim.material];
                 const auto& pbr = gmat.pbrMetallicRoughness;
 
-                mat.albedo = Vec3(pbr.baseColorFactor[0],
-                                  pbr.baseColorFactor[1],
-                                  pbr.baseColorFactor[2]);
+                mat.baseColor = Vec3(pbr.baseColorFactor[0],
+                                     pbr.baseColorFactor[1],
+                                     pbr.baseColorFactor[2]);
                 mat.opacity = static_cast<float>(pbr.baseColorFactor[3]);
                 mat.metallic = static_cast<float>(pbr.metallicFactor);
                 mat.roughness = static_cast<float>(pbr.roughnessFactor);
@@ -246,25 +235,56 @@ ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
                                         gmat.emissiveFactor[2]);
                 }
 
-                mat.albedoMap = uploadGltfTexture(
-                    model, pbr.baseColorTexture.index, renderer, texCache);
-                mat.metallicRoughnessMap = uploadGltfTexture(
-                    model, pbr.metallicRoughnessTexture.index, renderer, texCache);
-                mat.normalMap = uploadGltfTexture(
-                    model, gmat.normalTexture.index, renderer, texCache);
-                mat.emissiveMap = uploadGltfTexture(
-                    model, gmat.emissiveTexture.index, renderer, texCache);
-                mat.aoMap = uploadGltfTexture(
-                    model, gmat.occlusionTexture.index, renderer, texCache);
+                mat.baseColorTex = extractGltfImage(model, pbr.baseColorTexture.index);
+                mat.metallicRoughnessTex =
+                    extractGltfImage(model, pbr.metallicRoughnessTexture.index);
+                mat.normalTex = extractGltfImage(model, gmat.normalTexture.index);
+                mat.emissiveTex = extractGltfImage(model, gmat.emissiveTexture.index);
+                mat.aoTex = extractGltfImage(model, gmat.occlusionTexture.index);
             }
 
-            MeshHandle mh = renderer.uploadMesh(renderMesh);
-            result.meshes.push_back({mh, mat});
+            result.meshes.push_back({std::move(renderMesh), std::move(mat)});
         }
     }
 
-    std::cout << "[INFO] Loaded model: " << path
+    std::cout << "[INFO] Parsed model: " << path
               << " (" << result.meshes.size() << " mesh(es))\n";
+    return result;
+}
+
+ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {
+    auto cached = cache.find(path);
+    if (cached != cache.end()) return cached->second;
+
+    CpuModel cpu = loadCpu(path);
+    std::unordered_map<const std::vector<uint8_t>*, TextureHandle> texCache;
+    auto upload = [&](const CpuImage& img) -> TextureHandle {
+        if (!img.valid()) return TextureHandle{};
+        // Dedup by the underlying pixel buffer (shared glTF images upload once).
+        auto it = texCache.find(&img.pixels);
+        if (it != texCache.end()) return it->second;
+        TextureHandle h = renderer.uploadTexture(img.width, img.height,
+                                                 img.channels, img.pixels.data());
+        texCache[&img.pixels] = h;
+        return h;
+    };
+
+    ImportedModel result;
+    for (auto& cm : cpu.meshes) {
+        RenderMaterial mat;
+        mat.albedo = cm.material.baseColor;
+        mat.opacity = cm.material.opacity;
+        mat.metallic = cm.material.metallic;
+        mat.roughness = cm.material.roughness;
+        mat.emission = cm.material.emission;
+        mat.albedoMap = upload(cm.material.baseColorTex);
+        mat.metallicRoughnessMap = upload(cm.material.metallicRoughnessTex);
+        mat.normalMap = upload(cm.material.normalTex);
+        mat.emissiveMap = upload(cm.material.emissiveTex);
+        mat.aoMap = upload(cm.material.aoTex);
+        MeshHandle mh = renderer.uploadMesh(cm.geometry);
+        result.meshes.push_back({mh, mat});
+    }
 
     cache[path] = result;
     return result;

@@ -13,6 +13,7 @@ struct HitRecord {
     int materialIndex;
     double u = 0.0, v = 0.0;     // interpolated texture coords (meshes)
     Vec3 color{1, 1, 1};         // interpolated vertex color (modulates albedo)
+    Vec3 tangent;                // interpolated surface tangent (zero = none)
 
     void setFaceNormal(const Ray& ray, const Vec3& outwardNormal) {
         frontFace = dot(ray.direction, outwardNormal) < 0;
@@ -40,6 +41,7 @@ struct Triangle {
     // (mesh geometry sets them; primitives leave the defaults). Zero normals
     // mean "use the flat face normal"; color defaults to white; uv to zero.
     Vec3 n0, n1, n2;
+    Vec3 t0, t1, t2;             // per-vertex tangents (zero = no normal mapping)
     Vec3 c0{1, 1, 1}, c1{1, 1, 1}, c2{1, 1, 1};
     double uv0[2] = {0, 0}, uv1[2] = {0, 0}, uv2[2] = {0, 0};
 

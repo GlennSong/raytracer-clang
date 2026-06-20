@@ -559,7 +559,8 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
 
         const Material& mat = materials[rec.materialIndex];
 
-        radiance += throughput * mat.emission;
+        // Flat emission; an emissive map (glTF) modulates it in the PBR block.
+        if (mat.emissiveTex < 0) radiance += throughput * mat.emission;
 
         if (mat.type == MaterialType::EMISSIVE) {
             break;
@@ -589,12 +590,28 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                                : mat.albedo) *
                           rec.color;
             if (mat.albedoTex >= 0 || mat.normalTex >= 0 || mat.mrTex >= 0 ||
-                mat.aoTex >= 0) {
-                // Baked PBR texture set, sampled with a world-planar tiling UV.
+                mat.aoTex >= 0 || mat.emissiveTex >= 0) {
+                // A PBR texture set. glTF models sample with their own UVs +
+                // tangent; the procedural bake uses a world-planar tiling frame.
+                // Same slots either way — the source is invisible here.
                 double tu, tv; Vec3 T, B;
-                surfFrame(rec.point, rec.normal, mat.texScale, tu, tv, T, B);
+                if (mat.meshUV) {
+                    tu = rec.u * mat.texScale; tv = rec.v * mat.texScale;
+                    T = rec.tangent;
+                    B = T.lengthSquared() > 1e-12 ? normalize(cross(rec.normal, T))
+                                                  : Vec3();
+                } else {
+                    surfFrame(rec.point, rec.normal, mat.texScale, tu, tv, T, B);
+                }
+                // glTF base-colour/emissive are sRGB-encoded; decode to linear.
+                // Normal/MR/AO are linear data and sampled as-is.
+                auto toLinear = [&](Vec3 c) {
+                    return mat.meshUV ? Vec3(std::pow(c.x, 2.2), std::pow(c.y, 2.2),
+                                             std::pow(c.z, 2.2))
+                                      : c;
+                };
                 if (mat.albedoTex >= 0)
-                    albedo = albedo * textures[mat.albedoTex].sampleRGB(tu, tv);
+                    albedo = albedo * toLinear(textures[mat.albedoTex].sampleRGB(tu, tv));
                 if (mat.mrTex >= 0) {
                     Vec3 mr = textures[mat.mrTex].sampleRGB(tu, tv);
                     rough = std::clamp(mr.y, 0.04, 1.0);
@@ -602,7 +619,10 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                 }
                 if (mat.aoTex >= 0)
                     albedo = albedo * textures[mat.aoTex].sampleR(tu, tv);  // cheap AO
-                if (mat.normalTex >= 0) {
+                if (mat.emissiveTex >= 0)
+                    radiance += throughput * mat.emission *
+                                toLinear(textures[mat.emissiveTex].sampleRGB(tu, tv));
+                if (mat.normalTex >= 0 && T.lengthSquared() > 1e-12) {
                     Vec3 tn = textures[mat.normalTex].sampleRGB(tu, tv) * 2.0 -
                               Vec3(1, 1, 1);
                     n = normalize(T * tn.x + B * tn.y + rec.normal * tn.z);

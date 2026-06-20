@@ -60,6 +60,8 @@ bool Triangle::intersect(const Ray& ray, double tMin, double tMax, HitRecord& re
     rec.u = uv0[0] * b0 + uv1[0] * u + uv2[0] * v;
     rec.v = uv0[1] * b0 + uv1[1] * u + uv2[1] * v;
     rec.color = c0 * b0 + c1 * u + c2 * v;
+    Vec3 tg = t0 * b0 + t1 * u + t2 * v;
+    rec.tangent = tg.lengthSquared() > 1e-12 ? normalize(tg) : Vec3();
     rec.materialIndex = materialIndex;
     return true;
 }

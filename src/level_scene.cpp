@@ -5,6 +5,7 @@
 #include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
 #include "engine/procgen/surface_maps.h"
+#include "engine/model_importer.h"
 #include "engine/procgen/city/city.h"
 #include "engine/procgen/noise.h"
 #include "log.h"
@@ -147,10 +148,11 @@ void addMeshAsTriangles(const RenderMesh& mesh, const Vec3& position,
     };
     auto fill = [&](Triangle& tri, int slot, const Vertex& v) {
         Vec3 n = orientation.rotate(v.normal);
+        Vec3 tg = orientation.rotate(v.tangent);
         Vec3 p = toWorld(v);
-        if (slot == 0) { tri.v0 = p; tri.n0 = n; tri.c0 = v.color; tri.uv0[0] = v.u; tri.uv0[1] = v.v; }
-        else if (slot == 1) { tri.v1 = p; tri.n1 = n; tri.c1 = v.color; tri.uv1[0] = v.u; tri.uv1[1] = v.v; }
-        else { tri.v2 = p; tri.n2 = n; tri.c2 = v.color; tri.uv2[0] = v.u; tri.uv2[1] = v.v; }
+        if (slot == 0) { tri.v0 = p; tri.n0 = n; tri.t0 = tg; tri.c0 = v.color; tri.uv0[0] = v.u; tri.uv0[1] = v.v; }
+        else if (slot == 1) { tri.v1 = p; tri.n1 = n; tri.t1 = tg; tri.c1 = v.color; tri.uv1[0] = v.u; tri.uv1[1] = v.v; }
+        else { tri.v2 = p; tri.n2 = n; tri.t2 = tg; tri.c2 = v.color; tri.uv2[0] = v.u; tri.uv2[1] = v.v; }
     };
     for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
         Triangle tri;
@@ -370,6 +372,46 @@ CityModel generateCityModel(const json& ent, const json& root) {
     return generateCity(cp);
 }
 
+int addCpuImage(Scene& scene, const CpuImage& img) {
+    if (!img.valid()) return -1;
+    Texture t;
+    t.width = img.width; t.height = img.height; t.channels = img.channels;
+    t.pixels = img.pixels;
+    return scene.addTexture(std::move(t));
+}
+
+// Path-trace an imported glTF model (ADR-0039): the same CPU parse the realtime
+// importer uploads, but baked into Scene triangles + textures so the model uses
+// the identical material/texture system as procedural surfaces — only the UV
+// source differs (the glTF's authored UVs/tangents, flagged meshUV).
+void addGltfModel(const json& ent, const std::string& levelDir, Scene& scene) {
+    std::string meshPath = ent["mesh"].get<std::string>();
+    if (!meshPath.empty() && meshPath[0] != '/') meshPath = levelDir + "/" + meshPath;
+    CpuModel model = ModelImporter::loadCpu(meshPath);
+    if (model.meshes.empty()) return;
+
+    Vec3 position = parseVec3(ent.value("position", json()));
+    Vec3 scale = parseVec3(ent.value("scale", json()), Vec3(1, 1, 1));
+    Quat orientation = parseOrientation(ent);
+
+    int meshCount = 0;
+    for (const CpuMesh& cm : model.meshes) {
+        const CpuMaterial& gm = cm.material;
+        Material mat = Material::pbr(gm.baseColor, gm.metallic, gm.roughness);
+        mat.emission = gm.emission;
+        mat.meshUV = true;   // sample with the glTF's own UVs (no world tiling)
+        mat.albedoTex = addCpuImage(scene, gm.baseColorTex);
+        mat.normalTex = addCpuImage(scene, gm.normalTex);
+        mat.mrTex = addCpuImage(scene, gm.metallicRoughnessTex);
+        mat.aoTex = addCpuImage(scene, gm.aoTex);
+        mat.emissiveTex = addCpuImage(scene, gm.emissiveTex);
+        int mi = scene.addMaterial(mat);
+        addMeshAsTriangles(cm.geometry, position, orientation, scale, mi, scene);
+        ++meshCount;
+    }
+    LOG_INFO << "glTF model " << meshPath << ": " << meshCount << " mesh(es)";
+}
+
 void bakeCityModel(const CityModel& m, Scene& scene) {
     using S = RenderMaterial::Surface;
     SurfaceTexCache texCache;   // one bake per surface, shared across the city
@@ -436,10 +478,15 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // Procedural terrain (top-level block, regenerated from its recipe).
     if (root.contains("terrain")) addTerrain(root["terrain"], scene, materials, cityFlatten);
 
+    // Level directory, for resolving glTF mesh paths relative to the level file.
+    std::string levelDir = ".";
+    if (auto slash = levelPath.find_last_of('/'); slash != std::string::npos)
+        levelDir = levelPath.substr(0, slash);
+
     int skipped = 0;
     for (const auto& ent : root.value("entities", json::array())) {
         if (ent.contains("mesh")) {
-            skipped++;   // glTF models aren't tessellated offline yet
+            addGltfModel(ent, levelDir, scene);   // imported glTF, path-traced
             continue;
         }
         // Hero parametric tree: bark + alpha-cut leaf cards (matches the viewer).

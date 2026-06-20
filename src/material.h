@@ -31,8 +31,13 @@ struct Material {
     // with a world-planar tiling UV = worldCoord * texScale. When albedoTex is
     // set the surface is textured (mirrors the viewer's albedo/normal/MR/AO
     // maps) and the analytic `surface` path is skipped.
-    int albedoTex = -1, normalTex = -1, mrTex = -1, aoTex = -1;
+    int albedoTex = -1, normalTex = -1, mrTex = -1, aoTex = -1, emissiveTex = -1;
     double texScale = 1.0;
+    // Sample the maps with the mesh's own UVs (rec.u/rec.v) — for imported glTF
+    // models that ship authored UVs + tangents. The procedural bake leaves this
+    // false and uses the world-planar tiling frame instead. The two paths share
+    // the same texture slots, so the source (glTF vs bake) is invisible downstream.
+    bool meshUV = false;
     // Alpha-cut foliage (leaf cards): index into Scene::textures whose alpha is
     // sampled at the hit's uv; below `alphaCutoff` the surface is transparent
     // (the ray passes through). -1 = opaque. Mirrors the viewer's alpha test.

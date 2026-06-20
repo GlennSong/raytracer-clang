@@ -17,9 +17,36 @@ struct ImportedModel {
     std::vector<ImportedMesh> meshes;
 };
 
+// CPU-side import result (no GPU upload): geometry + decoded texture images, the
+// single source of truth both the realtime upload and the offline path tracer
+// consume, so a glTF model uses the same material/texture system regardless of
+// renderer (ADR-0039).
+struct CpuImage {
+    int width = 0, height = 0, channels = 0;
+    std::vector<uint8_t> pixels;   // row-major, `channels` bytes per texel
+    bool valid() const { return width > 0 && height > 0 && !pixels.empty(); }
+};
+struct CpuMaterial {
+    Vec3 baseColor{1, 1, 1};
+    float metallic = 1.0f, roughness = 1.0f, opacity = 1.0f;
+    Vec3 emission{0, 0, 0};
+    CpuImage baseColorTex, normalTex, metallicRoughnessTex, aoTex, emissiveTex;
+};
+struct CpuMesh {
+    RenderMesh geometry;   // positions/normals/uvs/tangents in object space
+    CpuMaterial material;
+};
+struct CpuModel {
+    std::vector<CpuMesh> meshes;
+};
+
 class ModelImporter {
 public:
     static ImportedModel load(const std::string& path, Renderer& renderer);
+
+    // Parse to CPU geometry + decoded images (no GPU). The offline tracer uses
+    // this directly; load() uploads it. Empty model on failure.
+    static CpuModel loadCpu(const std::string& path);
 
     // Parse-only check (no GPU upload) — the editor's asset import validates
     // files before copying them into the project. False fills `error`.
