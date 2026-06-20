@@ -201,6 +201,27 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
                  s.corner(0, 1, 1), u * -1, color);
 }
 
+// A solid parapet: a closed ring of four thin boxes around a footprint
+// perimeter, so the roof edge reads as a real wall with thickness from every
+// angle (emitShell gives single-sided quads that vanish edge-on / from inside).
+// `footOrigin` is the min corner, extents `width` (along r) × `depth` (along f),
+// rising `height` from `y`, wall `thick` metres.
+void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
+                 const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
+                 PartId part, const Vec3& color) {
+    const Vec3 up(0, 1, 0);
+    Real t = std::min(thick, std::min(width, depth) * 0.45);
+    Vec3 base(footOrigin.x, y, footOrigin.z);
+    // Back (-f) and front (+f) run the full width; left/right fit between them.
+    emitBox(out, Scope{base, {r, up, f}, Vec3(width, height, t)}, part, color);
+    emitBox(out, Scope{base + f * (depth - t), {r, up, f}, Vec3(width, height, t)},
+            part, color);
+    emitBox(out, Scope{base + f * t, {r, up, f}, Vec3(t, height, depth - 2 * t)},
+            part, color);
+    emitBox(out, Scope{base + r * (width - t) + f * t, {r, up, f},
+                       Vec3(t, height, depth - 2 * t)}, part, color);
+}
+
 std::vector<Scope> splitScope(const Scope& s, int axis, const std::vector<Real>& sizes) {
     std::vector<Scope> out;
     Real total = 0;
@@ -313,7 +334,11 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     } else {
         sill = (mode == FacadeMode::Retail) ? 0.4 : human::WINDOW_SILL;
         head = std::min(fh - 0.4, (mode == FacadeMode::Retail) ? fh - 0.4 : human::WINDOW_HEAD);
-        margin = std::min(bw * 0.22, Real(0.6));
+        // A CONSTANT window module across every face (the piers absorb the slack),
+        // so a wide face and a narrow one show the same window size, not different
+        // ones (ADR-0040). Width is the bay minus piers, clamped.
+        Real winW = std::min(Real(1.6), std::max(Real(0.8), bw - 0.8));
+        margin = (bw - winW) * 0.5;
     }
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
 
@@ -727,11 +752,23 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
     // Upper residential floors, with optional setbacks.
     for (int i = 0; i < params.floors; ++i) {
         if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
-            i % params.setbackFloors == 0) {
+            i % params.setbackFloors == 0 &&
+            width - 2 * params.setbackEvery >= 8.0 &&
+            depth - 2 * params.setbackEvery >= 8.0) {
             Real d = params.setbackEvery;
             Real dx = std::min(d, width * 0.4), dz = std::min(d, depth * 0.4);
+            // Cap the lower (wider) mass with a roof slab so the exposed setback
+            // ledge is a real surface, not an open shelf (ADR-0040: stepped
+            // towers terrace at each setback). Slab spans the old footprint; the
+            // new mass rises from it and hides all but the ledge ring.
+            emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
+                               {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
+                    PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
             footOrigin = footOrigin + r * dx + f * dz;
             width -= 2 * dx; depth -= 2 * dz;
+            // A low terrace parapet around the stepped-back mass.
+            emitParapet(out, footOrigin, width, depth, r, f, y, 0.6, 0.24,
+                        PartId::Trim, materialFor(PartId::Trim, wallColor).albedo);
         }
         Real fh = params.floorHeight;
         Scope storey = storeyScope(y, fh);
@@ -762,9 +799,8 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
                        {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
             PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
     if (params.parapet > 0) {
-        Scope para = storeyScope(y, params.parapet);
-        emitShell(out, para, PartId::Trim, materialFor(PartId::Trim, wallColor).albedo,
-                  false, false);
+        emitParapet(out, footOrigin, width, depth, r, f, y, params.parapet, 0.28,
+                    PartId::Trim, materialFor(PartId::Trim, wallColor).albedo);
     }
     // Crown: mechanical penthouse + rooftop water tank (ADR-0040 Pass B).
     emitCrown(out, footOrigin, width, depth, r, f, y, params, rng);

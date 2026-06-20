@@ -161,6 +161,11 @@ void emitBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color);
 // optional) under `part` — the walkable-shell primitive (ADR-0038 §4).
 void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color,
                bool floor, bool ceiling);
+// Emit a solid parapet ring (four thin boxes with real thickness) around a
+// footprint perimeter — a roof-edge wall that reads from every angle.
+void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
+                 const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
+                 PartId part, const Vec3& color);
 // Emit a quad (one facade panel / window / sign) from four corners + a normal.
 void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
               const Vec3& d, const Vec3& normal, const Vec3& color);

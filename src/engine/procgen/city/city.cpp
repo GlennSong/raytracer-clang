@@ -370,9 +370,14 @@ CityModel generateCity(const CityParams& cp) {
         std::vector<std::vector<int>> adj(nNodes);
         for (const RoadEdge& e : graph.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
         std::vector<Real> next(nodeGrade);
-        // Light smoothing: remove local bumps for gentle grades, but keep the
-        // broad slope (heavy smoothing would flatten the hills — not wanted).
-        for (int iter = 0; iter < 5; ++iter) {
+        // Smoothing: streets should read engineered, not bumpy. A few Laplacian
+        // passes relax local terrain bumps between adjacent intersections while
+        // preserving the broad slope across the city (a linear ramp is harmonic,
+        // so it survives the relaxation; only high-frequency noise is removed).
+        // Kept to a handful of passes: the road graph is only a few nodes wide,
+        // so over-iterating would diffuse the whole slope toward its mean and
+        // pull foundations off the terrain.
+        for (int iter = 0; iter < 6; ++iter) {
             for (int i = 0; i < nNodes; ++i) {
                 if (adj[i].empty()) continue;
                 Real avg = 0; for (int j : adj[i]) avg += nodeGrade[j];
@@ -553,6 +558,12 @@ CityModel generateCity(const CityParams& cp) {
         for (const Lot& lot : lots) {
             if (rng.unit() > cp.buildChance) continue;        // plaza / empty
             if (lot.area < 50) continue;
+            // Reject sliver lots — a long, thin footprint extrudes into an
+            // impossibly narrow blade. Need a real minimum short side.
+            {
+                Vec2 llo, lhi; bounds(lot.footprint, llo, lhi);
+                if (std::min(lhi.x - llo.x, lhi.y - llo.y) < 6.0) continue;
+            }
             // Pull the building in from the lot lines a little (setback to the lot).
             Poly2 site = inset(lot.footprint, 1.2);
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
