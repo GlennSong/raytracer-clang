@@ -211,22 +211,28 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
     return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
 
-// Dispatch a Surface id (material.h / renderer.h Surface) to its pattern.
+// Dispatch a Surface id (material.h / renderer.h Surface) to its pattern. The
+// result is clamped to [0,1] per channel: an albedo above 1 would make the path
+// tracer gain energy each bounce (throughput never decays, Russian roulette
+// never terminates — a pathological slowdown), so surfaces stay conserving.
 Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n) {
     double u, v; surfPlane(worldPos, n, u, v);
+    Vec3 c;
     switch (id) {
-        case 1:  return surfBrick(base, u, v);
-        case 2:  return surfConcrete(base, u, v);
-        case 3:  return surfStucco(base, u, v);
-        case 4:  return surfRoofTile(base, u, v);
-        case 5:  return surfShingle(base, u, v);
-        case 6:  return surfCorrugated(base, u, v);
-        case 7:  return surfAsphalt(base, u, v);
-        case 8:  return surfPavement(base, u, v);
-        case 9:  return surfCobble(base, u, v);
-        case 10: return surfWood(base, u, v);
+        case 1:  c = surfBrick(base, u, v); break;
+        case 2:  c = surfConcrete(base, u, v); break;
+        case 3:  c = surfStucco(base, u, v); break;
+        case 4:  c = surfRoofTile(base, u, v); break;
+        case 5:  c = surfShingle(base, u, v); break;
+        case 6:  c = surfCorrugated(base, u, v); break;
+        case 7:  c = surfAsphalt(base, u, v); break;
+        case 8:  c = surfPavement(base, u, v); break;
+        case 9:  c = surfCobble(base, u, v); break;
+        case 10: c = surfWood(base, u, v); break;
         default: return base;
     }
+    return Vec3(std::clamp(c.x, 0.0, 1.0), std::clamp(c.y, 0.0, 1.0),
+                std::clamp(c.z, 0.0, 1.0));
 }
 
 }  // namespace

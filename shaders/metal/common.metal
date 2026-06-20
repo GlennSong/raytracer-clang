@@ -187,17 +187,19 @@ float3 surfWood(float3 base, float u, float v) {
 
 float3 applySurface(uint id, float3 base, float3 worldPos, float3 n) {
     float2 uv = surfUV(worldPos, n);
+    float3 c;
     switch (id) {
-        case 1u:  return surfBrick(base, uv.x, uv.y);
-        case 2u:  return surfConcrete(base, uv.x, uv.y);
-        case 3u:  return surfStucco(base, uv.x, uv.y);
-        case 4u:  return surfRoofTile(base, uv.x, uv.y);
-        case 5u:  return surfShingle(base, uv.x, uv.y);
-        case 6u:  return surfCorrugated(base, uv.x, uv.y);
-        case 7u:  return surfAsphalt(base, uv.x, uv.y);
-        case 8u:  return surfPavement(base, uv.x, uv.y);
-        case 9u:  return surfCobble(base, uv.x, uv.y);
-        case 10u: return surfWood(base, uv.x, uv.y);
+        case 1u:  c = surfBrick(base, uv.x, uv.y); break;
+        case 2u:  c = surfConcrete(base, uv.x, uv.y); break;
+        case 3u:  c = surfStucco(base, uv.x, uv.y); break;
+        case 4u:  c = surfRoofTile(base, uv.x, uv.y); break;
+        case 5u:  c = surfShingle(base, uv.x, uv.y); break;
+        case 6u:  c = surfCorrugated(base, uv.x, uv.y); break;
+        case 7u:  c = surfAsphalt(base, uv.x, uv.y); break;
+        case 8u:  c = surfPavement(base, uv.x, uv.y); break;
+        case 9u:  c = surfCobble(base, uv.x, uv.y); break;
+        case 10u: c = surfWood(base, uv.x, uv.y); break;
         default:  return base;
     }
+    return saturate(c);   // keep albedo energy-conserving (see scene.cpp)
 }
