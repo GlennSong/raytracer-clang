@@ -520,6 +520,140 @@ int l_furniture_traffic_signal(lua_State* L) {
     return 1;
 }
 
+// --- scope.* : the split/shape-grammar op-vocabulary (ADR-0042 Phase 2) -------
+// A Scope is an oriented box; split/divide/inset subdivide it and box/shell emit
+// geometry. This is the spatial-subdivision core of the grammar (shape_grammar.h)
+// exposed so Lua can author arbitrary props and facade details, not just whole
+// buildings. The ops wrap the same C++ the building grammar uses.
+constexpr const char* kScopeMt = "engine.procgen.Scope";
+
+void pushScope(lua_State* L, const Scope& s) {
+    void* mem = lua_newuserdatauv(L, sizeof(Scope), 0);
+    new (mem) Scope(s);
+    luaL_setmetatable(L, kScopeMt);
+}
+Scope& checkScope(lua_State* L, int idx) {
+    return *static_cast<Scope*>(luaL_checkudata(L, idx, kScopeMt));
+}
+int scopeGc(lua_State* L) {
+    static_cast<Scope*>(lua_touserdata(L, 1))->~Scope();
+    return 0;
+}
+
+// An axis argument: a number 0/1/2, or "x"/"y"/"z" (== right/up/forward, also
+// spelled "right"/"up"/"forward"). Matches the C++ scope frame.
+int checkAxis(lua_State* L, int idx) {
+    if (lua_type(L, idx) == LUA_TSTRING) {
+        const char* s = lua_tostring(L, idx);
+        switch (s[0]) {
+            case 'x': case 'r': return 0;
+            case 'y': case 'u': return 1;
+            case 'z': case 'f': return 2;
+            default: return luaL_error(L, "axis must be x/y/z (right/up/forward)");
+        }
+    }
+    int a = static_cast<int>(luaL_checkinteger(L, idx));
+    luaL_argcheck(L, a >= 0 && a <= 2, idx, "axis must be 0..2");
+    return a;
+}
+
+// Push a vector of scopes as a 1-based Lua array.
+void pushScopeArray(lua_State* L, const std::vector<Scope>& parts) {
+    lua_createtable(L, static_cast<int>(parts.size()), 0);
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        pushScope(L, parts[i]);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+}
+
+Vec3 optColor(lua_State* L, int idx) {
+    return lua_istable(L, idx) ? checkVec3(L, idx) : Vec3(0.8, 0.8, 0.8);
+}
+
+// scope{ origin = {x,y,z}, size = {x,y,z} } -> Scope (axis-aligned; the axes
+// default to world right/up/forward, origin is the box's min corner).
+int l_scope(lua_State* L) {
+    Scope s;
+    if (lua_istable(L, 1)) {
+        s.origin = optVec3Field(L, 1, "origin", s.origin);
+        s.size   = optVec3Field(L, 1, "size", s.size);
+    }
+    pushScope(L, s);
+    return 1;
+}
+
+int l_scope_corner(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    pushVec3(L, s.corner(luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                         luaL_checknumber(L, 4)));
+    return 1;
+}
+int l_scope_center(lua_State* L) {
+    pushVec3(L, checkScope(L, 1).center());
+    return 1;
+}
+int l_scope_size(lua_State* L) {
+    pushVec3(L, checkScope(L, 1).size);
+    return 1;
+}
+// s:split(axis, {a, b, ...}) -> {Scope}. A negative size means "repeat |size| to
+// fill" (the grammar's repeat-divide), matching splitScope.
+int l_scope_split(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    int axis = checkAxis(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    std::vector<Real> sizes;
+    lua_Integer n = luaL_len(L, 3);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 3, i);
+        sizes.push_back(static_cast<Real>(luaL_checknumber(L, -1)));
+        lua_pop(L, 1);
+    }
+    pushScopeArray(L, splitScope(s, axis, sizes));
+    return 1;
+}
+// s:divide(axis, target) -> {Scope}: N≈(extent/target) equal cells (repeatScope).
+int l_scope_divide(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    int axis = checkAxis(L, 2);
+    Real target = static_cast<Real>(luaL_checknumber(L, 3));
+    pushScopeArray(L, repeatScope(s, axis, target));
+    return 1;
+}
+int l_scope_inset(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    pushScope(L, insetScope(s, static_cast<Real>(luaL_checknumber(L, 2))));
+    return 1;
+}
+// s:box(color) -> mesh : the six faces of the scope as a solid box.
+int l_scope_box(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    BuildingMesh bm;
+    emitBox(bm, s, PartId::Wall, optColor(L, 2));
+    pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
+    return 1;
+}
+// s:shell(color [, floor, ceiling]) -> mesh : the four walls (a hollow storey).
+int l_scope_shell(lua_State* L) {
+    Scope& s = checkScope(L, 1);
+    bool floor = lua_toboolean(L, 3);
+    bool ceiling = lua_toboolean(L, 4);
+    BuildingMesh bm;
+    emitShell(bm, s, PartId::Wall, optColor(L, 2), floor, ceiling);
+    pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
+    return 1;
+}
+
+// mesh.quad(a, b, c, d, normal, color) -> mesh : one panel from four corners.
+int l_mesh_quad(lua_State* L) {
+    Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3),
+         d = checkVec3(L, 4), nrm = checkVec3(L, 5);
+    auto m = std::make_shared<RenderMesh>();
+    emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
 // The skin-side TreeParams (grammar fields are unused; the grammar is the
 // module string passed to tree.skin).
 TreeParams readTreeParams(lua_State* L, int idx) {
@@ -739,6 +873,23 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_pop(L, 1);
     registerMetatable(L, kModulesMt, modulesGc);
 
+    // The Scope metatable carries the split-grammar op methods (ADR-0042 Phase 2).
+    if (luaL_newmetatable(L, kScopeMt)) {
+        lua_pushcfunction(L, scopeGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_scope_corner); lua_setfield(L, -2, "corner");
+        lua_pushcfunction(L, l_scope_center); lua_setfield(L, -2, "center");
+        lua_pushcfunction(L, l_scope_size);   lua_setfield(L, -2, "size");
+        lua_pushcfunction(L, l_scope_split);  lua_setfield(L, -2, "split");
+        lua_pushcfunction(L, l_scope_divide); lua_setfield(L, -2, "divide");
+        lua_pushcfunction(L, l_scope_inset);  lua_setfield(L, -2, "inset");
+        lua_pushcfunction(L, l_scope_box);    lua_setfield(L, -2, "box");
+        lua_pushcfunction(L, l_scope_shell);  lua_setfield(L, -2, "shell");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+
     static const luaL_Reg kSdfFns[] = {
         {"sphere", l_sdf_sphere},
         {"box", l_sdf_box},
@@ -779,10 +930,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"orient", l_mesh_orient},
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
+        {"quad", l_mesh_quad},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
     lua_setglobal(L, "mesh");
+
+    lua_pushcfunction(L, l_scope);
+    lua_setglobal(L, "scope");
 
     static const luaL_Reg kLSystemFns[] = {
         {"create", l_lsystem_create},

@@ -154,6 +154,48 @@ TEST_CASE(procgen_script_builds_street_furniture) {
     if (tall) CHECK(topY(*tall) > topY(*lamp));
 }
 
+TEST_CASE(procgen_script_authors_with_scope_ops) {
+    // ADR-0042 Phase 2: the split/shape-grammar op-vocabulary is exposed, so Lua
+    // can subdivide a scope and emit geometry per cell — author props/details,
+    // not just whole buildings. The ops wrap the same C++ grammar.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local s = scope{ origin = {0, 0, 0}, size = {4, 3, 2} }
+        local bays = s:split('x', { 1, 1, 1, 1 })      -- four equal bays
+        local parts = {}
+        for i = 1, #bays do parts[i] = bays[i]:box{0.2, 0.6, 0.8} end
+        return mesh.merge(parts)
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() > 0);
+    CHECK(mesh->indices.size() % 3 == 0);
+
+    // split returns the requested number of cells; divide sizes by target.
+    double n = 0, halved = 0, divided = 0;
+    CHECK(vm.doString("n = #(scope{origin={0,0,0},size={4,3,2}}:split('x',{1,1,1,1}))"));
+    CHECK(vm.getGlobalNumber("n", n));
+    CHECK(n == 4);
+    CHECK(vm.doString("divided = #(scope{origin={0,0,0},size={10,3,2}}:divide('x', 2.0))"));
+    CHECK(vm.getGlobalNumber("divided", divided));
+    CHECK(divided == 5);                                  // 10 / 2 = 5 cells
+
+    // inset shrinks the footprint but keeps height; corner/center read back.
+    CHECK(vm.doString("halved = (scope{origin={0,0,0},size={4,3,4}}:inset(1.0)):size()[1]"));
+    CHECK(vm.getGlobalNumber("halved", halved));
+    CHECK_APPROX(halved, 2.0, 1e-6);                     // 4 - 2*1 = 2 wide
+
+    // mesh.quad emits a single panel (two triangles).
+    std::shared_ptr<RenderMesh> quad;
+    CHECK(runProcgenMesh(vm,
+        "return mesh.quad({0,0,0},{1,0,0},{1,1,0},{0,1,0},{0,0,1},{1,1,1})",
+        quad, nullptr));
+    if (quad) CHECK(quad->indices.size() == 6);
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);
