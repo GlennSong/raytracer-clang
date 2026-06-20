@@ -306,11 +306,15 @@ TEST_CASE(city_winding_matches_engine_convention) {
 }
 
 TEST_CASE(city_has_street_furniture) {
-    // Lamp posts + crosswalks are added regardless of tree scatter.
+    // Lamp posts + crosswalks are added regardless of tree scatter. Lamps and
+    // signals are instanced (ADR-0041), so they live in instanceGroups, not the
+    // baked props mesh — and at least one group carries placements.
     CityParams cp; cp.extent = 200; cp.cellSize = 95; cp.seed = 5;
     cp.scatterTrees = false;
     CityModel m = generateCity(cp);
-    CHECK(!m.props.vertices.empty());      // lamp posts (props) without any trees
+    std::size_t instances = 0;
+    for (const CityInstanceGroup& g : m.instanceGroups) instances += g.transforms.size();
+    CHECK(instances > 0);                  // lamp posts / signals, without any trees
     CHECK(!m.roads.vertices.empty());      // roads + lane lines + crosswalks
 }
 

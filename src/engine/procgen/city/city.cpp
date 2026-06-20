@@ -266,6 +266,15 @@ void emitLamp(RenderMesh& out, const Vec3& base) {
     place(MeshBuilder::box(Vec3(0.5, 0.2, 0.32)), lampCol, h);
 }
 
+// The lamp post built once at the origin, for use as an instance prototype
+// (ADR-0041): place copies with a translate transform instead of baking a lamp
+// at every verge point.
+RenderMesh lampProto() {
+    RenderMesh out;
+    emitLamp(out, Vec3(0, 0, 0));
+    return out;
+}
+
 // A zebra crosswalk centred at `center`, bars perpendicular to pedestrian travel
 // (i.e. running along the road `dir`), repeated across the road width. Flat at y.
 void emitCrosswalk(RenderMesh& mesh, const Vec2& center, const Vec2& dir,
@@ -439,6 +448,11 @@ CityModel generateCity(const CityParams& cp) {
         ++degree[e.a]; ++degree[e.b];
         incident[e.a].push_back(e.b); incident[e.b].push_back(e.a);
     }
+    // Lamp posts and traffic signals are repeated furniture, so they are
+    // *instanced* (ADR-0041): one prototype each, a transform per placement,
+    // emitted as instance groups below instead of baked into model.props.
+    std::vector<Mat4> lampXf, signalXf;
+
     // Mid-block lamp posts along each edge, alternating verge side.
     for (const RoadEdge& e : graph.edges) {
         Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
@@ -455,7 +469,7 @@ CityModel generateCity(const CityParams& cp) {
             Real y = yA + (yB - yA) * t;
             Real side = (k % 2 == 0) ? 1.0 : -1.0;
             Vec2 p = on + nrm * (off * side);
-            emitLamp(model.props, Vec3(p.x, y, p.y));
+            lampXf.push_back(Mat4::translate(p.x, y, p.y));
         }
     }
     // Coordinated intersection decoration at every junction (degree >= 3). For
@@ -479,9 +493,25 @@ CityModel generateCity(const CityParams& cp) {
             // arm and out to the right kerb. Signal head faces approaching traffic.
             Vec2 right(d.y, -d.x);
             Vec2 corner = node - d * corridorHalf + right * (corridorHalf + 0.6);
-            emitTrafficSignal(model.props, Vec3(corner.x, y, corner.y), d * -1);
+            Vec2 face = d * -1;                       // head faces approaching traffic
+            Real yaw = std::atan2(face.x, face.y);
+            signalXf.push_back(Mat4::trs(Vec3(corner.x, y, corner.y),
+                                         Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                                         Vec3(1, 1, 1)));
         }
     }
+
+    // Emit the lamp + signal instance groups (opaque, vertex-coloured props).
+    auto pushFurniture = [&](RenderMesh proto, std::vector<Mat4> xf, float rough) {
+        if (proto.vertices.empty() || xf.empty()) return;
+        CityInstanceGroup g;
+        g.proto = std::move(proto);
+        g.transforms = std::move(xf);
+        g.roughness = rough;
+        model.instanceGroups.push_back(std::move(g));
+    };
+    pushFurniture(lampProto(), std::move(lampXf), 0.5f);
+    pushFurniture(trafficSignalProto(), std::move(signalXf), 0.5f);
 
     Rng rng(cp.seed);
 

@@ -151,4 +151,10 @@ void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir) {
           base + Vec3(0, 1.05, 0) + fwd * 0.22, yaw);
 }
 
+RenderMesh trafficSignalProto() {
+    RenderMesh out;
+    emitTrafficSignal(out, Vec3(0, 0, 0), Vec2(0, 1));   // origin, facing +Z
+    return out;
+}
+
 }  // namespace engine

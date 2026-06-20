@@ -36,6 +36,11 @@ void emitStopBar(RenderMesh& out, const Vec2& center, const Vec2& dir,
 // across the approach the signal governs. `grade` is the ground height at base.
 void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir);
 
+// The traffic-signal assembly built once at the origin facing +Z, for use as an
+// instance prototype (ADR-0041): place copies with a translate + yaw transform
+// instead of baking the geometry at every corner.
+RenderMesh trafficSignalProto();
+
 }  // namespace engine
 
 #endif
