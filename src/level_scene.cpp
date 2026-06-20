@@ -32,7 +32,7 @@ int importMaterial(const json& ent, Scene& scene) {
     Vec3 albedo(0.8, 0.8, 0.8);
     double roughness = 0.5, metallic = 0.0;
     Vec3 emission(0, 0, 0);
-    bool checkerboard = false;
+    bool checkerboard = false, brick = false;
     if (ent.contains("material")) {
         const auto& m = ent["material"];
         albedo = parseVec3(m.value("albedo", json()), albedo);
@@ -42,6 +42,7 @@ int importMaterial(const json& ent, Scene& scene) {
         // Current documents spell the flag as a bool (property-layer JSON);
         // pre-migration ones used a "flags" array. Read both.
         checkerboard = m.value("checkerboard", false);
+        brick = m.value("brick", false);   // world-space procedural masonry
         if (m.contains("flags"))
             for (const auto& f : m["flags"])
                 checkerboard |= (f == "checkerboard");
@@ -51,6 +52,7 @@ int importMaterial(const json& ent, Scene& scene) {
     // Full PBR parameters, shaded with the viewer's GGX model in tracePath.
     Material mat = Material::pbr(albedo, metallic, roughness);
     mat.checkerboard = checkerboard;
+    mat.brick = brick;
     return scene.addMaterial(mat);
 }
 
@@ -293,14 +295,18 @@ CityModel generateCityModel(const json& ent, const json& root) {
 }
 
 void bakeCityModel(const CityModel& m, Scene& scene) {
-    auto bake = [&](const RenderMesh& mesh, float metallic, float roughness) {
+    auto bake = [&](const RenderMesh& mesh, float metallic, float roughness,
+                    bool brick = false) {
         if (mesh.vertices.empty()) return;
-        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), metallic, roughness));
+        Material mat = Material::pbr(Vec3(1, 1, 1), metallic, roughness);
+        mat.brick = brick;   // world-space procedural masonry (PartId::Brick)
+        int mi = scene.addMaterial(mat);
         addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
     };
     for (const RenderMesh& part : m.parts) {
-        RenderMaterial rm = materialFor(static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
-        bake(part, rm.metallic, rm.roughness);
+        PartId pid = static_cast<PartId>(part.materialIndex);
+        RenderMaterial rm = materialFor(pid, Vec3(1, 1, 1));
+        bake(part, rm.metallic, rm.roughness, pid == PartId::Brick);
     }
     bake(m.roads, 0.0f, 0.9f);
     bake(m.pavement, 0.0f, 0.95f);  // flat graded aprons + curbs

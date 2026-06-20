@@ -316,7 +316,7 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
 
     const std::string key = "city:" + std::to_string(index);
     auto spawnMesh = [&](const RenderMesh& mesh, const std::string& tag,
-                         float metallic, float roughness) {
+                         float metallic, float roughness, uint32_t flags = 0) {
         if (mesh.vertices.empty()) return;
         Entity e = world.create();
         Transform t;                       // city geometry is already world-space
@@ -327,11 +327,12 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
         r.material.albedo = Vec3(1, 1, 1);     // hue carried in vertex colour
         r.material.metallic = metallic;
         r.material.roughness = roughness;
+        r.material.flags = flags;              // e.g. FLAG_BRICK for masonry walls
         world.add<Renderable>(e, r);
     };
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
         RenderMaterial rm = materialFor(static_cast<PartId>(m.parts[i].materialIndex), Vec3(1, 1, 1));
-        spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness);
+        spawnMesh(m.parts[i], "part" + std::to_string(i), rm.metallic, rm.roughness, rm.flags);
     }
     spawnMesh(m.roads, "roads", 0.0f, 0.9f);
     spawnMesh(m.pavement, "pavement", 0.0f, 0.95f);

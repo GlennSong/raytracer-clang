@@ -96,6 +96,12 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.albedo = {0.30, 0.30, 0.32}; m.metallic = 0.0f; m.roughness = 0.9f; break;
         case PartId::Detail:
             m.albedo = wallColor * 0.8; m.metallic = 0.1f; m.roughness = 0.6f; break;
+        case PartId::Brick:
+            // A wall, but shaded with world-space procedural masonry. Albedo stays
+            // white so the brick base colour rides in vertex colour like every
+            // other city part; the shader/tracer draw the mortar + per-brick jitter.
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.88f;
+            m.flags |= RenderMaterial::FLAG_BRICK; break;
         case PartId::Wall:
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
@@ -338,7 +344,9 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
         appendToPart(out, PartId::Trim, trim);
     }
 
-    appendToPart(out, PartId::Wall, wall);
+    // Brick buildings route their wall surface to the masonry part (shaded with
+    // procedural brick); everyone else stays on the flat Wall material.
+    appendToPart(out, p.brick ? PartId::Brick : PartId::Wall, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Door, door);
 }

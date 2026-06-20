@@ -70,6 +70,9 @@ struct RenderMaterial {
     // function, weighted by height above the instance origin (base planted, tips
     // move). For grass/foliage; applied on the instanced draw path.
     static constexpr uint32_t FLAG_WIND = 4;
+    // World-space procedural running-bond brick (applyBrick in the shader /
+    // scene.cpp), for untextured masonry facades. No map needed.
+    static constexpr uint32_t FLAG_BRICK = 8;
 
     TextureHandle albedoMap;
     TextureHandle normalMap;

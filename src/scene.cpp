@@ -74,6 +74,60 @@ Vec3 applyCheckerboard(const Vec3& albedo, const Vec3& worldPos) {
     return (((cx + cz) & 1) != 0) ? albedo * 0.3 : albedo;
 }
 
+// Hash a brick's (column, row) index to [0,1] for per-brick colour jitter. Kept
+// identical to common.metal's hash21 so both renderers vary the same bricks.
+double brickHash(double a, double b) {
+    double s = std::sin(a * 12.9898 + b * 78.233) * 43758.5453;
+    return s - std::floor(s);
+}
+
+// World-space running-bond brick (the viewer's common.metal applyBrick, kept in
+// lockstep). `albedo` is the brick base colour (from facadeColor/vertex colour);
+// the mortar joints darken to a neutral grey and each brick takes a small colour
+// jitter, so a wall reads as masonry up close instead of a flat panel.
+Vec3 applyBrick(const Vec3& albedo, const Vec3& worldPos, const Vec3& normal) {
+    // Brick plane coords: v = height, u = horizontal run along the facade. On a
+    // vertical wall the horizontal tangent is perpendicular to the (horizontal)
+    // normal in XZ; near-horizontal surfaces fall back to a top-down layout.
+    double u, v;
+    if (std::fabs(normal.y) > 0.9) {
+        u = worldPos.x; v = worldPos.z;
+    } else {
+        double tx = normal.z, tz = -normal.x;
+        double tl = std::sqrt(tx * tx + tz * tz);
+        if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
+        tx /= tl; tz /= tl;
+        u = worldPos.x * tx + worldPos.z * tz;
+        v = worldPos.y;
+    }
+
+    const double courseH = 0.075;   // brick + bed-joint height
+    const double brickL  = 0.20;    // brick + head-joint length
+    const double mortar  = 0.011;   // joint half-width
+
+    double row = std::floor(v / courseH);
+    double offset = (std::fmod(std::fabs(row), 2.0) < 1.0) ? 0.0 : brickL * 0.5;
+    double uu = u + offset;
+    double col = std::floor(uu / brickL);
+
+    double fy = v - row * courseH;
+    double fx = uu - col * brickL;
+    double joint = std::min(std::min(fy, courseH - fy), std::min(fx, brickL - fx));
+
+    // Per-brick value jitter, with an occasional darker "burnt header" for
+    // character, and a faint within-brick gradient so faces aren't dead flat.
+    double h = brickHash(col, row);
+    double h2 = brickHash(col * 1.7 + 3.1, row * 0.9 + 5.7);
+    double shade = 0.74 + 0.46 * h;
+    if (h2 < 0.12) shade *= 0.6;
+    shade *= 0.94 + 0.12 * (fx / brickL);
+    Vec3 brickCol = albedo * shade;
+    Vec3 mortarCol(0.30, 0.29, 0.27);
+
+    double t = std::clamp((joint - mortar) / 0.004, 0.0, 1.0);   // 0 joint .. 1 face
+    return mortarCol + (brickCol - mortarCol) * t;
+}
+
 }  // namespace
 
 Vec3 EnvironmentMap::sample(const Vec3& unitDir) const {
@@ -374,6 +428,7 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                                ? applyCheckerboard(mat.albedo, rec.point)
                                : mat.albedo) *
                           rec.color;
+            if (mat.brick) albedo = applyBrick(albedo, rec.point, rec.normal);
 
             radiance += throughput * sampleDirectLight(rec.point, n, v, albedo,
                                                        mat.metallic,

@@ -98,6 +98,29 @@ TEST_CASE(grammar_grows_a_multipart_building) {
     CHECK(!bm.attaches.empty());
 }
 
+TEST_CASE(grammar_brick_routes_walls_to_masonry_part) {
+    Scope s = scopeFromFootprint(square(18), 0.0, 16.0);
+    // A brick building shades its walls as masonry: wall geometry goes to the
+    // Brick part, not the flat Wall part.
+    BuildingParams brick; brick.floors = 4; brick.seed = 7; brick.brick = true;
+    BuildingMesh bm = growBuilding(s, brick);
+    CHECK(hasPart(bm, PartId::Brick));
+    CHECK(!hasPart(bm, PartId::Wall));
+
+    // A plain building keeps the flat Wall material.
+    BuildingParams plain; plain.floors = 4; plain.seed = 7; plain.brick = false;
+    BuildingMesh pm = growBuilding(s, plain);
+    CHECK(hasPart(pm, PartId::Wall));
+    CHECK(!hasPart(pm, PartId::Brick));
+
+    // The Brick material carries FLAG_BRICK (world-space procedural masonry) and
+    // is otherwise a matte wall; the plain Wall material does not.
+    RenderMaterial bmat = materialFor(PartId::Brick, Vec3(0.5, 0.25, 0.18));
+    RenderMaterial wmat = materialFor(PartId::Wall, Vec3(0.5, 0.25, 0.18));
+    CHECK((bmat.flags & RenderMaterial::FLAG_BRICK) != 0);
+    CHECK((wmat.flags & RenderMaterial::FLAG_BRICK) == 0);
+}
+
 TEST_CASE(grammar_walkable_ground_punches_a_door) {
     BuildingParams p; p.floors = 3; p.walkableGround = true; p.seed = 1;
     Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
