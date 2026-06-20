@@ -9,6 +9,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/street_kit.h"
 #include "../procgen/city/polygon.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
@@ -485,6 +486,40 @@ Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
     return v;
 }
 
+// --- streetfurniture.* : the street-kit props as tunable Lua recipes (ADR-0042).
+// Each wraps the SAME C++ builder the city uses, so exposing a part never forks
+// its geometry — Lua only sets the params; the build stays in C++.
+
+// streetfurniture.lamp{ height=, pole_radius=, head_size={x,y,z},
+//   pole_color={r,g,b}, head_color={r,g,b} } -> mesh (built at the origin).
+int l_furniture_lamp(lua_State* L) {
+    LampParams p;
+    if (lua_istable(L, 1)) {
+        p.height     = static_cast<Real>(optField(L, 1, "height", p.height));
+        p.poleRadius = static_cast<Real>(optField(L, 1, "pole_radius", p.poleRadius));
+        p.headSize   = optVec3Field(L, 1, "head_size", p.headSize);
+        p.poleColor  = optVec3Field(L, 1, "pole_color", p.poleColor);
+        p.headColor  = optVec3Field(L, 1, "head_color", p.headColor);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(streetLamp(p)));
+    return 1;
+}
+
+// streetfurniture.traffic_signal{ pole_height=, arm_length=, arm_height=,
+//   pole_color={r,g,b}, housing_color={r,g,b} } -> mesh (origin, facing +Z).
+int l_furniture_traffic_signal(lua_State* L) {
+    SignalParams p;
+    if (lua_istable(L, 1)) {
+        p.poleHeight   = static_cast<Real>(optField(L, 1, "pole_height", p.poleHeight));
+        p.armLength    = static_cast<Real>(optField(L, 1, "arm_length", p.armLength));
+        p.armHeight    = static_cast<Real>(optField(L, 1, "arm_height", p.armHeight));
+        p.poleColor    = optVec3Field(L, 1, "pole_color", p.poleColor);
+        p.housingColor = optVec3Field(L, 1, "housing_color", p.housingColor);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(trafficSignalProto(p)));
+    return 1;
+}
+
 // The skin-side TreeParams (grammar fields are unused; the grammar is the
 // module string passed to tree.skin).
 TreeParams readTreeParams(lua_State* L, int idx) {
@@ -777,6 +812,14 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kBuildingFns);
     lua_setglobal(L, "building");
+
+    static const luaL_Reg kFurnitureFns[] = {
+        {"lamp", l_furniture_lamp},
+        {"traffic_signal", l_furniture_traffic_signal},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kFurnitureFns);
+    lua_setglobal(L, "streetfurniture");
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");

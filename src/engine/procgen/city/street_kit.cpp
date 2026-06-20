@@ -102,19 +102,20 @@ void emitStopBar(RenderMesh& out, const Vec2& center, const Vec2& dir,
              nrm, col);
 }
 
-void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir) {
+void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir,
+                       const SignalParams& sp) {
     Vec2 f = normalize(faceDir);
     if (f.lengthSquared() < 1e-8) f = Vec2(0, 1);
     Real yaw = std::atan2(f.x, f.y);
     Vec3 fwd(f.x, 0, f.y);
 
-    const Vec3 poleCol(0.16, 0.16, 0.18);
-    const Vec3 housing(0.07, 0.07, 0.08);
+    const Vec3 poleCol = sp.poleColor;
+    const Vec3 housing = sp.housingColor;
     const Vec3 red(0.85, 0.12, 0.10), amber(0.85, 0.62, 0.10), green(0.12, 0.72, 0.28);
     const Vec3 silver(0.62, 0.64, 0.66);
     const Vec3 walkSig(0.90, 0.78, 0.30);
 
-    const Real poleH = 5.6, armLen = 4.2, armY = 5.3;
+    const Real poleH = sp.poleHeight, armLen = sp.armLength, armY = sp.armHeight;
 
     // Pole + a small base collar.
     place(out, MeshBuilder::cylinder(0.12f, static_cast<float>(poleH), 8), poleCol,
@@ -151,9 +152,27 @@ void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir) {
           base + Vec3(0, 1.05, 0) + fwd * 0.22, yaw);
 }
 
-RenderMesh trafficSignalProto() {
+RenderMesh trafficSignalProto(const SignalParams& p) {
     RenderMesh out;
-    emitTrafficSignal(out, Vec3(0, 0, 0), Vec2(0, 1));   // origin, facing +Z
+    emitTrafficSignal(out, Vec3(0, 0, 0), Vec2(0, 1), p);   // origin, facing +Z
+    return out;
+}
+
+void emitStreetLamp(RenderMesh& out, const Vec3& base, const LampParams& p) {
+    Real h = p.height;
+    auto place = [&](RenderMesh m, const Vec3& col, Real y) {
+        for (Vertex& v : m.vertices) v.color = col;
+        MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
+        MeshBuilder::append(out, m);
+    };
+    place(MeshBuilder::cylinder(static_cast<float>(p.poleRadius), static_cast<float>(h), 6),
+          p.poleColor, h * 0.5);
+    place(MeshBuilder::box(p.headSize), p.headColor, h);
+}
+
+RenderMesh streetLamp(const LampParams& p) {
+    RenderMesh out;
+    emitStreetLamp(out, Vec3(0, 0, 0), p);
     return out;
 }
 

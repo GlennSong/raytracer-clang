@@ -253,27 +253,6 @@ void emitStairs(RenderMesh& mesh, const Vec3& mid, const Vec2& outDir, Real topY
     (void)side;
 }
 
-// A street lamp post: a thin pole + a bright lamp-head box (street furniture).
-void emitLamp(RenderMesh& out, const Vec3& base) {
-    Vec3 poleCol(0.16, 0.16, 0.18), lampCol(1.0, 0.88, 0.55);
-    Real h = 4.6;
-    auto place = [&](RenderMesh m, const Vec3& col, Real y) {
-        for (Vertex& v : m.vertices) v.color = col;
-        MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
-        MeshBuilder::append(out, m);
-    };
-    place(MeshBuilder::cylinder(0.07f, static_cast<float>(h), 6), poleCol, h * 0.5);
-    place(MeshBuilder::box(Vec3(0.5, 0.2, 0.32)), lampCol, h);
-}
-
-// The lamp post built once at the origin, for use as an instance prototype
-// (ADR-0041): place copies with a translate transform instead of baking a lamp
-// at every verge point.
-RenderMesh lampProto() {
-    RenderMesh out;
-    emitLamp(out, Vec3(0, 0, 0));
-    return out;
-}
 
 // A zebra crosswalk centred at `center`, bars perpendicular to pedestrian travel
 // (i.e. running along the road `dir`), repeated across the road width. Flat at y.
@@ -510,7 +489,7 @@ CityModel generateCity(const CityParams& cp) {
         g.roughness = rough;
         model.instanceGroups.push_back(std::move(g));
     };
-    pushFurniture(lampProto(), std::move(lampXf), 0.5f);
+    pushFurniture(streetLamp(), std::move(lampXf), 0.5f);
     pushFurniture(trafficSignalProto(), std::move(signalXf), 0.5f);
 
     Rng rng(cp.seed);

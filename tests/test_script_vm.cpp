@@ -6,6 +6,7 @@
 #include "../src/engine/mesh_builder.h"
 #include "../src/renderer/renderer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -125,6 +126,32 @@ TEST_CASE(procgen_script_grows_a_building) {
     CHECK(vm.getGlobalNumber("h12", h12));
     CHECK(h12 > h6);
     CHECK_APPROX(h6, 6 * 3.2 + 4.5 + 1.1, 1e-6);   // matches the C++ grammar
+}
+
+TEST_CASE(procgen_script_builds_street_furniture) {
+    // ADR-0042: the street kit is exposed as tunable Lua recipes wrapping the
+    // same C++ builder the city uses. A lamp and a signal each return a mesh, and
+    // a taller lamp yields a taller mesh (the params reach the builder).
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> lamp, signal;
+    std::string err;
+    CHECK(runProcgenMesh(vm, "return streetfurniture.lamp{ height = 4.6 }", lamp, &err));
+    CHECK(runProcgenMesh(vm, "return streetfurniture.traffic_signal{}", signal, &err));
+    if (!lamp || !signal) { CHECK(false); return; }
+    CHECK(lamp->vertices.size() > 12);
+    CHECK(signal->indices.size() % 3 == 0);
+    CHECK(signal->vertices.size() > lamp->vertices.size());   // signal is richer
+
+    // A taller lamp reaches higher (the height param flows to the C++ builder).
+    auto topY = [](const RenderMesh& m) {
+        double y = -1e30;
+        for (const Vertex& v : m.vertices) y = std::max(y, double(v.position.y));
+        return y;
+    };
+    std::shared_ptr<RenderMesh> tall;
+    CHECK(runProcgenMesh(vm, "return streetfurniture.lamp{ height = 8.0 }", tall, nullptr));
+    if (tall) CHECK(topY(*tall) > topY(*lamp));
 }
 
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
