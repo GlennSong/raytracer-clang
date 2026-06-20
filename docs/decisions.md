@@ -2582,6 +2582,80 @@ realtime instanced draw path already exists and stays as-is.
 
 ---
 
+## ADR-0042 — The city as data-driven Lua recipes over a bound C++ vocabulary
+**Status:** Accepted — **Phase 1** (street-furniture recipes) **in progress**;
+Phases 2–4 (op-vocabulary, block/district recipes, full-city composition)
+planned. · **Date:** 2026-06-20
+
+**Context.** The city's generative pieces are written in C++: `street_kit.cpp`
+*is* what a lamp post / traffic signal looks like, `shape_grammar.cpp` is what a
+building looks like, and `city.cpp` hard-codes how the parts assemble. But the
+engine's intended architecture — already real for flora (`flora.lua`), the gun
+viewmodel (`gun.lua`), and *per-building* authoring (`city.lua` calling
+`building.grow`) — is **a C++ vocabulary of fast primitives with the recipes
+living in Lua** (ADR-0023 ScriptVM, ADR-0028 the L1 grammar, ADR-0030 the
+parametric L-system + `tree.skin`, ADR-0032 flora). The Lua binding surface
+(`procgen_bindings.cpp`: `mesh.*`, `sdf.*`, `noise.*`, `lsystem.*`, `tree.*`,
+`building.grow`, `scatter.*`) simply *stops at the building*: the street kit, the
+prop placement, and the whole road→block→parcel→assembly are C++-only and have no
+Lua surface. So a street lamp is C++ not because that is its right home, but
+because the bridge for that vocabulary was never built — the city was grown
+C++-first to get topology and the BLAS/TLAS correct under test.
+
+The goal: be able to construct the city **in parts via Lua** — an individual
+prop, a building, a block, a district, or the whole city, or anything in between
+— and tune every piece from script without recompiling.
+
+**Decision.** Progressively expose the city's generative pieces as Lua-bound
+primitives + recipe assets, behind one composable contract, while the
+performance-critical substrate stays in C++.
+
+- **The boundary (what stays C++ vs moves to Lua).**
+  - *C++ substrate (stays):* mesh ops, the split/shape-grammar **interpreter**
+    (the rewrite/emit loop), instancing/BLAS/TLAS, noise/L-systems, and the
+    road→block→parcel **solver**. These are hot, stable, reused by every procgen
+    project. A solver is an algorithm, not a recipe.
+  - *Lua recipes (move):* *what* a part looks like (a lamp is a 4.6 m pole + a
+    glowing head), placement rules ("lamps every 30 m, alternating"), district
+    cladding rules, and every tunable number — hot-reloadable, art-directed.
+  - Single source of truth: a Lua binding calls the *same* C++ builder the city
+    uses (e.g. `streetfurniture.lamp{…}` → the C++ lamp builder), so exposing a
+    part never forks its geometry.
+- **One composable contract — the `model` value.** Every recipe (a lamp, a
+  building, a block, a city) returns the same shape: named part meshes + instance
+  groups + colliders + attach points. Models nest — a block model embeds building
+  and prop models; a city model embeds block models — so the *same* recipe call
+  is valid at every granularity ("individual parts or collected together … or
+  anything in between"). This generalises the mesh value `building.grow` already
+  returns.
+- **Phased migration (convert piece by piece; each phase ships green).**
+  1. **Street furniture** (this slice): parametrise the lamp/signal builders in
+     `street_kit`, bind `streetfurniture.lamp{…}` / `.traffic_signal{…}`, ship
+     `streetfurniture.lua`. Proves the bind → recipe → tune loop on the smallest
+     self-contained part — exactly the "a street light should be a generative
+     asset" case.
+  2. **Op-vocabulary:** bind the scope/`emit*` ops (`emitBox`, `emitParapet`,
+     `emitShell`, `splitScope`, instancing groups, part/material ids) so arbitrary
+     props and building details are authorable in Lua.
+  3. **Block & district recipes:** expose the solver's outputs (block faces,
+     verge points, intersection corners, lots) so a Lua recipe decorates a block
+     / zones a district by rule.
+  4. **Full-city composition:** a `city.lua` composes the above into a whole-city
+     model; the C++ `generateCity` becomes either a thin host that runs the city
+     recipe or a fast default kept in parallel.
+
+**Consequences.** Authoring iteration moves from recompile-to-tune to
+edit-the-script (hot reload), and the same generative vocabulary serves every
+procgen project, not just the city. Geometry never forks because the bindings
+wrap the existing builders. Costs: the binding surface grows, and during the
+migration a part may exist as both a C++ default and a Lua recipe until the C++
+caller is switched to source it from script; the deterministic, headless,
+test-covered C++ path is the safety net so each phase lands without regressing
+the city. The road/parcel solver deliberately stays C++ — Lua orchestrates and
+decorates its outputs, it does not re-implement the algorithm.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
