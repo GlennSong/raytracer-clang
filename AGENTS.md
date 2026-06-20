@@ -94,6 +94,44 @@ by threading conditionals through shared code.
   native-handle branch in `window.cpp`. Adding a backend means adding an
   implementation of the seam, not editing call sites.
 
+## Procgen Authoring (Engine Rule)
+
+Everything the engine can generate — meshes, materials, terrain, props,
+buildings, whole scenes — MUST eventually be authorable from Lua over a bound
+C++ vocabulary (ADR-0042). The script holds the *recipe* and the tunable
+parameters; C++ holds the hot *substrate*. This rule is load-bearing: it is what
+lets entire procedural scenes be built, tuned, and hot-reloaded as data without
+recompiling, and lets one generative vocabulary serve every procgen project.
+
+- **The boundary.** C++ owns the performance-critical, stable substrate — mesh
+  ops, grammar/L-system interpreters, solvers (road/parcel, etc.), noise,
+  instancing/BLAS/TLAS. Lua owns the recipes: *what* a thing looks like,
+  placement/zoning rules, and every tunable number. A solver is an algorithm, not
+  a recipe; a "what a street lamp looks like" is a recipe, not C++.
+- **Single source of truth.** A Lua binding MUST wrap the *same* C++ builder the
+  engine uses, never a fork of its geometry. Exposing a part parametrises the
+  existing builder; it does not duplicate it.
+- **One pipeline, one divergence.** Generated data flows through the *same*
+  engine pipeline regardless of output. The only legitimate divergence between
+  the offline path tracer and the realtime renderer is the renderer itself —
+  both consume the same meshes, materials, and instances.
+- **Composability.** Recipes return a common model value (parts + instances +
+  colliders + attach points) that nests, so the same call is valid for an
+  individual part, a collection, or a whole scene — or anything in between.
+
+## Engineering Ethos (Engine Rule)
+
+These are tools we are building for the long term, not a throwaway project.
+Invest in making them powerful and expressive.
+
+- **Prototype, then build it right.** A prototype exists to prove an idea. Once
+  proven, take the time to make it proper — parametric, single-source-of-truth,
+  tested, documented (an ADR when it is a real decision) — before moving on. Do
+  not leave prototype-quality code in place as if it were finished.
+- **Design for extension and reuse.** Prefer interfaces and vocabularies that
+  other parts of the engine (and future procgen projects) can build on, over a
+  one-off that solves only today's case.
+
 ## Coding Standards
 
 ### Naming Conventions
