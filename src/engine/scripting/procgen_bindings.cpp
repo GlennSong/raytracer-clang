@@ -11,6 +11,7 @@
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/polygon.h"
+#include "../procgen/proc_model.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -654,6 +655,103 @@ int l_mesh_quad(lua_State* L) {
     return 1;
 }
 
+// --- model.* : the composable procedural model value (ADR-0042 Phase 3) --------
+// A Model accumulates part meshes + instance groups, so a recipe can return a
+// whole block/scene, not just one mesh. Models compose via :merge, so parts nest
+// into collections nest into a city. :flatten bridges to single-mesh consumers.
+constexpr const char* kModelMt = "engine.procgen.Model";
+using ModelPtr = std::shared_ptr<ProcModel>;
+
+void pushModel(lua_State* L, ModelPtr m) {
+    void* mem = lua_newuserdatauv(L, sizeof(ModelPtr), 0);
+    new (mem) ModelPtr(std::move(m));
+    luaL_setmetatable(L, kModelMt);
+}
+ProcModel& checkModel(lua_State* L, int idx) {
+    return **static_cast<ModelPtr*>(luaL_checkudata(L, idx, kModelMt));
+}
+int modelGc(lua_State* L) {
+    static_cast<ModelPtr*>(lua_touserdata(L, 1))->~ModelPtr();
+    return 0;
+}
+
+// model.new() -> an empty Model.
+int l_model_new(lua_State* L) {
+    pushModel(L, std::make_shared<ProcModel>());
+    return 1;
+}
+
+// m:add(mesh) -> m : append a part mesh (baked, vertex-coloured). Chainable.
+int l_model_add(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    m.parts.push_back(checkMesh(L, 2));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:add_instances(mesh, placements [, opts]) -> m : place a prototype many times.
+// placements is an array of { pos = {x,y,z}, yaw = radians, scale = number };
+// opts may set { roughness=, metallic=, alpha_foliage= }. Chainable.
+int l_model_add_instances(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    ProcInstanceGroup g;
+    g.proto = checkMesh(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    lua_Integer n = luaL_len(L, 3);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 3, i);
+        Vec3 pos = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
+        double yaw = optField(L, -1, "yaw", 0.0);
+        double scale = optField(L, -1, "scale", 1.0);
+        g.transforms.push_back(Mat4::trs(pos,
+            Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(yaw)),
+            Vec3(scale, scale, scale)));
+        lua_pop(L, 1);
+    }
+    if (lua_istable(L, 4)) {
+        g.roughness = static_cast<float>(optField(L, 4, "roughness", g.roughness));
+        g.metallic = static_cast<float>(optField(L, 4, "metallic", g.metallic));
+        g.alphaFoliage = optBoolField(L, 4, "alpha_foliage", g.alphaFoliage);
+    }
+    m.instances.push_back(std::move(g));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:merge(other) -> m : fold another Model's parts + instances into this one.
+int l_model_merge(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    m.merge(checkModel(L, 2));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_model_part_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).parts.size()));
+    return 1;
+}
+int l_model_instance_count(lua_State* L) {
+    lua_pushinteger(L, checkModel(L, 1).instanceCount());
+    return 1;
+}
+
+// Flatten a model to a single mesh: every part, plus each instance group's proto
+// stamped at each transform. Bridges a Model to single-mesh consumers/preview.
+RenderMesh flattenModel(const ProcModel& m) {
+    RenderMesh out;
+    for (const RenderMesh& p : m.parts) MeshBuilder::append(out, p);
+    for (const ProcInstanceGroup& g : m.instances)
+        for (const Mat4& xf : g.transforms)
+            MeshBuilder::appendTransformed(out, g.proto, xf);
+    return out;
+}
+
+// m:flatten() -> mesh.
+int l_model_flatten(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(flattenModel(checkModel(L, 1))));
+    return 1;
+}
+
 // The skin-side TreeParams (grammar fields are unused; the grammar is the
 // module string passed to tree.skin).
 TreeParams readTreeParams(lua_State* L, int idx) {
@@ -890,6 +988,21 @@ void openProcgenLibrary(ScriptVM& vm) {
     }
     lua_pop(L, 1);
 
+    // The Model metatable carries the compose methods (ADR-0042 Phase 3).
+    if (luaL_newmetatable(L, kModelMt)) {
+        lua_pushcfunction(L, modelGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_model_add);            lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
+        lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
+        lua_pushcfunction(L, l_model_part_count);     lua_setfield(L, -2, "part_count");
+        lua_pushcfunction(L, l_model_instance_count); lua_setfield(L, -2, "instance_count");
+        lua_pushcfunction(L, l_model_flatten);        lua_setfield(L, -2, "flatten");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+
     static const luaL_Reg kSdfFns[] = {
         {"sphere", l_sdf_sphere},
         {"box", l_sdf_box},
@@ -976,6 +1089,13 @@ void openProcgenLibrary(ScriptVM& vm) {
     luaL_newlib(L, kFurnitureFns);
     lua_setglobal(L, "streetfurniture");
 
+    static const luaL_Reg kModelFns[] = {
+        {"new", l_model_new},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kModelFns);
+    lua_setglobal(L, "model");
+
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");
     lua_pushcfunction(L, l_terrain);
@@ -997,15 +1117,21 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
         return false;
     }
 
-    auto* mesh = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt));
-    if (mesh == nullptr) {
-        if (error != nullptr) *error = "procgen script did not return a Mesh";
+    if (auto* mesh = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt))) {
+        out = *mesh;
         lua_pop(L, 1);
-        return false;
+        return true;
     }
-    out = *mesh;
+    // A Model return flattens to a single mesh (parts + stamped instances), so a
+    // composed recipe works with single-mesh consumers / preview (ADR-0042).
+    if (auto* mdl = static_cast<ModelPtr*>(luaL_testudata(L, -1, kModelMt))) {
+        out = std::make_shared<RenderMesh>(flattenModel(**mdl));
+        lua_pop(L, 1);
+        return true;
+    }
+    if (error != nullptr) *error = "procgen script did not return a Mesh or Model";
     lua_pop(L, 1);
-    return true;
+    return false;
 }
 
 namespace {

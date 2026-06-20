@@ -196,6 +196,47 @@ TEST_CASE(procgen_script_authors_with_scope_ops) {
     if (quad) CHECK(quad->indices.size() == 6);
 }
 
+TEST_CASE(procgen_script_composes_a_model) {
+    // ADR-0042 Phase 3: a recipe returns a composable Model — parts + instance
+    // groups — not just one mesh. It flattens for single-mesh consumers, and
+    // models merge so parts nest into collections.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local m = model.new()
+        m:add(mesh.box{8, 0.2, 8})                 -- a ground slab part
+        local lamp = streetfurniture.lamp{}
+        m:add_instances(lamp, {
+            { pos = {-3, 0, 0} },
+            { pos = { 3, 0, 0} },
+            { pos = { 0, 0, 3}, yaw = 1.57, scale = 1.2 },
+        })
+        return m
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));   // a Model flattens to a mesh
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() > 0);
+    CHECK(mesh->indices.size() % 3 == 0);
+
+    // Structure + composition, inspected from Lua.
+    double parts = 0, insts = 0;
+    CHECK(vm.doString(R"LUA(
+        local a = model.new(); a:add(mesh.box{1,1,1})
+        local b = model.new(); b:add(mesh.box{1,1,1}); b:add(mesh.box{1,1,1})
+        a:merge(b)                                 -- 1 + 2 parts
+        mparts = a:part_count()
+        local c = model.new()
+        c:add_instances(streetfurniture.lamp{}, { {pos={0,0,0}}, {pos={1,0,0}}, {pos={2,0,0}} })
+        minsts = c:instance_count()
+    )LUA"));
+    CHECK(vm.getGlobalNumber("mparts", parts));
+    CHECK(parts == 3);
+    CHECK(vm.getGlobalNumber("minsts", insts));
+    CHECK(insts == 3);
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);
