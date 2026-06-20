@@ -9,6 +9,7 @@
 #include "engine/procgen/noise.h"
 #include "log.h"
 #include <unordered_map>
+#include <array>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -37,6 +38,36 @@ int addSurfaceTexture(Scene& scene, const TextureData& td) {
     return scene.addTexture(std::move(t));
 }
 
+// One bake per surface, shared across every material that uses it (a brick wall
+// and a brick building reference the same baked set). Keyed by surface id.
+using SurfaceTexCache = std::unordered_map<int, std::array<int, 4>>;
+
+// Bake (or reuse from the cache) a surface's PBR texture set into the scene and
+// bind it onto `mat`, with the tiling scale for its world tile size.
+void bindSurfaceTextures(Material& mat, RenderMaterial::Surface surf, Scene& scene,
+                         uint32_t seed, int texSize, SurfaceTexCache* cache) {
+    int id = static_cast<int>(surf);
+    std::array<int, 4> idx{-1, -1, -1, -1};
+    bool cached = false;
+    if (cache) {
+        auto it = cache->find(id);
+        if (it != cache->end()) { idx = it->second; cached = true; }
+    }
+    if (!cached) {
+        SurfaceMaps maps = surfaceMaps(surf, texSize, seed);
+        idx = {addSurfaceTexture(scene, maps.albedo),
+               addSurfaceTexture(scene, maps.normal),
+               addSurfaceTexture(scene, maps.mr),
+               addSurfaceTexture(scene, maps.ao)};
+        if (cache) (*cache)[id] = idx;
+    }
+    mat.albedoTex = idx[0]; mat.normalTex = idx[1];
+    mat.mrTex = idx[2]; mat.aoTex = idx[3];
+    double tile = surfaceWorldTileSize(surf);
+    mat.texScale = tile > 1e-6 ? 1.0 / tile : 1.0;
+    mat.surface = 0;   // textured: the analytic path is replaced by the maps
+}
+
 // Build a Material from a material JSON block (the body shared by an inline
 // "material" object and a named entry in the top-level "materials" table). A
 // "surface" bakes the procedural PBR texture set (albedo/normal/MR/AO) once and
@@ -61,15 +92,12 @@ Material materialFromJson(const json& m, Scene& scene) {
     mat.surface = surface;
     if (surface != 0 && m.value("textured", true)) {
         auto surf = static_cast<RenderMaterial::Surface>(surface);
-        SurfaceMaps maps = surfaceMaps(surf, m.value("textureSize", 256),
-                                       m.value("seed", 0u));
-        mat.albedoTex = addSurfaceTexture(scene, maps.albedo);
-        mat.normalTex = addSurfaceTexture(scene, maps.normal);
-        mat.mrTex = addSurfaceTexture(scene, maps.mr);
-        mat.aoTex = addSurfaceTexture(scene, maps.ao);
-        double tile = m.value("tileSize", surfaceWorldTileSize(surf));
-        mat.texScale = tile > 1e-6 ? 1.0 / tile : 1.0;
-        mat.surface = 0;   // textured: the analytic path is replaced by the maps
+        bindSurfaceTextures(mat, surf, scene, m.value("seed", 0u),
+                            m.value("textureSize", 256), nullptr);
+        if (m.contains("tileSize")) {
+            double t = m["tileSize"].get<double>();
+            mat.texScale = t > 1e-6 ? 1.0 / t : 1.0;
+        }
     }
     return mat;
 }
@@ -343,23 +371,25 @@ CityModel generateCityModel(const json& ent, const json& root) {
 }
 
 void bakeCityModel(const CityModel& m, Scene& scene) {
+    using S = RenderMaterial::Surface;
+    SurfaceTexCache texCache;   // one bake per surface, shared across the city
     auto bake = [&](const RenderMesh& mesh, float metallic, float roughness,
-                    int surface = 0) {
+                    S surface) {
         if (mesh.vertices.empty()) return;
         Material mat = Material::pbr(Vec3(1, 1, 1), metallic, roughness);
-        mat.surface = surface;   // world-space procedural material from the library
+        if (surface != S::None)   // bake + bind the procedural PBR texture set
+            bindSurfaceTextures(mat, surface, scene, 1337u, 256, &texCache);
         int mi = scene.addMaterial(mat);
         addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
     };
     for (const RenderMesh& part : m.parts) {
         RenderMaterial rm = materialFor(static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
-        bake(part, rm.metallic, rm.roughness, static_cast<int>(rm.surface()));
+        bake(part, rm.metallic, rm.roughness, rm.surface());
     }
-    using S = RenderMaterial::Surface;
-    bake(m.roads, 0.0f, 0.9f, static_cast<int>(S::Asphalt));
-    bake(m.pavement, 0.0f, 0.95f, static_cast<int>(S::Pavement));  // sidewalk slabs
-    bake(m.ground, 0.0f, 1.0f);
-    bake(m.props, 0.0f, 0.85f);     // trees (vertex-coloured)
+    bake(m.roads, 0.0f, 0.9f, S::Asphalt);
+    bake(m.pavement, 0.0f, 0.95f, S::Pavement);   // sidewalk slabs
+    bake(m.ground, 0.0f, 1.0f, S::None);
+    bake(m.props, 0.0f, 0.85f, S::None);          // trees (vertex-coloured)
     LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount
              << " blocks, " << m.treeCount << " trees";
 }
