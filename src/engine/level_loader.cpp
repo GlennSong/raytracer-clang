@@ -12,9 +12,11 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
+#include "procgen/proc_model.h"
 #endif
 #include "model_importer.h"
 #include <random>
+#include <sstream>
 #include "components.h"
 #include "property_json.h"
 #include "../log.h"
@@ -569,6 +571,107 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
              << m.parts.size() << " draw parts, + colliders";
 }
 
+// Read a script entity's `file`: as given, else under assets/scripts/, else
+// level-relative. Empty if none found.
+static std::string loadScriptCode(const std::string& file, const std::string& levelDir) {
+    for (const std::string& path : {file, std::string("assets/scripts/") + file,
+                                    levelDir + "/" + file}) {
+        std::ifstream f(path);
+        if (f) {
+            std::stringstream ss;
+            ss << f.rdbuf();
+            return ss.str();
+        }
+    }
+    return {};
+}
+
+// A Lua recipe entity (shape:"script", ADR-0042): run the recipe and spawn its
+// composable model — parts as Renderable entities, instance groups as
+// InstanceGroups. The realtime twin of level_scene's bakeProcModel, so the same
+// city.lua that renders offline also populates the viewer/editor.
+static void loadScriptEntity(const json& ent, const std::string& levelDir,
+                             World& world, Renderer& renderer, AssetManager& assets,
+                             int index) {
+#ifdef RT_ENABLE_SCRIPTING
+    std::string file = ent.value("file", std::string());
+    std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);
+    if (code.empty()) {
+        LOG_WARN << "script entity: cannot read '" << file << "'";
+        return;
+    }
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    vm.setGlobalNumber("seed", ent.value("seed", 0.0));
+    ProcModel model;
+    std::string err;
+    if (!runProcgenModelValue(vm, code, model, &err)) {
+        LOG_ERROR << "script entity '" << file << "': " << err;
+        return;
+    }
+    const std::string key = "script:" + std::to_string(index);
+    auto upload = [&](const TextureData& td) -> TextureHandle {
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+
+    for (std::size_t i = 0; i < model.parts.size(); ++i) {
+        const ProcPart& part = model.parts[i];
+        if (part.mesh.vertices.empty()) continue;
+        Entity e = world.create();
+        Transform t;                          // recipe geometry is world-space
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.material.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
+        r.material.metallic = part.material.metallic;
+        r.material.roughness = part.material.roughness;
+        if (part.material.textured) {
+            RenderMesh tiled = part.mesh;
+            double tile = part.material.tile > 1e-6 ? part.material.tile : 1.0;
+            applyWorldPlanarUVs(tiled, 1.0 / tile);
+            r.mesh = assets.acquireMesh(tiled, key + ":part" + std::to_string(i));
+            if (!part.material.albedo.pixels.empty())
+                r.material.albedoMap = upload(part.material.albedo);
+            if (!part.material.normal.pixels.empty())
+                r.material.normalMap = upload(part.material.normal);
+        } else {
+            r.mesh = assets.acquireMesh(part.mesh, key + ":part" + std::to_string(i));
+        }
+        world.add<Renderable>(e, r);
+    }
+
+    for (std::size_t gi = 0; gi < model.instances.size(); ++gi) {
+        const ProcInstanceGroup& cg = model.instances[gi];
+        if (cg.proto.vertices.empty() || cg.transforms.empty()) continue;
+        InstanceGroup g;
+        g.mesh = assets.acquireMesh(cg.proto, key + ":inst" + std::to_string(gi));
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.metallic = cg.metallic;
+        g.material.roughness = cg.roughness;
+        if (cg.alphaFoliage) {
+            g.material.albedoMap = upload(leafTexture(128));
+            g.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        }
+        g.transforms = cg.transforms;
+        Vec3 centroid(0, 0, 0);
+        for (const Mat4& tr : cg.transforms)
+            centroid = centroid + Vec3(tr.m[0][3], tr.m[1][3], tr.m[2][3]);
+        centroid = centroid / static_cast<Real>(cg.transforms.size());
+        Real spread = 0;
+        for (const Mat4& tr : cg.transforms)
+            spread = std::max(spread,
+                              (Vec3(tr.m[0][3], tr.m[1][3], tr.m[2][3]) - centroid).length());
+        BoundingSphere mb = assets.meshBounds(g.mesh);
+        g.boundsCenter = centroid;
+        g.boundsRadius = spread + (mb.center.length() + mb.radius) * 1.5;
+        world.add<InstanceGroup>(world.create(), g);
+    }
+#else
+    (void)ent; (void)levelDir; (void)world; (void)renderer; (void)assets; (void)index;
+    LOG_WARN << "script entity skipped (scripting disabled in this build)";
+#endif
+}
+
 static void loadEntities(const json& entities, const json& root, World& world,
                          Renderer& renderer, AssetManager& assets,
                          const std::string& levelDir, bool editorMode,
@@ -582,6 +685,13 @@ static void loadEntities(const json& entities, const json& root, World& world,
         // Hero parametric tree: a collidable, textured object (not scatter).
         if (ent.value("shape", std::string()) == "tree") {
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
+            continue;
+        }
+        // Lua recipe (ADR-0042): run the script and spawn its composable model —
+        // the same shape:"script" the offline tracer renders, now in the viewer.
+        if (ent.value("shape", std::string()) == "script") {
+            static int scriptIndex = 0;
+            loadScriptEntity(ent, levelDir, world, renderer, assets, scriptIndex++);
             continue;
         }
         // Procedural city: renderable geometry + per-building colliders. Reuse the
