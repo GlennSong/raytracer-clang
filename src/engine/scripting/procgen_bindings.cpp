@@ -13,6 +13,7 @@
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/proc_model.h"
+#include "../procgen/texture_field.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -717,6 +718,100 @@ int l_city_layout(lua_State* L) {
     return 1;
 }
 
+// --- texture.* : compose procedural textures from primitives (ADR-0043) -------
+// A Field is a 2D scalar field over (u,v) — the same closure substrate as Sdf.
+// Build a brick texture from a brick lattice × noise, then bake two colours by
+// the mask — rather than asking for a baked preset. Bake -> an Image (RGB).
+constexpr const char* kFieldMt = "engine.procgen.Field";
+constexpr const char* kImageMt = "engine.procgen.Image";
+using ImagePtr = std::shared_ptr<TextureData>;
+
+void pushField(lua_State* L, Field2 f) {
+    void* mem = lua_newuserdatauv(L, sizeof(Field2), 0);
+    new (mem) Field2(std::move(f));
+    luaL_setmetatable(L, kFieldMt);
+}
+Field2& checkField(lua_State* L, int idx) {
+    return *static_cast<Field2*>(luaL_checkudata(L, idx, kFieldMt));
+}
+int fieldGc(lua_State* L) {
+    static_cast<Field2*>(lua_touserdata(L, 1))->~Field2();
+    return 0;
+}
+void pushImage(lua_State* L, ImagePtr img) {
+    void* mem = lua_newuserdatauv(L, sizeof(ImagePtr), 0);
+    new (mem) ImagePtr(std::move(img));
+    luaL_setmetatable(L, kImageMt);
+}
+int imageGc(lua_State* L) {
+    static_cast<ImagePtr*>(lua_touserdata(L, 1))->~ImagePtr();
+    return 0;
+}
+
+int l_tex_constant(lua_State* L) {
+    pushField(L, fieldConstant(luaL_checknumber(L, 1)));
+    return 1;
+}
+int l_tex_noise(lua_State* L) {
+    auto seed = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+    double scale = optField(L, 1, "scale", 8.0);
+    pushField(L, fieldNoise(seed, scale));
+    return 1;
+}
+int l_tex_fbm(lua_State* L) {
+    auto seed = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+    double scale = optField(L, 1, "scale", 8.0);
+    int oct = static_cast<int>(optField(L, 1, "octaves", 4));
+    pushField(L, fieldFbm(seed, scale, oct));
+    return 1;
+}
+int l_tex_checker(lua_State* L) {
+    pushField(L, fieldChecker(optField(L, 1, "cols", 4), optField(L, 1, "rows", 4)));
+    return 1;
+}
+int l_tex_brick(lua_State* L) {
+    pushField(L, fieldBrick(optField(L, 1, "cols", 6), optField(L, 1, "rows", 12),
+                            optField(L, 1, "mortar", 0.1),
+                            optField(L, 1, "variation", 0.35),
+                            static_cast<uint32_t>(optField(L, 1, "seed", 0))));
+    return 1;
+}
+int l_tex_gradient_y(lua_State* L) {
+    pushField(L, fieldGradientY());
+    return 1;
+}
+// Field methods (return new fields — immutable composition).
+int l_field_add(lua_State* L) { pushField(L, fieldAdd(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_mul(lua_State* L) { pushField(L, fieldMul(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_mix(lua_State* L) {
+    pushField(L, fieldMix(checkField(L, 1), checkField(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_field_scale_bias(lua_State* L) {
+    pushField(L, fieldScaleBias(checkField(L, 1), luaL_checknumber(L, 2),
+                                luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_field_clamp(lua_State* L) {
+    pushField(L, fieldClamp(checkField(L, 1), luaL_optnumber(L, 2, 0.0),
+                            luaL_optnumber(L, 3, 1.0)));
+    return 1;
+}
+// texture.bake_gray(field, size) -> Image (roughness/height/AO map).
+int l_tex_bake_gray(lua_State* L) {
+    int size = static_cast<int>(luaL_optinteger(L, 2, 256));
+    pushImage(L, std::make_shared<TextureData>(bakeFieldGray(checkField(L, 1), size)));
+    return 1;
+}
+// texture.bake_color(mask, colorA, colorB, size) -> Image (albedo map).
+int l_tex_bake_color(lua_State* L) {
+    Field2& mask = checkField(L, 1);
+    Vec3 a = checkVec3(L, 2), b = checkVec3(L, 3);
+    int size = static_cast<int>(luaL_optinteger(L, 4, 256));
+    pushImage(L, std::make_shared<TextureData>(bakeFieldColor(mask, a, b, size)));
+    return 1;
+}
+
 // --- model.* : the composable procedural model value (ADR-0042 Phase 3) --------
 // A Model accumulates part meshes + instance groups, so a recipe can return a
 // whole block/scene, not just one mesh. Models compose via :merge, so parts nest
@@ -1050,6 +1145,21 @@ void openProcgenLibrary(ScriptVM& vm) {
     }
     lua_pop(L, 1);
 
+    // The Field metatable carries the texture-compose methods (ADR-0043).
+    if (luaL_newmetatable(L, kFieldMt)) {
+        lua_pushcfunction(L, fieldGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_field_add);        lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_field_mul);        lua_setfield(L, -2, "mul");
+        lua_pushcfunction(L, l_field_mix);        lua_setfield(L, -2, "mix");
+        lua_pushcfunction(L, l_field_scale_bias); lua_setfield(L, -2, "scale_bias");
+        lua_pushcfunction(L, l_field_clamp);      lua_setfield(L, -2, "clamp");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    registerMetatable(L, kImageMt, imageGc);   // Image is opaque (just __gc)
+
     // The Model metatable carries the compose methods (ADR-0042 Phase 3).
     if (luaL_newmetatable(L, kModelMt)) {
         lua_pushcfunction(L, modelGc);
@@ -1165,6 +1275,20 @@ void openProcgenLibrary(ScriptVM& vm) {
     luaL_newlib(L, kCityFns);
     lua_setglobal(L, "city");
 
+    static const luaL_Reg kTextureFns[] = {
+        {"constant", l_tex_constant},
+        {"noise", l_tex_noise},
+        {"fbm", l_tex_fbm},
+        {"checker", l_tex_checker},
+        {"brick", l_tex_brick},
+        {"gradient_y", l_tex_gradient_y},
+        {"bake_gray", l_tex_bake_gray},
+        {"bake_color", l_tex_bake_color},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kTextureFns);
+    lua_setglobal(L, "texture");
+
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");
     lua_pushcfunction(L, l_terrain);
@@ -1226,6 +1350,28 @@ bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,
         return true;
     }
     if (error != nullptr) *error = "procgen script did not return a Model or Mesh";
+    lua_pop(L, 1);
+    return false;
+}
+
+bool runProcgenTexture(ScriptVM& vm, const std::string& code, TextureData& out,
+                       std::string* error) {
+    lua_State* L = luaState(vm);
+    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
+        lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (error != nullptr) {
+            const char* msg = lua_tostring(L, -1);
+            *error = msg != nullptr ? msg : "unknown Lua error";
+        }
+        lua_pop(L, 1);
+        return false;
+    }
+    if (auto* img = static_cast<ImagePtr*>(luaL_testudata(L, -1, kImageMt))) {
+        out = **img;
+        lua_pop(L, 1);
+        return true;
+    }
+    if (error != nullptr) *error = "procgen script did not return an Image";
     lua_pop(L, 1);
     return false;
 }

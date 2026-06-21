@@ -2656,6 +2656,41 @@ decorates its outputs, it does not re-implement the algorithm.
 
 ---
 
+## ADR-0043 — Procedural textures composed from primitives (a 2D field vocabulary)
+**Status:** Accepted — the texture-field vocabulary + bake + Lua binding **done**;
+applying baked textures to model parts (material maps on script geometry) is the
+next slice. · **Date:** 2026-06-21
+
+**Context.** Procedural textures existed only as *presets*: `surface_maps.h` bakes
+a full PBR set for a named `Surface` (Brick, Concrete, …), and a recipe could only
+*ask for* one. That violates the ADR-0042 engine rule the same way pre-baked street
+furniture did — "you should be able to *build* a brick texture from primitives, not
+just request the existing one." Materials are the next domain to make Lua-authorable
+piece by piece.
+
+**Decision.** Add a compositional 2D-texture substrate that mirrors the SDF field
+exactly — *a texture is a function*, so primitives are closures and combinators
+wrap them (`texture_field.h`: `Field2 = std::function<double(double,double)>`).
+- **Primitives:** `constant`, `noise`, `fbm`, `checker`, `brick` (a running-bond
+  lattice with mortar gaps + per-brick variation), `gradient_y`.
+- **Combinators:** `add`, `mul`, `mix`, `scale_bias`, `clamp` — immutable
+  composition (each returns a new field).
+- **Bake:** `bakeFieldGray` (roughness/height/AO) and `bakeFieldColor` (lerp two
+  colours by a mask → albedo) → `TextureData`.
+- **Lua surface (ADR-0042):** a `texture.*` library over the same C++ functions —
+  `texture.brick{…}:mul(texture.fbm{…}:scale_bias(…))` then `texture.bake_color(…)`
+  → an `Image`. A brick wall is *built*, not requested (`brick.lua`). A
+  `--bake-texture <recipe.lua>` mode previews any recipe to PNG.
+
+**Consequences.** The same field substrate serves every map type and tiles by
+construction; a brick (or any) texture is now authored and tuned in script and
+hot-reloadable. The C++ `surface_maps` presets remain as fast defaults, but they
+are no longer the only way to get a texture. Owed: bind baked images as material
+maps on `ProcModel` parts (UVs + albedo/normal/roughness), so a script building
+can wear a script brick — the bridge from "bake a texture" to "texture a mesh."
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

@@ -8,10 +8,16 @@
 #include "job_system.h"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <algorithm>
+#ifdef RT_ENABLE_SCRIPTING
+#include "engine/scripting/script_vm.h"
+#include "engine/scripting/procgen_bindings.h"
+#include "engine/procgen/tree.h"   // TextureData
+#endif
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -80,6 +86,7 @@ struct CliOptions {
     std::string level;        // empty = Cornell box
     std::string cameraName;   // empty = first camera in the sidecar
     std::string outFile = "output.png";
+    std::string bakeTexture;           // a Lua texture recipe -> bake to outFile, no render
     std::string progressFile;          // empty = no sidecar (CLI default)
     double worldUnitsPerMeter = 0.0;   // 0 = mode default (1 level, 100 Cornell)
     LensParams lens;
@@ -99,6 +106,7 @@ CliOptions parseCli(int argc, char** argv) {
         else if (flag == "--level")    opt.level = argv[++i];
         else if (flag == "--camera")   opt.cameraName = argv[++i];
         else if (flag == "--out")      opt.outFile = argv[++i];
+        else if (flag == "--bake-texture") opt.bakeTexture = argv[++i];
         else if (flag == "--progress") opt.progressFile = argv[++i];
         else if (flag == "--size")     IMAGE_SIZE = std::max(16, atoi(argv[++i]));
         else if (flag == "--spp")      SAMPLES_PER_PIXEL = std::max(1, atoi(argv[++i]));
@@ -138,6 +146,36 @@ int main(int argc, char** argv) {
         printUsage();
         return 0;
     }
+
+    // Texture-bake mode (ADR-0043): run a Lua texture recipe and write the baked
+    // image, no scene render — so a procedural texture composed from primitives
+    // can be previewed/iterated. Uses the same engine bindings the scene path does.
+#ifdef RT_ENABLE_SCRIPTING
+    if (!opt.bakeTexture.empty()) {
+        std::ifstream f(opt.bakeTexture);
+        if (!f) { std::cerr << "Cannot open recipe: " << opt.bakeTexture << "\n"; return 1; }
+        std::stringstream ss; ss << f.rdbuf();
+        ScriptVM vm;
+        openProcgenLibrary(vm);
+        TextureData tex;
+        std::string err;
+        if (!runProcgenTexture(vm, ss.str(), tex, &err)) {
+            std::cerr << "texture recipe error: " << err << "\n";
+            return 1;
+        }
+        Image img(tex.width, tex.height);
+        for (int y = 0; y < tex.height; ++y)
+            for (int x = 0; x < tex.width; ++x) {
+                std::size_t i = (static_cast<std::size_t>(y) * tex.width + x) * tex.channels;
+                img.setPixel(x, y, Vec3(tex.pixels[i] / 255.0, tex.pixels[i + 1] / 255.0,
+                                        tex.pixels[i + 2] / 255.0));
+            }
+        img.writePng(opt.outFile);
+        std::cout << "Baked " << tex.width << "x" << tex.height << " texture -> "
+                  << opt.outFile << "\n";
+        return 0;
+    }
+#endif
 
     Scene scene;
     Vec3 lookFrom(278, 278, -800), lookAt(278, 278, 0);

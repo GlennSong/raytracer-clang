@@ -11,6 +11,7 @@ namespace engine {
 
 class ScriptVM;
 struct RenderMesh;
+struct TextureData;
 
 // One material-part of a procedural model (ADR-0032): geometry plus the intent
 // to build a RenderMaterial. `hasMaterial == false` means "use the caller's
@@ -78,6 +79,12 @@ bool runProcgenModel(ScriptVM& vm, const std::string& code,
 // `openProcgenLibrary` must have been called on `vm` first.
 bool runProcgenModelValue(ScriptVM& vm, const std::string& code,
                           struct ProcModel& out, std::string* error = nullptr);
+
+// Run a procgen script that returns a baked Image (texture.bake_*) and hand back
+// the pixels (ADR-0043). Returns false (with `error`) on a script error or a
+// non-Image return. `openProcgenLibrary` must have been called on `vm` first.
+bool runProcgenTexture(ScriptVM& vm, const std::string& code, TextureData& out,
+                       std::string* error = nullptr);
 
 }  // namespace engine
 

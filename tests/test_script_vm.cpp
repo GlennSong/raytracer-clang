@@ -3,6 +3,7 @@
 #include "../src/engine/scripting/script_vm.h"
 #include "../src/engine/scripting/procgen_bindings.h"
 #include "../src/engine/procgen/proc_model.h"
+#include "../src/engine/procgen/texture_field.h"   // TextureData
 #include "../src/engine/procgen/sdf.h"
 #include "../src/engine/mesh_builder.h"
 #include "../src/renderer/renderer.h"
@@ -312,6 +313,30 @@ TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
     CHECK(runProcgenModelValue(vm, "return mesh.box{1,1,1}", single, nullptr));
     CHECK(single.parts.size() == 1);
     CHECK(single.instances.empty());
+}
+
+TEST_CASE(procgen_script_builds_a_brick_texture) {
+    // ADR-0043: a brick texture is composed from primitives in Lua (brick lattice
+    // × fbm grit, two colours mixed by the mask), then baked — not a preset.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    TextureData tex;
+    std::string err;
+    const char* code = R"LUA(
+        local lattice = texture.brick{ cols=6, rows=12, mortar=0.12, variation=0.4, seed=7 }
+        local grit = texture.fbm{ seed=9, scale=20, octaves=4 }:scale_bias(0.3, 0.7)
+        return texture.bake_color(lattice:mul(grit), {0.62,0.6,0.57}, {0.6,0.2,0.14}, 96)
+    )LUA";
+    CHECK(runProcgenTexture(vm, code, tex, &err));
+    CHECK(tex.width == 96 && tex.height == 96 && tex.channels == 3);
+    // Brick faces show (red channel clearly above blue somewhere).
+    bool sawBrick = false;
+    for (std::size_t i = 0; i + 2 < tex.pixels.size(); i += 3)
+        if (tex.pixels[i] > tex.pixels[i + 2] + 40) { sawBrick = true; break; }
+    CHECK(sawBrick);
+    // A non-Image return is an error.
+    TextureData none;
+    CHECK(!runProcgenTexture(vm, "return 5", none, nullptr));
 }
 
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
