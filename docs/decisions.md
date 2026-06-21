@@ -2783,8 +2783,22 @@ Sidewalks also landed: `buildRoadMesh` grows a raised kerb skirt along the
 carriageway edges and around the junction corners (`sidewalk`/`curb` params) — a
 curb lip facing the street, a concrete slab top a `curb` height above the road,
 and an outer face dropping back to the ground — emitted through the winding-aware
-`MeshBuilder::emitQuad`, vertex-coloured concrete in the same mesh. Block pads,
-multi-lane widths + lane-line markings, and the terrain-following grower remain
+`MeshBuilder::emitQuad`, vertex-coloured concrete in the same mesh.
+
+Lane markings + multi-lane: `buildRoadMesh` paints a double-yellow centreline,
+dashed white lane dividers, and solid edge lines as thin raised stripes on the
+carriageway (ribbons only, so junctions stay plain). Lanes mirror each side of
+the centre and their count grows with the road width, so arterials read as
+multi-lane for free.
+
+Block pads + parks: `terrain.conform` now also takes `pads` ({y, poly}) and
+flattens each to a level plot (`makeFlattenPad`) alongside the road ramps. The
+recipe (`city.lua` `plan_blocks`) classifies each road-graph face from the
+*natural* terrain — faces flat enough (relief under a threshold) become level
+plots seated at the local height; too-hilly faces are left as natural green
+hillside — and a deterministic slice of the developed plots are parks (a flat
+lawn) rather than buildings. So a block is now a container that the terrain is
+conformed to. Stairstepped terrace lots and the terrain-following grower remain
 as above.
 
 ---

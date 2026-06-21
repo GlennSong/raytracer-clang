@@ -63,28 +63,63 @@ local function floors_at(o, r)
   return opt(o, "residential_floors", 2) + (math.floor(r) % 3)
 end
 
--- ----- buildings: one per block, seated on the terrain with a foundation ------
-function M.buildings(m, lay, land, o)
-  local fill = opt(o, "lot_fill", 0.55)
+-- ----- blocks: classify each road-graph face, flatten the developable ones to a
+-- level plot, and decide its contents (a building, or a park) ------------------
+-- plan_blocks reads the NATURAL terrain (which faces are flat enough to develop,
+-- and the plot heights); it returns `pads` (fed to terrain.conform so the ground
+-- is cut/filled to a level plot) and a `plan` that drives placement once the
+-- conformed land exists. Faces too hilly to level cheaply are left natural.
+function M.plan_blocks(base, lay, o)
+  local fill        = opt(o, "lot_fill", 0.55)
+  local flat_relief = opt(o, "flat_relief", 8)    -- max terrain rise to develop (m)
+  local pad_margin  = opt(o, "pad_margin", 3)
+  local park_frac   = opt(o, "park_fraction", 0.12)
+  local pads, plan  = {}, {}
   for _, block in ipairs(lay.blocks) do
     local cx, cz = centroid(block)
     local bw, bd = extent(block, cx, cz)
-    local fw, fd = math.max(8, bw * fill), math.max(8, bd * fill)
-    local hw, hd = fw * 0.5, fd * 0.5
-    local hi, lo = -1e9, 1e9
-    for _, c in ipairs({ {cx-hw,cz-hd}, {cx+hw,cz-hd}, {cx+hw,cz+hd}, {cx-hw,cz+hd}, {cx,cz} }) do
-      local y = land:at(c[1], c[2]); hi = math.max(hi, y); lo = math.min(lo, y)
+    local lo, hi = 1e9, -1e9
+    for _, p in ipairs(block) do
+      local y = base:at(p.x, p.z); lo = math.min(lo, y); hi = math.max(hi, y)
     end
-    local floors = floors_at(o, math.sqrt(cx * cx + cz * cz))
-    -- add_solid: render AND collide with the same triangles, so the foundation
-    -- and the building shell are exactly as solid as they look.
-    m:add_solid(scope{ origin = {cx - hw, lo - 1.0, cz - hd}, size = {fw, (hi - lo) + 1.0, fd} }
-            :box(opt(o, "foundation_color", {0.32, 0.32, 0.34})))
-    local bld = building.grow{ floors = floors, width = fw, depth = fd,
-      ground_retail = true, walkable_ground = true,
-      setback_floors = (floors >= 14) and 6 or 0, setback_every = 2.5,
-      seed = math.floor(cx * 7 + cz) % 100000 }
-    m:add_solid(mesh.translate(bld, { cx, hi, cz }))
+    if (hi - lo) <= flat_relief and bw > 16 and bd > 16 then
+      local fw, fd = math.max(8, bw * fill), math.max(8, bd * fill)
+      local hw, hd = fw * 0.5 + pad_margin, fd * 0.5 + pad_margin
+      local y = base:at(cx, cz)
+      pads[#pads + 1] = { y = y, poly = {
+        { x = cx - hw, z = cz - hd }, { x = cx + hw, z = cz - hd },
+        { x = cx + hw, z = cz + hd }, { x = cx - hw, z = cz + hd } } }
+      local park = (math.floor(cx * 13 + cz * 7) % 100) < (park_frac * 100)
+      plan[#plan + 1] = { kind = park and "park" or "build",
+        cx = cx, cz = cz, fw = fw, fd = fd, y = y,
+        r = math.sqrt(cx * cx + cz * cz) }
+    end
+    -- else: undeveloped hillside, left as the natural green terrain.
+  end
+  return pads, plan
+end
+
+-- ----- place each planned block on the conformed (level) terrain --------------
+function M.place_blocks(m, plan, land, o)
+  for _, b in ipairs(plan) do
+    local hw, hd = b.fw * 0.5, b.fd * 0.5
+    if b.kind == "build" then
+      -- The plot is flat at b.y, so just a short foundation plinth, then the tower.
+      m:add_solid(scope{ origin = { b.cx - hw, b.y - 1.0, b.cz - hd },
+                         size = { b.fw, 1.0, b.fd } }
+                  :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 })))
+      local floors = floors_at(o, b.r)
+      local bld = building.grow{ floors = floors, width = b.fw, depth = b.fd,
+        ground_retail = true, walkable_ground = true,
+        setback_floors = (floors >= 14) and 6 or 0, setback_every = 2.5,
+        seed = math.floor(b.cx * 7 + b.cz) % 100000 }
+      m:add_solid(mesh.translate(bld, { b.cx, b.y, b.cz }))
+    else
+      -- A park: a flat manicured lawn on the same level plot (distinct green).
+      m:add_solid(scope{ origin = { b.cx - hw, b.y, b.cz - hd },
+                         size = { b.fw, 0.2, b.fd } }
+                  :box(opt(o, "park_color", { 0.24, 0.46, 0.17 })))
+    end
   end
 end
 
@@ -127,16 +162,19 @@ function M.generate(o)
     amp = opt(o, "terrain_amp", 18), warp = opt(o, "terrain_warp", 28),
     size = size, eroded = o.eroded, droplets = o.droplets }
 
-  -- Lay the road network first, then CONFORM the terrain to it: each street
-  -- becomes a flat (or constant-grade) corridor and the ground cuts/fills to meet
-  -- it, instead of the road bending over every bump. `land` is what everything
-  -- downstream — the terrain mesh, the roads, the building footings — samples.
+  -- Lay the road network, plan the blocks on the natural terrain (which faces to
+  -- develop, where the level plots are), then CONFORM the terrain to BOTH the
+  -- roads and those plots: streets become flat/constant-grade corridors and each
+  -- developed block a level plot, with the ground cut/filled to meet them instead
+  -- of bending over every bump. `land` is what everything downstream samples.
   local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
     extent = opt(o, "extent", 170), cell_size = opt(o, "cell_size", 64),
     ring_spacing = opt(o, "ring_spacing", 60), spokes = opt(o, "spokes", 12),
     jitter = opt(o, "jitter", 0.10), seed = seed }
+  local pads, plan = M.plan_blocks(base, lay, o)
   local land = terrain.conform(base, lay, { margin = opt(o, "road_margin", 3),
-                                            falloff = opt(o, "road_falloff", 10) })
+    falloff = opt(o, "road_falloff", 10), pads = pads,
+    pad_falloff = opt(o, "pad_falloff", 8) })
 
   local m = model.new()
   -- The terrain is the ground you walk on: render it and collide with the exact
@@ -153,7 +191,7 @@ function M.generate(o)
     color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
     curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true) }))
 
-  M.buildings(m, lay, land, o)
+  M.place_blocks(m, plan, land, o)
   M.lamps(m, lay, land, o)
   return m
 end

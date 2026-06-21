@@ -959,6 +959,41 @@ int l_terr_conform(lua_State* L) {
     }
     lua_pop(L, 1);
 
+    // Optional block pads: opts.pads = { { y=, poly={ {x=,z=}, ... } }, ... }.
+    // Each becomes a flat pad (makeFlattenPad) at height y — the recipe decides
+    // which blocks are flat enough to develop and seats a level plot under them.
+    if (lua_istable(L, 3)) {
+        double padFalloff = optField(L, 3, "pad_falloff", falloff);
+        lua_getfield(L, 3, "pads");
+        if (lua_istable(L, -1)) {
+            int pads = lua_absindex(L, -1);
+            lua_Integer np = luaL_len(L, pads);
+            for (lua_Integer i = 1; i <= np; ++i) {
+                lua_geti(L, pads, i);
+                int pad = lua_absindex(L, -1);
+                double y = optField(L, pad, "y", 0.0);
+                std::vector<Vec3> poly;
+                lua_getfield(L, pad, "poly");
+                if (lua_istable(L, -1)) {
+                    int pp = lua_absindex(L, -1);
+                    lua_Integer pn = luaL_len(L, pp);
+                    poly.reserve(static_cast<std::size_t>(pn));
+                    for (lua_Integer k = 1; k <= pn; ++k) {
+                        lua_geti(L, pp, k);
+                        poly.push_back(Vec3(optField(L, -1, "x", 0.0), 0.0,
+                                            optField(L, -1, "z", 0.0)));
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);   // poly
+                if (poly.size() >= 3)
+                    regions.push_back(makeFlattenPad(std::move(poly), y, padFalloff));
+                lua_pop(L, 1);   // pad
+            }
+        }
+        lua_pop(L, 1);   // pads
+    }
+
     pushHeight(L, conformField(std::move(base), std::move(regions)));
     return 1;
 }

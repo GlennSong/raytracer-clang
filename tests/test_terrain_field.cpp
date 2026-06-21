@@ -105,3 +105,17 @@ TEST_CASE(terrain_conform_holds_a_constant_grade) {
     CHECK_APPROX(land(98, 0), 9.8, 1e-6);
     CHECK_APPROX(land(50, 2), 5.0, 1e-6);    // flat across the width
 }
+
+TEST_CASE(terrain_conform_levels_a_block_pad) {
+    // A block pad forces a square region flat at its plot height while the
+    // surrounds ease back — the level building plot a developed block sits on.
+    HeightField base = [](double x, double z) { return 0.05 * x + 0.05 * z; };
+    std::vector<TerrainFlatten> regs;
+    std::vector<Vec3> poly = { Vec3(-10, 0, -10), Vec3(10, 0, -10),
+                               Vec3(10, 0, 10), Vec3(-10, 0, 10) };
+    regs.push_back(makeFlattenPad(poly, 5.0, /*falloff=*/6.0));
+    HeightField land = conformField(base, regs);
+    CHECK_APPROX(land(0, 0), 5.0, 1e-6);     // centre forced to the pad height
+    CHECK_APPROX(land(8, -8), 5.0, 1e-6);    // anywhere inside the pad
+    CHECK_APPROX(land(0, 100), base(0, 100), 1e-6);   // far away: untouched
+}

@@ -427,6 +427,33 @@ TEST_CASE(procgen_terrain_conform_binding_runs) {
     CHECK(mesh->indices.size() % 3 == 0);
 }
 
+TEST_CASE(procgen_terrain_conform_block_pads_run) {
+    // terrain.conform also flattens block pads: the recipe passes a `pads` list of
+    // { y, poly } and the ground is cut/filled to a level plot under each. Smoke-
+    // test that path end to end (the pad math is in test_terrain_field).
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local base = terrain.fbm{ seed=5, freq=0.02, amp=25, octaves=5 }
+        local lay  = city.layout{ extent=120, cell_size=60, seed=5 }
+        local pads = {}
+        for _, b in ipairs(lay.blocks) do
+            local cx, cz, n = 0, 0, 0
+            for _, p in ipairs(b) do cx = cx + p.x; cz = cz + p.z; n = n + 1 end
+            cx, cz = cx / n, cz / n
+            pads[#pads + 1] = { y = base:at(cx, cz), poly = {
+                {x=cx-8,z=cz-8}, {x=cx+8,z=cz-8}, {x=cx+8,z=cz+8}, {x=cx-8,z=cz+8} } }
+        end
+        local land = terrain.conform(base, lay, { pads = pads, pad_falloff = 6 })
+        return terrain.mesh(land, { size=300, resolution=64, color={0.3,0.4,0.25} })
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() == 65u * 65u);
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);
