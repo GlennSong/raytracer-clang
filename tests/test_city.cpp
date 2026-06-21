@@ -11,6 +11,27 @@
 
 using namespace engine;  // namespace migration (ADR-0015)
 
+TEST_CASE(radial_roads_make_rings_and_spokes) {
+    // ADR-0044: a second generator. Concentric rings + spokes, all within the
+    // outer radius, and blocks fall out of the planar graph like the grid.
+    RadialParams rp;
+    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 12; rp.seed = 5;
+    RoadGraph g = radialRoads(rp);
+    CHECK(g.nodes.size() > 0);
+    CHECK(g.edges.size() > 0);
+
+    // Every node sits within the outer radius (plus jitter slack).
+    Real maxR = 0;
+    for (const RoadNode& n : g.nodes) maxR = std::max(maxR, n.pos.length());
+    CHECK(maxR <= rp.extent + rp.ringSpacing * 0.2);
+    // 4 rings × 12 spokes + centre = 49 nodes.
+    CHECK(g.nodes.size() == 49u);
+
+    // Blocks extract from the planarized radial graph (wedge-shaped lots).
+    std::vector<Poly2> blocks = extractBlocks(planarize(g));
+    CHECK(blocks.size() > 8);
+}
+
 namespace {
 Poly2 square(Real s) {
     return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW

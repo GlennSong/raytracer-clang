@@ -95,6 +95,48 @@ RoadGraph gridRoads(const GridRoadParams& p) {
     return g;
 }
 
+RoadGraph radialRoads(const RadialParams& p) {
+    RoadGraph g;
+    Rng rng(p.seed);
+    int rings = std::max(1, static_cast<int>(std::lround(p.extent / p.ringSpacing)));
+    int spokes = std::max(3, p.spokes);
+
+    auto widthOf = [&](RoadClass c) {
+        return c == RoadClass::Arterial ? p.arterialWidth
+             : c == RoadClass::Collector ? p.collectorWidth : p.localWidth;
+    };
+
+    int centre = g.addNode(p.center, 0.01);
+    std::vector<std::vector<int>> id(rings + 1);   // id[ring][spoke]; ring 0 = centre
+    for (int r = 1; r <= rings; ++r) {
+        id[r].resize(spokes);
+        Real radius = r * p.ringSpacing;
+        Real jr = p.jitter * p.ringSpacing;
+        for (int s = 0; s < spokes; ++s) {
+            Real ang = 2 * PI * s / spokes;
+            Vec2 pos = p.center + Vec2(std::cos(ang), std::sin(ang)) * radius;
+            pos += Vec2(rng.range(-jr, jr), rng.range(-jr, jr));
+            id[r][s] = g.addNode(pos, 0.01);
+        }
+    }
+
+    // Ring roads: chords between adjacent spokes on each ring (outer = arterial).
+    for (int r = 1; r <= rings; ++r) {
+        RoadClass c = (r == rings) ? RoadClass::Arterial
+                    : (r % 2 == 0) ? RoadClass::Collector : RoadClass::Local;
+        for (int s = 0; s < spokes; ++s)
+            g.addEdge(id[r][s], id[r][(s + 1) % spokes], widthOf(c), c);
+    }
+    // Spokes: centre out through every ring (every 3rd spoke an arterial avenue).
+    for (int s = 0; s < spokes; ++s) {
+        RoadClass c = (s % 3 == 0) ? RoadClass::Arterial : RoadClass::Collector;
+        g.addEdge(centre, id[1][s], widthOf(c), c);
+        for (int r = 1; r < rings; ++r)
+            g.addEdge(id[r][s], id[r + 1][s], widthOf(c), c);
+    }
+    return g;
+}
+
 RoadGraph planarize(const RoadGraph& in, Real tol) {
     RoadGraph out;
     // Re-key nodes into the output (dedup by tol).

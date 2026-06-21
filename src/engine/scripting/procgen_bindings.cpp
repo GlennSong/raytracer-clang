@@ -670,19 +670,43 @@ void pushPoint(lua_State* L, const Vec2& p) {
     lua_pushnumber(L, p.y); lua_setfield(L, -2, "z");   // Vec2.y == world z
 }
 
-// city.layout{ extent=, cell_size=, jitter=, dropout=, seed= } -> a layout table
-//   { nodes = {{x,z}...}, edges = {{a,b,width}...}, blocks = {{{x,z}...}...} }.
+// Read an optional string field (default if absent / not a string).
+std::string optStrField(lua_State* L, int idx, const char* key, const char* def) {
+    idx = lua_absindex(L, idx);
+    lua_getfield(L, idx, key);
+    const char* s = lua_tostring(L, -1);
+    std::string r = s ? s : def;
+    lua_pop(L, 1);
+    return r;
+}
+
+// city.layout{ pattern=, extent=, cell_size=, ring_spacing=, spokes=, jitter=,
+//   dropout=, seed= } -> { nodes = {{x,z}...}, edges = {{a,b,width}...},
+//   blocks = {{{x,z}...}...} }. pattern = "grid" (default) | "radial" (ADR-0044).
 // Node indices in edges are 1-based (Lua convention).
 int l_city_layout(lua_State* L) {
-    GridRoadParams gp;
-    if (lua_istable(L, 1)) {
-        gp.extent   = static_cast<Real>(optField(L, 1, "extent", gp.extent));
-        gp.cellSize = static_cast<Real>(optField(L, 1, "cell_size", gp.cellSize));
-        gp.jitter   = static_cast<Real>(optField(L, 1, "jitter", gp.jitter));
-        gp.dropout  = static_cast<Real>(optField(L, 1, "dropout", gp.dropout));
-        gp.seed     = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+    std::string pattern = lua_istable(L, 1) ? optStrField(L, 1, "pattern", "grid") : "grid";
+    RoadGraph raw;
+    if (pattern == "radial") {
+        RadialParams rp;
+        rp.extent      = static_cast<Real>(optField(L, 1, "extent", rp.extent));
+        rp.ringSpacing = static_cast<Real>(optField(L, 1, "ring_spacing", rp.ringSpacing));
+        rp.spokes      = static_cast<int>(optField(L, 1, "spokes", rp.spokes));
+        rp.jitter      = static_cast<Real>(optField(L, 1, "jitter", rp.jitter));
+        rp.seed        = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+        raw = radialRoads(rp);
+    } else {
+        GridRoadParams gp;
+        if (lua_istable(L, 1)) {
+            gp.extent   = static_cast<Real>(optField(L, 1, "extent", gp.extent));
+            gp.cellSize = static_cast<Real>(optField(L, 1, "cell_size", gp.cellSize));
+            gp.jitter   = static_cast<Real>(optField(L, 1, "jitter", gp.jitter));
+            gp.dropout  = static_cast<Real>(optField(L, 1, "dropout", gp.dropout));
+            gp.seed     = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+        }
+        raw = gridRoads(gp);
     }
-    RoadGraph g = planarize(gridRoads(gp));
+    RoadGraph g = planarize(raw);
     std::vector<Poly2> blocks = extractBlocks(g);
 
     lua_createtable(L, 0, 3);

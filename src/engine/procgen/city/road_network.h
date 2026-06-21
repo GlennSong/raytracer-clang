@@ -40,6 +40,21 @@ struct GridRoadParams {
 };
 RoadGraph gridRoads(const GridRoadParams& params);
 
+// Radial road generator (ADR-0044): concentric ring roads + radial spokes from a
+// centre — the "Paris/Canberra" pattern. Rings every `ringSpacing` out to
+// `extent`, `spokes` radials from the middle, vertices jittered. The outer ring
+// is arterial so the region stays enclosed. Deterministic for `seed`.
+struct RadialParams {
+    Vec2  center{0, 0};
+    Real  extent = 400;      // outer radius (m)
+    Real  ringSpacing = 70;  // distance between concentric rings (m)
+    int   spokes = 12;       // radial roads from the centre
+    Real  jitter = 0.08;     // node jitter as a fraction of ringSpacing
+    Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
+    uint32_t seed = 0;
+};
+RoadGraph radialRoads(const RadialParams& params);
+
 // Planarize: split edges wherever they cross and merge coincident nodes, so the
 // only adjacencies are at shared endpoints (precondition for face extraction).
 RoadGraph planarize(const RoadGraph& graph, Real tol = 0.5);
