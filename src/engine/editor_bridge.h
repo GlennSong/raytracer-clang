@@ -104,6 +104,7 @@ public:
     // spawn point comes from the live view, which only the engine holds).
     void addPrimitive(const std::string& shape);
     void addGroup();
+    void addPlayerSpawn();
     void placeCamera();
     void duplicateSelected();
 

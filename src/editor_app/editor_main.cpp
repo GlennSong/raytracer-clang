@@ -784,6 +784,9 @@ int main(int argc, char** argv) {
     addShapeMenu->addAction("empty group", [&bridge]() {
         if (bridge.attached()) bridge.addGroup();
     });
+    addShapeMenu->addAction("player spawn", [&bridge]() {
+        if (bridge.attached()) bridge.addPlayerSpawn();
+    });
     addButton->setMenu(addShapeMenu);
     toolbar->addWidget(addButton);
 

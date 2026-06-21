@@ -264,6 +264,19 @@ void EditorSystem::update(FrameContext& ctx) {
 
 void EditorSystem::processShellRequests(FrameContext& ctx) {
     for (const std::string& what : pendingAdds) {
+        if (what == "playerspawn") {
+            // Only one spawn is meaningful: addPlayerSpawn reuses an existing one,
+            // so record a create (undo) only when we actually made a new one.
+            bool had = false;
+            ctx.world.each<Transform, PlayerSpawn>(
+                [&](Entity, Transform&, PlayerSpawn&) { had = true; });
+            Entity e = addPlayerSpawn(ctx);
+            if (e.valid()) {
+                selected = e;
+                if (!had) undoStack()->recordCreate(e);
+            }
+            continue;
+        }
         Entity e = (what == "camera") ? cameras.placeCameraAtView(ctx)
                    : (what == "group") ? addGroup(ctx)
                                        : addPrimitive(ctx, what);
@@ -607,7 +620,7 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
         selected = addGroup(ctx);
         if (undo && selected.valid()) undo->recordCreate(selected);
     }
-    ImGui::SameLine();
+    // Its own line: "player spawn" is wide and would clip off a narrow toolbar.
     if (ImGui::Button("player spawn")) {
         // Only one spawn may exist; addPlayerSpawn reuses it if present, so undo
         // records a create only when we actually made a new one.

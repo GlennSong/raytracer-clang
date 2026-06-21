@@ -193,6 +193,10 @@ void EditorBridge::addGroup() {
     if (editorPtr && worldPtr) editorPtr->requestAddPrimitive("group");
 }
 
+void EditorBridge::addPlayerSpawn() {
+    if (editorPtr && worldPtr) editorPtr->requestAddPrimitive("playerspawn");
+}
+
 void EditorBridge::placeCamera() {
     if (editorPtr && worldPtr) editorPtr->requestPlaceCamera();
 }
