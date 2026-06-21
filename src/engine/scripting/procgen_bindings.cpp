@@ -900,6 +900,12 @@ int l_height_clamp(lua_State* L) {
     pushHeight(L, heightClamp(checkHeight(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
     return 1;
 }
+// h:at(x, z) -> height : sample the field (for draping a city on terrain).
+int l_height_at(lua_State* L) {
+    HeightField& h = checkHeight(L, 1);
+    lua_pushnumber(L, h(luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
 // terrain.mesh(field, { size=, resolution=, color={r,g,b} }) -> mesh.
 int l_terr_mesh(lua_State* L) {
     HeightField& h = checkHeight(L, 1);
@@ -1315,6 +1321,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_height_scale); lua_setfield(L, -2, "scale");
         lua_pushcfunction(L, l_height_mix);   lua_setfield(L, -2, "mix");
         lua_pushcfunction(L, l_height_clamp); lua_setfield(L, -2, "clamp");
+        lua_pushcfunction(L, l_height_at);    lua_setfield(L, -2, "at");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

@@ -192,6 +192,20 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
 
 ## Next steps, in rough priority
 
+0. **Editor recipe studio (a big block, planned)** — the payoff of the Lua
+   procgen authoring (ADR-0042/0043). A whole editor system to *interpret and
+   view Lua output in semi-realtime* so a human (or an agent over MCP) can
+   iterate on recipes: a **recipe preview** panel (pick a `.lua`, run the right
+   runner — `runProcgenTexture` → image, `runProcgenMesh`/`runProcgenModelValue`
+   → geometry, a `HeightField` → heightmap image + 3D mesh — and display it),
+   **hot-reload** on file change, **parameter controls** (a recipe declares its
+   tunable params; the editor renders sliders/color pickers), and eventually a
+   **visual node graph** (text Lua and the graph are two front-ends to the same
+   DAG). Covers materials, heightmaps, and roadways. The headless runners +
+   bake paths it needs already exist and are tested (the `--bake-texture` CLI is
+   a one-shot version); this block is the desktop/Qt UI on top, so it is
+   macOS/desktop-gated and saved as one focused effort.
+
 1. **Mac verification session** (nothing else depends on more code first):
    - `editor_app` viewport: NSView + CAMetalLayer path, retina scale, input
      feel, ImGuizmo matrix conventions (transpose bridge in
