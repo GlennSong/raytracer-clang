@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "city",
+      "shape": "script",
+      "file": "lua_city.lua"
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.5, -0.4],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
