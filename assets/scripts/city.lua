@@ -147,8 +147,11 @@ function M.generate(o)
   m:add(ground)
   m:collide(ground, { friction = 0.95 })
 
-  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground.
-  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3, color = {0.08, 0.08, 0.09} }))
+  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground,
+  -- with raised sidewalks skirting both verges (curb lip + concrete slab).
+  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
+    color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
+    curb = opt(o, "curb", 0.15) }))
 
   M.buildings(m, lay, land, o)
   M.lamps(m, lay, land, o)

@@ -16,6 +16,9 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     auto height = [&](double x, double z) {
         return (p.heightAt ? p.heightAt(x, z) : 0.0) + p.lift;
     };
+    auto ground = [&](double x, double z) {
+        return p.heightAt ? p.heightAt(x, z) : 0.0;          // terrain, no lift
+    };
     auto to3d = [&](const Vec2& v) { return Vec3(v.x, height(v.x, v.y), v.y); };
 
     // Road geometry lies flat-ish on the terrain, so every tri faces up; emitTri
@@ -23,6 +26,37 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     // order the strip/junction code happens to pass its corners in.
     auto addTri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
         MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.color);
+    };
+
+    // A raised sidewalk skirt running along a curb line P0->P1, with `outN` the
+    // unit direction away from the road. Per sub-segment it emits the curb lip
+    // (vertical face toward the street), the slab top (raised curbHeight above the
+    // road), and an outer face dropping back to the ground — so the kerb reads as
+    // a real raised sidewalk, not a painted stripe. No-op when disabled.
+    auto curbBand = [&](const Vec2& P0, const Vec2& P1, const Vec2& outN) {
+        if (p.sidewalkWidth <= 0.0) return;
+        double len = (P1 - P0).length();
+        if (len < 1e-3) return;
+        int segs = std::max(1, static_cast<int>(len / 4.0));
+        const Vec3 nUp(0, 1, 0);
+        const Vec3 nIn(-outN.x, 0, -outN.y);    // curb lip faces the carriageway
+        const Vec3 nOut(outN.x, 0, outN.y);     // outer face faces away
+        for (int s = 1; s <= segs; ++s) {
+            Vec2 q0 = lerp(P0, P1, static_cast<double>(s - 1) / segs);
+            Vec2 q1 = lerp(P0, P1, static_cast<double>(s) / segs);
+            Vec2 o0 = q0 + outN * p.sidewalkWidth, o1 = q1 + outN * p.sidewalkWidth;
+            double r0 = height(q0.x, q0.y), r1 = height(q1.x, q1.y);   // road surface
+            double t0 = r0 + p.curbHeight, t1 = r1 + p.curbHeight;     // slab top
+            double g0 = std::min(ground(o0.x, o0.y), t0 - 0.01);       // outer foot
+            double g1 = std::min(ground(o1.x, o1.y), t1 - 0.01);
+            Vec3 a0(q0.x, r0, q0.y), a1(q1.x, r1, q1.y);   // curb base (at road)
+            Vec3 b0(q0.x, t0, q0.y), b1(q1.x, t1, q1.y);   // curb top / slab inner
+            Vec3 c0(o0.x, t0, o0.y), c1(o1.x, t1, o1.y);   // slab outer
+            Vec3 d0(o0.x, g0, o0.y), d1(o1.x, g1, o1.y);   // outer foot
+            MeshBuilder::emitQuad(mesh, a0, a1, b1, b0, nIn, p.curbColor);
+            MeshBuilder::emitQuad(mesh, b0, b1, c1, c0, nUp, p.sidewalkColor);
+            MeshBuilder::emitQuad(mesh, c0, c1, d1, d0, nOut, p.curbColor);
+        }
     };
     // A flat strip between two cross-sections, segmented + draped on the terrain.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,
@@ -108,6 +142,18 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         int rn = static_cast<int>(ring.size());
         for (int k = 0; k < rn; ++k)
             addTri(c, to3d(ring[k]), to3d(ring[(k + 1) % rn]));
+
+        // Sidewalk corners: the pad boundary between consecutive arms (arm k's
+        // left point round to arm k+1's right point) is a kerb corner, not a road
+        // mouth — skirt it so the sidewalk turns the corner instead of gapping.
+        for (int k = 0; k < m; ++k) {
+            const Vec2& Lk = ring[2 * k + 1];                  // arm k, left
+            const Vec2& Rn = ring[2 * ((k + 1) % m)];          // arm k+1, right
+            if ((Rn - Lk).length() < 1e-3) continue;
+            Vec2 oN = normalize(perp(Rn - Lk));
+            if (dot(oN, (Lk + Rn) * 0.5 - V) < 0) oN = oN * -1.0;   // face outward
+            curbBand(Lk, Rn, oN);
+        }
     }
 
     // --- Ribbons: the trimmed span between junctions --------------------------
@@ -120,8 +166,12 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         double sa = trim[e][0], sb = trim[e][1];
         if (sa + sb >= len - 0.5) continue;        // swallowed entirely by junctions
         Vec2 start = A + d * sa, end = B - d * sb;
-        Vec2 nrm = perp(d) * (g.edges[e].width * 0.5);
+        Vec2 pu = perp(d);                              // unit edge normal
+        Vec2 nrm = pu * (g.edges[e].width * 0.5);
         addStrip(start - nrm, start + nrm, end - nrm, end + nrm);
+        // Sidewalk skirts down both verges (outward = away from the carriageway).
+        curbBand(start + nrm, end + nrm, pu);
+        curbBand(start - nrm, end - nrm, pu * -1.0);
     }
 
     return mesh;

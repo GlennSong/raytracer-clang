@@ -22,6 +22,13 @@ struct RoadMeshParams {
     double lift = 0.25;                 // raise above the terrain to avoid z-fight
     double minSetback = 1.0;            // floor on the junction trim distance (m)
     Vec3   color{0.08, 0.08, 0.09};     // asphalt
+    // Sidewalks: a raised skirt along the carriageway edges (and around the
+    // junction corners) — a curb lip facing the street, a concrete slab top, and
+    // an outer face dropping back to the ground. 0 width = no sidewalks.
+    double sidewalkWidth = 0.0;         // slab width beyond the carriageway (m)
+    double curbHeight = 0.15;           // how far the lip stands above the road (m)
+    Vec3   sidewalkColor{0.62, 0.62, 0.60};   // concrete slab
+    Vec3   curbColor{0.48, 0.48, 0.47};       // curb faces
     std::function<double(double, double)> heightAt;
 };
 

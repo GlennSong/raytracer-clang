@@ -38,6 +38,37 @@ TEST_CASE(road_mesh_builds_junctions_and_ribbons) {
     CHECK(maxR <= 41.0);
 }
 
+TEST_CASE(road_mesh_sidewalks_raise_a_kerb) {
+    // ADR-0044 cross-section: sidewalks add a raised skirt — a slab top standing
+    // `curb` above the carriageway and an outer face dropping to the ground.
+    RoadGraph g;
+    int c = g.addNode(Vec2(0, 0));
+    int e = g.addNode(Vec2(40, 0)), w = g.addNode(Vec2(-40, 0));
+    int n = g.addNode(Vec2(0, 40)), s = g.addNode(Vec2(0, -40));
+    g.addEdge(c, e, 10); g.addEdge(c, w, 10);
+    g.addEdge(c, n, 10); g.addEdge(c, s, 10);
+
+    RoadMeshParams flat;                       // no sidewalks (default width 0)
+    RenderMesh bare = buildRoadMesh(g, flat);
+
+    RoadMeshParams p;
+    p.sidewalkWidth = 2.5;
+    p.curbHeight = 0.15;
+    RenderMesh m = buildRoadMesh(g, p);
+
+    CHECK(m.indices.size() > bare.indices.size());   // the skirt added geometry
+
+    // Flat ground (no heightAt): the road sits at `lift`, slab tops a curb above
+    // it, and the outer face drops to ground (y = 0, below the road).
+    double minY = 1e9, maxY = -1e9;
+    for (const Vertex& v : m.vertices) {
+        minY = std::min(minY, double(v.position.y));
+        maxY = std::max(maxY, double(v.position.y));
+    }
+    CHECK_APPROX(maxY, flat.lift + p.curbHeight, 1e-6);   // raised exactly one curb
+    CHECK(minY < flat.lift - 0.1);                        // outer face dropped to ground
+}
+
 TEST_CASE(radial_roads_make_rings_and_spokes) {
     // ADR-0044: a second generator. Concentric rings + spokes, all within the
     // outer radius, and blocks fall out of the planar graph like the grid.

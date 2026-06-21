@@ -1037,6 +1037,10 @@ int l_city_road_mesh(lua_State* L) {
         rp.lift = optField(L, 2, "lift", rp.lift);
         rp.minSetback = optField(L, 2, "min_setback", rp.minSetback);
         rp.color = optVec3Field(L, 2, "color", rp.color);
+        rp.sidewalkWidth = optField(L, 2, "sidewalk", rp.sidewalkWidth);
+        rp.curbHeight = optField(L, 2, "curb", rp.curbHeight);
+        rp.sidewalkColor = optVec3Field(L, 2, "sidewalk_color", rp.sidewalkColor);
+        rp.curbColor = optVec3Field(L, 2, "curb_color", rp.curbColor);
         lua_getfield(L, 2, "height");
         if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
             HeightField h = *hf;

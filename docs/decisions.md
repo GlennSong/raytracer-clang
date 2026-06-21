@@ -2777,8 +2777,15 @@ slope across `falloff`. Recipes build the terrain mesh *and* the road ribbon on
 the conformed field, so urban roads sit flat on hilly terrain instead of
 rippling. `applyFlatten` (the pointwise blend) was promoted from a `terrain.cpp`
 static to a public function so the combinator shares the exact cut/fill math the
-noise terrain uses. Block pads, multi-lane cross-sections, sidewalks, and the
-terrain-following grower remain as above.
+noise terrain uses.
+
+Sidewalks also landed: `buildRoadMesh` grows a raised kerb skirt along the
+carriageway edges and around the junction corners (`sidewalk`/`curb` params) — a
+curb lip facing the street, a concrete slab top a `curb` height above the road,
+and an outer face dropping back to the ground — emitted through the winding-aware
+`MeshBuilder::emitQuad`, vertex-coloured concrete in the same mesh. Block pads,
+multi-lane widths + lane-line markings, and the terrain-following grower remain
+as above.
 
 ---
 
