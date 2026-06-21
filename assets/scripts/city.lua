@@ -74,8 +74,8 @@ end
 -- + a placement. Lots too small are skipped (left as a gap); faces too hilly to
 -- level cheaply are left as natural green hillside.
 function M.plan_blocks(base, lay, o)
-  local flat_relief = opt(o, "flat_relief", 8)     -- max terrain rise to develop (m)
-  local min_lot     = opt(o, "min_lot", 14)        -- lot must hold a building + yards
+  local flat_relief = opt(o, "flat_relief", 11)    -- max terrain rise to develop (m)
+  local min_lot     = opt(o, "min_lot", 12)        -- lot must hold a building + yards
   local park_frac   = opt(o, "park_fraction", 0.10)
   local center_r    = opt(o, "center_plaza", false) and opt(o, "ring_spacing", 60) * 0.6 or -1
   local pads, plan  = {}, {}

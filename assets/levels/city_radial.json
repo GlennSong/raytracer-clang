@@ -5,7 +5,7 @@
     { "name": "city", "shape": "script", "file": "city.lua",
       "opts": { "pattern": "radial", "seed": 5, "extent": 210, "ring_spacing": 60,
                 "spokes": 6, "ring_subdiv": 7, "jitter": 0.03, "center_plaza": true,
-                "terrain_amp": 14, "terrain_size": 480,
+                "terrain_amp": 9, "terrain_size": 480,
                 "downtown_radius": 78, "midtown_radius": 150 } }
   ],
   "lighting": {
