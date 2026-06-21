@@ -390,6 +390,33 @@ Entity EditorSystem::addGroup(FrameContext& ctx) {
     return e;
 }
 
+Entity EditorSystem::addPlayerSpawn(FrameContext& ctx) {
+    // The player start: a single, pickable green capsule. Its Transform is the
+    // spawn — the LevelWriter syncs it into the level's "player" block (so it
+    // round-trips via that block, not a SourceSpec, exactly like the loader's
+    // loadPlayerSpawn). Only one spawn is meaningful, so if one already exists we
+    // select it rather than scatter duplicates the writer would fight over.
+    Entity existing{};
+    ctx.world.each<Transform, PlayerSpawn>([&](Entity e, Transform&, PlayerSpawn&) {
+        if (!existing.valid()) existing = e;
+    });
+    if (existing.valid()) return existing;
+
+    Entity e = ctx.world.create();
+    Transform t;
+    t.position = spawnPoint(ctx);
+    ctx.world.add<Transform>(e, t);
+    ctx.world.add<PrevTransform>(e, {t});
+    ctx.world.add<PlayerSpawn>(e);
+
+    Renderable gizmo;
+    gizmo.mesh = ctx.renderer.uploadMesh(MeshBuilder::capsule(0.3f, 0.8f));
+    gizmo.material.albedo = Vec3(0.2, 0.8, 0.3);   // green = "you start here"
+    gizmo.material.roughness = 0.5f;
+    ctx.world.add<Renderable>(e, gizmo);
+    return e;
+}
+
 Entity EditorSystem::duplicateSelected(FrameContext& ctx) {
     Transform* t = ctx.world.get<Transform>(selected);
     SourceSpec* spec = ctx.world.get<SourceSpec>(selected);
@@ -579,6 +606,16 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
     if (ImGui::Button("group")) {
         selected = addGroup(ctx);
         if (undo && selected.valid()) undo->recordCreate(selected);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("player spawn")) {
+        // Only one spawn may exist; addPlayerSpawn reuses it if present, so undo
+        // records a create only when we actually made a new one.
+        bool had = false;
+        ctx.world.each<Transform, PlayerSpawn>(
+            [&](Entity, Transform&, PlayerSpawn&) { had = true; });
+        selected = addPlayerSpawn(ctx);
+        if (undo && !had && selected.valid()) undo->recordCreate(selected);
     }
 
     ImGui::SetNextItemWidth(180);
