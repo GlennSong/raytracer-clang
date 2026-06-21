@@ -976,6 +976,25 @@ int heightGc(lua_State* L) {
     return 0;
 }
 
+// An opaque handle to the cut/fill footprints a conform produced. terrain.conform
+// returns it alongside the conformed field so a recipe can hand the *same*
+// footprints to the engine (m:conform) to grade the LEVEL terrain — the bridge
+// that lets a Lua city sit on the C++ CDLOD terrain (ADR-0044).
+constexpr const char* kRegionsMt = "engine.procgen.Regions";
+using RegionsVec = std::vector<TerrainFlatten>;
+void pushRegions(lua_State* L, RegionsVec r) {
+    void* mem = lua_newuserdatauv(L, sizeof(RegionsVec), 0);
+    new (mem) RegionsVec(std::move(r));
+    luaL_setmetatable(L, kRegionsMt);
+}
+RegionsVec& checkRegions(lua_State* L, int idx) {
+    return *static_cast<RegionsVec*>(luaL_checkudata(L, idx, kRegionsMt));
+}
+int regionsGc(lua_State* L) {
+    static_cast<RegionsVec*>(lua_touserdata(L, 1))->~RegionsVec();
+    return 0;
+}
+
 int l_terr_flat(lua_State* L) { pushHeight(L, heightConstant(luaL_checknumber(L, 1))); return 1; }
 int l_terr_noise(lua_State* L) {
     pushHeight(L, heightNoise(static_cast<uint32_t>(optField(L, 1, "seed", 0)),
@@ -1103,8 +1122,11 @@ int l_terr_conform(lua_State* L) {
         lua_pop(L, 1);   // pads
     }
 
-    pushHeight(L, conformField(std::move(base), std::move(regions)));
-    return 1;
+    // Return BOTH the conformed field (build the road mesh on it) AND the raw
+    // footprints (hand to m:conform so the engine grades the level terrain too).
+    pushHeight(L, conformField(std::move(base), regions));
+    pushRegions(L, std::move(regions));
+    return 2;
 }
 // HeightField methods (immutable composition).
 int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
@@ -1436,6 +1458,18 @@ int l_model_flatten(lua_State* L) {
     return 1;
 }
 
+// m:conform(regions) -> m : record the cut/fill footprints (from terrain.conform)
+// on the model so the loader grades the LEVEL terrain to meet the recipe's roads
+// and pads. The recipe still builds its road/block meshes on the conformed field;
+// this makes the walkable CDLOD ground agree. No-op if the level owns no terrain.
+int l_model_conform(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    RegionsVec& r = checkRegions(L, 2);
+    m.flatten.insert(m.flatten.end(), r.begin(), r.end());
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
 // The skin-side TreeParams (grammar fields are unused; the grammar is the
 // module string passed to tree.skin).
 TreeParams readTreeParams(lua_State* L, int idx) {
@@ -1680,6 +1714,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_pop(L, 1);
     registerMetatable(L, kImageMt, imageGc);      // Image is opaque (just __gc)
     registerMetatable(L, kMaterialMt, materialGc);  // Material is opaque (just __gc)
+    registerMetatable(L, kRegionsMt, regionsGc);  // flatten regions handle (opaque)
 
     // The HeightField metatable carries the terrain-compose methods (ADR-0043).
     if (luaL_newmetatable(L, kHeightMt)) {
@@ -1713,6 +1748,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_instance_count); lua_setfield(L, -2, "instance_count");
         lua_pushcfunction(L, l_model_collider_count); lua_setfield(L, -2, "collider_count");
         lua_pushcfunction(L, l_model_flatten);        lua_setfield(L, -2, "flatten");
+        lua_pushcfunction(L, l_model_conform);        lua_setfield(L, -2, "conform");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
@@ -1930,6 +1966,12 @@ void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
     lua_State* L = luaState(vm);
     pushJson(L, opts);
     lua_setglobal(L, "args");
+}
+
+void setGlobalHeightField(ScriptVM& vm, const char* name, HeightField field) {
+    lua_State* L = luaState(vm);
+    pushHeight(L, std::move(field));     // same userdata terrain.fbm{} returns
+    lua_setglobal(L, name);              // the recipe samples/conforms it as `name`
 }
 
 bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,

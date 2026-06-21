@@ -599,13 +599,43 @@ static std::string loadScriptCode(const std::string& file, const std::string& le
     return {};
 }
 
+#ifdef RT_ENABLE_SCRIPTING
+// Run a script entity's recipe into `out`. An on-terrain recipe gets the level's
+// ground sampler injected as the `ground` global so it drapes + conforms the
+// engine terrain (ADR-0044). Pure model build — no ECS side effects — so the
+// loader can pre-run it for cut/fill footprints before the terrain is meshed.
+static bool runScriptModel(const json& ent, const std::string& levelDir,
+                           const HeightField* ground, ProcModel& out) {
+    std::string file = ent.value("file", std::string());
+    std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);
+    if (code.empty()) {
+        LOG_WARN << "script entity: cannot read '" << file << "'";
+        return false;
+    }
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    vm.setGlobalNumber("seed", ent.value("seed", 0.0));
+    if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
+    if (ground != nullptr) setGlobalHeightField(vm, "ground", *ground);
+    std::string err;
+    if (!runProcgenModelValue(vm, code, out, &err)) {
+        LOG_ERROR << "script entity '" << file << "': " << err;
+        return false;
+    }
+    return true;
+}
+#endif
+
 // A Lua recipe entity (shape:"script", ADR-0042): run the recipe and spawn its
 // composable model — parts as Renderable entities, instance groups as
 // InstanceGroups. The realtime twin of level_scene's bakeProcModel, so the same
-// city.lua that renders offline also populates the viewer/editor.
+// city.lua that renders offline also populates the viewer/editor. `prebuilt` is
+// a model the loader already ran (on-terrain pre-pass); `ground` injects the
+// level terrain for an on-terrain recipe run here.
 static void loadScriptEntity(const json& ent, const std::string& levelDir,
                              World& world, Renderer& renderer, AssetManager& assets,
-                             int index) {
+                             int index, const ProcModel* prebuilt = nullptr,
+                             const HeightField* ground = nullptr) {
 #ifdef RT_ENABLE_SCRIPTING
     std::string file = ent.value("file", std::string());
 
@@ -623,21 +653,13 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         spawnDocumentEntity(ent, "script", recipe.dump(), world);
     }
 
-    std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);
-    if (code.empty()) {
-        LOG_WARN << "script entity: cannot read '" << file << "'";
-        return;
+    ProcModel localModel;
+    const ProcModel* modelPtr = prebuilt;
+    if (modelPtr == nullptr) {
+        if (!runScriptModel(ent, levelDir, ground, localModel)) return;
+        modelPtr = &localModel;
     }
-    ScriptVM vm;
-    openProcgenLibrary(vm);
-    vm.setGlobalNumber("seed", ent.value("seed", 0.0));
-    if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
-    ProcModel model;
-    std::string err;
-    if (!runProcgenModelValue(vm, code, model, &err)) {
-        LOG_ERROR << "script entity '" << file << "': " << err;
-        return;
-    }
+    const ProcModel& model = *modelPtr;
     const std::string key = "script:" + std::to_string(index);
     auto upload = [&](const TextureData& td) -> TextureHandle {
         return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
@@ -806,11 +828,15 @@ static void loadEntities(const json& entities, const json& root, World& world,
                          Renderer& renderer, AssetManager& assets,
                          const std::string& levelDir, bool editorMode,
                          const json* cityEnt = nullptr,
-                         const CityModel* cityModel = nullptr) {
+                         const CityModel* cityModel = nullptr,
+                         const std::vector<std::pair<const json*, ProcModel>>*
+                             scriptCache = nullptr,
+                         const HeightField* ground = nullptr) {
     MaterialTable materials = buildMaterialTable(root);   // named "materials" table
     SurfaceTexCache surfaceTex;   // one bake+upload per surface across the load
     int treeIndex = 0;
     int cityIndex = 0;
+    int scriptIndex = 0;
     for (auto& ent : entities) {
         // Hero parametric tree: a collidable, textured object (not scatter).
         if (ent.value("shape", std::string()) == "tree") {
@@ -819,9 +845,15 @@ static void loadEntities(const json& entities, const json& root, World& world,
         }
         // Lua recipe (ADR-0042): run the script and spawn its composable model —
         // the same shape:"script" the offline tracer renders, now in the viewer.
+        // An on-terrain recipe was pre-run (for terrain grading) and is spawned
+        // from the cache; others run now, with the level ground injected.
         if (ent.value("shape", std::string()) == "script") {
-            static int scriptIndex = 0;
-            loadScriptEntity(ent, levelDir, world, renderer, assets, scriptIndex++);
+            const ProcModel* pre = nullptr;
+            if (scriptCache != nullptr)
+                for (const auto& p : *scriptCache)
+                    if (p.first == &ent) { pre = &p.second; break; }
+            loadScriptEntity(ent, levelDir, world, renderer, assets, scriptIndex++,
+                             pre, ground);
             continue;
         }
         // Procedural city: renderable geometry + per-building colliders. Reuse the
@@ -1624,11 +1656,46 @@ bool LevelLoader::load(const std::string& path,
         }
     }
 
+    // Level ground sampler (ADR-0044): the NATURAL terrain height handed to an
+    // on-terrain script recipe (the `ground` global) so a Lua city drapes on and
+    // conforms the CDLOD terrain — the script sibling of the C++ city's groundAt.
+    HeightField levelGround;
+    if (root.contains("terrain")) {
+        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+        levelGround = [tp, noise](double x, double z) {
+            return terrainHeight(*tp, *noise, x, z);
+        };
+    }
+
+    // Pre-pass: run on-terrain recipes BEFORE the terrain so their cut/fill
+    // footprints grade it; cache the model (by pointer) so the entity loop spawns
+    // it instead of re-running the recipe.
+    std::vector<std::pair<const json*, ProcModel>> scriptCache;
+    std::vector<TerrainFlatten> scriptFlatten;
+#ifdef RT_ENABLE_SCRIPTING
+    if (levelGround && root.contains("entities")) {
+        for (const auto& ent : root["entities"]) {
+            if (ent.value("shape", std::string()) == "script" &&
+                ent.value("onTerrain", false)) {
+                ProcModel m;
+                if (runScriptModel(ent, levelDir, &levelGround, m)) {
+                    scriptFlatten.insert(scriptFlatten.end(), m.flatten.begin(),
+                                         m.flatten.end());
+                    scriptCache.emplace_back(&ent, std::move(m));
+                }
+            }
+        }
+    }
+#endif
+
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     if (root.contains("terrain")) {
         TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
         terrainParams.flatten = cityFlatten;   // grade flat under the city
+        terrainParams.flatten.insert(terrainParams.flatten.end(),
+                                     scriptFlatten.begin(), scriptFlatten.end());
         Noise terrainNoise(root["terrain"].value("seed", 0u));
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         if (root.contains("vegetation"))
@@ -1644,7 +1711,8 @@ bool LevelLoader::load(const std::string& path,
 
     if (root.contains("entities"))
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
-                     editorMode, cityEnt, &cityModel);
+                     editorMode, cityEnt, &cityModel, &scriptCache,
+                     levelGround ? &levelGround : nullptr);
 
     if (root.contains("player"))
         (editorMode ? loadPlayerSpawn(root["player"], world, assets)

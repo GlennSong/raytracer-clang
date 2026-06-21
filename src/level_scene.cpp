@@ -580,15 +580,27 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // entities can reference shared materials by name (ADR-0039).
     MaterialTable materials = buildMaterialTable(root, scene);
 
-    // Procedural terrain (top-level block, regenerated from its recipe).
-    if (root.contains("terrain")) addTerrain(root["terrain"], scene, materials, cityFlatten);
-
     // Level directory, for resolving glTF mesh paths relative to the level file.
     std::string levelDir = ".";
     if (auto slash = levelPath.find_last_of('/'); slash != std::string::npos)
         levelDir = levelPath.substr(0, slash);
 
+    // Level ground sampler (ADR-0044): the NATURAL terrain height (no flatten yet),
+    // handed to a draped recipe as the `ground` global so it can seat its city and
+    // conform the carriageways. Its cut/fill footprints come back via m:conform and
+    // feed the terrain build below, so the walkable CDLOD ground meets the roads.
+    HeightField levelGround;
+    if (root.contains("terrain")) {
+        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+        levelGround = [tp, noise](double x, double z) {
+            return terrainHeight(*tp, *noise, x, z);
+        };
+    }
+
     int skipped = 0;
+    std::vector<std::pair<const json*, ProcModel>> scriptCache;   // pre-run on-terrain
+    std::vector<TerrainFlatten> scriptFlatten;
 #ifdef RT_ENABLE_SCRIPTING
     std::unique_ptr<ScriptVM> scriptVm;
     auto ensureVm = [&]() -> ScriptVM& {
@@ -598,7 +610,50 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         }
         return *scriptVm;
     };
+    // Run a script entity's recipe into `out`. On-terrain recipes get the level
+    // ground injected so they drape + conform the engine terrain.
+    auto runScript = [&](const json& ent, ProcModel& out) -> bool {
+        std::string file = ent.value("file", std::string());
+        std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);
+        if (code.empty()) { LOG_WARN << "script entity: cannot read '" << file << "'"; return false; }
+        ScriptVM& vm = ensureVm();
+        vm.setGlobalNumber("seed", ent.value("seed", 0.0));
+        if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
+        if (ent.value("onTerrain", false) && levelGround)
+            setGlobalHeightField(vm, "ground", levelGround);
+        std::string err;
+        if (!runProcgenModelValue(vm, code, out, &err)) {
+            LOG_ERROR << "script entity '" << file << "': " << err;
+            return false;
+        }
+        return true;
+    };
+    // Pre-pass: run on-terrain recipes BEFORE the terrain so their cut/fill
+    // footprints can grade it. Cache the model (by pointer) so the entity loop
+    // bakes it rather than re-running the recipe.
+    if (levelGround) {
+        for (const auto& ent : root.value("entities", json::array())) {
+            if (ent.value("shape", std::string()) == "script" &&
+                ent.value("onTerrain", false)) {
+                ProcModel m;
+                if (runScript(ent, m)) {
+                    scriptFlatten.insert(scriptFlatten.end(), m.flatten.begin(),
+                                         m.flatten.end());
+                    scriptCache.emplace_back(&ent, std::move(m));
+                }
+            }
+        }
+    }
 #endif
+
+    // Procedural terrain (top-level block, regenerated from its recipe), graded
+    // flat under the city/script cut-fill footprints.
+    if (root.contains("terrain")) {
+        std::vector<TerrainFlatten> allFlatten = cityFlatten;
+        allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
+        addTerrain(root["terrain"], scene, materials, allFlatten);
+    }
+
     for (const auto& ent : root.value("entities", json::array())) {
         if (ent.contains("mesh")) {
             addGltfModel(ent, levelDir, scene);   // imported glTF, path-traced
@@ -609,22 +664,13 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // offline through the same pipeline (the renderer is the only divergence).
         if (ent.value("shape", std::string()) == "script") {
 #ifdef RT_ENABLE_SCRIPTING
-            std::string file = ent.value("file", std::string());
-            std::string code = file.empty() ? std::string()
-                                            : loadScriptCode(file, levelDir);
-            if (code.empty()) {
-                LOG_WARN << "script entity: cannot read '" << file << "'";
-                continue;
+            bool baked = false;
+            for (auto& pre : scriptCache)            // pre-run on-terrain recipe
+                if (pre.first == &ent) { bakeProcModel(pre.second, scene); baked = true; break; }
+            if (!baked) {
+                ProcModel model;
+                if (runScript(ent, model)) bakeProcModel(model, scene);
             }
-            ScriptVM& vm = ensureVm();
-            vm.setGlobalNumber("seed", ent.value("seed", 0.0));
-            if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
-            ProcModel model;
-            std::string err;
-            if (runProcgenModelValue(vm, code, model, &err))
-                bakeProcModel(model, scene);
-            else
-                LOG_ERROR << "script entity '" << file << "': " << err;
 #else
             LOG_WARN << "script entity skipped (scripting disabled in this build)";
 #endif

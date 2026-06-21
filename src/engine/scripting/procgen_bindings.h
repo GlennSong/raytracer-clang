@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../rt_math.h"   // Vec3
+#include "../procgen/terrain_field.h"   // HeightField
 
 namespace engine {
 
@@ -19,6 +20,13 @@ struct TextureData;
 // arrays -> 1-based tables (so a {r,g,b} colour reads straight back), primitives
 // map across. Call after openProcgenLibrary, before running the recipe.
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson);
+
+// Inject a HeightField as a Lua global (e.g. "ground") so a recipe can sample and
+// conform the *level's* terrain (ADR-0044). The loader builds this from the
+// level's CDLOD TerrainParams (terrainHeight) and the recipe drapes its city on
+// it, handing cut/fill footprints back via m:conform. Call after
+// openProcgenLibrary, before running the recipe.
+void setGlobalHeightField(ScriptVM& vm, const char* name, HeightField field);
 
 // One material-part of a procedural model (ADR-0032): geometry plus the intent
 // to build a RenderMaterial. `hasMaterial == false` means "use the caller's

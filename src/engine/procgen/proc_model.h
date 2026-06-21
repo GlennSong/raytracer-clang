@@ -3,6 +3,7 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"             // Mat4
+#include "terrain.h"                   // TerrainFlatten
 #include "tree.h"                      // TextureData
 #include <vector>
 
@@ -83,12 +84,20 @@ struct ProcModel {
     std::vector<ProcPart> parts;
     std::vector<ProcInstanceGroup> instances;
     std::vector<ProcCollider> colliders;
+    // Cut/fill footprints (ADR-0044) the recipe wants graded into the *level*
+    // terrain — the script-side sibling of CityModel::flatten. A recipe that
+    // drapes on the engine terrain (terrain.conform with the injected `ground`)
+    // hands these back via m:conform(regions); the loader folds them into the
+    // CDLOD TerrainParams before the terrain mesh/collider is built, so the
+    // ground meets the roads. Empty for a recipe that owns its own ground.
+    std::vector<TerrainFlatten> flatten;
 
     // Fold another model into this one (composition).
     void merge(const ProcModel& o) {
         parts.insert(parts.end(), o.parts.begin(), o.parts.end());
         instances.insert(instances.end(), o.instances.begin(), o.instances.end());
         colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
+        flatten.insert(flatten.end(), o.flatten.begin(), o.flatten.end());
     }
 
     int instanceCount() const {
