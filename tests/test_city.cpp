@@ -4,12 +4,39 @@
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/city.h"
 #include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
 
 using namespace engine;  // namespace migration (ADR-0015)
+
+TEST_CASE(road_mesh_builds_junctions_and_ribbons) {
+    // ADR-0044: the road surface trims ribbons back at junctions and fills the
+    // gap with a pad, so a 4-way crossing produces real geometry (not overlap).
+    RoadGraph g;
+    int c = g.addNode(Vec2(0, 0));
+    int e = g.addNode(Vec2(40, 0)), w = g.addNode(Vec2(-40, 0));
+    int n = g.addNode(Vec2(0, 40)), s = g.addNode(Vec2(0, -40));
+    g.addEdge(c, e, 10); g.addEdge(c, w, 10);
+    g.addEdge(c, n, 10); g.addEdge(c, s, 10);
+
+    RoadMeshParams p;
+    RenderMesh m = buildRoadMesh(g, p);
+    CHECK(!m.vertices.empty());
+    CHECK(m.indices.size() % 3 == 0);
+    // The degree-4 hub adds a junction pad (8 ring verts -> 8 fan triangles) on
+    // top of the four ribbons, so there is real intersection geometry.
+    CHECK(m.indices.size() / 3 >= 8u + 4u * 2u);
+
+    // No road geometry strays beyond the arms' reach (sanity on the trim).
+    double maxR = 0;
+    for (const Vertex& v : m.vertices)
+        maxR = std::max(maxR, std::sqrt(double(v.position.x * v.position.x +
+                                             v.position.z * v.position.z)));
+    CHECK(maxR <= 41.0);
+}
 
 TEST_CASE(radial_roads_make_rings_and_spokes) {
     // ADR-0044: a second generator. Concentric rings + spokes, all within the

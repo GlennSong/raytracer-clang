@@ -11,6 +11,7 @@
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
+#include "../procgen/city/road_mesh.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
@@ -948,8 +949,55 @@ int l_terrain_preset(lua_State* L) {
     return 1;
 }
 
+// city.road_mesh(layout, { height=HeightField, lift=, color={r,g,b} }) -> mesh.
+// Builds a connected road *surface* from a layout table (the one city.layout
+// returns, or one a recipe edited — added spine edges/nodes), with trimmed
+// ribbons + junction pads (road_mesh.h). `height` drapes it on terrain.
+int l_city_road_mesh(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    RoadGraph g;
+    // Nodes (1-based; the table is {x=,z=} points).
+    lua_getfield(L, 1, "nodes");
+    lua_Integer nn = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
+    std::vector<int> remap(static_cast<std::size_t>(nn));
+    for (lua_Integer i = 1; i <= nn; ++i) {
+        lua_geti(L, -1, i);
+        double x = optField(L, -1, "x", 0.0), z = optField(L, -1, "z", 0.0);
+        remap[static_cast<std::size_t>(i - 1)] = g.addNode(Vec2(x, z), 0.01);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    // Edges ({a, b, width}, 1-based node indices).
+    lua_getfield(L, 1, "edges");
+    lua_Integer ne = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
+    for (lua_Integer i = 1; i <= ne; ++i) {
+        lua_geti(L, -1, i);
+        int a = static_cast<int>(optField(L, -1, "a", 0));
+        int b = static_cast<int>(optField(L, -1, "b", 0));
+        double w = optField(L, -1, "width", 8.0);
+        if (a >= 1 && a <= nn && b >= 1 && b <= nn)
+            g.addEdge(remap[a - 1], remap[b - 1], static_cast<Real>(w));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    RoadMeshParams rp;
+    if (lua_istable(L, 2)) {
+        rp.lift = optField(L, 2, "lift", rp.lift);
+        rp.minSetback = optField(L, 2, "min_setback", rp.minSetback);
+        rp.color = optVec3Field(L, 2, "color", rp.color);
+        lua_getfield(L, 2, "height");
+        if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
+            HeightField h = *hf;
+            rp.heightAt = [h](double x, double z) { return h(x, z); };
+        }
+        lua_pop(L, 1);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(buildRoadMesh(g, rp)));
+    return 1;
+}
+
 // --- material.* : a baked material bundle for a part (ADR-0043) ---------------
-// Bundle baked Images (albedo, normal) + scalar PBR params + a world tile size.
 // Applied to a part by world-planar projection — no authored UVs needed.
 constexpr const char* kMaterialMt = "engine.procgen.Material";
 using MaterialPtr = std::shared_ptr<ProcMaterial>;
@@ -1460,6 +1508,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kCityFns[] = {
         {"layout", l_city_layout},
+        {"road_mesh", l_city_road_mesh},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);
