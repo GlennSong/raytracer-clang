@@ -15,6 +15,7 @@
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
 #include "../procgen/terrain_field.h"
+#include "../procgen/erosion.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -868,6 +869,23 @@ int l_terr_terrace(lua_State* L) {
     pushHeight(L, heightTerrace(checkHeight(L, 1), luaL_checknumber(L, 2)));
     return 1;
 }
+// terrain.erode(field, { size=, resolution=, droplets=, talus=, seed=, ... }) ->
+// HeightField. A bake pass: hydraulic + thermal erosion carves drainage networks.
+int l_terr_erode(lua_State* L) {
+    HeightField& f = checkHeight(L, 1);
+    double size = optField(L, 2, "size", 400.0);
+    int res = static_cast<int>(optField(L, 2, "resolution", 384));
+    ErosionParams p;
+    p.droplets    = static_cast<int>(optField(L, 2, "droplets", p.droplets));
+    p.erodeSpeed  = static_cast<float>(optField(L, 2, "erode_speed", p.erodeSpeed));
+    p.depositSpeed = static_cast<float>(optField(L, 2, "deposit_speed", p.depositSpeed));
+    p.evaporation = static_cast<float>(optField(L, 2, "evaporation", p.evaporation));
+    p.thermalIterations = static_cast<int>(optField(L, 2, "thermal_iterations", p.thermalIterations));
+    p.talus       = static_cast<float>(optField(L, 2, "talus", p.talus));
+    p.seed        = static_cast<uint32_t>(optField(L, 2, "seed", 0));
+    pushHeight(L, erodeField(f, size, res, p));
+    return 1;
+}
 // HeightField methods (immutable composition).
 int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
 int l_height_mul(lua_State* L) { pushHeight(L, heightMul(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
@@ -1447,7 +1465,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"flat", l_terr_flat},     {"noise", l_terr_noise},
         {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
         {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
-        {"mesh", l_terr_mesh},
+        {"erode", l_terr_erode},   {"mesh", l_terr_mesh},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kTerrainFns);

@@ -1,0 +1,10 @@
+{
+  "cameras": [
+    {
+      "name": "Land",
+      "position": [150, 75, 175],
+      "forward": [-0.64, -0.32, -0.70],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 230 }
+    }
+  ]
+}

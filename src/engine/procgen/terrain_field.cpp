@@ -1,6 +1,7 @@
 #include "terrain_field.h"
 
 #include "noise.h"
+#include "erosion.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -80,6 +81,25 @@ HeightField heightClamp(HeightField a, double lo, double hi) {
     return [a, lo, hi](double x, double z) {
         double v = a(x, z);
         return v < lo ? lo : (v > hi ? hi : v);
+    };
+}
+
+HeightField erodeField(const HeightField& f, double worldSize, int resolution,
+                       const ErosionParams& params) {
+    int n = std::max(2, resolution) + 1;
+    auto hm = std::make_shared<Heightmap>();
+    hm->n = n;
+    hm->worldSize = static_cast<float>(worldSize);
+    hm->h.resize(static_cast<std::size_t>(n) * n);
+    double half = worldSize * 0.5;
+    double step = worldSize / (n - 1);
+    for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x)            // same index convention as bakeHeightmap
+            hm->set(x, z, static_cast<float>(f(-half + x * step, -half + z * step)));
+    erode(*hm, params);
+    return [hm](double x, double z) {
+        return static_cast<double>(
+            hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
     };
 }
 

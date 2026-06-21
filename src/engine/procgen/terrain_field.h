@@ -8,6 +8,8 @@
 
 namespace engine {
 
+struct ErosionParams;   // erosion.h
+
 // A world-space heightfield over (x, z) — the compositional substrate for
 // procedural terrain (ADR-0043 extended to terrain). The 2.5D sibling of Field2:
 // a heightfield is a function, so primitives are closures and combinators wrap
@@ -37,6 +39,15 @@ HeightField heightMax(HeightField a, HeightField b);
 HeightField heightMin(HeightField a, HeightField b);
 HeightField heightMix(HeightField a, HeightField b, double t);
 HeightField heightClamp(HeightField a, double lo, double hi);
+
+// --- erosion (a stateful, grid-based bake pass — not a pointwise combinator) ---
+// Bake `f` into a `resolution`×`resolution` heightmap over a `worldSize` square,
+// run hydraulic (droplet) + thermal erosion (erosion.h), and return a HeightField
+// that bilinearly samples the eroded grid — so it composes back into the field
+// vocabulary. Erosion needs a grid (a point's eroded height depends on flow across
+// the whole field), so unlike the analytic primitives it costs time + resolution.
+HeightField erodeField(const HeightField& f, double worldSize, int resolution,
+                       const ErosionParams& params);
 
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid

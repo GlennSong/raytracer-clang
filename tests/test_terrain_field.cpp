@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/terrain_field.h"
+#include "../src/engine/procgen/erosion.h"
 #include <cmath>
 
 using namespace engine;
@@ -36,6 +37,30 @@ TEST_CASE(terrain_field_composes_and_bakes) {
     bool upward = true;
     for (const Vertex& v : m.vertices) if (v.normal.y < 0.0) upward = false;
     CHECK(upward);
+}
+
+TEST_CASE(terrain_field_erode_returns_a_modified_field) {
+    // ADR-0043: erosion is a bake pass over a grid (not a pointwise op); it takes
+    // a field, simulates, and hands back a field that samples the eroded grid.
+    HeightField mountains = heightRidged(7, 0.01, 40.0, 5);
+    ErosionParams ep;
+    ep.droplets = 4000;          // light — this is a unit test
+    ep.thermalIterations = 4;
+    ep.seed = 3;
+    HeightField carved = erodeField(mountains, 300.0, 96, ep);
+
+    // The eroded field differs from the source (material moved) but stays in a
+    // sane range, and still varies across the region.
+    double maxDiff = 0, lo = 1e9, hi = -1e9;
+    for (int j = 0; j < 24; ++j)
+        for (int i = 0; i < 24; ++i) {
+            double x = i * 12.0 - 140.0, z = j * 12.0 - 140.0;
+            double a = mountains(x, z), b = carved(x, z);
+            maxDiff = std::max(maxDiff, std::fabs(a - b));
+            lo = std::min(lo, b); hi = std::max(hi, b);
+        }
+    CHECK(maxDiff > 0.5);        // erosion actually changed the surface
+    CHECK(hi - lo > 5.0);        // still real relief, not flattened away
 }
 
 TEST_CASE(terrain_field_terrace_quantises_to_steps) {
