@@ -7,6 +7,21 @@ CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -isystem third_party -MM
 DEBUG_FLAGS = -g -O0
 RELEASE_FLAGS = -O2
 
+# Lua scripting in the offline tracer (ADR-0042): so shape:"script" entities run
+# the same recipes as the viewer and a procgen scene renders offline through the
+# same pipeline. Lua is vendored C — compiled as C with warnings off (-w), kept
+# separate from our C++. Scoped to the raytracer target so the test build stays
+# Lua-free (level_scene's script path is guarded by RT_ENABLE_SCRIPTING).
+CC = clang
+LUA_DIR = third_party/lua
+# Exclude the standalone mains (lua.c/luac.c), the single-TU amalgamation
+# (onelua.c — it re-defines every symbol) and the internal test harness
+# (ltests.c). Linking the individual objects directly, duplicates would clash.
+LUA_SRCS = $(filter-out $(LUA_DIR)/lua.c $(LUA_DIR)/luac.c $(LUA_DIR)/onelua.c \
+                        $(LUA_DIR)/ltests.c,$(wildcard $(LUA_DIR)/*.c))
+LUA_OBJS = $(patsubst $(LUA_DIR)/%.c,$(BUILD_DIR)/lua/%.o,$(LUA_SRCS))
+SCRIPT_FLAGS = -DRT_ENABLE_SCRIPTING=1 -isystem $(LUA_DIR)
+
 SRC_DIR = src
 BUILD_DIR = build
 TARGET = raytracer
@@ -44,7 +59,10 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
-	$(SRC_DIR)/engine/procgen/city/city.cpp
+	$(SRC_DIR)/engine/procgen/city/city.cpp \
+	$(SRC_DIR)/engine/procgen/scatter.cpp \
+	$(SRC_DIR)/engine/scripting/script_vm.cpp \
+	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -151,12 +169,21 @@ all: $(TARGET)
 release: CXXFLAGS += $(RELEASE_FLAGS)
 release: $(TARGET)
 
-$(TARGET): $(OBJS)
+# The raytracer links Lua + scripting; the flag propagates to its prerequisite
+# objects (so level_scene.o compiles its shape:"script" path), but not to the
+# separately-compiled test target.
+$(TARGET): CXXFLAGS += $(SCRIPT_FLAGS)
+$(TARGET): $(OBJS) $(LUA_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# Vendored Lua: compiled as C (clang, not clang++), warnings off.
+$(BUILD_DIR)/lua/%.o: $(LUA_DIR)/%.c | $(BUILD_DIR)
+	@mkdir -p $(@D)
+	$(CC) -O2 -w -c -o $@ $<
 
 # Pull in the generated header-dependency files so header edits force rebuilds.
 -include $(OBJS:.o=.d)

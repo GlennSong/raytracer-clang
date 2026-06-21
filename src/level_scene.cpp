@@ -11,8 +11,13 @@
 #include "log.h"
 #include <unordered_map>
 #include <array>
+#include <sstream>
 #include <nlohmann/json.hpp>
 #include <fstream>
+#ifdef RT_ENABLE_SCRIPTING
+#include "engine/scripting/script_vm.h"
+#include "engine/scripting/procgen_bindings.h"
+#endif
 
 using json = nlohmann::json;
 
@@ -474,6 +479,28 @@ void bakeCityModel(const CityModel& m, Scene& scene) {
 
 }  // namespace
 
+#ifdef RT_ENABLE_SCRIPTING
+namespace {
+std::string readTextFile(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return {};
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+// Resolve a script entity's `file`: as given, else under assets/scripts/, else
+// level-relative. Returns the source, or empty if none found.
+std::string loadScriptCode(const std::string& file, const std::string& levelDir) {
+    for (const std::string& p : {file, std::string("assets/scripts/") + file,
+                                 levelDir + "/" + file}) {
+        std::string c = readTextFile(p);
+        if (!c.empty()) return c;
+    }
+    return {};
+}
+}  // namespace
+#endif
+
 void bakeProcModel(const ProcModel& m, Scene& scene) {
     for (const RenderMesh& part : m.parts) {
         if (part.indices.empty()) continue;
@@ -543,9 +570,44 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         levelDir = levelPath.substr(0, slash);
 
     int skipped = 0;
+#ifdef RT_ENABLE_SCRIPTING
+    std::unique_ptr<ScriptVM> scriptVm;
+    auto ensureVm = [&]() -> ScriptVM& {
+        if (!scriptVm) {
+            scriptVm = std::make_unique<ScriptVM>();
+            openProcgenLibrary(*scriptVm);
+        }
+        return *scriptVm;
+    };
+#endif
     for (const auto& ent : root.value("entities", json::array())) {
         if (ent.contains("mesh")) {
             addGltfModel(ent, levelDir, scene);   // imported glTF, path-traced
+            continue;
+        }
+        // Lua recipe (ADR-0042): run a script returning a composable Model and
+        // bake it — the same recipe the viewer runs, so a procgen scene renders
+        // offline through the same pipeline (the renderer is the only divergence).
+        if (ent.value("shape", std::string()) == "script") {
+#ifdef RT_ENABLE_SCRIPTING
+            std::string file = ent.value("file", std::string());
+            std::string code = file.empty() ? std::string()
+                                            : loadScriptCode(file, levelDir);
+            if (code.empty()) {
+                LOG_WARN << "script entity: cannot read '" << file << "'";
+                continue;
+            }
+            ScriptVM& vm = ensureVm();
+            vm.setGlobalNumber("seed", ent.value("seed", 0.0));
+            ProcModel model;
+            std::string err;
+            if (runProcgenModelValue(vm, code, model, &err))
+                bakeProcModel(model, scene);
+            else
+                LOG_ERROR << "script entity '" << file << "': " << err;
+#else
+            LOG_WARN << "script entity skipped (scripting disabled in this build)";
+#endif
             continue;
         }
         // Hero parametric tree: bark + alpha-cut leaf cards (matches the viewer).
