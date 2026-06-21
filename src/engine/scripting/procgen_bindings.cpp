@@ -13,6 +13,7 @@
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
 #include "../procgen/city/polygon.h"
+#include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
 #include "../procgen/terrain_field.h"
@@ -309,6 +310,17 @@ int l_mesh_translate(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
     Vec3 t = checkVec3(L, 2);
     MeshBuilder::transform(*m, Mat4::translate(t.x, t.y, t.z));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.place(mesh, {x,y,z}, yaw) -> mesh : yaw (radians, about +Y) then translate,
+// for seating an oriented part — e.g. a building turned to face its lot's street.
+int l_mesh_place(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    Vec3 t = checkVec3(L, 2);
+    double yaw = luaL_optnumber(L, 3, 0.0);
+    MeshBuilder::transform(*m, Mat4::translate(t.x, t.y, t.z) *
+                                   Mat4::rotateY(static_cast<Real>(yaw)));
     pushMesh(L, m);
     return 1;
 }
@@ -770,6 +782,51 @@ int l_city_layout(lua_State* L) {
     }
     lua_setfield(L, -2, "blocks");
 
+    return 1;
+}
+
+// city.lots(block, { target_area=, min_area=, min_edge=, jitter=, seed= }) ->
+// array of lots. Partitions one block polygon (from layout.blocks) into building
+// parcels by recursive OBB bisection (parcel.h); each lot is returned as its
+// oriented box { cx, cz, w, d, angle (rad), area, frontage={x,z} } so a recipe
+// can seat a building sized to FIT the lot (and skip lots too small).
+int l_city_lots(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Poly2 block;
+    lua_Integer n = luaL_len(L, 1);
+    block.reserve(static_cast<std::size_t>(n));
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 1, i);
+        block.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+        lua_pop(L, 1);
+    }
+    ParcelParams pp;
+    if (lua_istable(L, 2)) {
+        pp.targetArea = static_cast<Real>(optField(L, 2, "target_area", pp.targetArea));
+        pp.minArea    = static_cast<Real>(optField(L, 2, "min_area", pp.minArea));
+        pp.minEdge    = static_cast<Real>(optField(L, 2, "min_edge", pp.minEdge));
+        pp.jitter     = static_cast<Real>(optField(L, 2, "jitter", pp.jitter));
+        pp.seed       = static_cast<uint32_t>(optField(L, 2, "seed", 0));
+    }
+    std::vector<Lot> lots = subdivideBlock(block, pp);
+    lua_createtable(L, static_cast<int>(lots.size()), 0);
+    for (std::size_t i = 0; i < lots.size(); ++i) {
+        const Lot& lot = lots[i];
+        OBB2 obb = orientedBoundingBox(lot.footprint);
+        lua_createtable(L, 0, 6);
+        lua_pushnumber(L, obb.center.x);          lua_setfield(L, -2, "cx");
+        lua_pushnumber(L, obb.center.y);          lua_setfield(L, -2, "cz");
+        lua_pushnumber(L, obb.half[0] * 2.0);     lua_setfield(L, -2, "w");
+        lua_pushnumber(L, obb.half[1] * 2.0);     lua_setfield(L, -2, "d");
+        lua_pushnumber(L, std::atan2(obb.axis[0].y, obb.axis[0].x));
+        lua_setfield(L, -2, "angle");
+        lua_pushnumber(L, lot.area);              lua_setfield(L, -2, "area");
+        lua_createtable(L, 0, 2);
+        lua_pushnumber(L, lot.frontage.x);        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, lot.frontage.y);        lua_setfield(L, -2, "z");
+        lua_setfield(L, -2, "frontage");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
     return 1;
 }
 
@@ -1669,6 +1726,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"capsule", l_mesh_capsule},
         {"merge", l_mesh_merge},
         {"translate", l_mesh_translate},
+        {"place", l_mesh_place},
         {"scale", l_mesh_scale},
         {"rotate_x", l_mesh_rotate_x},
         {"rotate_y", l_mesh_rotate_y},
@@ -1731,6 +1789,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kCityFns[] = {
         {"layout", l_city_layout},
+        {"lots", l_city_lots},
         {"road_mesh", l_city_road_mesh},
         {nullptr, nullptr},
     };

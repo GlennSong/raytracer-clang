@@ -2800,6 +2800,15 @@ hillside — and a deterministic slice of the developed plots are parks (a flat
 lawn) rather than buildings. So a block is now a container that the terrain is
 conformed to.
 
+Lot subdivision: a block is now partitioned into building parcels rather than
+taking one oversized building centred on the whole face. `city.lots(block, ...)`
+exposes the C++ `subdivideBlock` (recursive OBB bisection) to Lua, returning each
+lot as an oriented box { cx, cz, w, d, angle, area, frontage }; `mesh.place`
+seats a part at a position + yaw. `city.lua` `plan_blocks` subdivides each
+developable face and seats a building *sized to fit* each lot (skipping lots too
+small — a left gap), turned to the parcel. So buildings sit inside their plots at
+real urban density (many right-sized buildings per block) instead of overflowing.
+
 Hub plaza + building variety + parameterized recipes: a many-armed junction
 (`plaza`/`plaza_min_arms`) trims every arm back to the plaza radius so the pad
 fills a clean circular plaza instead of a cramped fan — the radial hub reads

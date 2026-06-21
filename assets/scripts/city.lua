@@ -29,14 +29,6 @@ local function centroid(poly)
   for _, p in ipairs(poly) do cx = cx + p.x; cz = cz + p.z end
   return cx / #poly, cz / #poly
 end
-local function extent(poly, cx, cz)
-  local w, d = 0, 0
-  for _, p in ipairs(poly) do
-    w = math.max(w, math.abs(p.x - cx) * 2)
-    d = math.max(d, math.abs(p.z - cz) * 2)
-  end
-  return w, d
-end
 
 -- ----- terrain: a composed heightfield (optionally eroded) --------------------
 function M.terrain(o)
@@ -63,38 +55,51 @@ local function floors_at(o, r)
   return opt(o, "residential_floors", 2) + (math.floor(r) % 3)
 end
 
--- ----- blocks: classify each road-graph face, flatten the developable ones to a
--- level plot, and decide its contents (a building, or a park) ------------------
+-- A rotated rectangle footprint (4 corners) centred at (cx,cz), half-extents
+-- hw,hd, turned by `ang` radians — the pad/lawn outline for an oriented lot.
+local function rect(cx, cz, hw, hd, ang)
+  local c, s = math.cos(ang), math.sin(ang)
+  local function pt(dx, dz)
+    return { x = cx + dx * c - dz * s, z = cz + dx * s + dz * c }
+  end
+  return { pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd) }
+end
+
+-- ----- blocks: partition each road-graph face into lots, level the developable
+-- ones, and seat a building sized to FIT each lot --------------------------------
 -- plan_blocks reads the NATURAL terrain (which faces are flat enough to develop,
--- and the plot heights); it returns `pads` (fed to terrain.conform so the ground
--- is cut/filled to a level plot) and a `plan` that drives placement once the
--- conformed land exists. Faces too hilly to level cheaply are left natural.
+-- and the plot height), subdivides each into parcels (city.lots), and for every
+-- lot big enough for a building emits a pad (so terrain.conform cuts a level plot)
+-- + a placement. Lots too small are skipped (left as a gap); faces too hilly to
+-- level cheaply are left as natural green hillside.
 function M.plan_blocks(base, lay, o)
-  local fill        = opt(o, "lot_fill", 0.55)
-  local flat_relief = opt(o, "flat_relief", 8)    -- max terrain rise to develop (m)
-  local pad_margin  = opt(o, "pad_margin", 3)
-  local park_frac   = opt(o, "park_fraction", 0.12)
+  local flat_relief = opt(o, "flat_relief", 8)     -- max terrain rise to develop (m)
+  local setback     = opt(o, "lot_setback", 2)     -- building inset within its lot (m)
+  local min_edge    = opt(o, "min_building", 9)    -- skip lots too small to build on
+  local park_frac   = opt(o, "park_fraction", 0.10)
   local pads, plan  = {}, {}
   for _, block in ipairs(lay.blocks) do
     local cx, cz = centroid(block)
-    local bw, bd = extent(block, cx, cz)
     local lo, hi = 1e9, -1e9
     for _, p in ipairs(block) do
       local y = base:at(p.x, p.z); lo = math.min(lo, y); hi = math.max(hi, y)
     end
-    if (hi - lo) <= flat_relief and bw > 16 and bd > 16 then
-      local fw, fd = math.max(8, bw * fill), math.max(8, bd * fill)
-      local hw, hd = fw * 0.5 + pad_margin, fd * 0.5 + pad_margin
-      local y = base:at(cx, cz)
-      pads[#pads + 1] = { y = y, poly = {
-        { x = cx - hw, z = cz - hd }, { x = cx + hw, z = cz - hd },
-        { x = cx + hw, z = cz + hd }, { x = cx - hw, z = cz + hd } } }
-      local park = (math.floor(cx * 13 + cz * 7) % 100) < (park_frac * 100)
-      plan[#plan + 1] = { kind = park and "park" or "build",
-        cx = cx, cz = cz, fw = fw, fd = fd, y = y,
-        r = math.sqrt(cx * cx + cz * cz) }
+    if (hi - lo) <= flat_relief then
+      local y = base:at(cx, cz)        -- the whole block levels to its centre height
+      for _, lot in ipairs(city.lots(block,
+          { target_area = opt(o, "lot_area", 520),
+            min_area = opt(o, "lot_min_area", 150), seed = opt(o, "seed", 7) })) do
+        local fw, fd = lot.w - 2 * setback, lot.d - 2 * setback
+        if fw >= min_edge and fd >= min_edge then     -- a building actually fits
+          pads[#pads + 1] = { y = y,
+            poly = rect(lot.cx, lot.cz, fw * 0.5 + 1, fd * 0.5 + 1, lot.angle) }
+          local park = (math.floor(lot.cx * 13 + lot.cz * 7) % 100) < (park_frac * 100)
+          plan[#plan + 1] = { kind = park and "park" or "build",
+            cx = lot.cx, cz = lot.cz, fw = fw, fd = fd, angle = lot.angle, y = y,
+            r = math.sqrt(lot.cx * lot.cx + lot.cz * lot.cz) }
+        end
+      end
     end
-    -- else: undeveloped hillside, left as the natural green terrain.
   end
   return pads, plan
 end
@@ -126,22 +131,23 @@ function M.building_args(o, b)
   return a
 end
 
--- ----- place each planned block on the conformed (level) terrain --------------
+-- ----- place each planned lot on the conformed (level) terrain ----------------
+-- Each lot is oriented (turned to its parcel), so the plinth/building/lawn is
+-- built centred at the origin and `mesh.place`d at the lot centre + angle.
 function M.place_blocks(m, plan, land, o)
   for _, b in ipairs(plan) do
     local hw, hd = b.fw * 0.5, b.fd * 0.5
     if b.kind == "build" then
-      -- The plot is flat at b.y, so just a short foundation plinth, then the tower.
-      m:add_solid(scope{ origin = { b.cx - hw, b.y - 1.0, b.cz - hd },
-                         size = { b.fw, 1.0, b.fd } }
-                  :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 })))
+      local plinth = scope{ origin = { -hw, -1.0, -hd }, size = { b.fw, 1.0, b.fd } }
+                       :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 }))
+      m:add_solid(mesh.place(plinth, { b.cx, b.y, b.cz }, b.angle))
       local bld = building.grow(M.building_args(o, b))
-      m:add_solid(mesh.translate(bld, { b.cx, b.y, b.cz }))
+      m:add_solid(mesh.place(bld, { b.cx, b.y, b.cz }, b.angle))
     else
       -- A park: a flat manicured lawn on the same level plot (distinct green).
-      m:add_solid(scope{ origin = { b.cx - hw, b.y, b.cz - hd },
-                         size = { b.fw, 0.2, b.fd } }
-                  :box(opt(o, "park_color", { 0.24, 0.46, 0.17 })))
+      local lawn = scope{ origin = { -hw, 0, -hd }, size = { b.fw, 0.2, b.fd } }
+                     :box(opt(o, "park_color", { 0.24, 0.46, 0.17 }))
+      m:add_solid(mesh.place(lawn, { b.cx, b.y, b.cz }, b.angle))
     end
   end
 end
@@ -191,8 +197,8 @@ function M.generate(o)
   -- developed block a level plot, with the ground cut/filled to meet them instead
   -- of bending over every bump. `land` is what everything downstream samples.
   local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
-    extent = opt(o, "extent", 170), cell_size = opt(o, "cell_size", 64),
-    ring_spacing = opt(o, "ring_spacing", 60), spokes = opt(o, "spokes", 12),
+    extent = opt(o, "extent", 180), cell_size = opt(o, "cell_size", 84),
+    ring_spacing = opt(o, "ring_spacing", 64), spokes = opt(o, "spokes", 12),
     jitter = opt(o, "jitter", 0.10), seed = seed }
   local pads, plan = M.plan_blocks(base, lay, o)
   local land = terrain.conform(base, lay, { margin = opt(o, "road_margin", 3),

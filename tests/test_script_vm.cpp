@@ -473,6 +473,36 @@ TEST_CASE(procgen_recipe_args_from_opts) {
     setRecipeArgs(vm, "[1,2,3]");
 }
 
+TEST_CASE(procgen_city_lots_partition_a_block) {
+    // city.lots subdivides a block into parcels sized near target_area, each an
+    // oriented box small enough to seat a building that FITS the block.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    ProcModel m;
+    std::string err;
+    // Build a model of one small box per lot, and report lot stats via globals.
+    const char* code = R"LUA(
+        local block = { {x=-30,z=-20}, {x=30,z=-20}, {x=30,z=20}, {x=-30,z=20} }  -- 60x40 = 2400 m^2
+        local lots = city.lots(block, { target_area = 500, seed = 3 })
+        n_lots = #lots
+        max_w, max_d = 0, 0
+        local m = model.new()
+        for _, lot in ipairs(lots) do
+            max_w = math.max(max_w, lot.w); max_d = math.max(max_d, lot.d)
+            m:add(mesh.place(mesh.box{ lot.w - 2, 1, lot.d - 2 }, { lot.cx, 0, lot.cz }, lot.angle))
+        end
+        return m
+    )LUA";
+    CHECK(runProcgenModelValue(vm, code, m, &err));
+    double nLots = 0, maxW = 0, maxD = 0;
+    CHECK(vm.getGlobalNumber("n_lots", nLots));
+    CHECK(nLots >= 2.0);                               // a 2400 m^2 block splits up
+    CHECK(vm.getGlobalNumber("max_w", maxW));
+    CHECK(vm.getGlobalNumber("max_d", maxD));
+    CHECK(maxW <= 60.0 && maxD <= 60.0);              // no lot exceeds the block
+    CHECK(static_cast<int>(m.parts.size()) == static_cast<int>(nLots));
+}
+
 TEST_CASE(procgen_building_style_and_shape) {
     // The variety knobs are exposed: a glass box and a round cylinder tower both
     // grow, and the cylinder's mass differs from the box's.
