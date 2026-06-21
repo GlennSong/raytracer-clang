@@ -7,8 +7,93 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <queue>
 
 namespace engine {
+
+std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& p) {
+    const double cell = std::max(1.0, p.cell);
+    const int n = std::max(2, static_cast<int>(std::lround(2 * p.region / cell)));
+    const double ox = p.center.x - p.region, oz = p.center.z - p.region;
+    auto X = [&](int i) { return ox + (i + 0.5) * cell; };
+    auto Z = [&](int j) { return oz + (j + 0.5) * cell; };
+    auto idx = [&](int i, int j) { return j * n + i; };
+
+    // 1. Sample the heightmap "bitmap" and mark each cell buildable: gentle slope
+    //    (central-difference gradient) and below the mountain cutoff. The border
+    //    ring is forced blocked so a region's disc can't run off the search area.
+    std::vector<double> H(static_cast<std::size_t>(n) * n);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) H[idx(i, j)] = h(X(i), Z(j));
+    std::vector<char> build(static_cast<std::size_t>(n) * n, 0);
+    for (int j = 1; j < n - 1; ++j)
+        for (int i = 1; i < n - 1; ++i) {
+            double gx = (H[idx(i + 1, j)] - H[idx(i - 1, j)]) / (2 * cell);
+            double gz = (H[idx(i, j + 1)] - H[idx(i, j - 1)]) / (2 * cell);
+            double slope = std::sqrt(gx * gx + gz * gz);
+            build[idx(i, j)] = (slope <= p.maxSlope && H[idx(i, j)] <= p.maxHeight) ? 1 : 0;
+        }
+
+    // 2. Distance transform: cells of each buildable cell to the nearest BLOCKED
+    //    cell (multi-source BFS, in cell units). Its max over a region is the
+    //    radius of the largest flat disc that fits — the inscribed circle.
+    const int INF = n * n + 1;
+    std::vector<int> dist(static_cast<std::size_t>(n) * n, INF);
+    std::queue<int> q;
+    for (int c = 0; c < n * n; ++c)
+        if (!build[c]) { dist[c] = 0; q.push(c); }
+    const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+    while (!q.empty()) {
+        int c = q.front(); q.pop();
+        int ci = c % n, cj = c / n;
+        for (int k = 0; k < 4; ++k) {
+            int ni = ci + di[k], nj = cj + dj[k];
+            if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+            int nc = idx(ni, nj);
+            if (dist[nc] > dist[c] + 1) { dist[nc] = dist[c] + 1; q.push(nc); }
+        }
+    }
+
+    // 3. Flood-fill connected buildable regions; each region's site is its cell of
+    //    greatest distance-to-edge (disc centre), radius = that distance * cell.
+    std::vector<char> seen(static_cast<std::size_t>(n) * n, 0);
+    std::vector<FlatSite> sites;
+    for (int start = 0; start < n * n; ++start) {
+        if (seen[start] || !build[start]) continue;
+        int best = start;
+        std::queue<int> fq;
+        fq.push(start); seen[start] = 1;
+        while (!fq.empty()) {
+            int c = fq.front(); fq.pop();
+            if (dist[c] > dist[best]) best = c;
+            int ci = c % n, cj = c / n;
+            for (int k = 0; k < 4; ++k) {
+                int ni = ci + di[k], nj = cj + dj[k];
+                if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+                int nc = idx(ni, nj);
+                if (!seen[nc] && build[nc]) { seen[nc] = 1; fq.push(nc); }
+            }
+        }
+        double radius = dist[best] * cell;
+        if (radius >= p.minRadius)
+            sites.push_back({X(best % n), Z(best / n), radius});
+    }
+
+    // 4. Largest disc first; drop sites huddled too close to a bigger one kept.
+    std::sort(sites.begin(), sites.end(),
+              [](const FlatSite& a, const FlatSite& b) { return a.radius > b.radius; });
+    std::vector<FlatSite> kept;
+    for (const FlatSite& s : sites) {
+        bool tooClose = false;
+        for (const FlatSite& k : kept) {
+            double d = std::hypot(s.cx - k.cx, s.cz - k.cz);
+            if (d < p.minSeparation) { tooClose = true; break; }
+        }
+        if (!tooClose) kept.push_back(s);
+        if (static_cast<int>(kept.size()) >= std::max(1, p.count)) break;
+    }
+    return kept;
+}
 
 HeightField heightConstant(double h) {
     return [h](double, double) { return h; };

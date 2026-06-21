@@ -119,3 +119,36 @@ TEST_CASE(terrain_conform_levels_a_block_pad) {
     CHECK_APPROX(land(8, -8), 5.0, 1e-6);    // anywhere inside the pad
     CHECK_APPROX(land(0, 100), base(0, 100), 1e-6);   // far away: untouched
 }
+
+TEST_CASE(flat_sites_finds_the_plain_not_the_mountain) {
+    // A world split in two: a flat plain on the left (x < 0), a steep cone on the
+    // right (x > 0). findFlatSites must return a buildable disc in the plain and
+    // never centre one on the slope.
+    HeightField world = [](double x, double z) {
+        if (x < -10) return 0.5;                       // flat plain
+        double r = std::sqrt((x - 120) * (x - 120) + z * z);
+        return std::max(0.5, 140.0 - r);               // a tall steep cone at (120,0)
+    };
+    FlatSiteParams p;
+    p.region = 200; p.cell = 8; p.maxSlope = 0.25; p.maxHeight = 40;
+    p.minRadius = 20; p.count = 3;
+    std::vector<FlatSite> sites = findFlatSites(world, p);
+    CHECK(!sites.empty());
+    const FlatSite& best = sites[0];
+    CHECK(best.cx < -10);                  // the site sits in the flat plain
+    CHECK(best.radius >= 20);              // a real, usable flat disc
+    // No returned site sits on the steep cone.
+    for (const FlatSite& s : sites) CHECK(s.cx < 60);
+}
+
+TEST_CASE(flat_sites_respects_max_height_and_separation) {
+    // An everywhere-flat field at two elevations: low (z<0) and a high mesa
+    // (z>0, height 80). With maxHeight 50 only the low half is buildable.
+    HeightField field = [](double, double z) { return z > 0 ? 80.0 : 1.0; };
+    FlatSiteParams p;
+    p.region = 200; p.cell = 8; p.maxSlope = 0.2; p.maxHeight = 50;
+    p.minRadius = 15; p.count = 4;
+    std::vector<FlatSite> sites = findFlatSites(field, p);
+    CHECK(!sites.empty());
+    for (const FlatSite& s : sites) CHECK(s.cz <= 0.0);   // only the low half
+}

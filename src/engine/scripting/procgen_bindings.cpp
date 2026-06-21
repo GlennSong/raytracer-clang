@@ -1128,6 +1128,39 @@ int l_terr_conform(lua_State* L) {
     pushRegions(L, std::move(regions));
     return 2;
 }
+// terrain.flat_sites(field, { region=, center={x=,z=}, cell=, max_slope=,
+//   max_height=, min_radius=, count=, min_separation= }) -> array of
+//   { cx, cz, radius } : buildable patches (flat valleys), largest disc first.
+// The recipe plants a city at a site and sizes it to `radius`, so cities sit on
+// flat ground that can hold them instead of draping over peaks (ADR-0044).
+int l_terr_flat_sites(lua_State* L) {
+    HeightField& h = checkHeight(L, 1);
+    FlatSiteParams p;
+    if (lua_istable(L, 2)) {
+        p.region        = optField(L, 2, "region", p.region);
+        p.cell          = optField(L, 2, "cell", p.cell);
+        p.maxSlope      = optField(L, 2, "max_slope", p.maxSlope);
+        p.maxHeight     = optField(L, 2, "max_height", p.maxHeight);
+        p.minRadius     = optField(L, 2, "min_radius", p.minRadius);
+        p.minSeparation = optField(L, 2, "min_separation", p.minSeparation);
+        p.count         = static_cast<int>(optField(L, 2, "count", p.count));
+        lua_getfield(L, 2, "center");
+        if (lua_istable(L, -1))
+            p.center = Vec3(optField(L, -1, "x", 0.0), 0.0, optField(L, -1, "z", 0.0));
+        lua_pop(L, 1);
+    }
+    std::vector<FlatSite> sites = findFlatSites(h, p);
+    lua_createtable(L, static_cast<int>(sites.size()), 0);
+    for (std::size_t i = 0; i < sites.size(); ++i) {
+        lua_createtable(L, 0, 3);
+        lua_pushnumber(L, sites[i].cx);     lua_setfield(L, -2, "cx");
+        lua_pushnumber(L, sites[i].cz);     lua_setfield(L, -2, "cz");
+        lua_pushnumber(L, sites[i].radius); lua_setfield(L, -2, "radius");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
 // HeightField methods (immutable composition).
 int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
 int l_height_mul(lua_State* L) { pushHeight(L, heightMul(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
@@ -1888,6 +1921,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
         {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
         {"erode", l_terr_erode},   {"conform", l_terr_conform},
+        {"flat_sites", l_terr_flat_sites},
         {"mesh", l_terr_mesh},
         {nullptr, nullptr},
     };

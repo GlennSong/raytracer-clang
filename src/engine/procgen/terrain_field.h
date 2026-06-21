@@ -60,6 +60,28 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
 // over every bump. Pointwise — composes back into the field vocabulary, no grid.
 HeightField conformField(HeightField base, std::vector<TerrainFlatten> regions);
 
+// --- site selection (where a city can actually go) ---------------------------
+// A buildable patch of ground: a centre and the radius of the largest flat disc
+// that fits inside it. (ADR-0044: don't drape a city over mountain peaks — find
+// the flat valleys first.)
+struct FlatSite { double cx = 0, cz = 0, radius = 0; };
+struct FlatSiteParams {
+    double region = 1000;     // half-extent of the square searched, around `center`
+    Vec3   center{0, 0, 0};   // search centre (uses .x/.z)
+    double cell = 8;          // sample spacing (m): the heightmap "bitmap" pitch
+    double maxSlope = 0.18;   // max |gradient| (rise/run) a cell may have to build
+    double maxHeight = 1e9;   // ignore ground above this (keeps cities off peaks)
+    double minRadius = 40;    // discard sites whose flat disc is smaller than this
+    int    count = 4;         // return up to this many, largest disc first
+    double minSeparation = 0; // drop a site within this of an already-kept one
+};
+// Sample `h` into a grid bitmap over the search square, mark cells buildable
+// (slope <= maxSlope and height <= maxHeight), flood-fill connected buildable
+// regions, and return each as a FlatSite — its largest inscribed disc (a distance
+// transform to the nearest blocked cell), biggest first. The recipe plants a city
+// at a site and sizes it to the radius, so it sits on flat ground that can hold it.
+std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& p);
+
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid
 // over the [-size/2, size/2]² square centred at the origin, vertices sampled from
