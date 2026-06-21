@@ -2888,6 +2888,68 @@ an instanced L-system forest, `lsystem_tree.lua`) on one walkable CDLOD terrain.
 
 ---
 
+## ADR-0045 — Grade-limited road routing (a road follows the terrain at a walkable grade)
+**Status:** Accepted · **Date:** 2026-06-21
+
+**Context.** ADR-0044 conforms the terrain *to* the road: each edge becomes a
+straight ramp plane between its two endpoints, and `applyFlatten` cuts/fills the
+ground to it. That is right for an urban street on a chosen flat site, but it is
+wrong for a road crossing open terrain. The highway in `twin_cities.lua` was three
+nodes (start, a hand-picked "lowest" mid-waypoint, end) → two long ramps; cross a
+hill and one straight plane either carves a canyon through it or rides up and over
+at whatever grade the endpoints imply — with no bound on steepness. City layouts
+are likewise generated in pure 2D and conformed afterward, so a road can run
+straight up a slope the character could never walk. The symptom (playtest): roads
+draping over mountain tops and terrain poking through the carriageway, because a
+single long ramp only matches the ground at its two ends.
+
+The missing idea: **a road can't climb what the player can't walk.** Grade must be
+a *constraint on the path*, not something the conform discovers after the fact.
+
+**Decision.** Add a grade-limited router that lays a road as a path which *follows*
+the ground while holding a maximum grade — so it bends around a peak, or
+switchbacks up it, instead of going straight over. `routeRoad(field, from, to,
+RouteParams)` (in `terrain_field`, on the `HeightField` vocabulary) runs **A\*** over
+a `cell`-spaced grid of the heightfield, 8-connected: a step is *forbidden* when its
+grade `|Δh|/dist > maxGrade`, the cost is horizontal distance (plus a `turnPenalty`
+that straightens the line and an optional `climbCost` that biases onto flatter
+ground), and the heuristic is straight-line horizontal distance (admissible). To
+gain height on steep ground the path must traverse along the slope and double back —
+switchbacks fall out of the constraint, not a special case. The staircase is
+collapsed to its corners (Douglas–Peucker) so the result is a handful of segments,
+seated on the ground (`y = field(x,z)`). No grade-legal route in the search box →
+empty, and the caller falls back to a straight road (never worse than before).
+
+Exposed to Lua as `terrain.route(field, { from, to, max_grade, cell, width,
+turn_penalty, climb_cost, ... })`, which returns a **chain layout**
+(`{nodes, edges, blocks={}}`) — the same shape `city.layout` returns — so it drops
+straight into the existing `terrain.conform` + `city.road_mesh` pipeline with no new
+plumbing. `twin_cities.lua`'s highway now routes A→B at `max_grade = 0.12`: the
+many short, shallow segments mean the conform only smooths a road that already
+follows gentle ground, so the cut/fill is small and the carriageway stops poking
+through. Because the routed nodes are dense, the verge-forest loop was generalised
+to walk an arbitrary polyline.
+
+**Why A\* over the tensor/agent grower ADR-0044 sketched.** The grower is the right
+tool for *generating a whole network* that answers terrain; point-to-point routing
+of a single arterial/highway is a shortest-path problem, and A\* with a hard grade
+gate is the smallest, most predictable thing that makes "carve around / switchback,
+never exceed the grade" true and unit-testable. It also composes: a recipe can route
+any two points, and the primitive is available when city generators become
+terrain-aware. Covered by `tests/test_terrain_field.cpp` (straight on flat ground,
+grade held + bent around a steep cone, empty when walled in).
+
+**Deferred.** Intra-city *arterials* that bound blocks aren't rerouted here: the
+faces are extracted from the 2D graph before conform, so bending a block-boundary
+edge would desync the lots. The cities sit on flat discs (`terrain.flat_sites`), so
+their internal grades are bounded *by placement*; making the C++ road generators
+themselves terrain-aware (so blocks follow the routed arterials) stays the ADR-0044
+grower work. Literal hairpin switchbacks on a uniform steep plane are limited by the
+8-neighbour grid's 45° minimum step angle — fine for real (varied) terrain, where
+the router winds through gentler ground; a 16-neighbour grid would sharpen them.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

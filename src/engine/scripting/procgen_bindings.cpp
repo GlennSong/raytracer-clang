@@ -1160,6 +1160,62 @@ int l_terr_flat_sites(lua_State* L) {
     }
     return 1;
 }
+// terrain.route(field, { from={x,z}, to={x,z}, max_grade=, cell=, width=,
+//   turn_penalty=, climb_cost=, pad=, max_stretch=, simplify_tol= }) -> a chain
+//   LAYOUT { nodes={{x,z},...}, edges={{a,b,width},...}, blocks={} } following a
+//   grade-bounded path over the terrain (switchbacks up / around steep ground),
+//   ready to drop into terrain.conform + city.road_mesh. Falls back to a straight
+//   two-node chain when no grade-legal route fits (so callers always get a road).
+int l_terr_route(lua_State* L) {
+    HeightField& h = checkHeight(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    Vec3 from(0, 0, 0), to(0, 0, 0);
+    lua_getfield(L, 2, "from");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    from = Vec3(optField(L, -1, "x", 0.0), 0.0, optField(L, -1, "z", 0.0));
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "to");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    to = Vec3(optField(L, -1, "x", 0.0), 0.0, optField(L, -1, "z", 0.0));
+    lua_pop(L, 1);
+
+    RouteParams rp;
+    rp.cell        = optField(L, 2, "cell", rp.cell);
+    rp.maxGrade    = optField(L, 2, "max_grade", rp.maxGrade);
+    rp.pad         = optField(L, 2, "pad", rp.pad);
+    rp.turnPenalty = optField(L, 2, "turn_penalty", rp.turnPenalty);
+    rp.climbCost   = optField(L, 2, "climb_cost", rp.climbCost);
+    rp.maxStretch  = optField(L, 2, "max_stretch", rp.maxStretch);
+    rp.simplifyTol = optField(L, 2, "simplify_tol", rp.simplifyTol);
+    double width = optField(L, 2, "width", 12.0);
+
+    std::vector<Vec3> path = routeRoad(h, from, to, rp);
+    if (path.size() < 2)                       // no grade-legal route: straight road
+        path = {Vec3(from.x, h(from.x, from.z), from.z),
+                Vec3(to.x, h(to.x, to.z), to.z)};
+
+    // Emit the polyline as a chain layout: nodes 1..n, edges joining consecutive.
+    lua_createtable(L, 0, 3);
+    lua_createtable(L, static_cast<int>(path.size()), 0);            // nodes
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        lua_createtable(L, 0, 2);
+        lua_pushnumber(L, path[i].x); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, path[i].z); lua_setfield(L, -2, "z");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "nodes");
+    lua_createtable(L, static_cast<int>(path.size() - 1), 0);        // edges
+    for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, static_cast<lua_Integer>(i + 1)); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, static_cast<lua_Integer>(i + 2)); lua_setfield(L, -2, "b");
+        lua_pushnumber(L, width); lua_setfield(L, -2, "width");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "edges");
+    lua_newtable(L); lua_setfield(L, -2, "blocks");                  // no blocks
+    return 1;
+}
 
 // HeightField methods (immutable composition).
 int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
@@ -1921,7 +1977,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
         {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
         {"erode", l_terr_erode},   {"conform", l_terr_conform},
-        {"flat_sites", l_terr_flat_sites},
+        {"flat_sites", l_terr_flat_sites}, {"route", l_terr_route},
         {"mesh", l_terr_mesh},
         {nullptr, nullptr},
     };

@@ -141,6 +141,61 @@ TEST_CASE(flat_sites_finds_the_plain_not_the_mountain) {
     for (const FlatSite& s : sites) CHECK(s.cx < 60);
 }
 
+TEST_CASE(route_road_on_flat_ground_runs_straight) {
+    // Nothing to climb: the route is one straight shot, grade 0 the whole way.
+    HeightField flat = [](double, double) { return 3.0; };
+    RouteParams rp; rp.cell = 10; rp.maxGrade = 0.12;
+    std::vector<Vec3> path = routeRoad(flat, Vec3(-90, 0, 0), Vec3(90, 0, 0), rp);
+    CHECK(path.size() >= 2);
+    CHECK_APPROX(path.front().x, -90.0, 1e-6);
+    CHECK_APPROX(path.back().x, 90.0, 1e-6);
+    // Total length is close to the straight-line distance (no needless detour).
+    double len = 0;
+    for (std::size_t i = 1; i < path.size(); ++i)
+        len += std::hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z);
+    CHECK(len < 180.0 * 1.2);
+}
+
+TEST_CASE(route_road_keeps_grade_and_bends_around_a_peak) {
+    // A tall, steep cone (slope 3 — far over the 0.12 grade) blocks the straight
+    // line. The router must route around its base, where the ground is flat, and
+    // never take a leg steeper than the grade limit.
+    HeightField world = [](double x, double z) {
+        double r = std::sqrt(x * x + z * z);
+        return std::max(0.0, 120.0 - 3.0 * r);          // cone, height 0 past r=40
+    };
+    RouteParams rp; rp.cell = 10; rp.maxGrade = 0.12; rp.turnPenalty = 4;
+    std::vector<Vec3> path = routeRoad(world, Vec3(-90, 0, 0), Vec3(90, 0, 0), rp);
+    CHECK(path.size() >= 2);
+
+    // Every leg holds the grade limit (small epsilon for the simplifier).
+    double maxGrade = 0.0, maxAbsZ = 0.0;
+    for (std::size_t i = 1; i < path.size(); ++i) {
+        double horiz = std::hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z);
+        double grade = horiz > 1e-6 ? std::fabs(path[i].y - path[i - 1].y) / horiz : 0.0;
+        maxGrade = std::max(maxGrade, grade);
+        maxAbsZ = std::max(maxAbsZ, std::fabs(static_cast<double>(path[i].z)));
+    }
+    CHECK(maxGrade <= 0.12 + 1e-3);        // walkable everywhere
+    CHECK(maxAbsZ > 35.0);                 // genuinely bent around the cone's base
+    // Endpoints are seated on the ground at the requested xz.
+    CHECK_APPROX(path.front().x, -90.0, 1e-6);
+    CHECK_APPROX(path.back().x, 90.0, 1e-6);
+}
+
+TEST_CASE(route_road_returns_empty_when_walled_in) {
+    // The goal sits inside a steep crater wall the road can't climb — no grade-legal
+    // route exists, so the router reports failure (the caller falls back to straight).
+    HeightField crater = [](double x, double z) {
+        double r = std::sqrt(x * x + z * z);
+        // A ring wall at r~50: steep everywhere between the outside and the centre.
+        return (r < 60.0 && r > 40.0) ? 300.0 : 0.0;
+    };
+    RouteParams rp; rp.cell = 8; rp.maxGrade = 0.12;
+    std::vector<Vec3> path = routeRoad(crater, Vec3(-90, 0, 0), Vec3(0, 0, 0), rp);
+    CHECK(path.empty());
+}
+
 TEST_CASE(flat_sites_respects_max_height_and_separation) {
     // An everywhere-flat field at two elevations: low (z<0) and a high mesa
     // (z>0, height 80). With maxHeight 50 only the low half is buildable.

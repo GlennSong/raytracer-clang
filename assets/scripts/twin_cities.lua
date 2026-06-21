@@ -235,53 +235,48 @@ local fA = build_city({ pattern = "radial", extent = exA, ring_spacing = exA / 4
 local fB = build_city({ pattern = "tensor", extent = exB, spacing = exB / 3.2, step = 8,
   radial_decay = exB * 0.6, seed = 9 }, B.cx, B.cz, "tensor")
 
--- ===== highway A -> B, routed through the lowest ground =======================
--- Pick the mid waypoint as the lowest of a few candidates perpendicular to the
--- A-B midpoint, so the road bends away from rising terrain rather than over it.
-local mx, mz = (A.cx + B.cx) * 0.5, (A.cz + B.cz) * 0.5
-local dx, dz = B.cx - A.cx, B.cz - A.cz
-local dl = math.max(1e-3, math.sqrt(dx * dx + dz * dz))
-local px, pz = -dz / dl, dx / dl
-local best_off, best_h = 0, 1e9
-for off = -180, 180, 30 do
-  local h = land:at(mx + px * off, mz + pz * off)
-  if h < best_h then best_h = h; best_off = off end
-end
-local wx, wz = mx + px * best_off, mz + pz * best_off
--- Start/end just outside each city's footprint so the highway meets the ring road.
+-- ===== highway A -> B, routed to hold a walkable grade =======================
+-- A road can't run straight up a mountain any more than the character can walk it.
+-- Instead of a straight ramp that conforms into a cut/fill canyon over whatever
+-- lies between, route a path over the NATURAL ground that never climbs steeper than
+-- ~12% — so the highway bends around the peaks (switchbacking where it must) and
+-- the conform only has to smooth a road that already follows gentle ground.
 local function toward(from, to, dist)
   local ddx, ddz = to.cx - from.cx, to.cz - from.cz
   local l = math.max(1e-3, math.sqrt(ddx * ddx + ddz * ddz))
   return from.cx + ddx / l * dist, from.cz + ddz / l * dist
 end
-local ax, az = toward(A, B, A.radius * 0.92)
+local ax, az = toward(A, B, A.radius * 0.92)   -- meet each city's ring road
 local bx, bz = toward(B, A, B.radius * 0.92)
-local hw = {
-  nodes = { { x = ax, z = az }, { x = wx, z = wz }, { x = bx, z = bz } },
-  edges = { { a = 1, b = 2, width = 14 }, { a = 2, b = 3, width = 14 } }, blocks = {},
-}
+local hw = terrain.route(land, {
+  from = { x = ax, z = az }, to = { x = bx, z = bz },
+  max_grade = 0.12, cell = 14, width = 14, turn_penalty = 12, climb_cost = 0.6 })
 local hwfield, hwregions = terrain.conform(land, hw, { margin = 4, falloff = 24 })
 m:conform(hwregions)
 m:add_solid(city.road_mesh(hw, { height = hwfield, lift = 0.05, sidewalk = 1.6,
   curb = 0.14, markings = true }))
 
 -- ===== a simple L-system forest along the highway verges =====================
+-- Walk the routed polyline (now any number of legs) and plant a tree on alternate
+-- verges every ~16 m.
 local tree_proto = make_tree(7)
 local trees = {}
-for i = 0, 26 do
-  local t = i / 26
-  local p0, p1, tt
-  if t < 0.5 then p0, p1, tt = hw.nodes[1], hw.nodes[2], t * 2
-  else p0, p1, tt = hw.nodes[2], hw.nodes[3], (t - 0.5) * 2 end
-  local x = p0.x + (p1.x - p0.x) * tt
-  local z = p0.z + (p1.z - p0.z) * tt
+local ti = 0
+for _, e in ipairs(hw.edges) do
+  local p0, p1 = hw.nodes[e.a], hw.nodes[e.b]
   local ex, ez = p1.x - p0.x, p1.z - p0.z
   local l = math.max(1e-3, math.sqrt(ex * ex + ez * ez))
   local nx, nz = -ez / l, ex / l
-  local s = (i % 2 == 0) and 1 or -1
-  local tx, tz = x + nx * 13 * s, z + nz * 13 * s
-  trees[#trees + 1] = { pos = { tx, hwfield:at(tx, tz), tz },
-                        yaw = (i % 7) * 0.9, scale = 0.9 + (i % 5) * 0.12 }
+  local n = math.max(1, math.floor(l / 16))
+  for k = 0, n - 1 do
+    local t = (k + 0.5) / n
+    local x, z = p0.x + ex * t, p0.z + ez * t
+    local s = (ti % 2 == 0) and 1 or -1
+    local tx, tz = x + nx * 13 * s, z + nz * 13 * s
+    trees[#trees + 1] = { pos = { tx, hwfield:at(tx, tz), tz },
+                          yaw = (ti % 7) * 0.9, scale = 0.9 + (ti % 5) * 0.12 }
+    ti = ti + 1
+  end
 end
 m:add_instances(tree_proto, trees, { collide = { shape = "capsule", radius = 0.5, height = 4 } })
 

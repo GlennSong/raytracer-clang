@@ -82,6 +82,32 @@ struct FlatSiteParams {
 // at a site and sizes it to the radius, so it sits on flat ground that can hold it.
 std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& p);
 
+// --- routing (lay a road that keeps a walkable grade) ------------------------
+// A road has to stay walkable: if the character can't climb a slope, the road
+// can't run straight up it either. Instead of draping a straight line over the
+// terrain (and conforming it into a cut/fill canyon over the hill), route the
+// road as a path that follows the ground while keeping its grade bounded — so it
+// carves around a mountain or switchbacks up it at a gentle incline (ADR-0045).
+struct RouteParams {
+    double cell = 12.0;        // search-grid spacing (m): coarser = faster, blockier
+    double maxGrade = 0.12;    // max |rise/run| a segment may climb; steeper is forbidden
+    double pad = 0.0;          // widen the search box past the endpoints (m); 0 => auto
+    double turnPenalty = 6.0;  // cost (m) added per heading change — straightens the path
+    double climbCost = 0.0;    // extra cost per metre climbed — biases toward flatter ground
+    double maxStretch = 8.0;   // give up if the route would exceed straight-line * this
+    double simplifyTol = 0.0;  // collapse points within this offset of a straight run (m); 0 => cell*0.4
+};
+// Route a road from `from` to `to` over the heightfield, returning a polyline of
+// (x, h(x,z), z) waypoints whose every leg holds grade <= maxGrade. A* over a grid
+// of `cell`-spaced cells, 8-connected, where a step is forbidden when its grade is
+// too steep — so to gain height the path must traverse along the slope and double
+// back (switchbacks) rather than climb straight up. Near-collinear runs collapse,
+// so the result is a handful of segments at the turns. Returns just {from,to} when
+// the endpoints are level/adjacent, and an empty vector when no route fits the
+// grade within the search box (the caller falls back to a straight road).
+std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& to,
+                            const RouteParams& p);
+
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid
 // over the [-size/2, size/2]² square centred at the origin, vertices sampled from

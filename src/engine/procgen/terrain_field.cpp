@@ -6,8 +6,11 @@
 #include "../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <queue>
+#include <utility>
 
 namespace engine {
 
@@ -93,6 +96,151 @@ std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& 
         if (static_cast<int>(kept.size()) >= std::max(1, p.count)) break;
     }
     return kept;
+}
+
+namespace {
+// Perpendicular distance from point p to the segment a->b, in the XZ plane.
+double perpDistXZ(const Vec3& p, const Vec3& a, const Vec3& b) {
+    double ex = b.x - a.x, ez = b.z - a.z;
+    double len = std::sqrt(ex * ex + ez * ez);
+    if (len < 1e-9) return std::hypot(p.x - a.x, p.z - a.z);
+    return std::fabs((p.x - a.x) * ez - (p.z - a.z) * ex) / len;
+}
+// Douglas-Peucker on an XZ polyline: keep the endpoints and any vertex that sits
+// more than `tol` off the straight run, so collinear cells collapse but the
+// switchback corners (which lie far off their chord) survive.
+void douglasPeucker(const std::vector<Vec3>& pts, int lo, int hi, double tol,
+                    std::vector<char>& keep) {
+    if (hi <= lo + 1) return;
+    double worst = -1; int split = -1;
+    for (int i = lo + 1; i < hi; ++i) {
+        double d = perpDistXZ(pts[i], pts[lo], pts[hi]);
+        if (d > worst) { worst = d; split = i; }
+    }
+    if (worst > tol && split > 0) {
+        keep[split] = 1;
+        douglasPeucker(pts, lo, split, tol, keep);
+        douglasPeucker(pts, split, hi, tol, keep);
+    }
+}
+}  // namespace
+
+std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& to,
+                            const RouteParams& p) {
+    const double straight = std::hypot(to.x - from.x, to.z - from.z);
+    // Trivial: coincident endpoints, or endpoints already within one cell.
+    if (straight <= std::max(1.0, p.cell)) {
+        return {Vec3(from.x, h(from.x, from.z), from.z),
+                Vec3(to.x, h(to.x, to.z), to.z)};
+    }
+    double cell = std::max(1.0, p.cell);
+    // Search box: the endpoints' AABB, widened so the path has room to bend around
+    // a peak or fan out a switchback. Then cap the grid so a long route can't blow
+    // up the cell count — coarsen the cell instead.
+    double pad = p.pad > 0 ? p.pad : std::max(4 * cell, straight * 0.75);
+    double minX = std::min(from.x, to.x) - pad, maxX = std::max(from.x, to.x) + pad;
+    double minZ = std::min(from.z, to.z) - pad, maxZ = std::max(from.z, to.z) + pad;
+    const long maxCells = 600000;
+    long nx = 0, nz = 0;
+    for (;;) {
+        nx = static_cast<long>(std::ceil((maxX - minX) / cell)) + 1;
+        nz = static_cast<long>(std::ceil((maxZ - minZ) / cell)) + 1;
+        if (nx * nz <= maxCells || cell > straight) break;
+        cell *= 1.5;
+    }
+    if (nx < 2 || nz < 2) {
+        return {Vec3(from.x, h(from.x, from.z), from.z),
+                Vec3(to.x, h(to.x, to.z), to.z)};
+    }
+    const int N = static_cast<int>(nx * nz);
+    auto idx = [&](int i, int j) { return j * static_cast<int>(nx) + i; };
+    auto X = [&](int i) { return minX + i * cell; };
+    auto Z = [&](int j) { return minZ + j * cell; };
+
+    // Lazily cache the terrain height per grid point (A* only visits a fraction).
+    std::vector<double> hc(static_cast<std::size_t>(N));
+    std::vector<char> hv(static_cast<std::size_t>(N), 0);
+    auto H = [&](int c, int i, int j) {
+        if (!hv[c]) { hc[c] = h(X(i), Z(j)); hv[c] = 1; }
+        return hc[c];
+    };
+
+    auto snap = [&](const Vec3& v, int& i, int& j) {
+        i = std::min(static_cast<int>(nx) - 1,
+                     std::max(0, static_cast<int>(std::lround((v.x - minX) / cell))));
+        j = std::min(static_cast<int>(nz) - 1,
+                     std::max(0, static_cast<int>(std::lround((v.z - minZ) / cell))));
+    };
+    int si, sj, gi, gj;
+    snap(from, si, sj);
+    snap(to, gi, gj);
+    const int start = idx(si, sj), goal = idx(gi, gj);
+    auto heur = [&](int i, int j) {
+        return std::hypot(X(i) - X(gi), Z(j) - Z(gj));   // admissible (<= true cost)
+    };
+
+    const double INF = std::numeric_limits<double>::infinity();
+    std::vector<double> g(static_cast<std::size_t>(N), INF);
+    std::vector<int> came(static_cast<std::size_t>(N), -1);
+    std::vector<signed char> dirIn(static_cast<std::size_t>(N), -1);
+    using QN = std::pair<double, int>;                   // (f-score, cell)
+    std::priority_queue<QN, std::vector<QN>, std::greater<QN>> open;
+    g[start] = 0.0;
+    open.push({heur(si, sj), start});
+    const int di[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    const int dj[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    const double budget = straight * std::max(1.0, p.maxStretch);
+
+    bool found = false;
+    while (!open.empty()) {
+        QN top = open.top(); open.pop();
+        int c = top.second;
+        if (top.first > g[c] + heur(c % static_cast<int>(nx), c / static_cast<int>(nx)) + 1e-9)
+            continue;                                    // stale queue entry
+        if (c == goal) { found = true; break; }
+        int ci = c % static_cast<int>(nx), cj = c / static_cast<int>(nx);
+        double hcur = H(c, ci, cj);
+        for (int k = 0; k < 8; ++k) {
+            int ni = ci + di[k], nj = cj + dj[k];
+            if (ni < 0 || nj < 0 || ni >= nx || nj >= nz) continue;
+            int nc = idx(ni, nj);
+            double horiz = (di[k] && dj[k]) ? cell * 1.41421356 : cell;
+            double dh = H(nc, ni, nj) - hcur;
+            if (std::fabs(dh) > p.maxGrade * horiz) continue;   // too steep — forbidden
+            double step = horiz + p.climbCost * std::max(0.0, dh);
+            if (dirIn[c] >= 0 && dirIn[c] != k) step += p.turnPenalty;
+            double ng = g[c] + step;
+            if (ng > budget) continue;                   // detoured too far — prune
+            if (ng < g[nc]) {
+                g[nc] = ng;
+                came[nc] = c;
+                dirIn[nc] = static_cast<signed char>(k);
+                open.push({ng + heur(ni, nj), nc});
+            }
+        }
+    }
+    if (!found) return {};                               // no grade-legal route in the box
+
+    // Reconstruct the cell path (goal -> start), reverse, and pin the exact
+    // endpoints so the road meets its junctions precisely.
+    std::vector<Vec3> raw;
+    for (int c = goal; c != -1; c = came[c]) {
+        int ci = c % static_cast<int>(nx), cj = c / static_cast<int>(nx);
+        raw.push_back(Vec3(X(ci), 0, Z(cj)));
+    }
+    std::reverse(raw.begin(), raw.end());
+    raw.front() = Vec3(from.x, 0, from.z);
+    raw.back() = Vec3(to.x, 0, to.z);
+
+    // Collapse the staircase to its corners, then seat every waypoint on the ground.
+    double tol = p.simplifyTol > 0 ? p.simplifyTol : cell * 0.4;
+    std::vector<char> keep(raw.size(), 0);
+    keep.front() = keep.back() = 1;
+    douglasPeucker(raw, 0, static_cast<int>(raw.size()) - 1, tol, keep);
+    std::vector<Vec3> path;
+    for (std::size_t i = 0; i < raw.size(); ++i)
+        if (keep[i]) path.push_back(Vec3(raw[i].x, h(raw[i].x, raw[i].z), raw[i].z));
+    return path;
 }
 
 HeightField heightConstant(double h) {
