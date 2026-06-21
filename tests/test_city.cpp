@@ -69,6 +69,34 @@ TEST_CASE(road_mesh_sidewalks_raise_a_kerb) {
     CHECK(minY < flat.lift - 0.1);                        // outer face dropped to ground
 }
 
+TEST_CASE(road_mesh_lane_markings_paint_lines) {
+    // ADR-0044: a marked carriageway carries a double-yellow centreline, dashed
+    // white dividers, and solid edge lines, raised just above the asphalt — and
+    // the lane count grows with the road width.
+    RoadGraph g;
+    int a = g.addNode(Vec2(-50, 0)), b = g.addNode(Vec2(50, 0));
+    g.addEdge(a, b, 14);                       // wide enough for dividers each side
+
+    RoadMeshParams plain;
+    RenderMesh bare = buildRoadMesh(g, plain);
+
+    RoadMeshParams p;
+    p.laneMarkings = true;
+    RenderMesh m = buildRoadMesh(g, p);
+    CHECK(m.indices.size() > bare.indices.size());   // stripes added geometry
+
+    bool sawYellow = false, sawWhite = false;
+    double maxY = -1e9;
+    for (const Vertex& v : m.vertices) {
+        maxY = std::max(maxY, double(v.position.y));
+        if (v.color.x > 0.7 && v.color.y > 0.6 && v.color.z < 0.3) sawYellow = true;
+        if (v.color.x > 0.8 && v.color.y > 0.8 && v.color.z > 0.78) sawWhite = true;
+    }
+    CHECK(sawYellow);                                 // double-yellow centreline
+    CHECK(sawWhite);                                  // edge lines + dividers
+    CHECK_APPROX(maxY, plain.lift + p.markLift, 1e-6);  // stripes sit a hair proud
+}
+
 TEST_CASE(radial_roads_make_rings_and_spokes) {
     // ADR-0044: a second generator. Concentric rings + spokes, all within the
     // outer radius, and blocks fall out of the planar graph like the grid.

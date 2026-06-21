@@ -58,6 +58,33 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             MeshBuilder::emitQuad(mesh, c0, c1, d1, d0, nOut, p.curbColor);
         }
     };
+
+    // A painted lane stripe parallel to a ribbon: a thin strip at perpendicular
+    // `offset` from the centreline, raised just above the asphalt. `dashed` lays
+    // it as a dash pattern (lane dividers); solid otherwise (edge/centre lines).
+    // `d`/`n` are the ribbon's unit direction / left-normal.
+    auto laneStrip = [&](const Vec2& s, const Vec2& e, const Vec2& d, const Vec2& n,
+                         double offset, const Vec3& col, bool dashed) {
+        Vec2 a = s + n * offset, b = e + n * offset;
+        double len = (b - a).length();
+        if (len < 1e-3) return;
+        double hw = p.markWidth * 0.5;
+        auto P = [&](const Vec2& xz) {
+            return Vec3(xz.x, height(xz.x, xz.y) + p.markLift, xz.y);
+        };
+        auto quad = [&](double t0, double t1) {
+            Vec2 c0 = a + d * t0, c1 = a + d * t1;
+            MeshBuilder::emitQuad(mesh, P(c0 - n * hw), P(c1 - n * hw),
+                                  P(c1 + n * hw), P(c0 + n * hw), Vec3(0, 1, 0), col);
+        };
+        if (!dashed) {
+            for (double t = 0; t < len; t += 3.0) quad(t, std::min(t + 3.0, len));
+        } else {
+            double period = p.dashLength + p.dashGap;
+            for (double t = 0; t < len; t += period)
+                quad(t, std::min(t + p.dashLength, len));
+        }
+    };
     // A flat strip between two cross-sections, segmented + draped on the terrain.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,
                         const Vec2& b1) {
@@ -172,6 +199,28 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         // Sidewalk skirts down both verges (outward = away from the carriageway).
         curbBand(start + nrm, end + nrm, pu);
         curbBand(start - nrm, end - nrm, pu * -1.0);
+
+        // Lane markings on the carriageway: solid edge lines, a double-yellow
+        // centreline between opposing directions, dashed white lane dividers. The
+        // lane count comes from the road width, so arterials read as multi-lane.
+        if (p.laneMarkings) {
+            double hw2 = g.edges[e].width * 0.5;
+            // Equal lanes each side of a two-way centreline, so there is always a
+            // centre and the dividers mirror.
+            int perSide = std::max(1, static_cast<int>(std::lround(hw2 / p.laneWidth)));
+            double laneW = hw2 / perSide, inset = p.markWidth * 1.5;
+            // Double-yellow centreline between the opposing directions.
+            laneStrip(start, end, d, pu,  p.markWidth, p.centerColor, false);
+            laneStrip(start, end, d, pu, -p.markWidth, p.centerColor, false);
+            // Dashed white lane dividers, mirrored each side.
+            for (int i = 1; i < perSide; ++i) {
+                laneStrip(start, end, d, pu,  i * laneW, p.laneColor, true);
+                laneStrip(start, end, d, pu, -i * laneW, p.laneColor, true);
+            }
+            // Solid white edge lines just inside the kerb.
+            laneStrip(start, end, d, pu,  hw2 - inset, p.laneColor, false);
+            laneStrip(start, end, d, pu, -(hw2 - inset), p.laneColor, false);
+        }
     }
 
     return mesh;

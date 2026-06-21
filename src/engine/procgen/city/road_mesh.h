@@ -29,6 +29,17 @@ struct RoadMeshParams {
     double curbHeight = 0.15;           // how far the lip stands above the road (m)
     Vec3   sidewalkColor{0.62, 0.62, 0.60};   // concrete slab
     Vec3   curbColor{0.48, 0.48, 0.47};       // curb faces
+    // Lane markings: thin raised stripes painted on the carriageway — solid edge
+    // lines, a double-yellow centreline between opposing directions, and dashed
+    // white lane dividers. The lane count is derived from the road width
+    // (width / laneWidth), so wider arterials read as multi-lane for free.
+    bool   laneMarkings = false;
+    double laneWidth = 3.5;             // nominal lane width -> lane count (m)
+    double markWidth = 0.16;            // painted stripe width (m)
+    double markLift = 0.02;             // raise stripes above the asphalt (m)
+    double dashLength = 3.0, dashGap = 3.0;   // lane-divider dash pattern (m)
+    Vec3   laneColor{0.85, 0.85, 0.82};       // white lines
+    Vec3   centerColor{0.80, 0.70, 0.12};     // yellow centreline
     std::function<double(double, double)> heightAt;
 };
 
