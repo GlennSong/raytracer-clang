@@ -206,6 +206,38 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
    a one-shot version); this block is the desktop/Qt UI on top, so it is
    macOS/desktop-gated and saved as one focused effort.
 
+### Candidate procgen algorithms (backlog — captured, not yet built)
+
+Each is a *generator/primitive* that feeds substrate we already own, so adding
+one is mostly the algorithm, not new pipeline. Pull these off the backlog as the
+relevant system needs them; do NOT add them before the current systems are
+consolidated (a unified `city.lua`, viewer script-scene parity, CDLOD-from-field).
+
+- **Least-cost path (A\*/Dijkstra) over a slope-weighted grid** — the right tool
+  for *terrain-aware roads* (follow valleys, switchback up grades) and for routing
+  an artist spine intelligently to a target. Sample the heightfield → cost grid →
+  path → a `RoadGraph` edge. Pairs with the eroded-valley terrain (low-cost
+  corridors). Highest-value next algorithm for roads.
+- **Space colonization** — scatter attractor points; grow a network toward them,
+  consuming attractors within a kill distance. Two uses for us, both reusing
+  existing substrate: (a) *natural trees* — it emits a branch skeleton that
+  `skinTree` already turns into bark+leaves, a volume-filling counterpart to the
+  L-system; (b) *organic demand-driven roads* — emits a `RoadGraph` into
+  planarize→blocks→`road_mesh`. Crown/served-area shape = the attractor cloud.
+- **Worley / cellular (Voronoi) noise** — drops straight into `texture_field`
+  (stone, scales, cracks, cells) and into terrain (biome cells, mesas). A missing
+  noise primitive.
+- **Voronoi / Delaunay partition** — organic city districts and lot subdivision
+  (an alternative to the current OBB parcels); cracked-surface meshes.
+- **Straight skeleton** — proper hip/gable **roofs** from an arbitrary footprint
+  polygon; a real building-realism win for the shape grammar.
+- **Poisson-disk (blue-noise) sampling** — even-but-random scatter, and the
+  attractor distribution that seeds space colonization.
+- **Wave Function Collapse** — modular **interiors**/decoration/tilemaps (NOT
+  roads — we own the road graph). For building interiors when we get there.
+- **Tensor fields** — the other organic-roads approach (orientation field roads
+  follow); alternative/complement to space colonization for street networks.
+
 1. **Mac verification session** (nothing else depends on more code first):
    - `editor_app` viewport: NSView + CAMetalLayer path, retina scale, input
      feel, ImGuizmo matrix conventions (transpose bridge in

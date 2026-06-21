@@ -20,32 +20,19 @@ end
 local function build()
   local seed = 7
 
-  -- Rolling hills the city climbs — a few hills across the footprint (higher
-  -- frequency) and real amplitude, warped for organic contours.
-  local hills = terrain.fbm{ seed = seed, freq = 0.014, amp = 30, octaves = 5 }
-  local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 30)
+  -- Rolling hills the city climbs — gentle enough that draped roads read clean,
+  -- steep enough that the buildings step up the slopes, warped for organic contours.
+  local hills = terrain.fbm{ seed = seed, freq = 0.012, amp = 18, octaves = 5 }
+  local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 28)
 
   local m = model.new()
   m:add(terrain.mesh(land, { size = 460, resolution = 220, color = {0.33, 0.40, 0.26} }))
 
   local lay = city.layout{ extent = 170, cell_size = 64, jitter = 0.10, seed = seed }
 
-  -- Roads: an asphalt quad per edge, draped at each endpoint's terrain height.
-  local roads = {}
-  for _, e in ipairs(lay.edges) do
-    local a, b = lay.nodes[e.a], lay.nodes[e.b]
-    local dx, dz = b.x - a.x, b.z - a.z
-    local len = math.sqrt(dx * dx + dz * dz)
-    if len > 1 then
-      local nx, nz = -dz / len * (e.width * 0.5), dx / len * (e.width * 0.5)
-      local ya, yb = land:at(a.x, a.z) + 0.15, land:at(b.x, b.z) + 0.15
-      roads[#roads + 1] = mesh.quad(
-        { a.x - nx, ya, a.z - nz }, { a.x + nx, ya, a.z + nz },
-        { b.x + nx, yb, b.z + nz }, { b.x - nx, yb, b.z - nz },
-        { 0, 1, 0 }, { 0.08, 0.08, 0.09 })
-    end
-  end
-  if #roads > 0 then m:add(mesh.merge(roads)) end
+  -- Roads: a connected surface with junction geometry (ribbons trimmed back to
+  -- the curb corners, intersection pads filling the gaps), draped on the terrain.
+  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09} }))
 
   -- A building per block, seated on the ground: sample the footprint corners,
   -- floor the building on the HIGH corner and run a foundation plinth down to the
