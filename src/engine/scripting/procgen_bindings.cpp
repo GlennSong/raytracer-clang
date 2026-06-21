@@ -785,11 +785,13 @@ int l_city_layout(lua_State* L) {
     return 1;
 }
 
-// city.lots(block, { target_area=, min_area=, min_edge=, jitter=, seed= }) ->
-// array of lots. Partitions one block polygon (from layout.blocks) into building
-// parcels by recursive OBB bisection (parcel.h); each lot is returned as its
-// oriented box { cx, cz, w, d, angle (rad), area, frontage={x,z} } so a recipe
-// can seat a building sized to FIT the lot (and skip lots too small).
+// city.lots(block, { inset=, target_area=, min_area=, min_edge=, jitter=, seed= })
+// -> array of lots. `inset` first pulls the block in off the road centrelines (so
+// lots clear the carriageway + sidewalk) — if that collapses a small block, no
+// lots come back, so the recipe simply leaves it. Then it partitions the buildable
+// interior into parcels (parcel.h) and returns each oriented to ITS street:
+// { cx, cz, w (along the street = facade width), d (toward the street = depth),
+//   yaw (turn a building's +Z to face the street), area }.
 int l_city_lots(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     Poly2 block;
@@ -801,30 +803,34 @@ int l_city_lots(lua_State* L) {
         lua_pop(L, 1);
     }
     ParcelParams pp;
+    double insetD = 0.0;
     if (lua_istable(L, 2)) {
         pp.targetArea = static_cast<Real>(optField(L, 2, "target_area", pp.targetArea));
         pp.minArea    = static_cast<Real>(optField(L, 2, "min_area", pp.minArea));
         pp.minEdge    = static_cast<Real>(optField(L, 2, "min_edge", pp.minEdge));
         pp.jitter     = static_cast<Real>(optField(L, 2, "jitter", pp.jitter));
         pp.seed       = static_cast<uint32_t>(optField(L, 2, "seed", 0));
+        insetD        = optField(L, 2, "inset", 0.0);
     }
-    std::vector<Lot> lots = subdivideBlock(block, pp);
+    if (insetD > 0.0) block = inset(block, static_cast<Real>(insetD));
+
+    std::vector<Lot> lots;
+    if (block.size() >= 3) lots = subdivideBlock(block, pp);
     lua_createtable(L, static_cast<int>(lots.size()), 0);
     for (std::size_t i = 0; i < lots.size(); ++i) {
         const Lot& lot = lots[i];
         OBB2 obb = orientedBoundingBox(lot.footprint);
-        lua_createtable(L, 0, 6);
-        lua_pushnumber(L, obb.center.x);          lua_setfield(L, -2, "cx");
-        lua_pushnumber(L, obb.center.y);          lua_setfield(L, -2, "cz");
-        lua_pushnumber(L, obb.half[0] * 2.0);     lua_setfield(L, -2, "w");
-        lua_pushnumber(L, obb.half[1] * 2.0);     lua_setfield(L, -2, "d");
-        lua_pushnumber(L, std::atan2(obb.axis[0].y, obb.axis[0].x));
-        lua_setfield(L, -2, "angle");
-        lua_pushnumber(L, lot.area);              lua_setfield(L, -2, "area");
-        lua_createtable(L, 0, 2);
-        lua_pushnumber(L, lot.frontage.x);        lua_setfield(L, -2, "x");
-        lua_pushnumber(L, lot.frontage.y);        lua_setfield(L, -2, "z");
-        lua_setfield(L, -2, "frontage");
+        const Vec2& f = lot.frontage;                 // outward, toward the street
+        // The OBB axis most aligned with the frontage runs toward the street
+        // (depth); the other runs along it (the facade width).
+        int depthAxis = std::abs(dot(obb.axis[0], f)) >= std::abs(dot(obb.axis[1], f)) ? 0 : 1;
+        lua_createtable(L, 0, 5);
+        lua_pushnumber(L, obb.center.x);                       lua_setfield(L, -2, "cx");
+        lua_pushnumber(L, obb.center.y);                       lua_setfield(L, -2, "cz");
+        lua_pushnumber(L, obb.half[1 - depthAxis] * 2.0);      lua_setfield(L, -2, "w");
+        lua_pushnumber(L, obb.half[depthAxis] * 2.0);          lua_setfield(L, -2, "d");
+        lua_pushnumber(L, std::atan2(f.x, f.y));               lua_setfield(L, -2, "yaw");
+        lua_pushnumber(L, lot.area);                           lua_setfield(L, -2, "area");
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     return 1;

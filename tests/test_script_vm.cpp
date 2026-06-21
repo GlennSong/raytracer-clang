@@ -489,7 +489,7 @@ TEST_CASE(procgen_city_lots_partition_a_block) {
         local m = model.new()
         for _, lot in ipairs(lots) do
             max_w = math.max(max_w, lot.w); max_d = math.max(max_d, lot.d)
-            m:add(mesh.place(mesh.box{ lot.w - 2, 1, lot.d - 2 }, { lot.cx, 0, lot.cz }, lot.angle))
+            m:add(mesh.place(mesh.box{ lot.w - 2, 1, lot.d - 2 }, { lot.cx, 0, lot.cz }, lot.yaw))
         end
         return m
     )LUA";

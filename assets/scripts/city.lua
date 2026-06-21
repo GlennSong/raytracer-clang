@@ -56,11 +56,12 @@ local function floors_at(o, r)
 end
 
 -- A rotated rectangle footprint (4 corners) centred at (cx,cz), half-extents
--- hw,hd, turned by `ang` radians — the pad/lawn outline for an oriented lot.
-local function rect(cx, cz, hw, hd, ang)
-  local c, s = math.cos(ang), math.sin(ang)
+-- hw,hd, turned by `yaw` radians — the pad outline for an oriented lot. The sign
+-- matches Mat4::rotateY (what mesh.place uses) so the pad aligns with the part.
+local function rect(cx, cz, hw, hd, yaw)
+  local c, s = math.cos(yaw), math.sin(yaw)
   local function pt(dx, dz)
-    return { x = cx + dx * c - dz * s, z = cz + dx * s + dz * c }
+    return { x = cx + dx * c + dz * s, z = cz - dx * s + dz * c }
   end
   return { pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd) }
 end
@@ -86,16 +87,18 @@ function M.plan_blocks(base, lay, o)
     end
     if (hi - lo) <= flat_relief then
       local y = base:at(cx, cz)        -- the whole block levels to its centre height
+      -- `inset` pulls the parcels in off the road centrelines (carriageway +
+      -- sidewalk + a front setback) so buildings sit inside the block, not the street.
       for _, lot in ipairs(city.lots(block,
-          { target_area = opt(o, "lot_area", 520),
+          { inset = opt(o, "block_inset", 12), target_area = opt(o, "lot_area", 520),
             min_area = opt(o, "lot_min_area", 150), seed = opt(o, "seed", 7) })) do
         local fw, fd = lot.w - 2 * setback, lot.d - 2 * setback
         if fw >= min_edge and fd >= min_edge then     -- a building actually fits
           pads[#pads + 1] = { y = y,
-            poly = rect(lot.cx, lot.cz, fw * 0.5 + 1, fd * 0.5 + 1, lot.angle) }
+            poly = rect(lot.cx, lot.cz, fw * 0.5 + 1, fd * 0.5 + 1, lot.yaw) }
           local park = (math.floor(lot.cx * 13 + lot.cz * 7) % 100) < (park_frac * 100)
           plan[#plan + 1] = { kind = park and "park" or "build",
-            cx = lot.cx, cz = lot.cz, fw = fw, fd = fd, angle = lot.angle, y = y,
+            cx = lot.cx, cz = lot.cz, fw = fw, fd = fd, yaw = lot.yaw, y = y,
             r = math.sqrt(lot.cx * lot.cx + lot.cz * lot.cz) }
         end
       end
@@ -140,14 +143,14 @@ function M.place_blocks(m, plan, land, o)
     if b.kind == "build" then
       local plinth = scope{ origin = { -hw, -1.0, -hd }, size = { b.fw, 1.0, b.fd } }
                        :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 }))
-      m:add_solid(mesh.place(plinth, { b.cx, b.y, b.cz }, b.angle))
+      m:add_solid(mesh.place(plinth, { b.cx, b.y, b.cz }, b.yaw))
       local bld = building.grow(M.building_args(o, b))
-      m:add_solid(mesh.place(bld, { b.cx, b.y, b.cz }, b.angle))
+      m:add_solid(mesh.place(bld, { b.cx, b.y, b.cz }, b.yaw))
     else
       -- A park: a flat manicured lawn on the same level plot (distinct green).
       local lawn = scope{ origin = { -hw, 0, -hd }, size = { b.fw, 0.2, b.fd } }
                      :box(opt(o, "park_color", { 0.24, 0.46, 0.17 }))
-      m:add_solid(mesh.place(lawn, { b.cx, b.y, b.cz }, b.angle))
+      m:add_solid(mesh.place(lawn, { b.cx, b.y, b.cz }, b.yaw))
     end
   end
 end
