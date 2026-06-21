@@ -236,6 +236,7 @@ add_executable(run_tests
     tests/test_instance_tlas.cpp
     tests/test_texture_field.cpp
     tests/test_terrain_field.cpp
+    tests/test_winding.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

@@ -115,10 +115,11 @@ RenderMesh MeshBuilder::cylinder(float radius, float height, int slices) {
             Vec3(x, halfH, z), Vec3(0, 1, 0), capTan,
             0.5f + 0.5f * std::cos(phi), 0.5f + 0.5f * std::sin(phi)));
     }
+    // Clockwise-front so the +Y cap faces up (a fan around the centre).
     for (int i = 0; i < slices; i++)
         mesh.indices.insert(mesh.indices.end(),
-            {topCenter, topCenter + 1 + static_cast<uint32_t>(i + 1),
-             topCenter + 1 + static_cast<uint32_t>(i)});
+            {topCenter, topCenter + 1 + static_cast<uint32_t>(i),
+             topCenter + 1 + static_cast<uint32_t>(i + 1)});
 
     // Bottom cap
     uint32_t botCenter = static_cast<uint32_t>(mesh.vertices.size());
@@ -131,10 +132,11 @@ RenderMesh MeshBuilder::cylinder(float radius, float height, int slices) {
             Vec3(x, -halfH, z), Vec3(0, -1, 0), capTan,
             0.5f + 0.5f * std::cos(phi), 0.5f - 0.5f * std::sin(phi)));
     }
+    // Clockwise-front for the -Y cap (reverse of the top fan).
     for (int i = 0; i < slices; i++)
         mesh.indices.insert(mesh.indices.end(),
-            {botCenter, botCenter + 1 + static_cast<uint32_t>(i),
-             botCenter + 1 + static_cast<uint32_t>(i + 1)});
+            {botCenter, botCenter + 1 + static_cast<uint32_t>(i + 1),
+             botCenter + 1 + static_cast<uint32_t>(i)});
 
     return mesh;
 }
@@ -195,10 +197,11 @@ RenderMesh MeshBuilder::cone(float radius, float height, int slices) {
             Vec3(0, -1, 0), capTan,
             0.5f + 0.5f * std::cos(phi), 0.5f - 0.5f * std::sin(phi)));
     }
+    // Clockwise-front for the -Y cap so it faces down.
     for (int i = 0; i < slices; i++)
         mesh.indices.insert(mesh.indices.end(),
-            {botCenter, botCenter + 1 + static_cast<uint32_t>(i),
-             botCenter + 1 + static_cast<uint32_t>(i + 1)});
+            {botCenter, botCenter + 1 + static_cast<uint32_t>(i + 1),
+             botCenter + 1 + static_cast<uint32_t>(i)});
 
     return mesh;
 }
