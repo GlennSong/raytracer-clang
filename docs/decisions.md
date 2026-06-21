@@ -2644,6 +2644,20 @@ performance-critical substrate stays in C++.
      model; the C++ `generateCity` becomes either a thin host that runs the city
      recipe or a fast default kept in parallel.
 
+**Colliders follow the geometry.** A `ProcModel` carries a `colliders` channel
+alongside its render parts and instances, because a procgen scene is not solid
+until it has physics. Since procgen scenery is *static world geometry*, collision
+follows the actual generated mesh rather than a bounding approximation: the Lua
+surface is `m:add_solid(mesh)` (render + collide the same triangles — building
+shells, foundations), `m:collide(mesh)` (a standalone static trimesh — terrain,
+roads), `m:add_collider{shape=...}` (a primitive only where the shape truly is
+one — a round tower is exactly a capsule), and an `add_instances(..., {collide=})`
+spec so a verge of street lamps is solid (a thin capsule each). The viewer's
+loader turns each into the same `Collider`/`MeshCollider` + `RigidBody` the
+hand-authored loaders build; the offline path tracer (no physics) ignores the
+channel — the one legitimate renderer divergence. Colliders live in the recipe,
+so they regenerate with the geometry on every load (no extra round-trip state).
+
 **Consequences.** Authoring iteration moves from recompile-to-tune to
 edit-the-script (hot reload), and the same generative vocabulary serves every
 procgen project, not just the city. Geometry never forks because the bindings

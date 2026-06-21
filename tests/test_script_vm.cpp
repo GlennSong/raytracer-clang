@@ -315,6 +315,48 @@ TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
     CHECK(single.instances.empty());
 }
 
+TEST_CASE(procgen_model_carries_colliders_following_geometry) {
+    // ADR-0042: procgen scenery is static world geometry, so a recipe declares
+    // colliders that follow the actual mesh — exact trimesh for shells/ground,
+    // primitives where the shape truly is one, and per-instance for props.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    ProcModel m;
+    std::string err;
+    const char* code = R"LUA(
+        local m = model.new()
+        m:add_solid(mesh.box{20, 12, 16})            -- render + exact trimesh
+        m:collide(mesh.box{200, 1, 200})             -- ground walk surface
+        m:add_collider{ shape = "capsule", center = {0, 5, 0},
+                        radius = 4, height = 10 }     -- a round tower, exactly
+        local places = { { pos = {10, 0, 0} }, { pos = {-10, 0, 0} } }
+        m:add_instances(streetfurniture.lamp{}, places,
+                        { collide = { shape = "capsule", radius = 0.3, height = 4 } })
+        return m
+    )LUA";
+    CHECK(runProcgenModelValue(vm, code, m, &err));
+    // add_solid contributes one part AND one collider; collide adds another;
+    // add_collider a third. The instance group carries its own collision spec.
+    CHECK(m.parts.size() == 1);
+    CHECK(m.colliders.size() == 3);
+    CHECK(m.instances.size() == 1);
+    CHECK(m.instances[0].collision == InstanceCollision::Capsule);
+
+    int meshK = 0, capsuleK = 0;
+    for (const ProcCollider& c : m.colliders) {
+        if (c.kind == ProcCollider::Kind::Mesh) {
+            ++meshK;
+            CHECK(!c.mesh.vertices.empty());          // real triangles, not a box
+        } else if (c.kind == ProcCollider::Kind::Capsule) {
+            ++capsuleK;
+            CHECK_APPROX(c.radius, 4.0, 1e-9);
+            CHECK_APPROX(c.halfHeight, 5.0, 1e-9);    // height 10 -> halfHeight 5
+        }
+    }
+    CHECK(meshK == 2);       // the solid shell + the ground
+    CHECK(capsuleK == 1);
+}
+
 TEST_CASE(procgen_script_builds_a_brick_texture) {
     // ADR-0043: a brick texture is composed from primitives in Lua (brick lattice
     // × fbm grit, two colours mixed by the mask), then baked — not a preset.

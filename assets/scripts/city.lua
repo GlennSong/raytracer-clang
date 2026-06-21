@@ -76,13 +76,15 @@ function M.buildings(m, lay, land, o)
       local y = land:at(c[1], c[2]); hi = math.max(hi, y); lo = math.min(lo, y)
     end
     local floors = floors_at(o, math.sqrt(cx * cx + cz * cz))
-    m:add(scope{ origin = {cx - hw, lo - 1.0, cz - hd}, size = {fw, (hi - lo) + 1.0, fd} }
+    -- add_solid: render AND collide with the same triangles, so the foundation
+    -- and the building shell are exactly as solid as they look.
+    m:add_solid(scope{ origin = {cx - hw, lo - 1.0, cz - hd}, size = {fw, (hi - lo) + 1.0, fd} }
             :box(opt(o, "foundation_color", {0.32, 0.32, 0.34})))
     local bld = building.grow{ floors = floors, width = fw, depth = fd,
       ground_retail = true, walkable_ground = true,
       setback_floors = (floors >= 14) and 6 or 0, setback_every = 2.5,
       seed = math.floor(cx * 7 + cz) % 100000 }
-    m:add(mesh.translate(bld, { cx, hi, cz }))
+    m:add_solid(mesh.translate(bld, { cx, hi, cz }))
   end
 end
 
@@ -104,7 +106,10 @@ function M.lamps(m, lay, land, o)
       end
     end
   end
-  m:add_instances(lamp, places)
+  -- Each lamp is solid: a thin vertical capsule around the pole (the correct
+  -- collider for a post — you walk into it, not a bounding box).
+  m:add_instances(lamp, places,
+    { collide = { shape = "capsule", radius = 0.3, height = 5 } })
 end
 
 -- ----- the whole city ---------------------------------------------------------
@@ -122,14 +127,20 @@ function M.generate(o)
     size = size, eroded = o.eroded, droplets = o.droplets }
 
   local m = model.new()
-  m:add(terrain.mesh(land, { size = size, resolution = opt(o, "terrain_resolution", 220),
-                             color = opt(o, "ground_color", {0.33, 0.40, 0.26}) }))
+  -- The terrain is the ground you walk on: render it and collide with the exact
+  -- same surface (no approximation), so footing follows every contour.
+  local ground = terrain.mesh(land, { size = size,
+    resolution = opt(o, "terrain_resolution", 220),
+    color = opt(o, "ground_color", {0.33, 0.40, 0.26}) })
+  m:add(ground)
+  m:collide(ground, { friction = 0.95 })
 
   local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
     extent = opt(o, "extent", 170), cell_size = opt(o, "cell_size", 64),
     ring_spacing = opt(o, "ring_spacing", 60), spokes = opt(o, "spokes", 12),
     jitter = opt(o, "jitter", 0.10), seed = seed }
-  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09} }))
+  -- Roads are draped just above the terrain; make them a solid walk surface too.
+  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09} }))
 
   M.buildings(m, lay, land, o)
   M.lamps(m, lay, land, o)

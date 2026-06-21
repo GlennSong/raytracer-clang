@@ -694,6 +694,99 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         g.boundsRadius = spread + (mb.center.length() + mb.radius) * 1.5;
         world.add<InstanceGroup>(world.create(), g);
     }
+
+    // Physics colliders (ADR-0042): procgen scenery is static world geometry, so
+    // collision follows the actual generated mesh. Each ProcCollider becomes the
+    // same Collider/MeshCollider + RigidBody the hand-authored loaders build —
+    // exact triangle meshes for shells/terrain/roads, primitives where the shape
+    // truly is one. (The offline path tracer has no physics and ignores these.)
+    auto appendTris = [](MeshCollider& mc, const RenderMesh& rm, const Mat4* xf) {
+        for (std::size_t i = 0; i + 2 < rm.indices.size(); i += 3) {
+            Vec3 a = rm.vertices[rm.indices[i]].position;
+            Vec3 b = rm.vertices[rm.indices[i + 1]].position;
+            Vec3 c = rm.vertices[rm.indices[i + 2]].position;
+            if (xf) { a = xf->transformPoint(a); b = xf->transformPoint(b); c = xf->transformPoint(c); }
+            if (cross(b - a, c - a).length() < 1e-5) continue;   // skip slivers
+            uint32_t base = static_cast<uint32_t>(mc.vertices.size());
+            mc.vertices.push_back(a); mc.vertices.push_back(b); mc.vertices.push_back(c);
+            mc.indices.push_back(base); mc.indices.push_back(base + 1); mc.indices.push_back(base + 2);
+        }
+    };
+    auto spawnMeshCollider = [&](MeshCollider&& mc) {
+        if (mc.indices.empty()) return;
+        Entity e = world.create();
+        Transform t;
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        world.add<MeshCollider>(e, std::move(mc));
+    };
+    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, Real yaw,
+                              const ProcCollider& src) {
+        Entity e = world.create();
+        Transform t;
+        t.position = center;
+        if (std::abs(yaw) > 1e-9) t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Collider c;
+        c.shape = shape;
+        c.halfExtent = src.halfExtent;
+        c.radius = src.radius;
+        c.halfHeight = src.halfHeight;
+        c.friction = src.friction;
+        world.add<Collider>(e, c);
+        RigidBody rb;
+        rb.motion = src.dynamic ? BodyMotion::Dynamic : BodyMotion::Static;
+        world.add<RigidBody>(e, rb);
+    };
+    for (const ProcCollider& pc : model.colliders) {
+        switch (pc.kind) {
+            case ProcCollider::Kind::Mesh: {
+                MeshCollider mc;
+                mc.friction = pc.friction;
+                appendTris(mc, pc.mesh, nullptr);
+                spawnMeshCollider(std::move(mc));
+                break;
+            }
+            case ProcCollider::Kind::Box:
+                spawnPrimitive(ColliderShape::Box, pc.center, pc.yaw, pc); break;
+            case ProcCollider::Kind::Sphere:
+                spawnPrimitive(ColliderShape::Sphere, pc.center, 0, pc); break;
+            case ProcCollider::Kind::Capsule:
+                spawnPrimitive(ColliderShape::Capsule, pc.center, 0, pc); break;
+        }
+    }
+
+    // Instanced colliders: stamp a collider at each placement (a lamp per verge).
+    for (const ProcInstanceGroup& cg : model.instances) {
+        if (cg.collision == InstanceCollision::None || cg.transforms.empty()) continue;
+        if (cg.collision == InstanceCollision::Mesh) {
+            const RenderMesh& proto =
+                cg.collisionProto.vertices.empty() ? cg.proto : cg.collisionProto;
+            MeshCollider mc;
+            mc.friction = cg.colliderFriction;
+            for (const Mat4& xf : cg.transforms) appendTris(mc, proto, &xf);
+            spawnMeshCollider(std::move(mc));
+            continue;
+        }
+        ColliderShape shape = cg.collision == InstanceCollision::Box ? ColliderShape::Box
+                            : cg.collision == InstanceCollision::Sphere ? ColliderShape::Sphere
+                                                                        : ColliderShape::Capsule;
+        ProcCollider tmpl;
+        tmpl.halfExtent = cg.colliderHalfExtent;
+        tmpl.radius = cg.colliderRadius;
+        tmpl.halfHeight = cg.colliderHalfHeight;
+        tmpl.friction = cg.colliderFriction;
+        // The proto stands on its origin, so lift the collider centre to wrap a
+        // prop sitting on the ground rather than sinking it half-under.
+        Real lift = shape == ColliderShape::Box ? cg.colliderHalfExtent.y
+                  : shape == ColliderShape::Sphere ? cg.colliderRadius
+                                                   : cg.colliderHalfHeight + cg.colliderRadius;
+        for (const Mat4& xf : cg.transforms) {
+            Vec3 pos(xf.m[0][3], xf.m[1][3], xf.m[2][3]);
+            spawnPrimitive(shape, pos + Vec3(0, lift, 0), 0, tmpl);
+        }
+    }
 #else
     (void)ent; (void)levelDir; (void)world; (void)renderer; (void)assets; (void)index;
     LOG_WARN << "script entity skipped (scripting disabled in this build)";

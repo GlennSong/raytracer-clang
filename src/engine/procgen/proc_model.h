@@ -35,22 +35,60 @@ struct ProcPart {
 // via merge, so a block model embeds building + prop models and a city model
 // embeds block models — "individual parts or collected together, or anything in
 // between." (Colliders + attach points are a planned addition.)
+// A physics collider for a procedural model (ADR-0042). Procgen scenery is
+// static world geometry, so collision follows the *actual* generated mesh:
+// `Mesh` is the real triangle surface (terrain, roads, building shells) baked
+// into one static Jolt mesh body — accurate, the standard for level geometry.
+// The primitive kinds are for shapes that genuinely ARE a primitive (a round
+// tower is exactly a capsule), not as a loose bounding approximation. The
+// viewer turns each of these into the same Collider/MeshCollider + RigidBody
+// the hand-authored loaders build; the offline path tracer (no physics) ignores
+// them. Mesh triangles are world-space; primitives carry their own placement.
+struct ProcCollider {
+    enum class Kind { Mesh, Box, Sphere, Capsule };
+    Kind kind = Kind::Mesh;
+    RenderMesh mesh;                 // Kind::Mesh — exact static triangles
+    Vec3 center{0, 0, 0};            // primitive placement (world)
+    Real yaw = 0;                    // primitive Y rotation (radians)
+    Vec3 halfExtent{0.5, 0.5, 0.5};  // Box
+    Real radius = 0.5;               // Sphere, Capsule
+    Real halfHeight = 0.5;           // Capsule (half the cylinder segment)
+    Real friction = 0.6;
+    bool dynamic = false;            // static world geometry by default
+};
+
+// How an instance group collides: each placement stamps a collider. `None`
+// leaves the props non-solid; `Mesh` bakes the proto's triangles at every
+// transform into the shared static mesh body; the primitive kinds place one
+// Collider per instance (a lamp post is exactly a thin capsule).
+enum class InstanceCollision { None, Mesh, Box, Sphere, Capsule };
+
 struct ProcInstanceGroup {
     RenderMesh proto;
     std::vector<Mat4> transforms;
     float metallic = 0.0f;
     float roughness = 0.85f;
     bool  alphaFoliage = false;
+    // Optional per-instance collision (ADR-0042). `collisionProto` overrides the
+    // render proto for Mesh collision (a cheaper-but-faithful collision surface);
+    // empty means collide with the render proto itself.
+    InstanceCollision collision = InstanceCollision::None;
+    RenderMesh collisionProto;
+    Real colliderRadius = 0.5, colliderHalfHeight = 0.5;
+    Vec3 colliderHalfExtent{0.5, 0.5, 0.5};
+    Real colliderFriction = 0.6;
 };
 
 struct ProcModel {
     std::vector<ProcPart> parts;
     std::vector<ProcInstanceGroup> instances;
+    std::vector<ProcCollider> colliders;
 
     // Fold another model into this one (composition).
     void merge(const ProcModel& o) {
         parts.insert(parts.end(), o.parts.begin(), o.parts.end());
         instances.insert(instances.end(), o.instances.begin(), o.instances.end());
+        colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
     }
 
     int instanceCount() const {
@@ -59,6 +97,8 @@ struct ProcModel {
             n += static_cast<int>(g.transforms.size());
         return n;
     }
+
+    int colliderCount() const { return static_cast<int>(colliders.size()); }
 };
 
 }  // namespace engine

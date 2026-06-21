@@ -1096,9 +1096,103 @@ int l_model_add_instances(lua_State* L) {
         g.roughness = static_cast<float>(optField(L, 4, "roughness", g.roughness));
         g.metallic = static_cast<float>(optField(L, 4, "metallic", g.metallic));
         g.alphaFoliage = optBoolField(L, 4, "alpha_foliage", g.alphaFoliage);
+        // opts.collide: solidify every instance. "mesh" stamps the proto's
+        // triangles at each transform; a { shape="capsule", radius=, height= }
+        // (or box/sphere) table places one primitive collider per instance —
+        // the right shape for a lamp post (a thin capsule), exactly.
+        lua_getfield(L, 4, "collide");
+        if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "mesh") {
+            g.collision = InstanceCollision::Mesh;
+        } else if (lua_istable(L, -1)) {
+            int ct = lua_absindex(L, -1);
+            std::string shape = optStrField(L, ct, "shape", "capsule");
+            g.colliderFriction =
+                static_cast<Real>(optField(L, ct, "friction", g.colliderFriction));
+            if (shape == "box") {
+                g.collision = InstanceCollision::Box;
+                g.colliderHalfExtent = optVec3Field(L, ct, "size", Vec3(1, 1, 1)) * 0.5;
+            } else if (shape == "sphere") {
+                g.collision = InstanceCollision::Sphere;
+                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+            } else {
+                g.collision = InstanceCollision::Capsule;
+                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+                g.colliderHalfHeight =
+                    static_cast<Real>(optField(L, ct, "height", g.colliderHalfHeight * 2.0) * 0.5);
+            }
+        }
+        lua_pop(L, 1);
     }
     m.instances.push_back(std::move(g));
     lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:collide(mesh [, {friction=}]) -> m : an exact static triangle-mesh collider
+// from `mesh` (world space). The faithful collider for terrain, roads, and any
+// solid shell — collision is the actual surface, not an approximation. Chainable.
+int l_model_collide(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    ProcCollider c;
+    c.kind = ProcCollider::Kind::Mesh;
+    c.mesh = checkMesh(L, 2);
+    if (lua_istable(L, 3))
+        c.friction = static_cast<Real>(optField(L, 3, "friction", c.friction));
+    m.colliders.push_back(std::move(c));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:add_solid(mesh [, material]) -> m : render the mesh AND collide with the
+// same triangles. The default for built world geometry (a building shell, a
+// foundation): what you see is exactly what you hit. Chainable.
+int l_model_add_solid(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    RenderMesh mesh = checkMesh(L, 2);
+    ProcPart part;
+    part.mesh = mesh;
+    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
+        part.material = **mat;
+    m.parts.push_back(std::move(part));
+    ProcCollider c;
+    c.kind = ProcCollider::Kind::Mesh;
+    c.mesh = std::move(mesh);
+    m.colliders.push_back(std::move(c));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:add_collider(spec) -> m : a primitive collider, for a part whose true shape
+// IS a primitive (a round tower is exactly a capsule). spec.shape = "box"
+// (size={w,h,d}, yaw), "sphere" (radius), or "capsule" (radius, height); with
+// center={x,y,z}, friction, motion ("static"|"dynamic"). Chainable.
+int l_model_add_collider(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    ProcCollider c;
+    std::string shape = optStrField(L, 2, "shape", "box");
+    c.center = optVec3Field(L, 2, "center", c.center);
+    c.yaw = static_cast<Real>(optField(L, 2, "yaw", 0.0));
+    c.friction = static_cast<Real>(optField(L, 2, "friction", c.friction));
+    c.dynamic = optStrField(L, 2, "motion", "static") == std::string("dynamic");
+    if (shape == "sphere") {
+        c.kind = ProcCollider::Kind::Sphere;
+        c.radius = static_cast<Real>(optField(L, 2, "radius", c.radius));
+    } else if (shape == "capsule") {
+        c.kind = ProcCollider::Kind::Capsule;
+        c.radius = static_cast<Real>(optField(L, 2, "radius", c.radius));
+        c.halfHeight = static_cast<Real>(optField(L, 2, "height", c.halfHeight * 2.0) * 0.5);
+    } else {
+        c.kind = ProcCollider::Kind::Box;
+        c.halfExtent = optVec3Field(L, 2, "size", Vec3(1, 1, 1)) * 0.5;
+    }
+    m.colliders.push_back(std::move(c));
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_model_collider_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).colliders.size()));
     return 1;
 }
 
@@ -1404,10 +1498,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_setfield(L, -2, "__gc");
         lua_newtable(L);
         lua_pushcfunction(L, l_model_add);            lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_model_add_solid);      lua_setfield(L, -2, "add_solid");
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
+        lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
+        lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");
         lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
         lua_pushcfunction(L, l_model_part_count);     lua_setfield(L, -2, "part_count");
         lua_pushcfunction(L, l_model_instance_count); lua_setfield(L, -2, "instance_count");
+        lua_pushcfunction(L, l_model_collider_count); lua_setfield(L, -2, "collider_count");
         lua_pushcfunction(L, l_model_flatten);        lua_setfield(L, -2, "flatten");
         lua_setfield(L, -2, "__index");
     }
