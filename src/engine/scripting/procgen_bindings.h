@@ -72,6 +72,13 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
 bool runProcgenModel(ScriptVM& vm, const std::string& code,
                      std::vector<ScriptMeshPart>& out, std::string* error = nullptr);
 
+// Run a procgen script that returns a composable Model (ADR-0042) and hand back
+// its parts + instance groups. A bare Mesh return is accepted as a single part.
+// Returns false (with `error`) on a script error or a non-Model/Mesh return.
+// `openProcgenLibrary` must have been called on `vm` first.
+bool runProcgenModelValue(ScriptVM& vm, const std::string& code,
+                          struct ProcModel& out, std::string* error = nullptr);
+
 }  // namespace engine
 
 #endif

@@ -1,10 +1,37 @@
 #include "test_framework.h"
 
 #include "../src/level_scene.h"
+#include "../src/engine/mesh_builder.h"
 #include <cstdio>
 #include <fstream>
 
 using namespace engine;  // namespace migration (ADR-0015)
+
+TEST_CASE(bake_proc_model_emits_parts_and_instanced_geometry) {
+    // ADR-0042 Phase 4: a composable ProcModel bakes into the path-tracer Scene —
+    // parts to world triangles, instance groups to a shared BLAS placed by the
+    // TLAS (ADR-0041). Renderer-agnostic: the same model a Lua recipe returns.
+    ProcModel m;
+    m.parts.push_back(MeshBuilder::box(Vec3(1, 1, 1)));   // a part at the origin
+    ProcInstanceGroup g;
+    g.proto = MeshBuilder::box(Vec3(0.5, 0.5, 0.5));      // a prototype...
+    g.transforms = { Mat4::translate(5, 0, 0), Mat4::translate(10, 0, 0),
+                     Mat4::translate(15, 0, 0) };          // ...placed three times
+    m.instances.push_back(g);
+
+    Scene scene;
+    bakeProcModel(m, scene);
+    scene.buildAccelerator();
+    CHECK(!scene.triangles.empty());        // the part baked to triangles
+    CHECK(scene.protos.size() == 1);        // one shared BLAS for the proto
+    CHECK(scene.instances.size() == 3);     // three placements
+
+    // A ray hits the instanced box at x = 10 (only reachable via the TLAS).
+    HitRecord rec;
+    Ray ray(Vec3(10, 0, 20), Vec3(0, 0, -1));
+    CHECK(scene.intersect(ray, 0.001, 1e9, rec));
+    CHECK_APPROX(rec.point.x, 10.0, 1e-6);
+}
 
 namespace {
 const char* LEVEL_PATH = "test_level_tmp.json";

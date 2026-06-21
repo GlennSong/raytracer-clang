@@ -474,6 +474,29 @@ void bakeCityModel(const CityModel& m, Scene& scene) {
 
 }  // namespace
 
+void bakeProcModel(const ProcModel& m, Scene& scene) {
+    for (const RenderMesh& part : m.parts) {
+        if (part.indices.empty()) continue;
+        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.85));
+        addMeshAsTriangles(part, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
+    }
+    // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
+    for (const ProcInstanceGroup& g : m.instances) {
+        if (g.proto.indices.empty() || g.transforms.empty()) continue;
+        Material mat = Material::pbr(Vec3(1, 1, 1), g.metallic, g.roughness);
+        if (g.alphaFoliage) {                     // alpha-cut leaf cards
+            TextureData leaf = leafTexture(128);
+            Texture tex;
+            tex.width = leaf.width; tex.height = leaf.height;
+            tex.channels = leaf.channels; tex.pixels = std::move(leaf.pixels);
+            mat.alphaTex = scene.addTexture(std::move(tex));
+        }
+        int mi = scene.addMaterial(mat);
+        int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
+        for (const Mat4& xf : g.transforms) scene.addInstance(proto, xf);
+    }
+}
+
 bool LevelScene::load(const std::string& levelPath, Scene& scene,
                       std::string* outHdrPath) {
     std::ifstream file(levelPath);

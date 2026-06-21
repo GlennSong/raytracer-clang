@@ -1203,6 +1203,33 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
+bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,
+                          std::string* error) {
+    lua_State* L = luaState(vm);
+    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
+        lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (error != nullptr) {
+            const char* msg = lua_tostring(L, -1);
+            *error = msg != nullptr ? msg : "unknown Lua error";
+        }
+        lua_pop(L, 1);
+        return false;
+    }
+    if (auto* mdl = static_cast<ModelPtr*>(luaL_testudata(L, -1, kModelMt))) {
+        out = **mdl;                     // copy out the parts + instance groups
+        lua_pop(L, 1);
+        return true;
+    }
+    if (auto* mesh = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt))) {
+        out.parts.push_back(**mesh);     // a bare mesh is a single part
+        lua_pop(L, 1);
+        return true;
+    }
+    if (error != nullptr) *error = "procgen script did not return a Model or Mesh";
+    lua_pop(L, 1);
+    return false;
+}
+
 namespace {
 // Read one model part from the value at `idx`: either a Mesh userdata, or a
 // table { mesh=, texture=, alpha_test=, albedo=, roughness=, metallic= }.

@@ -3,6 +3,7 @@
 
 #include "scene.h"
 #include "lens_params.h"
+#include "engine/procgen/proc_model.h"
 #include <string>
 
 namespace engine {
@@ -24,6 +25,13 @@ struct LevelScene {
     static bool load(const std::string& levelPath, Scene& scene,
                      std::string* outHdrPath = nullptr);
 };
+
+// Bake a composable procedural model (ADR-0042) into the path-tracer Scene: each
+// part becomes world-space triangles, each instance group a shared BLAS proto
+// placed by the TLAS (ADR-0041), with the alpha-cut leaf material for foliage.
+// Renderer-agnostic — the same ProcModel a Lua recipe returns feeds this offline
+// path and the viewer's InstanceGroup spawn.
+void bakeProcModel(const ProcModel& model, Scene& scene);
 
 // A camera read from the level's sidecar (CameraStore format,
 // <level>.cameras.json) for offline rendering. Pose is position + forward —

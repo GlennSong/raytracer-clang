@@ -2,6 +2,7 @@
 
 #include "../src/engine/scripting/script_vm.h"
 #include "../src/engine/scripting/procgen_bindings.h"
+#include "../src/engine/procgen/proc_model.h"
 #include "../src/engine/procgen/sdf.h"
 #include "../src/engine/mesh_builder.h"
 #include "../src/renderer/renderer.h"
@@ -279,6 +280,38 @@ TEST_CASE(procgen_script_decorates_the_road_network) {
     CHECK(mesh && !mesh->vertices.empty());
     CHECK(vm.getGlobalNumber("placed", placed));
     CHECK(placed == edges);                        // one lamp per road segment
+}
+
+TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
+    // ADR-0042 Phase 4: runProcgenModelValue pulls the structured ProcModel
+    // (parts + instance groups) out of a recipe, so a loader can spawn it with
+    // real instancing — not just a flattened mesh.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    ProcModel m;
+    std::string err;
+    const char* code = R"LUA(
+        local lay = city.layout{ extent = 200, cell_size = 95, seed = 5 }
+        local p = {}
+        for _, e in ipairs(lay.edges) do
+            local a, b = lay.nodes[e.a], lay.nodes[e.b]
+            p[#p + 1] = { pos = { (a.x + b.x) * 0.5, 0, (a.z + b.z) * 0.5 } }
+        end
+        local m = model.new()
+        m:add(mesh.box{4, 0.2, 4})                 -- one baked part
+        m:add_instances(streetfurniture.lamp{}, p) -- one instance group
+        return m
+    )LUA";
+    CHECK(runProcgenModelValue(vm, code, m, &err));
+    CHECK(m.parts.size() == 1);
+    CHECK(m.instances.size() == 1);
+    CHECK(m.instanceCount() > 0);              // a lamp per road segment
+
+    // A bare mesh return is accepted as a single part.
+    ProcModel single;
+    CHECK(runProcgenModelValue(vm, "return mesh.box{1,1,1}", single, nullptr));
+    CHECK(single.parts.size() == 1);
+    CHECK(single.instances.empty());
 }
 
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
