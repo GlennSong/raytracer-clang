@@ -141,7 +141,9 @@ end
 -- a low frame around garden lots. So a lot is a building PLUS its surrounds.
 local function lot_style(o, r)
   if r < opt(o, "downtown_radius", 55) then
-    return { coverage = 0.85, front = 2.0, ground = { 0.32, 0.32, 0.33 }, hedge = false }
+    -- A paved concrete plaza, no garden — a dense downtown lot.
+    return { coverage = 0.85, front = 2.0,
+             ground = opt(o, "plaza_color", { 0.56, 0.56, 0.54 }), hedge = false }
   elseif r < opt(o, "midtown_radius", 120) then
     return { coverage = 0.70, front = 3.0, ground = { 0.26, 0.42, 0.18 }, hedge = true }
   end
