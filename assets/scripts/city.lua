@@ -75,8 +75,7 @@ end
 -- level cheaply are left as natural green hillside.
 function M.plan_blocks(base, lay, o)
   local flat_relief = opt(o, "flat_relief", 8)     -- max terrain rise to develop (m)
-  local setback     = opt(o, "lot_setback", 2)     -- building inset within its lot (m)
-  local min_edge    = opt(o, "min_building", 9)    -- skip lots too small to build on
+  local min_lot     = opt(o, "min_lot", 14)        -- lot must hold a building + yards
   local park_frac   = opt(o, "park_fraction", 0.10)
   local pads, plan  = {}, {}
   for _, block in ipairs(lay.blocks) do
@@ -88,17 +87,17 @@ function M.plan_blocks(base, lay, o)
     if (hi - lo) <= flat_relief then
       local y = base:at(cx, cz)        -- the whole block levels to its centre height
       -- `inset` pulls the parcels in off the road centrelines (carriageway +
-      -- sidewalk + a front setback) so buildings sit inside the block, not the street.
+      -- sidewalk + a front setback) so lots sit inside the block, not the street.
       for _, lot in ipairs(city.lots(block,
           { inset = opt(o, "block_inset", 12), target_area = opt(o, "lot_area", 520),
             min_area = opt(o, "lot_min_area", 150), seed = opt(o, "seed", 7) })) do
-        local fw, fd = lot.w - 2 * setback, lot.d - 2 * setback
-        if fw >= min_edge and fd >= min_edge then     -- a building actually fits
+        if lot.w >= min_lot and lot.d >= min_lot then     -- room for a plot
+          -- The pad levels the WHOLE lot (garden + building), so the parcel reads flat.
           pads[#pads + 1] = { y = y,
-            poly = rect(lot.cx, lot.cz, fw * 0.5 + 1, fd * 0.5 + 1, lot.yaw) }
+            poly = rect(lot.cx, lot.cz, lot.w * 0.5 + 0.5, lot.d * 0.5 + 0.5, lot.yaw) }
           local park = (math.floor(lot.cx * 13 + lot.cz * 7) % 100) < (park_frac * 100)
           plan[#plan + 1] = { kind = park and "park" or "build",
-            cx = lot.cx, cz = lot.cz, fw = fw, fd = fd, yaw = lot.yaw, y = y,
+            cx = lot.cx, cz = lot.cz, w = lot.w, d = lot.d, yaw = lot.yaw, y = y,
             r = math.sqrt(lot.cx * lot.cx + lot.cz * lot.cz) }
         end
       end
@@ -111,9 +110,11 @@ end
 -- Downtown grows glass/metal towers (some round, set back as they climb);
 -- midtown concrete/stucco/brick mid-rises; the residential fringe brick & painted
 -- low-rises. So the skyline reads as a varied city, not a field of equal boxes.
+-- Returns variety params (style/floors/setbacks/shape); the placer adds the
+-- width/depth sized to the building's footprint within the lot.
 function M.building_args(o, b)
   local h = math.floor(b.cx * 31 + b.cz * 17) % 997
-  local a = { width = b.fw, depth = b.fd, floors = floors_at(o, b.r),
+  local a = { floors = floors_at(o, b.r),
               ground_retail = true, walkable_ground = true,
               seed = math.floor(b.cx * 7 + b.cz) % 100000 }
   if b.r < opt(o, "downtown_radius", 55) then
@@ -134,23 +135,66 @@ function M.building_args(o, b)
   return a
 end
 
--- ----- place each planned lot on the conformed (level) terrain ----------------
--- Each lot is oriented (turned to its parcel), so the plinth/building/lawn is
--- built centred at the origin and `mesh.place`d at the lot centre + angle.
+-- ----- lot dressing: how a parcel is filled, by district ----------------------
+-- coverage = building's share of the lot; front = forecourt depth toward the
+-- street; ground = the lot slab colour (paved downtown -> lawn outward); hedge =
+-- a low frame around garden lots. So a lot is a building PLUS its surrounds.
+local function lot_style(o, r)
+  if r < opt(o, "downtown_radius", 55) then
+    return { coverage = 0.85, front = 2.0, ground = { 0.32, 0.32, 0.33 }, hedge = false }
+  elseif r < opt(o, "midtown_radius", 120) then
+    return { coverage = 0.70, front = 3.0, ground = { 0.26, 0.42, 0.18 }, hedge = true }
+  end
+  return { coverage = 0.55, front = 4.5, ground = { 0.28, 0.46, 0.20 }, hedge = true }
+end
+
+-- ----- place each planned lot on the conformed (level) terrain -----------------
+-- Everything is built centred at the origin (the building shifted to its local
+-- footprint) and mesh.place'd at the lot centre + yaw, so the parcel turns as a
+-- unit: a level ground slab, an optional open-front hedge, then the building set
+-- back behind its forecourt and squared to the street.
 function M.place_blocks(m, plan, land, o)
   for _, b in ipairs(plan) do
-    local hw, hd = b.fw * 0.5, b.fd * 0.5
+    local sty = lot_style(o, b.r)
+    local hw, hd = b.w * 0.5, b.d * 0.5
+    local function place(part) m:add_solid(mesh.place(part, { b.cx, b.y, b.cz }, b.yaw)) end
+
+    -- Level lot ground (lawn / paved forecourt), filling the parcel.
+    place(scope{ origin = { -hw, -0.05, -hd }, size = { b.w, 0.2, b.d } }:box(sty.ground))
+
+    -- Open-front hedge: a thin low frame on the sides + rear (garden lots only),
+    -- leaving the street side open onto the forecourt.
+    if sty.hedge then
+      local t, hh, col = 0.4, 0.7, opt(o, "hedge_color", { 0.17, 0.33, 0.13 })
+      for _, bar in ipairs({ { -hw, -hd, b.w, t }, { -hw, -hd, t, b.d },
+                             { hw - t, -hd, t, b.d } }) do
+        place(scope{ origin = { bar[1], 0, bar[2] }, size = { bar[3], hh, bar[4] } }:box(col))
+      end
+    end
+
     if b.kind == "build" then
-      local plinth = scope{ origin = { -hw, -1.0, -hd }, size = { b.fw, 1.0, b.fd } }
-                       :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 }))
-      m:add_solid(mesh.place(plinth, { b.cx, b.y, b.cz }, b.yaw))
-      local bld = building.grow(M.building_args(o, b))
-      m:add_solid(mesh.place(bld, { b.cx, b.y, b.cz }, b.yaw))
-    else
-      -- A park: a flat manicured lawn on the same level plot (distinct green).
-      local lawn = scope{ origin = { -hw, 0, -hd }, size = { b.fw, 0.2, b.fd } }
-                     :box(opt(o, "park_color", { 0.24, 0.46, 0.17 }))
-      m:add_solid(mesh.place(lawn, { b.cx, b.y, b.cz }, b.yaw))
+      -- Building footprint within the lot, set back to leave a forecourt toward
+      -- the street (+Z). Sized from coverage; skip if it comes out too small.
+      local bw = b.w * sty.coverage
+      local bd = (b.d - sty.front) * sty.coverage
+      if bw >= 8 and bd >= 8 then
+        local yaw, zoff = b.yaw, b.d * 0.5 - sty.front - bd * 0.5
+        -- A deliberate diagonal: a small share of lots turn (and shrink to fit) —
+        -- intentional variety, not the accidental corner-lot skew of before.
+        local hsh = math.floor(b.cx * 7 + b.cz * 3) % 100
+        if hsh < opt(o, "diagonal_chance", 6) then
+          yaw = b.yaw + math.pi * 0.22 * ((hsh % 2 == 0) and 1 or -1)
+          bw, bd, zoff = bw * 0.72, bd * 0.72, 0
+        end
+        local args = M.building_args(o, b); args.width = bw; args.depth = bd
+        local hbw, hbd = bw * 0.5, bd * 0.5
+        m:add_solid(mesh.place(
+          scope{ origin = { -hbw, -1.0, zoff - hbd }, size = { bw, 1.0, bd } }
+            :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 })),
+          { b.cx, b.y, b.cz }, yaw))
+        m:add_solid(mesh.place(mesh.translate(building.grow(args), { 0, 0, zoff }),
+          { b.cx, b.y, b.cz }, yaw))
+      end
     end
   end
 end

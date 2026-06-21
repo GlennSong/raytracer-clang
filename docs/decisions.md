@@ -2803,11 +2803,20 @@ conformed to.
 Lot subdivision: a block is now partitioned into building parcels rather than
 taking one oversized building centred on the whole face. `city.lots(block, ...)`
 exposes the C++ `subdivideBlock` (recursive OBB bisection) to Lua, returning each
-lot as an oriented box { cx, cz, w, d, angle, area, frontage }; `mesh.place`
-seats a part at a position + yaw. `city.lua` `plan_blocks` subdivides each
+lot as an oriented box { cx, cz, w, d, yaw, area }; `mesh.place` seats a part at a
+position + yaw. The lot is `inset` off the road centrelines first (so parcels
+clear the carriageway + sidewalk) and squared to its own box — the yaw is the lot
+edge facing the street (chosen by the parcel's outward frontage), so a grid
+building fronts the road *perpendicular* instead of skewing toward the corner the
+raw radial frontage pointed at. `city.lua` `plan_blocks` subdivides each
 developable face and seats a building *sized to fit* each lot (skipping lots too
-small — a left gap), turned to the parcel. So buildings sit inside their plots at
-real urban density (many right-sized buildings per block) instead of overflowing.
+small — a left gap), turned to the parcel. The lot is dressed as a unit (a "lot
+recipe"): a level ground slab (paved forecourt downtown -> lawn outward), the
+building set back behind a forecourt at a district-dependent coverage, an
+open-front hedge framing garden lots, and a small `diagonal_chance` that turns
+(and shrinks) the occasional building as *deliberate* variety. So buildings sit
+inside their plots at real urban density, fronting the street, with gardens —
+not a field of oversized boxes.
 
 Hub plaza + building variety + parameterized recipes: a many-armed junction
 (`plaza`/`plaza_min_arms`) trims every arm back to the plaza radius so the pad

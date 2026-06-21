@@ -824,12 +824,17 @@ int l_city_lots(lua_State* L) {
         // The OBB axis most aligned with the frontage runs toward the street
         // (depth); the other runs along it (the facade width).
         int depthAxis = std::abs(dot(obb.axis[0], f)) >= std::abs(dot(obb.axis[1], f)) ? 0 : 1;
+        // Square the building to the lot box (so a grid building fronts the road
+        // perpendicular) — the yaw is the depth axis turned to point outward, NOT
+        // the raw radial frontage (which sent corner lots off at 45°).
+        Vec2 sd = obb.axis[depthAxis];
+        if (dot(sd, f) < 0) sd = sd * -1.0;
         lua_createtable(L, 0, 5);
         lua_pushnumber(L, obb.center.x);                       lua_setfield(L, -2, "cx");
         lua_pushnumber(L, obb.center.y);                       lua_setfield(L, -2, "cz");
         lua_pushnumber(L, obb.half[1 - depthAxis] * 2.0);      lua_setfield(L, -2, "w");
         lua_pushnumber(L, obb.half[depthAxis] * 2.0);          lua_setfield(L, -2, "d");
-        lua_pushnumber(L, std::atan2(f.x, f.y));               lua_setfield(L, -2, "yaw");
+        lua_pushnumber(L, std::atan2(sd.x, sd.y));             lua_setfield(L, -2, "yaw");
         lua_pushnumber(L, lot.area);                           lua_setfield(L, -2, "area");
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
     }
