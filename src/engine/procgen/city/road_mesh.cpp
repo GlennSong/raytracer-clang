@@ -1,5 +1,6 @@
 #include "road_mesh.h"
 
+#include "../../mesh_builder.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,20 +18,11 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     };
     auto to3d = [&](const Vec2& v) { return Vec3(v.x, height(v.x, v.y), v.y); };
 
+    // Road geometry lies flat-ish on the terrain, so every tri faces up; emitTri
+    // winds each one clockwise-front (the engine convention) regardless of the
+    // order the strip/junction code happens to pass its corners in.
     auto addTri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        const Vec3 up(0, 1, 0);
-        auto mk = [&](const Vec3& q) {
-            Vertex vt(q, up, Vec3(1, 0, 0), 0, 0);
-            vt.color = p.color;
-            return vt;
-        };
-        mesh.vertices.push_back(mk(a));
-        mesh.vertices.push_back(mk(b));
-        mesh.vertices.push_back(mk(c));
-        mesh.indices.push_back(base);
-        mesh.indices.push_back(base + 1);
-        mesh.indices.push_back(base + 2);
+        MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.color);
     };
     // A flat strip between two cross-sections, segmented + draped on the terrain.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,

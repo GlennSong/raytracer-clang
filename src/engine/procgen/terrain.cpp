@@ -350,18 +350,9 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
         }
     }
 
-    mesh.indices.reserve(static_cast<size_t>(res) * res * 6);
-    for (int j = 0; j < res; j++) {
-        for (int i = 0; i < res; i++) {
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;                  // +x
-            uint32_t c = a + static_cast<uint32_t>(n);   // +z
-            uint32_t d = c + 1;                  // +x, +z
-            // Clockwise-front winding (matches the box convention) so the top
-            // surface faces up — and recomputeNormals derives up-facing normals.
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
-    }
+    // Clockwise-front winding so the top faces up; recomputeNormals then derives
+    // the up-facing smooth normals from it.
+    MeshBuilder::gridIndices(mesh, n, n);
 
     MeshBuilder::recomputeNormals(mesh);
     // UVs span [0,1] across the patch (offset by half, scaled by 1/size).
@@ -485,17 +476,8 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                 }
             }
 
-            mesh.indices.reserve(static_cast<size_t>(res) * res * 6);
-            for (int j = 0; j < res; j++) {
-                for (int i = 0; i < res; i++) {
-                    uint32_t a = static_cast<uint32_t>(j * n + i);
-                    uint32_t b = a + 1;
-                    uint32_t c = a + static_cast<uint32_t>(n);
-                    uint32_t d = c + 1;
-                    // Same clockwise-front winding as generateTerrain (top up).
-                    mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-                }
-            }
+            // Same clockwise-front winding as generateTerrain (top up).
+            MeshBuilder::gridIndices(mesh, n, n);
 
             chunk.boundsMin = Vec3(originX, minY, originZ);
             chunk.boundsMax = Vec3(originX + chunkSize, maxY, originZ + chunkSize);

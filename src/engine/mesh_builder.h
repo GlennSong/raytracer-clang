@@ -49,6 +49,35 @@ struct MeshBuilder {
     // face cross product), e.g. after displacing vertices (noise terrain).
     static void recomputeNormals(RenderMesh& mesh);
 
+    // --- Winding-aware face emission -------------------------------------
+    // The engine winds front faces CLOCKWISE: for a triangle (a,b,c) the
+    // outward geometric normal is cross(c-a, b-a) (see recomputeNormals), and
+    // the Metal viewer culls back faces by that rule. The offline path tracer
+    // is two-sided, so it silently tolerates flipped winding — which is how
+    // inside-out terrain/road meshes slip through until they reach the viewer.
+    // These helpers bake the convention in once: each orients the triangle(s)
+    // it appends so the geometric normal agrees with the supplied shading
+    // `normal`, and flat-shades them with that normal + color. Generators
+    // (terrain, roads, the shape grammar) emit through here instead of
+    // hand-rolling index order, so winding can't drift per call site.
+
+    // One triangle through the three corners, wound to face `normal`.
+    static void emitTri(RenderMesh& mesh, const Vec3& a, const Vec3& b,
+                        const Vec3& c, const Vec3& normal, const Vec3& color);
+
+    // One quad: corners a,b,c,d in perimeter order, wound to face `normal`,
+    // with 0..1 UVs (a->b is U, a->d is V) and a->b as the tangent.
+    static void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,
+                         const Vec3& c, const Vec3& d, const Vec3& normal,
+                         const Vec3& color);
+
+    // Append clockwise-front indices for an up-facing (+Y) vertex lattice
+    // already pushed row-major: vertex (i,j) lives at `base + j*cols + i`,
+    // with +i = +X and +j = +Z. The shared triangulation for terrain grids
+    // (heightfield bake + noise terrain), so the top always faces up.
+    static void gridIndices(RenderMesh& mesh, int cols, int rows,
+                            uint32_t base = 0);
+
     // Planar UVs projected along an axis (0=x, 1=y, 2=z): the two perpendicular
     // position components, scaled, become (u, v). A cheap default mapping for
     // terrain (axis=1) and generated geometry that ships without UVs.

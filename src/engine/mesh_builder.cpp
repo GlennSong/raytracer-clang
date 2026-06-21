@@ -403,6 +403,67 @@ void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
     for (Vertex& v : mesh.vertices) v.normal = normalize(v.normal);
 }
 
+void MeshBuilder::emitTri(RenderMesh& mesh, const Vec3& a, const Vec3& b,
+                          const Vec3& c, const Vec3& normal, const Vec3& color) {
+    uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    Vec3 edge = b - a;
+    Vec3 tan = edge.lengthSquared() > 1e-12 ? normalize(edge) : Vec3(1, 0, 0);
+    auto mk = [&](const Vec3& p) {
+        Vertex v(p, normal, tan, 0, 0);
+        v.color = color;
+        return v;
+    };
+    mesh.vertices.push_back(mk(a));
+    mesh.vertices.push_back(mk(b));
+    mesh.vertices.push_back(mk(c));
+    // Keep (a,b,c) when its outward normal cross(c-a,b-a) agrees with `normal`,
+    // else swap b/c so the front face points the way the shading normal does.
+    if (dot(cross(c - a, b - a), normal) >= 0)
+        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
+    else
+        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1});
+}
+
+void MeshBuilder::emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,
+                           const Vec3& c, const Vec3& d, const Vec3& normal,
+                           const Vec3& color) {
+    uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    Vec3 edge = b - a;
+    Vec3 tan = edge.lengthSquared() > 1e-12 ? normalize(edge) : Vec3(1, 0, 0);
+    auto vtx = [&](const Vec3& p, float u, float vv) {
+        Vertex v(p, normal, tan, u, vv);
+        v.color = color;
+        return v;
+    };
+    mesh.vertices.push_back(vtx(a, 0, 0));
+    mesh.vertices.push_back(vtx(b, 1, 0));
+    mesh.vertices.push_back(vtx(c, 1, 1));
+    mesh.vertices.push_back(vtx(d, 0, 1));
+    if (dot(cross(c - a, b - a), normal) >= 0)
+        mesh.indices.insert(mesh.indices.end(),
+                            {base, base + 1, base + 2, base, base + 2, base + 3});
+    else
+        mesh.indices.insert(mesh.indices.end(),
+                            {base, base + 2, base + 1, base, base + 3, base + 2});
+}
+
+void MeshBuilder::gridIndices(RenderMesh& mesh, int cols, int rows,
+                              uint32_t base) {
+    if (cols < 2 || rows < 2) return;
+    mesh.indices.reserve(mesh.indices.size() +
+                         static_cast<size_t>(cols - 1) * (rows - 1) * 6);
+    for (int j = 0; j + 1 < rows; ++j) {
+        for (int i = 0; i + 1 < cols; ++i) {
+            uint32_t a = base + static_cast<uint32_t>(j * cols + i);
+            uint32_t b = a + 1;                              // +x
+            uint32_t c = a + static_cast<uint32_t>(cols);    // +z
+            uint32_t d = c + 1;                              // +x, +z
+            // Clockwise-front for an up-facing (+Y) surface.
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+        }
+    }
+}
+
 void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high) {
     if (mesh.vertices.empty()) return;
     double minY = 1e30, maxY = -1e30;

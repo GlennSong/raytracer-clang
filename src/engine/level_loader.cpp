@@ -233,6 +233,23 @@ static SourceSpec buildSourceSpec(const json& ent, const std::string& shape) {
     return spec;
 }
 
+// Spawn a procgen "document" entity: a transform + SourceSpec carrying the
+// recipe, with no mesh of its own. LevelWriter only serialises SourceSpec
+// entities, so this is what lets a generated scene survive the editor's
+// save-then-reload (Play): the render/instance entities a generator emits are
+// runtime companions, dropped on save and regenerated from this recipe on load.
+// The city and script (ADR-0042) loaders anchor on one of these; the tree folds
+// the same role into its bark entity (which is also a Renderable).
+static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
+                                  const std::string& recipe, World& world) {
+    Entity doc = world.create();
+    createEntityCommon(doc, ent, world);
+    SourceSpec spec = buildSourceSpec(ent, shape);
+    spec.recipe = recipe;
+    world.add<SourceSpec>(doc, spec);
+    return doc;
+}
+
 // A hero parametric tree (shape: "tree"): a real, collidable object you can
 // bounce off or shoot at, distinct from the instanced vegetation scatter. The
 // bark is one mesh (procedural bark texture, opaque) with a static triangle
@@ -394,13 +411,9 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
     // reloads the level — while the top-level "terrain" block survives, leaving
     // "just terrain". The render/collider entities below are runtime companions
     // (regenerated from this recipe on load), exactly like the tree's leaf entity.
-    {
-        Entity doc = world.create();
-        createEntityCommon(doc, ent, world);
-        SourceSpec spec = buildSourceSpec(ent, "city");
-        if (ent.contains("city")) spec.recipe = ent["city"].dump();
-        world.add<SourceSpec>(doc, spec);
-    }
+    spawnDocumentEntity(ent, "city",
+                        ent.contains("city") ? ent["city"].dump() : std::string(),
+                        world);
 
     using Surface = RenderMaterial::Surface;
     const std::string key = "city:" + std::to_string(index);
@@ -597,22 +610,17 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     std::string file = ent.value("file", std::string());
 
     // Document entity: carries the SourceSpec (recipe) so the shape:"script"
-    // entity round-trips through the editor's save-then-reload. LevelWriter only
-    // serialises entities with a SourceSpec, so without this the recipe is
-    // dropped on Play→save and the world comes back empty on reload — the same
-    // failure the tree (bark) and city (doc) entities avoid. The render/instance
-    // entities spawned below are runtime companions, regenerated from this recipe
-    // on load. Created before the file read so even a recipe that fails to load
-    // (transient missing file) still round-trips instead of vanishing on save.
+    // entity round-trips through the editor's save-then-reload. Without it the
+    // recipe is dropped on Play→save and the world comes back empty on reload —
+    // the same failure the tree (bark) and city (doc) entities avoid. The
+    // render/instance entities spawned below are runtime companions, regenerated
+    // from this recipe on load. Created before the file read so even a recipe
+    // that fails to load (transient missing file) still round-trips.
     {
-        Entity doc = world.create();
-        createEntityCommon(doc, ent, world);
-        SourceSpec spec = buildSourceSpec(ent, "script");
         json recipe;
         recipe["file"] = file;
         if (ent.contains("seed")) recipe["seed"] = ent["seed"];
-        spec.recipe = recipe.dump();
-        world.add<SourceSpec>(doc, spec);
+        spawnDocumentEntity(ent, "script", recipe.dump(), world);
     }
 
     std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);

@@ -112,3 +112,60 @@ TEST_CASE(mesh_bake_height_color_gradients_bottom_to_top) {
     CHECK((m.vertices[2].color - high).lengthSquared() < 1e-9);   // top = high
     CHECK_APPROX(m.vertices[1].color.y, (low.y + high.y) * 0.5, 1e-5);  // midpoint
 }
+
+namespace {
+// The engine winds front faces clockwise: a triangle (a,b,c)'s outward normal
+// is cross(c-a, b-a). For correct back-face culling that must agree with the
+// triangle's shading normal. Returns true if every triangle in `m` is wound so.
+bool windingFacesShadingNormal(const RenderMesh& m) {
+    for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vertex& a = m.vertices[m.indices[i]];
+        const Vertex& b = m.vertices[m.indices[i + 1]];
+        const Vertex& c = m.vertices[m.indices[i + 2]];
+        Vec3 geo = cross(c.position - a.position, b.position - a.position);
+        if (dot(geo, a.normal) < 0) return false;
+    }
+    return true;
+}
+}  // namespace
+
+TEST_CASE(mesh_emit_tri_winds_to_face_normal_either_input_order) {
+    // The same three corners passed in opposite orders must both come out wound
+    // so the front face points at the supplied up normal (CW-front convention).
+    Vec3 p0(0, 0, 0), p1(1, 0, 0), p2(0, 0, 1);
+    RenderMesh cw, ccw;
+    MeshBuilder::emitTri(cw, p0, p1, p2, Vec3(0, 1, 0), Vec3(1, 1, 1));
+    MeshBuilder::emitTri(ccw, p0, p2, p1, Vec3(0, 1, 0), Vec3(1, 1, 1));
+    CHECK(windingFacesShadingNormal(cw));
+    CHECK(windingFacesShadingNormal(ccw));
+    CHECK(cw.indices.size() == 3 && ccw.indices.size() == 3);
+}
+
+TEST_CASE(mesh_emit_quad_winds_to_face_normal) {
+    // An up-facing quad and a down-facing one (corners listed the same way) both
+    // wind so the geometric normal agrees with the requested shading normal.
+    RenderMesh up, down;
+    Vec3 a(0, 0, 0), b(1, 0, 0), c(1, 0, 1), d(0, 0, 1);
+    MeshBuilder::emitQuad(up, a, b, c, d, Vec3(0, 1, 0), Vec3(1, 1, 1));
+    MeshBuilder::emitQuad(down, a, b, c, d, Vec3(0, -1, 0), Vec3(1, 1, 1));
+    CHECK(up.indices.size() == 6 && down.indices.size() == 6);
+    CHECK(windingFacesShadingNormal(up));
+    CHECK(windingFacesShadingNormal(down));
+}
+
+TEST_CASE(mesh_grid_indices_face_up) {
+    // A flat 3x3 vertex lattice in the XZ plane (row-major, +i=+X, +j=+Z): every
+    // triangle gridIndices emits must face +Y (regression for inverted terrain).
+    RenderMesh m;
+    const int n = 3;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            m.vertices.push_back(Vertex(Vec3(i, 0, j), Vec3(0, 1, 0)));
+    MeshBuilder::gridIndices(m, n, n);
+    CHECK(m.indices.size() == static_cast<size_t>((n - 1) * (n - 1) * 6));
+    CHECK(windingFacesShadingNormal(m));
+    // Degenerate lattices append nothing rather than reading out of bounds.
+    RenderMesh tiny;
+    MeshBuilder::gridIndices(tiny, 1, 5);
+    CHECK(tiny.indices.empty());
+}

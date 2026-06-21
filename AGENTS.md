@@ -118,6 +118,15 @@ recompiling, and lets one generative vocabulary serve every procgen project.
 - **Composability.** Recipes return a common model value (parts + instances +
   colliders + attach points) that nests, so the same call is valid for an
   individual part, a collection, or a whole scene — or anything in between.
+- **Winding goes through the substrate.** The engine winds front faces
+  *clockwise* (the Metal viewer culls back faces by this; the path tracer is
+  two-sided and silently tolerates the wrong order, so bad winding only shows up
+  in the viewer). Builders MUST emit faces through the winding-aware helpers
+  (`MeshBuilder::emitTri/emitQuad/gridIndices`) rather than hand-rolling index
+  order, so a generator can't ship inside-out geometry. A generated entity that
+  must survive the editor's Play save/reload spawns a document entity
+  (`spawnDocumentEntity`) carrying its recipe; the render/instance entities are
+  runtime companions regenerated from it.
 
 ## Engineering Ethos (Engine Rule)
 

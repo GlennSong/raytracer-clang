@@ -2,6 +2,7 @@
 
 #include "noise.h"
 #include "erosion.h"
+#include "../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -128,18 +129,10 @@ RenderMesh bakeHeightMesh(const HeightField& h, double size, int resolution,
             mesh.vertices.push_back(v);
         }
     }
-    mesh.indices.reserve(static_cast<std::size_t>(res) * res * 6);
-    for (int j = 0; j < res; ++j) {
-        for (int i = 0; i < res; ++i) {
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;
-            uint32_t c = a + n;
-            uint32_t d = c + 1;
-            // CCW seen from above (+Y), so the geometric normal points up.
-            mesh.indices.push_back(a); mesh.indices.push_back(c); mesh.indices.push_back(b);
-            mesh.indices.push_back(b); mesh.indices.push_back(c); mesh.indices.push_back(d);
-        }
-    }
+    // Clockwise-front winding for an up-facing grid (the engine's convention —
+    // see MeshBuilder::gridIndices). The previous hand-rolled order here was
+    // inverted, so the terrain top was culled as a back face in the viewer.
+    MeshBuilder::gridIndices(mesh, n, n);
     return mesh;
 }
 

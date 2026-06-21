@@ -121,29 +121,13 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
     return m;
 }
 
+// The shape grammar's quad emitter is the engine's winding-aware MeshBuilder
+// helper (kept as a free function here so the grammar's many call sites read
+// tersely). Centralising the winding rule means the grammar, terrain and roads
+// can't drift apart on which way a front face points.
 void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
               const Vec3& d, const Vec3& normal, const Vec3& color) {
-    uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-    Vec3 tan = normalize(b - a);
-    auto vtx = [&](const Vec3& p, float u, float vv) {
-        Vertex v(p, normal, tan, u, vv);
-        v.color = color;
-        return v;
-    };
-    mesh.vertices.push_back(vtx(a, 0, 0));
-    mesh.vertices.push_back(vtx(b, 1, 0));
-    mesh.vertices.push_back(vtx(c, 1, 1));
-    mesh.vertices.push_back(vtx(d, 0, 1));
-    // Engine winding convention (matches MeshBuilder::box, which renders correctly
-    // under the viewer's back-face culling): the triangle's geometric normal points
-    // OPPOSITE the outward shading `normal` (geo·normal < 0). The offline path
-    // tracer is two-sided so it never caught this; the Metal viewer culls, so a
-    // flipped winding renders the building inside-out.
-    Vec3 geo = cross(b - a, c - a);
-    if (dot(geo, normal) <= 0)
-        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
-    else
-        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1, base, base + 3, base + 2});
+    MeshBuilder::emitQuad(mesh, a, b, c, d, normal, color);
 }
 
 // Append a part's geometry, creating the part lazily and keeping materialIndex.
