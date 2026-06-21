@@ -2850,6 +2850,42 @@ marshalled into a Lua global `args` (`setRecipeArgs`): the same `city.lua` drive
 `city_lua.json` (grid) and `city_radial.json` (radial + plaza) from the level
 alone. Stairstepped terrace lots and the terrain-following grower remain as above.
 
+Tensor-field generator — the dovetail of radial and grid (after Chen et al.,
+SIGGRAPH 2008): rather than stamping one pattern, `tensorRoads` builds a
+continuous field of road *orientations* and traces streets along it, so the
+layout morphs smoothly from radial in the core to a grid at the rim with no seam.
+The field is a symmetric traceless tensor `[[a,b],[b,-a]]`; its two eigenvectors
+are everywhere perpendicular and have no head/tail (a road has no direction),
+which is exactly why a *tensor* field blends without the cowlick singularities a
+vector field gives. We sum a radial singularity at the centre (weight decaying as
+`exp(-(r/decay)^2)` — its eigenvectors give avenues + rings) and a constant grid
+basis (the rim lattice); roads are evenly-spaced streamlines (Jobard & Lefebvre)
+of both eigenvector families, integrated RK2. The separation rule is kept *tight*
+(`dStop ≈ 0.4·spacing`): same-family streamlines are parallel and only crowd when
+the radial spokes converge, so a small stop curbs near-duplicate slivers without
+truncating a line at the cross-family intersections that *form* the blocks — that
+balance is what lets the usual `planarize`/`extractBlocks` pass recover clean
+faces (sparse truncation starved it; none let parallel lines bunch into slivers).
+Exposed as `city.layout{ pattern="tensor", spacing, step, grid_angle,
+radial_strength/decay, grid_strength }`. *Why not space colonization:* SCA grows
+organic branches toward attractors — great for medieval sprawl or knitting two
+districts across an irregular gap, but it can't make a crisp grid or true rings,
+so it's a connective layer, not a district generator.
+
+Lua recipes draped on the CDLOD terrain (the script sibling of the C++ city's
+`onTerrain`): a `shape:"script"` entity flagged `onTerrain:true` is *pre-run*
+before the terrain is meshed, with the level's natural `terrainHeight` injected as
+the Lua global `ground` (`setGlobalHeightField`). The recipe samples it to seat
+its city and calls `terrain.conform(ground, layout, …)` — which now returns the
+conformed field *and* an opaque regions handle — then hands the regions to
+`m:conform(regions)`, recording cut/fill footprints on the model (`ProcModel`
+gained a `flatten` channel). Both loaders (viewer `level_loader`, offline
+`level_scene`) fold those footprints into `TerrainParams.flatten` and grade the
+CDLOD ground flat under the roads/blocks, then spawn/bake from the cached model so
+the recipe runs once and the walkable terrain meets the carriageways. This is what
+lets `twin_cities.lua` place a radial and a tensor city (plus a graded highway and
+an instanced L-system forest, `lsystem_tree.lua`) on one walkable CDLOD terrain.
+
 ---
 
 ## Interim seams & tech-debt register

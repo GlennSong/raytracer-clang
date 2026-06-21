@@ -9,10 +9,11 @@
 #include "procgen/surface_maps.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
+#include "procgen/terrain_field.h"   // HeightField (level ground sampler)
+#include "procgen/proc_model.h"      // ProcModel (script model cache)
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
-#include "procgen/proc_model.h"
 #endif
 #include "model_importer.h"
 #include <random>

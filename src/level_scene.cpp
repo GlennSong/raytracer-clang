@@ -8,6 +8,8 @@
 #include "engine/model_importer.h"
 #include "engine/procgen/city/city.h"
 #include "engine/procgen/noise.h"
+#include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
+#include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
 #include "log.h"
 #include <unordered_map>
 #include <array>
