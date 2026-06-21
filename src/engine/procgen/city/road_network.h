@@ -26,6 +26,25 @@ struct RoadGraph {
     Real edgeWidth(int edgeIndex) const { return edges[edgeIndex].width; }
 };
 
+// A curved road centreline (the arc a ring/roundabout follows). Curves are the
+// source of truth; a curve is SAMPLED into the planar graph as a fine polyline
+// with a bounded chord error, so the planar pipeline (planarize/blocks/parcels)
+// stays segment-based while the road reads as a true curve and lots line the arc.
+// Straight roads are just ordinary edges. (Future: cubic-spline artist roads.)
+struct RoadArc {
+    Vec2 center;
+    Real radius = 0;
+    Real a0 = 0, a1 = 0;        // swept from a0 to a1 (radians, signed)
+    Vec2 at(Real t) const;      // point on the arc, t in [0,1]
+    Real length() const { return std::abs(a1 - a0) * radius; }
+};
+// Sample `arc` from node n0 (at a0) to n1 (at a1) into a chain of edges with
+// intermediate nodes, keeping the chord error <= maxErr (so the polyline is
+// indistinguishable from the true curve). The endpoints stay n0/n1 so spokes
+// attach to them. `minSegs` is a floor for tiny arcs.
+void sampleArc(RoadGraph& g, int n0, int n1, const RoadArc& arc, Real width,
+               RoadClass klass, Real maxErr = 0.15, int minSegs = 1);
+
 // Deformed-grid road generator (city-plan §3.1, the bootstrap). A grid of streets
 // over a square region centred on `center`, vertices jittered by noise, with
 // optional dropout of low-importance local streets. Deterministic for `seed`.
@@ -42,18 +61,18 @@ RoadGraph gridRoads(const GridRoadParams& params);
 
 // Radial road generator (ADR-0044): concentric ring roads + radial avenues — the
 // "Paris/Étoile" pattern. Rings every `ringSpacing` out to `extent`; each ring is
-// a smooth circle (`ringSubdiv` chords per avenue gap, so it reads as a curve, not
-// a coarse polygon); `spokes` avenues radiate from the central ROUNDABOUT (the
-// innermost ring) outward — they meet the ring, never a centre point, so there is
-// no spike and the centre is an island. The outer ring is arterial so the region
-// stays enclosed. Deterministic for `seed`.
+// a true circular ARC sampled to a fine polyline (bounded chord error), so it
+// reads as a real curve and lots line it. `spokes` avenues radiate from the
+// central ROUNDABOUT (the innermost ring) outward — they meet the ring, never a
+// centre point, so there is no spike and the centre is an island. The outer ring
+// is arterial so the region stays enclosed. Deterministic for `seed`.
 struct RadialParams {
     Vec2  center{0, 0};
     Real  extent = 400;      // outer radius (m)
     Real  ringSpacing = 70;  // distance between concentric rings (m)
     int   spokes = 8;        // radial avenues from the roundabout
-    int   ringSubdiv = 6;    // chords per avenue gap on a ring (smoothness)
-    Real  jitter = 0.03;     // node jitter as a fraction of ringSpacing (small = round)
+    int   ringSubdiv = 6;    // minimum chords per avenue gap (arc sampling adds more)
+    Real  jitter = 0.03;     // avenue ANGLE jitter (kept on the circle so rings stay round)
     Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
     uint32_t seed = 0;
 };

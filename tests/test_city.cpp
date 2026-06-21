@@ -131,17 +131,18 @@ TEST_CASE(road_mesh_lane_markings_paint_lines) {
 }
 
 TEST_CASE(radial_roads_make_rings_and_spokes) {
-    // ADR-0044: concentric SMOOTH rings + avenues radiating from a central
-    // roundabout (the Étoile model) — no centre node, so the avenues meet the
-    // inner ring instead of converging to a spike.
+    // ADR-0044: concentric rings sampled from true ARCS (bounded chord error) +
+    // avenues radiating from a central roundabout. No centre node, so the avenues
+    // meet the inner ring instead of converging to a spike; rings are smooth.
     RadialParams rp;
-    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 8; rp.ringSubdiv = 6; rp.seed = 5;
+    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 8; rp.seed = 5;
     RoadGraph g = radialRoads(rp);
     CHECK(g.edges.size() > 0);
 
     const int rings = 4;                          // round(280 / 70)
-    const int segs = rp.spokes * rp.ringSubdiv;   // nodes per ring (smooth circle)
-    CHECK(g.nodes.size() == static_cast<std::size_t>(rings * segs));   // no centre node
+    // Arc sampling gives many nodes per ring (a smooth circle), more than a coarse
+    // polygon would — comfortably above spokes per ring.
+    CHECK(g.nodes.size() > static_cast<std::size_t>(rings * rp.spokes * 3));
 
     Real minR = 1e9, maxR = 0;
     for (const RoadNode& n : g.nodes) {
@@ -151,7 +152,18 @@ TEST_CASE(radial_roads_make_rings_and_spokes) {
     CHECK(minR > rp.ringSpacing * 0.7);           // nothing inside the roundabout
     CHECK(maxR <= rp.extent + rp.ringSpacing * 0.2);
 
-    // Blocks extract from the planarized radial graph (wedge-shaped lots).
+    // Sampled ring nodes sit ON their circle (true arc, not a chord midpoint that
+    // cuts the corner): every node is within chord-error slack of some ring radius.
+    int offCircle = 0;
+    for (const RoadNode& n : g.nodes) {
+        Real r = n.pos.length();
+        bool onRing = false;
+        for (int k = 1; k <= rings; ++k)
+            if (std::abs(r - k * rp.ringSpacing) < 1.0) onRing = true;
+        if (!onRing) offCircle++;
+    }
+    CHECK(offCircle == 0);
+
     std::vector<Poly2> blocks = extractBlocks(planarize(g));
     CHECK(blocks.size() > 8);
 }

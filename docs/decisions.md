@@ -2818,11 +2818,21 @@ open-front hedge framing garden lots, and a small `diagonal_chance` that turns
 inside their plots at real urban density, fronting the street, with gardens —
 not a field of oversized boxes.
 
+Curved roads as a first-class primitive (sampled, not analytic): a `RoadArc`
+(centre/radius/sweep) is the *source* geometry of a curved road; `sampleArc`
+samples it into the planar graph as a fine polyline with a bounded chord error
+(≤0.15 m), so the existing segment-based pipeline (planarize/blocks/parcels) is
+untouched while the road reads as a true smooth curve and lots line the arc. The
+deliberately-deferred part of "full curved topology" is *analytic* curve–curve
+intersection + curved-boundary block faces — sampled instead because the result
+is visually identical for a fraction of the cost/risk. Straight roads (the grid)
+are just edges; the radial generator builds its rings from arcs.
+
 Radial = Place de l'Étoile: `radialRoads` was a wagon wheel (coarse polygon
 rings, all spokes converging to one centre node = a spike). Rebuilt: each ring is
-a smooth circle of `spokes * ringSubdiv` short chords; the avenues (fewer now,
-default 8) radiate from the inner **roundabout** (ring 1) outward and never touch
-a centre point, so there is no spike and the disc inside ring 1 is an island.
+a true circular arc (sampled fine), the avenues (fewer now, default 8) radiate
+from the inner **roundabout** (ring 1) outward and never touch a centre point, so
+there is no spike and the disc inside ring 1 is an island.
 `city.lua` fills that island, when `center_plaza` is set, with a round paved plaza
 + a monument (an Arc/obelisk stand-in) instead of subdividing it — the avenues
 radiate around it. Sidewalks follow the chorded rings, so they curve too. The grid
