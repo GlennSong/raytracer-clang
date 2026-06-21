@@ -31,6 +31,27 @@ session.
   (impostor bake + HLOD swap, sector streaming + cross-tile roads — GPU /
   spatial-partition gated). See the city rows in the ADR register.
 
+- **Procedural city on CDLOD terrain + tensor roads + site selection (latest
+  session, ADR-0044)** — a Lua **city recipe now drapes on and grades the engine's
+  CDLOD terrain**, not just its own baked ground: a `shape:"script"` entity flagged
+  `onTerrain:true` is pre-run with the level's natural `terrainHeight` injected as
+  the Lua global `ground`; it samples + `terrain.conform`s it and hands cut/fill
+  footprints back via `m:conform(regions)` (`ProcModel` gained a `flatten` channel),
+  which both loaders fold into `TerrainParams.flatten` before meshing — the script
+  sibling of the C++ city's `onTerrain`. A **tensor-field road generator**
+  (`tensorRoads`, `city.layout{pattern="tensor"}`) traces streets along a blended
+  radial+grid orientation field so one city morphs from rings/avenues in the core to
+  a grid at the rim. **Site selection** (`findFlatSites` / `terrain.flat_sites`)
+  floodfills the heightfield for buildable flat valleys (slope+height bitmap →
+  connected regions → largest inscribed disc), so cities plant on flat ground, not
+  peaks. A **simple L-system tree** (`lsystem_tree.lua`) is instanced as a forest.
+  The demo `twin_cities.json` puts a radial Étoile + a tensor city on found sites,
+  joined by a low-routed highway, with grounded varied buildings (relief gate + lot
+  pad/slab + foundation + district archetypes + coverage/forecourt fit). Covered by
+  `test_city.cpp` (tensor), `test_terrain_field.cpp` (flat_sites), `test_script_vm`.
+  **Owed:** see "Procedural city — phase 2" under Next steps — this shipped as a
+  base to iterate on, not finished.
+
 - **Open-world Phase 1 + interactive render budget (latest session)** — chunked
   terrain → CDLOD heightfield (ADR-0035/0036), vegetation scatter, and a perf +
   look pass (**ADR-0037**), all viewer-verified with the user: foliage depth
@@ -191,6 +212,45 @@ Targets: `editor_app` (the editor), `viewer` (the game; boots into play,
 `--edit` starts in the editor), `raytracer` (offline), `run_tests`.
 
 ## Next steps, in rough priority
+
+0a. **Procedural city — phase 2 (the next big block, from playtest feedback)** —
+   the CDLOD-terrain city + tensor roads + site selection shipped to main as a
+   *base*, and a walkthrough surfaced real issues. Treat this as a focused phase,
+   not a tweak. Known-rough areas, roughly by payoff:
+   - **Conform fidelity at the seams.** Buildings are grounded now (foundations +
+     lot slabs), but the road↔block↔terrain joins still need a proper pass: curbs
+     and sidewalks meeting the graded falloff, the ramp grade (road node heights)
+     vs the block pad grade (block-centre height) disagreeing where a block fronts
+     a road, and the falloff width vs slab thickness. Re-evaluate how a road
+     corridor and an adjacent block pad are reconciled into ONE consistent surface
+     (today they are independent `TerrainFlatten` footprints blended by nearest).
+   - **Robust lot subdivision for curved/concave blocks.** The tensor generator's
+     curved roads make 20-50-vertex block faces that the parcel `inset`/subdivide
+     chokes on; `twin_cities.lua` works around it with a Lua collinear-vertex
+     simplifier. The real fix belongs in C++: a robust polygon inset + an OBB
+     subdivision (or a Voronoi/straight-skeleton parcelling, see the algorithm
+     backlog) that handles many-vertex, gently-concave faces directly.
+   - **Tensor city rim density.** Its core reads well; the rim blocks are large,
+     irregular cells that yield few lots. Wants finer streamline spacing at the rim
+     and/or block-splitting so the outskirts populate.
+   - **Recipe duplication.** `twin_cities.lua` re-ports `city.lua`'s placement
+     (relief gate, pads, slab, foundation, variety) because the Lua sandbox has no
+     `require`. Decide on an engine-level recipe-composition mechanism (a shared
+     prelude, a registered module table, or promoting the placement into C++
+     bindings) so the city pipeline has one home.
+   - **Site selection, fuller.** `terrain.flat_sites` works (floodfill → inscribed
+     disc) but the recipe biases it near fixed targets. A fuller version: place N
+     cities purely from the ranked sites, then route the connecting roads on the
+     buildable grid (least-cost path over the slope-weighted bitmap — already the
+     top algorithm in the backlog below) so highways follow valleys around the
+     mountains instead of a 3-point dog-leg.
+   - **Walk-test the feel.** Foundations/curbs/tree capsules and the character
+     step-up over sidewalks are unverified on a real viewer (the offline tracer has
+     no physics); needs a Mac pass.
+   New, reusable substrate this session already added and tested:
+   `tensorRoads`/`pattern="tensor"`, `findFlatSites`/`terrain.flat_sites`, the
+   `onTerrain` script→CDLOD-terrain conform path (`ground` global + `m:conform`),
+   and `lsystem_tree.lua`. See ADR-0044.
 
 0. **Editor recipe studio (a big block, planned)** — the payoff of the Lua
    procgen authoring (ADR-0042/0043). A whole editor system to *interpret and
