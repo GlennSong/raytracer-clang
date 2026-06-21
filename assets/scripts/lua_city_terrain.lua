@@ -20,9 +20,10 @@ end
 local function build()
   local seed = 7
 
-  -- Terrain: gentle hills so a city still reads, warped for organic contours.
-  local hills = terrain.fbm{ seed = seed, freq = 0.006, amp = 11, octaves = 5 }
-  local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 24)
+  -- Rolling hills the city climbs — a few hills across the footprint (higher
+  -- frequency) and real amplitude, warped for organic contours.
+  local hills = terrain.fbm{ seed = seed, freq = 0.014, amp = 30, octaves = 5 }
+  local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 30)
 
   local m = model.new()
   m:add(terrain.mesh(land, { size = 460, resolution = 220, color = {0.33, 0.40, 0.26} }))
