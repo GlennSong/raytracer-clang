@@ -5,10 +5,12 @@
 #include "../../renderer/renderer.h"  // RenderMesh
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace engine {
 
-struct ErosionParams;   // erosion.h
+struct ErosionParams;    // erosion.h
+struct TerrainFlatten;   // terrain.h
 
 // A world-space heightfield over (x, z) — the compositional substrate for
 // procedural terrain (ADR-0043 extended to terrain). The 2.5D sibling of Field2:
@@ -48,6 +50,15 @@ HeightField heightClamp(HeightField a, double lo, double hi);
 // the whole field), so unlike the analytic primitives it costs time + resolution.
 HeightField erodeField(const HeightField& f, double worldSize, int resolution,
                        const ErosionParams& params);
+
+// --- conform (cut/fill the terrain to a road network / block pads) ---
+// Return a HeightField that blends `base` toward each flatten region's plane
+// (applyFlatten): inside a footprint the height is forced to the plane (a flat
+// pad, or a constant-grade road ramp), easing back to the natural terrain across
+// the footprint's falloff. This is how an urban road stays flat (or a single
+// incline) while the terrain conforms *around* it instead of the road draping
+// over every bump. Pointwise — composes back into the field vocabulary, no grid.
+HeightField conformField(HeightField base, std::vector<TerrainFlatten> regions);
 
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid

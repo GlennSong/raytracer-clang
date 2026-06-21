@@ -39,6 +39,13 @@ TerrainFlatten makeFlattenPad(std::vector<Vec3> polygon, double targetY,
 TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double yB,
                                double halfWidth, double falloff = 6.0);
 
+// Blend a set of flatten footprints over a natural height at one point: the
+// strongest (closest) footprint wins, levelling to its plane inside and easing
+// back to `base` across each footprint's falloff. The pointwise core both the
+// noise terrain and the composable HeightField (terrain.conform) cut/fill with.
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).

@@ -2768,6 +2768,18 @@ terraced — so foundations can't stairstep on a hill.
 Sequenced after the terrain heightfield (done) so roads have richer terrain to
 respond to.
 
+**Landed so far.** The `TerrainFlatten` cut/fill is now exposed to Lua as a
+HeightField combinator: `terrain.conform(field, layout, {margin, falloff})`
+samples the field at each road node, builds a constant-grade ramp corridor per
+edge (`makeFlattenRamp`), and returns a conformed field that levels the ground to
+each road (flat across, a single incline along) and eases back to the natural
+slope across `falloff`. Recipes build the terrain mesh *and* the road ribbon on
+the conformed field, so urban roads sit flat on hilly terrain instead of
+rippling. `applyFlatten` (the pointwise blend) was promoted from a `terrain.cpp`
+static to a public function so the combinator shares the exact cut/fill math the
+noise terrain uses. Block pads, multi-lane cross-sections, sidewalks, and the
+terrain-following grower remain as above.
+
 ---
 
 ## Interim seams & tech-debt register

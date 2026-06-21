@@ -407,6 +407,26 @@ TEST_CASE(procgen_script_composes_terrain_heightfield) {
     CHECK(preset && !preset->vertices.empty());
 }
 
+TEST_CASE(procgen_terrain_conform_binding_runs) {
+    // terrain.conform reads a road layout and cuts/fills the field to it so urban
+    // roads sit flat. Smoke-test the binding end to end (city.layout -> conform ->
+    // mesh); the cut/fill math itself is covered in test_terrain_field.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local base = terrain.fbm{ seed=5, freq=0.02, amp=25, octaves=5 }
+        local lay  = city.layout{ extent=120, cell_size=60, seed=5 }
+        local land = terrain.conform(base, lay, { margin=3, falloff=8 })
+        return terrain.mesh(land, { size=300, resolution=80, color={0.3,0.4,0.25} })
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() == 81u * 81u);
+    CHECK(mesh->indices.size() % 3 == 0);
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);

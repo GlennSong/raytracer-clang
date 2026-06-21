@@ -911,6 +911,57 @@ int l_terr_erode(lua_State* L) {
     pushHeight(L, erodeField(f, size, res, p));
     return 1;
 }
+// terrain.conform(field, layout, { margin=, falloff= }) -> HeightField. Cut/fill
+// the terrain to a road network: each edge becomes a constant-grade ramp corridor
+// (its endpoints at the field's natural height, flat across the road, linear
+// along its length), easing back to the natural ground across `falloff`. So urban
+// roads stay flat (or a single incline) while the terrain conforms *around* them.
+// Build the road mesh on the RESULT (height = conformed field) so the ribbon is
+// flat too.
+int l_terr_conform(lua_State* L) {
+    HeightField base = checkHeight(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    double margin = lua_istable(L, 3) ? optField(L, 3, "margin", 2.0) : 2.0;
+    double falloff = lua_istable(L, 3) ? optField(L, 3, "falloff", 8.0) : 8.0;
+
+    // Nodes ({x=,z=}, 1-based), each seated at the terrain's natural height so the
+    // road meets the ground at the junctions.
+    lua_getfield(L, 2, "nodes");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer nn = luaL_len(L, -1);
+    std::vector<Vec3> node(static_cast<std::size_t>(nn));
+    for (lua_Integer i = 1; i <= nn; ++i) {
+        lua_geti(L, -1, i);
+        double x = optField(L, -1, "x", 0.0), z = optField(L, -1, "z", 0.0);
+        node[static_cast<std::size_t>(i - 1)] = Vec3(x, base(x, z), z);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    // Edges ({a, b, width}, 1-based) -> a ramp corridor between the two nodes.
+    std::vector<TerrainFlatten> regions;
+    lua_getfield(L, 2, "edges");
+    if (lua_istable(L, -1)) {
+        lua_Integer ne = luaL_len(L, -1);
+        regions.reserve(static_cast<std::size_t>(ne));
+        for (lua_Integer i = 1; i <= ne; ++i) {
+            lua_geti(L, -1, i);
+            int a = static_cast<int>(optField(L, -1, "a", 0));
+            int b = static_cast<int>(optField(L, -1, "b", 0));
+            double w = optField(L, -1, "width", 8.0);
+            lua_pop(L, 1);
+            if (a < 1 || a > nn || b < 1 || b > nn) continue;
+            const Vec3& pa = node[static_cast<std::size_t>(a - 1)];
+            const Vec3& pb = node[static_cast<std::size_t>(b - 1)];
+            regions.push_back(
+                makeFlattenRamp(pa, pb, pa.y, pb.y, w * 0.5 + margin, falloff));
+        }
+    }
+    lua_pop(L, 1);
+
+    pushHeight(L, conformField(std::move(base), std::move(regions)));
+    return 1;
+}
 // HeightField methods (immutable composition).
 int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
 int l_height_mul(lua_State* L) { pushHeight(L, heightMul(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
@@ -1643,7 +1694,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"flat", l_terr_flat},     {"noise", l_terr_noise},
         {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
         {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
-        {"erode", l_terr_erode},   {"mesh", l_terr_mesh},
+        {"erode", l_terr_erode},   {"conform", l_terr_conform},
+        {"mesh", l_terr_mesh},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kTerrainFns);

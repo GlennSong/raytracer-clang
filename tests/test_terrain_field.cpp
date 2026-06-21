@@ -1,8 +1,10 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/terrain_field.h"
+#include "../src/engine/procgen/terrain.h"     // TerrainFlatten, makeFlattenRamp
 #include "../src/engine/procgen/erosion.h"
 #include <cmath>
+#include <vector>
 
 using namespace engine;
 
@@ -75,4 +77,31 @@ TEST_CASE(terrain_field_terrace_quantises_to_steps) {
     CHECK_APPROX(heightAdd(heightConstant(2), heightConstant(3))(0, 0), 5.0, 1e-9);
     CHECK_APPROX(heightScale(heightConstant(4), 0.5)(0, 0), 2.0, 1e-9);
     CHECK_APPROX(heightClamp(heightConstant(9), 0, 5)(0, 0), 5.0, 1e-9);
+}
+
+TEST_CASE(terrain_conform_levels_a_flat_road_corridor) {
+    // A tilted ground; a flat road corridor forces the terrain flat inside it and
+    // eases back to the natural slope outside — the cut/fill an urban road needs.
+    HeightField base = [](double x, double z) { return 0.1 * x + 0.2 * z; };
+    std::vector<TerrainFlatten> regs;
+    regs.push_back(makeFlattenRamp(Vec3(-20, 5, 0), Vec3(20, 5, 0),
+                                   5.0, 5.0, /*halfWidth=*/4.0, /*falloff=*/6.0));
+    HeightField land = conformField(base, regs);
+    CHECK_APPROX(land(0, 0), 5.0, 1e-6);     // dead centre: flat road height
+    CHECK_APPROX(land(10, 3), 5.0, 1e-6);    // still within the half-width
+    CHECK_APPROX(land(0, 100), base(0, 100), 1e-6);   // far away: untouched
+}
+
+TEST_CASE(terrain_conform_holds_a_constant_grade) {
+    // A road climbing a hill: flat across its width, a single linear incline along
+    // its length (not following bumps) — endpoints meet the terrain height.
+    HeightField base = [](double, double) { return 0.0; };
+    std::vector<TerrainFlatten> regs;
+    regs.push_back(makeFlattenRamp(Vec3(0, 0, 0), Vec3(100, 10, 0),
+                                   0.0, 10.0, /*halfWidth=*/4.0, /*falloff=*/6.0));
+    HeightField land = conformField(base, regs);
+    CHECK_APPROX(land(2, 0), 0.2, 1e-6);     // linear along the length
+    CHECK_APPROX(land(50, 0), 5.0, 1e-6);
+    CHECK_APPROX(land(98, 0), 9.8, 1e-6);
+    CHECK_APPROX(land(50, 2), 5.0, 1e-6);    // flat across the width
 }

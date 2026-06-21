@@ -122,9 +122,21 @@ function M.generate(o)
   local seed = opt(o, "seed", 7)
   local size = opt(o, "terrain_size", 460)
 
-  local land = M.terrain{ seed = seed, freq = opt(o, "terrain_freq", 0.012),
+  -- The natural landscape, before the city imposes itself on it.
+  local base = M.terrain{ seed = seed, freq = opt(o, "terrain_freq", 0.012),
     amp = opt(o, "terrain_amp", 18), warp = opt(o, "terrain_warp", 28),
     size = size, eroded = o.eroded, droplets = o.droplets }
+
+  -- Lay the road network first, then CONFORM the terrain to it: each street
+  -- becomes a flat (or constant-grade) corridor and the ground cuts/fills to meet
+  -- it, instead of the road bending over every bump. `land` is what everything
+  -- downstream — the terrain mesh, the roads, the building footings — samples.
+  local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
+    extent = opt(o, "extent", 170), cell_size = opt(o, "cell_size", 64),
+    ring_spacing = opt(o, "ring_spacing", 60), spokes = opt(o, "spokes", 12),
+    jitter = opt(o, "jitter", 0.10), seed = seed }
+  local land = terrain.conform(base, lay, { margin = opt(o, "road_margin", 3),
+                                            falloff = opt(o, "road_falloff", 10) })
 
   local m = model.new()
   -- The terrain is the ground you walk on: render it and collide with the exact
@@ -135,12 +147,8 @@ function M.generate(o)
   m:add(ground)
   m:collide(ground, { friction = 0.95 })
 
-  local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
-    extent = opt(o, "extent", 170), cell_size = opt(o, "cell_size", 64),
-    ring_spacing = opt(o, "ring_spacing", 60), spokes = opt(o, "spokes", 12),
-    jitter = opt(o, "jitter", 0.10), seed = seed }
-  -- Roads are draped just above the terrain; make them a solid walk surface too.
-  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09} }))
+  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground.
+  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3, color = {0.08, 0.08, 0.09} }))
 
   M.buildings(m, lay, land, o)
   M.lamps(m, lay, land, o)

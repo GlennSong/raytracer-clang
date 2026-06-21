@@ -2,6 +2,7 @@
 
 #include "noise.h"
 #include "erosion.h"
+#include "terrain.h"          // TerrainFlatten, applyFlatten
 #include "../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -101,6 +102,16 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
     return [hm](double x, double z) {
         return static_cast<double>(
             hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
+    };
+}
+
+HeightField conformField(HeightField base, std::vector<TerrainFlatten> regions) {
+    // Share the regions into the closure (a closure is copied as the field is
+    // passed around; the footprint list can be large for a whole road network).
+    auto regs = std::make_shared<std::vector<TerrainFlatten>>(std::move(regions));
+    HeightField b = std::move(base);
+    return [b, regs](double x, double z) {
+        return applyFlatten(*regs, x, z, b(x, z));
     };
 }
 

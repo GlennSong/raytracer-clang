@@ -50,6 +50,7 @@ double distanceToFootprint(const std::vector<Vec3>& poly, double x, double z) {
     }
     return best;
 }
+}  // namespace
 
 // Blend the flatten footprints over a natural height. The strongest (closest)
 // footprint wins, so overlapping road/block stamps don't fight; inside a
@@ -79,7 +80,6 @@ double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
     }
     return result;
 }
-}  // namespace
 
 static void footprintBounds(TerrainFlatten& f) {
     f.minX = f.minZ = std::numeric_limits<double>::max();
