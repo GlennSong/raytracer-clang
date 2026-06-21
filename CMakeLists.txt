@@ -47,6 +47,7 @@ add_library(engine_core STATIC
     src/engine/procgen/tree.cpp
     src/engine/procgen/surface_maps.cpp
     src/engine/procgen/texture_field.cpp
+    src/engine/procgen/terrain_field.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/scatter.cpp
@@ -233,6 +234,7 @@ add_executable(run_tests
     tests/test_instancing.cpp
     tests/test_instance_tlas.cpp
     tests/test_texture_field.cpp
+    tests/test_terrain_field.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

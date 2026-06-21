@@ -14,6 +14,7 @@
 #include "../procgen/city/polygon.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
+#include "../procgen/terrain_field.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -820,6 +821,85 @@ int l_tex_bake_normal(lua_State* L) {
     return 1;
 }
 
+// --- terrain.* : compose a heightfield from primitives (ADR-0043) -------------
+// A HeightField is a world-space function (x,z)->height — the 2.5D sibling of the
+// texture Field. Build terrain from fbm + ridged ridges + domain warp + terraces,
+// then bake to a mesh. `terrain` is a callable table: terrain(params, seed) still
+// runs the C++ preset (generateTerrain); terrain.fbm{...} etc. compose.
+constexpr const char* kHeightMt = "engine.procgen.Height";
+
+void pushHeight(lua_State* L, HeightField f) {
+    void* mem = lua_newuserdatauv(L, sizeof(HeightField), 0);
+    new (mem) HeightField(std::move(f));
+    luaL_setmetatable(L, kHeightMt);
+}
+HeightField& checkHeight(lua_State* L, int idx) {
+    return *static_cast<HeightField*>(luaL_checkudata(L, idx, kHeightMt));
+}
+int heightGc(lua_State* L) {
+    static_cast<HeightField*>(lua_touserdata(L, 1))->~HeightField();
+    return 0;
+}
+
+int l_terr_flat(lua_State* L) { pushHeight(L, heightConstant(luaL_checknumber(L, 1))); return 1; }
+int l_terr_noise(lua_State* L) {
+    pushHeight(L, heightNoise(static_cast<uint32_t>(optField(L, 1, "seed", 0)),
+                              optField(L, 1, "freq", 0.01), optField(L, 1, "amp", 10.0)));
+    return 1;
+}
+int l_terr_fbm(lua_State* L) {
+    pushHeight(L, heightFbm(static_cast<uint32_t>(optField(L, 1, "seed", 0)),
+                            optField(L, 1, "freq", 0.01), optField(L, 1, "amp", 20.0),
+                            static_cast<int>(optField(L, 1, "octaves", 5))));
+    return 1;
+}
+int l_terr_ridged(lua_State* L) {
+    pushHeight(L, heightRidged(static_cast<uint32_t>(optField(L, 1, "seed", 0)),
+                               optField(L, 1, "freq", 0.01), optField(L, 1, "amp", 20.0),
+                               static_cast<int>(optField(L, 1, "octaves", 5))));
+    return 1;
+}
+int l_terr_warp(lua_State* L) {
+    pushHeight(L, heightWarp(checkHeight(L, 1), checkHeight(L, 2),
+                             luaL_optnumber(L, 3, 30.0)));
+    return 1;
+}
+int l_terr_terrace(lua_State* L) {
+    pushHeight(L, heightTerrace(checkHeight(L, 1), luaL_checknumber(L, 2)));
+    return 1;
+}
+// HeightField methods (immutable composition).
+int l_height_add(lua_State* L) { pushHeight(L, heightAdd(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
+int l_height_mul(lua_State* L) { pushHeight(L, heightMul(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
+int l_height_max(lua_State* L) { pushHeight(L, heightMax(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
+int l_height_min(lua_State* L) { pushHeight(L, heightMin(checkHeight(L, 1), checkHeight(L, 2))); return 1; }
+int l_height_scale(lua_State* L) { pushHeight(L, heightScale(checkHeight(L, 1), luaL_checknumber(L, 2))); return 1; }
+int l_height_mix(lua_State* L) {
+    pushHeight(L, heightMix(checkHeight(L, 1), checkHeight(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_height_clamp(lua_State* L) {
+    pushHeight(L, heightClamp(checkHeight(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+// terrain.mesh(field, { size=, resolution=, color={r,g,b} }) -> mesh.
+int l_terr_mesh(lua_State* L) {
+    HeightField& h = checkHeight(L, 1);
+    double size = optField(L, 2, "size", 200.0);
+    int res = static_cast<int>(optField(L, 2, "resolution", 128));
+    Vec3 color = optVec3Field(L, 2, "color", Vec3(0.34, 0.40, 0.28));
+    pushMesh(L, std::make_shared<RenderMesh>(bakeHeightMesh(h, size, res, color)));
+    return 1;
+}
+// terrain(params, seed) via __call (index 1 is the terrain table itself).
+TerrainParams readTerrainParams(lua_State* L, int idx);   // defined below
+int l_terrain_preset(lua_State* L) {
+    TerrainParams p = readTerrainParams(L, 2);
+    auto seed = static_cast<uint32_t>(luaL_optinteger(L, 3, 0));
+    pushMesh(L, std::make_shared<RenderMesh>(generateTerrain(p, Noise(seed))));
+    return 1;
+}
+
 // --- material.* : a baked material bundle for a part (ADR-0043) ---------------
 // Bundle baked Images (albedo, normal) + scalar PBR params + a world tile size.
 // Applied to a part by world-planar projection — no authored UVs needed.
@@ -1081,13 +1161,6 @@ TerrainParams readTerrainParams(lua_State* L, int idx) {
     p.warp = optField(L, idx, "warp", p.warp);
     return p;
 }
-int l_terrain(lua_State* L) {                   // terrain(params, seed) -> Mesh
-    TerrainParams p = readTerrainParams(L, 1);
-    auto seed = static_cast<uint32_t>(luaL_optinteger(L, 2, 0));
-    pushMesh(L, std::make_shared<RenderMesh>(generateTerrain(p, Noise(seed))));
-    return 1;
-}
-
 ScatterParams readScatterParams(lua_State* L, int idx) {
     ScatterParams p;
     if (lua_isnoneornil(L, idx)) return p;
@@ -1211,6 +1284,22 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_pop(L, 1);
     registerMetatable(L, kImageMt, imageGc);      // Image is opaque (just __gc)
     registerMetatable(L, kMaterialMt, materialGc);  // Material is opaque (just __gc)
+
+    // The HeightField metatable carries the terrain-compose methods (ADR-0043).
+    if (luaL_newmetatable(L, kHeightMt)) {
+        lua_pushcfunction(L, heightGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_height_add);   lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_height_mul);   lua_setfield(L, -2, "mul");
+        lua_pushcfunction(L, l_height_max);   lua_setfield(L, -2, "max");
+        lua_pushcfunction(L, l_height_min);   lua_setfield(L, -2, "min");
+        lua_pushcfunction(L, l_height_scale); lua_setfield(L, -2, "scale");
+        lua_pushcfunction(L, l_height_mix);   lua_setfield(L, -2, "mix");
+        lua_pushcfunction(L, l_height_clamp); lua_setfield(L, -2, "clamp");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
 
     // The Model metatable carries the compose methods (ADR-0042 Phase 3).
     if (luaL_newmetatable(L, kModelMt)) {
@@ -1351,7 +1440,21 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");
-    lua_pushcfunction(L, l_terrain);
+    // `terrain` is a table of heightfield ops (ADR-0043) that is also CALLABLE:
+    // terrain(params, seed) runs the C++ preset via __call; terrain.fbm{...} etc.
+    // compose a heightfield, terrain.mesh(field, {...}) tessellates it.
+    static const luaL_Reg kTerrainFns[] = {
+        {"flat", l_terr_flat},     {"noise", l_terr_noise},
+        {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
+        {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
+        {"mesh", l_terr_mesh},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kTerrainFns);
+    lua_newtable(L);                                  // its metatable
+    lua_pushcfunction(L, l_terrain_preset);
+    lua_setfield(L, -2, "__call");
+    lua_setmetatable(L, -2);
     lua_setglobal(L, "terrain");
     lua_pushcfunction(L, l_scatter);
     lua_setglobal(L, "scatter");

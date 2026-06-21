@@ -2712,6 +2712,48 @@ once to a texture set, then applied as an ordinary `Material`. Decisions:
   bundles baked `Image`s; `model:add(mesh, material)` attaches it; `bakeProcModel`
   binds the maps into the path tracer's `Material` slots.
 
+**Update — the field substrate generalises to terrain.** The same closure-graph
+idea extends to a world-space heightfield (`terrain_field.h`: `HeightField =
+function<double(double,double)>`): primitives (`noise`/`fbm`/`ridged`/`warp`/
+`terrace`) + combinators (`add`/`mul`/`scale`/`max`/`min`/`mix`/`clamp`) +
+`bakeHeightMesh` (tessellate to a grid mesh with gradient normals). Lua: `terrain`
+is a *callable table* — `terrain(params, seed)` still runs the C++ preset
+(`generateTerrain`, back-compat) while `terrain.fbm{…}:max(terrain.ridged{…})` and
+`terrain.mesh(field, …)` compose and tessellate. So terrain is now *built from
+primitives*, not only requested — the same move as textures, one domain over.
+
+---
+
+## ADR-0044 — Road generation: pluggable generators + terrain-aware routing (planned)
+**Status:** Proposed — captures the design for the next slice. · **Date:** 2026-06-21
+
+**Context.** Roads today are a single generator: `gridRoads` (a deformed grid)
+→ `planarize` → `extractBlocks` → grade (Laplacian-smoothed node heights) →
+`TerrainFlatten` cut/fill under roads + block aprons. That pipeline is solid, but
+(1) only a Manhattan-ish grid exists — no radial or organic patterns; (2) roads
+are laid *regardless* of terrain and the terrain is then flattened to fit, rather
+than routed to *follow* it; (3) a sloped block is one flat apron pad, never
+terraced — so foundations can't stairstep on a hill.
+
+**Decision (planned).** Keep the solver in C++ (it's an algorithm), make the
+*generators* pluggable and the *pattern/params* Lua-authored:
+- **Pluggable generators**, each returning a `RoadGraph`, so `planarize`/blocks/
+  grade/flatten stay shared: `gridRoads` (have), `radialRoads` (ring + spoke),
+  and an agent/tensor-field **grower** for organic + terrain-following. Graphs can
+  be unioned (a radial core into a grid fringe is two generators → one planarize).
+- **Terrain-aware routing** lives in the grower: weight growth by slope so roads
+  seek saddles and follow contours (tensor-field / agent road growth), leaving the
+  existing `TerrainFlatten` system less to cut.
+- **Lua surface:** `city.layout` gains `pattern = "grid"|"radial"|"organic"` +
+  density / slope-tolerance, so *which* network and *how it answers the terrain*
+  is a recipe; the graph math stays C++.
+- **Stairstepped lots** extend `TerrainFlatten`: split a sloped block into stepped
+  terrace bands (flat pads at stepped heights + retaining walls) and seat building
+  foundations on their band — several stepped pads instead of one.
+
+Sequenced after the terrain heightfield (done) so roads have richer terrain to
+respond to.
+
 ---
 
 ## Interim seams & tech-debt register

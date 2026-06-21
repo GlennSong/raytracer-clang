@@ -339,6 +339,32 @@ TEST_CASE(procgen_script_builds_a_brick_texture) {
     CHECK(!runProcgenTexture(vm, "return 5", none, nullptr));
 }
 
+TEST_CASE(procgen_script_composes_terrain_heightfield) {
+    // ADR-0043: terrain composes from primitives, then bakes to a mesh. `terrain`
+    // is a callable table — terrain(params, seed) still runs the C++ preset.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local base   = terrain.fbm{ seed=7, freq=0.01, amp=20, octaves=5 }
+        local ridges = terrain.ridged{ seed=7, freq=0.006, amp=30, octaves=5 }
+        local land   = terrain.warp(base:max(ridges), terrain.fbm{seed=3, freq=0.02, amp=1}, 25)
+        return terrain.mesh(land, { size = 256, resolution = 64, color = {0.32, 0.40, 0.26} })
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() == 65u * 65u);
+    CHECK(mesh->indices.size() % 3 == 0);
+
+    // The preset path still works through __call (back-compat).
+    std::shared_ptr<RenderMesh> preset;
+    CHECK(runProcgenMesh(vm,
+        "return terrain({size = 50, resolution = 16, height_scale = 5}, 99)",
+        preset, &err));
+    CHECK(preset && !preset->vertices.empty());
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);
