@@ -168,6 +168,62 @@ TEST_CASE(radial_roads_make_rings_and_spokes) {
     CHECK(blocks.size() > 8);
 }
 
+TEST_CASE(tensor_roads_blend_radial_core_into_grid_rim) {
+    // ADR-0044: the tensor field is radial in the core and a grid at the rim.
+    // We verify both regimes from one generator: near the centre the two road
+    // families run radial/tangential, far out they align to the grid axes.
+    TensorRoadParams tp;
+    tp.extent = 260; tp.spacing = 70; tp.step = 8;
+    tp.radialDecay = 110; tp.gridAngle = 0; tp.seed = 5;
+    RoadGraph g = tensorRoads(tp);
+    CHECK(g.edges.size() > 0);
+    CHECK(g.nodes.size() > 0);
+
+    // Everything stays inside the requested region.
+    for (const RoadNode& n : g.nodes) {
+        CHECK(std::abs(n.pos.x) <= tp.extent + 1.0);
+        CHECK(std::abs(n.pos.y) <= tp.extent + 1.0);
+    }
+
+    // Classify each edge by where it sits: in the core, the field is radial, so
+    // an edge should run either ~radially or ~tangentially. Count how many do.
+    int coreEdges = 0, coreAligned = 0, rimEdges = 0, rimAxisAligned = 0;
+    for (const RoadEdge& e : g.edges) {
+        Vec2 a = g.nodes[e.a].pos, b = g.nodes[e.b].pos;
+        Vec2 mid = (a + b) * 0.5;
+        Vec2 dir = normalize(b - a);
+        if (dir.lengthSquared() < 1e-9) continue;
+        Real r = mid.length();
+        if (r > 1e-3 && r < tp.radialDecay * 0.6) {
+            ++coreEdges;
+            Vec2 radial = normalize(mid);
+            Real along = std::abs(dot(dir, radial));     // 1 = radial, 0 = tangential
+            if (along > 0.85 || along < 0.15) ++coreAligned;
+        } else if (r > tp.radialDecay * 1.4) {
+            ++rimEdges;
+            Real ax = std::max(std::abs(dir.x), std::abs(dir.y));
+            if (ax > 0.92) ++rimAxisAligned;             // aligned to the grid axes
+        }
+    }
+    CHECK(coreEdges > 0);
+    CHECK(rimEdges > 0);
+    // The blend is approximate (the field rotates continuously), so we only ask
+    // that the dominant character holds for most edges in each regime.
+    CHECK(coreAligned * 2 > coreEdges);                  // >50% radial/tangential
+    CHECK(rimAxisAligned * 2 > rimEdges);                // >50% grid-aligned
+
+    // The streamlines actually enclose blocks once planarised.
+    std::vector<Poly2> blocks = extractBlocks(planarize(g));
+    CHECK(blocks.size() > 4);
+}
+
+TEST_CASE(tensor_roads_are_deterministic) {
+    TensorRoadParams tp; tp.extent = 200; tp.spacing = 60; tp.seed = 11;
+    RoadGraph a = tensorRoads(tp), b = tensorRoads(tp);
+    CHECK(a.nodes.size() == b.nodes.size());
+    CHECK(a.edges.size() == b.edges.size());
+}
+
 namespace {
 Poly2 square(Real s) {
     return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW

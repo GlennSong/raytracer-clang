@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <queue>
+#include <unordered_map>
 
 namespace engine {
 namespace {
@@ -169,6 +171,213 @@ RoadGraph radialRoads(const RadialParams& p) {
         for (int r = 1; r < rings; ++r)
             g.addEdge(sp[r][s], sp[r + 1][s], widthOf(c), c);
     }
+    return g;
+}
+
+// --- Tensor-field generator -------------------------------------------------
+namespace {
+
+// A symmetric, traceless 2nd-order tensor stored by its two free components:
+// the matrix is [[a, b], [b, -a]]. The major eigenvector is at angle
+// 0.5*atan2(b, a); the minor is perpendicular. Summing tensors is just summing
+// (a, b) — that linearity is the whole point: basis fields blend cleanly.
+struct Tensor { Real a = 0, b = 0; };
+
+// Evaluate the field at q: a constant grid basis plus a radial singularity whose
+// influence decays with distance, so orientation is radial in the core and grid
+// at the rim. Encoding a direction theta as (cos 2theta, sin 2theta) is what
+// makes a road's 180-degree ambiguity vanish, so opposing fields reinforce
+// instead of cancelling.
+Tensor fieldAt(const TensorRoadParams& p, const Vec2& q) {
+    Tensor t;
+    t.a += p.gridStrength * std::cos(2 * p.gridAngle);
+    t.b += p.gridStrength * std::sin(2 * p.gridAngle);
+
+    Vec2 v = q - p.center;
+    Real r = v.length();
+    if (r > 1e-3) {
+        Real phi = std::atan2(v.y, v.x);          // major eigenvector = radial
+        Real w = p.radialStrength *
+                 std::exp(-(r * r) / (p.radialDecay * p.radialDecay));
+        t.a += w * std::cos(2 * phi);
+        t.b += w * std::sin(2 * phi);
+    }
+    return t;
+}
+
+// Unit major-eigenvector direction; zero where the field is degenerate (the two
+// eigenvalues coincide and orientation is undefined — a singular point).
+Vec2 majorDir(const Tensor& t) {
+    Real mag = std::sqrt(t.a * t.a + t.b * t.b);
+    if (mag < 1e-6) return Vec2(0, 0);
+    Real ang = 0.5 * std::atan2(t.b, t.a);
+    return Vec2(std::cos(ang), std::sin(ang));
+}
+
+// Uniform-grid point index for evenly-spaced streamlines: lets a candidate ask
+// "is any committed streamline of my family within d?" in O(1). Cell == the
+// separation distance, so the answer lives in the 3x3 neighbourhood.
+struct PointHash {
+    Real cell;
+    std::unordered_map<long long, std::vector<Vec2>> buckets;
+    explicit PointHash(Real c) : cell(c > 1e-3 ? c : 1.0) {}
+    static long long key(int i, int j) {
+        return (static_cast<long long>(i) << 32) ^ (static_cast<unsigned>(j));
+    }
+    void insert(const Vec2& p) {
+        buckets[key(static_cast<int>(std::floor(p.x / cell)),
+                    static_cast<int>(std::floor(p.y / cell)))].push_back(p);
+    }
+    bool nearAny(const Vec2& p, Real d) const {
+        Real d2 = d * d;
+        int ci = static_cast<int>(std::floor(p.x / cell));
+        int cj = static_cast<int>(std::floor(p.y / cell));
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di) {
+                auto it = buckets.find(key(ci + di, cj + dj));
+                if (it == buckets.end()) continue;
+                for (const Vec2& q : it->second)
+                    if ((q - p).lengthSquared() <= d2) return true;
+            }
+        return false;
+    }
+};
+
+// Integrate one streamline from `seed` along eigenvector family `fam` (0 = major,
+// 1 = minor), in one direction (sign). A midpoint (RK2) step keeps curved rings
+// smooth. The line runs its full span — stopping at the region edge, a
+// degenerate point, when it closes back on its own seed (a ring), or when it
+// bunches to within `dStop` of an ALREADY-traced line of the *same* family.
+// That last test is the Jobard & Lefebvre separation rule, but kept tight: same
+// family lines are parallel and only approach when crowding (e.g. radial spokes
+// converging on the core), so a small `dStop` curbs near-duplicate slivers
+// without truncating a line at the cross-family intersections that form blocks.
+// Returns the ordered points walked.
+std::vector<Vec2> integrate(const TensorRoadParams& p, const Vec2& seed, int fam,
+                            Real sign, const PointHash& hash, Real dStop,
+                            Real dClose, Real extent, int maxSteps) {
+    std::vector<Vec2> pts;
+    Vec2 cur = seed;
+    Vec2 prevDir(0, 0);
+    auto eigenAt = [&](const Vec2& q) {
+        Vec2 d = majorDir(fieldAt(p, q));
+        return fam == 0 ? d : perp(d);
+    };
+    auto inRegion = [&](const Vec2& q) {
+        Vec2 d = q - p.center;
+        return std::abs(d.x) <= extent && std::abs(d.y) <= extent;
+    };
+    for (int s = 0; s < maxSteps; ++s) {
+        Vec2 dir = eigenAt(cur);
+        if (dir.lengthSquared() < 1e-9) break;               // degenerate point
+        // Eigenvectors have no sign; pick the one continuing our heading.
+        if (prevDir.lengthSquared() > 1e-9) {
+            if (dot(dir, prevDir) < 0) dir = -dir;
+        } else {
+            dir = dir * sign;
+        }
+        Vec2 mid = cur + dir * (p.step * 0.5);               // RK2 midpoint
+        Vec2 dir2 = eigenAt(mid);
+        if (dir2.lengthSquared() < 1e-9) break;
+        if (dot(dir2, dir) < 0) dir2 = -dir2;
+        Vec2 next = cur + dir2 * p.step;
+
+        if (!inRegion(next)) break;
+        // Closed orbit (ring): we've travelled a bit and come home.
+        if (s > 4 && (next - seed).length() < dClose) { pts.push_back(seed); break; }
+        // Bunched into an existing same-family line: stop (anti-sliver).
+        if (s > 1 && hash.nearAny(next, dStop)) { pts.push_back(next); break; }
+        pts.push_back(next);
+        prevDir = normalize(next - cur);
+        cur = next;
+    }
+    return pts;
+}
+
+// Trace an evenly-spaced set of streamlines of one family, growing from a seed
+// queue and self-propagating: every committed sample spawns offset seeds a
+// `spacing` to either side, so streamlines fill the region at a uniform pitch
+// (Jobard & Lefebvre). Commits each line into the graph and the family hash.
+void traceFamily(RoadGraph& g, const TensorRoadParams& p, int fam,
+                 PointHash& hash, std::queue<Vec2>& seeds, Real width,
+                 RoadClass klass) {
+    const Real dReject = p.spacing * 0.7;    // reject a seed this close to a line
+    const Real dStop   = p.spacing * 0.4;    // stop a line bunching this close
+    const Real dClose  = p.spacing * 0.5;    // ring closes back on its seed
+    const Real dSeed   = p.spacing;          // perpendicular offset for new seeds
+    const Real snap    = std::max(Real(0.25), p.step * 0.4);
+    const int  maxSteps = static_cast<int>(p.extent * 8 / p.step) + 16;
+    int guard = 0, guardMax = 20000;
+
+    while (!seeds.empty() && guard++ < guardMax) {
+        Vec2 seed = seeds.front();
+        seeds.pop();
+        Vec2 d = seed - p.center;
+        if (std::abs(d.x) > p.extent || std::abs(d.y) > p.extent) continue;
+        if (hash.nearAny(seed, dReject)) continue;           // already covered here
+
+        std::vector<Vec2> fwd =
+            integrate(p, seed, fam, +1, hash, dStop, dClose, p.extent, maxSteps);
+        std::vector<Vec2> bwd =
+            integrate(p, seed, fam, -1, hash, dStop, dClose, p.extent, maxSteps);
+
+        // Stitch backward (reversed) + seed + forward into one polyline.
+        std::vector<Vec2> line;
+        line.reserve(bwd.size() + fwd.size() + 1);
+        for (auto it = bwd.rbegin(); it != bwd.rend(); ++it) line.push_back(*it);
+        line.push_back(seed);
+        for (const Vec2& q : fwd) line.push_back(q);
+        if (line.size() < 2) continue;
+
+        // Commit to the graph and the separation hash.
+        int prev = g.addNode(line[0], snap);
+        hash.insert(line[0]);
+        for (std::size_t i = 1; i < line.size(); ++i) {
+            int cur = g.addNode(line[i], snap);
+            g.addEdge(prev, cur, width, klass);
+            hash.insert(line[i]);
+            prev = cur;
+        }
+
+        // Self-propagate: drop seeds offset to each side along the local normal.
+        for (std::size_t i = 0; i < line.size(); i += 2) {
+            Vec2 t = (i + 1 < line.size()) ? line[i + 1] - line[i]
+                   : (i > 0)               ? line[i] - line[i - 1]
+                                           : Vec2(1, 0);
+            Vec2 n = normalize(perp(t));
+            if (n.lengthSquared() < 1e-9) continue;
+            seeds.push(line[i] + n * dSeed);
+            seeds.push(line[i] - n * dSeed);
+        }
+    }
+}
+
+}  // namespace
+
+RoadGraph tensorRoads(const TensorRoadParams& p) {
+    RoadGraph g;
+    Rng rng(p.seed);
+
+    // Major family = avenues/spokes; minor family = the cross streets and rings.
+    PointHash majorHash(p.spacing), minorHash(p.spacing);
+    std::queue<Vec2> majorSeeds, minorSeeds;
+
+    // Seed the core (where the radial field is strongest) plus a coarse scatter
+    // so disconnected pockets at the grid rim still get traced. A little jitter
+    // keeps rim seeds off the field's symmetry lines.
+    majorSeeds.push(p.center);
+    minorSeeds.push(p.center);
+    Real jr = p.spacing * 0.15;
+    for (Real y = -p.extent; y <= p.extent; y += p.spacing * 1.5)
+        for (Real x = -p.extent; x <= p.extent; x += p.spacing * 1.5) {
+            Vec2 s = p.center + Vec2(x + rng.range(-jr, jr), y + rng.range(-jr, jr));
+            majorSeeds.push(s);
+            minorSeeds.push(s);
+        }
+
+    // Trace avenues first, then cross streets seeded onto them by the scatter.
+    traceFamily(g, p, 0, majorHash, majorSeeds, p.collectorWidth, RoadClass::Collector);
+    traceFamily(g, p, 1, minorHash, minorSeeds, p.localWidth, RoadClass::Local);
     return g;
 }
 

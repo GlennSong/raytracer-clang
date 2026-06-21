@@ -737,6 +737,18 @@ int l_city_layout(lua_State* L) {
         rp.jitter      = static_cast<Real>(optField(L, 1, "jitter", rp.jitter));
         rp.seed        = static_cast<uint32_t>(optField(L, 1, "seed", 0));
         raw = radialRoads(rp);
+    } else if (pattern == "tensor") {
+        // Hybrid radial<->grid field (ADR-0044): radial core, grid rim, blended.
+        TensorRoadParams tp;
+        tp.extent         = static_cast<Real>(optField(L, 1, "extent", tp.extent));
+        tp.spacing        = static_cast<Real>(optField(L, 1, "spacing", tp.spacing));
+        tp.step           = static_cast<Real>(optField(L, 1, "step", tp.step));
+        tp.gridAngle      = static_cast<Real>(optField(L, 1, "grid_angle", tp.gridAngle));
+        tp.radialStrength = static_cast<Real>(optField(L, 1, "radial_strength", tp.radialStrength));
+        tp.radialDecay    = static_cast<Real>(optField(L, 1, "radial_decay", tp.radialDecay));
+        tp.gridStrength   = static_cast<Real>(optField(L, 1, "grid_strength", tp.gridStrength));
+        tp.seed           = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+        raw = tensorRoads(tp);
     } else {
         GridRoadParams gp;
         if (lua_istable(L, 1)) {

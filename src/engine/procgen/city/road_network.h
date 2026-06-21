@@ -78,6 +78,40 @@ struct RadialParams {
 };
 RoadGraph radialRoads(const RadialParams& params);
 
+// Tensor-field road generator (ADR-0044; after Chen et al., "Interactive
+// Procedural Street Modeling", SIGGRAPH 2008). The single generator that
+// *dovetails* radial and grid: instead of stamping one pattern, it builds a
+// continuous field of road orientations and traces streets along it, so the
+// layout morphs smoothly from radial in the core to a grid at the rim — no hard
+// seam between the two.
+//
+// The field is a symmetric, traceless 2nd-order tensor T(p) = [[a,b],[b,-a]];
+// its two eigenvectors are everywhere perpendicular and have no head/tail (a
+// road has no direction), which is exactly why tensors — not vector fields —
+// blend without the "cowlick" singularities a vector field gives. We sum two
+// basis fields, each weighted by a smooth falloff:
+//   * a RADIAL singularity at `center` whose major eigenvector points radially,
+//     so its streamlines are avenues (major family) and ring roads (minor
+//     family) — the Étoile core; its weight decays as exp(-(r/radialDecay)^2).
+//   * a GRID field of constant orientation `gridAngle`, the rim lattice.
+// Roads are then traced as evenly-spaced streamlines (Jobard & Lefebvre) of both
+// eigenvector families at separation `spacing`, integrated with step `step`.
+// Cross-family crossings become intersections in the usual planarize pass.
+// Deterministic for `seed`.
+struct TensorRoadParams {
+    Vec2  center{0, 0};
+    Real  extent = 400;        // half-size of the square region (m)
+    Real  gridAngle = 0;       // orientation of the grid basis (radians)
+    Real  radialStrength = 1;  // weight of the radial singularity at the core
+    Real  radialDecay = 150;   // 1/e falloff radius of the radial field (m)
+    Real  gridStrength = 1;    // weight of the constant grid basis
+    Real  spacing = 70;        // target streamline separation = block size (m)
+    Real  step = 8;            // streamline integration step (m)
+    Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
+    uint32_t seed = 0;
+};
+RoadGraph tensorRoads(const TensorRoadParams& params);
+
 // Planarize: split edges wherever they cross and merge coincident nodes, so the
 // only adjacencies are at shared endpoints (precondition for face extraction).
 RoadGraph planarize(const RoadGraph& graph, Real tol = 0.5);
