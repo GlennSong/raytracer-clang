@@ -500,6 +500,36 @@ TEST_CASE(level_writer_round_trips_recipe_entities) {
     CHECK(!ent.contains("material"));
 }
 
+TEST_CASE(level_writer_round_trips_script_recipe_flat) {
+    // Regression: a Lua recipe entity (shape:"script", ADR-0042) reads its params
+    // (file/seed) from the entity's top level, not a nested block. The writer must
+    // emit them flat so a Play save->reload reproduces the original
+    // `{shape:"script", file, seed}` — otherwise the recipe is dropped and the
+    // world comes back empty ("the world disappears the instant Play reloads").
+    TmpFile cleanup;
+    World world;
+    Entity script = world.create();
+    Transform t;
+    world.add<Transform>(script, t);
+    SourceSpec spec;
+    spec.shape = "script";
+    spec.recipe = R"({"file":"city.lua","seed":7})";
+    world.add<SourceSpec>(script, spec);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    CHECK(root["entities"].size() == 1);
+
+    const json& ent = root["entities"][0];
+    CHECK(ent["shape"] == "script");
+    CHECK(ent["file"] == "city.lua");          // flat, not nested under "script"
+    CHECK(ent["seed"].get<int>() == 7);
+    CHECK(!ent.contains("script"));            // no nested recipe block
+    CHECK(!ent.contains("size"));              // the recipe owns its geometry
+    CHECK(!ent.contains("material"));
+}
+
 TEST_CASE(editor_bridge_lists_and_selects) {
     World world;
     Entity box = addBox(world, Vec3(0, 0, 0));

@@ -595,6 +595,26 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
                              int index) {
 #ifdef RT_ENABLE_SCRIPTING
     std::string file = ent.value("file", std::string());
+
+    // Document entity: carries the SourceSpec (recipe) so the shape:"script"
+    // entity round-trips through the editor's save-then-reload. LevelWriter only
+    // serialises entities with a SourceSpec, so without this the recipe is
+    // dropped on Play→save and the world comes back empty on reload — the same
+    // failure the tree (bark) and city (doc) entities avoid. The render/instance
+    // entities spawned below are runtime companions, regenerated from this recipe
+    // on load. Created before the file read so even a recipe that fails to load
+    // (transient missing file) still round-trips instead of vanishing on save.
+    {
+        Entity doc = world.create();
+        createEntityCommon(doc, ent, world);
+        SourceSpec spec = buildSourceSpec(ent, "script");
+        json recipe;
+        recipe["file"] = file;
+        if (ent.contains("seed")) recipe["seed"] = ent["seed"];
+        spec.recipe = recipe.dump();
+        world.add<SourceSpec>(doc, spec);
+    }
+
     std::string code = file.empty() ? std::string() : loadScriptCode(file, levelDir);
     if (code.empty()) {
         LOG_WARN << "script entity: cannot read '" << file << "'";
