@@ -100,6 +100,16 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         }
     };
 
+    // Turn the kerb around a corner at node V, from curb point P0 to P1 (outward =
+    // away from V). Used at junction corners AND at simple bends, so adjacent
+    // sidewalks join cleanly instead of leaving a notch where the kerbs meet.
+    auto cornerBand = [&](const Vec2& V, const Vec2& P0, const Vec2& P1) {
+        if ((P1 - P0).length() < 1e-3) return;
+        Vec2 oN = normalize(perp(P1 - P0));
+        if (dot(oN, (P0 + P1) * 0.5 - V) < 0) oN = oN * -1.0;
+        curbBand(P0, P1, oN);
+    };
+
     // Incident edges per node.
     std::vector<std::vector<int>> inc(nNodes);
     for (int e = 0; e < nEdges; ++e) {
@@ -179,14 +189,33 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         // Sidewalk corners: the pad boundary between consecutive arms (arm k's
         // left point round to arm k+1's right point) is a kerb corner, not a road
         // mouth — skirt it so the sidewalk turns the corner instead of gapping.
-        for (int k = 0; k < m; ++k) {
-            const Vec2& Lk = ring[2 * k + 1];                  // arm k, left
-            const Vec2& Rn = ring[2 * ((k + 1) % m)];          // arm k+1, right
-            if ((Rn - Lk).length() < 1e-3) continue;
-            Vec2 oN = normalize(perp(Rn - Lk));
-            if (dot(oN, (Lk + Rn) * 0.5 - V) < 0) oN = oN * -1.0;   // face outward
-            curbBand(Lk, Rn, oN);
-        }
+        for (int k = 0; k < m; ++k)
+            cornerBand(V, ring[2 * k + 1], ring[2 * ((k + 1) % m)]);
+    }
+
+    // --- Simple bends (degree-2): no pad, but the two ribbons still meet at an
+    // angle (every chord-joint of a curved ring), so their kerbs leave a notch.
+    // Fill the small carriageway gap and turn the sidewalk corner on each side so
+    // the kerb runs continuous around the curve. The road runs straight through,
+    // so there is no trim.
+    for (int v = 0; v < nNodes; ++v) {
+        if (static_cast<int>(inc[v].size()) != 2) continue;
+        Vec2 V = g.nodes[v].pos;
+        auto armDir = [&](int e) {
+            int o = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
+            return normalize(g.nodes[o].pos - V);
+        };
+        int e0 = inc[v][0], e1 = inc[v][1];
+        Vec2 d0 = armDir(e0), d1 = armDir(e1);
+        double w0 = g.edges[e0].width * 0.5, w1 = g.edges[e1].width * 0.5;
+        Vec2 l0 = V + perp(d0) * w0, r0 = V - perp(d0) * w0;   // e0 kerb points at V
+        Vec2 l1 = V + perp(d1) * w1, r1 = V - perp(d1) * w1;   // e1 kerb points at V
+        // The road continues, so e0's left pairs with e1's right (and vice versa).
+        // Fan the carriageway notch from V to each pair, then turn the kerb across it.
+        addTri(to3d(V), to3d(l0), to3d(r1));
+        addTri(to3d(V), to3d(r0), to3d(l1));
+        cornerBand(V, l0, r1);
+        cornerBand(V, r0, l1);
     }
 
     // --- Ribbons: the trimmed span between junctions --------------------------
