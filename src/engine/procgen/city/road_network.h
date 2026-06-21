@@ -40,16 +40,20 @@ struct GridRoadParams {
 };
 RoadGraph gridRoads(const GridRoadParams& params);
 
-// Radial road generator (ADR-0044): concentric ring roads + radial spokes from a
-// centre — the "Paris/Canberra" pattern. Rings every `ringSpacing` out to
-// `extent`, `spokes` radials from the middle, vertices jittered. The outer ring
-// is arterial so the region stays enclosed. Deterministic for `seed`.
+// Radial road generator (ADR-0044): concentric ring roads + radial avenues — the
+// "Paris/Étoile" pattern. Rings every `ringSpacing` out to `extent`; each ring is
+// a smooth circle (`ringSubdiv` chords per avenue gap, so it reads as a curve, not
+// a coarse polygon); `spokes` avenues radiate from the central ROUNDABOUT (the
+// innermost ring) outward — they meet the ring, never a centre point, so there is
+// no spike and the centre is an island. The outer ring is arterial so the region
+// stays enclosed. Deterministic for `seed`.
 struct RadialParams {
     Vec2  center{0, 0};
     Real  extent = 400;      // outer radius (m)
     Real  ringSpacing = 70;  // distance between concentric rings (m)
-    int   spokes = 12;       // radial roads from the centre
-    Real  jitter = 0.08;     // node jitter as a fraction of ringSpacing
+    int   spokes = 8;        // radial avenues from the roundabout
+    int   ringSubdiv = 6;    // chords per avenue gap on a ring (smoothness)
+    Real  jitter = 0.03;     // node jitter as a fraction of ringSpacing (small = round)
     Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
     uint32_t seed = 0;
 };

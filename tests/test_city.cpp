@@ -131,20 +131,25 @@ TEST_CASE(road_mesh_lane_markings_paint_lines) {
 }
 
 TEST_CASE(radial_roads_make_rings_and_spokes) {
-    // ADR-0044: a second generator. Concentric rings + spokes, all within the
-    // outer radius, and blocks fall out of the planar graph like the grid.
+    // ADR-0044: concentric SMOOTH rings + avenues radiating from a central
+    // roundabout (the Étoile model) — no centre node, so the avenues meet the
+    // inner ring instead of converging to a spike.
     RadialParams rp;
-    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 12; rp.seed = 5;
+    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 8; rp.ringSubdiv = 6; rp.seed = 5;
     RoadGraph g = radialRoads(rp);
-    CHECK(g.nodes.size() > 0);
     CHECK(g.edges.size() > 0);
 
-    // Every node sits within the outer radius (plus jitter slack).
-    Real maxR = 0;
-    for (const RoadNode& n : g.nodes) maxR = std::max(maxR, n.pos.length());
+    const int rings = 4;                          // round(280 / 70)
+    const int segs = rp.spokes * rp.ringSubdiv;   // nodes per ring (smooth circle)
+    CHECK(g.nodes.size() == static_cast<std::size_t>(rings * segs));   // no centre node
+
+    Real minR = 1e9, maxR = 0;
+    for (const RoadNode& n : g.nodes) {
+        minR = std::min(minR, n.pos.length());
+        maxR = std::max(maxR, n.pos.length());
+    }
+    CHECK(minR > rp.ringSpacing * 0.7);           // nothing inside the roundabout
     CHECK(maxR <= rp.extent + rp.ringSpacing * 0.2);
-    // 4 rings × 12 spokes + centre = 49 nodes.
-    CHECK(g.nodes.size() == 49u);
 
     // Blocks extract from the planarized radial graph (wedge-shaped lots).
     std::vector<Poly2> blocks = extractBlocks(planarize(g));

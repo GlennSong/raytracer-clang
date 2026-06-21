@@ -77,9 +77,23 @@ function M.plan_blocks(base, lay, o)
   local flat_relief = opt(o, "flat_relief", 8)     -- max terrain rise to develop (m)
   local min_lot     = opt(o, "min_lot", 14)        -- lot must hold a building + yards
   local park_frac   = opt(o, "park_fraction", 0.10)
+  local center_r    = opt(o, "center_plaza", false) and opt(o, "ring_spacing", 60) * 0.6 or -1
   local pads, plan  = {}, {}
   for _, block in ipairs(lay.blocks) do
     local cx, cz = centroid(block)
+    -- The island inside the roundabout: a plaza + monument (the Étoile centre),
+    -- not subdivided into lots.
+    if math.sqrt(cx * cx + cz * cz) < center_r then
+      local rad = 0
+      for _, p in ipairs(block) do
+        rad = math.max(rad, math.sqrt((p.x - cx) ^ 2 + (p.z - cz) ^ 2))
+      end
+      local y = base:at(cx, cz)
+      pads[#pads + 1] = { y = y, poly = block }     -- level the whole island
+      plan[#plan + 1] = { kind = "plaza", cx = cx, cz = cz, rad = rad, y = y }
+      goto next_block
+    end
+    do
     local lo, hi = 1e9, -1e9
     for _, p in ipairs(block) do
       local y = base:at(p.x, p.z); lo = math.min(lo, y); hi = math.max(hi, y)
@@ -102,6 +116,8 @@ function M.plan_blocks(base, lay, o)
         end
       end
     end
+    end   -- the developable-block branch
+    ::next_block::
   end
   return pads, plan
 end
@@ -157,6 +173,20 @@ end
 -- back behind its forecourt and squared to the street.
 function M.place_blocks(m, plan, land, o)
   for _, b in ipairs(plan) do
+    -- The roundabout's central island: a round paved plaza + a monument (an
+    -- Arc/obelisk stand-in) the avenues radiate around.
+    if b.kind == "plaza" then
+      local pr = b.rad * 0.82
+      m:add_solid(mesh.translate(mesh.cylinder(pr, 0.2), { b.cx, b.y, b.cz }))
+      m:add_solid(mesh.translate(
+        scope{ origin = { -4, 0, -4 }, size = { 8, 2.5, 8 } }
+          :box(opt(o, "monument_color", { 0.60, 0.58, 0.55 })), { b.cx, b.y, b.cz }))
+      m:add_solid(mesh.translate(
+        scope{ origin = { -1.6, 2.5, -1.6 }, size = { 3.2, 16, 3.2 } }
+          :box(opt(o, "monument_color", { 0.62, 0.60, 0.57 })), { b.cx, b.y, b.cz }))
+      goto next_lot
+    end
+    do
     local sty = lot_style(o, b.r)
     local hw, hd = b.w * 0.5, b.d * 0.5
     local function place(part) m:add_solid(mesh.place(part, { b.cx, b.y, b.cz }, b.yaw)) end
@@ -198,6 +228,8 @@ function M.place_blocks(m, plan, land, o)
           { b.cx, b.y, b.cz }, yaw))
       end
     end
+    end   -- the normal lot branch
+    ::next_lot::
   end
 end
 

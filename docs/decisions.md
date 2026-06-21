@@ -2818,6 +2818,16 @@ open-front hedge framing garden lots, and a small `diagonal_chance` that turns
 inside their plots at real urban density, fronting the street, with gardens —
 not a field of oversized boxes.
 
+Radial = Place de l'Étoile: `radialRoads` was a wagon wheel (coarse polygon
+rings, all spokes converging to one centre node = a spike). Rebuilt: each ring is
+a smooth circle of `spokes * ringSubdiv` short chords; the avenues (fewer now,
+default 8) radiate from the inner **roundabout** (ring 1) outward and never touch
+a centre point, so there is no spike and the disc inside ring 1 is an island.
+`city.lua` fills that island, when `center_plaza` is set, with a round paved plaza
++ a monument (an Arc/obelisk stand-in) instead of subdividing it — the avenues
+radiate around it. Sidewalks follow the chorded rings, so they curve too. The grid
+generator is untouched.
+
 Hub plaza + building variety + parameterized recipes: a many-armed junction
 (`plaza`/`plaza_min_arms`) trims every arm back to the plaza radius so the pad
 fills a clean circular plaza instead of a cramped fan — the radial hub reads

@@ -100,39 +100,46 @@ RoadGraph radialRoads(const RadialParams& p) {
     Rng rng(p.seed);
     int rings = std::max(1, static_cast<int>(std::lround(p.extent / p.ringSpacing)));
     int spokes = std::max(3, p.spokes);
+    int subdiv = std::max(1, p.ringSubdiv);
+    int segs = spokes * subdiv;          // nodes per ring; avenue gaps are subdivided
+                                         // into `subdiv` chords so the ring reads round
 
     auto widthOf = [&](RoadClass c) {
         return c == RoadClass::Arterial ? p.arterialWidth
              : c == RoadClass::Collector ? p.collectorWidth : p.localWidth;
     };
 
-    int centre = g.addNode(p.center, 0.01);
-    std::vector<std::vector<int>> id(rings + 1);   // id[ring][spoke]; ring 0 = centre
+    // Ring nodes only — there is NO centre node, so avenues meet the inner
+    // roundabout (ring 1) instead of converging to a spike. The disc inside ring 1
+    // is an island. Ring r sits at r*ringSpacing; node k at angle 2pi*k/segs.
+    std::vector<std::vector<int>> id(rings + 1);   // id[ring][segment], ring 1 = roundabout
     for (int r = 1; r <= rings; ++r) {
-        id[r].resize(spokes);
+        id[r].resize(segs);
         Real radius = r * p.ringSpacing;
         Real jr = p.jitter * p.ringSpacing;
-        for (int s = 0; s < spokes; ++s) {
-            Real ang = 2 * PI * s / spokes;
+        for (int k = 0; k < segs; ++k) {
+            Real ang = 2 * PI * k / segs;
             Vec2 pos = p.center + Vec2(std::cos(ang), std::sin(ang)) * radius;
             pos += Vec2(rng.range(-jr, jr), rng.range(-jr, jr));
-            id[r][s] = g.addNode(pos, 0.01);
+            id[r][k] = g.addNode(pos, 0.01);
         }
     }
 
-    // Ring roads: chords between adjacent spokes on each ring (outer = arterial).
+    // Ring roads: a smooth loop of short chords. The roundabout (ring 1) and the
+    // outer ring are arterial; the rest alternate collector/local.
     for (int r = 1; r <= rings; ++r) {
-        RoadClass c = (r == rings) ? RoadClass::Arterial
+        RoadClass c = (r == 1 || r == rings) ? RoadClass::Arterial
                     : (r % 2 == 0) ? RoadClass::Collector : RoadClass::Local;
-        for (int s = 0; s < spokes; ++s)
-            g.addEdge(id[r][s], id[r][(s + 1) % spokes], widthOf(c), c);
+        for (int k = 0; k < segs; ++k)
+            g.addEdge(id[r][k], id[r][(k + 1) % segs], widthOf(c), c);
     }
-    // Spokes: centre out through every ring (every 3rd spoke an arterial avenue).
+    // Avenues: from the roundabout (ring 1) outward, on the segment node that lands
+    // on each spoke angle (every `subdiv`-th node). Every other one is arterial.
     for (int s = 0; s < spokes; ++s) {
-        RoadClass c = (s % 3 == 0) ? RoadClass::Arterial : RoadClass::Collector;
-        g.addEdge(centre, id[1][s], widthOf(c), c);
+        int k = s * subdiv;
+        RoadClass c = (s % 2 == 0) ? RoadClass::Arterial : RoadClass::Collector;
         for (int r = 1; r < rings; ++r)
-            g.addEdge(id[r][s], id[r + 1][s], widthOf(c), c);
+            g.addEdge(id[r][k], id[r + 1][k], widthOf(c), c);
     }
     return g;
 }

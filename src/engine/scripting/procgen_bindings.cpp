@@ -733,6 +733,7 @@ int l_city_layout(lua_State* L) {
         rp.extent      = static_cast<Real>(optField(L, 1, "extent", rp.extent));
         rp.ringSpacing = static_cast<Real>(optField(L, 1, "ring_spacing", rp.ringSpacing));
         rp.spokes      = static_cast<int>(optField(L, 1, "spokes", rp.spokes));
+        rp.ringSubdiv  = static_cast<int>(optField(L, 1, "ring_subdiv", rp.ringSubdiv));
         rp.jitter      = static_cast<Real>(optField(L, 1, "jitter", rp.jitter));
         rp.seed        = static_cast<uint32_t>(optField(L, 1, "seed", 0));
         raw = radialRoads(rp);
