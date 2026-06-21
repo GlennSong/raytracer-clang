@@ -36,7 +36,8 @@ void PhysicsSystem::createBodies(World& world) {
                     rb.bodyId = physics.addBox(c.halfExtent, t.position,
                                                t.orientation, rb.motion,
                                                c.restitution, c.friction,
-                                               rb.lockRotation);
+                                               rb.lockRotation,
+                                               rb.continuousCollision);
                     break;
             }
             // If entity has a Velocity component, queue initial velocity

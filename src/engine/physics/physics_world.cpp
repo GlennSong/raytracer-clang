@@ -237,13 +237,13 @@ PhysicsBodyId createBody(JPH::BodyInterface& bodies, const JPH::Shape* shape,
 PhysicsBodyId PhysicsWorld::addBox(const Vec3& halfExtent, const Vec3& position,
                                    const Quat& orientation, BodyMotion motion,
                                    Real restitution, Real friction,
-                                   bool lockRotation) {
+                                   bool lockRotation, bool continuous) {
     if (!impl) return INVALID_PHYSICS_BODY;
     JPH::BoxShapeSettings shapeSettings(toJolt(halfExtent));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) return INVALID_PHYSICS_BODY;
     return createBody(impl->bodies(), result.Get(), position, orientation, motion,
-                      restitution, friction, lockRotation);
+                      restitution, friction, lockRotation, continuous);
 }
 
 PhysicsBodyId PhysicsWorld::addSphere(Real radius, const Vec3& position,

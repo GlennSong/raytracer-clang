@@ -50,7 +50,7 @@ public:
     PhysicsBodyId addBox(const Vec3& halfExtent, const Vec3& position,
                          const Quat& orientation, BodyMotion motion,
                          Real restitution = 0.0, Real friction = 0.2,
-                         bool lockRotation = false);
+                         bool lockRotation = false, bool continuous = false);
     PhysicsBodyId addSphere(Real radius, const Vec3& position,
                             const Quat& orientation, BodyMotion motion,
                             Real restitution = 0.0, Real friction = 0.2,

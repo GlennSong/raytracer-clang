@@ -159,8 +159,9 @@ struct RigidBody {
     BodyMotion motion = BodyMotion::Dynamic;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
     bool lockRotation = false;
-    // Continuous collision (linear sweep) — for fast movers like the player, so a
-    // long fall doesn't tunnel through thin terrain colliders. Capsule bodies only.
+    // Continuous collision (linear sweep) — for fast movers (the player on a long
+    // fall, a bullet), so they don't tunnel through thin colliders. Capsule and
+    // box bodies.
     bool continuousCollision = false;
 };
 

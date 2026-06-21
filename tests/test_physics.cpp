@@ -270,3 +270,30 @@ TEST_CASE(physics_synchronous_pool_runs_sim) {
     CHECK_APPROX(world.bodyPosition(sphere).y, 0.5, 0.05);
     world.shutdown();
 }
+
+TEST_CASE(physics_ccd_box_does_not_tunnel_thin_wall) {
+    // A bullet is a small, fast dynamic box. With discrete stepping it leaps
+    // past a thin wall between frames (tunnelling — "I can shoot through
+    // buildings"); linear-cast CCD sweeps the body so it actually stops. Same
+    // shot, CCD off vs on.
+    auto shoot = [](bool continuous) {
+        PhysicsWorld world;
+        world.initialize();
+        // A thin static wall (10 cm) standing at x = 0.
+        world.addBox(Vec3(0.05, 3, 3), Vec3(0, 0, 0), Quat::identity(),
+                     BodyMotion::Static, 0.0, 0.5);
+        // A small fast box fired from x = -3 straight at it (~5 m per 1/60 step,
+        // far more than the wall is thick).
+        PhysicsBodyId b =
+            world.addBox(Vec3(0.05, 0.05, 0.05), Vec3(-3, 0, 0), Quat::identity(),
+                         BodyMotion::Dynamic, 0.0, 0.3, false, continuous);
+        world.optimizeBroadPhase();
+        world.setLinearVelocity(b, Vec3(300, 0, 0));
+        step(world, 6);
+        Real x = world.bodyPosition(b).x;
+        world.shutdown();
+        return x;
+    };
+    CHECK(shoot(false) > 0.5);   // discrete: tunnelled clean through the wall
+    CHECK(shoot(true) < 0.0);    // CCD: stopped on the near side
+}

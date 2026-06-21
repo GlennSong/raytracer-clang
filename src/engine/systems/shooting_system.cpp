@@ -86,6 +86,10 @@ void ShootingSystem::spawnBullet(FrameContext& ctx) {
 
     RigidBody rb;
     rb.motion = BodyMotion::Dynamic;
+    // A bullet is small and fast, so discrete steps tunnel it straight through
+    // thin static geometry (a building wall, a fence). Linear-cast CCD sweeps the
+    // body between steps so it actually hits what it passes through.
+    rb.continuousCollision = true;
     ctx.world.add<RigidBody>(e, rb);
 
     Renderable r;
