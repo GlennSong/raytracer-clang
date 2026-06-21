@@ -740,15 +740,23 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         rb.motion = src.dynamic ? BodyMotion::Dynamic : BodyMotion::Static;
         world.add<RigidBody>(e, rb);
     };
+    // Static triangle-mesh colliders are MERGED by friction into one body each:
+    // a city is hundreds of solids (every building, plinth, lawn, the terrain, the
+    // roads), and one static mesh body per surface keeps the physics broadphase
+    // cheap (a few bodies, each with its own BVH) instead of hundreds of bodies.
+    // Primitives (a round tower, a lamp post) stay per-entity — there are few.
+    std::vector<std::pair<Real, MeshCollider>> meshBuckets;
+    auto bucketFor = [&](Real friction) -> MeshCollider& {
+        for (auto& b : meshBuckets)
+            if (std::abs(b.first - friction) < 1e-4) return b.second;
+        meshBuckets.emplace_back(friction, MeshCollider{});
+        meshBuckets.back().second.friction = friction;
+        return meshBuckets.back().second;
+    };
     for (const ProcCollider& pc : model.colliders) {
         switch (pc.kind) {
-            case ProcCollider::Kind::Mesh: {
-                MeshCollider mc;
-                mc.friction = pc.friction;
-                appendTris(mc, pc.mesh, nullptr);
-                spawnMeshCollider(std::move(mc));
-                break;
-            }
+            case ProcCollider::Kind::Mesh:
+                appendTris(bucketFor(pc.friction), pc.mesh, nullptr); break;
             case ProcCollider::Kind::Box:
                 spawnPrimitive(ColliderShape::Box, pc.center, pc.yaw, pc); break;
             case ProcCollider::Kind::Sphere:
@@ -759,15 +767,14 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     }
 
     // Instanced colliders: stamp a collider at each placement (a lamp per verge).
+    // Mesh stamps merge into the friction buckets; primitives are one body each.
     for (const ProcInstanceGroup& cg : model.instances) {
         if (cg.collision == InstanceCollision::None || cg.transforms.empty()) continue;
         if (cg.collision == InstanceCollision::Mesh) {
             const RenderMesh& proto =
                 cg.collisionProto.vertices.empty() ? cg.proto : cg.collisionProto;
-            MeshCollider mc;
-            mc.friction = cg.colliderFriction;
+            MeshCollider& mc = bucketFor(cg.colliderFriction);
             for (const Mat4& xf : cg.transforms) appendTris(mc, proto, &xf);
-            spawnMeshCollider(std::move(mc));
             continue;
         }
         ColliderShape shape = cg.collision == InstanceCollision::Box ? ColliderShape::Box
@@ -788,6 +795,7 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
             spawnPrimitive(shape, pos + Vec3(0, lift, 0), 0, tmpl);
         }
     }
+    for (auto& b : meshBuckets) spawnMeshCollider(std::move(b.second));
 #else
     (void)ent; (void)levelDir; (void)world; (void)renderer; (void)assets; (void)index;
     LOG_WARN << "script entity skipped (scripting disabled in this build)";
