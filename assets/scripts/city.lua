@@ -99,6 +99,33 @@ function M.plan_blocks(base, lay, o)
   return pads, plan
 end
 
+-- ----- building variety: archetype by district + a per-plot hash -------------
+-- Downtown grows glass/metal towers (some round, set back as they climb);
+-- midtown concrete/stucco/brick mid-rises; the residential fringe brick & painted
+-- low-rises. So the skyline reads as a varied city, not a field of equal boxes.
+function M.building_args(o, b)
+  local h = math.floor(b.cx * 31 + b.cz * 17) % 997
+  local a = { width = b.fw, depth = b.fd, floors = floors_at(o, b.r),
+              ground_retail = true, walkable_ground = true,
+              seed = math.floor(b.cx * 7 + b.cz) % 100000 }
+  if b.r < opt(o, "downtown_radius", 55) then
+    a.style = ({ "glass", "glass", "metal", "concrete" })[(h % 4) + 1]
+    a.bay_width = 3.6 + (h % 3) * 0.4
+    if a.floors >= 12 then a.setback_floors = 5; a.setback_every = 2.5 end
+    if h % 6 == 0 then a.shape = "cylinder"; a.sides = 40 end       -- round towers
+    if h % 47 == 0 then a.shape = "pagoda"; a.tiers = 5 end          -- a rare landmark
+  elseif b.r < opt(o, "midtown_radius", 120) then
+    a.style = ({ "concrete", "stucco", "painted", "brick" })[(h % 4) + 1]
+    a.bay_width = 3.2 + (h % 4) * 0.3
+    if h % 7 == 0 and a.floors >= 8 then a.setback_floors = 4; a.setback_every = 2.0 end
+  else
+    a.style = ({ "brick", "painted", "stucco" })[(h % 3) + 1]
+    a.ground_retail = false
+    a.bay_width = 3.0
+  end
+  return a
+end
+
 -- ----- place each planned block on the conformed (level) terrain --------------
 function M.place_blocks(m, plan, land, o)
   for _, b in ipairs(plan) do
@@ -108,11 +135,7 @@ function M.place_blocks(m, plan, land, o)
       m:add_solid(scope{ origin = { b.cx - hw, b.y - 1.0, b.cz - hd },
                          size = { b.fw, 1.0, b.fd } }
                   :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 })))
-      local floors = floors_at(o, b.r)
-      local bld = building.grow{ floors = floors, width = b.fw, depth = b.fd,
-        ground_retail = true, walkable_ground = true,
-        setback_floors = (floors >= 14) and 6 or 0, setback_every = 2.5,
-        seed = math.floor(b.cx * 7 + b.cz) % 100000 }
+      local bld = building.grow(M.building_args(o, b))
       m:add_solid(mesh.translate(bld, { b.cx, b.y, b.cz }))
     else
       -- A park: a flat manicured lawn on the same level plot (distinct green).
@@ -189,13 +212,16 @@ function M.generate(o)
   -- with raised sidewalks skirting both verges (curb lip + concrete slab).
   m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
     color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
-    curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true) }))
+    curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true),
+    plaza = opt(o, "plaza", 0) }))
 
   M.place_blocks(m, plan, land, o)
   M.lamps(m, lay, land, o)
   return m
 end
 
--- Default entry point: a representative grid city on rolling terrain. Change the
--- opts (or return M.tower(3)) to author a different city or a single building.
-return M.generate{ pattern = "grid", seed = 7 }
+-- Entry point: the level's `opts` block arrives as the global `args` (see
+-- setRecipeArgs), so the SAME recipe drives a grid city or a radial one straight
+-- from the level. With no opts it falls back to a representative grid city. Edit
+-- to `return M.tower(3)` etc. to preview a single building instead.
+return M.generate(args or { pattern = "grid", seed = 7 })

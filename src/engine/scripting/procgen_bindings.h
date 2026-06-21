@@ -13,6 +13,13 @@ class ScriptVM;
 struct RenderMesh;
 struct TextureData;
 
+// Marshal a level entity's `opts` (a JSON object, serialized) into a Lua global
+// table `args`, so one recipe is parameterizable from the level (e.g. the same
+// city.lua drives both a grid and a radial city). Objects -> keyed tables,
+// arrays -> 1-based tables (so a {r,g,b} colour reads straight back), primitives
+// map across. Call after openProcgenLibrary, before running the recipe.
+void setRecipeArgs(ScriptVM& vm, const std::string& optsJson);
+
 // One material-part of a procedural model (ADR-0032): geometry plus the intent
 // to build a RenderMaterial. `hasMaterial == false` means "use the caller's
 // default material" (a bare single-mesh script return — back-compat). `texture`

@@ -454,6 +454,43 @@ TEST_CASE(procgen_terrain_conform_block_pads_run) {
     CHECK(mesh->vertices.size() == 65u * 65u);
 }
 
+TEST_CASE(procgen_recipe_args_from_opts) {
+    // A level's `opts` is marshalled into the global `args` table so one recipe is
+    // parameterizable from the level (numbers, bools, and arrays survive).
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    setRecipeArgs(vm, R"({"w": 4, "tall": true, "color": [0.1, 0.2, 0.3]})");
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        local h = args.tall and args.w * 3 or args.w     -- bool + number
+        return mesh.box{ args.w, h, args.color[1] + 4 }  -- array element
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    CHECK(mesh != nullptr);
+    // Malformed / non-object opts are ignored, not fatal.
+    setRecipeArgs(vm, "not json");
+    setRecipeArgs(vm, "[1,2,3]");
+}
+
+TEST_CASE(procgen_building_style_and_shape) {
+    // The variety knobs are exposed: a glass box and a round cylinder tower both
+    // grow, and the cylinder's mass differs from the box's.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> box, cyl;
+    std::string err;
+    CHECK(runProcgenMesh(vm,
+        "return building.grow{ floors=8, width=16, depth=14, style='glass', seed=1 }",
+        box, &err));
+    CHECK(box && !box->vertices.empty());
+    CHECK(runProcgenMesh(vm,
+        "return building.grow{ floors=8, width=16, depth=14, shape='cylinder', sides=24, seed=1 }",
+        cyl, &err));
+    CHECK(cyl && !cyl->vertices.empty());
+    CHECK(cyl->vertices.size() != box->vertices.size());   // a round mass, not a box
+}
+
 TEST_CASE(procgen_non_mesh_return_is_an_error) {
     ScriptVM vm;
     openProcgenLibrary(vm);

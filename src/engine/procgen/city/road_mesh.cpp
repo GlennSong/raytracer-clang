@@ -153,11 +153,17 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             B.s = std::max(B.s, sB);
         }
 
+        // A many-armed hub pushes every arm out to the plaza radius, so the pad
+        // fills a clean circular plaza rather than a cramped fan of corners.
+        double floorS = (m >= p.plazaMinArms && p.plazaRadius > 0.0)
+                            ? std::max(p.minSetback, p.plazaRadius)
+                            : p.minSetback;
+
         // Clamp + record the trims, and lay out the pad ring.
         std::vector<Vec2> ring;   // CCW: each arm contributes [right point, left point]
         for (Arm& a : arms) {
             double maxS = edgeLen(a.edge) * 0.45;
-            a.s = std::min(std::max(a.s, p.minSetback), std::max(p.minSetback, maxS));
+            a.s = std::min(std::max(a.s, floorS), std::max(floorS, maxS));
             int end = (g.edges[a.edge].a == v) ? 0 : 1;
             trim[a.edge][end] = a.s;
             Vec2 base = V + a.d * a.s;

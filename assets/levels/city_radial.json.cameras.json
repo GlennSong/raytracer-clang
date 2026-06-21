@@ -1,0 +1,5 @@
+{ "cameras": [
+  { "name": "Aerial", "position": [40, 230, 250], "forward": [-0.14, -0.72, -0.68],
+    "lens": { "focalLength": 26, "sensorHeight": 24, "fStop": 0, "focusDistance": 300 } },
+  { "name": "Hub", "position": [70, 120, 130], "forward": [-0.45, -0.62, -0.64],
+    "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } } ] }

@@ -22,6 +22,11 @@ struct RoadMeshParams {
     double lift = 0.25;                 // raise above the terrain to avoid z-fight
     double minSetback = 1.0;            // floor on the junction trim distance (m)
     Vec3   color{0.08, 0.08, 0.09};     // asphalt
+    // Plaza: a node with many converging arms (a radial hub) trims them all back
+    // to at least `plazaRadius`, so the pad fills a clean circular plaza instead
+    // of a cramped fan of overlapping corners. 0 radius = off (ordinary junction).
+    int    plazaMinArms = 6;
+    double plazaRadius = 0.0;
     // Sidewalks: a raised skirt along the carriageway edges (and around the
     // junction corners) — a curb lip facing the street, a concrete slab top, and
     // an outer face dropping back to the ground. 0 width = no sidewalks.

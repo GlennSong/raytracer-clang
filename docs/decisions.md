@@ -2798,8 +2798,19 @@ recipe (`city.lua` `plan_blocks`) classifies each road-graph face from the
 plots seated at the local height; too-hilly faces are left as natural green
 hillside — and a deterministic slice of the developed plots are parks (a flat
 lawn) rather than buildings. So a block is now a container that the terrain is
-conformed to. Stairstepped terrace lots and the terrain-following grower remain
-as above.
+conformed to.
+
+Hub plaza + building variety + parameterized recipes: a many-armed junction
+(`plaza`/`plaza_min_arms`) trims every arm back to the plaza radius so the pad
+fills a clean circular plaza instead of a cramped fan — the radial hub reads
+cleanly. The building grammar's variety (massing `shape` = box/cylinder/pagoda,
+facade `style` = brick/concrete/stucco/glass/metal, setbacks, bay width) is now
+exposed to Lua, and `city.lua` picks an archetype per plot by district + a hash,
+so the skyline is varied (glass/metal towers downtown, some round; concrete/brick
+mid-rises; brick low-rises). Levels parameterize a recipe through an `opts` block,
+marshalled into a Lua global `args` (`setRecipeArgs`): the same `city.lua` drives
+`city_lua.json` (grid) and `city_radial.json` (radial + plaza) from the level
+alone. Stairstepped terrace lots and the terrain-following grower remain as above.
 
 ---
 

@@ -21,6 +21,8 @@
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cmath>
 #include <memory>
 #include <new>
@@ -439,6 +441,10 @@ bool optBoolField(lua_State* L, int idx, const char* key, bool fallback) {
 
 // --- building.* : the split/shape grammar (ADR-0038 §2, ADR-0028 L1 grammar) ---
 
+// Defined further down; needed here for the building style/colour fields.
+Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback);
+std::string optStrField(lua_State* L, int idx, const char* key, const char* def);
+
 BuildingParams readBuildingParams(lua_State* L, int idx) {
     BuildingParams p;
     if (lua_isnoneornil(L, idx)) return p;
@@ -453,7 +459,29 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.setbackEvery  = static_cast<Real>(optField(L, idx, "setback_every", p.setbackEvery));
     p.setbackFloors = static_cast<int>(optField(L, idx, "setback_floors", p.setbackFloors));
     p.parapet       = static_cast<Real>(optField(L, idx, "parapet", p.parapet));
-    p.seed          = static_cast<uint32_t>(optField(L, idx, "seed", 0));
+    uint32_t seed   = static_cast<uint32_t>(optField(L, idx, "seed", 0));
+    p.seed          = seed;
+
+    // Massing: box | cylinder (round tower) | pagoda (tiered) — the "not every
+    // building is a box" axis.
+    std::string shp = optStrField(L, idx, "shape", "box");
+    if (shp == "cylinder") p.shape = BuildingShape::Cylinder;
+    else if (shp == "pagoda") p.shape = BuildingShape::Pagoda;
+    p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
+    p.tiers     = static_cast<int>(optField(L, idx, "tiers", p.tiers));
+    p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
+
+    // Facade style: a named look picks the wall material + a seeded colour
+    // (brick reds, concrete greys, glass curtain, ...). Fine knobs override it.
+    std::string style = optStrField(L, idx, "style", "");
+    if (style == "glass")          p.curtainWall = true;
+    else if (style == "brick")    { p.wallPart = PartId::Brick;    p.wallColor = facadeColor(FacadeStyle::Brick, seed); }
+    else if (style == "concrete") { p.wallPart = PartId::Concrete; p.wallColor = facadeColor(FacadeStyle::Concrete, seed); }
+    else if (style == "stucco")   { p.wallPart = PartId::Stucco;   p.wallColor = facadeColor(FacadeStyle::Stucco, seed); }
+    else if (style == "metal")    { p.wallPart = PartId::Metal;    p.wallColor = facadeColor(FacadeStyle::Metal, seed); }
+    else if (style == "painted")    p.wallColor = facadeColor(FacadeStyle::Painted, seed);
+    p.curtainWall = optBoolField(L, idx, "curtain_wall", p.curtainWall);
+    p.wallColor = optVec3Field(L, idx, "wall_color", p.wallColor);
     return p;
 }
 
@@ -1081,6 +1109,8 @@ int l_city_road_mesh(lua_State* L) {
         rp.markWidth = optField(L, 2, "mark_width", rp.markWidth);
         rp.laneColor = optVec3Field(L, 2, "lane_color", rp.laneColor);
         rp.centerColor = optVec3Field(L, 2, "center_color", rp.centerColor);
+        rp.plazaRadius = optField(L, 2, "plaza", rp.plazaRadius);
+        rp.plazaMinArms = static_cast<int>(optField(L, 2, "plaza_min_arms", rp.plazaMinArms));
         lua_getfield(L, 2, "height");
         if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
             HeightField h = *hf;
@@ -1780,6 +1810,43 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     if (error != nullptr) *error = "procgen script did not return a Mesh or Model";
     lua_pop(L, 1);
     return false;
+}
+
+namespace {
+// Recursively push a JSON value onto the Lua stack (objects -> keyed tables,
+// arrays -> 1-based tables, primitives map across).
+void pushJson(lua_State* L, const nlohmann::json& j) {
+    if (j.is_object()) {
+        lua_newtable(L);
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            pushJson(L, it.value());
+            lua_setfield(L, -2, it.key().c_str());
+        }
+    } else if (j.is_array()) {
+        lua_newtable(L);
+        lua_Integer i = 1;
+        for (const auto& e : j) {
+            pushJson(L, e);
+            lua_seti(L, -2, i++);
+        }
+    } else if (j.is_boolean()) {
+        lua_pushboolean(L, j.get<bool>());
+    } else if (j.is_number()) {
+        lua_pushnumber(L, j.get<double>());
+    } else if (j.is_string()) {
+        lua_pushstring(L, j.get<std::string>().c_str());
+    } else {
+        lua_pushnil(L);
+    }
+}
+}  // namespace
+
+void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
+    nlohmann::json opts = nlohmann::json::parse(optsJson, nullptr, false);
+    if (opts.is_discarded() || !opts.is_object()) return;   // ignore malformed opts
+    lua_State* L = luaState(vm);
+    pushJson(L, opts);
+    lua_setglobal(L, "args");
 }
 
 bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,

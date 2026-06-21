@@ -69,6 +69,39 @@ TEST_CASE(road_mesh_sidewalks_raise_a_kerb) {
     CHECK(minY < flat.lift - 0.1);                        // outer face dropped to ground
 }
 
+TEST_CASE(road_mesh_plaza_opens_a_hub) {
+    // ADR-0044: a many-armed hub with a plaza trims every arm back to the plaza
+    // radius, so the junction fills a clean disc instead of a cramped fan.
+    const double TAU = 6.283185307179586;
+    RoadGraph g;
+    int c = g.addNode(Vec2(0, 0));
+    const int arms = 8;
+    for (int i = 0; i < arms; ++i) {
+        double a = TAU * i / arms;
+        int e = g.addNode(Vec2(std::cos(a) * 60.0, std::sin(a) * 60.0));
+        g.addEdge(c, e, 10);
+    }
+    // The plaza's signature is the cleared gap around the centre: the pad fans
+    // from the node out to the trim radius, and the ribbons only start there, so
+    // the nearest road vertex to the hub sits at ~plazaRadius (bigger than the
+    // tight natural trim).
+    auto hubGap = [](const RenderMesh& m) {
+        double minR = 1e9;
+        for (const Vertex& v : m.vertices) {
+            double d = std::sqrt(double(v.position.x * v.position.x +
+                                        v.position.z * v.position.z));
+            if (d > 1.0) minR = std::min(minR, d);   // skip the pad-centre fan apex
+        }
+        return minR;
+    };
+    RoadMeshParams plain;
+    RoadMeshParams p;
+    p.plazaRadius = 20.0;
+    p.plazaMinArms = 6;
+    CHECK(hubGap(buildRoadMesh(g, p)) > 15.0);          // pad opened to the plaza
+    CHECK(hubGap(buildRoadMesh(g, p)) > hubGap(buildRoadMesh(g, plain)));
+}
+
 TEST_CASE(road_mesh_lane_markings_paint_lines) {
     // ADR-0044: a marked carriageway carries a double-yellow centreline, dashed
     // white dividers, and solid edge lines, raised just above the asphalt — and
