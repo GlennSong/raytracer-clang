@@ -3,9 +3,30 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"             // Mat4
+#include "tree.h"                      // TextureData
 #include <vector>
 
 namespace engine {
+
+// A baked material for a procedural part (ADR-0043): a bundle of map sets +
+// scalar PBR params, applied with a world-planar tiling frame at `tile` world
+// units per repeat (no authored UVs needed). Empty maps mean "use the scalar /
+// vertex colour". The same bundle binds into the path tracer's Material and the
+// viewer's RenderMaterial — the renderer is the only divergence.
+struct ProcMaterial {
+    bool textured = false;
+    TextureData albedo;        // RGB albedo map (empty = vertex colour only)
+    TextureData normal;        // tangent-space normal map (empty = none)
+    float metallic = 0.0f;
+    float roughness = 0.85f;
+    double tile = 1.0;         // world units per texture repeat
+};
+
+// A model part: geometry + its material (default = untextured, vertex-coloured).
+struct ProcPart {
+    RenderMesh mesh;
+    ProcMaterial material;
+};
 
 // A composable procedural model (ADR-0042): the value a recipe returns at any
 // granularity — a single part, a collection of parts, or a whole scene. It is
@@ -23,7 +44,7 @@ struct ProcInstanceGroup {
 };
 
 struct ProcModel {
-    std::vector<RenderMesh> parts;
+    std::vector<ProcPart> parts;
     std::vector<ProcInstanceGroup> instances;
 
     // Fold another model into this one (composition).

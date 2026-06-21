@@ -2685,9 +2685,32 @@ wrap them (`texture_field.h`: `Field2 = std::function<double(double,double)>`).
 **Consequences.** The same field substrate serves every map type and tiles by
 construction; a brick (or any) texture is now authored and tuned in script and
 hot-reloadable. The C++ `surface_maps` presets remain as fast defaults, but they
-are no longer the only way to get a texture. Owed: bind baked images as material
-maps on `ProcModel` parts (UVs + albedo/normal/roughness), so a script building
-can wear a script brick — the bridge from "bake a texture" to "texture a mesh."
+are no longer the only way to get a texture.
+
+**Update — material bundle + bake-onto-part (the graph→maps→mesh pipeline).**
+The authoring DAG (`Field2`) is the right abstraction independent of where it
+runs; a material is a *bundle of map fields* (albedo/normal/roughness/…), baked
+once to a texture set, then applied as an ordinary `Material`. Decisions:
+- **Bake on CPU, sample at render.** Compositing is baked once per material, not
+  done in realtime, and the bake is **renderer-agnostic** — both the path tracer
+  and the viewer sample the *identical* maps. This keeps the engine rule "the
+  renderer is the only divergence." A GPU-shader bake would tie material authoring
+  to one graphics backend (Metal-only) and is rejected as the default; it stays a
+  possible future optimisation of the *same* DAG.
+- **One über-shader + baked maps, not per-material fragment shaders.** The graph
+  lowers to *textures*, never to a unique shader permutation, so a procedural
+  material and an artist's textures are indistinguishable at render time (the
+  glTF↔procedural unification rule). Many named material recipes (red_brick,
+  weathered_brick, …) are authored and assigned per part — materials are
+  first-class reusable values like the street furniture.
+- **No authored UVs required.** Parts are textured by the world-planar tiling
+  frame (`surfFrame`, `meshUV=false`) at a per-material `tile` size, so any
+  procedural mesh wears a material without per-vertex UV authoring; authored UVs
+  (glTF) are honoured where present.
+- **Carrier:** a `ProcModel` part becomes `{mesh, ProcMaterial}` (`ProcMaterial`
+  = baked albedo/normal maps + roughness/metallic + tile). `material.new{…}` (Lua)
+  bundles baked `Image`s; `model:add(mesh, material)` attaches it; `bakeProcModel`
+  binds the maps into the path tracer's `Material` slots.
 
 ---
 

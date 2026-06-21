@@ -811,6 +811,52 @@ int l_tex_bake_color(lua_State* L) {
     pushImage(L, std::make_shared<TextureData>(bakeFieldColor(mask, a, b, size)));
     return 1;
 }
+// texture.bake_normal(height, strength, size) -> Image (tangent-space normal).
+int l_tex_bake_normal(lua_State* L) {
+    Field2& h = checkField(L, 1);
+    double strength = luaL_optnumber(L, 2, 1.0);
+    int size = static_cast<int>(luaL_optinteger(L, 3, 256));
+    pushImage(L, std::make_shared<TextureData>(bakeFieldNormal(h, strength, size)));
+    return 1;
+}
+
+// --- material.* : a baked material bundle for a part (ADR-0043) ---------------
+// Bundle baked Images (albedo, normal) + scalar PBR params + a world tile size.
+// Applied to a part by world-planar projection — no authored UVs needed.
+constexpr const char* kMaterialMt = "engine.procgen.Material";
+using MaterialPtr = std::shared_ptr<ProcMaterial>;
+
+void pushMaterial(lua_State* L, MaterialPtr m) {
+    void* mem = lua_newuserdatauv(L, sizeof(MaterialPtr), 0);
+    new (mem) MaterialPtr(std::move(m));
+    luaL_setmetatable(L, kMaterialMt);
+}
+int materialGc(lua_State* L) {
+    static_cast<MaterialPtr*>(lua_touserdata(L, 1))->~MaterialPtr();
+    return 0;
+}
+
+// material.new{ albedo=Image, normal=Image, roughness=, metallic=, tile= }.
+int l_material_new(lua_State* L) {
+    auto m = std::make_shared<ProcMaterial>();
+    if (lua_istable(L, 1)) {
+        lua_getfield(L, 1, "albedo");
+        if (auto* img = static_cast<ImagePtr*>(luaL_testudata(L, -1, kImageMt))) {
+            m->albedo = **img; m->textured = true;
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "normal");
+        if (auto* img = static_cast<ImagePtr*>(luaL_testudata(L, -1, kImageMt))) {
+            m->normal = **img; m->textured = true;
+        }
+        lua_pop(L, 1);
+        m->roughness = static_cast<float>(optField(L, 1, "roughness", m->roughness));
+        m->metallic = static_cast<float>(optField(L, 1, "metallic", m->metallic));
+        m->tile = optField(L, 1, "tile", m->tile);
+    }
+    pushMaterial(L, std::move(m));
+    return 1;
+}
 
 // --- model.* : the composable procedural model value (ADR-0042 Phase 3) --------
 // A Model accumulates part meshes + instance groups, so a recipe can return a
@@ -838,10 +884,15 @@ int l_model_new(lua_State* L) {
     return 1;
 }
 
-// m:add(mesh) -> m : append a part mesh (baked, vertex-coloured). Chainable.
+// m:add(mesh [, material]) -> m : append a part. With a material it is textured
+// (world-planar), else baked vertex-coloured. Chainable.
 int l_model_add(lua_State* L) {
     ProcModel& m = checkModel(L, 1);
-    m.parts.push_back(checkMesh(L, 2));
+    ProcPart part;
+    part.mesh = checkMesh(L, 2);
+    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
+        part.material = **mat;
+    m.parts.push_back(std::move(part));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -896,7 +947,7 @@ int l_model_instance_count(lua_State* L) {
 // stamped at each transform. Bridges a Model to single-mesh consumers/preview.
 RenderMesh flattenModel(const ProcModel& m) {
     RenderMesh out;
-    for (const RenderMesh& p : m.parts) MeshBuilder::append(out, p);
+    for (const ProcPart& p : m.parts) MeshBuilder::append(out, p.mesh);
     for (const ProcInstanceGroup& g : m.instances)
         for (const Mat4& xf : g.transforms)
             MeshBuilder::appendTransformed(out, g.proto, xf);
@@ -1158,7 +1209,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
-    registerMetatable(L, kImageMt, imageGc);   // Image is opaque (just __gc)
+    registerMetatable(L, kImageMt, imageGc);      // Image is opaque (just __gc)
+    registerMetatable(L, kMaterialMt, materialGc);  // Material is opaque (just __gc)
 
     // The Model metatable carries the compose methods (ADR-0042 Phase 3).
     if (luaL_newmetatable(L, kModelMt)) {
@@ -1284,10 +1336,18 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"gradient_y", l_tex_gradient_y},
         {"bake_gray", l_tex_bake_gray},
         {"bake_color", l_tex_bake_color},
+        {"bake_normal", l_tex_bake_normal},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kTextureFns);
     lua_setglobal(L, "texture");
+
+    static const luaL_Reg kMaterialFns[] = {
+        {"new", l_material_new},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kMaterialFns);
+    lua_setglobal(L, "material");
 
     lua_pushcfunction(L, l_polygonize);
     lua_setglobal(L, "polygonize");
@@ -1345,7 +1405,7 @@ bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,
         return true;
     }
     if (auto* mesh = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt))) {
-        out.parts.push_back(**mesh);     // a bare mesh is a single part
+        { ProcPart p; p.mesh = **mesh; out.parts.push_back(std::move(p)); }  // bare mesh = one part
         lua_pop(L, 1);
         return true;
     }

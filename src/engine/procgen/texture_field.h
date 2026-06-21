@@ -45,6 +45,10 @@ TextureData bakeFieldGray(const Field2& f, int size);
 // brick lattice — giving an albedo map. `size`×`size`, row-major RGB.
 TextureData bakeFieldColor(const Field2& mask, const Vec3& a, const Vec3& b,
                            int size);
+// Tangent-space normal map from a height field: the surface normal of the height
+// gradient, `strength` exaggerating relief, encoded RGB ([-1,1]→[0,1]). For
+// brick mortar recesses, fabric weave, etc.
+TextureData bakeFieldNormal(const Field2& height, double strength, int size);
 
 }  // namespace engine
 

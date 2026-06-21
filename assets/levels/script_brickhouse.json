@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "house",
+      "shape": "script",
+      "file": "brickhouse.lua"
+    },
+    {
+      "shape": "box",
+      "size": [40, 0.2, 40],
+      "position": [0, -0.1, 0],
+      "material": { "albedo": [0.42, 0.44, 0.40], "roughness": 1.0 }
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.42, 0.52, -0.5],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}

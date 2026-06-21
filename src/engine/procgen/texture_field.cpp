@@ -130,4 +130,30 @@ TextureData bakeFieldColor(const Field2& mask, const Vec3& a, const Vec3& b,
     return td;
 }
 
+TextureData bakeFieldNormal(const Field2& height, double strength, int size) {
+    size = std::max(1, size);
+    TextureData td;
+    td.width = size; td.height = size; td.channels = 3;
+    td.pixels.resize(static_cast<std::size_t>(size) * size * 3);
+    double d = 1.0 / size;
+    auto byte = [](double c) {
+        return static_cast<uint8_t>((c < 0 ? 0 : (c > 1 ? 1 : c)) * 255.0 + 0.5);
+    };
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            double u = (x + 0.5) / size, v = (y + 0.5) / size;
+            // Central differences on the (tiling) height field.
+            double hl = height(u - d, v), hr = height(u + d, v);
+            double hd = height(u, v - d), hu = height(u, v + d);
+            Vec3 n(-(hr - hl) * strength, -(hu - hd) * strength, 1.0);
+            n = normalize(n);
+            std::size_t i = (static_cast<std::size_t>(y) * size + x) * 3;
+            td.pixels[i] = byte(n.x * 0.5 + 0.5);
+            td.pixels[i + 1] = byte(n.y * 0.5 + 0.5);
+            td.pixels[i + 2] = byte(n.z * 0.5 + 0.5);
+        }
+    }
+    return td;
+}
+
 }  // namespace engine

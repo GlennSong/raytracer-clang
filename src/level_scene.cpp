@@ -501,11 +501,30 @@ std::string loadScriptCode(const std::string& file, const std::string& levelDir)
 }  // namespace
 #endif
 
+// Add a baked TextureData to the Scene as a Texture; -1 if empty.
+static int addProcTexture(const TextureData& td, Scene& scene) {
+    if (td.pixels.empty()) return -1;
+    Texture tex;
+    tex.width = td.width; tex.height = td.height; tex.channels = td.channels;
+    tex.pixels = td.pixels;
+    return scene.addTexture(std::move(tex));
+}
+
 void bakeProcModel(const ProcModel& m, Scene& scene) {
-    for (const RenderMesh& part : m.parts) {
-        if (part.indices.empty()) continue;
-        int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.85));
-        addMeshAsTriangles(part, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
+    for (const ProcPart& part : m.parts) {
+        if (part.mesh.indices.empty()) continue;
+        const ProcMaterial& pm = part.material;
+        Material mat = Material::pbr(Vec3(1, 1, 1), pm.metallic, pm.roughness);
+        if (pm.textured) {
+            // World-planar tiling frame (meshUV=false): no authored UVs needed;
+            // surfFrame projects at texScale = repeats per world unit (ADR-0043).
+            mat.meshUV = false;
+            mat.texScale = pm.tile > 1e-6 ? 1.0 / pm.tile : 1.0;
+            mat.albedoTex = addProcTexture(pm.albedo, scene);
+            mat.normalTex = addProcTexture(pm.normal, scene);
+        }
+        int mi = scene.addMaterial(mat);
+        addMeshAsTriangles(part.mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
     }
     // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
     for (const ProcInstanceGroup& g : m.instances) {
