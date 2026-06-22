@@ -1081,7 +1081,9 @@ int l_terr_conform(lua_State* L) {
     double falloff = lua_istable(L, 3) ? optField(L, 3, "falloff", 8.0) : 8.0;
 
     // Nodes ({x=,z=}, 1-based), each seated at the terrain's natural height so the
-    // road meets the ground at the junctions.
+    // road meets the ground at the junctions — unless the node carries an explicit
+    // `y` (a routed road's own cut/fill profile, ADR-0047), in which case the ground
+    // is graded TO that height instead of the road draping on the terrain.
     lua_getfield(L, 2, "nodes");
     luaL_checktype(L, -1, LUA_TTABLE);
     lua_Integer nn = luaL_len(L, -1);
@@ -1089,7 +1091,8 @@ int l_terr_conform(lua_State* L) {
     for (lua_Integer i = 1; i <= nn; ++i) {
         lua_geti(L, -1, i);
         double x = optField(L, -1, "x", 0.0), z = optField(L, -1, "z", 0.0);
-        node[static_cast<std::size_t>(i - 1)] = Vec3(x, base(x, z), z);
+        double y = optField(L, -1, "y", base(x, z));     // road profile if given, else ground
+        node[static_cast<std::size_t>(i - 1)] = Vec3(x, y, z);
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
@@ -1215,6 +1218,8 @@ int l_terr_route(lua_State* L) {
     rp.climbCost   = optField(L, 2, "climb_cost", rp.climbCost);
     rp.maxStretch  = optField(L, 2, "max_stretch", rp.maxStretch);
     rp.simplifyTol = optField(L, 2, "simplify_tol", rp.simplifyTol);
+    rp.cutFill     = optField(L, 2, "cut_fill", rp.cutFill);     // >=0: earthwork mode
+    rp.elevStep    = optField(L, 2, "elev_step", rp.elevStep);
     double width = optField(L, 2, "width", 12.0);
 
     std::vector<Vec3> path = routeRoad(h, from, to, rp);
@@ -1226,9 +1231,10 @@ int l_terr_route(lua_State* L) {
     lua_createtable(L, 0, 3);
     lua_createtable(L, static_cast<int>(path.size()), 0);            // nodes
     for (std::size_t i = 0; i < path.size(); ++i) {
-        lua_createtable(L, 0, 2);
+        lua_createtable(L, 0, 3);
         lua_pushnumber(L, path[i].x); lua_setfield(L, -2, "x");
         lua_pushnumber(L, path[i].z); lua_setfield(L, -2, "z");
+        lua_pushnumber(L, path[i].y); lua_setfield(L, -2, "y");   // ROAD height (cut/fill)
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "nodes");

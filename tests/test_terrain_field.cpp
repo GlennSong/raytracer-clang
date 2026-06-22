@@ -183,6 +183,37 @@ TEST_CASE(route_road_keeps_grade_and_bends_around_a_peak) {
     CHECK_APPROX(path.back().x, 90.0, 1e-6);
 }
 
+TEST_CASE(route_road_earthwork_trades_length_for_cut_fill) {
+    // ADR-0047: a cone peak sits between the endpoints. With cheap earthwork
+    // (low cutFill) the road cuts straight through it; with dear earthwork (high
+    // cutFill) it detours around the base to avoid moving earth. Both keep the road
+    // profile walkable. The cutFill weight is the single hug<->cut dial.
+    HeightField cone = [](double x, double z) {
+        double r = std::sqrt(x * x + z * z);
+        return std::max(0.0, 80.0 - 0.6 * r);          // peak 80, slope 0.6, base r~133
+    };
+    auto measure = [&](double cutFill, double& len, double& earth, double& maxGrade) {
+        RouteParams p; p.cell = 10; p.maxGrade = 0.12; p.turnPenalty = 4; p.cutFill = cutFill;
+        std::vector<Vec3> path = routeRoad(cone, Vec3(-120, 0, 0), Vec3(120, 0, 0), p);
+        len = earth = maxGrade = 0;
+        for (std::size_t i = 1; i < path.size(); ++i) {
+            double d = std::hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z);
+            len += d;
+            if (d > 1e-6) maxGrade = std::max(maxGrade, std::fabs(path[i].y - path[i - 1].y) / d);
+            double mx = (path[i].x + path[i - 1].x) * 0.5, mz = (path[i].z + path[i - 1].z) * 0.5,
+                   my = (path[i].y + path[i - 1].y) * 0.5;
+            earth += std::fabs(my - cone(mx, mz)) * d;     // cut/fill volume proxy
+        }
+    };
+    double lenLo, earthLo, gradeLo, lenHi, earthHi, gradeHi;
+    measure(0.02, lenLo, earthLo, gradeLo);   // cheap earth -> cut straight through
+    measure(3.0,  lenHi, earthHi, gradeHi);   // dear earth  -> detour around the base
+    CHECK(gradeLo <= 0.12 + 1e-3);            // the road profile is always walkable
+    CHECK(gradeHi <= 0.12 + 1e-3);
+    CHECK(lenHi > lenLo * 1.05);              // hugging detours, so it runs longer
+    CHECK(earthHi < earthLo * 0.5);           // and moves far less earth
+}
+
 TEST_CASE(route_road_returns_empty_when_walled_in) {
     // The goal sits inside a steep crater wall the road can't climb — no grade-legal
     // route exists, so the router reports failure (the caller falls back to straight).

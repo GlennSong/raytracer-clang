@@ -96,6 +96,18 @@ struct RouteParams {
     double climbCost = 0.0;    // extra cost per metre climbed — biases toward flatter ground
     double maxStretch = 8.0;   // give up if the route would exceed straight-line * this
     double simplifyTol = 0.0;  // collapse points within this offset of a straight run (m); 0 => cell*0.4
+
+    // Earthwork mode (ADR-0047, after Galin et al. 2010). With cutFill < 0 (default)
+    // the road HUGS: it follows the ground and the grade limit is a hard gate on the
+    // terrain it may cross. With cutFill >= 0 the road instead carries its own
+    // elevation profile — the search is over (x, z, road-height), the grade limit is
+    // a hard constraint on the ROAD profile (so it's always walkable, even across
+    // ground too steep to hug), and cut/fill |road - terrain| is a SOFT cost weighted
+    // by cutFill. High cutFill => deviating is dear => the road hugs and switchbacks;
+    // low cutFill => reshaping is cheap => it runs straight and flat, cutting hills and
+    // filling valleys. cutFill is the single "hug <-> modify the terrain" dial.
+    double cutFill = -1.0;     // < 0: hug (no earthwork). >= 0: cost per m^2 of cut/fill
+    double elevStep = 0.0;     // road-height quantum for the profile search (m); 0 => auto
 };
 // Route a road from `from` to `to` over the heightfield, returning a polyline of
 // (x, h(x,z), z) waypoints whose every leg holds grade <= maxGrade. A* over a grid

@@ -3035,6 +3035,70 @@ streamlines chase; a multi-scale gradient would steady it on rough ground.
 
 ---
 
+## ADR-0047 — Earthwork-weighted routing: one dial from "hug the terrain" to "cut through it"
+**Status:** Accepted · **Date:** 2026-06-22
+
+**Context.** The system had the two *ends* of the road-vs-terrain spectrum as separate,
+unpriced tools: `routeRoad` (ADR-0045) only **hugs** — it drapes on the ground and a
+hard grade gate forbids steep steps, so it returns *empty* when no walkable hug
+exists (e.g. a tall peak with no gentle way round); `terrain.conform` (ADR-0044) only
+**modifies** — it cuts/fills the ground to whatever road it's handed. Real roads live
+on the continuum between, and *which* point you want is an economic choice: a mountain
+trail with cheap labour and dear earthmoving switchbacks (hugs); a motorway with cheap
+earthmoving and a need for speed cuts straight through (modifies). Nothing in the
+system let you express that choice, or even produce a road across ground too steep to
+hug. This is exactly the problem the highway-alignment-optimization literature (civil
+engineering) and Galin et al. 2010 ("Procedural Generation of Roads", graphics) solve:
+a single weighted shortest path whose cost prices length, grade, curvature, **and**
+earthwork together.
+
+**Decision.** Give `routeRoad` an optional **earthwork mode** (a `cutFill` weight) that
+turns the hug/modify choice into one continuous dial. The change is in the search
+*state*: instead of routing over `(x, z)` with the road glued to the ground, route
+over `(x, z, road-elevation)` — the road carries its own profile. Then:
+- the grade limit becomes a **hard constraint on the ROAD profile** (each step may
+  change road height by at most `maxGrade·dist`), so the result is *always* walkable —
+  even across ground too steep to hug, which the hug router can't do at all;
+- cut/fill, `|road − terrain|`, is a **soft cost** weighted by `cutFill`, added to the
+  per-step length (and turn penalty);
+- `cutFill` is the dial. **High** → deviating is dear → the road hugs and switchbacks
+  to keep earthwork near zero. **Low** → reshaping is cheap → the road runs straight
+  and flat, notching hilltops and filling hollows. `cutFill < 0` (default) keeps the
+  exact ADR-0045 hug behaviour, so existing callers are untouched.
+
+The routed profile flows through to the world: `terrain.route` emits each node's road
+height `y`, and `terrain.conform` now grades the ground *to* a node's `y` when present
+(instead of re-sampling the field), so the cut notch and fill embankment are real
+geometry. One correctness subtlety: the hug path's XZ Douglas-Peucker simplifier would
+merge across a vertical bend and fake an illegal grade, so earthwork mode uses a
+*lossless* 3D-collinear collapse that preserves the grade-limited profile exactly
+(verified: road grade stays ≤ `maxGrade` across the whole sweep).
+
+On a road crossing a ~0.9-grade peak (`road_earthwork` demo, straight-line 440 m), the
+dial sweeps cleanly and every road stays at 0.12 grade:
+
+| `cutFill` | length | earthwork (proxy) | max cut/fill |
+|---|---|---|---|
+| 3.0 (hug) | ×2.30 | 564 | 3 m |
+| 0.5 | ×1.76 | 949 | 5 m |
+| 0.1 | ×1.46 | 1868 | 11 m |
+| 0.02 (cut) | ×1.01 | 8226 | 47 m |
+
+Covered by `tests/test_terrain_field.cpp` (over a cone peak, high `cutFill` detours
+around the base moving far less earth; low `cutFill` cuts straight through; both keep
+the profile walkable).
+
+**Deferred.** Two real simplifications. (1) The cut/fill cost is a flat `|road −
+terrain|·length` proxy for cross-sectional volume — it doesn't price *haul* (moving
+the cut spoil to a fill), which the civil mass-haul diagram balances, nor distinguish a
+cheap fill from an expensive deep cut. (2) Horizontal and vertical alignment are
+solved *jointly* on one grid; the mature decomposition routes the centerline first,
+then fits a vertical profile (piecewise grades + parabolic crest/sag curves) by DP for
+sight-distance and balanced earthwork. Both are natural next increments; the current
+form already makes the hug↔cut decision a single, testable knob.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

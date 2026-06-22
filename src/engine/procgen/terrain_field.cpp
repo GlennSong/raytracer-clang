@@ -123,10 +123,147 @@ void douglasPeucker(const std::vector<Vec3>& pts, int lo, int hi, double tol,
         douglasPeucker(pts, split, hi, tol, keep);
     }
 }
+// Earthwork-aware routing (ADR-0047, after Galin et al. 2010). The road is no longer
+// glued to the ground: the search runs over (x, z, road-elevation). The grade limit
+// is a HARD constraint on the ROAD profile (always walkable, even across ground too
+// steep to hug), while cut/fill |road - terrain| is a SOFT cost (weight p.cutFill).
+// So the optimiser trades three things in one shortest path — horizontal length,
+// turning, and earthwork — and p.cutFill slides the result from "hug & switchback"
+// (dear earthwork) to "straight cut & fill" (cheap earthwork).
+std::vector<Vec3> routeRoadEarthwork(const HeightField& h, const Vec3& from,
+                                     const Vec3& to, const RouteParams& p) {
+    const double straight = std::hypot(to.x - from.x, to.z - from.z);
+    double cell = std::max(1.0, p.cell);
+    double pad = p.pad > 0 ? p.pad : std::max(4 * cell, straight * 0.75);
+    double minX = std::min(from.x, to.x) - pad, maxX = std::max(from.x, to.x) + pad;
+    double minZ = std::min(from.z, to.z) - pad, maxZ = std::max(from.z, to.z) + pad;
+    const long maxCells = 120000;
+    long nx = 0, nz = 0;
+    for (;;) {
+        nx = static_cast<long>(std::ceil((maxX - minX) / cell)) + 1;
+        nz = static_cast<long>(std::ceil((maxZ - minZ) / cell)) + 1;
+        if (nx * nz <= maxCells || cell > straight) break;
+        cell *= 1.5;
+    }
+    if (nx < 2 || nz < 2)
+        return {Vec3(from.x, h(from.x, from.z), from.z), Vec3(to.x, h(to.x, to.z), to.z)};
+    const int NX = static_cast<int>(nx), NZ = static_cast<int>(nz), NC = NX * NZ;
+    auto X = [&](int i) { return minX + i * cell; };
+    auto Z = [&](int j) { return minZ + j * cell; };
+    auto cidx = [&](int i, int j) { return j * NX + i; };
+
+    // Terrain height per cell, plus the elevation band the road profile lives in.
+    std::vector<double> ter(static_cast<std::size_t>(NC));
+    double tMin = 1e300, tMax = -1e300;
+    for (int j = 0; j < NZ; ++j)
+        for (int i = 0; i < NX; ++i) {
+            double t = h(X(i), Z(j));
+            ter[cidx(i, j)] = t; tMin = std::min(tMin, t); tMax = std::max(tMax, t);
+        }
+    double elevStep = p.elevStep > 0 ? p.elevStep : std::max(0.25, p.maxGrade * cell * 0.5);
+    elevStep = std::min(elevStep, std::max(0.25, p.maxGrade * cell * 0.9));  // climbable per cell
+    int nLev = static_cast<int>(std::ceil((tMax - tMin) / std::max(1e-6, elevStep))) + 1;
+    while (static_cast<long>(NC) * nLev > 3000000 && nLev > 2) {
+        elevStep *= 1.5; nLev = static_cast<int>(std::ceil((tMax - tMin) / elevStep)) + 1;
+    }
+    auto elevOf = [&](int L) { return tMin + L * elevStep; };
+    auto levOf = [&](double y) {
+        return std::max(0, std::min(nLev - 1, static_cast<int>(std::lround((y - tMin) / elevStep))));
+    };
+    auto sidx = [&](int c, int L) { return static_cast<long>(c) * nLev + L; };
+    const long NS = static_cast<long>(NC) * nLev;
+
+    auto snap = [&](const Vec3& v, int& i, int& j) {
+        i = std::max(0, std::min(NX - 1, static_cast<int>(std::lround((v.x - minX) / cell))));
+        j = std::max(0, std::min(NZ - 1, static_cast<int>(std::lround((v.z - minZ) / cell))));
+    };
+    int si, sj, gi, gj; snap(from, si, sj); snap(to, gi, gj);
+    int sc = cidx(si, sj), gc = cidx(gi, gj);
+    const long startS = sidx(sc, levOf(ter[sc]));       // endpoints tie into the ground
+    const long goalS  = sidx(gc, levOf(ter[gc]));
+    auto heur = [&](int c) { return std::hypot(X(c % NX) - X(gi), Z(c / NX) - Z(gj)); };
+
+    const double INF = std::numeric_limits<double>::infinity();
+    std::vector<double> g(static_cast<std::size_t>(NS), INF);
+    std::vector<long> came(static_cast<std::size_t>(NS), -1);
+    std::vector<signed char> dirIn(static_cast<std::size_t>(NS), -1);
+    using QN = std::pair<double, long>;
+    std::priority_queue<QN, std::vector<QN>, std::greater<QN>> open;
+    g[startS] = 0; open.push({heur(sc), startS});
+    const int di[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    const int dj[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+
+    bool found = false;
+    while (!open.empty()) {
+        QN top = open.top(); open.pop();
+        long s = top.second; int c = static_cast<int>(s / nLev), L = static_cast<int>(s % nLev);
+        if (top.first > g[s] + heur(c) + 1e-9) continue;          // stale
+        if (s == goalS) { found = true; break; }
+        int ci = c % NX, cj = c / NX; double y = elevOf(L);
+        for (int k = 0; k < 8; ++k) {
+            int ni = ci + di[k], nj = cj + dj[k];
+            if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) continue;
+            int nc = cidx(ni, nj);
+            double horiz = (di[k] && dj[k]) ? cell * 1.41421356 : cell;
+            double maxdy = p.maxGrade * horiz;
+            int dLmax = static_cast<int>(std::floor(maxdy / elevStep + 1e-9));
+            for (int dL = -dLmax; dL <= dLmax; ++dL) {           // road-profile grade is hard
+                int nL = L + dL; if (nL < 0 || nL >= nLev) continue;
+                double ny = elevOf(nL);
+                double dev = std::fabs(ny - ter[nc]);            // cut/fill volume proxy
+                double step = horiz + p.cutFill * dev * horiz + p.climbCost * std::max(0.0, ny - y);
+                if (dirIn[s] >= 0 && dirIn[s] != k) step += p.turnPenalty;
+                long ns = sidx(nc, nL);
+                double ng = g[s] + step;
+                if (ng < g[ns]) {
+                    g[ns] = ng; came[ns] = s; dirIn[ns] = static_cast<signed char>(k);
+                    open.push({ng + heur(nc), ns});
+                }
+            }
+        }
+    }
+    if (!found)
+        return {Vec3(from.x, h(from.x, from.z), from.z), Vec3(to.x, h(to.x, to.z), to.z)};
+
+    std::vector<Vec3> raw;
+    for (long s = goalS; s != -1; s = came[s]) {
+        int c = static_cast<int>(s / nLev), L = static_cast<int>(s % nLev);
+        raw.push_back(Vec3(X(c % NX), elevOf(L), Z(c / NX)));    // y = ROAD elevation
+    }
+    std::reverse(raw.begin(), raw.end());
+    // Pin the exact endpoints in plan, but seat them at the road's own elevation at
+    // the adjacent node (the start/goal levels were chosen at ground height, so this
+    // meets the terrain) — a flat tie-in, never a steep jump from a non-grid endpoint.
+    if (raw.size() >= 2) {
+        raw.front() = Vec3(from.x, raw[1].y, from.z);
+        raw.back()  = Vec3(to.x, raw[raw.size() - 2].y, to.z);
+    }
+
+    // Collapse only EXACTLY collinear runs (in 3D): unlike the XZ Douglas-Peucker the
+    // hug path uses, this is lossless, so the road's grade-limited profile is never
+    // distorted into an illegal slope by the simplification (a plan-only simplifier
+    // would merge across a vertical bend and fake a steep segment).
+    std::vector<Vec3> path;
+    path.push_back(raw.front());
+    for (std::size_t i = 1; i + 1 < raw.size(); ++i) {
+        const Vec3& a = path.back(); const Vec3& b = raw[i]; const Vec3& c = raw[i + 1];
+        double ax = b.x - a.x, ay = b.y - a.y, az = b.z - a.z;
+        double bx = c.x - b.x, by = c.y - b.y, bz = c.z - b.z;
+        double la = std::sqrt(ax*ax + ay*ay + az*az), lb = std::sqrt(bx*bx + by*by + bz*bz);
+        if (la < 1e-9) continue;
+        if (lb < 1e-9) { path.push_back(b); continue; }
+        double cosang = (ax*bx + ay*by + az*bz) / (la * lb);
+        if (cosang < 1 - 1e-6) path.push_back(b);               // a real corner: keep it
+    }
+    path.push_back(raw.back());
+    return path;
+}
+
 }  // namespace
 
 std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& to,
                             const RouteParams& p) {
+    if (p.cutFill >= 0.0) return routeRoadEarthwork(h, from, to, p);   // hug <-> cut dial
     const double straight = std::hypot(to.x - from.x, to.z - from.z);
     // Trivial: coincident endpoints, or endpoints already within one cell.
     if (straight <= std::max(1.0, p.cell)) {
