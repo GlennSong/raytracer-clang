@@ -240,6 +240,33 @@ TEST_CASE(smooth_centripetal_catmull_rom_rounds_a_staircase) {
     CHECK(maxTurn(sm) < maxTurn(stair) * 0.4);         // rounded into gentle turns
 }
 
+TEST_CASE(round_road_corners_holds_a_minimum_radius) {
+    // ADR-0048: a road ribbon is the centerline offset by its half-width, and an
+    // offset self-intersects on the inside of any bend tighter than that offset. So
+    // filleting a corner to a guaranteed minRadius (>= half-width) is what stops the
+    // widened geometry folding. A 90-degree corner with long legs must come out with
+    // no point sharper than minRadius, endpoints intact.
+    std::vector<Vec3> corner = { {0,0,0}, {100,0,0}, {100,0,100} };
+    double R = 20.0;
+    std::vector<Vec3> filleted = roundRoadCorners(corner, R, /*chordTol=*/0.3, /*decimate=*/0.0);
+    CHECK(filleted.size() > 3);                          // arc inserted
+    CHECK_APPROX(filleted.front().x, 0.0, 1e-6);
+    CHECK_APPROX(filleted.back().z, 100.0, 1e-6);
+
+    // Minimum radius of curvature over consecutive triples (circumradius = abc/4A).
+    double minR = 1e18;
+    for (std::size_t i = 1; i + 1 < filleted.size(); ++i) {
+        double ax = filleted[i].x-filleted[i-1].x, az = filleted[i].z-filleted[i-1].z;
+        double bx = filleted[i+1].x-filleted[i].x, bz = filleted[i+1].z-filleted[i].z;
+        double cx = filleted[i+1].x-filleted[i-1].x, cz = filleted[i+1].z-filleted[i-1].z;
+        double area2 = std::fabs(ax*bz - az*bx);        // 2 * triangle area
+        if (area2 < 1e-9) continue;                      // collinear -> infinite radius
+        double circum = (std::hypot(ax,az) * std::hypot(bx,bz) * std::hypot(cx,cz)) / (2*area2);
+        minR = std::min(minR, circum);
+    }
+    CHECK(minR > R * 0.9);                               // radius held (sampling slack)
+}
+
 TEST_CASE(route_road_returns_empty_when_walled_in) {
     // The goal sits inside a steep crater wall the road can't climb — no grade-legal
     // route exists, so the router reports failure (the caller falls back to straight).

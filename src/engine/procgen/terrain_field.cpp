@@ -455,6 +455,74 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool 
     return out;
 }
 
+std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius,
+                                   double chordTol, double decimateTol) {
+    constexpr double PI = 3.14159265358979323846;
+    // Decimate to control points (the corners to round).
+    std::vector<Vec3> C;
+    if (decimateTol > 0 && in.size() > 2) {
+        std::vector<char> keep(in.size(), 0);
+        keep.front() = keep.back() = 1;
+        douglasPeucker(in, 0, static_cast<int>(in.size()) - 1, decimateTol, keep);
+        for (std::size_t i = 0; i < in.size(); ++i) if (keep[i]) C.push_back(in[i]);
+    } else {
+        C = in;
+    }
+    if (C.size() < 3 || minRadius <= 0) return C;
+
+    const int m = static_cast<int>(C.size()) - 1;     // segments 0..m-1, corners 1..m-1
+    std::vector<double> segLen(m);
+    for (int i = 0; i < m; ++i)
+        segLen[i] = std::hypot(C[i+1].x - C[i].x, C[i+1].z - C[i].z);
+    double tol = chordTol > 0 ? chordTol : 0.5;
+
+    // Replace each corner with a circular fillet tangent to both legs. Radius =
+    // minRadius, but capped to half the shorter adjacent leg so adjacent fillets
+    // never overlap; where that cap bites (legs too short for a 180 hairpin) the
+    // corner stays tighter than minRadius — that's the "needs a junction" case.
+    std::vector<Vec3> out;
+    out.push_back(C[0]);
+    for (int i = 1; i < m; ++i) {
+        double ax = C[i-1].x - C[i].x, az = C[i-1].z - C[i].z;   // toward previous (XZ)
+        double bx = C[i+1].x - C[i].x, bz = C[i+1].z - C[i].z;   // toward next
+        double la = std::hypot(ax, az), lb = std::hypot(bx, bz);
+        if (la < 1e-9 || lb < 1e-9) { out.push_back(C[i]); continue; }
+        ax /= la; az /= la; bx /= lb; bz /= lb;
+        double beta = std::acos(std::max(-1.0, std::min(1.0, ax*bx + az*bz)));   // interior angle
+        if (beta > PI - 0.05) { out.push_back(C[i]); continue; }                 // ~straight
+        double halfB = 0.5 * beta, tanHalf = std::tan(halfB);
+        double Tdes = tanHalf > 1e-6 ? minRadius / tanHalf : 1e18;
+        double T = std::min(Tdes, 0.5 * std::min(segLen[i-1], segLen[i]));       // fit the legs
+        double R = T * tanHalf;                                                  // <= minRadius if capped
+        if (R < 1e-3) { out.push_back(C[i]); continue; }
+
+        double fA = (segLen[i-1] - T) / segLen[i-1];
+        Vec3 A(C[i].x + ax*T, C[i-1].y + (C[i].y - C[i-1].y) * fA, C[i].z + az*T);
+        double fB = T / segLen[i];
+        Vec3 B(C[i].x + bx*T, C[i].y + (C[i+1].y - C[i].y) * fB, C[i].z + bz*T);
+
+        double bisx = ax + bx, bisz = az + bz, lbis = std::hypot(bisx, bisz);
+        if (lbis < 1e-9) { out.push_back(A); out.push_back(B); continue; }       // 180 fold
+        bisx /= lbis; bisz /= lbis;
+        double dC = R / std::sin(halfB);
+        double cx = C[i].x + bisx*dC, cz = C[i].z + bisz*dC;                     // arc centre
+
+        double angA = std::atan2(A.z - cz, A.x - cx), angB = std::atan2(B.z - cz, B.x - cx);
+        double dAng = angB - angA;
+        while (dAng >  PI) dAng -= 2*PI;
+        while (dAng < -PI) dAng += 2*PI;                                         // minor arc
+        double dThetaMax = R > tol ? 2.0 * std::acos(std::max(0.0, 1.0 - tol/R)) : std::fabs(dAng);
+        int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(dAng) / std::max(1e-6, dThetaMax))));
+        out.push_back(A);
+        for (int s = 1; s <= segs; ++s) {
+            double f = static_cast<double>(s) / segs, ang = angA + dAng * f;
+            out.push_back(Vec3(cx + std::cos(ang)*R, A.y + (B.y - A.y)*f, cz + std::sin(ang)*R));
+        }
+    }
+    out.push_back(C[m]);
+    return out;
+}
+
 HeightField heightConstant(double h) {
     return [h](double, double) { return h; };
 }

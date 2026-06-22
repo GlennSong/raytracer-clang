@@ -3157,6 +3157,26 @@ the control points* (span ends), so a midpoint-flatness sampler misses the bend
 entirely — arc-length stepping is what actually samples the corner. The general
 `RoadCurve` sampler should keep that lesson.
 
+**Minimum radius / the offset-curve problem (this slice).** A road ribbon is the
+centerline *offset* by its half-width (+ sidewalk); an offset curve **self-intersects
+on the inside of any bend tighter than the offset distance** (`κ·d = 1` is the cusp;
+`r_inner = r_center − d` must stay positive). So a Catmull-Rom hairpin whose radius
+falls below the half-width *folds the ribbon over itself* — the overlapping geometry
+seen at the apexes. Catmull-Rom can't bound its radius, so the fix is the road-design
+primitive: `roundRoadCorners(centerline, minRadius, …)` replaces each corner with a
+**tangent–arc–tangent fillet** at a *guaranteed* `minRadius`, capped to half the
+shorter adjacent leg so neighbouring fillets can't overlap. Set `minRadius ≥
+halfWidth + sidewalk + margin` (per road class) and the offset can't fold. Wired as
+`terrain.route{ smooth=true, min_radius=R }`; A/B on the switchback (min_radius 14 vs.
+half-width 7 + sidewalk 2.2) shows the ribbon holding uniform width through the bends
+instead of pinching. Test: a 90° corner filleted to R=20 leaves no point sharper than
+that radius. Where legs are too short for `minRadius` (a true 180° hairpin) the cap
+bites and the corner stays tight — confirming the ADR-0044 line that such a turn wants
+a **junction/hairpin element**, not a thin extruded ribbon. The deeper, fully-general
+fix (allow tight curves, then offset robustly and *trim* the self-intersection via
+medial-axis / straight-skeleton / polyline-buffer joins, the SVG/CNC stroking problem)
+stays deferred behind the simpler "constrain the radius" approach.
+
 **Literature.** The two bullseyes: **ASAM OpenDRIVE** — a road is a reference line of
 *line / arc / spiral (clothoid) / cubic* pieces with lanes offset from it (the exact
 "one path type, made of spline pieces" model, shipped for driving sim); and **CGAL 2D

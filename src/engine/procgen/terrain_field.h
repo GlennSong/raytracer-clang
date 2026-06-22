@@ -132,6 +132,20 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& centerlin
                                               bool closed = false, double chordTol = 0.5,
                                               double decimateTol = 0.0);
 
+// Round a road centerline's corners with circular fillets of a guaranteed MINIMUM
+// RADIUS (ADR-0048). A road ribbon is the centerline offset by its half-width (+
+// sidewalk); an offset curve self-intersects on the inside of any bend tighter than
+// the offset distance, which is the geometry pinching/overlapping at sharp corners.
+// Catmull-Rom can't bound its radius; this fits a tangent-arc-tangent fillet at each
+// corner at radius `minRadius` (the road-design primitive), so set minRadius >=
+// halfWidth + sidewalk + margin and the offset can't fold. The radius is capped to
+// half the shorter adjacent leg so neighbouring fillets don't overlap — where that
+// bites (a true hairpin with short legs) the corner stays tighter than minRadius and
+// really wants a junction element, not a thin ribbon. Carries y; samples arcs by
+// chord error. Returns the input unchanged if minRadius <= 0.
+std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& centerline, double minRadius,
+                                   double chordTol = 0.5, double decimateTol = 0.0);
+
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid
 // over the [-size/2, size/2]² square centred at the origin, vertices sampled from

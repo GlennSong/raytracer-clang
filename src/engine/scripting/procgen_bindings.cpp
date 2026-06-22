@@ -1234,7 +1234,11 @@ int l_terr_route(lua_State* L) {
     if (smooth && path.size() >= 3) {
         double chordTol = optField(L, 2, "chord_tol", 0.5);
         double decimate = optField(L, 2, "decimate", rp.cell * 0.6);
-        path = smoothCentripetalCatmullRom(path, /*closed=*/false, chordTol, decimate);
+        double minRadius = optField(L, 2, "min_radius", 0.0);
+        if (minRadius > 0)        // guaranteed radius so the widened ribbon can't fold
+            path = roundRoadCorners(path, minRadius, chordTol, decimate);
+        else                      // organic curve, no curvature bound
+            path = smoothCentripetalCatmullRom(path, /*closed=*/false, chordTol, decimate);
     }
 
     // Emit the polyline as a chain layout: nodes 1..n, edges joining consecutive.
