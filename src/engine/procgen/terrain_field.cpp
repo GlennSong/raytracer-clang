@@ -123,6 +123,21 @@ void douglasPeucker(const std::vector<Vec3>& pts, int lo, int hi, double tol,
         douglasPeucker(pts, split, hi, tol, keep);
     }
 }
+
+// Evaluate a non-uniform Catmull-Rom span on [t1,t2] (the piece through P1->P2),
+// Barry-Goldman pyramid. Centripetal knots (alpha=0.5) avoid the cusps/overshoot
+// uniform Catmull-Rom produces on the irregular point spacing a grid path gives.
+Vec3 catmullRomAt(const Vec3& P0, const Vec3& P1, const Vec3& P2, const Vec3& P3,
+                  double t0, double t1, double t2, double t3, double t) {
+    auto mix = [&](const Vec3& a, const Vec3& b, double ta, double tb) {
+        double w = (tb - ta) < 1e-12 ? 0.0 : (t - ta) / (tb - ta);
+        return a * (1.0 - w) + b * w;
+    };
+    Vec3 A1 = mix(P0, P1, t0, t1), A2 = mix(P1, P2, t1, t2), A3 = mix(P2, P3, t2, t3);
+    Vec3 B1 = mix(A1, A2, t0, t2), B2 = mix(A2, A3, t1, t3);
+    return mix(B1, B2, t1, t2);
+}
+
 // Earthwork-aware routing (ADR-0047, after Galin et al. 2010). The road is no longer
 // glued to the ground: the search runs over (x, z, road-elevation). The grade limit
 // is a HARD constraint on the ROAD profile (always walkable, even across ground too
@@ -378,6 +393,66 @@ std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& 
     for (std::size_t i = 0; i < raw.size(); ++i)
         if (keep[i]) path.push_back(Vec3(raw[i].x, h(raw[i].x, raw[i].z), raw[i].z));
     return path;
+}
+
+std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool closed,
+                                              double chordTol, double decimateTol) {
+    // 1. Optionally decimate to control points first (in XZ): a grid path is a
+    //    staircase, and a spline THROUGH every stair-step just wiggles down the
+    //    staircase. Collapsing to the corners first is what lets the curve sweep.
+    std::vector<Vec3> ctrl;
+    if (decimateTol > 0 && in.size() > 2) {
+        std::vector<char> keep(in.size(), 0);
+        keep.front() = keep.back() = 1;
+        douglasPeucker(in, 0, static_cast<int>(in.size()) - 1, decimateTol, keep);
+        for (std::size_t i = 0; i < in.size(); ++i) if (keep[i]) ctrl.push_back(in[i]);
+    } else {
+        ctrl = in;
+    }
+    if (ctrl.size() < 3) return ctrl;                 // nothing to round
+
+    // 2. Pad with phantom control points so the curve passes through the real ends
+    //    (open) or wraps seamlessly (closed — a ring is just a closed path).
+    std::vector<Vec3> P;
+    if (closed) {
+        P.push_back(ctrl.back());
+        P.insert(P.end(), ctrl.begin(), ctrl.end());
+        P.push_back(ctrl[0]);
+        P.push_back(ctrl[1]);
+    } else {
+        P.push_back(ctrl[0] + (ctrl[0] - ctrl[1]));   // mirror -> tangent at the end
+        P.insert(P.end(), ctrl.begin(), ctrl.end());
+        P.push_back(ctrl.back() + (ctrl.back() - ctrl[ctrl.size() - 2]));
+    }
+
+    // 3. Centripetal knots (alpha = 0.5): t_{i+1} = t_i + |P_{i+1}-P_i|^0.5.
+    std::vector<double> t(P.size(), 0.0);
+    for (std::size_t i = 1; i < P.size(); ++i) {
+        double dx = P[i].x - P[i-1].x, dy = P[i].y - P[i-1].y, dz = P[i].z - P[i-1].z;
+        double d = std::sqrt(std::sqrt(dx*dx + dy*dy + dz*dz));   // ^0.5
+        t[i] = t[i-1] + std::max(d, 1e-6);
+    }
+
+    // 4. Sample each span [P_i..P_{i+1}]. Centripetal Catmull-Rom loads its curvature
+    //    near the control points (the span ENDS), so a midpoint-flatness test misses
+    //    the bend entirely — instead step along each span by arc length so the corners
+    //    get enough samples to read as a curve. `chordTol` sets the spacing (smaller =
+    //    finer); the per-span count grows with the span's length.
+    double step = std::max(chordTol > 0 ? chordTol : 0.5, 0.25);
+    std::vector<Vec3> out;
+    out.push_back(P[1]);
+    std::size_t last = P.size() - 2;                  // last real span ends at P[last]
+    for (std::size_t i = 1; i < last; ++i) {
+        const Vec3 &P0 = P[i-1], &P1 = P[i], &P2 = P[i+1], &P3 = P[i+2];
+        double chord = std::sqrt((P2.x-P1.x)*(P2.x-P1.x) + (P2.y-P1.y)*(P2.y-P1.y) +
+                                 (P2.z-P1.z)*(P2.z-P1.z));
+        int n = std::max(2, static_cast<int>(std::ceil(chord / step)));
+        for (int s = 1; s <= n; ++s) {
+            double tt = t[i] + (t[i+1] - t[i]) * (static_cast<double>(s) / n);
+            out.push_back(catmullRomAt(P0, P1, P2, P3, t[i-1], t[i], t[i+1], t[i+2], tt));
+        }
+    }
+    return out;
 }
 
 HeightField heightConstant(double h) {

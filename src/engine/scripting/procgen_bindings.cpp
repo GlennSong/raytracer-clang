@@ -1227,6 +1227,16 @@ int l_terr_route(lua_State* L) {
         path = {Vec3(from.x, h(from.x, from.z), from.z),
                 Vec3(to.x, h(to.x, to.z), to.z)};
 
+    // Optional spline smoothing (ADR-0048): turn the routed polyline into a curve.
+    lua_getfield(L, 2, "smooth");
+    bool smooth = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    if (smooth && path.size() >= 3) {
+        double chordTol = optField(L, 2, "chord_tol", 0.5);
+        double decimate = optField(L, 2, "decimate", rp.cell * 0.6);
+        path = smoothCentripetalCatmullRom(path, /*closed=*/false, chordTol, decimate);
+    }
+
     // Emit the polyline as a chain layout: nodes 1..n, edges joining consecutive.
     lua_createtable(L, 0, 3);
     lua_createtable(L, static_cast<int>(path.size()), 0);            // nodes

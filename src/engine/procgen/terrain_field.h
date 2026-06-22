@@ -120,6 +120,18 @@ struct RouteParams {
 std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& to,
                             const RouteParams& p);
 
+// Smooth a road centerline into a curve (ADR-0048). A routed/streamline centerline is
+// a polyline — and a grid-routed one is an 8-direction staircase, which is what reads
+// as "unnatural". This fits a CENTRIPETAL Catmull-Rom through the points (optionally
+// decimated to corners first, `decimateTol`) and re-samples it adaptively so the
+// chord never deviates more than `chordTol` from the true curve — dense in the bends,
+// sparse on the straights. `closed` wraps the curve (a ring is a closed path). Carries
+// y, so a routed road keeps its cut/fill profile. NB: smoothing moves the line off the
+// routed grid path, so grade/clearance should be re-checked if they were tight.
+std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& centerline,
+                                              bool closed = false, double chordTol = 0.5,
+                                              double decimateTol = 0.0);
+
 // --- bake ---
 // Tessellate the heightfield to a mesh: a `resolution`×`resolution`-cell grid
 // over the [-size/2, size/2]² square centred at the origin, vertices sampled from

@@ -17,8 +17,10 @@ local hills = terrain.fbm{ seed = seed, freq = 0.004, amp = amp, octaves = 2 }
 local A = { x = 0, z = -220 }
 local B = { x = 0, z =  220 }      -- the straight line crosses a ~0.9-grade peak
 
+local smooth = (args and args.smooth) or false
 local road = terrain.route(hills, { from = A, to = B, max_grade = 0.12, cell = 12,
-                                    turn_penalty = 6, width = 14, cut_fill = cf })
+                                    turn_penalty = 6, width = 14, cut_fill = cf,
+                                    smooth = smooth })
 
 -- Grade the ground to the road's own cut/fill profile (nodes carry their `y`).
 local land = terrain.conform(hills, road, { margin = 4, falloff = 28 })

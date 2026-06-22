@@ -214,6 +214,32 @@ TEST_CASE(route_road_earthwork_trades_length_for_cut_fill) {
     CHECK(earthHi < earthLo * 0.5);           // and moves far less earth
 }
 
+TEST_CASE(smooth_centripetal_catmull_rom_rounds_a_staircase) {
+    // ADR-0048: the grid router emits an 8-direction staircase. Smoothing must round
+    // its corners — the sharpest turn between consecutive segments drops well below
+    // the raw 90 degrees — while subdividing finely and pinning the exact endpoints
+    // (so a road still meets its junctions).
+    std::vector<Vec3> stair = { {0,0,0}, {10,0,0}, {10,0,10}, {20,0,10}, {20,0,20} };
+    auto maxTurn = [](const std::vector<Vec3>& p) {
+        double m = 0;
+        for (std::size_t i = 1; i + 1 < p.size(); ++i) {
+            double ax = p[i].x-p[i-1].x, az = p[i].z-p[i-1].z;
+            double bx = p[i+1].x-p[i].x, bz = p[i+1].z-p[i].z;
+            double la = std::hypot(ax,az), lb = std::hypot(bx,bz);
+            if (la < 1e-9 || lb < 1e-9) continue;
+            double c = std::max(-1.0, std::min(1.0, (ax*bx + az*bz)/(la*lb)));
+            m = std::max(m, std::acos(c));
+        }
+        return m;
+    };
+    std::vector<Vec3> sm = smoothCentripetalCatmullRom(stair, /*closed=*/false, 0.2, 0.0);
+    CHECK(sm.size() > stair.size());                  // adaptively subdivided
+    CHECK_APPROX(sm.front().x, 0.0, 1e-6);  CHECK_APPROX(sm.front().z, 0.0, 1e-6);
+    CHECK_APPROX(sm.back().x, 20.0, 1e-6);  CHECK_APPROX(sm.back().z, 20.0, 1e-6);
+    CHECK(maxTurn(stair) > 1.5);                       // ~90-degree corners
+    CHECK(maxTurn(sm) < maxTurn(stair) * 0.4);         // rounded into gentle turns
+}
+
 TEST_CASE(route_road_returns_empty_when_walled_in) {
     // The goal sits inside a steep crater wall the road can't climb — no grade-legal
     // route exists, so the router reports failure (the caller falls back to straight).
