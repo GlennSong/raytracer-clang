@@ -1363,6 +1363,41 @@ int l_city_road_mesh(lua_State* L) {
     return 1;
 }
 
+// city.stroke{ points={{x,z},...}, width= | widths={...}, y=, color={r,g,b},
+//   closed= } -> a flat ribbon mesh: the centerline stroked at the given width(s),
+//   robust for any curve incl. tight bends and hairpins (ADR-0048). The
+//   back-to-basics path-stroking primitive, terrain-free.
+int l_city_stroke(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<Vec2> pts;
+    lua_getfield(L, 1, "points");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer np = luaL_len(L, -1);
+    for (lua_Integer i = 1; i <= np; ++i) {
+        lua_geti(L, -1, i);
+        pts.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    std::vector<double> hw;
+    lua_getfield(L, 1, "widths");
+    if (lua_istable(L, -1)) {
+        lua_Integer nw = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= nw; ++i) {
+            lua_geti(L, -1, i); hw.push_back(luaL_checknumber(L, -1) * 0.5); lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    if (hw.empty()) hw.push_back(optField(L, 1, "width", 8.0) * 0.5);
+
+    double y = optField(L, 1, "y", 0.0);
+    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
+    bool closed = optBoolField(L, 1, "closed", false);
+    pushMesh(L, std::make_shared<RenderMesh>(strokeRibbon(pts, hw, y, color, closed)));
+    return 1;
+}
+
 // --- material.* : a baked material bundle for a part (ADR-0043) ---------------
 // Applied to a part by world-planar projection — no authored UVs needed.
 constexpr const char* kMaterialMt = "engine.procgen.Material";
@@ -1989,6 +2024,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"layout", l_city_layout},
         {"lots", l_city_lots},
         {"road_mesh", l_city_road_mesh},
+        {"stroke", l_city_stroke},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

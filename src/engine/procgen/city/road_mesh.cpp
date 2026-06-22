@@ -305,4 +305,59 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     return mesh;
 }
 
+RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>& halfW,
+                        double y, const Vec3& color, bool closed) {
+    RenderMesh mesh;
+    const int n = static_cast<int>(pts.size());
+    if (n < 2 || halfW.empty()) return mesh;
+
+    auto W   = [&](int i) { return halfW[std::min<int>(static_cast<int>(halfW.size()) - 1,
+                                                       std::max(0, i))]; };
+    auto P3  = [&](const Vec2& v) { return Vec3(v.x, y, v.y); };
+    auto tri = [&](const Vec2& a, const Vec2& b, const Vec2& c) {
+        MeshBuilder::emitTri(mesh, P3(a), P3(b), P3(c), Vec3(0, 1, 0), color);
+    };
+
+    // Each segment is a trapezoid (start half-width -> end half-width). On the inside
+    // of a bend these overlap, but they're coplanar fills facing the same way — not a
+    // fold — so the union is exactly the stroked region.
+    const int segCount = closed ? n : n - 1;
+    for (int i = 0; i < segCount; ++i) {
+        Vec2 A = pts[i], B = pts[(i + 1) % n];
+        Vec2 ab = B - A; double L = ab.length();
+        if (L < 1e-9) continue;
+        Vec2 nrm = perp(ab / L);
+        double wa = W(i), wb = W((i + 1) % n);
+        Vec2 AL = A + nrm*wa, AR = A - nrm*wa, BL = B + nrm*wb, BR = B - nrm*wb;
+        tri(AL, AR, BR); tri(AL, BR, BL);
+    }
+
+    // Round join at each vertex: fan the wedge on the OUTER side of the bend between
+    // the two segments' edges. The sweep equals the signed turn angle, so a gentle
+    // bend gets a sliver and a 180-degree hairpin gets a clean semicircular turning
+    // cap — the general stroke handles a switchback by construction, no special case.
+    const int vbeg = closed ? 0 : 1, vend = closed ? n : n - 1;
+    for (int i = vbeg; i < vend; ++i) {
+        Vec2 P = pts[i];
+        Vec2 a = P - pts[(i - 1 + n) % n], b = pts[(i + 1) % n] - P;
+        double la = a.length(), lb = b.length();
+        if (la < 1e-9 || lb < 1e-9) continue;
+        a = a / la; b = b / lb;
+        double theta = std::atan2(cross(a, b), dot(a, b));   // signed turn (-pi..pi)
+        if (std::fabs(theta) < 1e-3) continue;               // straight: segments meet flush
+        double w = W(i);
+        Vec2 c0dir = perp(a) * (theta > 0 ? -1.0 : 1.0);     // dir to the outer corner
+        double a0 = std::atan2(c0dir.y, c0dir.x);
+        int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(theta) / 0.35)));
+        Vec2 prev = P + c0dir * w;
+        for (int s = 1; s <= segs; ++s) {
+            double ang = a0 + theta * (static_cast<double>(s) / segs);
+            Vec2 cur = P + Vec2(std::cos(ang), std::sin(ang)) * w;
+            tri(P, prev, cur);
+            prev = cur;
+        }
+    }
+    return mesh;
+}
+
 }  // namespace engine

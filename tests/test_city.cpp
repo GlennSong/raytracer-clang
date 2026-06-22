@@ -40,6 +40,128 @@ TEST_CASE(road_mesh_builds_junctions_and_ribbons) {
     CHECK(maxR <= 41.0);
 }
 
+namespace {
+bool triContainsXZ(const RenderMesh& m, std::size_t i, double px, double pz) {
+    const auto& A = m.vertices[m.indices[i]].position;
+    const auto& B = m.vertices[m.indices[i+1]].position;
+    const auto& C = m.vertices[m.indices[i+2]].position;
+    double d1 = (px-B.x)*(A.z-B.z) - (A.x-B.x)*(pz-B.z);
+    double d2 = (px-C.x)*(B.z-C.z) - (B.x-C.x)*(pz-C.z);
+    double d3 = (px-A.x)*(C.z-A.z) - (C.x-A.x)*(pz-A.z);
+    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(neg && pos);                       // same side of all edges
+}
+bool meshCoversXZ(const RenderMesh& m, double px, double pz) {
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+        if (triContainsXZ(m, i, px, pz)) return true;
+    return false;
+}
+double meshAreaXZ(const RenderMesh& m) {
+    double area = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const auto& A = m.vertices[m.indices[i]].position;
+        const auto& B = m.vertices[m.indices[i+1]].position;
+        const auto& C = m.vertices[m.indices[i+2]].position;
+        area += 0.5 * std::fabs((B.x-A.x)*(C.z-A.z) - (C.x-A.x)*(B.z-A.z));
+    }
+    return area;
+}
+double distToSeg(double px, double pz, Vec2 a, Vec2 b) {
+    double dx = b.x-a.x, dz = b.y-a.y, l2 = dx*dx + dz*dz;
+    double t = l2 < 1e-12 ? 0 : std::max(0.0, std::min(1.0, ((px-a.x)*dx + (pz-a.y)*dz)/l2));
+    double cx = a.x + dx*t, cz = a.y + dz*t;
+    return std::sqrt((px-cx)*(px-cx) + (pz-cz)*(pz-cz));
+}
+}  // namespace
+
+TEST_CASE(stroke_ribbon_is_exact_and_never_strays) {
+    // ADR-0048 back-to-basics: stroking a centerline into a flat ribbon.
+    // (1) A straight constant-width line is an exact rectangle: area == length*width.
+    std::vector<Vec2> line = { {0,0}, {100,0} };
+    RenderMesh sm = strokeRibbon(line, {4.0}, 0.0, Vec3(0.1,0.1,0.1), false);
+    CHECK(sm.indices.size() % 3 == 0);
+    CHECK_APPROX(meshAreaXZ(sm), 100.0 * 8.0, 1e-6);     // 2*halfWidth * length
+
+    // (2) A hairpin tighter than the width must not fold: every emitted vertex stays
+    // within the half-width of the centerline (a stray/folded triangle would not).
+    std::vector<Vec2> hair = { {-60,0}, {0,0}, {-60,8} };   // ~170-degree reversal
+    double w = 6.0;
+    RenderMesh hm = strokeRibbon(hair, {w}, 0.0, Vec3(0.1,0.1,0.1), false);
+    CHECK(!hm.vertices.empty());
+    double worst = 0;
+    for (const Vertex& v : hm.vertices) {
+        double d = std::min(distToSeg(v.position.x, v.position.z, hair[0], hair[1]),
+                            distToSeg(v.position.x, v.position.z, hair[1], hair[2]));
+        worst = std::max(worst, d);
+    }
+    CHECK(worst <= w + 1e-3);                             // nothing strays outside the ribbon
+}
+
+TEST_CASE(stroke_ribbon_closed_ring_has_a_hole) {
+    // A stroked circle is an annulus, not a disc: its centre is uncovered and its
+    // area matches a ring (~ circumference * width), far below the disc area.
+    std::vector<Vec2> circ;
+    const int N = 48; const double R = 30.0, w = 5.0;     // w = half-width
+    for (int i = 0; i < N; ++i) {
+        double t = 2.0 * 3.14159265358979 * i / N;
+        circ.push_back(Vec2(R * std::cos(t), R * std::sin(t)));
+    }
+    RenderMesh m = strokeRibbon(circ, {w}, 0.0, Vec3(0.1,0.1,0.1), /*closed=*/true);
+    CHECK(!m.vertices.empty());
+    CHECK(!meshCoversXZ(m, 0.0, 0.0));                    // the hole: centre uncovered
+    CHECK(meshCoversXZ(m, R, 0.0));                       // the ring itself is covered
+    double ring = 2.0 * 3.14159265 * R * (2.0 * w);       // ~ circumference * full width
+    CHECK(meshAreaXZ(m) < ring * 1.4);                    // a ring, nowhere near a disc
+    CHECK(meshAreaXZ(m) > ring * 0.7);
+}
+
+TEST_CASE(stroke_ribbon_variable_width_tapers) {
+    // Per-point widths give a trapezoid: area == length * average full width.
+    std::vector<Vec2> line = { {0,0}, {100,0} };
+    RenderMesh m = strokeRibbon(line, {6.0, 1.0}, 0.0, Vec3(0.1,0.1,0.1), false);
+    CHECK_APPROX(meshAreaXZ(m), 100.0 * (12.0 + 2.0) / 2.0, 1e-6);   // (2*6 + 2*1)/2 * len
+}
+
+TEST_CASE(stroke_ribbon_every_triangle_faces_up) {
+    // Whatever the curve, the flat ribbon is single-sided up — no flipped winding.
+    std::vector<Vec2> wig = { {0,0}, {20,10}, {40,-10}, {60,8}, {62,-2}, {30,-20} };
+    RenderMesh m = strokeRibbon(wig, {4.0}, 0.0, Vec3(0.1,0.1,0.1), false);
+    CHECK(!m.vertices.empty());
+    for (const Vertex& v : m.vertices) CHECK(v.normal.y > 0.5);
+}
+
+TEST_CASE(stroke_ribbon_hairpin_has_a_round_cap) {
+    // A ~180-degree apex gets a semicircular turning cap from the round join: a point
+    // just past the apex vertex is covered by the cap, but nothing beyond the radius.
+    std::vector<Vec2> hair = { {-60,0}, {0,0}, {-60,6} };   // apex at the origin vertex
+    const double w = 6.0;
+    RenderMesh m = strokeRibbon(hair, {w}, 0.0, Vec3(0.1,0.1,0.1), false);
+    CHECK(meshCoversXZ(m, 5.0, 0.0));      // on the cap, past where the legs end (x=0)
+    CHECK(!meshCoversXZ(m, 8.0, 0.0));     // but the cap stops at the half-width radius
+}
+
+TEST_CASE(stroke_network_intersection_is_a_clean_junction) {
+    // Two crossing roads (an X): planarize splits them at the crossing into a 4-way
+    // node, and the mesh fills that intersection (centre covered) without any geometry
+    // straying past the arms — a proper junction, not two ribbons overlapping loose.
+    RoadGraph g;
+    int a = g.addNode(Vec2(-40,0)), b = g.addNode(Vec2(40,0));
+    int c = g.addNode(Vec2(0,-40)), d = g.addNode(Vec2(0,40));
+    g.addEdge(a, b, 10); g.addEdge(c, d, 10);
+    RoadGraph pg = planarize(g);
+    CHECK(pg.nodes.size() == 5u);                       // the crossing inserted a node
+    RenderMesh m = buildRoadMesh(pg, RoadMeshParams{});
+    CHECK(meshCoversXZ(m, 2.0, 2.0));                   // the intersection is filled
+    // Nothing strays past an arm end (length 40) plus its half-width (5) — the far
+    // ribbon corner sits at sqrt(40^2+5^2) ~ 40.3, so bound by the arm reach + width.
+    double worst = 0;
+    for (const Vertex& v : m.vertices)
+        worst = std::max(worst, std::sqrt(double(v.position.x*v.position.x +
+                                                 v.position.z*v.position.z)));
+    CHECK(worst <= 40.0 + 5.0 + 1e-3);
+}
+
 TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {
     // ADR-0048: a sharp degree-2 reversal (legs nearly parallel = ~160-degree
     // deflection) can't be a simple bend — the widened ribbon folds. With hairpin

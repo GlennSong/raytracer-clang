@@ -55,6 +55,17 @@ struct RoadMeshParams {
 
 RenderMesh buildRoadMesh(const RoadGraph& graph, const RoadMeshParams& params);
 
+// Stroke a centerline polyline into a flat filled ribbon — path stroking (ADR-0048),
+// the back-to-basics primitive. Robust for ANY curve at ANY width including bends
+// tighter than the width: per-segment trapezoids (variable half-width per point) plus
+// a round join that fans the OUTER wedge at each vertex. The inside of a bend has the
+// trapezoids overlap — a coplanar fill, not a fold — and a 180-degree vertex gets a
+// semicircular turning cap for free. `halfW` is per-point (clamped/repeated if short);
+// the ribbon lies flat at height `y`. `closed` strokes a loop (a ring/circle).
+RenderMesh strokeRibbon(const std::vector<Vec2>& centerline,
+                        const std::vector<double>& halfW, double y,
+                        const Vec3& color, bool closed = false);
+
 }  // namespace engine
 
 #endif

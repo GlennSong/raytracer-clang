@@ -3202,6 +3202,27 @@ topology vs. edge *shapes*, separated — the dual we're adopting), **Chen et al
 networks), **McCrae & Singh 2009** ("Sketching Piecewise Clothoid Curves" — fitting
 clothoids to a rough polyline, i.e. the natural upgrade from Catmull-Rom).
 
+**Path stroking — back to basics (this slice).** Before unifying the generators, the
+fundamental primitive had to be provably right: turning a centerline into a filled
+ribbon for *any* curve at *any* width without folding. `strokeRibbon(centerline,
+halfW, y, color, closed)` (in `road_mesh`) does it the 2D-graphics way — a trapezoid
+per segment (variable half-width per point) plus a **round join** that fans the OUTER
+wedge at each vertex. The inside of a bend has trapezoids overlap, but that's a
+coplanar fill, not a fold; and because the join sweep equals the signed turn angle, a
+**180° hairpin gets a semicircular turning cap for free** — the general stroke handles
+a switchback by construction, no special case. A path that curves tighter than its
+half-width simply fills its own centre (the offset self-intersection, benign when
+flat). Exposed as `city.stroke{ points, width|widths, closed }`; a flat terrain-free
+demo (`stroke_test.lua`) strokes a circle, S-curves, a hairpin, a variable-width
+taper and a spiral. A test suite pins the invariants (`tests/test_city.cpp`): straight
+line is an exact rectangle; variable width is the exact trapezoid; a closed circle is
+an annulus with an uncovered centre; nothing strays outside the half-width on a
+hairpin; every triangle faces up; the hairpin has a round cap; and a planarized
+X-crossing builds a clean junction (centre filled, nothing past the arms). What's
+still owed for a *network* is **non-overlapping** union across intersecting ribbons —
+the per-path stroke and the graph+junction path each avoid folds, but true disjoint
+geometry across crossings is the polygon-union / arrangement work (Clipper / CGAL).
+
 **Deferred / risks.** (1) The graph back-reference (`curve, t` per node) isn't built
 yet — the prototype smooths the *output* polyline, it doesn't yet make the graph a view
 of curves; that's the core of the migration. (2) Smoothing moves the centerline OFF the
