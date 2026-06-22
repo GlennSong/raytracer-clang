@@ -3172,12 +3172,14 @@ half-width 7 + sidewalk 2.2) shows the ribbon holding uniform width through the 
 instead of pinching. Test: a 90° corner filleted to R=20 leaves no point sharper than
 that radius. Where legs are too short for `minRadius` (a true 180° hairpin) the cap
 bites — so `roundRoadCorners` leaves that apex a **sharp vertex** instead of a
-too-tight arc, and `road_mesh` builds a **turning pad** there: a degree-2 bend whose
-deflection exceeds `hairpinDeflection` is routed through the same setback+pad path the
-≥3-way junctions use (with the floor raised to ~carriageway+walk), so the ribbons pull
-back and a switchback bulb fills the turn instead of the ribbon folding. A/B on the
-switchback shows an isolated hairpin become a clean turning bulb. Covered by
-`tests/test_city.cpp` (a sharp degree-2 reversal yields a distinct padded mesh) and
+too-tight arc, and `road_mesh` builds a **turning head** there: a degree-2 bend whose
+deflection exceeds `hairpinDeflection` pulls both legs back and fills a **disc**
+centred on the apex. (First attempt reused the ≥3-way junction pad — but that fan-
+triangulates a ring of arms *assumed to spread around the node*, and a hairpin's two
+near-parallel arms make the fan wrap a ~340° triangle across the back and fold over
+itself; a disc centred on the apex can't fold.) A/B on the switchback shows an
+isolated hairpin become a clean turning head. Covered by `tests/test_city.cpp` (a
+sharp degree-2 reversal yields a distinct mesh — ribbons set back, disc filled) and
 `tests/test_terrain_field.cpp` (the radius guarantee).
 
 Two things stay deferred. (1) A *stack* of switchbacks crammed within a few metres

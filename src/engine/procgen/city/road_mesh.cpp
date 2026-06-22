@@ -146,7 +146,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         int edge; double ang; Vec2 d; double w; double s;   // s = setback at this node
     };
     for (int v = 0; v < nNodes; ++v) {
-        if (static_cast<int>(inc[v].size()) < 3 && !hairpin[v]) continue;
+        if (static_cast<int>(inc[v].size()) < 3) continue;
         Vec2 V = g.nodes[v].pos;
 
         std::vector<Arm> arms;
@@ -185,13 +185,6 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         double floorS = (m >= p.plazaMinArms && p.plazaRadius > 0.0)
                             ? std::max(p.minSetback, p.plazaRadius)
                             : p.minSetback;
-        // A hairpin pulls both ribbons well back and fills a turning bulb wide enough
-        // that the tight inner curve never folds — sized to the carriageway + walk.
-        if (hairpin[v]) {
-            double maxHalf = 0;
-            for (const Arm& a : arms) maxHalf = std::max(maxHalf, a.w);
-            floorS = std::max(floorS, 1.8 * maxHalf + p.sidewalkWidth);
-        }
 
         // Clamp + record the trims, and lay out the pad ring.
         std::vector<Vec2> ring;   // CCW: each arm contributes [right point, left point]
@@ -215,6 +208,33 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         // mouth — skirt it so the sidewalk turns the corner instead of gapping.
         for (int k = 0; k < m; ++k)
             cornerBand(V, ring[2 * k + 1], ring[2 * ((k + 1) % m)]);
+    }
+
+    // --- Hairpins (sharp degree-2): a clean turning-head DISC. The junction pad
+    // assumes arms spread around the node and fan-triangulates a ring; two
+    // near-parallel hairpin arms make that fan wrap a ~340-degree triangle across the
+    // back and fold over itself. A disc centred on the apex can't fold: pull both
+    // legs back into it and fill it as a fan, so the tight inner curve is covered by
+    // a turning head rather than a folded ribbon.
+    for (int v = 0; v < nNodes; ++v) {
+        if (!hairpin[v]) continue;
+        Vec2 V = g.nodes[v].pos;
+        double maxHalf = std::max(g.edges[inc[v][0]].width, g.edges[inc[v][1]].width) * 0.5;
+        double tr = maxHalf;                                  // pull leg ends inside the disc
+        for (int e : inc[v]) {
+            int end = (g.edges[e].a == v) ? 0 : 1;
+            trim[e][end] = std::max(trim[e][end], std::min(tr, edgeLen(e) * 0.45));
+        }
+        double R = maxHalf * 1.5 + p.sidewalkWidth;           // covers the trimmed leg corners
+        Vec3 c = to3d(V);
+        int segs = std::max(10, static_cast<int>(std::ceil(2.0 * 3.14159265 * R / 4.0)));
+        Vec2 prev = V + Vec2(R, 0);
+        for (int s = 1; s <= segs; ++s) {
+            double ang = 2.0 * 3.14159265 * s / segs;
+            Vec2 cur = V + Vec2(std::cos(ang) * R, std::sin(ang) * R);
+            addTri(c, to3d(prev), to3d(cur));                 // CCW fan -> upward normal
+            prev = cur;
+        }
     }
 
     // --- Simple bends (degree-2): no pad, but the two ribbons still meet at an
