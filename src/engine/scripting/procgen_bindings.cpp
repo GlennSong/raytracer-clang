@@ -1351,6 +1351,7 @@ int l_city_road_mesh(lua_State* L) {
         rp.centerColor = optVec3Field(L, 2, "center_color", rp.centerColor);
         rp.plazaRadius = optField(L, 2, "plaza", rp.plazaRadius);
         rp.plazaMinArms = static_cast<int>(optField(L, 2, "plaza_min_arms", rp.plazaMinArms));
+        rp.hairpinDeflection = optField(L, 2, "hairpin_deflection", rp.hairpinDeflection);
         lua_getfield(L, 2, "height");
         if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
             HeightField h = *hf;

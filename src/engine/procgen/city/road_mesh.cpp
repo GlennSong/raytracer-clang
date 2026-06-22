@@ -117,6 +117,23 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         inc[g.edges[e].b].push_back(e);
     }
 
+    // Flag the sharp degree-2 bends (hairpins): a turn this tight can't be a simple
+    // bend — the widened ribbon would fold — so it's built as a turning pad below.
+    std::vector<char> hairpin(nNodes, 0);
+    if (p.hairpinDeflection > 0.0) {
+        for (int v = 0; v < nNodes; ++v) {
+            if (static_cast<int>(inc[v].size()) != 2) continue;
+            Vec2 V = g.nodes[v].pos;
+            auto dir = [&](int e) {
+                int o = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
+                return normalize(g.nodes[o].pos - V);
+            };
+            Vec2 d0 = dir(inc[v][0]), d1 = dir(inc[v][1]);
+            double between = std::acos(std::max(-1.0, std::min(1.0, dot(d0, d1))));
+            if (3.14159265358979 - between > p.hairpinDeflection) hairpin[v] = 1;   // deflection too sharp
+        }
+    }
+
     // trim[e][0] at endpoint a, trim[e][1] at endpoint b: how far the ribbon is
     // pulled back from each node so it stops at the junction edge.
     std::vector<std::array<double, 2>> trim(nEdges, {0.0, 0.0});
@@ -129,7 +146,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         int edge; double ang; Vec2 d; double w; double s;   // s = setback at this node
     };
     for (int v = 0; v < nNodes; ++v) {
-        if (static_cast<int>(inc[v].size()) < 3) continue;
+        if (static_cast<int>(inc[v].size()) < 3 && !hairpin[v]) continue;
         Vec2 V = g.nodes[v].pos;
 
         std::vector<Arm> arms;
@@ -168,6 +185,13 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         double floorS = (m >= p.plazaMinArms && p.plazaRadius > 0.0)
                             ? std::max(p.minSetback, p.plazaRadius)
                             : p.minSetback;
+        // A hairpin pulls both ribbons well back and fills a turning bulb wide enough
+        // that the tight inner curve never folds — sized to the carriageway + walk.
+        if (hairpin[v]) {
+            double maxHalf = 0;
+            for (const Arm& a : arms) maxHalf = std::max(maxHalf, a.w);
+            floorS = std::max(floorS, 1.8 * maxHalf + p.sidewalkWidth);
+        }
 
         // Clamp + record the trims, and lay out the pad ring.
         std::vector<Vec2> ring;   // CCW: each arm contributes [right point, left point]
@@ -199,7 +223,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     // the kerb runs continuous around the curve. The road runs straight through,
     // so there is no trim.
     for (int v = 0; v < nNodes; ++v) {
-        if (static_cast<int>(inc[v].size()) != 2) continue;
+        if (static_cast<int>(inc[v].size()) != 2 || hairpin[v]) continue;   // hairpins padded above
         Vec2 V = g.nodes[v].pos;
         auto armDir = [&](int e) {
             int o = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;

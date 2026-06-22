@@ -3171,11 +3171,22 @@ halfWidth + sidewalk + margin` (per road class) and the offset can't fold. Wired
 half-width 7 + sidewalk 2.2) shows the ribbon holding uniform width through the bends
 instead of pinching. Test: a 90° corner filleted to R=20 leaves no point sharper than
 that radius. Where legs are too short for `minRadius` (a true 180° hairpin) the cap
-bites and the corner stays tight — confirming the ADR-0044 line that such a turn wants
-a **junction/hairpin element**, not a thin extruded ribbon. The deeper, fully-general
-fix (allow tight curves, then offset robustly and *trim* the self-intersection via
-medial-axis / straight-skeleton / polyline-buffer joins, the SVG/CNC stroking problem)
-stays deferred behind the simpler "constrain the radius" approach.
+bites — so `roundRoadCorners` leaves that apex a **sharp vertex** instead of a
+too-tight arc, and `road_mesh` builds a **turning pad** there: a degree-2 bend whose
+deflection exceeds `hairpinDeflection` is routed through the same setback+pad path the
+≥3-way junctions use (with the floor raised to ~carriageway+walk), so the ribbons pull
+back and a switchback bulb fills the turn instead of the ribbon folding. A/B on the
+switchback shows an isolated hairpin become a clean turning bulb. Covered by
+`tests/test_city.cpp` (a sharp degree-2 reversal yields a distinct padded mesh) and
+`tests/test_terrain_field.cpp` (the radius guarantee).
+
+Two things stay deferred. (1) A *stack* of switchbacks crammed within a few metres
+(very steep, high-`cutFill` terrain) still tangles — overlapping pads — because that's
+really the *router* producing too-dense reversals; the fix is router-side (a
+switchback-spacing / turn penalty), not the mesh. (2) The fully-general "allow tight
+curves then offset robustly and *trim* the self-intersection" path (medial-axis /
+straight-skeleton / polyline-buffer joins — the SVG/CNC stroking problem) stays behind
+the simpler "constrain the radius, pad what's left" approach.
 
 **Literature.** The two bullseyes: **ASAM OpenDRIVE** — a road is a reference line of
 *line / arc / spiral (clothoid) / cubic* pieces with lanes offset from it (the exact

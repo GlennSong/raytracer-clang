@@ -40,6 +40,27 @@ TEST_CASE(road_mesh_builds_junctions_and_ribbons) {
     CHECK(maxR <= 41.0);
 }
 
+TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {
+    // ADR-0048: a sharp degree-2 reversal (legs nearly parallel = ~160-degree
+    // deflection) can't be a simple bend — the widened ribbon folds. With hairpin
+    // handling on, the apex is built as a junction-style turning pad, so it pulls the
+    // ribbons back and emits more geometry than the plain folded bend.
+    RoadGraph g;
+    int A = g.addNode(Vec2(60, 6)), V = g.addNode(Vec2(0, 0)), B = g.addNode(Vec2(60, -6));
+    g.addEdge(A, V, 10); g.addEdge(V, B, 10);
+
+    RoadMeshParams plain;                       // hairpinDeflection = 0 -> simple bend
+    RenderMesh mb = buildRoadMesh(g, plain);
+    RoadMeshParams pad; pad.hairpinDeflection = 1.0;   // ~57deg+; this 160deg turn qualifies
+    RenderMesh mp = buildRoadMesh(g, pad);
+
+    CHECK(mp.indices.size() % 3 == 0);
+    CHECK(!mp.vertices.empty());
+    // The pad path is distinct from the simple bend: it pulls both ribbons back (a
+    // setback) and fans a turning bulb, so the geometry differs from the folded bend.
+    CHECK(mp.indices.size() != mb.indices.size());
+}
+
 TEST_CASE(road_mesh_sidewalks_raise_a_kerb) {
     // ADR-0044 cross-section: sidewalks add a raised skirt — a slab top standing
     // `curb` above the carriageway and an outer face dropping to the ground.

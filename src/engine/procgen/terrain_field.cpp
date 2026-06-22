@@ -494,7 +494,9 @@ std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius
         double Tdes = tanHalf > 1e-6 ? minRadius / tanHalf : 1e18;
         double T = std::min(Tdes, 0.5 * std::min(segLen[i-1], segLen[i]));       // fit the legs
         double R = T * tanHalf;                                                  // <= minRadius if capped
-        if (R < 1e-3) { out.push_back(C[i]); continue; }
+        // Too tight to round without the ribbon folding: leave the apex SHARP so the
+        // mesh builds a turning pad (a switchback bulb) here instead of a thin arc.
+        if (R < 0.85 * minRadius) { out.push_back(C[i]); continue; }
 
         double fA = (segLen[i-1] - T) / segLen[i-1];
         Vec3 A(C[i].x + ax*T, C[i-1].y + (C[i].y - C[i-1].y) * fA, C[i].z + az*T);

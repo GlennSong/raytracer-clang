@@ -29,5 +29,6 @@ local land = terrain.conform(hills, road, { margin = 4, falloff = 28 })
 local m = model.new()
 m:add(terrain.mesh(land, { size = 620, resolution = 340, color = { 0.42, 0.47, 0.32 } }))
 m:add_solid(city.road_mesh(road, { height = land, lift = 0.4, color = { 0.08, 0.08, 0.09 },
-                                   sidewalk = 2.2, curb = 0.16, markings = true }))
+                                   sidewalk = 2.2, curb = 0.16, markings = true,
+                                   hairpin_deflection = 1.0 }))   -- ~80deg+ turns -> turning pad
 return m
