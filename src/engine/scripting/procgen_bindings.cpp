@@ -721,12 +721,25 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
     return r;
 }
 
+// Borrow an optional HeightField stored in field `key` of the table at `tableIdx`
+// (returns nullptr if absent). The pointer is valid for the call: the table on the
+// stack keeps the userdata alive. Defined with the HeightField machinery below.
+const HeightField* optHeightField(lua_State* L, int tableIdx, const char* key);
+
 // city.layout{ pattern=, extent=, cell_size=, ring_spacing=, spokes=, jitter=,
-//   dropout=, seed= } -> { nodes = {{x,z}...}, edges = {{a,b,width}...},
-//   blocks = {{{x,z}...}...} }. pattern = "grid" (default) | "radial" (ADR-0044).
+//   dropout=, seed=, terrain=, max_grade=, slope_align= } -> { nodes = {{x,z}...},
+//   edges = {{a,b,width}...}, blocks = {{{x,z}...}...} }. pattern = "grid" (default)
+//   | "radial" | "tensor" (ADR-0044). When `terrain` (a HeightField) is given, the
+//   network is made grade-aware (ADR-0046): the tensor field bends to follow
+//   contours on steep ground, and every generator's streets steeper than
+//   `max_grade` are pruned — and because that happens before block extraction, the
+//   blocks merge across the dropped streets for free.
 // Node indices in edges are 1-based (Lua convention).
 int l_city_layout(lua_State* L) {
     std::string pattern = lua_istable(L, 1) ? optStrField(L, 1, "pattern", "grid") : "grid";
+    const HeightField* terrain = optHeightField(L, 1, "terrain");
+    Real maxGrade   = static_cast<Real>(optField(L, 1, "max_grade", 0.12));
+    Real slopeAlign = static_cast<Real>(optField(L, 1, "slope_align", 1.0));
     RoadGraph raw;
     if (pattern == "radial") {
         RadialParams rp;
@@ -748,6 +761,9 @@ int l_city_layout(lua_State* L) {
         tp.radialDecay    = static_cast<Real>(optField(L, 1, "radial_decay", tp.radialDecay));
         tp.gridStrength   = static_cast<Real>(optField(L, 1, "grid_strength", tp.gridStrength));
         tp.seed           = static_cast<uint32_t>(optField(L, 1, "seed", 0));
+        tp.terrain        = terrain;          // contour-follow on steep ground (ADR-0046)
+        tp.slopeAlign     = slopeAlign;
+        tp.maxGrade       = maxGrade;
         raw = tensorRoads(tp);
     } else {
         GridRoadParams gp;
@@ -761,6 +777,7 @@ int l_city_layout(lua_State* L) {
         raw = gridRoads(gp);
     }
     RoadGraph g = planarize(raw);
+    if (terrain) g = pruneSteepEdges(g, *terrain, maxGrade);   // drop unwalkable streets
     std::vector<Poly2> blocks = extractBlocks(g);
 
     lua_createtable(L, 0, 3);
@@ -970,6 +987,13 @@ void pushHeight(lua_State* L, HeightField f) {
 }
 HeightField& checkHeight(lua_State* L, int idx) {
     return *static_cast<HeightField*>(luaL_checkudata(L, idx, kHeightMt));
+}
+const HeightField* optHeightField(lua_State* L, int tableIdx, const char* key) {
+    if (!lua_istable(L, tableIdx)) return nullptr;
+    lua_getfield(L, tableIdx, key);
+    const HeightField* h = static_cast<const HeightField*>(luaL_testudata(L, -1, kHeightMt));
+    lua_pop(L, 1);                  // the table still references the userdata: stays alive
+    return h;
 }
 int heightGc(lua_State* L) {
     static_cast<HeightField*>(lua_touserdata(L, 1))->~HeightField();

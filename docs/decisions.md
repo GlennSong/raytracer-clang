@@ -2950,6 +2950,75 @@ the router winds through gentler ground; a 16-neighbour grid would sharpen them.
 
 ---
 
+## ADR-0046 — Terrain-aware city generation (the network answers the slope, blocks follow)
+**Status:** Accepted · **Date:** 2026-06-22
+
+**Context.** ADR-0045 routes a *single* road (the highway) at a walkable grade, but
+`city.layout` still generated whole networks in pure 2D and conformed the terrain to
+them afterward. On a hilly site that means streets run straight up the fall line and
+the ground is cut/filled to match — the same "road on the mountain top" symptom,
+multiplied across a network. The reason it couldn't just reuse the ADR-0045 router:
+a city's *arterials bound its blocks*, and the blocks (→ lots → buildings → pads)
+are extracted from the road graph; bending a block-boundary edge after extraction
+would desync the lots from the road.
+
+**The lever.** `city.layout` runs **generator → `planarize` → `extractBlocks`**, in
+that order. So *any* change to the road graph made **before** extraction flows into
+the blocks for free — no lot/parcel rework. That is what makes terrain-aware
+generation tractable as an edit rather than a rewrite: do it upstream of the faces.
+
+**Decision.** Two mechanisms, both upstream of `extractBlocks`, exposed by passing an
+optional `terrain` HeightField (plus `max_grade`, `slope_align`) to `city.layout`:
+
+1. **Contour coupling in the tensor field** (the flagship; after Chen et al. §6).
+   `fieldAt` blends the tensor toward the **contour** orientation (perpendicular to
+   the terrain gradient) where the ground is steep, weighted by `slopeAlign` and
+   saturating near `maxGrade`, and scaled by the base field magnitude so it dominates
+   on steep ground yet vanishes on flats. The traced avenues then bend to follow the
+   hillside instead of marching across it. (The *perpendicular* family then tends
+   toward the fall line — which is exactly what mechanism 2 removes.)
+
+2. **Grade-gated pruning, shared by every generator.** `pruneSteepEdges` runs on the
+   *planar* graph (each short segment judged on its own grade) and drops streets that
+   climb steeper than `maxGrade`, so only walkable streets survive and the steep
+   flanks fall into the larger natural-hillside blocks the relief-gate already
+   declines to develop. Two guards keep it coherent: **Arterials are never pruned**
+   (the skeleton stays connected) and an edge is **kept rather than orphan an
+   endpoint** (no degree-0 nodes) — so unavoidable steep dead-end access survives
+   instead of disconnecting the graph.
+
+On the `hill_roads` study scene (a road network on rolling hills, no city) the pair
+takes the tensor layout from ~36% walkable streets and ~0.21 mean grade (terrain-
+blind) to ~75% and ~0.11 — roughly halving the grade and doubling the walkable
+fraction. Covered by `tests/test_city.cpp` (prune drops steep streets / keeps
+arterials + never orphans; the tensor field's avenues run gentler with coupling than
+without).
+
+The study scene generates the network *in place* (the terrain and the layout share
+an origin), which is the precondition for correctness: the generator must sample the
+terrain at the street's true world position. A recipe like `twin_cities.lua` that
+builds a city at the origin and *translates* it to its site can't just pass its world
+heightfield — it would read the slope at the wrong place. So terrain-awareness is
+wired into the standalone road, not the translated cities (which sit on flat discs
+anyway, where it's a no-op); giving `city.layout` a `center` so a city generates at
+its world location is the small follow-up that lets a *placed* city use it.
+
+**Why pruning over rerouting the steep streets.** Routing each steep local street
+(ADR-0045) into a switchback would cross its neighbours in a dense block and is far
+more code; on a hillside a city simply *doesn't build* the unwalkable street — the
+block grows and stays green. Pruning is the smaller, more faithful move, and the
+ADR-0045 router stays the tool for the long point-to-point arterials/highways.
+
+**Deferred.** Grid/radial generators get terrain-awareness only via pruning (their
+*pattern* isn't bent — only the tensor field follows contours); a steep grid thins
+rather than curves. Reconnecting a network the prune fragments (a min-grade spanning
+pass to guarantee every block keeps a walkable access street) and node-relaxation
+toward gentler ground are the next increments. The contour coupling is also only as
+clean as the terrain is smooth — high-frequency relief gives wiggly contours the
+streamlines lag; a multi-scale gradient would steady it.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

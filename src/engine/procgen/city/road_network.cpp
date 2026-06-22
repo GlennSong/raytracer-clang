@@ -202,6 +202,28 @@ Tensor fieldAt(const TensorRoadParams& p, const Vec2& q) {
         t.a += w * std::cos(2 * phi);
         t.b += w * std::sin(2 * phi);
     }
+
+    // Terrain coupling (ADR-0046): on steep ground, pull the field toward the
+    // CONTOUR (perpendicular to the gradient) so streamlines follow the hillside.
+    // The pull grows with slope and saturates near maxGrade, and scales with the
+    // base field magnitude so it can dominate the designed pattern where it's steep
+    // yet vanish where it's flat — flat sites keep the pure radial<->grid blend.
+    if (p.terrain) {
+        const HeightField& h = *p.terrain;
+        Real e = std::max(Real(1.0), p.step * 0.5);
+        Real gx = (h(q.x + e, q.y) - h(q.x - e, q.y)) / (2 * e);
+        Real gz = (h(q.x, q.y + e) - h(q.x, q.y - e)) / (2 * e);
+        Real slope = std::sqrt(gx * gx + gz * gz);
+        if (slope > 1e-4) {
+            Vec2 contour = perp(Vec2(gx, gz));    // tangent to the level set
+            Real phi = std::atan2(contour.y, contour.x);
+            Real s = slope / std::max(Real(1e-4), p.maxGrade);
+            Real mag = (p.gridStrength + p.radialStrength) * p.slopeAlign *
+                       (s / (1 + s));             // 0 on flats -> base magnitude when steep
+            t.a += mag * std::cos(2 * phi);
+            t.b += mag * std::sin(2 * phi);
+        }
+    }
     return t;
 }
 
@@ -379,6 +401,43 @@ RoadGraph tensorRoads(const TensorRoadParams& p) {
     traceFamily(g, p, 0, majorHash, majorSeeds, p.collectorWidth, RoadClass::Collector);
     traceFamily(g, p, 1, minorHash, minorSeeds, p.localWidth, RoadClass::Local);
     return g;
+}
+
+RoadGraph pruneSteepEdges(const RoadGraph& g, const HeightField& terrain,
+                          Real maxGrade, int samplesPerEdge) {
+    const int S = std::max(2, samplesPerEdge);
+    std::vector<int> degree(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { ++degree[e.a]; ++degree[e.b]; }
+
+    // Worst grade along an edge, judged on S sub-segments (a street can be gentle
+    // end-to-end yet pitch over a bump in the middle).
+    auto edgeGrade = [&](const RoadEdge& e) -> Real {
+        Vec2 a = g.nodes[e.a].pos, b = g.nodes[e.b].pos;
+        if ((b - a).length() < 1e-4) return 0;
+        Vec2 prev = a; Real prevH = terrain(a.x, a.y), worst = 0;
+        for (int k = 1; k <= S; ++k) {
+            Vec2 cur = a + (b - a) * (Real(k) / S);
+            Real curH = terrain(cur.x, cur.y), d = (cur - prev).length();
+            if (d > 1e-4) worst = std::max(worst, std::abs(curH - prevH) / d);
+            prev = cur; prevH = curH;
+        }
+        return worst;
+    };
+
+    std::vector<char> keep(g.edges.size(), 1);
+    for (std::size_t i = 0; i < g.edges.size(); ++i) {
+        const RoadEdge& e = g.edges[i];
+        if (e.klass == RoadClass::Arterial) continue;        // skeleton stays whole
+        if (edgeGrade(e) <= maxGrade) continue;              // walkable — keep
+        if (degree[e.a] <= 1 || degree[e.b] <= 1) continue;  // would orphan — keep
+        keep[i] = 0; --degree[e.a]; --degree[e.b];
+    }
+
+    RoadGraph out;
+    out.nodes = g.nodes;                                     // node indices unchanged
+    for (std::size_t i = 0; i < g.edges.size(); ++i)
+        if (keep[i]) out.edges.push_back(g.edges[i]);
+    return out;
 }
 
 RoadGraph planarize(const RoadGraph& in, Real tol) {

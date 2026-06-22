@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NETWORK_H
 
 #include "polygon.h"
+#include "../terrain_field.h"   // HeightField — terrain-aware routing/pruning (ADR-0046)
 #include <cstdint>
 #include <vector>
 
@@ -109,8 +110,29 @@ struct TensorRoadParams {
     Real  step = 8;            // streamline integration step (m)
     Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
     uint32_t seed = 0;
+
+    // Terrain coupling (ADR-0046, after Chen et al. §6). When `terrain` is set, the
+    // field is blended toward the CONTOUR orientation (perpendicular to the terrain
+    // gradient) where the ground is steep, so the avenues bend to follow the
+    // hillside instead of marching across it. Flat ground is untouched. `slopeAlign`
+    // scales how hard steep ground pulls the field; `maxGrade` is the slope at which
+    // that pull saturates (so streets ease onto contours as the grade approaches it).
+    const HeightField* terrain = nullptr;
+    Real  slopeAlign = 1.0;
+    Real  maxGrade = 0.12;
 };
 RoadGraph tensorRoads(const TensorRoadParams& params);
+
+// Drop the streets a road can't legally climb (ADR-0046). For each edge, sample
+// its grade |dh|/run from `terrain`; if it exceeds `maxGrade`, remove it — so the
+// network only keeps streets gentle enough to walk and the steep ground falls into
+// the (bigger) natural-hillside blocks. Two guards keep the result coherent:
+// Arterials are never pruned (the structural skeleton stays connected), and an edge
+// is kept when removing it would orphan an endpoint (no degree-0 nodes). Run on the
+// PLANAR graph (so each short segment is judged on its own) before extractBlocks,
+// and the blocks merge across the removed streets for free.
+RoadGraph pruneSteepEdges(const RoadGraph& graph, const HeightField& terrain,
+                          Real maxGrade, int samplesPerEdge = 3);
 
 // Planarize: split edges wherever they cross and merge coincident nodes, so the
 // only adjacencies are at shared endpoints (precondition for face extraction).

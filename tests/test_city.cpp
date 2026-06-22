@@ -225,6 +225,78 @@ TEST_CASE(tensor_roads_are_deterministic) {
 }
 
 namespace {
+// Worst grade along an edge over the given heightfield (matches pruneSteepEdges).
+Real edgeGrade(const RoadGraph& g, const RoadEdge& e, const HeightField& h) {
+    Vec2 a = g.nodes[e.a].pos, b = g.nodes[e.b].pos;
+    Real len = (b - a).length();
+    return len < 1e-4 ? 0 : std::fabs(h(b.x, b.y) - h(a.x, a.y)) / len;
+}
+}  // namespace
+
+TEST_CASE(prune_steep_edges_drops_unwalkable_streets) {
+    // ADR-0046: on a hillside tilted 0.4 in x, a 3x3 lattice's x-edges climb at
+    // grade 0.4 (>0.12) while its z-edges are flat. Pruning must drop the steep
+    // streets and keep the gentle ones — and because the z-edges hold every node,
+    // nothing is orphaned, so EVERY surviving edge is walkable.
+    HeightField slope = [](double x, double) { return 0.4 * x; };
+    RoadGraph g;
+    int id[3][3];
+    for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i) id[i][j] = g.addNode(Vec2(i * 100.0, j * 100.0));
+    for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i) {
+            if (i < 2) g.addEdge(id[i][j], id[i + 1][j], 8, RoadClass::Local);  // steep (x)
+            if (j < 2) g.addEdge(id[i][j], id[i][j + 1], 8, RoadClass::Local);  // flat  (z)
+        }
+    CHECK(g.edges.size() == 12u);
+
+    RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
+    CHECK(pruned.edges.size() < g.edges.size());        // steep streets removed
+    CHECK(!pruned.edges.empty());                       // gentle network survives
+    Real worst = 0;
+    for (const RoadEdge& e : pruned.edges) worst = std::max(worst, edgeGrade(pruned, e, slope));
+    CHECK(worst <= 0.12 + 1e-6);                         // all survivors walkable
+}
+
+TEST_CASE(prune_steep_edges_keeps_arterials_and_never_orphans) {
+    // The skeleton stays whole: an Arterial is kept even when steep, and a node's
+    // last edge is kept rather than orphan it. A lone steep local spur off a node
+    // that has no other edge must survive.
+    HeightField slope = [](double x, double) { return 0.5 * x; };
+    RoadGraph g;
+    int a = g.addNode(Vec2(0, 0)), b = g.addNode(Vec2(100, 0)), c = g.addNode(Vec2(200, 0));
+    g.addEdge(a, b, 16, RoadClass::Arterial);           // steep but structural
+    g.addEdge(b, c, 8, RoadClass::Local);               // steep, but c has no other edge
+    RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
+    CHECK(pruned.edges.size() == 2u);                   // both kept (skeleton + no orphan)
+}
+
+TEST_CASE(tensor_field_follows_contours_on_a_slope) {
+    // ADR-0046: with terrain coupling the avenues bend to follow the hillside, so
+    // the major (Collector) family runs far gentler than the terrain-blind layout
+    // that marches the same field straight across the slope.
+    HeightField slope = [](double x, double) { return 0.4 * x; };
+    auto meanCollectorGrade = [&](const RoadGraph& g) {
+        Real sum = 0; int n = 0;
+        for (const RoadEdge& e : g.edges)
+            if (e.klass == RoadClass::Collector) { sum += edgeGrade(g, e, slope); ++n; }
+        return n ? sum / n : Real(0);
+    };
+
+    TensorRoadParams blind; blind.extent = 200; blind.spacing = 60; blind.seed = 7;
+    RoadGraph gBlind = tensorRoads(blind);
+
+    TensorRoadParams aware = blind;
+    aware.terrain = &slope; aware.slopeAlign = 2.0; aware.maxGrade = 0.12;
+    RoadGraph gAware = tensorRoads(aware);
+
+    Real blindGrade = meanCollectorGrade(gBlind);
+    Real awareGrade = meanCollectorGrade(gAware);
+    CHECK(awareGrade < blindGrade);          // avenues bent toward the contours
+    CHECK(awareGrade < 0.12);                // and they actually read as walkable
+}
+
+namespace {
 Poly2 square(Real s) {
     return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW
 }
