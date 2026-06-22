@@ -2978,21 +2978,36 @@ optional `terrain` HeightField (plus `max_grade`, `slope_align`) to `city.layout
    hillside instead of marching across it. (The *perpendicular* family then tends
    toward the fall line — which is exactly what mechanism 2 removes.)
 
-2. **Grade-gated pruning, shared by every generator.** `pruneSteepEdges` runs on the
-   *planar* graph (each short segment judged on its own grade) and drops streets that
-   climb steeper than `maxGrade`, so only walkable streets survive and the steep
-   flanks fall into the larger natural-hillside blocks the relief-gate already
-   declines to develop. Two guards keep it coherent: **Arterials are never pruned**
-   (the skeleton stays connected) and an edge is **kept rather than orphan an
-   endpoint** (no degree-0 nodes) — so unavoidable steep dead-end access survives
-   instead of disconnecting the graph.
+2. **Connectivity-preserving pruning, shared by every generator.** `pruneSteepEdges`
+   runs on the *planar* graph (each short segment judged on its own grade) and drops
+   streets steeper than `maxGrade` so the steep flanks fall into the larger natural-
+   hillside blocks. The first cut dropped edges purely by grade with a no-orphan
+   guard — and **shattered the network into hundreds of fragments**, because a steep
+   edge is often the *only* bridge between two parts (a degree guard stops degree-0
+   nodes but says nothing about connectivity). The fix is a max-spanning-forest
+   completion: keep every gentle edge and Arterial (they define the base
+   connectivity), then add back only the **gentlest** steep edges needed to reconnect
+   whatever that leaves split. A steep street survives exactly where there's no
+   gentler way around; a redundant one (gentle detour exists) is dropped. The result
+   has the *same* connected components as the input.
 
-On the `hill_roads` study scene (a road network on rolling hills, no city) the pair
-takes the tensor layout from ~36% walkable streets and ~0.21 mean grade (terrain-
-blind) to ~75% and ~0.11 — roughly halving the grade and doubling the walkable
-fraction. Covered by `tests/test_city.cpp` (prune drops steep streets / keeps
-arterials + never orphans; the tensor field's avenues run gentler with coupling than
-without).
+3. **A stitch backstop — one connected network, always.** Strong contour coupling can
+   leave streamlines that never cross (parallel on a steep flank), so the *raw* graph
+   is already fragmented before pruning, and a component-preserving prune faithfully
+   keeps those gaps. `connectComponents` closes them: while more than one component
+   remains, add the single shortest connector between the closest nodes of different
+   components (then re-`planarize` so connectors split at anything they cross). So
+   regardless of where a split came from, `city.layout` returns one coherent network.
+
+On the `hill_roads` study scene (a road network on smooth rolling hills, no city) the
+three take the tensor layout from ~40% walkable streets and ~0.19 mean grade
+(terrain-blind) to ~68% and ~0.13 — while staying a **single connected component**
+(the grade-blind prune alone left ~400). Covered by `tests/test_city.cpp` (prune
+keeps the network connected / keeps arterials + never orphans; `connectComponents`
+heals a split graph into one; the tensor field's streets run gentler with coupling
+than without). Contour coupling reads cleanest on *smooth* relief — sharp ridged
+terrain gives wiggly contours the streamlines chase into a tangle — so the study
+scene uses a low-octave fbm massif.
 
 The study scene generates the network *in place* (the terrain and the layout share
 an origin), which is the precondition for correctness: the generator must sample the
@@ -3009,13 +3024,14 @@ more code; on a hillside a city simply *doesn't build* the unwalkable street —
 block grows and stays green. Pruning is the smaller, more faithful move, and the
 ADR-0045 router stays the tool for the long point-to-point arterials/highways.
 
-**Deferred.** Grid/radial generators get terrain-awareness only via pruning (their
-*pattern* isn't bent — only the tensor field follows contours); a steep grid thins
-rather than curves. Reconnecting a network the prune fragments (a min-grade spanning
-pass to guarantee every block keeps a walkable access street) and node-relaxation
-toward gentler ground are the next increments. The contour coupling is also only as
+**Deferred.** Grid/radial generators get terrain-awareness only via prune + stitch
+(their *pattern* isn't bent — only the tensor field follows contours); a steep grid
+thins and gets stitched rather than curving. The stitch connectors are picked by
+straight-line distance, not grade, so a healed bridge can itself be steep (it's the
+unavoidable access, but routing it via ADR-0045 would be gentler); and node-
+relaxation toward gentler ground is still owed. The contour coupling is also only as
 clean as the terrain is smooth — high-frequency relief gives wiggly contours the
-streamlines lag; a multi-scale gradient would steady it.
+streamlines chase; a multi-scale gradient would steady it on rough ground.
 
 ---
 

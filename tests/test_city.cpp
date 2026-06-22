@@ -9,6 +9,8 @@
 #include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <set>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -231,13 +233,25 @@ Real edgeGrade(const RoadGraph& g, const RoadEdge& e, const HeightField& h) {
     Real len = (b - a).length();
     return len < 1e-4 ? 0 : std::fabs(h(b.x, b.y) - h(a.x, a.y)) / len;
 }
+// Number of connected components among the nodes that appear in some edge.
+int edgeComponents(const RoadGraph& g) {
+    std::vector<int> p(g.nodes.size());
+    for (std::size_t i = 0; i < p.size(); ++i) p[i] = static_cast<int>(i);
+    std::function<int(int)> find = [&](int x) { return p[x] == x ? x : p[x] = find(p[x]); };
+    std::vector<char> used(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { p[find(e.a)] = find(e.b); used[e.a] = used[e.b] = 1; }
+    std::set<int> roots;
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) if (used[i]) roots.insert(find(static_cast<int>(i)));
+    return static_cast<int>(roots.size());
+}
 }  // namespace
 
-TEST_CASE(prune_steep_edges_drops_unwalkable_streets) {
+TEST_CASE(prune_steep_edges_keeps_the_network_connected) {
     // ADR-0046: on a hillside tilted 0.4 in x, a 3x3 lattice's x-edges climb at
-    // grade 0.4 (>0.12) while its z-edges are flat. Pruning must drop the steep
-    // streets and keep the gentle ones — and because the z-edges hold every node,
-    // nothing is orphaned, so EVERY surviving edge is walkable.
+    // grade 0.4 (>0.12) while its z-edges are flat. The prune must NOT fragment the
+    // graph: it keeps every gentle (z) edge and adds back only the minimal steep (x)
+    // bridges needed to join the three vertical lines — so the result is still one
+    // connected network, with the steep streets thinned to the unavoidable few.
     HeightField slope = [](double x, double) { return 0.4 * x; };
     RoadGraph g;
     int id[3][3];
@@ -249,13 +263,15 @@ TEST_CASE(prune_steep_edges_drops_unwalkable_streets) {
             if (j < 2) g.addEdge(id[i][j], id[i][j + 1], 8, RoadClass::Local);  // flat  (z)
         }
     CHECK(g.edges.size() == 12u);
+    CHECK(edgeComponents(g) == 1);
 
     RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
-    CHECK(pruned.edges.size() < g.edges.size());        // steep streets removed
-    CHECK(!pruned.edges.empty());                       // gentle network survives
-    Real worst = 0;
-    for (const RoadEdge& e : pruned.edges) worst = std::max(worst, edgeGrade(pruned, e, slope));
-    CHECK(worst <= 0.12 + 1e-6);                         // all survivors walkable
+    CHECK(edgeComponents(pruned) == 1);                 // still one coherent network
+    int gentle = 0, steep = 0;
+    for (const RoadEdge& e : pruned.edges)
+        (edgeGrade(pruned, e, slope) <= 0.12 ? gentle : steep)++;
+    CHECK(gentle == 6);                                 // every walkable street kept
+    CHECK(steep == 2);                                  // only the 2 bridges to link 3 lines
 }
 
 TEST_CASE(prune_steep_edges_keeps_arterials_and_never_orphans) {
@@ -269,6 +285,22 @@ TEST_CASE(prune_steep_edges_keeps_arterials_and_never_orphans) {
     g.addEdge(b, c, 8, RoadClass::Local);               // steep, but c has no other edge
     RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
     CHECK(pruned.edges.size() == 2u);                   // both kept (skeleton + no orphan)
+}
+
+TEST_CASE(connect_components_heals_a_split_network) {
+    // ADR-0046: two separate street fragments must be stitched into one connected
+    // graph by the shortest bridge between them (the coherence backstop after a
+    // contour-coupled trace leaves non-crossing streamlines).
+    RoadGraph g;
+    int a = g.addNode(Vec2(0, 0)),  b = g.addNode(Vec2(50, 0));    // fragment 1
+    int c = g.addNode(Vec2(0, 200)), d = g.addNode(Vec2(50, 200)); // fragment 2, far off
+    int e = g.addNode(Vec2(500, 0)), f = g.addNode(Vec2(500, 50)); // fragment 3
+    g.addEdge(a, b, 8); g.addEdge(c, d, 8); g.addEdge(e, f, 8);
+    CHECK(edgeComponents(g) == 3);
+
+    RoadGraph joined = connectComponents(g);
+    CHECK(edgeComponents(joined) == 1);                 // one coherent network
+    CHECK(joined.edges.size() == 5u);                   // 3 original + 2 connectors
 }
 
 TEST_CASE(tensor_field_follows_contours_on_a_slope) {

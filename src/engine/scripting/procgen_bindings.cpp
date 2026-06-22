@@ -777,7 +777,11 @@ int l_city_layout(lua_State* L) {
         raw = gridRoads(gp);
     }
     RoadGraph g = planarize(raw);
-    if (terrain) g = pruneSteepEdges(g, *terrain, maxGrade);   // drop unwalkable streets
+    if (terrain) {
+        g = pruneSteepEdges(g, *terrain, maxGrade);    // drop unwalkable streets,
+        g = connectComponents(g);                      // then heal any split into one net,
+        g = planarize(g);                              // and re-split at the new connectors
+    }
     std::vector<Poly2> blocks = extractBlocks(g);
 
     lua_createtable(L, 0, 3);

@@ -123,16 +123,28 @@ struct TensorRoadParams {
 };
 RoadGraph tensorRoads(const TensorRoadParams& params);
 
-// Drop the streets a road can't legally climb (ADR-0046). For each edge, sample
-// its grade |dh|/run from `terrain`; if it exceeds `maxGrade`, remove it — so the
-// network only keeps streets gentle enough to walk and the steep ground falls into
-// the (bigger) natural-hillside blocks. Two guards keep the result coherent:
-// Arterials are never pruned (the structural skeleton stays connected), and an edge
-// is kept when removing it would orphan an endpoint (no degree-0 nodes). Run on the
+// Thin out the streets a road can't legally climb, WITHOUT fragmenting the network
+// (ADR-0046). A grade-only drop shatters the graph (steep edges are often the only
+// bridge between two parts), so this is a connectivity-preserving prune / max-
+// spanning-forest completion: keep every gentle edge (grade |dh|/run <= maxGrade
+// from `terrain`) and every Arterial, then add back the GENTLEST steep edges needed
+// to reconnect whatever that leaves split. A steep street survives only where
+// there's no gentler way around; a steep street with a gentle detour is dropped. The
+// result has exactly the connected components of the input — no new gaps, no orphans
+// — and the steep ground falls into the (bigger) natural-hillside blocks. Run on the
 // PLANAR graph (so each short segment is judged on its own) before extractBlocks,
 // and the blocks merge across the removed streets for free.
 RoadGraph pruneSteepEdges(const RoadGraph& graph, const HeightField& terrain,
                           Real maxGrade, int samplesPerEdge = 3);
+
+// Stitch a fragmented network back into ONE connected graph (ADR-0046). Contour
+// coupling can leave streamlines that never cross (parallel on a steep flank), and
+// pruning preserves but can't heal such splits — so this is the coherence backstop:
+// while more than one component remains, add the single shortest connector edge
+// between the closest pair of nodes in different components. Returns a graph with
+// exactly one connected component (re-planarize afterward so the new connectors
+// split cleanly at any road they cross).
+RoadGraph connectComponents(const RoadGraph& graph, Real connectorWidth = 8);
 
 // Planarize: split edges wherever they cross and merge coincident nodes, so the
 // only adjacencies are at shared endpoints (precondition for face extraction).

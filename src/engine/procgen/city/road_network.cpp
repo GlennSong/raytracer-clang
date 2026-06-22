@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <queue>
 #include <unordered_map>
 
@@ -406,8 +407,6 @@ RoadGraph tensorRoads(const TensorRoadParams& p) {
 RoadGraph pruneSteepEdges(const RoadGraph& g, const HeightField& terrain,
                           Real maxGrade, int samplesPerEdge) {
     const int S = std::max(2, samplesPerEdge);
-    std::vector<int> degree(g.nodes.size(), 0);
-    for (const RoadEdge& e : g.edges) { ++degree[e.a]; ++degree[e.b]; }
 
     // Worst grade along an edge, judged on S sub-segments (a street can be gentle
     // end-to-end yet pitch over a bump in the middle).
@@ -424,19 +423,84 @@ RoadGraph pruneSteepEdges(const RoadGraph& g, const HeightField& terrain,
         return worst;
     };
 
-    std::vector<char> keep(g.edges.size(), 1);
+    // Connectivity-preserving prune (a max-spanning-forest completion). Dropping
+    // streets purely by grade shatters the network — the steep edges are often the
+    // ONLY bridge between two parts. So instead: keep every gentle edge and arterial
+    // (they define the base connectivity), then add back the GENTLEST steep edges
+    // needed to reconnect whatever they leave split. A steep street therefore
+    // survives only where there's no gentler way around (and a redundant steep street
+    // — one with a gentle detour — is dropped). The result has exactly the connected
+    // components of the full graph: no new gaps, no orphans.
+    std::vector<int> parent(g.nodes.size());
+    for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = static_cast<int>(i);
+    auto find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](int a, int b) { int ra = find(a), rb = find(b); if (ra != rb) parent[ra] = rb; };
+
+    std::vector<char> keep(g.edges.size(), 0);
+    std::vector<std::pair<Real, int>> steep;                 // (grade, edge index)
     for (std::size_t i = 0; i < g.edges.size(); ++i) {
         const RoadEdge& e = g.edges[i];
-        if (e.klass == RoadClass::Arterial) continue;        // skeleton stays whole
-        if (edgeGrade(e) <= maxGrade) continue;              // walkable — keep
-        if (degree[e.a] <= 1 || degree[e.b] <= 1) continue;  // would orphan — keep
-        keep[i] = 0; --degree[e.a]; --degree[e.b];
+        if (e.klass == RoadClass::Arterial || edgeGrade(e) <= maxGrade) {
+            keep[i] = 1; unite(e.a, e.b);                    // walkable / structural
+        } else {
+            steep.emplace_back(edgeGrade(e), static_cast<int>(i));
+        }
+    }
+    std::sort(steep.begin(), steep.end(),
+              [](const auto& l, const auto& r) { return l.first < r.first; });
+    for (const auto& s : steep) {
+        const RoadEdge& e = g.edges[s.second];
+        if (find(e.a) != find(e.b)) { keep[s.second] = 1; unite(e.a, e.b); }  // sole bridge
     }
 
     RoadGraph out;
     out.nodes = g.nodes;                                     // node indices unchanged
     for (std::size_t i = 0; i < g.edges.size(); ++i)
         if (keep[i]) out.edges.push_back(g.edges[i]);
+    return out;
+}
+
+RoadGraph connectComponents(const RoadGraph& g, Real connectorWidth) {
+    RoadGraph out = g;
+    const int n = static_cast<int>(out.nodes.size());
+    std::vector<int> parent(n);
+    for (int i = 0; i < n; ++i) parent[i] = i;
+    auto find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](int a, int b) { int ra = find(a), rb = find(b); if (ra != rb) parent[ra] = rb; };
+
+    std::vector<char> used(n, 0);
+    for (const RoadEdge& e : out.edges) { unite(e.a, e.b); used[e.a] = used[e.b] = 1; }
+    std::vector<int> nodes;
+    for (int i = 0; i < n; ++i) if (used[i]) nodes.push_back(i);
+    auto componentCount = [&]() {
+        int c = 0;
+        for (int i : nodes) if (find(i) == i) ++c;
+        return c;
+    };
+
+    // Greedily bridge the closest pair of nodes in different components, until one.
+    while (componentCount() > 1) {
+        Real best = std::numeric_limits<Real>::max();
+        int bu = -1, bv = -1;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            int u = nodes[i], ru = find(u);
+            for (std::size_t j = i + 1; j < nodes.size(); ++j) {
+                int v = nodes[j];
+                if (find(v) == ru) continue;
+                Real d = (out.nodes[u].pos - out.nodes[v].pos).lengthSquared();
+                if (d < best) { best = d; bu = u; bv = v; }
+            }
+        }
+        if (bu < 0) break;
+        out.addEdge(bu, bv, connectorWidth, RoadClass::Collector);
+        unite(bu, bv);
+    }
     return out;
 }
 
