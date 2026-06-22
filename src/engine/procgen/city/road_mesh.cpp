@@ -332,10 +332,12 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>&
         tri(AL, AR, BR); tri(AL, BR, BL);
     }
 
-    // Round join at each vertex: fan the wedge on the OUTER side of the bend between
-    // the two segments' edges. The sweep equals the signed turn angle, so a gentle
-    // bend gets a sliver and a 180-degree hairpin gets a clean semicircular turning
-    // cap — the general stroke handles a switchback by construction, no special case.
+    // Round join at each vertex: fan the OUTER wedge of the bend between the two
+    // segments' edges (sweep == the signed turn angle, so a 180-degree vertex gets a
+    // semicircular cap). The inner side's trapezoids overlap to meet. To avoid a
+    // sliver where the two trapezoids leave a hairline gap (and the tiny inner cusp at
+    // a convex vertex), the inner pair of corners is bridged with a single bevel
+    // triangle — cheap, and harmless where it overlaps.
     const int vbeg = closed ? 0 : 1, vend = closed ? n : n - 1;
     for (int i = vbeg; i < vend; ++i) {
         Vec2 P = pts[i];
@@ -344,18 +346,20 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>&
         if (la < 1e-9 || lb < 1e-9) continue;
         a = a / la; b = b / lb;
         double theta = std::atan2(cross(a, b), dot(a, b));   // signed turn (-pi..pi)
-        if (std::fabs(theta) < 1e-3) continue;               // straight: segments meet flush
+        if (std::fabs(theta) < 1e-4) continue;               // straight: segments meet flush
         double w = W(i);
-        Vec2 c0dir = perp(a) * (theta > 0 ? -1.0 : 1.0);     // dir to the outer corner
+        double outer = theta > 0 ? -1.0 : 1.0;               // outer side sign
+        Vec2 c0dir = perp(a) * outer;                        // dir to the outer corner
         double a0 = std::atan2(c0dir.y, c0dir.x);
-        int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(theta) / 0.35)));
+        int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(theta) / 0.30)));
         Vec2 prev = P + c0dir * w;
         for (int s = 1; s <= segs; ++s) {
             double ang = a0 + theta * (static_cast<double>(s) / segs);
-            Vec2 cur = P + Vec2(std::cos(ang), std::sin(ang)) * w;
-            tri(P, prev, cur);
-            prev = cur;
+            tri(P, prev, P + Vec2(std::cos(ang), std::sin(ang)) * w);
+            prev = P + Vec2(std::cos(ang), std::sin(ang)) * w;
         }
+        // Inner bevel: bridge the two inner corners so no hairline gap/cusp remains.
+        tri(P, P - perp(a) * outer * w, P - perp(b) * outer * w);
     }
     return mesh;
 }

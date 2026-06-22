@@ -3207,7 +3207,12 @@ fundamental primitive had to be provably right: turning a centerline into a fill
 ribbon for *any* curve at *any* width without folding. `strokeRibbon(centerline,
 halfW, y, color, closed)` (in `road_mesh`) does it the 2D-graphics way — a trapezoid
 per segment (variable half-width per point) plus a **round join** that fans the OUTER
-wedge at each vertex. The inside of a bend has trapezoids overlap, but that's a
+wedge at each vertex (+ a one-triangle inner bevel, so the curvature-flip sliver and
+the convex-vertex cusp can't appear). Roundness comes from centerline *density* — a
+coarse 3-point hairpin strokes to facets, a finely-sampled arc strokes round — so
+smoothing stays a separate centerline step. (A full disc per vertex — the exact
+Minkowski sum — was tried and rejected: it scallops the edge and piles up coplanar
+overdraw.) The inside of a bend has trapezoids overlap, but that's a
 coplanar fill, not a fold; and because the join sweep equals the signed turn angle, a
 **180° hairpin gets a semicircular turning cap for free** — the general stroke handles
 a switchback by construction, no special case. A path that curves tighter than its

@@ -23,8 +23,8 @@ local DARK = { 0.08, 0.08, 0.10 }
 -- 1) Circle (closed loop), constant width. A closed loop needs DISTINCT points (no
 -- duplicated first/last), else the seam degenerates.
 local circle = {}
-for i = 0, 47 do
-  local t = 2*math.pi * i / 48
+for i = 0, 71 do
+  local t = 2*math.pi * i / 72
   circle[#circle + 1] = { x = -80 + 28*math.cos(t), z = 80 + 28*math.sin(t) }
 end
 m:add_solid(city.stroke{ closed = true, width = 10, y = 0.05, color = DARK, points = circle })
@@ -33,10 +33,16 @@ m:add_solid(city.stroke{ closed = true, width = 10, y = 0.05, color = DARK, poin
 m:add_solid(city.stroke{ width = 9, y = 0.05, color = DARK,
   points = pts(function(t) return t, 80 + 30*math.sin(t/26) end, 60, -10, 130) })
 
--- 3) Tight hairpin / switchback (the case that kept folding), constant width.
-m:add_solid(city.stroke{ width = 9, y = 0.05, color = DARK, points = {
-  { x = -110, z = -20 }, { x = -20, z = -20 }, { x = -16, z = -26 },
-  { x = -22, z = -32 }, { x = -110, z = -32 } } })
+-- 3) Switchback hairpin: two parallel legs joined by a smooth semicircular U-turn
+-- (a real round hairpin is a fine ARC in the centerline, not 3 hand-placed points).
+local hp = {}
+hp[#hp+1] = { x = -110, z = -20 }                       -- top leg start (heading +x)
+for k = 0, 18 do                                         -- semicircle, centre (-26,-26) r=6;
+  local a = math.pi/2 - math.pi * k / 18                 -- arc[0]=(-26,-20) IS the leg end,
+  hp[#hp+1] = { x = -26 + 6*math.cos(a), z = -26 + 6*math.sin(a) }  -- so no duplicate seam
+end
+hp[#hp+1] = { x = -110, z = -32 }                       -- bottom leg end (heading -x)
+m:add_solid(city.stroke{ width = 9, y = 0.05, color = DARK, points = hp })
 
 -- 4) Variable-width taper along a gentle curve (10 -> 2 m).
 local vp, vw = {}, {}
