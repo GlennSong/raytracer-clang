@@ -38,6 +38,7 @@ add_library(engine_core STATIC
     src/engine/states/debug_overlay_state.cpp
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
+    src/engine/editable_curve.cpp
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
