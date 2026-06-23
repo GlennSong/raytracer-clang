@@ -52,6 +52,22 @@ bool roadNetSetTangent(RoadNet& net, int i, const Vec2& tangent);
 // the curve actually uses) — what the viewport seeds the tangent handle from.
 Vec2 roadNetTangentAt(const RoadNet& net, int i);
 
+// --- topology edits: the viewport's add / split / delete (ADR-0049) -----------
+// Append a control node at `pos`; returns its index.
+int  roadNetAddNode(RoadNet& net, const Vec2& pos);
+// Connect nodes a and b. Ignored (returns false) if invalid, equal, or already joined.
+bool roadNetAddEdge(RoadNet& net, int a, int b);
+// Append a node at `pos` joined to `from` — grow a road from an end. -1 if `from` bad.
+int  roadNetExtend(RoadNet& net, int from, const Vec2& pos);
+// Insert a node at `pos` into edge `edgeIndex`, splitting it in two; returns the new
+// node index (the "click a road to add a point" op). -1 if the edge index is bad.
+int  roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos);
+// Delete node `i` and its incident edges, reindexing the rest. False if out of range.
+bool roadNetDeleteNode(RoadNet& net, int i);
+// The edge nearest `p` within `maxDist` (chord distance), or -1 — for viewport edge
+// picking (which road segment did the user click to split?).
+int  roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist);
+
 // --- level I/O: the `road` block of a shape:"road" entity ----------------------
 RoadNet roadNetFromJson(const nlohmann::json& j);
 nlohmann::json roadNetToJson(const RoadNet& net);

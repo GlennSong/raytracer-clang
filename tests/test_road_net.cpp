@@ -132,6 +132,48 @@ TEST_CASE(road_net_curved_and_tangents_round_trip) {
     CHECK_APPROX(r.tangents[1].y, 9.0, 1e-9);
 }
 
+TEST_CASE(road_net_split_inserts_a_point) {
+    RoadNet n = sampleNet();                          // 4 nodes, 3 edges
+    int edge = roadNetNearestEdge(n, Vec2(-15, 0), 8.0);   // over the 0-1 run
+    CHECK(edge == 0);
+    int ni = roadNetSplitEdge(n, edge, Vec2(-15, 0));
+    CHECK(ni == 4);                                   // appended
+    CHECK(n.nodes.size() == 5);
+    CHECK(n.edges.size() == 4);                       // one edge became two
+    CHECK(!buildRoadNetMesh(n).vertices.empty());
+    CHECK(roadNetSplitEdge(n, 99, Vec2(0, 0)) == -1); // bad edge
+    CHECK(roadNetNearestEdge(n, Vec2(0, 500), 8.0) == -1);  // nothing near
+}
+
+TEST_CASE(road_net_extend_grows_from_an_end) {
+    RoadNet n = sampleNet();
+    int ni = roadNetExtend(n, 4 /*no such node yet*/, Vec2(0, 0));
+    CHECK(ni == -1);                                  // from-node out of range
+    ni = roadNetExtend(n, 2, Vec2(40, 60));           // grow off the junction
+    CHECK(ni == 4);
+    CHECK(n.edges.size() == 4);
+    CHECK(roadNetAddEdge(n, 0, 1) == false);          // already joined
+    CHECK(roadNetAddEdge(n, 0, 3) == true);           // new connection
+}
+
+TEST_CASE(road_net_delete_removes_and_reindexes) {
+    RoadNet n = sampleNet();                          // nodes 0..3, edges {0,1}{1,2}{1,3}
+    roadNetSetTangent(n, 3, Vec2(2, 7));              // give the last node a tangent
+    CHECK(roadNetDeleteNode(n, 1));                   // the junction
+    CHECK(n.nodes.size() == 3);
+    CHECK(n.edges.empty());                           // all three edges touched node 1
+    // Surviving nodes kept their positions (old 0,2,3 -> new 0,1,2).
+    CHECK_APPROX(n.nodes[0].x, -30.0, 1e-9);
+    CHECK_APPROX(n.nodes[2].y, 30.0, 1e-9);
+    CHECK(!roadNetDeleteNode(n, 9));                  // out of range
+
+    RoadNet m = sampleNet();
+    CHECK(roadNetDeleteNode(m, 3));                   // a leaf: only edge {1,3} drops
+    CHECK(m.nodes.size() == 3);
+    CHECK(m.edges.size() == 2);
+    CHECK(m.edges[1][0] == 1 && m.edges[1][1] == 2);  // {1,2} survives, indices intact
+}
+
 TEST_CASE(road_net_reads_authoring_json) {
     // The hand-authored `road` block a level/editor writes: edges as [a,b] pairs.
     json j = json::parse(R"({

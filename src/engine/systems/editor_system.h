@@ -29,6 +29,15 @@ bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Render
 // returns an empty list for a straight (non-curved) road.
 std::vector<Vec3> roadTangentHandles(World& world, Entity e);
 bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
+// Road topology editing for the viewport (ADR-0049). Each regenerates the mesh +
+// syncs the saved recipe. nearestRoadEdge picks which edge a world point is over
+// (-1 = none within maxDist), so the shell can route a click on the road to a split;
+// splitRoadEdge / extendRoad return the new node's index (to select it); deleteRoadNode
+// removes a node + its edges.
+int  nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist);
+int  splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer);
+int  extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer);
+bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
 
 // The edit-mode workhorse (docs/edit-mode-plan.md): click-to-select with
 // bounding-sphere picking, an ImGuizmo move/rotate/scale gizmo, an inspector

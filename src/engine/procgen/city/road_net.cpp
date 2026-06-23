@@ -149,6 +149,67 @@ Vec2 roadNetTangentAt(const RoadNet& net, int i) {
     return Vec2(0, 0);
 }
 
+int roadNetAddNode(RoadNet& net, const Vec2& pos) {
+    net.nodes.push_back(pos);                 // tangents stays shorter -> the new node is auto
+    return static_cast<int>(net.nodes.size()) - 1;
+}
+
+bool roadNetAddEdge(RoadNet& net, int a, int b) {
+    const int n = static_cast<int>(net.nodes.size());
+    if (a < 0 || b < 0 || a >= n || b >= n || a == b) return false;
+    for (const std::array<int, 2>& e : net.edges)
+        if ((e[0] == a && e[1] == b) || (e[0] == b && e[1] == a)) return false;   // already joined
+    net.edges.push_back({a, b});
+    return true;
+}
+
+int roadNetExtend(RoadNet& net, int from, const Vec2& pos) {
+    if (from < 0 || from >= static_cast<int>(net.nodes.size())) return -1;
+    int ni = roadNetAddNode(net, pos);
+    roadNetAddEdge(net, from, ni);
+    return ni;
+}
+
+int roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos) {
+    if (edgeIndex < 0 || edgeIndex >= static_cast<int>(net.edges.size())) return -1;
+    int a = net.edges[edgeIndex][0], b = net.edges[edgeIndex][1];
+    int ni = roadNetAddNode(net, pos);
+    net.edges[edgeIndex] = {a, ni};           // a -> new
+    net.edges.push_back({ni, b});             // new -> b
+    return ni;
+}
+
+bool roadNetDeleteNode(RoadNet& net, int i) {
+    const int n = static_cast<int>(net.nodes.size());
+    if (i < 0 || i >= n) return false;
+    std::vector<std::array<int, 2>> kept;
+    for (const std::array<int, 2>& e : net.edges) {
+        if (e[0] == i || e[1] == i) continue;                 // drop incident edges
+        kept.push_back({ e[0] > i ? e[0] - 1 : e[0], e[1] > i ? e[1] - 1 : e[1] });
+    }
+    net.edges = std::move(kept);
+    net.nodes.erase(net.nodes.begin() + i);
+    if (i < static_cast<int>(net.tangents.size()))
+        net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
+    return true;
+}
+
+int roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist) {
+    int best = -1;
+    double bestD2 = maxDist * maxDist;
+    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
+        int a = net.edges[ei][0], b = net.edges[ei][1];
+        if (a < 0 || b < 0 || a >= static_cast<int>(net.nodes.size())
+            || b >= static_cast<int>(net.nodes.size())) continue;
+        Vec2 A = net.nodes[a], B = net.nodes[b], ab = B - A;
+        double len2 = ab.lengthSquared();
+        double t = len2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(p - A, ab) / len2)) : 0.0;
+        double d2 = (p - (A + ab * t)).lengthSquared();
+        if (d2 < bestD2) { bestD2 = d2; best = ei; }
+    }
+    return best;
+}
+
 RoadNet roadNetFromJson(const json& j) {
     RoadNet net;
     if (j.contains("nodes") && j["nodes"].is_array())

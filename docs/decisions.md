@@ -3358,10 +3358,20 @@ for free. `assets/levels/road_spline.json` is five **collinear** control nodes b
 smooth S purely by their tangents. Tests: a tangent bows the spline off the chord, auto
 smooths a chain, and `curved`/`tangents` round-trip.
 
-**Deferred / risks.** (1) Per-edge width + add/delete nodes/edges from the viewport (only
-move + widen + retangent so far). (1b) A single tangent per node (the through-direction)
-is oriented per edge by sign, so a deliberate cusp/reversal needs separate in/out handles
-— a small extension when wanted.
+**Topology editing (landed).** The road is now authorable, not just adjustable:
+`roadNetSplitEdge` (click a road to insert a point — the edge becomes two), `roadNetExtend`
+(grow a node off an end), `roadNetAddNode`/`roadNetAddEdge`, and `roadNetDeleteNode` (drop a
+node + its incident edges, reindexing the rest and keeping `tangents` parallel).
+`roadNetNearestEdge` picks which segment a world point is over so the shell can route a
+click to a split. The editor wraps these as `splitRoadEdge`/`extendRoad`/`deleteRoadNode`/
+`nearestRoadEdge`, each regenerating + syncing the recipe. Tests cover split (a point
+inserts, one edge → two), extend (grows + rejects a bad end), and delete (a junction drops
+all three edges; a leaf drops one and the survivors keep their indices).
+
+**Deferred / risks.** (1) Per-edge width (one global width for now; the edges already carry
+a `width`, so it's a small step). (1b) A single tangent per node (the through-direction) is
+oriented per edge by sign, so a deliberate cusp/reversal needs separate in/out handles — a
+small extension when wanted.
 (3) Live terrain *conform* on drag (currently drapes only; re-conforming is deferred to
 drag-release). (4) The road `Transform` is assumed identity (nodes are world-space); a
 moved Transform would offset the baked mesh but not the node handles — fine for v1, but a

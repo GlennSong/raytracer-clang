@@ -995,4 +995,33 @@ bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Ren
     return true;
 }
 
+int nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net) return -1;
+    return roadNetNearestEdge(*net, Vec2(worldPos.x, worldPos.z), maxDist);
+}
+
+int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net) return -1;
+    int ni = roadNetSplitEdge(*net, edge, Vec2(worldPos.x, worldPos.z));
+    if (ni >= 0) regenerateRoad(world, e, renderer);
+    return ni;
+}
+
+int extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net) return -1;
+    int ni = roadNetExtend(*net, fromNode, Vec2(worldPos.x, worldPos.z));
+    if (ni >= 0) regenerateRoad(world, e, renderer);
+    return ni;
+}
+
+bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net || !roadNetDeleteNode(*net, node)) return false;
+    regenerateRoad(world, e, renderer);
+    return true;
+}
+
 }  // namespace engine
