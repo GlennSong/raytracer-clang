@@ -571,4 +571,94 @@ RenderMesh unionRoadbed(const RoadGraph& graph, const RoadbedParams& params) {
     return unionRoadbed(graphToSpines(graph), params);
 }
 
+std::vector<std::vector<Vec2>> traceChains(const RoadGraph& g) {
+    const int n = static_cast<int>(g.nodes.size());
+    std::vector<std::vector<int>> inc(n);
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[g.edges[e].a].push_back(e); inc[g.edges[e].b].push_back(e);
+    }
+    auto deg = [&](int v) { return static_cast<int>(inc[v].size()); };
+    auto other = [&](int e, int v) { return g.edges[e].a == v ? g.edges[e].b : g.edges[e].a; };
+    std::vector<char> used(g.edges.size(), 0);
+    std::vector<std::vector<Vec2>> chains;
+
+    auto walk = [&](int v, int e) {
+        std::vector<Vec2> chain{ g.nodes[v].pos };
+        int cur = v, ce = e;
+        for (;;) {
+            used[ce] = 1; int nx = other(ce, cur); chain.push_back(g.nodes[nx].pos);
+            if (deg(nx) != 2) break;                       // hit a junction / dead end
+            int ne = -1; for (int e2 : inc[nx]) if (e2 != ce && !used[e2]) { ne = e2; break; }
+            if (ne < 0) break;
+            cur = nx; ce = ne;
+        }
+        if (chain.size() >= 2) chains.push_back(std::move(chain));
+    };
+    for (int v = 0; v < n; ++v)                            // chains anchored at junctions
+        if (deg(v) != 2)
+            for (int e : inc[v]) if (!used[e]) walk(v, e);
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e)   // leftover pure loops
+        if (!used[e]) walk(g.edges[e].a, e);
+    return chains;
+}
+
+namespace {
+// Drop `trim` of arc length from each end of a polyline (so a stripe stops short of a
+// junction). Returns empty if the line is too short to survive.
+std::vector<Vec2> trimEnds(const std::vector<Vec2>& pts, double trim) {
+    int n = static_cast<int>(pts.size());
+    if (n < 2) return {};
+    std::vector<double> cum(n, 0);
+    for (int i = 1; i < n; ++i) cum[i] = cum[i-1] + (pts[i] - pts[i-1]).length();
+    double total = cum[n-1];
+    if (total <= 2 * trim + 0.5) return {};
+    double a = trim, b = total - trim;
+    auto at = [&](double s) {
+        int i = 1; while (i < n && cum[i] < s) ++i;
+        double t = (s - cum[i-1]) / std::max(1e-9, cum[i] - cum[i-1]);
+        return pts[i-1] + (pts[i] - pts[i-1]) * t;
+    };
+    std::vector<Vec2> out{ at(a) };
+    for (int i = 1; i < n; ++i) if (cum[i] > a && cum[i] < b) out.push_back(pts[i]);
+    out.push_back(at(b));
+    return out;
+}
+}  // namespace
+
+RenderMesh laneMarkings(const RoadGraph& g, const LaneMarkParams& p) {
+    RenderMesh mesh;
+    double hw = std::max(0.02, p.markWidth * 0.5);
+    auto append = [&](RenderMesh r) {
+        for (Vertex& v : r.vertices)               // drape onto the road surface
+            v.position.y = (p.heightAt ? p.heightAt(v.position.x, v.position.z) : 0.0) + p.lift;
+        std::size_t base = mesh.vertices.size();
+        for (const Vertex& v : r.vertices) mesh.vertices.push_back(v);
+        for (unsigned idx : r.indices) mesh.indices.push_back(static_cast<unsigned>(base) + idx);
+    };
+    for (const std::vector<Vec2>& chain : traceChains(g)) {
+        std::vector<Vec2> line = trimEnds(chain, p.trim);
+        if (line.size() < 2) continue;
+        if (p.dashLength <= 0.0) {                  // solid centerline
+            append(strokeRibbon(line, { hw }, 0.0, p.color, false));
+            continue;
+        }
+        // Dashed: walk the line, emitting a stroke for each dash-length on/off span.
+        double phase = 0.0; bool on = true;
+        std::vector<Vec2> dash{ line[0] };
+        for (std::size_t i = 1; i < line.size(); ) {
+            Vec2 a = dash.back(), b = line[i];
+            double seg = (b - a).length();
+            double want = (on ? p.dashLength : p.dashGap) - phase;
+            if (seg <= want) { phase += seg; if (on) dash.push_back(b); ++i; }
+            else {
+                Vec2 cut = a + (b - a) * (want / std::max(1e-9, seg));
+                if (on) { dash.push_back(cut); append(strokeRibbon(dash, { hw }, 0.0, p.color, false)); }
+                dash = { cut }; on = !on; phase = 0.0;
+            }
+        }
+        if (on && dash.size() >= 2) append(strokeRibbon(dash, { hw }, 0.0, p.color, false));
+    }
+    return mesh;
+}
+
 }  // namespace engine

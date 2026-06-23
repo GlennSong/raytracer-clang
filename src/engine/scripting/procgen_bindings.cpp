@@ -1493,6 +1493,65 @@ int l_city_roadbed(lua_State* L) {
     return 1;
 }
 
+// Build a RoadGraph from a `layout` field (a city.layout result), preserving node
+// adjacency so chains/markings can be traced.
+RoadGraph readLayoutGraph(lua_State* L, int tbl) {
+    RoadGraph g;
+    lua_getfield(L, tbl, "layout");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return g; }
+    int li = lua_gettop(L);
+    lua_getfield(L, li, "nodes");
+    if (lua_istable(L, -1)) {
+        lua_Integer nn = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= nn; ++i) {
+            lua_geti(L, -1, i);
+            RoadNode node; node.pos = Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0));
+            g.nodes.push_back(node); lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, li, "edges");
+    if (lua_istable(L, -1)) {
+        lua_Integer ne = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= ne; ++i) {
+            lua_geti(L, -1, i);
+            int a = static_cast<int>(optField(L, -1, "a", 0)) - 1;
+            int b = static_cast<int>(optField(L, -1, "b", 0)) - 1;
+            double w = optField(L, -1, "width", 8.0);
+            lua_pop(L, 1);
+            if (a >= 0 && b >= 0 && a < static_cast<int>(g.nodes.size()) &&
+                b < static_cast<int>(g.nodes.size()) && a != b)
+                g.edges.push_back(RoadEdge{a, b, static_cast<Real>(w)});
+        }
+    }
+    lua_pop(L, 1);
+    lua_pop(L, 1);                                          // layout
+    return g;
+}
+
+// city.lane_markings{ layout=city.layout{...}, mark_width=, trim=, lift=, dash=, gap=,
+//   color=, height= } -> a centerline stripe mesh, broken at junctions and draped on
+//   the road surface (ADR-0048). Add it as its own solid over the roadbed.
+int l_city_lane_markings(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    RoadGraph g = readLayoutGraph(L, 1);
+    LaneMarkParams mp;
+    mp.markWidth = optField(L, 1, "mark_width", mp.markWidth);
+    mp.trim = optField(L, 1, "trim", mp.trim);
+    mp.lift = optField(L, 1, "lift", mp.lift);
+    mp.dashLength = optField(L, 1, "dash", mp.dashLength);
+    mp.dashGap = optField(L, 1, "gap", mp.dashGap);
+    mp.color = optVec3Field(L, 1, "color", mp.color);
+    lua_getfield(L, 1, "height");
+    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
+        HeightField h = *hf;
+        mp.heightAt = [h](double x, double z) { return h(x, z); };
+    }
+    lua_pop(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(laneMarkings(g, mp)));
+    return 1;
+}
+
 // city.union{ spines={ {points={{x,z}...}, width=, closed=}, ... }, cell=, y=,
 //   color= } -> ONE non-overlapping mesh: the union of the stroked spines, merged at
 //   every crossing (ADR-0048). `cell` is the grid resolution (smaller = crisper).
@@ -2135,6 +2194,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"stroke", l_city_stroke},
         {"union", l_city_union},
         {"roadbed", l_city_roadbed},
+        {"lane_markings", l_city_lane_markings},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

@@ -109,6 +109,23 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
 RenderMesh unionRoadbed(const RoadGraph& graph, const RoadbedParams& params);
 std::vector<UnionSpine> graphToSpines(const RoadGraph& graph);
 
+// Trace a road graph into its road CHAINS: maximal polylines of degree-2 nodes between
+// junctions (degree != 2), plus any pure loops. The unit a centerline marking follows.
+std::vector<std::vector<Vec2>> traceChains(const RoadGraph& graph);
+
+// Lane markings (ADR-0048): a thin centerline stripe down each road chain, pulled back
+// from the junctions (markings break at intersections) and draped on the terrain a
+// hair above the asphalt. The finishing detail that makes a ribbon read as a road.
+struct LaneMarkParams {
+    double markWidth = 0.25;
+    double trim = 4.0;                       // pull the stripe back from each junction (m)
+    double lift = 0.10;                      // height above the road surface (m)
+    double dashLength = 0.0, dashGap = 0.0;  // 0 => solid centerline
+    Vec3   color{0.86, 0.72, 0.16};          // yellow
+    std::function<double(double, double)> heightAt;
+};
+RenderMesh laneMarkings(const RoadGraph& graph, const LaneMarkParams& params);
+
 }  // namespace engine
 
 #endif

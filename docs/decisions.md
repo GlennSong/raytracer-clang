@@ -3262,9 +3262,25 @@ output feed straight in — so the engine converts its generated splines to a me
 draped roadbed in one call (`roadbed_network.lua` roadbeds a terrain-aware tensor
 network on its own terrain). Test: a straight road grows a sidewalk band (covered just
 outside the carriageway, nothing past it) and its vertices follow the terrain ramp.
-Still owed for *crisp* roads: lane markings (the union has no centerline-parameter, so
-markings want either the curve back-reference from the deferred RoadCurve model, or a
-thin marking stroke composited on top).
+
+**Lane markings (landed).** The union has no centerline parameter, so markings are a
+*thin marking stroke composited on top*: `traceChains` walks the graph into its maximal
+degree-2 polylines between junctions (the unit a stripe follows), each chain is trimmed
+back from its junctions (`trimEnds` — markings break at intersections), stroked at the
+paint width via the same `strokeRibbon` primitive, optionally chopped into a dash/gap
+pattern, and every vertex draped a hair over the asphalt on the road `heightAt`. Exposed
+as `city.lane_markings{ layout, height, mark_width, trim, dash, gap, lift }`. Wired into
+two shipping cities: the **radial** city (Lua `city.lua` `roadbed` path — a draped
+roadbed + sidewalks + a yellow centreline down every spoke and ring, merged cleanly
+through the central plaza) and the **city-arena** (C++ `generateCity`, ADR-0027/0038 §6).
+The arena's old per-edge `emitFlatRoad`/`emitLaneLine` — which stacked and z-fought where
+streets crossed — is replaced by `unionRoadbed(graph)` (carriageway only; the block
+aprons stay the sidewalks) plus `laneMarkings(graph)` for the yellow centreline, both
+draped on a smooth *street-grade* field (project a query point onto its nearest edge,
+lerp the Laplacian-smoothed node grades) so the merged surface sits level with the aprons
+at the curb. The crosswalks/stop bars now ride the slab top, and the terrain is still cut
+to grade under each road. So the same SDF/stroke pipeline now draws every road in both
+city styles.
 
 **Deferred / risks.** (1) The graph back-reference (`curve, t` per node) isn't built
 yet — the prototype smooths the *output* polyline, it doesn't yet make the graph a view

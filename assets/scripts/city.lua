@@ -295,12 +295,25 @@ function M.generate(o)
   m:add(ground)
   m:collide(ground, { friction = 0.95 })
 
-  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground,
-  -- with raised sidewalks skirting both verges (curb lip + concrete slab).
-  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
-    color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
-    curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true),
-    plaza = opt(o, "plaza", 0) }))
+  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground.
+  -- `roadbed = true` uses the SDF union roadbed (merged carriageway + sidewalk + curb,
+  -- ADR-0048) with a draped centerline marking; otherwise the per-edge road_mesh.
+  if opt(o, "roadbed", false) then
+    local rl = 0.22
+    local grit  = texture.fbm{ seed = 7, scale = 40, octaves = 4 }:scale_bias(0.25, 0.82)
+    local grain = texture.bake_color(grit, { 0.70, 0.70, 0.72 }, { 1.0, 1.0, 1.0 }, 256)
+    local surf  = material.new{ albedo = grain, roughness = 0.93, tile = 7 }
+    m:add_solid(city.roadbed{ layout = lay, height = land, cell = opt(o, "road_cell", 0.7),
+      sidewalk = opt(o, "sidewalk", 2.5), curb = opt(o, "curb", 0.16), lift = rl }, surf)
+    m:add_solid(city.lane_markings{ layout = lay, height = land, lift = rl + 0.04,
+      mark_width = opt(o, "mark_width", 0.3), trim = opt(o, "mark_trim", 5),
+      dash = opt(o, "dash", 0), gap = opt(o, "gap", 0) })
+  else
+    m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
+      color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
+      curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true),
+      plaza = opt(o, "plaza", 0) }))
+  end
 
   M.place_blocks(m, plan, land, o)
   M.lamps(m, lay, land, o)
