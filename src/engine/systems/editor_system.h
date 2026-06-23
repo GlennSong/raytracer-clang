@@ -13,6 +13,17 @@
 
 namespace engine {
 
+class Renderer;
+
+// Road sub-object editing (ADR-0049), for the viewport's node handles. The engine
+// owns the data + regen; the shell owns only the handle drawing and mouse picking.
+//   roadNodeHandles  -> a world position per control node (seated on the road), so
+//                       the viewport can draw a draggable handle at each.
+//   moveRoadNode     -> drop a node at a new world XZ: updates the RoadNet, rebuilds
+//                       the carriageway mesh, and keeps the saved recipe in sync.
+std::vector<Vec3> roadNodeHandles(World& world, Entity e);
+bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
+
 // The edit-mode workhorse (docs/edit-mode-plan.md): click-to-select with
 // bounding-sphere picking, an ImGuizmo move/rotate/scale gizmo, an inspector
 // for the selected entity (transform, material, shape, physics spec), an Add

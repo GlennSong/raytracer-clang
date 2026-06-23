@@ -1,6 +1,7 @@
 #include "editor_system.h"
 
 #include "../components.h"
+#include "../procgen/city/road_net.h"   // editable road regen (ADR-0049)
 #include "../imgui_properties.h"
 #include "../mesh_builder.h"
 #include "../level_writer.h"
@@ -165,6 +166,19 @@ Vec3 defaultShapeSize(const std::string& shape) {
     return Vec3(1, 1, 1);   // box, wedge
 }
 
+// Rebuild an editable road's carriageway from its RoadNet and keep the saved
+// recipe in sync, after a property edit or a node drag (ADR-0049).
+void regenerateRoad(World& world, Entity e, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net) return;
+    if (Renderable* r = world.get<Renderable>(e)) {
+        RenderMesh mesh = buildRoadNetMesh(*net);
+        if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
+    }
+    if (SourceSpec* spec = world.get<SourceSpec>(e))
+        spec->recipe = roadNetToJson(*net).dump();   // the saved form tracks the live net
+}
+
 }  // namespace
 
 EditorSystem::EditorSystem(CameraSystem& cameras, std::string levelFile,
@@ -197,6 +211,14 @@ void EditorSystem::onStart(FrameContext& ctx) {
             if (!spec->recipe.empty()) return;   // recipe entities (trees) don't rebuild from Size
             RenderMesh mesh = MeshBuilder::shape(spec->shape, spec->size);
             if (!mesh.vertices.empty()) r->mesh = renderer->uploadMesh(mesh);
+        };
+    }
+    // Editable road (ADR-0049): any inspector edit (Width, sidewalk, ...) — or an
+    // undo/paste (label == null) — regenerates the carriageway and re-syncs the
+    // saved recipe, so widening a road is live and round-trips.
+    if (ComponentRegistry::Entry* road = registry.find("Road")) {
+        road->onEdited = [renderer](World& world, Entity e, const char*) {
+            regenerateRoad(world, e, *renderer);
         };
     }
 }
@@ -930,5 +952,25 @@ void EditorSystem::drawGroupMarkers(FrameContext&) const {}
 void EditorSystem::drawCameraFrustums(FrameContext&) const {}
 
 #endif
+
+// --- Road sub-object editing (ADR-0049) ------------------------------------
+std::vector<Vec3> roadNodeHandles(World& world, Entity e) {
+    std::vector<Vec3> handles;
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net) return handles;
+    handles.reserve(net->nodes.size());
+    for (const Vec2& n : net->nodes) {
+        double y = (net->heightAt ? net->heightAt(n.x, n.y) : 0.0) + net->lift + 0.05;
+        handles.push_back(Vec3(n.x, y, n.y));
+    }
+    return handles;
+}
+
+bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net || !roadNetMoveNode(*net, node, Vec2(worldPos.x, worldPos.z))) return false;
+    regenerateRoad(world, e, renderer);
+    return true;
+}
 
 }  // namespace engine

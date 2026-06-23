@@ -3,6 +3,7 @@
 #include "asset_manager.h"
 #include "procgen/terrain.h"
 #include "procgen/city/city.h"
+#include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -249,6 +250,32 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
     spec.recipe = recipe;
     world.add<SourceSpec>(doc, spec);
     return doc;
+}
+
+// An editor-authored road (shape:"road", ADR-0049): a RoadNet (control nodes +
+// look) baked to a carriageway mesh and carried as a first-class DOCUMENT entity,
+// so the inspector can widen it and the viewport can drag its nodes — the editor
+// regenerates the mesh through onEdited. Drapes on the level terrain (`ground`).
+static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
+                           int index, const HeightField* ground) {
+    RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"] : json::object());
+    if (ground) net.heightAt = *ground;
+
+    Entity e = world.create();
+    createEntityCommon(e, ent, world);
+
+    SourceSpec spec = buildSourceSpec(ent, "road");
+    spec.recipe = roadNetToJson(net).dump();        // heightAt is re-injected on load
+    world.add<SourceSpec>(e, spec);
+    world.add<RoadNet>(e, net);                      // the editable source of truth
+
+    Renderable r;
+    r.material.albedo = Vec3(1, 1, 1);               // hue carried in vertex colour
+    r.material.roughness = 0.93f;
+    RenderMesh mesh = buildRoadNetMesh(net);
+    if (!mesh.vertices.empty())
+        r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
+    world.add<Renderable>(e, r);
 }
 
 // A hero parametric tree (shape: "tree"): a real, collidable object you can
@@ -842,10 +869,16 @@ static void loadEntities(const json& entities, const json& root, World& world,
     int treeIndex = 0;
     int cityIndex = 0;
     int scriptIndex = 0;
+    int roadIndex = 0;
     for (auto& ent : entities) {
         // Hero parametric tree: a collidable, textured object (not scatter).
         if (ent.value("shape", std::string()) == "tree") {
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
+            continue;
+        }
+        // Editor-authored road (ADR-0049): an editable RoadNet + its baked mesh.
+        if (ent.value("shape", std::string()) == "road") {
+            loadRoadEntity(ent, world, assets, roadIndex++, ground);
             continue;
         }
         // Lua recipe (ADR-0042): run the script and spawn its composable model —

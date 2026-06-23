@@ -2,6 +2,7 @@
 
 #include "components.h"
 #include "camera/scene_camera.h"
+#include "procgen/city/road_net.h"
 
 namespace engine {
 
@@ -88,6 +89,21 @@ void describeProperties(Velocity& vel, PropertyVisitor& v) {
     // (observer mode shows it live); document entities never carry it.
     v.field(FieldMeta("Linear").id("linear").increment(0.1), vel.linear);
     v.field(FieldMeta("Angular").id("angular").increment(0.1), vel.angular);
+}
+
+void describeProperties(RoadNet& r, PropertyVisitor& v) {
+    // The editable look of a road. "Width" is the widen control; the node
+    // positions are dragged in the viewport, not typed here. An edit to any of
+    // these fires the editor's regen hook (buildRoadNetMesh -> re-upload).
+    v.field(FieldMeta("Width").id("width").range(2.0, 60.0).increment(0.5).units("m"), r.width);
+    v.field(FieldMeta("Sidewalk").id("sidewalk").range(0.0, 12.0).increment(0.25).units("m"), r.sidewalk);
+    v.field(FieldMeta("Curb").id("curb").range(0.0, 0.6).increment(0.02).units("m"), r.curb);
+    v.field(FieldMeta("Corner Radius").id("corner_radius").range(0.0, 20.0).increment(0.5).units("m"),
+            r.cornerRadius);
+    v.field(FieldMeta("Lift").id("lift").range(0.0, 2.0).increment(0.05).units("m"), r.lift);
+    v.field(FieldMeta("Markings").id("markings"), r.markings);
+    v.field(FieldMeta("Crosswalks").id("crosswalks"), r.crosswalks);
+    v.field(FieldMeta("Color").id("color").asColor(), r.color);
 }
 
 }  // namespace engine

@@ -2,12 +2,17 @@
 
 #include "components.h"
 #include "camera/scene_camera.h"
+#include "procgen/city/road_net.h"
 
 namespace engine {
 
 void registerEngineComponents(ComponentRegistry& registry) {
     registry.add<Transform>("Transform");
     registry.add<SourceSpec>("Shape");
+    // An editor-authored road: its look is editable here (Width is the widen
+    // control); its nodes are dragged in the viewport. The editor wires onEdited
+    // to regenerate the carriageway mesh from these fields.
+    registry.add<RoadNet>("Road");
     // Renderable's editable surface is its material; mesh handles are runtime.
     registry.addWithAccessor<Renderable>(
         "Material", [](Renderable& r, PropertyVisitor& v) {

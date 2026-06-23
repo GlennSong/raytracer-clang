@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [320, 0.4, 320],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 } },
+    { "name": "road", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": -90, "z": -14 }, { "x": -45, "z": 12 }, { "x": 0, "z": 16 },
+          { "x": 45, "z": 6 }, { "x": 90, "z": -12 }, { "x": 6, "z": 70 }
+        ],
+        "edges": [ [0, 1], [1, 2], [2, 3], [3, 4], [2, 5] ],
+        "width": 12, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": true
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}

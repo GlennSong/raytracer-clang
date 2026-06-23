@@ -534,6 +534,30 @@ TEST_CASE(level_writer_round_trips_script_recipe_flat) {
     CHECK(!ent.contains("material"));
 }
 
+TEST_CASE(level_writer_round_trips_road_recipe) {
+    // An editor-authored road (shape:"road", ADR-0049) saves its `road` block — the
+    // nodes/edges/look the editor edits — so a widen or node-drag round-trips.
+    TmpFile cleanup;
+    World world;
+    Entity e = world.create();
+    world.add<Transform>(e);
+    SourceSpec spec;
+    spec.shape = "road";
+    spec.recipe = R"({"nodes":[{"x":0,"z":0},{"x":20,"z":4}],"edges":[[0,1]],"width":12})";
+    world.add<SourceSpec>(e, spec);
+
+    CHECK(LevelWriter::save(TMP_PATH, world));
+    std::ifstream f(TMP_PATH);
+    json root = json::parse(f);
+    const json& ent = root["entities"][0];
+    CHECK(ent["shape"] == "road");
+    CHECK(ent.contains("road"));                       // nested block, keyed by shape
+    CHECK(ent["road"]["width"].get<int>() == 12);
+    CHECK(ent["road"]["edges"][0][0].get<int>() == 0);
+    CHECK_APPROX(ent["road"]["nodes"][1]["z"].get<double>(), 4.0, 1e-9);
+    CHECK(!ent.contains("size"));
+}
+
 TEST_CASE(editor_bridge_lists_and_selects) {
     World world;
     Entity box = addBox(world, Vec3(0, 0, 0));

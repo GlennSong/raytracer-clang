@@ -7,6 +7,7 @@
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
 #include "engine/procgen/city/city.h"
+#include "engine/procgen/city/road_net.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
@@ -688,6 +689,16 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (ent.value("shape", std::string()) == "city") {
             if (&ent == cityEnt) bakeCityModel(cityModel, scene);     // pre-generated
             else bakeCityModel(generateCityModel(ent, root), scene);  // flat city
+            continue;
+        }
+        // Editor-authored road (shape:"road", ADR-0049): the same RoadNet the
+        // editor edits, baked to the carriageway and draped on the level terrain.
+        if (ent.value("shape", std::string()) == "road") {
+            RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"] : json::object());
+            if (levelGround) net.heightAt = levelGround;
+            int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.93));
+            addMeshAsTriangles(buildRoadNetMesh(net), Vec3(), Quat::identity(),
+                               Vec3(1, 1, 1), mi, scene);
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",
