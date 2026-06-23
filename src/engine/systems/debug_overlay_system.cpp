@@ -149,6 +149,13 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Combo("View", &ctx.renderer.debugView, viewNames, 9);
     const char* wireNames[] = {"Off", "Wireframe", "Wire overlay"};
     ImGui::Combo("Wireframe", &ctx.renderer.wireframe, wireNames, 3);
+    if (ctx.renderer.wireframe != 0) {
+        float wc[3] = {static_cast<float>(ctx.renderer.wireframeColor.x),
+                       static_cast<float>(ctx.renderer.wireframeColor.y),
+                       static_cast<float>(ctx.renderer.wireframeColor.z)};
+        if (ImGui::ColorEdit3("Wire color", wc))
+            ctx.renderer.wireframeColor = Vec3(wc[0], wc[1], wc[2]);
+    }
 
     if (ImGui::CollapsingHeader("Lighting")) {
         auto& lit = ctx.view.lighting;

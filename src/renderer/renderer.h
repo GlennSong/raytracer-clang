@@ -411,6 +411,9 @@ public:
 
     // Wireframe: 0=off, 1=wireframe only, 2=wireframe overlaid on the shaded image
     int wireframe = 0;
+    // Colour of the wireframe lines (both modes). Lines bypass lighting and draw
+    // this flat colour, so they read clearly against the shaded surface.
+    Vec3 wireframeColor{0.1f, 1.0f, 0.5f};
 
     // Lens effects of the active view's LensParams (docs/virtual-camera-plan.md):
     // a final image-space warp pass (distortion + chromatic aberration +

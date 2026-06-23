@@ -2185,6 +2185,13 @@ void MetalRenderer::endFrame() {
 
     impl->currentCommandBuffer = [impl->commandQueue commandBuffer];
 
+    // Wireframe line colour: the lit fragment returns this flat colour when .w > 0.5.
+    // Mode 1 draws all geometry as lines, so enable it for the whole frame; mode 2
+    // keeps it off for the fills and toggles it on only for the overlay pass below.
+    impl->cameraUniforms.wireColor = simd_make_float4(
+        static_cast<float>(wireframeColor.x), static_cast<float>(wireframeColor.y),
+        static_cast<float>(wireframeColor.z), wireframe == 1 ? 1.0f : 0.0f);
+
     // --- Shadow pass: one depth-array slice per cascade ---
     if (impl->shadowEnabled && impl->shadowPipeline) {
         // Batch identical-mesh casters into instanced shadow draws. The color
@@ -2740,12 +2747,14 @@ void MetalRenderer::endFrame() {
     // shared instance buffer, so it can't clobber the fills' instance data), and
     // a LessEqual/no-write depth state so lines sit on their own visible surface.
     if (wireframe == 2) {
+        impl->cameraUniforms.wireColor.w = 1.0f;     // overlay lines draw the flat colour
         [impl->currentEncoder setRenderPipelineState:impl->opaquePipeline];
         [impl->currentEncoder setDepthStencilState:impl->depthStateWireOverlay];
         [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeLines];
         for (auto& dc : impl->opaqueDrawCalls)
             issueSingleDraw(dc);
         [impl->currentEncoder setTriangleFillMode:MTLTriangleFillModeFill];
+        impl->cameraUniforms.wireColor.w = 0.0f;
     }
 
     impl->lastStats = stats;

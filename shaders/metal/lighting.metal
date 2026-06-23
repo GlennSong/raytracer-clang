@@ -534,6 +534,11 @@ fragment GBufferOut fragmentMain(
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
 ) {
+    // Wireframe pass: lines bypass shading and draw the flat override colour.
+    if (camera.wireColor.w > 0.5) {
+        GBufferOut wf; wf.color = float4(camera.wireColor.rgb, 1.0);
+        wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
+    }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
     // Per-vertex tint (default white) modulates the material albedo — this is
@@ -572,6 +577,10 @@ fragment GBufferOut fragmentMainInstanced(
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
 ) {
+    if (camera.wireColor.w > 0.5) {                 // wireframe lines: flat colour
+        GBufferOut wf; wf.color = float4(camera.wireColor.rgb, 1.0);
+        wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
+    }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
     SurfaceMaterial mat = {in.albedo * in.vertexColor, in.metallic, in.roughness,
@@ -631,6 +640,10 @@ fragment GBufferOut fragmentMainInstancedFoliage(
     sampler envSampler [[sampler(1)]],
     sampler texSampler [[sampler(2)]]
 ) {
+    if (camera.wireColor.w > 0.5) {                 // wireframe lines: flat colour
+        GBufferOut wf; wf.color = float4(camera.wireColor.rgb, 1.0);
+        wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
+    }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
     SurfaceMaterial mat = {in.albedo * in.vertexColor, in.metallic, in.roughness,

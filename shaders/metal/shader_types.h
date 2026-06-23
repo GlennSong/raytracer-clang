@@ -47,6 +47,9 @@ struct CameraUniforms {
     float         windFrequency;
     float         windHeight;     // height over which the sway weight ramps 0->1
     float         _windPad;
+    // Wireframe line colour override: rgb is the line colour, w>0.5 enables it (the
+    // lit fragment then returns this flat colour instead of shading). Set per pass.
+    simd_float4   wireColor;
 };
 
 struct ModelUniforms {
