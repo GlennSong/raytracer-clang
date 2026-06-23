@@ -3314,6 +3314,46 @@ not CR through sampled points.
 
 ---
 
+## ADR-0049 — The editable road: a RoadNet entity the editor can widen and drag
+
+**Context.** The roads above are *generated* (procedural city, Lua recipes). The next
+step is *authoring*: select a road in the editor, widen it, drag its curve nodes, and
+see it regenerate live. The two systems that make that hard already exist — a fast pure
+graph→mesh function (`buildRoadMesh`, no SDF grid after ADR-0048, so it rebuilds in
+milliseconds) and a live-regen-on-edit hook (`ComponentRegistry::onEdited`, used today
+to rebuild a primitive's mesh when its Size changes). So this is mostly *promotion +
+wiring*, not new modelling.
+
+**Decision.** A `RoadNet` — control **nodes + edges + look** (width, sidewalk, curb,
+corner radius, markings) — is the editable counterpart to `city.road_mesh`, promoted to
+a first-class entity. `buildRoadNetMesh` feeds its graph to `buildRoadMesh`; the edit
+ops the editor drives are `roadNetSetWidth` (the inspector widen) and `roadNetMoveNode`
+(the viewport node drag), with JSON I/O for a `shape:"road"` level entity. It loads in
+both the viewer (`level_loader`) and the offline tracer (`level_scene`), draped on the
+level terrain, carrying a `SourceSpec` recipe so it round-trips through save/reload.
+Registered as the **"Road"** inspector component; `editor_system` wires `onEdited` to
+regenerate the mesh and re-sync the saved recipe, so widening (or undo) is live. The
+viewport gets `roadNodeHandles` (a world point per node) + `moveRoadNode` (drop a node,
+regen) — the engine owns the data + regen; the shell owns only the handle draw + mouse
+picking. `assets/levels/road_edit.json` is a sample editable road (a curved T).
+
+**Why nodes-as-graph first, splines later.** This slice keeps roads as a polyline graph
+(the thing `buildRoadMesh` already eats), so the full edit→regen→re-upload loop is
+proven with zero new geometry risk. The genuine next piece — control points with **in/out
+tangents** (a `RoadCurve` sampled to the graph, the "graph as a view of curves" of
+ADR-0048) — layers on top: it only changes how the polyline is *produced*, not how it's
+meshed or wired. Width is per-net for now; per-edge width is a small extension (the edges
+already carry a `width`).
+
+**Deferred / risks.** (1) Tangent-editable splines (the RoadCurve) — the modelling step.
+(2) Per-edge width + add/delete nodes/edges from the viewport (only move + widen so far).
+(3) Live terrain *conform* on drag (currently drapes only; re-conforming is deferred to
+drag-release). (4) The road `Transform` is assumed identity (nodes are world-space); a
+moved Transform would offset the baked mesh but not the node handles — fine for v1, but a
+whole-road move should go through the nodes or compose the Transform into the handles.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
