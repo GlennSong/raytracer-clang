@@ -62,6 +62,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
@@ -109,6 +110,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
 	$(TEST_DIR)/test_city.cpp \
+	$(TEST_DIR)/test_road_net.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
 	$(TEST_DIR)/test_instance_tlas.cpp \
@@ -156,6 +158,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
