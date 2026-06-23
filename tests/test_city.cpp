@@ -45,6 +45,8 @@ bool triContainsXZ(const RenderMesh& m, std::size_t i, double px, double pz) {
     const auto& A = m.vertices[m.indices[i]].position;
     const auto& B = m.vertices[m.indices[i+1]].position;
     const auto& C = m.vertices[m.indices[i+2]].position;
+    double area2 = (B.x-A.x)*(C.z-A.z) - (C.x-A.x)*(B.z-A.z);
+    if (std::fabs(area2) < 1e-7) return false;     // a degenerate tri contains no area
     double d1 = (px-B.x)*(A.z-B.z) - (A.x-B.x)*(pz-B.z);
     double d2 = (px-C.x)*(B.z-C.z) - (B.x-C.x)*(pz-C.z);
     double d3 = (px-A.x)*(C.z-A.z) - (C.x-A.x)*(pz-A.z);
@@ -160,6 +162,46 @@ TEST_CASE(stroke_network_intersection_is_a_clean_junction) {
         worst = std::max(worst, std::sqrt(double(v.position.x*v.position.x +
                                                  v.position.z*v.position.z)));
     CHECK(worst <= 40.0 + 5.0 + 1e-3);
+}
+
+TEST_CASE(union_ribbons_merges_crossing_without_overlap) {
+    // ADR-0048: two perpendicular strips. The union is non-overlapping by
+    // construction (disjoint grid cells), so its SUMMED triangle area is the true
+    // union area — it covers the crossing, yet is strictly less than the two strokes'
+    // summed area, which double-counts the overlap.
+    UnionSpine h; h.halfWidth = 5; h.points = { {-50,0}, {50,0} };
+    UnionSpine v; v.halfWidth = 5; v.points = { {0,-50}, {0,50} };
+    Vec3 c(0.1, 0.1, 0.1);
+    RenderMesh u = unionRibbons({ h, v }, 0.5, 0.0, c);
+    CHECK(meshCoversXZ(u, 1.0, 1.0));        // the crossing is filled
+    CHECK(meshCoversXZ(u, 40.0, 0.3));       // one arm
+    CHECK(meshCoversXZ(u, 0.3, 40.0));       // the other arm
+    CHECK(!meshCoversXZ(u, 40.0, 40.0));     // the empty quadrant stays empty
+
+    // Method-consistent non-overlap proof: union-of-both < (union-of-each summed),
+    // by the crossing overlap that was MERGED rather than double-counted. The bodies
+    // overlap in a ~10x10 = ~100 square at the centre.
+    double uBoth = meshAreaXZ(u);
+    double uH = meshAreaXZ(unionRibbons({ h }, 0.5, 0.0, c));
+    double uV = meshAreaXZ(unionRibbons({ v }, 0.5, 0.0, c));
+    double overlap = (uH + uV) - uBoth;
+    CHECK(overlap > 80.0);                   // the crossing was merged (~100)
+    CHECK(overlap < 130.0);                  // and it's only the crossing, nothing more
+}
+
+TEST_CASE(union_ribbons_keeps_a_ring_hole) {
+    // A closed ring unions to an annulus: the centre stays uncovered.
+    std::vector<Vec2> circ;
+    const double R = 30.0;
+    for (int i = 0; i < 48; ++i) {
+        double t = 2.0 * 3.14159265 * i / 48;
+        circ.push_back(Vec2(R*std::cos(t), R*std::sin(t)));
+    }
+    UnionSpine ring; ring.halfWidth = 5; ring.closed = true; ring.points = circ;
+    RenderMesh u = unionRibbons({ ring }, 0.6, 0.0, Vec3(0.1,0.1,0.1));
+    CHECK(!u.vertices.empty());
+    CHECK(!meshCoversXZ(u, 0.0, 0.0));       // hole preserved
+    CHECK(meshCoversXZ(u, R, 0.3));          // ring covered
 }
 
 TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {

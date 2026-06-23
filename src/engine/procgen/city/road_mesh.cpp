@@ -364,4 +364,87 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>&
     return mesh;
 }
 
+namespace {
+// Squared distance from p to segment ab.
+double segDist2(const Vec2& p, const Vec2& a, const Vec2& b) {
+    Vec2 ab = b - a;
+    double len2 = ab.lengthSquared();
+    double t = len2 < 1e-12 ? 0.0 : std::max(0.0, std::min(1.0, dot(p - a, ab) / len2));
+    Vec2 c = a + ab * t;
+    return (p - c).lengthSquared();
+}
+}  // namespace
+
+RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
+                        double y, const Vec3& color) {
+    RenderMesh mesh;
+    if (spines.empty() || cell <= 0) return mesh;
+
+    // Grid covering every spine, padded by the widest half-width so the round caps fit.
+    double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30, maxHW = 0;
+    for (const UnionSpine& s : spines) {
+        maxHW = std::max(maxHW, s.halfWidth);
+        for (const Vec2& p : s.points) {
+            minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+            minZ = std::min(minZ, p.y); maxZ = std::max(maxZ, p.y);
+        }
+    }
+    if (minX > maxX) return mesh;
+    double pad = maxHW + cell;
+    minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
+    const int nx = static_cast<int>(std::ceil((maxX - minX) / cell)) + 1;
+    const int nz = static_cast<int>(std::ceil((maxZ - minZ) / cell)) + 1;
+    if (nx < 2 || nz < 2) return mesh;
+    auto X = [&](int i) { return minX + i * cell; };
+    auto Z = [&](int j) { return minZ + j * cell; };
+    auto idx = [&](int i, int j) { return j * nx + i; };
+
+    // Signed distance to the union of stroked spines at each grid node:
+    // min over spines of (distance-to-polyline - half-width). < 0 is inside.
+    std::vector<double> sdf(static_cast<std::size_t>(nx) * nz);
+    for (int j = 0; j < nz; ++j)
+        for (int i = 0; i < nx; ++i) {
+            Vec2 p(X(i), Z(j));
+            double best = 1e30;
+            for (const UnionSpine& s : spines) {
+                int n = static_cast<int>(s.points.size());
+                if (n < 2) continue;
+                int segs = s.closed ? n : n - 1;
+                double d2 = 1e30;
+                for (int k = 0; k < segs; ++k)
+                    d2 = std::min(d2, segDist2(p, s.points[k], s.points[(k + 1) % n]));
+                best = std::min(best, std::sqrt(d2) - s.halfWidth);
+            }
+            sdf[idx(i, j)] = best;
+        }
+
+    // Marching-squares FILLED cells: per cell, walk its 4 edges keeping inside
+    // corners and the interpolated zero-crossings, then fan the convex inside polygon.
+    auto P3 = [&](const Vec2& v) { return Vec3(v.x, y, v.y); };
+    auto emit = [&](const Vec2& a, const Vec2& b, const Vec2& c) {
+        double area2 = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        if (std::fabs(area2) < 1e-9) return;        // drop degenerate slivers
+        MeshBuilder::emitTri(mesh, P3(a), P3(b), P3(c), Vec3(0, 1, 0), color);
+    };
+    for (int j = 0; j < nz - 1; ++j)
+        for (int i = 0; i < nx - 1; ++i) {
+            double s[4] = { sdf[idx(i, j)], sdf[idx(i+1, j)],
+                            sdf[idx(i+1, j+1)], sdf[idx(i, j+1)] };
+            Vec2 c[4] = { Vec2(X(i), Z(j)), Vec2(X(i+1), Z(j)),
+                          Vec2(X(i+1), Z(j+1)), Vec2(X(i), Z(j+1)) };
+            std::vector<Vec2> poly;
+            for (int e = 0; e < 4; ++e) {
+                int e2 = (e + 1) % 4;
+                if (s[e] < 0) poly.push_back(c[e]);
+                if ((s[e] < 0) != (s[e2] < 0)) {
+                    double t = s[e] / (s[e] - s[e2]);           // zero crossing on the edge
+                    poly.push_back(c[e] + (c[e2] - c[e]) * t);
+                }
+            }
+            for (std::size_t k = 1; k + 1 < poly.size(); ++k)
+                emit(poly[0], poly[k], poly[k + 1]);
+        }
+    return mesh;
+}
+
 }  // namespace engine

@@ -1398,6 +1398,40 @@ int l_city_stroke(lua_State* L) {
     return 1;
 }
 
+// city.union{ spines={ {points={{x,z}...}, width=, closed=}, ... }, cell=, y=,
+//   color= } -> ONE non-overlapping mesh: the union of the stroked spines, merged at
+//   every crossing (ADR-0048). `cell` is the grid resolution (smaller = crisper).
+int l_city_union(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<UnionSpine> spines;
+    lua_getfield(L, 1, "spines");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer ns = luaL_len(L, -1);
+    for (lua_Integer si = 1; si <= ns; ++si) {
+        lua_geti(L, -1, si);                            // a spine table
+        UnionSpine sp;
+        sp.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
+        sp.closed = optBoolField(L, -1, "closed", false);
+        lua_getfield(L, -1, "points");
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_Integer np = luaL_len(L, -1);
+        for (lua_Integer pi = 1; pi <= np; ++pi) {
+            lua_geti(L, -1, pi);
+            sp.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);                                  // points
+        spines.push_back(std::move(sp));
+        lua_pop(L, 1);                                  // spine
+    }
+    lua_pop(L, 1);                                      // spines
+    double cell = optField(L, 1, "cell", 1.5);
+    double y = optField(L, 1, "y", 0.0);
+    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
+    pushMesh(L, std::make_shared<RenderMesh>(unionRibbons(spines, cell, y, color)));
+    return 1;
+}
+
 // --- material.* : a baked material bundle for a part (ADR-0043) ---------------
 // Applied to a part by world-planar projection — no authored UVs needed.
 constexpr const char* kMaterialMt = "engine.procgen.Material";
@@ -2025,6 +2059,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"lots", l_city_lots},
         {"road_mesh", l_city_road_mesh},
         {"stroke", l_city_stroke},
+        {"union", l_city_union},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

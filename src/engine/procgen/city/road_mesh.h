@@ -66,6 +66,21 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& centerline,
                         const std::vector<double>& halfW, double y,
                         const Vec3& color, bool closed = false);
 
+// Union a set of centerline spines into ONE non-overlapping filled mesh (ADR-0048).
+// Where ribbons cross or overlap, the result is a single merged surface, not stacked
+// ribbons. Method: the signed distance to a polyline IS the Minkowski sum (so round
+// joins/caps fall out), `min` over the spines is the union, and the region {sdf < 0}
+// is meshed by marching-squares *filled cells* on a `cell`-spaced grid — so the
+// triangles are non-overlapping by construction (cells are disjoint) and holes (a
+// ring's centre, a roundabout) appear for free. Crisp to ~`cell`; finer = sharper.
+struct UnionSpine {
+    std::vector<Vec2> points;
+    double halfWidth = 4.0;
+    bool   closed = false;
+};
+RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
+                        double y, const Vec3& color);
+
 }  // namespace engine
 
 #endif

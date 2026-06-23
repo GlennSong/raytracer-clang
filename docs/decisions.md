@@ -3223,10 +3223,27 @@ taper and a spiral. A test suite pins the invariants (`tests/test_city.cpp`): st
 line is an exact rectangle; variable width is the exact trapezoid; a closed circle is
 an annulus with an uncovered centre; nothing strays outside the half-width on a
 hairpin; every triangle faces up; the hairpin has a round cap; and a planarized
-X-crossing builds a clean junction (centre filled, nothing past the arms). What's
-still owed for a *network* is **non-overlapping** union across intersecting ribbons —
-the per-path stroke and the graph+junction path each avoid folds, but true disjoint
-geometry across crossings is the polygon-union / arrangement work (Clipper / CGAL).
+X-crossing builds a clean junction (centre filled, nothing past the arms).
+
+**Non-overlapping network union (this slice).** `unionRibbons(spines, cell, …)` merges
+a set of centerline spines into ONE non-overlapping surface — every crossing becomes a
+shared junction, not stacked ribbons. Rather than an exact polygon arrangement
+(Clipper/CGAL, dependency + degeneracy minefield), it's a **coverage union**, which
+turns out to fit the problem exactly: the signed distance to a polyline *is* the
+Minkowski sum (so round joins/caps are free), `min` over the spines is the union, and
+the region {sdf < 0} is meshed by **marching-squares filled cells** on a `cell`-spaced
+grid. Triangles are therefore **non-overlapping by construction** (grid cells are
+disjoint), holes (a ring's centre, a roundabout) appear for free, self-crossings (a
+figure-8) merge like any other crossing, and oblique/multi-way meets need no special
+case. Exposed as `city.union{ spines, cell }`; `stroke_union.lua` renders the six
+crossing cases merged. Tests (`tests/test_city.cpp`): two perpendicular strips union to
+*less* area than the two unioned separately, by exactly the ~100 m² crossing overlap
+(method-consistent, so it proves the merge); a ring keeps its hole. Cost: it's
+grid-dense (≈40k triangles for the six-case panel) and crisp only to ~`cell` (corners
+round at cell scale) — so the trade vs. an exact arrangement is *robustness + zero
+degeneracy cases* now, against triangle count and sub-cell sharpness. Decimation (or a
+later exact arrangement for hero assets) is the optimisation; the union itself is
+provably correct.
 
 **Deferred / risks.** (1) The graph back-reference (`curve, t` per node) isn't built
 yet — the prototype smooths the *output* polyline, it doesn't yet make the graph a view
