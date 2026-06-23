@@ -18,6 +18,14 @@ namespace engine {
 struct RoadNet {
     std::vector<Vec2> nodes;
     std::vector<std::array<int, 2>> edges;     // node-index pairs (0-based)
+    // Spline control (ADR-0049): when `curved`, each edge is sampled as a Hermite
+    // cubic through its endpoints' tangents instead of a straight chord, so the
+    // road follows a smooth curve the editor can shape by dragging tangent handles.
+    // `tangents` is one through-direction per node (parallel to `nodes`); a zero (or
+    // missing) tangent is auto — Catmull-Rom on a through-road, straight into a
+    // junction/dead-end. Editing a tangent overrides the auto for that knot.
+    std::vector<Vec2> tangents;
+    bool   curved = false;
     double width = 10.0;                        // carriageway width (m) — the widen control
     double sidewalk = 2.5;                      // raised sidewalk width per verge (m)
     double curb = 0.16;                         // curb height (m)
@@ -37,6 +45,12 @@ RenderMesh buildRoadNetMesh(const RoadNet& net);
 void roadNetSetWidth(RoadNet& net, double width);
 // Move control node `i` to `pos` (the viewport node drag). False if out of range.
 bool roadNetMoveNode(RoadNet& net, int i, const Vec2& pos);
+// Set node `i`'s tangent (the viewport tangent-handle drag). A zero tangent reverts
+// the knot to auto. Enables `curved` so the spline shows. False if out of range.
+bool roadNetSetTangent(RoadNet& net, int i, const Vec2& tangent);
+// Node `i`'s effective tangent (the stored override, or the auto Catmull-Rom/chord
+// the curve actually uses) — what the viewport seeds the tangent handle from.
+Vec2 roadNetTangentAt(const RoadNet& net, int i);
 
 // --- level I/O: the `road` block of a shape:"road" entity ----------------------
 RoadNet roadNetFromJson(const nlohmann::json& j);

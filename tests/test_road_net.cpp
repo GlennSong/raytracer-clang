@@ -94,6 +94,44 @@ TEST_CASE(road_net_json_round_trips) {
     CHECK_APPROX(r.color.y, 0.2, 1e-9);
 }
 
+TEST_CASE(road_net_curved_auto_smooths_a_chain) {
+    // `curved` with no explicit tangents still builds (auto Catmull-Rom on the
+    // degree-2 nodes, straight into the junction).
+    RoadNet n = sampleNet();
+    n.curved = true;
+    CHECK(!buildRoadNetMesh(n).vertices.empty());
+}
+
+TEST_CASE(road_net_tangent_bends_off_the_chord) {
+    // Three collinear nodes: straight stays tight in Z; a strong perpendicular
+    // tangent on the middle knot bows the spline well off the chord.
+    RoadNet n;
+    n.nodes = { Vec2(-100, 0), Vec2(0, 0), Vec2(100, 0) };
+    n.edges = { {0, 1}, {1, 2} };
+    n.width = 12.0;
+    double minX, maxX, minZ0, maxZ0;
+    bboxXZ(buildRoadNetMesh(n), minX, maxX, minZ0, maxZ0);   // straight (curved == false)
+
+    CHECK(roadNetSetTangent(n, 1, Vec2(0, 80)));            // drag the middle tangent off-axis
+    CHECK(n.curved);                                        // a set tangent shows the spline
+    double minZ1, maxZ1;
+    bboxXZ(buildRoadNetMesh(n), minX, maxX, minZ1, maxZ1);
+    // The straight road is just the carriageway band; the spline bows off the chord
+    // (an S about the middle knot), so its Z extent is far wider.
+    CHECK((maxZ1 - minZ1) > (maxZ0 - minZ0) + 15.0);
+    CHECK(!roadNetSetTangent(n, 9, Vec2(1, 1)));           // out of range rejected
+}
+
+TEST_CASE(road_net_curved_and_tangents_round_trip) {
+    RoadNet n = sampleNet();
+    roadNetSetTangent(n, 1, Vec2(5.0, 9.0));                // also flips curved on
+    RoadNet r = roadNetFromJson(roadNetToJson(n));
+    CHECK(r.curved);
+    CHECK(r.tangents.size() == n.tangents.size());
+    CHECK_APPROX(r.tangents[1].x, 5.0, 1e-9);
+    CHECK_APPROX(r.tangents[1].y, 9.0, 1e-9);
+}
+
 TEST_CASE(road_net_reads_authoring_json) {
     // The hand-authored `road` block a level/editor writes: edges as [a,b] pairs.
     json j = json::parse(R"({

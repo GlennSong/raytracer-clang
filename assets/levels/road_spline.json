@@ -7,13 +7,14 @@
     { "name": "road", "shape": "road", "position": [0, 0, 0],
       "road": {
         "nodes": [
-          { "x": -90, "z": -14 }, { "x": -45, "z": 12 }, { "x": 0, "z": 16 },
-          { "x": 45, "z": 6 }, { "x": 90, "z": -12 }, { "x": 6, "z": 70 }
+          { "x": -110, "z": 0 }, { "x": -55, "z": 0 }, { "x": 0, "z": 0 },
+          { "x": 55, "z": 0 }, { "x": 110, "z": 0 }
         ],
-        "edges": [ [0, 1], [1, 2], [2, 3], [3, 4], [2, 5] ],
+        "edges": [ [0, 1], [1, 2], [2, 3], [3, 4] ],
         "curved": true,
+        "tangents": [ [0, 0], [40, 38], [55, 0], [40, -38], [0, 0] ],
         "width": 12, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
-        "lift": 0.3, "markings": true, "crosswalks": true
+        "lift": 0.3, "markings": true, "crosswalks": false
       } }
   ],
   "lighting": {

@@ -973,4 +973,26 @@ bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Render
     return true;
 }
 
+std::vector<Vec3> roadTangentHandles(World& world, Entity e) {
+    std::vector<Vec3> handles;
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net || !net->curved) return handles;
+    handles.reserve(net->nodes.size());
+    for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
+        Vec2 h = net->nodes[i] + roadNetTangentAt(*net, i);   // node + tangent vector
+        double y = (net->heightAt ? net->heightAt(h.x, h.y) : 0.0) + net->lift + 0.05;
+        handles.push_back(Vec3(h.x, y, h.y));
+    }
+    return handles;
+}
+
+bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net || node < 0 || node >= static_cast<int>(net->nodes.size())) return false;
+    Vec2 tangent = Vec2(worldPos.x, worldPos.z) - net->nodes[node];   // handle - node
+    if (!roadNetSetTangent(*net, node, tangent)) return false;
+    regenerateRoad(world, e, renderer);
+    return true;
+}
+
 }  // namespace engine

@@ -23,6 +23,12 @@ class Renderer;
 //                       the carriageway mesh, and keeps the saved recipe in sync.
 std::vector<Vec3> roadNodeHandles(World& world, Entity e);
 bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
+// Spline tangent handles (ADR-0049): a world point per node offset along its current
+// tangent (drawn distinct from the node handles). Dragging one sets that knot's
+// tangent (handle - node), shaping the curve, and regenerates. roadTangentHandles
+// returns an empty list for a straight (non-curved) road.
+std::vector<Vec3> roadTangentHandles(World& world, Entity e);
+bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
 
 // The edit-mode workhorse (docs/edit-mode-plan.md): click-to-select with
 // bounding-sphere picking, an ImGuizmo move/rotate/scale gizmo, an inspector

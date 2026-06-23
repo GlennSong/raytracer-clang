@@ -3345,8 +3345,23 @@ ADR-0048) — layers on top: it only changes how the polyline is *produced*, not
 meshed or wired. Width is per-net for now; per-edge width is a small extension (the edges
 already carry a `width`).
 
-**Deferred / risks.** (1) Tangent-editable splines (the RoadCurve) — the modelling step.
-(2) Per-edge width + add/delete nodes/edges from the viewport (only move + widen so far).
+**Splines (landed).** `curved` makes each edge a **Hermite cubic** through its
+endpoints' tangents instead of a straight chord: `tangents` is one through-direction
+per node; a zero/missing tangent is auto — **Catmull-Rom** on a degree-2 through-road,
+a straight chord into a junction/dead-end (so junctions stay sharp and the pad fills,
+chains stay smooth). `roadNetSetTangent` (the tangent-handle drag) and `roadNetTangentAt`
+(seed the handle from the stored override or the auto) drive it; the editor gets
+`roadTangentHandles` + `moveRoadTangent` alongside the node handles. The sampler keeps the
+original node indices (junction degree preserved) and appends curve samples, then hands
+the fine graph to `buildRoadMesh` — so the continuous-chain stroking smooths the result
+for free. `assets/levels/road_spline.json` is five **collinear** control nodes bent into a
+smooth S purely by their tangents. Tests: a tangent bows the spline off the chord, auto
+smooths a chain, and `curved`/`tangents` round-trip.
+
+**Deferred / risks.** (1) Per-edge width + add/delete nodes/edges from the viewport (only
+move + widen + retangent so far). (1b) A single tangent per node (the through-direction)
+is oriented per edge by sign, so a deliberate cusp/reversal needs separate in/out handles
+— a small extension when wanted.
 (3) Live terrain *conform* on drag (currently drapes only; re-conforming is deferred to
 drag-release). (4) The road `Transform` is assumed identity (nodes are world-space); a
 moved Transform would offset the baked mesh but not the node handles — fine for v1, but a
