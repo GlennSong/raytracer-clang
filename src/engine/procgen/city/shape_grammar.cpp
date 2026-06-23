@@ -242,16 +242,40 @@ Scope insetScope(const Scope& s, Real d) {
 
 Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height) {
     OBB2 obb = orientedBoundingBox(footprint);
+    // Fit the box INSIDE the footprint: a non-rectangular lot (wedge/trapezoid or
+    // corner piece) has an OBB that bulges past the polygon, which would seat the
+    // building proud of its lot. Shrink about an interior anchor until all four
+    // corners sit inside, so rectangular lots keep full size and skew lots pull in.
+    Vec2 anchor = pointInPolygon(footprint, obb.center) ? obb.center
+                                                        : centroid(footprint);
+    auto cornersInside = [&](Real s) {
+        for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2) {
+                Vec2 c = anchor + obb.axis[0] * (obb.half[0] * s * sx)
+                                + obb.axis[1] * (obb.half[1] * s * sy);
+                if (!pointInPolygon(footprint, c)) return false;
+            }
+        return true;
+    };
+    Real fit = 1.0;
+    if (!cornersInside(1.0)) {
+        Real lo = 0.0, hi = 1.0;
+        for (int it = 0; it < 16; ++it) {
+            Real mid = (lo + hi) * 0.5;
+            (cornersInside(mid) ? lo : hi) = mid;
+        }
+        fit = lo;
+    }
     Scope s;
     // Long OBB axis -> forward (facades face the long sides); short -> right.
     int la = obb.longAxis(), sa = 1 - la;
     Vec2 fwd = obb.axis[la], rgt = obb.axis[sa];
-    Real fwdHalf = obb.half[la], rgtHalf = obb.half[sa];
+    Real fwdHalf = obb.half[la] * fit, rgtHalf = obb.half[sa] * fit;
     s.axis[0] = normalize(Vec3(rgt.x, 0, rgt.y));
     s.axis[1] = Vec3(0, 1, 0);
     s.axis[2] = normalize(Vec3(fwd.x, 0, fwd.y));
     s.size = Vec3(rgtHalf * 2, height, fwdHalf * 2);
-    Vec3 centerXZ(obb.center.x, baseY, obb.center.y);
+    Vec3 centerXZ(anchor.x, baseY, anchor.y);
     s.origin = centerXZ - s.axis[0] * rgtHalf - s.axis[2] * fwdHalf;
     return s;
 }
