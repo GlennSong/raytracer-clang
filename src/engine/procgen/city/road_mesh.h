@@ -81,6 +81,27 @@ struct UnionSpine {
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);
 
+// Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
+// it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},
+// sidewalk is {0<=sdf<sidewalkWidth}, with a curb step between, all from one distance
+// field, so junctions merge and sidewalks wrap the network with no special cases.
+// Each vertex is seated on `heightAt` (the terrain), so the dense union grid drapes
+// smoothly over 3D ground. Per-band vertex colours (road/sidewalk/curb) carry a small
+// grain so it reads as a surface; pass the result to add_solid(mesh, material) for a
+// procedural asphalt/concrete texture on top.
+struct RoadbedParams {
+    double cell = 0.6;
+    double sidewalkWidth = 2.0;
+    double curbHeight = 0.18;
+    double lift = 0.05;
+    double grain = 0.06;                 // per-cell colour jitter (texture-ish)
+    Vec3   roadColor{0.09, 0.09, 0.10};
+    Vec3   sidewalkColor{0.58, 0.58, 0.55};
+    Vec3   curbColor{0.50, 0.50, 0.48};
+    std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
+};
+RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedParams& params);
+
 }  // namespace engine
 
 #endif

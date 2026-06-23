@@ -204,6 +204,30 @@ TEST_CASE(union_ribbons_keeps_a_ring_hole) {
     CHECK(meshCoversXZ(u, R, 0.3));          // ring covered
 }
 
+TEST_CASE(union_roadbed_adds_a_sidewalk_band_and_drapes) {
+    // ADR-0048: a straight road. The roadbed covers the carriageway, a sidewalk band
+    // just outside it (0 <= sdf < sidewalkWidth), nothing past it; and with a height
+    // field every vertex is seated on the terrain.
+    UnionSpine s; s.halfWidth = 5; s.points = { {-40,0}, {40,0} };
+    RoadbedParams p; p.cell = 0.5; p.sidewalkWidth = 2.0; p.curbHeight = 0.2; p.lift = 0.05;
+    p.heightAt = [](double x, double) { return 0.01 * x; };     // a gentle ramp
+    RenderMesh m = unionRoadbed({ s }, p);
+    CHECK(meshCoversXZ(m, 0.0, 0.0));        // carriageway (sdf = -5)
+    CHECK(meshCoversXZ(m, 0.0, 6.0));        // sidewalk band (dist 6 -> sdf 1)
+    CHECK(!meshCoversXZ(m, 0.0, 8.0));       // beyond the sidewalk (sdf 3 > 2)
+
+    // Draped: every vertex sits on terrain(=0.01x over ~[-47,47]) + lift (+curb on the
+    // walk), so the y-range is the terrain range, not a flat plane.
+    double minY = 1e9, maxY = -1e9;
+    for (const Vertex& v : m.vertices) {
+        minY = std::min(minY, static_cast<double>(v.position.y));
+        maxY = std::max(maxY, static_cast<double>(v.position.y));
+    }
+    CHECK(minY > -0.6);
+    CHECK(maxY < 0.8);
+    CHECK(maxY - minY > 0.5);                // it follows the ramp, not flat
+}
+
 TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {
     // ADR-0048: a sharp degree-2 reversal (legs nearly parallel = ~160-degree
     // deflection) can't be a simple bend — the widened ribbon folds. With hairpin

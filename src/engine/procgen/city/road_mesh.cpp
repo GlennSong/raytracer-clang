@@ -447,4 +447,111 @@ RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
     return mesh;
 }
 
+RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedParams& p) {
+    RenderMesh mesh;
+    if (spines.empty() || p.cell <= 0) return mesh;
+    const double cell = p.cell, sw = p.sidewalkWidth;
+
+    double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30, maxHW = 0;
+    for (const UnionSpine& s : spines) {
+        maxHW = std::max(maxHW, s.halfWidth);
+        for (const Vec2& q : s.points) {
+            minX = std::min(minX, q.x); maxX = std::max(maxX, q.x);
+            minZ = std::min(minZ, q.y); maxZ = std::max(maxZ, q.y);
+        }
+    }
+    if (minX > maxX) return mesh;
+    double pad = maxHW + sw + cell;
+    minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
+    const int nx = static_cast<int>(std::ceil((maxX - minX) / cell)) + 1;
+    const int nz = static_cast<int>(std::ceil((maxZ - minZ) / cell)) + 1;
+    if (nx < 2 || nz < 2) return mesh;
+    auto X = [&](int i) { return minX + i * cell; };
+    auto Z = [&](int j) { return minZ + j * cell; };
+    auto gi = [&](int i, int j) { return j * nx + i; };
+
+    std::vector<double> sdf(static_cast<std::size_t>(nx) * nz);
+    for (int j = 0; j < nz; ++j)
+        for (int i = 0; i < nx; ++i) {
+            Vec2 pt(X(i), Z(j)); double best = 1e30;
+            for (const UnionSpine& s : spines) {
+                int n = static_cast<int>(s.points.size()); if (n < 2) continue;
+                int segs = s.closed ? n : n - 1; double d2 = 1e30;
+                for (int k = 0; k < segs; ++k)
+                    d2 = std::min(d2, segDist2(pt, s.points[k], s.points[(k + 1) % n]));
+                best = std::min(best, std::sqrt(d2) - s.halfWidth);
+            }
+            sdf[gi(i, j)] = best;
+        }
+
+    auto drape = [&](const Vec2& v) { return (p.heightAt ? p.heightAt(v.x, v.y) : 0.0) + p.lift; };
+    // A deterministic per-cell value jitter so the flat bands read as a textured surface.
+    auto grainAt = [&](int i, int j) {
+        uint32_t h = static_cast<uint32_t>(i * 73856093) ^ static_cast<uint32_t>(j * 19349663);
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return (1.0 - p.grain) + p.grain * ((h >> 8) & 0xffff) / 65535.0 * 2.0;
+    };
+    struct SVtx { Vec2 p; double s; };
+    auto clip = [](const std::vector<SVtx>& poly, double thr, bool below) {
+        std::vector<SVtx> out; int n = static_cast<int>(poly.size());
+        for (int i = 0; i < n; ++i) {
+            const SVtx& A = poly[i]; const SVtx& B = poly[(i + 1) % n];
+            bool ain = below ? (A.s < thr) : (A.s >= thr);
+            bool bin = below ? (B.s < thr) : (B.s >= thr);
+            if (ain) out.push_back(A);
+            if (ain != bin) {
+                double t = (thr - A.s) / (B.s - A.s);
+                out.push_back({A.p + (B.p - A.p) * t, thr});
+            }
+        }
+        return out;
+    };
+
+    for (int j = 0; j < nz - 1; ++j)
+        for (int i = 0; i < nx - 1; ++i) {
+            double s00 = sdf[gi(i,j)], s10 = sdf[gi(i+1,j)], s11 = sdf[gi(i+1,j+1)], s01 = sdf[gi(i,j+1)];
+            if (s00 >= sw && s10 >= sw && s11 >= sw && s01 >= sw) continue;     // wholly outside
+            SVtx corners[4] = { {Vec2(X(i),   Z(j)),   s00}, {Vec2(X(i+1), Z(j)),   s10},
+                                {Vec2(X(i+1), Z(j+1)), s11}, {Vec2(X(i),   Z(j+1)), s01} };
+            std::vector<SVtx> cellPoly(corners, corners + 4);
+            double g = grainAt(i, j);
+
+            auto fan = [&](const std::vector<SVtx>& poly, double extraH, Vec3 col) {
+                col = col * g;
+                for (std::size_t k = 1; k + 1 < poly.size(); ++k) {
+                    Vec2 a = poly[0].p, b = poly[k].p, c = poly[k + 1].p;
+                    double a2 = (b.x-a.x)*(c.y-a.y) - (c.x-a.x)*(b.y-a.y);
+                    if (std::fabs(a2) < 1e-9) continue;
+                    MeshBuilder::emitTri(mesh,
+                        Vec3(a.x, drape(a) + extraH, a.y), Vec3(b.x, drape(b) + extraH, b.y),
+                        Vec3(c.x, drape(c) + extraH, c.y), Vec3(0, 1, 0), col);
+                }
+            };
+            fan(clip(cellPoly, 0.0, true), 0.0, p.roadColor);                   // carriageway
+            fan(clip(clip(cellPoly, sw, true), 0.0, false), p.curbHeight, p.sidewalkColor);  // walk
+
+            // Curb face: the vertical step up the sdf=0 contour, facing the street.
+            std::vector<Vec2> zc;
+            for (int e = 0; e < 4; ++e) {
+                const SVtx& A = corners[e]; const SVtx& B = corners[(e + 1) % 4];
+                if ((A.s < 0) != (B.s < 0)) {
+                    double t = A.s / (A.s - B.s); zc.push_back(A.p + (B.p - A.p) * t);
+                }
+            }
+            if (zc.size() == 2) {
+                double gx = ((s10 + s11) - (s00 + s01)), gz = ((s01 + s11) - (s00 + s10));
+                double gl = std::sqrt(gx*gx + gz*gz);
+                Vec3 nrm = gl > 1e-9 ? Vec3(-gx/gl, 0, -gz/gl) : Vec3(0, 1, 0);   // toward the road
+                Vec2 q0 = zc[0], q1 = zc[1];
+                double y0 = drape(q0), y1 = drape(q1);
+                Vec3 b0(q0.x, y0, q0.y), b1(q1.x, y1, q1.y);
+                Vec3 t0(q0.x, y0 + p.curbHeight, q0.y), t1(q1.x, y1 + p.curbHeight, q1.y);
+                Vec3 cc = p.curbColor * g;
+                MeshBuilder::emitTri(mesh, b0, b1, t1, nrm, cc);
+                MeshBuilder::emitTri(mesh, b0, t1, t0, nrm, cc);
+            }
+        }
+    return mesh;
+}
+
 }  // namespace engine

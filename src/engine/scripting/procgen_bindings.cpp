@@ -1398,6 +1398,58 @@ int l_city_stroke(lua_State* L) {
     return 1;
 }
 
+// Read a `spines = { {points={{x,z}...}, width=, closed=}, ... }` field into spines.
+std::vector<UnionSpine> readUnionSpines(lua_State* L, int tbl) {
+    std::vector<UnionSpine> spines;
+    lua_getfield(L, tbl, "spines");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer ns = luaL_len(L, -1);
+    for (lua_Integer si = 1; si <= ns; ++si) {
+        lua_geti(L, -1, si);
+        UnionSpine sp;
+        sp.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
+        sp.closed = optBoolField(L, -1, "closed", false);
+        lua_getfield(L, -1, "points");
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_Integer np = luaL_len(L, -1);
+        for (lua_Integer pi = 1; pi <= np; ++pi) {
+            lua_geti(L, -1, pi);
+            sp.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);                                  // points
+        spines.push_back(std::move(sp));
+        lua_pop(L, 1);                                  // spine
+    }
+    lua_pop(L, 1);                                      // spines
+    return spines;
+}
+
+// city.roadbed{ spines={...}, cell=, sidewalk=, curb=, lift=, grain=, height=,
+//   road_color=, sidewalk_color=, curb_color= } -> one draped roadbed mesh: merged
+//   carriageway + raised sidewalk + curb, seated on the `height` field (ADR-0048).
+int l_city_roadbed(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<UnionSpine> spines = readUnionSpines(L, 1);
+    RoadbedParams rp;
+    rp.cell = optField(L, 1, "cell", rp.cell);
+    rp.sidewalkWidth = optField(L, 1, "sidewalk", rp.sidewalkWidth);
+    rp.curbHeight = optField(L, 1, "curb", rp.curbHeight);
+    rp.lift = optField(L, 1, "lift", rp.lift);
+    rp.grain = optField(L, 1, "grain", rp.grain);
+    rp.roadColor = optVec3Field(L, 1, "road_color", rp.roadColor);
+    rp.sidewalkColor = optVec3Field(L, 1, "sidewalk_color", rp.sidewalkColor);
+    rp.curbColor = optVec3Field(L, 1, "curb_color", rp.curbColor);
+    lua_getfield(L, 1, "height");
+    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
+        HeightField h = *hf;
+        rp.heightAt = [h](double x, double z) { return h(x, z); };
+    }
+    lua_pop(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(unionRoadbed(spines, rp)));
+    return 1;
+}
+
 // city.union{ spines={ {points={{x,z}...}, width=, closed=}, ... }, cell=, y=,
 //   color= } -> ONE non-overlapping mesh: the union of the stroked spines, merged at
 //   every crossing (ADR-0048). `cell` is the grid resolution (smaller = crisper).
@@ -2060,6 +2112,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"road_mesh", l_city_road_mesh},
         {"stroke", l_city_stroke},
         {"union", l_city_union},
+        {"roadbed", l_city_roadbed},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

@@ -3245,6 +3245,22 @@ degeneracy cases* now, against triangle count and sub-cell sharpness. Decimation
 later exact arrangement for hero assets) is the optimisation; the union itself is
 provably correct.
 
+The SDF makes the full **roadbed** fall out for free: `unionRoadbed` reads the same
+distance field as *bands* — carriageway `{sdf<0}`, raised sidewalk `{0<=sdf<width}`,
+the curb step between (a vertical face up the `sdf=0` contour) — so sidewalks wrap the
+whole merged network with zero special-casing (junctions, the roundabout's centre
+hole, all just work). Each cell is clipped to its bands (Sutherland-Hodgman on the
+scalar field) and every vertex is seated on a terrain `heightAt`, so the dense union
+grid that looked wasteful when flat is exactly what lets it **drape smoothly over 3D
+ground**. Per-band vertex colours carry a grain, and the mesh takes a procedural
+asphalt/concrete material (`add_solid(mesh, material)`, world-planar) on top. Exposed
+as `city.roadbed{ spines, cell, sidewalk, curb, height }`; `roadbed_demo.lua` drapes a
+small network on hills. Test: a straight road grows a sidewalk band (covered just
+outside the carriageway, nothing past it) and its vertices follow the terrain ramp.
+Still owed for *crisp* roads: lane markings (the union has no centerline-parameter, so
+markings want either the curve back-reference from the deferred RoadCurve model, or a
+thin marking stroke composited on top).
+
 **Deferred / risks.** (1) The graph back-reference (`curve, t` per node) isn't built
 yet — the prototype smooths the *output* polyline, it doesn't yet make the graph a view
 of curves; that's the core of the migration. (2) Smoothing moves the centerline OFF the
