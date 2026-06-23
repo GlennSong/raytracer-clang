@@ -375,6 +375,48 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         if (!usedEdge[e]) chains.push_back(traceChain(g.edges[e].a, e));
 
     const double MITER_LIMIT = 2.5;
+
+    // Build one side's sidewalk rails (inner = carriageway edge, outer = inner + sw)
+    // robustly for ANY curvature: a ROUND join on the convex side (so a sharp bend
+    // sweeps an arc instead of spiking out a mitre) and an un-amplified mitre on the
+    // concave side (so the inner kerb never folds through itself on a tight inner
+    // bend). `side` = +1 left / -1 right. inner/outer come back the same length.
+    const double PI = 3.14159265358979;
+    auto buildSideRails = [&](const std::vector<Vec2>& P, const std::vector<double>& hwv,
+                              double sw, double side,
+                              std::vector<Vec2>& inner, std::vector<Vec2>& outer) {
+        int n = static_cast<int>(P.size());
+        inner.clear(); outer.clear();
+        std::vector<Vec2> seg(std::max(0, n - 1)), nrm(std::max(0, n - 1));
+        for (int i = 0; i + 1 < n; ++i) {
+            Vec2 d = P[i + 1] - P[i]; double l = d.length();
+            seg[i] = (l > 1e-9) ? d / l : Vec2(1, 0);
+            nrm[i] = perp(seg[i]) * side;                // outward for this side
+        }
+        auto add = [&](const Vec2& base, const Vec2& u, double hw) {
+            inner.push_back(base + u * hw); outer.push_back(base + u * (hw + sw));
+        };
+        for (int i = 0; i < n; ++i) {
+            if (i == 0) { add(P[0], nrm[0], hwv[0]); continue; }
+            if (i == n - 1) { add(P[n - 1], nrm[n - 2], hwv[n - 1]); continue; }
+            Vec2 n0 = nrm[i - 1], n1 = nrm[i];
+            double theta = std::atan2(cross(seg[i - 1], seg[i]), dot(seg[i - 1], seg[i]));
+            if (side * theta < -1e-3) {                  // convex: round join
+                double a0 = std::atan2(n0.y, n0.x), a1 = std::atan2(n1.y, n1.x);
+                double sweep = a1 - a0;
+                while (sweep <= -PI) sweep += 2 * PI;
+                while (sweep >   PI) sweep -= 2 * PI;
+                int steps = std::max(1, static_cast<int>(std::ceil(std::fabs(sweep) / 0.4)));
+                for (int s = 0; s <= steps; ++s)
+                    add(P[i], Vec2(std::cos(a0 + sweep * s / steps),
+                                   std::sin(a0 + sweep * s / steps)), hwv[i]);
+            } else {                                     // concave / straight: un-amplified
+                Vec2 bis = n0 + n1; double bl = bis.length();
+                add(P[i], (bl > 1e-6) ? bis / bl : n1, hwv[i]);
+            }
+        }
+    };
+
     for (auto& ch : chains) {
         const std::vector<int>& cn = ch.first;
         const std::vector<int>& ce = ch.second;
@@ -414,16 +456,21 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
                 f[i] = (c > 1e-3) ? std::min(1.0 / c, MITER_LIMIT) : MITER_LIMIT;
             }
         }
-        std::vector<Vec2> L(np), R(np), Lo(np), Ro(np);
+        // Carriageway edges use the plain mitre — an overlap on a tight inner bend is
+        // a harmless coplanar fill — so the asphalt stays a continuous strip.
+        std::vector<Vec2> L(np), R(np);
         for (int i = 0; i < np; ++i) {
             Vec2 off = m[i] * f[i];
-            L[i] = P[i] + off * hw[i];               R[i] = P[i] - off * hw[i];
-            Lo[i] = P[i] + off * (hw[i] + p.sidewalkWidth);
-            Ro[i] = P[i] - off * (hw[i] + p.sidewalkWidth);
+            L[i] = P[i] + off * hw[i]; R[i] = P[i] - off * hw[i];
         }
         for (int i = 0; i < np - 1; ++i) addStrip(L[i], R[i], L[i + 1], R[i + 1]);
-        sidewalkRail(L, Lo);
-        sidewalkRail(R, Ro);
+        // Sidewalks use the robust offset (round convex joins, clamped concave) so the
+        // raised kerb never spikes or folds, even on curves tighter than the road.
+        std::vector<Vec2> li, lo, ri, ro;
+        buildSideRails(P, hw, p.sidewalkWidth, +1.0, li, lo);
+        buildSideRails(P, hw, p.sidewalkWidth, -1.0, ri, ro);
+        sidewalkRail(li, lo);
+        sidewalkRail(ri, ro);
 
         if (p.laneMarkings) {
             double hwm = hw[np / 2], inset = p.markWidth * 1.5;
