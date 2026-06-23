@@ -3282,6 +3282,26 @@ at the curb. The crosswalks/stop bars now ride the slab top, and the terrain is 
 to grade under each road. So the same SDF/stroke pipeline now draws every road in both
 city styles.
 
+**Density + crosswalks (revision).** The uniform SDF roadbed spends polygons *everywhere*
+(a marching-squares grid at a fixed cell), and the separately-composited `laneMarkings`
+trimmed by a fixed arc length still let the stripe creep into a tight junction. The fix is
+to make the **junction-aware** `buildRoadMesh` the city mesher instead: it already trims
+each ribbon back to the curb corner, fills only the intersection with one pad, and draws
+the markings on the *trimmed* span — so the markings stop at the junction *structurally*,
+and the polygons concentrate where two curves meet. Two refinements close the loop: (1)
+the ribbon (and its sidewalk) now subdivides along its length **only where the terrain
+sags from the straight chord** by more than `conformTol` — flat ground stays a single
+stable quad, so polygons appear where the surface bends, not on flat runs; (2) a **zebra
+crosswalk** is laid across each junction arm at the trim point (the intersection mouth),
+since the mesher knows exactly where every intersection is. The cities switch off
+`unionRoadbed`/`laneMarkings` onto this: the arena (`buildRoadMesh` + crosswalks, draped
+on the street grade, stop bars draped so they don't bury) and the radial (`city.lua`
+`roadbed` → the dressed `road_mesh`). Every other `city.road_mesh` scene (twin_cities,
+lua_city_terrain, roads_terrain, hill_roads, road_earthwork) inherits the adaptive
+tessellation for free; `unionRoadbed` stays for the standalone `roadbed_demo` /
+`roadbed_network` SDF studies. So: fewer, more stable triangles, markings that stop at the
+intersection, and crosswalks back where the streets cross.
+
 **Deferred / risks.** (1) The graph back-reference (`curve, t` per node) isn't built
 yet — the prototype smooths the *output* polyline, it doesn't yet make the graph a view
 of curves; that's the core of the migration. (2) Smoothing moves the centerline OFF the
