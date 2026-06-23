@@ -79,32 +79,6 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         }
     };
 
-    // A painted lane stripe parallel to a ribbon: a thin strip at perpendicular
-    // `offset` from the centreline, raised just above the asphalt. `dashed` lays
-    // it as a dash pattern (lane dividers); solid otherwise (edge/centre lines).
-    // `d`/`n` are the ribbon's unit direction / left-normal.
-    auto laneStrip = [&](const Vec2& s, const Vec2& e, const Vec2& d, const Vec2& n,
-                         double offset, const Vec3& col, bool dashed) {
-        Vec2 a = s + n * offset, b = e + n * offset;
-        double len = (b - a).length();
-        if (len < 1e-3) return;
-        double hw = p.markWidth * 0.5;
-        auto P = [&](const Vec2& xz) {
-            return Vec3(xz.x, height(xz.x, xz.y) + p.markLift, xz.y);
-        };
-        auto quad = [&](double t0, double t1) {
-            Vec2 c0 = a + d * t0, c1 = a + d * t1;
-            MeshBuilder::emitQuad(mesh, P(c0 - n * hw), P(c1 - n * hw),
-                                  P(c1 + n * hw), P(c0 + n * hw), Vec3(0, 1, 0), col);
-        };
-        if (!dashed) {
-            for (double t = 0; t < len; t += 3.0) quad(t, std::min(t + 3.0, len));
-        } else {
-            double period = p.dashLength + p.dashGap;
-            for (double t = 0; t < len; t += period)
-                quad(t, std::min(t + p.dashLength, len));
-        }
-    };
     // A flat strip between two cross-sections, draped on the terrain and split along
     // its length only where the ground bends (stripSegs) — flat ground stays one quad.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,
@@ -287,68 +261,176 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         }
     }
 
-    // --- Simple bends (degree-2): no pad, but the two ribbons still meet at an
-    // angle (every chord-joint of a curved ring), so their kerbs leave a notch.
-    // Fill the small carriageway gap and turn the sidewalk corner on each side so
-    // the kerb runs continuous around the curve. The road runs straight through,
-    // so there is no trim.
-    for (int v = 0; v < nNodes; ++v) {
-        if (static_cast<int>(inc[v].size()) != 2 || hairpin[v]) continue;   // hairpins padded above
-        Vec2 V = g.nodes[v].pos;
-        auto armDir = [&](int e) {
-            int o = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
-            return normalize(g.nodes[o].pos - V);
-        };
-        int e0 = inc[v][0], e1 = inc[v][1];
-        Vec2 d0 = armDir(e0), d1 = armDir(e1);
-        double w0 = g.edges[e0].width * 0.5, w1 = g.edges[e1].width * 0.5;
-        Vec2 l0 = V + perp(d0) * w0, r0 = V - perp(d0) * w0;   // e0 kerb points at V
-        Vec2 l1 = V + perp(d1) * w1, r1 = V - perp(d1) * w1;   // e1 kerb points at V
-        // The road continues, so e0's left pairs with e1's right (and vice versa).
-        // Fan the carriageway notch from V to each pair, then turn the kerb across it.
-        addTri(to3d(V), to3d(l0), to3d(r1));
-        addTri(to3d(V), to3d(r0), to3d(l1));
-        cornerBand(V, l0, r1);
-        cornerBand(V, r0, l1);
-    }
+    // --- Continuous chains -----------------------------------------------------
+    // A curved street is a polyline of many short edges. Stroking each edge as its
+    // own full-width ribbon makes consecutive straight pieces OVERLAP on the inside
+    // of every bend and the per-edge lane lines double up at every joint (ADR-0048).
+    // Instead, trace each run of degree-2 nodes between junctions into one CHAIN and
+    // stroke it as a single ribbon with MITRED joins — so a sampled curve is one
+    // smooth strip and the markings run unbroken down its length. Chains break at
+    // junctions (degree != 2), hairpins (turned by a disc above) and dead ends.
 
-    // --- Ribbons: the trimmed span between junctions --------------------------
-    for (int e = 0; e < nEdges; ++e) {
-        Vec2 A = g.nodes[g.edges[e].a].pos, B = g.nodes[g.edges[e].b].pos;
-        Vec2 ab = B - A;
-        double len = ab.length();
-        if (len < 1e-3) continue;
-        Vec2 d = ab / len;
-        double sa = trim[e][0], sb = trim[e][1];
-        if (sa + sb >= len - 0.5) continue;        // swallowed entirely by junctions
-        Vec2 start = A + d * sa, end = B - d * sb;
-        Vec2 pu = perp(d);                              // unit edge normal
-        Vec2 nrm = pu * (g.edges[e].width * 0.5);
-        addStrip(start - nrm, start + nrm, end - nrm, end + nrm);
-        // Sidewalk skirts down both verges (outward = away from the carriageway).
-        curbBand(start + nrm, end + nrm, pu);
-        curbBand(start - nrm, end - nrm, pu * -1.0);
-
-        // Lane markings on the carriageway: solid edge lines, a double-yellow
-        // centreline between opposing directions, dashed white lane dividers. The
-        // lane count comes from the road width, so arterials read as multi-lane.
-        if (p.laneMarkings) {
-            double hw2 = g.edges[e].width * 0.5;
-            // Equal lanes each side of a two-way centreline, so there is always a
-            // centre and the dividers mirror.
-            int perSide = std::max(1, static_cast<int>(std::lround(hw2 / p.laneWidth)));
-            double laneW = hw2 / perSide, inset = p.markWidth * 1.5;
-            // Double-yellow centreline between the opposing directions.
-            laneStrip(start, end, d, pu,  p.markWidth, p.centerColor, false);
-            laneStrip(start, end, d, pu, -p.markWidth, p.centerColor, false);
-            // Dashed white lane dividers, mirrored each side.
-            for (int i = 1; i < perSide; ++i) {
-                laneStrip(start, end, d, pu,  i * laneW, p.laneColor, true);
-                laneStrip(start, end, d, pu, -i * laneW, p.laneColor, true);
+    // Continuous sidewalk along an inner rail (carriageway edge) and its outer rail:
+    // curb lip toward the street, raised slab, outer face dropping to the ground.
+    auto sidewalkRail = [&](const std::vector<Vec2>& inner, const std::vector<Vec2>& outer) {
+        if (p.sidewalkWidth <= 0.0) return;
+        int n = static_cast<int>(inner.size());
+        const Vec3 nUp(0, 1, 0);
+        for (int i = 0; i < n - 1; ++i) {
+            Vec2 toStreet = inner[i] - outer[i];                 // outer -> inner = toward road
+            double tl = toStreet.length();
+            Vec2 inDir = (tl > 1e-9) ? toStreet / tl : perp(inner[i + 1] - inner[i]);
+            Vec3 nIn(inDir.x, 0, inDir.y), nOut(-inDir.x, 0, -inDir.y);
+            int segs = stripSegs(inner[i], inner[i + 1]);
+            for (int s = 1; s <= segs; ++s) {
+                double u0 = static_cast<double>(s - 1) / segs, u1 = static_cast<double>(s) / segs;
+                Vec2 a0 = lerp(inner[i], inner[i + 1], u0), a1 = lerp(inner[i], inner[i + 1], u1);
+                Vec2 c0 = lerp(outer[i], outer[i + 1], u0), c1 = lerp(outer[i], outer[i + 1], u1);
+                double r0 = height(a0.x, a0.y), r1 = height(a1.x, a1.y);
+                double t0 = r0 + p.curbHeight, t1 = r1 + p.curbHeight;
+                double g0 = std::min(ground(c0.x, c0.y), t0 - 0.01);
+                double g1 = std::min(ground(c1.x, c1.y), t1 - 0.01);
+                Vec3 A0(a0.x, r0, a0.y), A1(a1.x, r1, a1.y);
+                Vec3 B0(a0.x, t0, a0.y), B1(a1.x, t1, a1.y);
+                Vec3 C0(c0.x, t0, c0.y), C1(c1.x, t1, c1.y);
+                Vec3 D0(c0.x, g0, c0.y), D1(c1.x, g1, c1.y);
+                MeshBuilder::emitQuad(mesh, A0, A1, B1, B0, nIn, p.curbColor);
+                MeshBuilder::emitQuad(mesh, B0, B1, C1, C0, nUp, p.sidewalkColor);
+                MeshBuilder::emitQuad(mesh, C0, C1, D1, D0, nOut, p.curbColor);
             }
-            // Solid white edge lines just inside the kerb.
-            laneStrip(start, end, d, pu,  hw2 - inset, p.laneColor, false);
-            laneStrip(start, end, d, pu, -(hw2 - inset), p.laneColor, false);
+        }
+    };
+
+    // Paint a thin draped stripe down a (continuous, already-offset) polyline — solid
+    // or dashed with a phase that carries across the joints so the dashes are even.
+    auto paintLine = [&](const std::vector<Vec2>& Q, const Vec3& col, bool dashed) {
+        double hwm = p.markWidth * 0.5;
+        auto P3 = [&](const Vec2& xz) { return Vec3(xz.x, height(xz.x, xz.y) + p.markLift, xz.y); };
+        auto quad = [&](const Vec2& a, const Vec2& b, const Vec2& nrm) {
+            MeshBuilder::emitQuad(mesh, P3(a - nrm), P3(b - nrm), P3(b + nrm), P3(a + nrm),
+                                  Vec3(0, 1, 0), col);
+        };
+        double phase = 0.0, period = p.dashLength + p.dashGap;
+        for (int i = 0; i + 1 < static_cast<int>(Q.size()); ++i) {
+            Vec2 a = Q[i], b = Q[i + 1], dd = b - a;
+            double L = dd.length();
+            if (L < 1e-6) continue;
+            Vec2 u = dd / L, nrm = perp(u) * hwm;
+            if (!dashed) {
+                int segs = stripSegs(a, b);
+                for (int s = 0; s < segs; ++s)
+                    quad(lerp(a, b, static_cast<double>(s) / segs),
+                         lerp(a, b, static_cast<double>(s + 1) / segs), nrm);
+            } else {
+                double dist = 0.0;
+                while (dist < L) {
+                    double lp = std::fmod(phase + dist, period);
+                    if (lp < p.dashLength) {
+                        double run = std::min(p.dashLength - lp, L - dist);
+                        quad(a + u * dist, a + u * (dist + run), nrm);
+                        dist += run;
+                    } else {
+                        dist += period - lp;
+                    }
+                }
+                phase += L;
+            }
+        }
+    };
+
+    std::vector<char> usedEdge(nEdges, 0);
+    auto isBreak = [&](int v) { return static_cast<int>(inc[v].size()) != 2 || hairpin[v]; };
+    auto traceChain = [&](int v, int e) {
+        std::vector<int> nodes{ v }, edges;
+        int cur = v, ce = e;
+        for (;;) {
+            usedEdge[ce] = 1;
+            int nx = (g.edges[ce].a == cur) ? g.edges[ce].b : g.edges[ce].a;
+            nodes.push_back(nx); edges.push_back(ce);
+            if (isBreak(nx)) break;
+            int ne = -1;
+            for (int e2 : inc[nx]) if (e2 != ce && !usedEdge[e2]) { ne = e2; break; }
+            if (ne < 0) break;
+            cur = nx; ce = ne;
+        }
+        return std::make_pair(std::move(nodes), std::move(edges));
+    };
+
+    std::vector<std::pair<std::vector<int>, std::vector<int>>> chains;
+    for (int v = 0; v < nNodes; ++v)
+        if (isBreak(v))
+            for (int e : inc[v]) if (!usedEdge[e]) chains.push_back(traceChain(v, e));
+    for (int e = 0; e < nEdges; ++e)                     // pure degree-2 loops, no break node
+        if (!usedEdge[e]) chains.push_back(traceChain(g.edges[e].a, e));
+
+    const double MITER_LIMIT = 2.5;
+    for (auto& ch : chains) {
+        const std::vector<int>& cn = ch.first;
+        const std::vector<int>& ce = ch.second;
+        int np = static_cast<int>(cn.size());
+        if (np < 2) continue;
+        std::vector<Vec2> P(np);
+        std::vector<double> hw(np);
+        for (int i = 0; i < np; ++i) P[i] = g.nodes[cn[i]].pos;
+        for (int i = 0; i < np; ++i) {
+            double wa = g.edges[ce[std::max(0, i - 1)]].width;
+            double wb = g.edges[ce[std::min(np - 2, i)]].width;
+            hw[i] = 0.5 * std::max(wa, wb);
+        }
+        // Pull the ends back to the junction setbacks (so the chain meets the pad).
+        {
+            int e0 = ce.front(); double t0 = trim[e0][(g.edges[e0].a == cn[0]) ? 0 : 1];
+            int eL = ce.back();  double tL = trim[eL][(g.edges[eL].b == cn[np - 1]) ? 1 : 0];
+            Vec2 d0 = P[1] - P[0]; double l0 = d0.length();
+            if (l0 > 1e-6 && t0 > 0) P[0] = P[0] + (d0 / l0) * std::min(t0, l0 - 0.1);
+            Vec2 dL = P[np - 1] - P[np - 2]; double lL = dL.length();
+            if (lL > 1e-6 && tL > 0) P[np - 1] = P[np - 1] - (dL / lL) * std::min(tL, lL - 0.1);
+        }
+        // Per-vertex mitre direction m (unit, +left) and length factor f (>= 1).
+        std::vector<Vec2> sn(np - 1);
+        for (int i = 0; i < np - 1; ++i) {
+            Vec2 dd = P[i + 1] - P[i]; double l = dd.length();
+            sn[i] = perp((l > 1e-9) ? dd / l : Vec2(1, 0));
+        }
+        std::vector<Vec2> m(np); std::vector<double> f(np);
+        m[0] = sn[0]; f[0] = 1.0; m[np - 1] = sn[np - 2]; f[np - 1] = 1.0;
+        for (int i = 1; i < np - 1; ++i) {
+            Vec2 bis = sn[i - 1] + sn[i]; double bl = bis.length();
+            if (bl < 1e-6) { m[i] = sn[i]; f[i] = 1.0; }
+            else {
+                m[i] = bis / bl;
+                double c = dot(m[i], sn[i]);
+                f[i] = (c > 1e-3) ? std::min(1.0 / c, MITER_LIMIT) : MITER_LIMIT;
+            }
+        }
+        std::vector<Vec2> L(np), R(np), Lo(np), Ro(np);
+        for (int i = 0; i < np; ++i) {
+            Vec2 off = m[i] * f[i];
+            L[i] = P[i] + off * hw[i];               R[i] = P[i] - off * hw[i];
+            Lo[i] = P[i] + off * (hw[i] + p.sidewalkWidth);
+            Ro[i] = P[i] - off * (hw[i] + p.sidewalkWidth);
+        }
+        for (int i = 0; i < np - 1; ++i) addStrip(L[i], R[i], L[i + 1], R[i + 1]);
+        sidewalkRail(L, Lo);
+        sidewalkRail(R, Ro);
+
+        if (p.laneMarkings) {
+            double hwm = hw[np / 2], inset = p.markWidth * 1.5;
+            int perSide = std::max(1, static_cast<int>(std::lround(hwm / p.laneWidth)));
+            double laneW = hwm / perSide;
+            auto offsetPoly = [&](auto offFn) {
+                std::vector<Vec2> q(np);
+                for (int i = 0; i < np; ++i) q[i] = P[i] + m[i] * (f[i] * offFn(i));
+                return q;
+            };
+            paintLine(offsetPoly([&](int) { return  p.markWidth; }), p.centerColor, false);
+            paintLine(offsetPoly([&](int) { return -p.markWidth; }), p.centerColor, false);
+            for (int k = 1; k < perSide; ++k) {
+                paintLine(offsetPoly([&](int) { return  k * laneW; }), p.laneColor, true);
+                paintLine(offsetPoly([&](int) { return -k * laneW; }), p.laneColor, true);
+            }
+            paintLine(offsetPoly([&](int i) { return  (hw[i] - inset); }), p.laneColor, false);
+            paintLine(offsetPoly([&](int i) { return -(hw[i] - inset); }), p.laneColor, false);
         }
     }
 
