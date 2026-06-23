@@ -863,11 +863,36 @@ int l_city_lots(lua_State* L) {
         // the raw radial frontage (which sent corner lots off at 45°).
         Vec2 sd = obb.axis[depthAxis];
         if (dot(sd, f) < 0) sd = sd * -1.0;
+        // Fit the rectangle INSIDE the lot: a non-rectangular piece (wedge /
+        // trapezoid / corner lot — common in radial + tensor blocks) has an OBB that
+        // bulges past the polygon, which would seat the building proud of its block.
+        // Shrink the box about an interior anchor until all four corners sit inside
+        // the lot, so grid lots keep their full size and skew lots pull in to fit.
+        Vec2 anchor = pointInPolygon(lot.footprint, obb.center) ? obb.center
+                                                                : centroid(lot.footprint);
+        auto cornersInside = [&](double s) {
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sy = -1; sy <= 1; sy += 2) {
+                    Vec2 c = anchor + obb.axis[0] * (obb.half[0] * s * sx)
+                                    + obb.axis[1] * (obb.half[1] * s * sy);
+                    if (!pointInPolygon(lot.footprint, c)) return false;
+                }
+            return true;
+        };
+        double fit = 1.0;
+        if (!cornersInside(1.0)) {
+            double lo = 0.0, hi = 1.0;
+            for (int it = 0; it < 16; ++it) {
+                double mid = (lo + hi) * 0.5;
+                (cornersInside(mid) ? lo : hi) = mid;
+            }
+            fit = lo;
+        }
         lua_createtable(L, 0, 5);
-        lua_pushnumber(L, obb.center.x);                       lua_setfield(L, -2, "cx");
-        lua_pushnumber(L, obb.center.y);                       lua_setfield(L, -2, "cz");
-        lua_pushnumber(L, obb.half[1 - depthAxis] * 2.0);      lua_setfield(L, -2, "w");
-        lua_pushnumber(L, obb.half[depthAxis] * 2.0);          lua_setfield(L, -2, "d");
+        lua_pushnumber(L, anchor.x);                           lua_setfield(L, -2, "cx");
+        lua_pushnumber(L, anchor.y);                           lua_setfield(L, -2, "cz");
+        lua_pushnumber(L, obb.half[1 - depthAxis] * 2.0 * fit); lua_setfield(L, -2, "w");
+        lua_pushnumber(L, obb.half[depthAxis] * 2.0 * fit);    lua_setfield(L, -2, "d");
         lua_pushnumber(L, std::atan2(sd.x, sd.y));             lua_setfield(L, -2, "yaw");
         lua_pushnumber(L, lot.area);                           lua_setfield(L, -2, "area");
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
