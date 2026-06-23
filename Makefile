@@ -45,6 +45,7 @@ SRCS = \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/editable_curve.cpp \
+	$(SRC_DIR)/engine/curve_edit.cpp \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
@@ -113,6 +114,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city.cpp \
 	$(TEST_DIR)/test_road_net.cpp \
 	$(TEST_DIR)/test_editable_curve.cpp \
+	$(TEST_DIR)/test_curve_edit.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
 	$(TEST_DIR)/test_instance_tlas.cpp \
@@ -141,6 +143,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/editable_curve.cpp \
+	$(SRC_DIR)/engine/curve_edit.cpp \
 	$(SRC_DIR)/engine/asset_manager.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
