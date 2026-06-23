@@ -1001,6 +1001,13 @@ int nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist
     return roadNetNearestEdge(*net, Vec2(worldPos.x, worldPos.z), maxDist);
 }
 
+bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    if (!net || !roadNetSetEdgeWidth(*net, edge, width)) return false;
+    regenerateRoad(world, e, renderer);
+    return true;
+}
+
 int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return -1;

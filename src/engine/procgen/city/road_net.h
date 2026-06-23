@@ -26,7 +26,10 @@ struct RoadNet {
     // junction/dead-end. Editing a tangent overrides the auto for that knot.
     std::vector<Vec2> tangents;
     bool   curved = false;
-    double width = 10.0;                        // carriageway width (m) — the widen control
+    double width = 10.0;                        // default carriageway width (m) — widen control
+    // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
+    // default `width`). Lets a road taper or a slip road run narrower than its trunk.
+    std::vector<double> edgeWidths;
     double sidewalk = 2.5;                      // raised sidewalk width per verge (m)
     double curb = 0.16;                         // curb height (m)
     double cornerRadius = 3.0;                  // rounded kerb-return radius (m)
@@ -41,8 +44,12 @@ struct RoadNet {
 RenderMesh buildRoadNetMesh(const RoadNet& net);
 
 // --- editor edit ops (each leaves the net ready for buildRoadNetMesh) ----------
-// Set the carriageway width (the inspector "Width" control — "widen a road").
+// Set the default carriageway width (the inspector "Width" control — "widen a road").
 void roadNetSetWidth(RoadNet& net, double width);
+// Width of edge `ei` (its per-edge override if set, else the default `width`).
+double roadNetEdgeWidth(const RoadNet& net, int ei);
+// Override edge `ei`'s width (the viewport per-edge widen). w <= 0 reverts to default.
+bool roadNetSetEdgeWidth(RoadNet& net, int ei, double w);
 // Move control node `i` to `pos` (the viewport node drag). False if out of range.
 bool roadNetMoveNode(RoadNet& net, int i, const Vec2& pos);
 // Set node `i`'s tangent (the viewport tangent-handle drag). A zero tangent reverts

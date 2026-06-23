@@ -132,6 +132,42 @@ TEST_CASE(road_net_curved_and_tangents_round_trip) {
     CHECK_APPROX(r.tangents[1].y, 9.0, 1e-9);
 }
 
+TEST_CASE(road_net_per_edge_width_overrides_default) {
+    RoadNet n = sampleNet();                          // edges {0,1}{1,2}{1,3}, width 10
+    CHECK_APPROX(roadNetEdgeWidth(n, 0), 10.0, 1e-9); // default before any override
+    double base = meshAreaXZ(buildRoadNetMesh(n));
+
+    CHECK(roadNetSetEdgeWidth(n, 1, 24.0));           // widen just the middle edge
+    CHECK_APPROX(roadNetEdgeWidth(n, 1), 24.0, 1e-9);
+    CHECK_APPROX(roadNetEdgeWidth(n, 0), 10.0, 1e-9); // others untouched
+    CHECK(meshAreaXZ(buildRoadNetMesh(n)) > base + 50.0);   // that edge grew
+
+    roadNetSetEdgeWidth(n, 1, 0.0);                   // <= 0 reverts to the default
+    CHECK_APPROX(roadNetEdgeWidth(n, 1), 10.0, 1e-9);
+    CHECK(!roadNetSetEdgeWidth(n, 9, 5.0));           // bad edge index
+}
+
+TEST_CASE(road_net_per_edge_width_survives_topology_and_json) {
+    RoadNet n = sampleNet();
+    roadNetSetEdgeWidth(n, 1, 20.0);                  // edge {1,2}
+    // Split edge 0 ({0,1}); the override on edge 1 must still apply to the same road.
+    roadNetSplitEdge(n, 0, Vec2(-15, 0));
+    CHECK_APPROX(roadNetEdgeWidth(n, 1), 20.0, 1e-9);
+    // Delete a leaf (node 3, edge {1,3}); edge {1,2}'s width tracks the reindex.
+    CHECK(roadNetDeleteNode(n, 3));
+    int wide = -1;
+    for (int i = 0; i < static_cast<int>(n.edges.size()); ++i)
+        if (roadNetEdgeWidth(n, i) > 15.0) wide = i;
+    CHECK(wide >= 0);                                 // the wide edge is still there
+
+    RoadNet r = roadNetFromJson(roadNetToJson(n));    // [a,b,width] round-trip
+    int rwide = -1;
+    for (int i = 0; i < static_cast<int>(r.edges.size()); ++i)
+        if (roadNetEdgeWidth(r, i) > 15.0) rwide = i;
+    CHECK(rwide >= 0);
+    CHECK_APPROX(roadNetEdgeWidth(r, rwide), 20.0, 1e-9);
+}
+
 TEST_CASE(road_net_split_inserts_a_point) {
     RoadNet n = sampleNet();                          // 4 nodes, 3 edges
     int edge = roadNetNearestEdge(n, Vec2(-15, 0), 8.0);   // over the 0-1 run

@@ -35,6 +35,7 @@ bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Ren
 // splitRoadEdge / extendRoad return the new node's index (to select it); deleteRoadNode
 // removes a node + its edges.
 int  nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist);
+bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer);
 int  splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer);
 int  extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer);
 bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);

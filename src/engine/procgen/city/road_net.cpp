@@ -34,23 +34,37 @@ std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
 // nodes keep their indices (so junction degree is preserved); curve samples append.
 RoadGraph netGraph(const RoadNet& net) {
     const int n = static_cast<int>(net.nodes.size());
-    std::vector<std::array<int, 2>> edges = validEdges(net);
     auto P = [&](int i) { return net.nodes[i]; };
-    auto width = static_cast<Real>(net.width);
+    // Valid edge indices, and each edge's width (its override or the default).
+    std::vector<int> ev;
+    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
+        const std::array<int, 2>& e = net.edges[ei];
+        if (e[0] >= 0 && e[1] >= 0 && e[0] < n && e[1] < n && e[0] != e[1]) ev.push_back(ei);
+    }
+    auto ewidth = [&](int ei) {
+        return static_cast<Real>(
+            (ei < static_cast<int>(net.edgeWidths.size()) && net.edgeWidths[ei] > 0.0)
+                ? net.edgeWidths[ei] : net.width);
+    };
 
     RoadGraph g;
     g.nodes.resize(n);
     for (int i = 0; i < n; ++i) g.nodes[i].pos = net.nodes[i];
 
     if (!net.curved) {
-        for (const std::array<int, 2>& e : edges)
-            g.edges.push_back(RoadEdge{e[0], e[1], width, RoadClass::Local});
+        for (int ei : ev) {
+            const std::array<int, 2>& e = net.edges[ei];
+            g.edges.push_back(RoadEdge{e[0], e[1], ewidth(ei), RoadClass::Local});
+        }
         return g;
     }
 
     // Per-node neighbours (for degree + the Catmull-Rom "other" neighbour).
     std::vector<std::vector<int>> nbr(n);
-    for (const std::array<int, 2>& e : edges) { nbr[e[0]].push_back(e[1]); nbr[e[1]].push_back(e[0]); }
+    for (int ei : ev) {
+        const std::array<int, 2>& e = net.edges[ei];
+        nbr[e[0]].push_back(e[1]); nbr[e[1]].push_back(e[0]);
+    }
     auto stored = [&](int i) {
         return (i < static_cast<int>(net.tangents.size())) ? net.tangents[i] : Vec2(0, 0);
     };
@@ -79,8 +93,10 @@ RoadGraph netGraph(const RoadNet& net) {
         return travel;
     };
 
-    for (const std::array<int, 2>& e : edges) {
+    for (int ei : ev) {
+        const std::array<int, 2>& e = net.edges[ei];
         int a = e[0], b = e[1];
+        Real w = ewidth(ei);
         Vec2 m0 = outTan(a, b), m1 = inTan(b, a);
         double len = (P(b) - P(a)).length();
         int segs = std::max(4, static_cast<int>(std::ceil(len / 5.0)));
@@ -89,10 +105,10 @@ RoadGraph netGraph(const RoadNet& net) {
             Vec2 p = hermite(P(a), m0, P(b), m1, static_cast<double>(s) / segs);
             int idx = static_cast<int>(g.nodes.size());
             g.nodes.push_back(RoadNode{p});
-            g.edges.push_back(RoadEdge{prev, idx, width, RoadClass::Local});
+            g.edges.push_back(RoadEdge{prev, idx, w, RoadClass::Local});
             prev = idx;
         }
-        g.edges.push_back(RoadEdge{prev, b, width, RoadClass::Local});
+        g.edges.push_back(RoadEdge{prev, b, w, RoadClass::Local});
     }
     return g;
 }
@@ -116,6 +132,20 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
 
 void roadNetSetWidth(RoadNet& net, double width) {
     net.width = std::max(0.5, width);
+}
+
+double roadNetEdgeWidth(const RoadNet& net, int ei) {
+    if (ei >= 0 && ei < static_cast<int>(net.edgeWidths.size()) && net.edgeWidths[ei] > 0.0)
+        return net.edgeWidths[ei];
+    return net.width;
+}
+
+bool roadNetSetEdgeWidth(RoadNet& net, int ei, double w) {
+    if (ei < 0 || ei >= static_cast<int>(net.edges.size())) return false;
+    if (static_cast<int>(net.edgeWidths.size()) < static_cast<int>(net.edges.size()))
+        net.edgeWidths.resize(net.edges.size(), 0.0);
+    net.edgeWidths[ei] = (w > 0.0) ? w : 0.0;          // <= 0 reverts to the default width
+    return true;
 }
 
 bool roadNetMoveNode(RoadNet& net, int i, const Vec2& pos) {
@@ -160,6 +190,7 @@ bool roadNetAddEdge(RoadNet& net, int a, int b) {
     for (const std::array<int, 2>& e : net.edges)
         if ((e[0] == a && e[1] == b) || (e[0] == b && e[1] == a)) return false;   // already joined
     net.edges.push_back({a, b});
+    if (!net.edgeWidths.empty()) net.edgeWidths.push_back(0.0);   // default width
     return true;
 }
 
@@ -176,6 +207,9 @@ int roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos) {
     int ni = roadNetAddNode(net, pos);
     net.edges[edgeIndex] = {a, ni};           // a -> new
     net.edges.push_back({ni, b});             // new -> b
+    if (!net.edgeWidths.empty())              // both halves inherit the split edge's width
+        net.edgeWidths.push_back(edgeIndex < static_cast<int>(net.edgeWidths.size())
+                                     ? net.edgeWidths[edgeIndex] : 0.0);
     return ni;
 }
 
@@ -183,11 +217,17 @@ bool roadNetDeleteNode(RoadNet& net, int i) {
     const int n = static_cast<int>(net.nodes.size());
     if (i < 0 || i >= n) return false;
     std::vector<std::array<int, 2>> kept;
-    for (const std::array<int, 2>& e : net.edges) {
+    std::vector<double> keptW;
+    const bool hasW = !net.edgeWidths.empty();
+    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
+        const std::array<int, 2>& e = net.edges[ei];
         if (e[0] == i || e[1] == i) continue;                 // drop incident edges
         kept.push_back({ e[0] > i ? e[0] - 1 : e[0], e[1] > i ? e[1] - 1 : e[1] });
+        if (hasW) keptW.push_back(ei < static_cast<int>(net.edgeWidths.size())
+                                      ? net.edgeWidths[ei] : 0.0);
     }
     net.edges = std::move(kept);
+    if (hasW) net.edgeWidths = std::move(keptW);              // stay parallel to edges
     net.nodes.erase(net.nodes.begin() + i);
     if (i < static_cast<int>(net.tangents.size()))
         net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
@@ -217,10 +257,21 @@ RoadNet roadNetFromJson(const json& j) {
             net.nodes.push_back(Vec2(p.value("x", 0.0), p.value("z", 0.0)));
     if (j.contains("edges") && j["edges"].is_array())
         for (const json& e : j["edges"]) {
-            if (e.is_array() && e.size() >= 2)
+            double w = 0.0;
+            if (e.is_array() && e.size() >= 2) {
                 net.edges.push_back({e[0].get<int>(), e[1].get<int>()});
-            else if (e.is_object())
+                if (e.size() >= 3) w = e[2].get<double>();        // [a, b, width]
+            } else if (e.is_object()) {
                 net.edges.push_back({e.value("a", 0), e.value("b", 0)});
+                w = e.value("width", 0.0);
+            } else {
+                continue;
+            }
+            if (w > 0.0) {                                        // a per-edge override
+                if (net.edgeWidths.size() < net.edges.size())
+                    net.edgeWidths.resize(net.edges.size(), 0.0);
+                net.edgeWidths.back() = w;
+            }
         }
     net.curved = j.value("curved", net.curved);
     if (j.contains("tangents") && j["tangents"].is_array())
@@ -249,7 +300,12 @@ json roadNetToJson(const RoadNet& net) {
     for (const Vec2& p : net.nodes) nodes.push_back({{"x", p.x}, {"z", p.y}});
     j["nodes"] = std::move(nodes);
     json edges = json::array();
-    for (const std::array<int, 2>& e : net.edges) edges.push_back(json::array({e[0], e[1]}));
+    for (int i = 0; i < static_cast<int>(net.edges.size()); ++i) {
+        const std::array<int, 2>& e = net.edges[i];
+        double w = (i < static_cast<int>(net.edgeWidths.size())) ? net.edgeWidths[i] : 0.0;
+        if (w > 0.0) edges.push_back(json::array({e[0], e[1], w}));    // [a, b, width]
+        else         edges.push_back(json::array({e[0], e[1]}));
+    }
     j["edges"] = std::move(edges);
     j["curved"] = net.curved;
     if (!net.tangents.empty()) {
