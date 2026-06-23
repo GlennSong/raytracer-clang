@@ -513,7 +513,9 @@ TEST_CASE(level_writer_round_trips_script_recipe_flat) {
     world.add<Transform>(script, t);
     SourceSpec spec;
     spec.shape = "script";
-    spec.recipe = R"({"file":"city.lua","seed":7})";
+    // The recipe carries `opts` too: a Lua city reads them via setRecipeArgs, so a
+    // radial city that drops its opts on save reloads as city.lua's default grid.
+    spec.recipe = R"({"file":"city.lua","seed":7,"opts":{"pattern":"radial","spokes":6}})";
     world.add<SourceSpec>(script, spec);
 
     CHECK(LevelWriter::save(TMP_PATH, world));
@@ -525,6 +527,8 @@ TEST_CASE(level_writer_round_trips_script_recipe_flat) {
     CHECK(ent["shape"] == "script");
     CHECK(ent["file"] == "city.lua");          // flat, not nested under "script"
     CHECK(ent["seed"].get<int>() == 7);
+    CHECK(ent["opts"]["pattern"] == "radial");  // opts survive so radial != grid
+    CHECK(ent["opts"]["spokes"].get<int>() == 6);
     CHECK(!ent.contains("script"));            // no nested recipe block
     CHECK(!ent.contains("size"));              // the recipe owns its geometry
     CHECK(!ent.contains("material"));

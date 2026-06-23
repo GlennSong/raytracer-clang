@@ -651,6 +651,10 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         json recipe;
         recipe["file"] = file;
         if (ent.contains("seed")) recipe["seed"] = ent["seed"];
+        // Carry the recipe's `opts` so they survive the editor's save→reload: the
+        // script reads them via setRecipeArgs (`args`), so dropping them here makes
+        // e.g. a radial city fall back to city.lua's default grid on the next load.
+        if (ent.contains("opts")) recipe["opts"] = ent["opts"];
         spawnDocumentEntity(ent, "script", recipe.dump(), world);
     }
 
