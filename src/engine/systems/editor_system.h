@@ -5,6 +5,7 @@
 #include "camera_system.h"
 #include "../app_state.h"
 #include "../editor_bridge.h"
+#include "../path_edit_tool.h"   // road/curve handle dragging in the viewport (ADR-0050)
 #include "../undo_stack.h"
 #include <functional>
 #include <memory>
@@ -130,6 +131,10 @@ private:
     void drawGizmo(FrameContext& ctx);
     void drawGrid(FrameContext& ctx) const;
     void drawSelectionMarker(FrameContext& ctx) const;
+    // Road handle dragging: rebind the tool to the selected road and run the click/drag
+    // this frame; returns true when it grabbed a handle (so the click isn't also a pick).
+    bool updatePathEdit(FrameContext& ctx, bool click);
+    void drawPathHandles(FrameContext& ctx) const;
     void drawGroupMarkers(FrameContext& ctx) const;
     void drawCameraFrustums(FrameContext& ctx) const;
 
@@ -148,6 +153,13 @@ private:
     Entity lastNoticedSelection;   // edge detection for SelectionChanged
     std::size_t selectionSig = 0;  // folds the whole set for change detection
     bool prevMouseLeft = false;
+    // Viewport path editing (ADR-0050): the tool keeps drag state across frames; the
+    // source is re-seated when the selected road (or its net pointer) changes.
+    PathEditTool pathTool;
+    std::unique_ptr<RoadHandleSource> roadSource;
+    Entity pathEditEntity;
+    struct RoadNet* pathRoadNet = nullptr;
+    bool pathWasDragging = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
     bool gizmoWasUsing = false; // drag-edge detection for undo recording
     Transform gizmoDragStart;

@@ -3411,12 +3411,20 @@ handle pick + plane-drag, constant-speed + facing). **Why Bezier handle points:*
 what an editor drags directly and match DCC tools; converted to the Hermite the
 evaluation needs internally.
 
-**Deferred (the shell-coupled parts).** (1) The viewport `PathEditTool` — drawing the
-handles + the mouse loop (ImGui/Metal) — and the `HandleSource` binding + road adapter
-that go with it; compiles in engine_core but only runs in the editor, so it lands
-unverified here. (2) `AnimationPath` as an ECS component + a play/scrub system that writes
-the target `Transform` during sim. (3) Plane-constraint hotkeys + handle visuals are UI
-polish for the tool.
+**Landed since.** The `HandleSource` binding (Layer 2) with `CurveHandleSource` /
+`RoadHandleSource` adapters, and the `PathEditTool` state machine (Layer 3) — both
+headless and unit-tested (the pick → plane-drag → apply → regen loop runs against a curve
+or a road with synthetic rays). `EditorSystem` now drives a selected road's handles
+through the tool: `updatePathEdit` runs the click/drag each frame (handles get first
+refusal on the click, so a drag never re-selects), `drawPathHandles` renders the
+centreline + node/tangent dots. The drag-loop logic is verified in engine_core; only the
+ImGui draw + live mouse are exercised in the editor.
+
+**Deferred (the shell-coupled parts).** (1) `AnimationPath` as an ECS component + a
+play/scrub system that writes the target `Transform` during sim (animation playback —
+roads are the current focus). (2) Plane-constraint hotkeys (the tool's `setPlaneOverride`
+is in place and tested; binding G/X/Y/Z to it is editor input plumbing). (3) Road
+sub-object undo bracketing through `onGrab`/`onEdit`.
 
 ---
 

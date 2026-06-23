@@ -259,7 +259,11 @@ void EditorSystem::update(FrameContext& ctx) {
 
     bool click = ctx.input.mouseLeftDown && !prevMouseLeft;
     prevMouseLeft = ctx.input.mouseLeftDown;
-    if (click && !ctx.input.uiWantsMouse && !gizmoBusy)
+    bool active = !ctx.input.uiWantsMouse && !gizmoBusy;
+    // A road's node/tangent handles get first refusal on the click; only a miss falls
+    // through to object picking, so dragging a handle never re-selects under it.
+    bool pathGrabbed = updatePathEdit(ctx, click && active);
+    if (click && active && !pathGrabbed)
         pickAtCursor(ctx);
 
     processShellRequests(ctx);
@@ -378,6 +382,46 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
     }
 }
 
+// Drive the path-edit tool for the selected road this frame (ADR-0050). Returns true
+// when a handle was grabbed on this click, so update() skips object picking. Pure logic
+// (no ImGui) — the matching draw lives in drawPathHandles().
+bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
+    RoadNet* net = ctx.world.alive(selected) ? ctx.world.get<RoadNet>(selected) : nullptr;
+    if (!net) {
+        if (pathTool.bound()) pathTool.bind(nullptr);
+        roadSource.reset();
+        pathEditEntity = Entity{};
+        pathRoadNet = nullptr;
+        pathWasDragging = false;
+        return false;
+    }
+    // (Re)seat the handle source when the road — or its storage slot — changes, but never
+    // mid-drag: the world isn't structurally mutated while dragging, so the pointer holds.
+    if (!pathTool.dragging() && (!(pathEditEntity == selected) || pathRoadNet != net)) {
+        roadSource = std::make_unique<RoadHandleSource>(*net);
+        pathTool.bind(roadSource.get());
+        pathEditEntity = selected;
+        pathRoadNet = net;
+    }
+    // Rebuild the carriageway after each applied move (ctx is only touched synchronously,
+    // inside drag() below, so capturing it by reference is safe).
+    pathTool.onEdit([this, &ctx] { regenerateRoad(ctx.world, selected, ctx.renderer); });
+
+    PickRay pr = rayThroughCursor(ctx);
+    EditRay ray{pr.origin, pr.direction};
+    const CameraState& cam = ctx.view.camera;
+    Vec3 viewDir = normalize(cam.target - cam.position);
+    // Pick fatness scales with view distance so the dots stay grabbable when zoomed out.
+    double radius = 0.04 * (cam.position - cam.target).length() + 0.25;
+
+    bool grabbed = false;
+    if (click) grabbed = pathTool.beginDrag(ray, radius);
+    else if (pathTool.dragging() && ctx.input.mouseLeftDown) pathTool.drag(ray, viewDir);
+    if (pathWasDragging && !ctx.input.mouseLeftDown) pathTool.endDrag();
+    pathWasDragging = pathTool.dragging();
+    return grabbed;
+}
+
 Vec3 EditorSystem::spawnPoint(FrameContext& ctx) const {
     // A few meters in front of the view, so new objects appear where you look.
     const CameraState& cam = ctx.view.camera;
@@ -492,6 +536,7 @@ void EditorSystem::render(FrameContext& ctx) {
     drawGroupMarkers(ctx);
     drawGizmo(ctx);
     drawSelectionMarker(ctx);
+    drawPathHandles(ctx);
 }
 
 void EditorSystem::drawGroupMarkers(FrameContext& ctx) const {
@@ -930,6 +975,45 @@ void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
     }
 }
 
+// The selected road's edit overlay (ADR-0050): the centreline skeleton plus a dot per
+// node and a hollow ring per tangent handle, the grabbed one lit. Projection mirrors
+// drawSelectionMarker; the handle geometry comes from the bound HandleSource.
+void EditorSystem::drawPathHandles(FrameContext& ctx) const {
+    if (!pathTool.bound()) return;
+    const CameraState& cam = ctx.view.camera;
+    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
+                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    auto toScreen = [&](const Vec3& w, ImVec2& out) -> bool {
+        Vec3 vpos = view.transformPoint(w);
+        if (vpos.z > -1e-3) return false;          // behind the camera (-Z forward)
+        Vec3 ndc = proj.transformPoint(vpos);
+        out = ImVec2(vp->Pos.x + (static_cast<float>(ndc.x) * 0.5f + 0.5f) * vp->Size.x,
+                     vp->Pos.y + (0.5f - static_cast<float>(ndc.y) * 0.5f) * vp->Size.y);
+        return true;
+    };
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    ImVec2 a, b;
+    for (const std::pair<Vec3, Vec3>& seg : pathTool.previewSegments())
+        if (toScreen(seg.first, a) && toScreen(seg.second, b))
+            dl->AddLine(a, b, IM_COL32(80, 200, 255, 180), 2.0f);
+
+    std::vector<EditHandle> hs = pathTool.handles();
+    for (int i = 0; i < static_cast<int>(hs.size()); ++i) {
+        ImVec2 s;
+        if (!toScreen(hs[i].position, s)) continue;
+        bool grabbed = (i == pathTool.grabbedIndex());
+        bool tangent = hs[i].kind != HandleKind::Knot;
+        ImU32 col = grabbed   ? IM_COL32(255, 240, 80, 255)
+                    : tangent ? IM_COL32(120, 220, 120, 230)
+                              : IM_COL32(255, 170, 40, 230);
+        float r = grabbed ? 7.0f : 5.0f;
+        if (tangent) dl->AddCircle(s, r, col, 0, 2.0f);
+        else dl->AddCircleFilled(s, r, col);
+    }
+}
+
 #else  // !RT_ENABLE_IMGUI
 
 void EditorSystem::render(FrameContext& ctx) {
@@ -948,6 +1032,7 @@ void EditorSystem::drawInspector(FrameContext&) {}
 void EditorSystem::drawGizmo(FrameContext&) {}
 void EditorSystem::drawGrid(FrameContext&) const {}
 void EditorSystem::drawSelectionMarker(FrameContext&) const {}
+void EditorSystem::drawPathHandles(FrameContext&) const {}
 void EditorSystem::drawGroupMarkers(FrameContext&) const {}
 void EditorSystem::drawCameraFrustums(FrameContext&) const {}
 
