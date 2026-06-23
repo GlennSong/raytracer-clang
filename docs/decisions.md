@@ -3379,6 +3379,47 @@ whole-road move should go through the nodes or compose the Transform into the ha
 
 ---
 
+## ADR-0050 — A reusable curve-path toolkit (roads + animation), foundation first
+
+**Context.** Editing a road's nodes/tangents in the viewport is one instance of a more
+general need: *manipulating a control-point path in 3D*. The same widget should drive a
+**road network** AND an **animation path** — a curve painted in the world, associated with
+an object, that "plays" by driving the object along it — and let you move tangents in
+full 3D or lock to a plane. So rather than a road-only gizmo, build an independent toolkit
+that hooks onto various features.
+
+**Decision — four decoupled layers, foundation (the testable ones) first.**
+1. **`EditableCurve` (core, headless).** A 3D **cubic-Bezier** path. Knots carry handle
+   *points* (the chosen representation — Bezier control points stored as offsets so they
+   ride along when a knot moves) with a per-knot mode: **Auto** (handles derived from
+   neighbours via Catmull-Rom, resolved on the fly — no bake), **Aligned** (in/out
+   collinear; dragging one mirrors the other), **Broken** (independent corner). Provides
+   eval, **arc-length reparameterization** (constant-speed traversal), sampling, and edits.
+2. **`curve_edit` manipulator math (headless).** `nearestHandle` (pick the dot under a
+   ray) and `projectDrag` (land a dragged handle on a constraint plane through its current
+   position): **Ground/XZ, XY, YZ, Screen**. Pure geometry — reusable by any handle gizmo.
+3. **Bindings** (`HandleSource`-style adapter, to come with the tool). Roads stay a
+   branching `RoadNet` graph and route edits to the ops already built; animation paths use
+   `EditableCurve` directly. Lets the *same* tool drive different data.
+4. **`AnimationPath` + `animationPose` (data + pure evaluator).** Curve + duration + loop
+   (Once/Loop/PingPong) + face-along-tangent. The evaluator walks the curve at constant
+   speed and orients +Z along travel — the "play / isolated-sim" side; editing (when not
+   simulating) uses the same handles.
+
+Layers 1, 2, and 4's evaluator are pure and unit-tested here (curve eval/arc-length,
+handle pick + plane-drag, constant-speed + facing). **Why Bezier handle points:** they're
+what an editor drags directly and match DCC tools; converted to the Hermite the
+evaluation needs internally.
+
+**Deferred (the shell-coupled parts).** (1) The viewport `PathEditTool` — drawing the
+handles + the mouse loop (ImGui/Metal) — and the `HandleSource` binding + road adapter
+that go with it; compiles in engine_core but only runs in the editor, so it lands
+unverified here. (2) `AnimationPath` as an ECS component + a play/scrub system that writes
+the target `Transform` during sim. (3) Plane-constraint hotkeys + handle visuals are UI
+polish for the tool.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
