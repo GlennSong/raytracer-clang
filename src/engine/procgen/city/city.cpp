@@ -371,6 +371,7 @@ CityModel generateCity(const CityParams& cp) {
     rmp.lift = roadThickness;
     rmp.color = asphaltCol;
     rmp.minSetback = roadW * 0.5 + 0.5;     // pad clears the curb corners
+    rmp.cornerRadius = 3.0;                  // rounded kerb returns at intersections
     rmp.sidewalkWidth = 0.0;                // the block aprons are the sidewalks
     rmp.laneMarkings = true;
     rmp.laneWidth = 3.6; rmp.markWidth = 0.18; rmp.markLift = 0.04;

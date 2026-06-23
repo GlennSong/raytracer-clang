@@ -309,6 +309,7 @@ function M.generate(o)
       curb = opt(o, "curb", 0.16), markings = true,
       mark_width = opt(o, "mark_width", 0.18),
       crosswalks = opt(o, "crosswalks", true),
+      corner_radius = opt(o, "corner_radius", 3.0),
       plaza = opt(o, "plaza", 0) }), surf)
   else
     m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,

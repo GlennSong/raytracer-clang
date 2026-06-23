@@ -53,29 +53,37 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     // (vertical face toward the street), the slab top (raised curbHeight above the
     // road), and an outer face dropping back to the ground — so the kerb reads as
     // a real raised sidewalk, not a painted stripe. No-op when disabled.
-    auto curbBand = [&](const Vec2& P0, const Vec2& P1, const Vec2& outN) {
+    // A continuous sidewalk between an inner rail (the carriageway edge) and an outer
+    // rail: curb lip toward the street, raised slab, outer face dropping to the
+    // ground, split lengthwise only where the terrain bends. Used for both the chain
+    // verges and the junction corners, so the kerb sweeps every corner as one rail
+    // (no fanned slats) and there's no notch where pieces meet. No-op when disabled.
+    auto sidewalkRail = [&](const std::vector<Vec2>& inner, const std::vector<Vec2>& outer) {
         if (p.sidewalkWidth <= 0.0) return;
-        double len = (P1 - P0).length();
-        if (len < 1e-3) return;
-        int segs = stripSegs(P0, P1);
+        int n = static_cast<int>(inner.size());
         const Vec3 nUp(0, 1, 0);
-        const Vec3 nIn(-outN.x, 0, -outN.y);    // curb lip faces the carriageway
-        const Vec3 nOut(outN.x, 0, outN.y);     // outer face faces away
-        for (int s = 1; s <= segs; ++s) {
-            Vec2 q0 = lerp(P0, P1, static_cast<double>(s - 1) / segs);
-            Vec2 q1 = lerp(P0, P1, static_cast<double>(s) / segs);
-            Vec2 o0 = q0 + outN * p.sidewalkWidth, o1 = q1 + outN * p.sidewalkWidth;
-            double r0 = height(q0.x, q0.y), r1 = height(q1.x, q1.y);   // road surface
-            double t0 = r0 + p.curbHeight, t1 = r1 + p.curbHeight;     // slab top
-            double g0 = std::min(ground(o0.x, o0.y), t0 - 0.01);       // outer foot
-            double g1 = std::min(ground(o1.x, o1.y), t1 - 0.01);
-            Vec3 a0(q0.x, r0, q0.y), a1(q1.x, r1, q1.y);   // curb base (at road)
-            Vec3 b0(q0.x, t0, q0.y), b1(q1.x, t1, q1.y);   // curb top / slab inner
-            Vec3 c0(o0.x, t0, o0.y), c1(o1.x, t1, o1.y);   // slab outer
-            Vec3 d0(o0.x, g0, o0.y), d1(o1.x, g1, o1.y);   // outer foot
-            MeshBuilder::emitQuad(mesh, a0, a1, b1, b0, nIn, p.curbColor);
-            MeshBuilder::emitQuad(mesh, b0, b1, c1, c0, nUp, p.sidewalkColor);
-            MeshBuilder::emitQuad(mesh, c0, c1, d1, d0, nOut, p.curbColor);
+        for (int i = 0; i < n - 1; ++i) {
+            Vec2 toStreet = inner[i] - outer[i];                 // outer -> inner = toward road
+            double tl = toStreet.length();
+            Vec2 inDir = (tl > 1e-9) ? toStreet / tl : perp(inner[i + 1] - inner[i]);
+            Vec3 nIn(inDir.x, 0, inDir.y), nOut(-inDir.x, 0, -inDir.y);
+            int segs = stripSegs(inner[i], inner[i + 1]);
+            for (int s = 1; s <= segs; ++s) {
+                double u0 = static_cast<double>(s - 1) / segs, u1 = static_cast<double>(s) / segs;
+                Vec2 a0 = lerp(inner[i], inner[i + 1], u0), a1 = lerp(inner[i], inner[i + 1], u1);
+                Vec2 c0 = lerp(outer[i], outer[i + 1], u0), c1 = lerp(outer[i], outer[i + 1], u1);
+                double r0 = height(a0.x, a0.y), r1 = height(a1.x, a1.y);
+                double t0 = r0 + p.curbHeight, t1 = r1 + p.curbHeight;
+                double g0 = std::min(ground(c0.x, c0.y), t0 - 0.01);
+                double g1 = std::min(ground(c1.x, c1.y), t1 - 0.01);
+                Vec3 A0(a0.x, r0, a0.y), A1(a1.x, r1, a1.y);
+                Vec3 B0(a0.x, t0, a0.y), B1(a1.x, t1, a1.y);
+                Vec3 C0(c0.x, t0, c0.y), C1(c1.x, t1, c1.y);
+                Vec3 D0(c0.x, g0, c0.y), D1(c1.x, g1, c1.y);
+                MeshBuilder::emitQuad(mesh, A0, A1, B1, B0, nIn, p.curbColor);
+                MeshBuilder::emitQuad(mesh, B0, B1, C1, C0, nUp, p.sidewalkColor);
+                MeshBuilder::emitQuad(mesh, C0, C1, D1, D0, nOut, p.curbColor);
+            }
         }
     };
 
@@ -114,15 +122,6 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         }
     };
 
-    // Turn the kerb around a corner at node V, from curb point P0 to P1 (outward =
-    // away from V). Used at junction corners AND at simple bends, so adjacent
-    // sidewalks join cleanly instead of leaving a notch where the kerbs meet.
-    auto cornerBand = [&](const Vec2& V, const Vec2& P0, const Vec2& P1) {
-        if ((P1 - P0).length() < 1e-3) return;
-        Vec2 oN = normalize(perp(P1 - P0));
-        if (dot(oN, (P0 + P1) * 0.5 - V) < 0) oN = oN * -1.0;
-        curbBand(P0, P1, oN);
-    };
 
     // Incident edges per node.
     std::vector<std::vector<int>> inc(nNodes);
@@ -200,28 +199,71 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
                             ? std::max(p.minSetback, p.plazaRadius)
                             : p.minSetback;
 
-        // Clamp + record the trims, and lay out the pad ring.
-        std::vector<Vec2> ring;   // CCW: each arm contributes [right point, left point]
-        for (Arm& a : arms) {
+        // Clamp + record the trims, lay out the per-arm mouth corners (an extra
+        // cornerRadius of setback makes room for the rounded kerb returns).
+        std::vector<Vec2> mouthR(m), mouthL(m);
+        for (int k = 0; k < m; ++k) {
+            Arm& a = arms[k];
             double maxS = edgeLen(a.edge) * 0.45;
-            a.s = std::min(std::max(a.s, floorS), std::max(floorS, maxS));
+            a.s = std::min(std::max(a.s + p.cornerRadius, floorS), std::max(floorS, maxS));
             int end = (g.edges[a.edge].a == v) ? 0 : 1;
             trim[a.edge][end] = a.s;
             Vec2 base = V + a.d * a.s;
-            ring.push_back(base - perp(a.d) * a.w);   // right
-            ring.push_back(base + perp(a.d) * a.w);   // left
+            mouthR[k] = base - perp(a.d) * a.w;
+            mouthL[k] = base + perp(a.d) * a.w;
         }
-        // Fan-triangulate the pad from the node centre.
+        // Each corner runs from arm k's LEFT mouth to arm k+1's RIGHT mouth. With a
+        // cornerRadius it is a circular arc centred where the two arms' kerb lines
+        // cross (a real rounded kerb return); otherwise a straight chamfer. Near-
+        // straight corners (a side road off a through street) stay straight.
+        std::vector<std::vector<Vec2>> corner(m);
+        for (int k = 0; k < m; ++k) {
+            const Arm& A = arms[k]; const Arm& B = arms[(k + 1) % m];
+            Vec2 Aleft = mouthL[k], Bright = mouthR[(k + 1) % m];
+            std::vector<Vec2>& cc = corner[k];
+            cc.push_back(Aleft);
+            double denom = cross(A.d, B.d);
+            if (p.cornerRadius > 0.0 && std::fabs(denom) > 0.25) {
+                Vec2 pA = V + perp(A.d) * A.w, pB = V - perp(B.d) * B.w;
+                Vec2 C = pA + A.d * (cross(pB - pA, B.d) / denom);   // kerb-line crossing
+                double a0 = std::atan2(Aleft.y - C.y, Aleft.x - C.x);
+                double a1 = std::atan2(Bright.y - C.y, Bright.x - C.x);
+                double sweep = a1 - a0;
+                while (sweep < -3.14159265) sweep += 2 * 3.14159265;
+                while (sweep >  3.14159265) sweep -= 2 * 3.14159265;
+                double rA = (Aleft - C).length(), rB = (Bright - C).length();
+                int steps = std::max(2, static_cast<int>(std::ceil(std::fabs(sweep) / 0.4)));
+                for (int s = 1; s < steps; ++s) {
+                    double t = static_cast<double>(s) / steps;
+                    double ang = a0 + sweep * t, rr = rA + (rB - rA) * t;
+                    cc.push_back(C + Vec2(std::cos(ang), std::sin(ang)) * rr);
+                }
+            }
+            cc.push_back(Bright);
+        }
+        // Fan-triangulate the pad from the node centre: each arm's mouth, then its
+        // outgoing corner (mouth left -> arc -> next mouth right).
+        std::vector<Vec2> ring;
+        for (int k = 0; k < m; ++k) {
+            ring.push_back(mouthR[k]);
+            for (std::size_t i = 0; i + 1 < corner[k].size(); ++i) ring.push_back(corner[k][i]);
+        }
         Vec3 c = to3d(V);
         int rn = static_cast<int>(ring.size());
         for (int k = 0; k < rn; ++k)
             addTri(c, to3d(ring[k]), to3d(ring[(k + 1) % rn]));
 
-        // Sidewalk corners: the pad boundary between consecutive arms (arm k's
-        // left point round to arm k+1's right point) is a kerb corner, not a road
-        // mouth — skirt it so the sidewalk turns the corner instead of gapping.
-        for (int k = 0; k < m; ++k)
-            cornerBand(V, ring[2 * k + 1], ring[2 * ((k + 1) % m)]);
+        // Sidewalk wraps each corner as ONE rail — inner = the corner polyline, outer
+        // = each point pushed radially out from the node — so the kerb sweeps a
+        // rounded corner smoothly instead of fanning into disjoint slats.
+        for (int k = 0; k < m; ++k) {
+            std::vector<Vec2> out(corner[k].size());
+            for (std::size_t i = 0; i < corner[k].size(); ++i) {
+                Vec2 rad = corner[k][i] - V; double rl = rad.length();
+                out[i] = corner[k][i] + ((rl > 1e-6) ? rad / rl : Vec2(0, 1)) * p.sidewalkWidth;
+            }
+            sidewalkRail(corner[k], out);
+        }
 
         // Crosswalk across each arm, just outside the pad mouth (where the ribbon
         // begins) — so a crossing lands exactly at the intersection. Skip arms with
@@ -269,37 +311,6 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     // stroke it as a single ribbon with MITRED joins — so a sampled curve is one
     // smooth strip and the markings run unbroken down its length. Chains break at
     // junctions (degree != 2), hairpins (turned by a disc above) and dead ends.
-
-    // Continuous sidewalk along an inner rail (carriageway edge) and its outer rail:
-    // curb lip toward the street, raised slab, outer face dropping to the ground.
-    auto sidewalkRail = [&](const std::vector<Vec2>& inner, const std::vector<Vec2>& outer) {
-        if (p.sidewalkWidth <= 0.0) return;
-        int n = static_cast<int>(inner.size());
-        const Vec3 nUp(0, 1, 0);
-        for (int i = 0; i < n - 1; ++i) {
-            Vec2 toStreet = inner[i] - outer[i];                 // outer -> inner = toward road
-            double tl = toStreet.length();
-            Vec2 inDir = (tl > 1e-9) ? toStreet / tl : perp(inner[i + 1] - inner[i]);
-            Vec3 nIn(inDir.x, 0, inDir.y), nOut(-inDir.x, 0, -inDir.y);
-            int segs = stripSegs(inner[i], inner[i + 1]);
-            for (int s = 1; s <= segs; ++s) {
-                double u0 = static_cast<double>(s - 1) / segs, u1 = static_cast<double>(s) / segs;
-                Vec2 a0 = lerp(inner[i], inner[i + 1], u0), a1 = lerp(inner[i], inner[i + 1], u1);
-                Vec2 c0 = lerp(outer[i], outer[i + 1], u0), c1 = lerp(outer[i], outer[i + 1], u1);
-                double r0 = height(a0.x, a0.y), r1 = height(a1.x, a1.y);
-                double t0 = r0 + p.curbHeight, t1 = r1 + p.curbHeight;
-                double g0 = std::min(ground(c0.x, c0.y), t0 - 0.01);
-                double g1 = std::min(ground(c1.x, c1.y), t1 - 0.01);
-                Vec3 A0(a0.x, r0, a0.y), A1(a1.x, r1, a1.y);
-                Vec3 B0(a0.x, t0, a0.y), B1(a1.x, t1, a1.y);
-                Vec3 C0(c0.x, t0, c0.y), C1(c1.x, t1, c1.y);
-                Vec3 D0(c0.x, g0, c0.y), D1(c1.x, g1, c1.y);
-                MeshBuilder::emitQuad(mesh, A0, A1, B1, B0, nIn, p.curbColor);
-                MeshBuilder::emitQuad(mesh, B0, B1, C1, C0, nUp, p.sidewalkColor);
-                MeshBuilder::emitQuad(mesh, C0, C1, D1, D0, nOut, p.curbColor);
-            }
-        }
-    };
 
     // Paint a thin draped stripe down a (continuous, already-offset) polyline — solid
     // or dashed with a phase that carries across the joints so the dashes are even.

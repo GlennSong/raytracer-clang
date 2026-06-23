@@ -170,7 +170,7 @@ local function build_city(layout_opts, cx, cz, kind)
   m:conform(regions)
   m:add_solid(city.road_mesh(lay, { height = field, lift = 0.06, sidewalk = 2.4,
     curb = 0.16, markings = true, mark_width = 0.18, crosswalks = true,
-    plaza = (kind == "radial") and 16 or 0 }))
+    corner_radius = 3.0, plaza = (kind == "radial") and 16 or 0 }))
   place_city(plan, kind)
 
   -- street lamps along the longer edges

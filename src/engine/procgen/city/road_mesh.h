@@ -32,6 +32,12 @@ struct RoadMeshParams {
     // it is built as a junction-style turning pad (a switchback bulb) instead of a
     // simple bend. 0 disables. (pi*0.6 ~ 108-degree turn.)
     double hairpinDeflection = 0.0;
+    // Rounded curb returns: a junction corner (between two adjacent arms) is filled
+    // with a circular arc of this radius instead of a straight chamfer, so the
+    // intersection corners read as real rounded kerbs and the sidewalk wraps them
+    // with no notch. The arms are set back an extra `cornerRadius` to make room.
+    // 0 = the plain straight chamfer (no extra setback).
+    double cornerRadius = 0.0;
     // Sidewalks: a raised skirt along the carriageway edges (and around the
     // junction corners) — a curb lip facing the street, a concrete slab top, and
     // an outer face dropping back to the ground. 0 width = no sidewalks.
