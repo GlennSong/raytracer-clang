@@ -1425,12 +1425,55 @@ std::vector<UnionSpine> readUnionSpines(lua_State* L, int tbl) {
     return spines;
 }
 
-// city.roadbed{ spines={...}, cell=, sidewalk=, curb=, lift=, grain=, height=,
-//   road_color=, sidewalk_color=, curb_color= } -> one draped roadbed mesh: merged
-//   carriageway + raised sidewalk + curb, seated on the `height` field (ADR-0048).
+// Spines from either an explicit `spines` list OR a `layout` (a city.layout result):
+// each graph edge becomes a spine, half-width from its width. The bridge that lets the
+// road GENERATORS feed straight into the union/roadbed pipeline.
+std::vector<UnionSpine> readSpinesArg(lua_State* L, int tbl) {
+    lua_getfield(L, tbl, "layout");
+    if (lua_istable(L, -1)) {
+        int layoutIdx = lua_gettop(L);
+        std::vector<Vec2> nodes;
+        lua_getfield(L, layoutIdx, "nodes");
+        if (lua_istable(L, -1)) {
+            lua_Integer nn = luaL_len(L, -1);
+            for (lua_Integer i = 1; i <= nn; ++i) {
+                lua_geti(L, -1, i);
+                nodes.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);                                  // nodes
+        std::vector<UnionSpine> spines;
+        lua_getfield(L, layoutIdx, "edges");
+        if (lua_istable(L, -1)) {
+            lua_Integer ne = luaL_len(L, -1);
+            for (lua_Integer i = 1; i <= ne; ++i) {
+                lua_geti(L, -1, i);
+                int a = static_cast<int>(optField(L, -1, "a", 0)) - 1;   // 1-based -> 0
+                int b = static_cast<int>(optField(L, -1, "b", 0)) - 1;
+                double w = optField(L, -1, "width", 8.0);
+                lua_pop(L, 1);
+                if (a >= 0 && b >= 0 && a < static_cast<int>(nodes.size()) &&
+                    b < static_cast<int>(nodes.size()) && a != b) {
+                    UnionSpine s; s.halfWidth = w * 0.5; s.points = { nodes[a], nodes[b] };
+                    spines.push_back(std::move(s));
+                }
+            }
+        }
+        lua_pop(L, 1);                                  // edges
+        lua_pop(L, 1);                                  // layout
+        return spines;
+    }
+    lua_pop(L, 1);                                      // (no layout)
+    return readUnionSpines(L, tbl);
+}
+
+// city.roadbed{ spines={...} | layout=city.layout{...}, cell=, sidewalk=, curb=, lift=,
+//   grain=, height=, road_color=, sidewalk_color=, curb_color= } -> one draped roadbed
+//   mesh: merged carriageway + raised sidewalk + curb, seated on `height` (ADR-0048).
 int l_city_roadbed(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readUnionSpines(L, 1);
+    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
     RoadbedParams rp;
     rp.cell = optField(L, 1, "cell", rp.cell);
     rp.sidewalkWidth = optField(L, 1, "sidewalk", rp.sidewalkWidth);
@@ -1455,28 +1498,7 @@ int l_city_roadbed(lua_State* L) {
 //   every crossing (ADR-0048). `cell` is the grid resolution (smaller = crisper).
 int l_city_union(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines;
-    lua_getfield(L, 1, "spines");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer ns = luaL_len(L, -1);
-    for (lua_Integer si = 1; si <= ns; ++si) {
-        lua_geti(L, -1, si);                            // a spine table
-        UnionSpine sp;
-        sp.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
-        sp.closed = optBoolField(L, -1, "closed", false);
-        lua_getfield(L, -1, "points");
-        luaL_checktype(L, -1, LUA_TTABLE);
-        lua_Integer np = luaL_len(L, -1);
-        for (lua_Integer pi = 1; pi <= np; ++pi) {
-            lua_geti(L, -1, pi);
-            sp.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);                                  // points
-        spines.push_back(std::move(sp));
-        lua_pop(L, 1);                                  // spine
-    }
-    lua_pop(L, 1);                                      // spines
+    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
     double cell = optField(L, 1, "cell", 1.5);
     double y = optField(L, 1, "y", 0.0);
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));

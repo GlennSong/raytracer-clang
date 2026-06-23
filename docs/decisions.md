@@ -3255,7 +3255,12 @@ grid that looked wasteful when flat is exactly what lets it **drape smoothly ove
 ground**. Per-band vertex colours carry a grain, and the mesh takes a procedural
 asphalt/concrete material (`add_solid(mesh, material)`, world-planar) on top. Exposed
 as `city.roadbed{ spines, cell, sidewalk, curb, height }`; `roadbed_demo.lua` drapes a
-small network on hills. Test: a straight road grows a sidewalk band (covered just
+small network on hills. And it's wired to the actual generators: a `RoadGraph`
+overload (`graphToSpines` → one spine per edge, half-width from the edge width) and a
+Lua `layout=` argument let `city.layout`/`gridRoads`/`radialRoads`/`tensorRoads`
+output feed straight in — so the engine converts its generated splines to a merged,
+draped roadbed in one call (`roadbed_network.lua` roadbeds a terrain-aware tensor
+network on its own terrain). Test: a straight road grows a sidewalk band (covered just
 outside the carriageway, nothing past it) and its vertices follow the terrain ramp.
 Still owed for *crisp* roads: lane markings (the union has no centerline-parameter, so
 markings want either the curve back-reference from the deferred RoadCurve model, or a

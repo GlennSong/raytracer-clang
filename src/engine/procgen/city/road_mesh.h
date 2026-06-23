@@ -102,6 +102,13 @@ struct RoadbedParams {
 };
 RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedParams& params);
 
+// Convert a road GRAPH's edges to spines (one per edge, half-width from its width) and
+// build the roadbed. The bridge from a generated network (city.layout / gridRoads /
+// radialRoads / tensorRoads) to a draped, merged, non-overlapping ribbon surface — so
+// the engine's road generators feed straight into the union/roadbed pipeline.
+RenderMesh unionRoadbed(const RoadGraph& graph, const RoadbedParams& params);
+std::vector<UnionSpine> graphToSpines(const RoadGraph& graph);
+
 }  // namespace engine
 
 #endif

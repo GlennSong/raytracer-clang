@@ -554,4 +554,21 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
     return mesh;
 }
 
+std::vector<UnionSpine> graphToSpines(const RoadGraph& graph) {
+    std::vector<UnionSpine> spines;
+    spines.reserve(graph.edges.size());
+    for (const RoadEdge& e : graph.edges) {
+        if (e.a == e.b) continue;
+        UnionSpine s;
+        s.halfWidth = e.width * 0.5;
+        s.points = { graph.nodes[e.a].pos, graph.nodes[e.b].pos };
+        spines.push_back(std::move(s));
+    }
+    return spines;
+}
+
+RenderMesh unionRoadbed(const RoadGraph& graph, const RoadbedParams& params) {
+    return unionRoadbed(graphToSpines(graph), params);
+}
+
 }  // namespace engine

@@ -228,6 +228,21 @@ TEST_CASE(union_roadbed_adds_a_sidewalk_band_and_drapes) {
     CHECK(maxY - minY > 0.5);                // it follows the ramp, not flat
 }
 
+TEST_CASE(union_roadbed_from_graph_converts_edges) {
+    // ADR-0048: the RoadGraph overload turns each edge into a spine, so a generated
+    // network (an X crossing here) roadbeds into one merged surface covering the join.
+    RoadGraph g;
+    int a = g.addNode(Vec2(-30,0)), b = g.addNode(Vec2(30,0));
+    int c = g.addNode(Vec2(0,-30)), d = g.addNode(Vec2(0,30));
+    g.addEdge(a, b, 10); g.addEdge(c, d, 10);
+    CHECK(graphToSpines(g).size() == 2u);                // one spine per edge
+    RoadbedParams p; p.cell = 0.6; p.sidewalkWidth = 2.0;
+    RenderMesh m = unionRoadbed(g, p);
+    CHECK(!m.vertices.empty());
+    CHECK(meshCoversXZ(m, 1.0, 1.0));                    // the crossing is merged
+    CHECK(meshCoversXZ(m, 25.0, 0.3));                   // an arm
+}
+
 TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {
     // ADR-0048: a sharp degree-2 reversal (legs nearly parallel = ~160-degree
     // deflection) can't be a simple bend — the widened ribbon folds. With hairpin
