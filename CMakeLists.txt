@@ -42,6 +42,7 @@ add_library(engine_core STATIC
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
     src/engine/handle_source.cpp
+    src/engine/path_edit_tool.cpp
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
