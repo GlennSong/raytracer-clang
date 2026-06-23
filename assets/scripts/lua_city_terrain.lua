@@ -32,7 +32,8 @@ local function build()
 
   -- Roads: a connected surface with junction geometry (ribbons trimmed back to
   -- the curb corners, intersection pads filling the gaps), draped on the terrain.
-  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09} }))
+  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09},
+    sidewalk = 2.4, curb = 0.16, markings = true, mark_width = 0.18, crosswalks = true }))
 
   -- A building per block, seated on the ground: sample the footprint corners,
   -- floor the building on the HIGH corner and run a foundation plinth down to the

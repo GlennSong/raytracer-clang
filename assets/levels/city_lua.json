@@ -7,7 +7,9 @@
     {
       "name": "city",
       "shape": "script",
-      "file": "city.lua"
+      "file": "city.lua",
+      "opts": { "pattern": "grid", "seed": 7, "roadbed": true,
+                "sidewalk": 2.6, "curb": 0.16 }
     }
   ],
   "lighting": {

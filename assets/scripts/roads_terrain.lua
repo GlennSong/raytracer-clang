@@ -21,6 +21,7 @@ m:add(terrain.mesh(land, { size = 520, resolution = 260, color = {0.36, 0.44, 0.
 -- A connected road surface (ribbons trimmed to the junctions, gaps filled with
 -- intersection pads), riding the now-flat corridors just clear of the ground.
 m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3, color = {0.07, 0.07, 0.08},
-                                  sidewalk = 2.5, curb = 0.16, markings = true }))
+                                  sidewalk = 2.5, curb = 0.16, markings = true,
+                                  mark_width = 0.18, crosswalks = true }))
 
 return m
