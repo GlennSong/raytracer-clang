@@ -40,6 +40,7 @@ add_library(engine_core STATIC
     src/engine/mesh_builder.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
+    src/engine/animation_path.cpp
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
