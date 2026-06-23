@@ -212,27 +212,6 @@ void emitStairs(RenderMesh& mesh, const Vec3& mid, const Vec2& outDir, Real topY
     (void)side;
 }
 
-
-// A zebra crosswalk centred at `center`, bars perpendicular to pedestrian travel
-// (i.e. running along the road `dir`), repeated across the road width. Flat at y.
-void emitCrosswalk(RenderMesh& mesh, const Vec2& center, const Vec2& dir,
-                   Real roadW, Real y, const Vec3& col) {
-    Vec2 d = normalize(dir), across = perp(d);
-    Real depth = 2.6, bar = 0.55, gap = 0.5;
-    int n = std::max(1, static_cast<int>(roadW / (bar + gap)));
-    Vec3 nrm(0, 1, 0);
-    for (int i = 0; i < n; ++i) {
-        Real s = -roadW * 0.5 + bar * 0.5 + i * (bar + gap);
-        if (std::fabs(s) > roadW * 0.5 - bar * 0.4) continue;
-        Vec2 bc = center + across * s;
-        auto corner = [&](Real ld, Real la) {
-            Vec2 p = bc + d * (depth * 0.5 * ld) + across * (bar * 0.5 * la);
-            return Vec3(p.x, y + 0.03, p.y);
-        };
-        pushQuad(mesh, corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1), nrm, col);
-    }
-}
-
 // A real street tree (ADR-0041): the parametric L-system tree (procgen/tree
 // growTree — generalized-cylinder branches + alpha-cut leaf cards), with a
 // thicker trunk/limbs than the forest default and no surface roots (it sits in a
@@ -352,20 +331,19 @@ CityModel generateCity(const CityParams& cp) {
         return nodeGrade[best];
     };
 
-    // Roads as ONE merged, non-overlapping surface (ADR-0044/0048). The naive
-    // "full-width ribbon per edge" stacks and z-fights where streets cross (worst
-    // at a 4-way), so instead the carriageway is the UNION of the edge spines
-    // (signed-distance field + marching squares), which merges junctions cleanly,
-    // and a yellow centreline is traced down each road chain (laneMarkings), pulled
-    // back from the intersections. Both are draped on the engineered STREET grade
-    // (flat across, linear along each edge) — not the raw terrain — so they sit
-    // level with the block aprons at the curb. The aprons remain the sidewalks, so
-    // the roadbed itself carries no sidewalk band here.
+    // Roads as ONE junction-aware surface (ADR-0044/0048). Rather than a full-width
+    // ribbon per edge (which stacks and z-fights where streets cross) or a uniform
+    // dense SDF grid (which spends polygons everywhere), buildRoadMesh trims each
+    // ribbon back to the curb corner, fills only the intersection with a pad, runs a
+    // simple strip between junctions (split only where the terrain bends), and draws
+    // the lane markings + crosswalks on the trimmed span — so the markings stop at the
+    // intersection and a crossing lands exactly at each junction mouth. The block
+    // aprons remain the sidewalks, so the carriageway carries no sidewalk band here.
     Vec3 sidewalkCol(0.52, 0.52, 0.50), asphaltCol(0.12, 0.12, 0.13),
          retainCol(0.42, 0.42, 0.42), yellow(0.72, 0.62, 0.12), white(0.78, 0.78, 0.76);
     const Real roadThickness = 0.12;   // carriageway slab depth over the cut ground
     const Real roadW = 12.0;           // fill the corridor (= 2 x apron setback)
-    for (RoadEdge& e : graph.edges) e.width = roadW;   // spine width for the union
+    for (RoadEdge& e : graph.edges) e.width = roadW;   // ribbon width
 
     auto appendMesh = [](RenderMesh& dst, const RenderMesh& src) {
         uint32_t base = static_cast<uint32_t>(dst.vertices.size());
@@ -374,8 +352,8 @@ CityModel generateCity(const CityParams& cp) {
     };
 
     // Smooth street grade: project a point onto its nearest road edge and lerp the
-    // node grades along it — the same flat-across/linear-along surface the old
-    // per-edge carriageway drew, but as a field the union grid can sample anywhere.
+    // node grades along it — flat across, linear along each edge — so the carriageway
+    // sits level with the block aprons at the curb.
     auto roadGradeAt = [&](double x, double z) -> double {
         Vec2 pt(x, z); Real bestD = 1e30, bestY = cp.baseY;
         for (const RoadEdge& e : graph.edges) {
@@ -388,24 +366,20 @@ CityModel generateCity(const CityParams& cp) {
         return bestY;
     };
 
-    // Merged carriageway (no sidewalk band — the block aprons are the sidewalks),
-    // seated a slab-thickness above the cut grade.
-    RoadbedParams rbp;
-    rbp.cell = 0.7; rbp.sidewalkWidth = 0.0; rbp.curbHeight = 0.0;
-    rbp.lift = roadThickness; rbp.grain = 0.05; rbp.roadColor = asphaltCol;
-    rbp.heightAt = [&](double x, double z) { return roadGradeAt(x, z); };
-    appendMesh(model.roads, unionRoadbed(graph, rbp));
-
-    // Yellow centreline down each chain, broken at the junctions, floated just over
-    // the asphalt.
-    LaneMarkParams lmp;
-    lmp.markWidth = 0.22; lmp.trim = 8.0; lmp.lift = roadThickness + 0.04;
-    lmp.dashLength = 0.0; lmp.color = yellow;
-    lmp.heightAt = [&](double x, double z) { return roadGradeAt(x, z); };
-    appendMesh(model.roads, laneMarkings(graph, lmp));
+    RoadMeshParams rmp;
+    rmp.heightAt = [&](double x, double z) { return roadGradeAt(x, z); };
+    rmp.lift = roadThickness;
+    rmp.color = asphaltCol;
+    rmp.minSetback = roadW * 0.5 + 0.5;     // pad clears the curb corners
+    rmp.sidewalkWidth = 0.0;                // the block aprons are the sidewalks
+    rmp.laneMarkings = true;
+    rmp.laneWidth = 3.6; rmp.markWidth = 0.18; rmp.markLift = 0.04;
+    rmp.laneColor = white; rmp.centerColor = yellow;
+    rmp.crosswalks = true; rmp.crosswalkColor = white;
+    appendMesh(model.roads, buildRoadMesh(graph, rmp));
 
     // Cut the terrain to the carriageway grade under each road so the ground meets
-    // the merged surface instead of poking through it.
+    // the road surface instead of poking through it.
     if (cp.groundAt)
         for (const RoadEdge& e : graph.edges) {
             Vec2 a = graph.nodes[e.a].pos, b = graph.nodes[e.b].pos;
@@ -458,16 +432,18 @@ CityModel generateCity(const CityParams& cp) {
         if (degree[ni] < 3) continue;
         Vec2 node = graph.nodes[ni].pos;
         Real y = nodeGrade[ni];
-        Real roadY = y + roadThickness;              // sit markings on the carriageway
         for (int oj : incident[ni]) {
             Vec2 other = graph.nodes[oj].pos;
             Vec2 toNode = node - other;              // travel toward the node
             Real len = toNode.length();
             if (len < 2 * crossSet + 3.0) continue;  // arm too short to mark
             Vec2 d = toNode / len;                   // approach direction
-            Vec2 cwCenter = node - d * crossSet;     // crosswalk across this arm
-            emitCrosswalk(model.roads, cwCenter, d, roadW, roadY, white);
-            emitStopBar(model.roads, node - d * (crossSet + 1.6), d, roadW, roadY, white);
+            // The crosswalk itself is drawn by buildRoadMesh at the junction mouth;
+            // here we add a stop bar just behind it, draped on the road surface (so it
+            // isn't buried where the grade rises away from the node).
+            Vec2 sbCenter = node - d * (crossSet + 1.6);
+            Real sbY = roadGradeAt(sbCenter.x, sbCenter.y) + roadThickness + 0.02;
+            emitStopBar(model.roads, sbCenter, d, roadW, sbY, white);
             // Near-right corner (drive-on-the-right): back from the node along the
             // arm and out to the right kerb. Signal head faces approaching traffic.
             Vec2 right(d.y, -d.x);

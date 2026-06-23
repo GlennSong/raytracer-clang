@@ -50,6 +50,19 @@ struct RoadMeshParams {
     double dashLength = 3.0, dashGap = 3.0;   // lane-divider dash pattern (m)
     Vec3   laneColor{0.85, 0.85, 0.82};       // white lines
     Vec3   centerColor{0.80, 0.70, 0.12};     // yellow centreline
+    // Crosswalks: a zebra band laid across each junction arm, just outside the
+    // intersection (at the curb-corner trim where the ribbon meets the pad), so a
+    // crossing appears exactly where two roads meet. Off by default.
+    bool   crosswalks = false;
+    double crosswalkDepth = 2.6;        // band length along the road (m)
+    double crosswalkBar = 0.55, crosswalkGap = 0.5;   // zebra bar/gap (m)
+    Vec3   crosswalkColor{0.85, 0.85, 0.82};
+    // Terrain conformance: a ribbon is split along its length only where the ground
+    // bends, so flat ground stays a single stable quad and polygons appear where the
+    // surface actually needs to follow the terrain. `conformTol` is the chord sag (m)
+    // allowed before another split; `conformStep` caps the longest flat span (m).
+    double conformTol = 0.08;
+    double conformStep = 24.0;
     std::function<double(double, double)> heightAt;
 };
 

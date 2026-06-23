@@ -1349,6 +1349,10 @@ int l_city_road_mesh(lua_State* L) {
         rp.markWidth = optField(L, 2, "mark_width", rp.markWidth);
         rp.laneColor = optVec3Field(L, 2, "lane_color", rp.laneColor);
         rp.centerColor = optVec3Field(L, 2, "center_color", rp.centerColor);
+        rp.crosswalks = optBoolField(L, 2, "crosswalks", rp.crosswalks);
+        rp.crosswalkColor = optVec3Field(L, 2, "crosswalk_color", rp.crosswalkColor);
+        rp.conformTol = optField(L, 2, "conform_tol", rp.conformTol);
+        rp.conformStep = optField(L, 2, "conform_step", rp.conformStep);
         rp.plazaRadius = optField(L, 2, "plaza", rp.plazaRadius);
         rp.plazaMinArms = static_cast<int>(optField(L, 2, "plaza_min_arms", rp.plazaMinArms));
         rp.hairpinDeflection = optField(L, 2, "hairpin_deflection", rp.hairpinDeflection);

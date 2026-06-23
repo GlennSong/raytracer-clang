@@ -28,6 +28,26 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.color);
     };
 
+    // How many length-wise splits a span from s0 to s1 needs: ONE on flat ground,
+    // more only where the terrain sags away from the straight chord by more than
+    // conformTol (so polygons appear where the surface bends, not on flat runs). A
+    // gentle conformStep cap keeps a very long flat quad from becoming unwieldy.
+    auto stripSegs = [&](const Vec2& s0, const Vec2& s1) {
+        double len = (s1 - s0).length();
+        if (len < 1e-3) return 1;
+        int cap = std::max(1, static_cast<int>(std::ceil(len / p.conformStep)));
+        if (!p.heightAt) return cap;                       // flat world: just the cap
+        double h0 = ground(s0.x, s0.y), h1 = ground(s1.x, s1.y), maxSag = 0.0;
+        int probe = std::max(4, static_cast<int>(len / 2.0));
+        for (int k = 1; k < probe; ++k) {
+            double t = static_cast<double>(k) / probe;
+            Vec2 m = lerp(s0, s1, t);
+            maxSag = std::max(maxSag, std::fabs(ground(m.x, m.y) - (h0 + (h1 - h0) * t)));
+        }
+        int bySag = static_cast<int>(std::ceil(maxSag / std::max(1e-3, p.conformTol)));
+        return std::min(std::max({1, cap, bySag}), static_cast<int>(len) + 1);
+    };
+
     // A raised sidewalk skirt running along a curb line P0->P1, with `outN` the
     // unit direction away from the road. Per sub-segment it emits the curb lip
     // (vertical face toward the street), the slab top (raised curbHeight above the
@@ -37,7 +57,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         if (p.sidewalkWidth <= 0.0) return;
         double len = (P1 - P0).length();
         if (len < 1e-3) return;
-        int segs = std::max(1, static_cast<int>(len / 4.0));
+        int segs = stripSegs(P0, P1);
         const Vec3 nUp(0, 1, 0);
         const Vec3 nIn(-outN.x, 0, -outN.y);    // curb lip faces the carriageway
         const Vec3 nOut(outN.x, 0, outN.y);     // outer face faces away
@@ -85,11 +105,11 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
                 quad(t, std::min(t + p.dashLength, len));
         }
     };
-    // A flat strip between two cross-sections, segmented + draped on the terrain.
+    // A flat strip between two cross-sections, draped on the terrain and split along
+    // its length only where the ground bends (stripSegs) — flat ground stays one quad.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,
                         const Vec2& b1) {
-        double len = std::max((b0 - a0).length(), (b1 - a1).length());
-        int segs = std::max(1, static_cast<int>(len / 4.0));   // follow terrain curvature
+        int segs = stripSegs((a0 + a1) * 0.5, (b0 + b1) * 0.5);
         Vec2 prev0 = a0, prev1 = a1;
         for (int s = 1; s <= segs; ++s) {
             double t = static_cast<double>(s) / segs;
@@ -97,6 +117,26 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             addTri(to3d(prev0), to3d(prev1), to3d(c1));
             addTri(to3d(prev0), to3d(c1), to3d(c0));
             prev0 = c0; prev1 = c1;
+        }
+    };
+
+    // A zebra crosswalk centred at `center`, bars running along the road `d` and
+    // repeated across a `roadW`-wide carriageway, draped + raised onto the asphalt.
+    auto crosswalkBand = [&](const Vec2& center, const Vec2& d, double roadW) {
+        Vec2 across = perp(d);
+        double depth = p.crosswalkDepth, bar = p.crosswalkBar, gap = p.crosswalkGap;
+        int n = std::max(1, static_cast<int>(roadW / (bar + gap)));
+        auto P = [&](const Vec2& xz) {
+            return Vec3(xz.x, height(xz.x, xz.y) + p.markLift, xz.y);
+        };
+        for (int i = 0; i < n; ++i) {
+            double s = -roadW * 0.5 + bar * 0.5 + i * (bar + gap);
+            if (std::fabs(s) > roadW * 0.5 - bar * 0.4) continue;
+            Vec2 bc = center + across * s;
+            Vec2 e0 = d * (depth * 0.5), e1 = across * (bar * 0.5);
+            MeshBuilder::emitQuad(mesh, P(bc - e0 - e1), P(bc + e0 - e1),
+                                  P(bc + e0 + e1), P(bc - e0 + e1),
+                                  Vec3(0, 1, 0), p.crosswalkColor);
         }
     };
 
@@ -208,6 +248,16 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         // mouth — skirt it so the sidewalk turns the corner instead of gapping.
         for (int k = 0; k < m; ++k)
             cornerBand(V, ring[2 * k + 1], ring[2 * ((k + 1) % m)]);
+
+        // Crosswalk across each arm, just outside the pad mouth (where the ribbon
+        // begins) — so a crossing lands exactly at the intersection. Skip arms with
+        // no room for the band on their ribbon.
+        if (p.crosswalks)
+            for (const Arm& a : arms) {
+                if (edgeLen(a.edge) - a.s < p.crosswalkDepth + 1.0) continue;
+                Vec2 center = V + a.d * (a.s + p.crosswalkDepth * 0.5 + 0.4);
+                crosswalkBand(center, a.d, a.w * 2.0);
+            }
     }
 
     // --- Hairpins (sharp degree-2): a clean turning-head DISC. The junction pad

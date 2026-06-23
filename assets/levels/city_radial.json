@@ -6,7 +6,7 @@
       "opts": { "pattern": "radial", "seed": 5, "extent": 210, "ring_spacing": 60,
                 "spokes": 6, "ring_subdiv": 7, "jitter": 0.03, "center_plaza": true,
                 "terrain_amp": 9, "terrain_size": 480,
-                "roadbed": true, "road_cell": 0.7, "sidewalk": 2.6, "curb": 0.18,
+                "roadbed": true, "sidewalk": 2.6, "curb": 0.18,
                 "downtown_radius": 78, "midtown_radius": 150 } }
   ],
   "lighting": {
