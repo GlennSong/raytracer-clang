@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_MESH_H
 
 #include "road_network.h"
+#include "../terrain.h"                   // TerrainFlatten (road -> terrain cut/fill)
 #include "../../../renderer/renderer.h"   // RenderMesh
 #include "../../../rt_math.h"             // Vec3
 #include <array>
@@ -99,6 +100,27 @@ std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const V
 // than minRadius is returned untouched. Pure + headless.
 std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1,
                               int segs, double minRadius);
+
+// Turn the raw terrain heights sampled under a road centerline into a DRIVABLE vertical
+// profile (corridor model, ADR-0044 terrain conforming). `ground[i]` is the terrain height
+// at centerline sample i and `s[i]` its arc-length position. The profile is smoothed (a
+// 3-point moving average kills bumps so the road isn't a roller-coaster) then slope-limited
+// to |grade| <= maxGrade (rise/run) by iterated forward/backward clamping. The terrain is
+// later cut/filled to meet this profile (roadConformRegions), so a road follows the natural
+// slope where it can and the ground is graded to it where it's too steep. Pure + headless.
+std::vector<double> roadProfile(const std::vector<double>& ground,
+                                const std::vector<double>& s, double maxGrade);
+
+// Cut/fill footprints that grade the terrain to a road corridor (ADR-0044 terrain
+// conforming). One flatten ramp per centerline segment, set to the road's vertical profile
+// `profileY` (from roadProfile), with half-width = carriageway half-width + `shoulder` and a
+// `falloff` feather back to natural ground (the embankment). Fed to the terrain via
+// applyFlatten so the ground meets the road exactly — cut where land is higher, fill where
+// lower — so no terrain pokes through. Pure; returns the regions for the caller to apply.
+std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerline,
+                                               const std::vector<double>& profileY,
+                                               double halfWidth, double shoulder,
+                                               double falloff);
 
 // Ear-clipping triangulation of a simple polygon (any winding; non-convex OK) into index
 // triples into `poly`. For the junction pad (ADR-0044): fanning from the node centre

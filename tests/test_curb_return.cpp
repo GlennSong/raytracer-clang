@@ -119,6 +119,68 @@ double sumTriAreas(const std::vector<Vec2>& p, const std::vector<std::array<int,
 }
 }
 
+namespace {
+double maxGradeOf(const std::vector<double>& y, const std::vector<double>& s) {
+    double g = 0.0;
+    for (std::size_t i = 1; i < y.size(); ++i) {
+        double ds = s[i] - s[i - 1];
+        if (ds > 1e-9) g = std::max(g, std::fabs(y[i] - y[i - 1]) / ds);
+    }
+    return g;
+}
+std::vector<double> arcLengths(int n, double step) {
+    std::vector<double> s(n);
+    for (int i = 0; i < n; ++i) s[i] = i * step;
+    return s;
+}
+}
+
+TEST_CASE(road_profile_ramps_a_step_within_the_grade_budget) {
+    // A 4 m step over 70 m — climbable at 10% (budget 7 m) — but concentrated as a cliff
+    // between two samples. The profile spreads it so no step exceeds the grade.
+    std::vector<double> ground = { 0, 0, 0, 0, 4, 4, 4, 4 };
+    std::vector<double> s = arcLengths(8, 10.0);          // 10 m spacing
+    std::vector<double> y = roadProfile(ground, s, 0.10); // max 10% grade
+    CHECK(maxGradeOf(y, s) <= 0.10 + 1e-6);               // drivable everywhere
+    CHECK_APPROX(y.front(), 0.0, 0.6);
+    CHECK_APPROX(y.back(), 4.0, 0.6);                    // the achievable rise is kept
+    CHECK((y[4] - y[3]) < 4.0);                          // the cliff step is gone
+}
+
+TEST_CASE(road_profile_clamps_an_unclimbable_slope_for_cut) {
+    // A 20 m rise over 70 m needs ~29% grade; at 10% the road can only climb ~7 m, so it
+    // deliberately falls short of the terrain — the terrain is cut down to meet it.
+    std::vector<double> ground = { 0, 0, 0, 0, 20, 20, 20, 20 };
+    std::vector<double> s = arcLengths(8, 10.0);
+    std::vector<double> y = roadProfile(ground, s, 0.10);
+    CHECK(maxGradeOf(y, s) <= 0.10 + 1e-6);               // still drivable
+    CHECK(y.back() < 12.0);                               // can't reach 20 -> needs a cut
+}
+
+TEST_CASE(road_profile_leaves_flat_and_gentle_ground_alone) {
+    std::vector<double> s = arcLengths(6, 20.0);
+    std::vector<double> flat = { 5, 5, 5, 5, 5, 5 };
+    std::vector<double> yf = roadProfile(flat, s, 0.10);
+    CHECK(maxGradeOf(yf, s) < 1e-9);                      // stays flat
+    // A gentle 4% ramp is under the 10% limit -> essentially preserved.
+    std::vector<double> ramp = { 0, 0.8, 1.6, 2.4, 3.2, 4.0 };
+    std::vector<double> yr = roadProfile(ramp, s, 0.10);
+    CHECK(maxGradeOf(yr, s) <= 0.045);
+    CHECK_APPROX(yr.back() - yr.front(), 4.0, 0.5);       // overall rise preserved
+}
+
+TEST_CASE(road_conform_carves_terrain_to_the_profile) {
+    // A straight road climbing 0 -> 5 m over 40 m. On the centerline the terrain must be
+    // graded to the road profile; far off the road it must stay natural ground.
+    std::vector<Vec2> cl = { Vec2(0, 0), Vec2(10, 0), Vec2(20, 0), Vec2(30, 0), Vec2(40, 0) };
+    std::vector<double> prof = { 0, 1.25, 2.5, 3.75, 5 };
+    auto regions = roadConformRegions(cl, prof, 4.0, 1.0, 6.0);   // hw 4 + shoulder 1
+    CHECK(static_cast<int>(regions.size()) == 4);
+    double base = 100.0;                                          // natural ground far above
+    CHECK_APPROX(applyFlatten(regions, 20, 0, base), 2.5, 0.3);  // on road -> the profile
+    CHECK_APPROX(applyFlatten(regions, 20, 40, base), base, 1e-6);  // far off road -> natural
+}
+
 TEST_CASE(triangulate_convex_tiles_the_polygon) {
     std::vector<Vec2> sq = { Vec2(0, 0), Vec2(4, 0), Vec2(4, 4), Vec2(0, 4) };
     auto tris = triangulatePolygon(sq);

@@ -104,6 +104,54 @@ bool pointInTriangle(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c)
 }
 }  // namespace
 
+std::vector<double> roadProfile(const std::vector<double>& ground,
+                                const std::vector<double>& s, double maxGrade) {
+    int n = static_cast<int>(ground.size());
+    std::vector<double> y = ground;
+    if (n < 3 || maxGrade <= 0.0 || static_cast<int>(s.size()) != n) return y;
+    // 1. Smooth out terrain bumps (two passes of a 3-point [1 2 1]/4 average; ends fixed).
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<double> sm = y;
+        for (int i = 1; i + 1 < n; ++i) sm[i] = 0.25 * y[i - 1] + 0.5 * y[i] + 0.25 * y[i + 1];
+        y = sm;
+    }
+    // 2. Slope-limit to <= maxGrade. A forward then backward clamp, iterated to a fixed
+    //    point: each pass pulls any over-steep step back to the grade limit, and the two
+    //    directions together settle into a profile within grade everywhere.
+    for (int iter = 0; iter < 128; ++iter) {
+        bool changed = false;
+        for (int i = 1; i < n; ++i) {
+            double lim = maxGrade * std::max(1e-6, s[i] - s[i - 1]);
+            if (y[i] > y[i - 1] + lim) { y[i] = y[i - 1] + lim; changed = true; }
+            else if (y[i] < y[i - 1] - lim) { y[i] = y[i - 1] - lim; changed = true; }
+        }
+        for (int i = n - 2; i >= 0; --i) {
+            double lim = maxGrade * std::max(1e-6, s[i + 1] - s[i]);
+            if (y[i] > y[i + 1] + lim) { y[i] = y[i + 1] + lim; changed = true; }
+            else if (y[i] < y[i + 1] - lim) { y[i] = y[i + 1] - lim; changed = true; }
+        }
+        if (!changed) break;
+    }
+    return y;
+}
+
+std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerline,
+                                               const std::vector<double>& profileY,
+                                               double halfWidth, double shoulder,
+                                               double falloff) {
+    std::vector<TerrainFlatten> regions;
+    int n = static_cast<int>(centerline.size());
+    if (n < 2 || static_cast<int>(profileY.size()) != n) return regions;
+    double hw = halfWidth + shoulder;
+    regions.reserve(n - 1);
+    for (int i = 0; i + 1 < n; ++i) {
+        Vec3 a(centerline[i].x, 0.0, centerline[i].y);          // Vec2.y is world Z
+        Vec3 b(centerline[i + 1].x, 0.0, centerline[i + 1].y);
+        regions.push_back(makeFlattenRamp(a, b, profileY[i], profileY[i + 1], hw, falloff));
+    }
+    return regions;
+}
+
 std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
     std::vector<std::array<int, 3>> tris;
     int n = static_cast<int>(poly.size());
