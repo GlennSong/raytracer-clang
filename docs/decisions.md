@@ -3420,11 +3420,19 @@ refusal on the click, so a drag never re-selects), `drawPathHandles` renders the
 centreline + node/tangent dots. The drag-loop logic is verified in engine_core; only the
 ImGui draw + live mouse are exercised in the editor.
 
+The tool also tracks a **hovered handle** (white ring on the dot under the cursor) and an
+**active node** (set on grab, kept after release) for emphasis — both unit-tested. And
+the ADR-0049 topology ops are wired to viewport gestures: **Shift+click a node** deletes
+it, **Ctrl+click the road** subdivides that edge, **Ctrl+click the ground** extends a new
+connected segment from the active node (intersections form by extending into existing
+geometry). A cheat-sheet overlay lists the gestures.
+
 **Deferred (the shell-coupled parts).** (1) `AnimationPath` as an ECS component + a
 play/scrub system that writes the target `Transform` during sim (animation playback —
 roads are the current focus). (2) Plane-constraint hotkeys (the tool's `setPlaneOverride`
 is in place and tested; binding G/X/Y/Z to it is editor input plumbing). (3) Road
-sub-object undo bracketing through `onGrab`/`onEdit`.
+sub-object undo bracketing through `onGrab`/`onEdit` — topology edits (delete/split/
+extend) and node drags are not yet on the command log.
 
 ---
 

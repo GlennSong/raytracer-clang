@@ -191,6 +191,9 @@ void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("gizmo_rotate", KeyCode::Num2);
     ctx.actions.bindButton("gizmo_scale", KeyCode::Num3);
     ctx.actions.bindButton("editor_frame", KeyCode::F);   // detach is disabled here
+    // Held while road topology gestures are armed (Ctrl): see updatePathEdit.
+    ctx.actions.bindButton("road_edit_modifier", KeyCode::LeftControl);
+    ctx.actions.bindButton("road_edit_modifier", KeyCode::RightControl);
     if (bridge) bridge->attach(&ctx.world, this, levelFile);
 
     ComponentRegistry& registry = componentRegistry();
@@ -414,10 +417,43 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
     // Pick fatness scales with view distance so the dots stay grabbable when zoomed out.
     double radius = 0.06 * (cam.position - cam.target).length() + 0.4;
 
+    // Always refresh hover first, so the click handlers below know what's under the cursor
+    // on the very frame of the click (updateHover self-suppresses while dragging).
+    int hov = pathTool.updateHover(ray, radius);
+
+    // Topology gestures (ADR-0049 ops, finally wired up). The carriageway height varies,
+    // so land the cursor on the ground plane through the active node for a stable XZ.
+    if (click && !pathTool.dragging()) {
+        double planeY = 0.0;
+        for (const EditHandle& h : pathTool.handles())
+            if (h.index == pathTool.selectedNode() && h.kind == HandleKind::Knot)
+                planeY = h.position.y;
+        Vec3 ground = projectDrag(ray, Vec3(0, planeY, 0), DragPlane::Ground, viewDir);
+
+        // Shift+click a node -> delete it.
+        if (ctx.input.keyShift && hov >= 0) {
+            int node = pathTool.handles()[hov].index;
+            if (deleteRoadNode(ctx.world, selected, node, ctx.renderer)) pathTool.clearSelection();
+            return true;
+        }
+        // Ctrl+click -> subdivide the edge under the cursor, or (over empty ground, with a
+        // node selected) extend a new connected segment to the cursor. Either way, select
+        // the new node so you can immediately drag or chain another extend.
+        if (ctx.actions.held("road_edit_modifier") && hov < 0) {
+            int edge = nearestRoadEdge(ctx.world, selected, ground, std::max(2.5, radius));
+            int newNode = (edge >= 0)
+                ? splitRoadEdge(ctx.world, selected, edge, ground, ctx.renderer)
+                : (pathTool.selectedNode() >= 0
+                       ? extendRoad(ctx.world, selected, pathTool.selectedNode(), ground, ctx.renderer)
+                       : -1);
+            if (newNode >= 0) pathTool.selectNode(newNode);
+            if (edge >= 0 || newNode >= 0) return true;
+        }
+    }
+
     bool grabbed = false;
     if (click) grabbed = pathTool.beginDrag(ray, radius);
     else if (pathTool.dragging() && ctx.input.mouseLeftDown) pathTool.drag(ray, viewDir);
-    else pathTool.updateHover(ray, radius);   // cursor feedback when not dragging
     if (pathWasDragging && !ctx.input.mouseLeftDown) pathTool.endDrag();
     pathWasDragging = pathTool.dragging();
     return grabbed;
@@ -1022,6 +1058,15 @@ void EditorSystem::drawPathHandles(FrameContext& ctx) const {
         // A thin ring around the hovered dot makes the grab target unmistakable.
         if (hover) dl->AddCircle(s, r + 3.0f, IM_COL32(255, 255, 255, 200), 0, 1.5f);
     }
+
+    // Controls cheat-sheet for the selected road, so the gestures are discoverable.
+    const char* help =
+        "Road edit:  drag dot = move node/tangent\n"
+        "Shift+click dot = delete node\n"
+        "Ctrl+click road = subdivide   |   Ctrl+click ground = extend from selected node";
+    ImVec2 at(vp->Pos.x + 12.0f, vp->Pos.y + vp->Size.y - 64.0f);
+    dl->AddText(ImVec2(at.x + 1, at.y + 1), IM_COL32(0, 0, 0, 200), help);   // shadow
+    dl->AddText(at, IM_COL32(235, 235, 235, 230), help);
 }
 
 #else  // !RT_ENABLE_IMGUI
