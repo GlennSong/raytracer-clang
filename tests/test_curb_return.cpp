@@ -102,6 +102,58 @@ TEST_CASE(fair_hermite_leaves_a_gentle_curve_untouched) {
         CHECK(len(capped[i] - ref[i]) < 1e-9);          // identical samples (scale stayed 1)
 }
 
+namespace {
+double triArea(const Vec2& a, const Vec2& b, const Vec2& c) {
+    return std::fabs(cross(b - a, c - a)) * 0.5;
+}
+double shoelace(const std::vector<Vec2>& p) {
+    double a = 0.0;
+    int n = static_cast<int>(p.size());
+    for (int i = 0; i < n; ++i) a += cross(p[i], p[(i + 1) % n]);
+    return std::fabs(a) * 0.5;
+}
+double sumTriAreas(const std::vector<Vec2>& p, const std::vector<std::array<int, 3>>& tris) {
+    double a = 0.0;
+    for (const auto& t : tris) a += triArea(p[t[0]], p[t[1]], p[t[2]]);
+    return a;
+}
+}
+
+TEST_CASE(triangulate_convex_tiles_the_polygon) {
+    std::vector<Vec2> sq = { Vec2(0, 0), Vec2(4, 0), Vec2(4, 4), Vec2(0, 4) };
+    auto tris = triangulatePolygon(sq);
+    CHECK(tris.size() == 2);                                  // n-2 triangles
+    CHECK_APPROX(sumTriAreas(sq, tris), 16.0, 1e-9);         // exact tiling, no overlap/gap
+}
+
+TEST_CASE(triangulate_nonconvex_notch_tiles_without_overlap) {
+    // A square with the top edge pushed into a V — (3,3) is a reflex vertex, exactly the
+    // case where fanning from an interior point self-overlaps. Ear clipping must tile it.
+    std::vector<Vec2> notch = { Vec2(0, 0), Vec2(6, 0), Vec2(6, 6), Vec2(3, 3), Vec2(0, 6) };
+    auto tris = triangulatePolygon(notch);
+    CHECK(static_cast<int>(tris.size()) == static_cast<int>(notch.size()) - 2);
+    CHECK_APPROX(sumTriAreas(notch, tris), shoelace(notch), 1e-9);   // tiles exactly (=27)
+    for (const auto& t : tris)
+        CHECK(triArea(notch[t[0]], notch[t[1]], notch[t[2]]) > 1e-9);   // none degenerate
+}
+
+TEST_CASE(triangulate_dedupes_a_ring_with_coincident_vertices) {
+    // A sharp junction's ring repeats coincident mouth corners (cornerRadius 0). The
+    // triangulator must dedupe and still tile the underlying square (covers the centre).
+    std::vector<Vec2> ring = { Vec2(5, -5), Vec2(5, 5), Vec2(5, 5), Vec2(-5, 5),
+                               Vec2(-5, 5), Vec2(-5, -5), Vec2(-5, -5), Vec2(5, -5) };
+    auto tris = triangulatePolygon(ring);
+    CHECK(tris.size() == 2);                                  // dedups to a 4-vert square
+    CHECK_APPROX(sumTriAreas(ring, tris), 100.0, 1e-9);     // tiles the full 10x10
+}
+
+TEST_CASE(triangulate_handles_cw_and_degenerate) {
+    // Clockwise input is normalized to CCW internally and still tiles.
+    std::vector<Vec2> cw = { Vec2(0, 0), Vec2(0, 4), Vec2(4, 4), Vec2(4, 0) };
+    CHECK_APPROX(sumTriAreas(cw, triangulatePolygon(cw)), 16.0, 1e-9);
+    CHECK(triangulatePolygon({ Vec2(0, 0), Vec2(1, 1) }).empty());     // < 3 verts
+}
+
 TEST_CASE(curb_fillet_degenerates_to_empty) {
     Vec2 C(0, 0);
     CHECK(curbReturnFillet(C, Vec2(1, 0), Vec2(1, 0.001), 2.0, 100.0).empty());   // folded/parallel

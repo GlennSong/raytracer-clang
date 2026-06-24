@@ -140,3 +140,47 @@ written.
 - Inigo Quilez / GM Shaders, *2D signed distance fields* (rounded joins, smooth-min).
 - UE & Unity road-marking materials (UV remap / decals): Epic "smart material for roads",
   Unity road-texture UV remapping.
+
+---
+
+## Round 2 — junction joins, drivable profile, terrain conforming
+
+Three more issues from driving the analytic roads: junction joins overlap in various
+configs; roads mirror every terrain bump (undrivable); terrain pokes through the road
+("green poke-through") because the road never carves the ground.
+
+### A. Junction joins (overlap at knots)
+**Root cause.** The junction pad fanned triangles from the node centre V to the boundary
+ring, assuming the ring is **star-convex from V**. T-junctions, mixed-width arms and notched
+rings violate that, so the fan **self-overlaps**.
+**Fix (landed).** `triangulatePolygon` — ear-clip the ring boundary directly; robust for any
+simple ring, no centre assumption. **Remaining:** (1) setback/trim consistency — the ribbon
+pull-back uses the *clamped* setback while the mouth geometry assumed the *unclamped* value,
+so the ribbon-pad seam can gap or overlap; share one value. (2) near-parallel arms
+(`denom~0`) clamp more carefully (spoked/extreme hubs are an acceptable-"decent" edge case).
+
+### B. Drivable vertical profile (hills / valleys / switchbacks)
+**Root cause.** Every centerline sample sits on **raw** terrain (`heightAt`), so the road
+mirrors every bump — a roller-coaster, not a road. **Literature** (corridor model; WSDOT/
+AASHTO vertical alignment; cubic-smoothing-spline grade extraction): give the road a
+**smoothed, grade-limited vertical profile** `y(s)` (3-point moving average / clamped slope,
+desirable max grade ~6%) and build the surface on `y(s)`, not raw ground.
+**Plan.** Pure `roadProfile(sampleHeights, arcLengths, maxGrade)` -> smoothed, grade-limited
+profile. Testable. Road surface and the conform target (C) both use it.
+
+### C. Terrain conforming (carve ground to road; kill green poke-through)
+**Root cause.** The editable road **drapes** but **never carves**; the terrain mesh is built
+independently (`terrain.cpp`), so where the road dips below ground — or coarse road quads
+miss a bump — green pokes through. Generated cities carve via Lua `terrain.conform` ->
+`TerrainFlatten` regions folded into the terrain (`applyFlatten`); editor roads have **no
+such path**. **Literature.** Cut-and-fill corridor grading: subgrade = `y(s)`, **cut** where
+land is higher, **fill** where lower, **feather** the shoulder back over a falloff (the
+embankment) — exactly `makeFlattenRamp(a,b,yA,yB,halfWidth,falloff)` / `applyFlatten`, which
+already exist in `terrain.h`.
+**Plan.** (1) `roadConformRegions(net, profile, shoulder, falloff)` -> a flatten ramp per
+edge at `y(s)` plus junction pads (pure, testable). (2) Build the road surface on the **same**
+`y(s)` so road and terrain agree exactly. (3) Editor integration: on regen, inject the regions
+into the level terrain params and rebuild the terrain mesh/collider (heavier, editor-coupled).
+
+**Order:** A (landed: ear-clip) -> A-seam -> B (profile) -> C (footprints) -> editor terrain
+rebuild. B and C share `y(s)`, so they land together.

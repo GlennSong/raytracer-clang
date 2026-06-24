@@ -95,6 +95,55 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
     return poly;
 }
 
+namespace {
+bool pointInTriangle(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
+    double d1 = cross(b - a, p - a), d2 = cross(c - b, p - b), d3 = cross(a - c, p - c);
+    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(neg && pos);                        // inside (or on edge) of CCW/CW triangle
+}
+}  // namespace
+
+std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
+    std::vector<std::array<int, 3>> tris;
+    int n = static_cast<int>(poly.size());
+    if (n < 3) return tris;
+    // Drop consecutive duplicate vertices (incl. the wrap): coincident mouths at a sharp
+    // junction give the ring degenerate zero-length edges that would stall ear finding.
+    std::vector<int> v;
+    for (int i = 0; i < n; ++i)
+        if (v.empty() || (poly[i] - poly[v.back()]).length() > 1e-6) v.push_back(i);
+    while (v.size() >= 2 && (poly[v.front()] - poly[v.back()]).length() < 1e-6) v.pop_back();
+    if (v.size() < 3) return tris;
+    double area2 = 0.0;                                  // signed area of the cleaned ring
+    for (std::size_t i = 0; i < v.size(); ++i)
+        area2 += cross(poly[v[i]], poly[v[(i + 1) % v.size()]]);
+    if (area2 < 0.0) std::reverse(v.begin(), v.end());   // work CCW
+    int guard = 3 * n;                           // bound the search so a bad ring can't spin
+    while (static_cast<int>(v.size()) > 2 && guard-- > 0) {
+        int m = static_cast<int>(v.size());
+        bool clipped = false;
+        for (int i = 0; i < m; ++i) {
+            int ia = v[(i + m - 1) % m], ib = v[i], ic = v[(i + 1) % m];
+            const Vec2 &a = poly[ia], &b = poly[ib], &c = poly[ic];
+            if (cross(b - a, c - a) <= 1e-12) continue;   // reflex or collinear: not an ear
+            bool ear = true;                              // no other vertex inside the ear
+            for (int j = 0; j < m && ear; ++j) {
+                int ij = v[j];
+                if (ij != ia && ij != ib && ij != ic && pointInTriangle(poly[ij], a, b, c))
+                    ear = false;
+            }
+            if (!ear) continue;
+            tris.push_back({ia, ib, ic});
+            v.erase(v.begin() + i);
+            clipped = true;
+            break;
+        }
+        if (!clipped) break;                     // no ear (degenerate/self-intersecting)
+    }
+    return tris;
+}
+
 RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     RenderMesh mesh;
     const int nNodes = static_cast<int>(g.nodes.size());
@@ -323,17 +372,17 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             }
             cc.push_back(Bright);
         }
-        // Fan-triangulate the pad from the node centre: each arm's mouth, then its
-        // outgoing corner (mouth left -> arc -> next mouth right).
+        // The pad's boundary ring: each arm's mouth, then its outgoing corner (mouth left
+        // -> arc -> next mouth right). Triangulate the ring directly (ear clipping) rather
+        // than fanning from V — a fan assumes the ring is star-convex from the node, which
+        // T-junctions, mixed-width arms and notched rings break (the fan self-overlaps).
         std::vector<Vec2> ring;
         for (int k = 0; k < m; ++k) {
             ring.push_back(mouthR[k]);
             for (std::size_t i = 0; i + 1 < corner[k].size(); ++i) ring.push_back(corner[k][i]);
         }
-        Vec3 c = to3d(V);
-        int rn = static_cast<int>(ring.size());
-        for (int k = 0; k < rn; ++k)
-            addTri(c, to3d(ring[k]), to3d(ring[(k + 1) % rn]));
+        for (const std::array<int, 3>& t : triangulatePolygon(ring))
+            addTri(to3d(ring[t[0]]), to3d(ring[t[1]]), to3d(ring[t[2]]));
 
         // Sidewalk wraps each corner as ONE rail — inner = the corner polyline, outer
         // = each point pushed radially out from the node — so the kerb sweeps a
