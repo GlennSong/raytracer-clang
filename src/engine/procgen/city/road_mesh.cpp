@@ -42,6 +42,59 @@ std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const V
     return arc;
 }
 
+namespace {
+Vec2 hermitePoint(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1, double t) {
+    double t2 = t * t, t3 = t2 * t;
+    double h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t;
+    double h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+    return p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
+}
+// The tightest bend along a polyline, as a radius (circumradius of each consecutive
+// triple; +inf for a straight run). Smaller = tighter.
+double minCircumRadius(const std::vector<Vec2>& poly) {
+    double worst = 1e30;
+    for (std::size_t i = 1; i + 1 < poly.size(); ++i) {
+        const Vec2 &a = poly[i - 1], &b = poly[i], &c = poly[i + 1];
+        double ab = (b - a).length(), bc = (c - b).length(), ca = (a - c).length();
+        double area2 = std::fabs(cross(b - a, c - a));        // 2 * triangle area
+        if (area2 < 1e-9) continue;                           // collinear -> straight
+        worst = std::min(worst, (ab * bc * ca) / (2.0 * area2));
+    }
+    return worst;
+}
+}  // namespace
+
+std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1,
+                              int segs, double minRadius) {
+    segs = std::max(1, segs);
+    // Blend the spline toward its straight chord by `alpha` (0 = the spline, 1 = the
+    // chord). Blending toward a line scales the whole curve's amplitude — and therefore
+    // every local radius — uniformly, endpoints included, so it can't trade apex
+    // curvature for an endpoint hook the way shrinking the tangents alone would.
+    auto sample = [&](double alpha) {
+        std::vector<Vec2> poly;
+        poly.reserve(segs + 1);
+        for (int s = 0; s <= segs; ++s) {
+            double t = static_cast<double>(s) / segs;
+            Vec2 curve = hermitePoint(p0, m0, p1, m1, t);
+            Vec2 chord = p0 + (p1 - p0) * t;
+            poly.push_back(curve * (1.0 - alpha) + chord * alpha);
+        }
+        return poly;
+    };
+    std::vector<Vec2> poly = sample(0.0);
+    if (minRadius <= 0.0) return poly;
+    // Flatten toward the chord until nothing bends tighter than minRadius. The chord has
+    // infinite radius, so this always converges; an already-gentle curve keeps alpha 0.
+    double alpha = 0.0;
+    for (int iter = 0; iter < 12 && minCircumRadius(poly) < minRadius; ++iter) {
+        alpha = std::min(1.0, alpha + 0.12);
+        poly = sample(alpha);
+        if (alpha >= 1.0) break;
+    }
+    return poly;
+}
+
 RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     RenderMesh mesh;
     const int nNodes = static_cast<int>(g.nodes.size());

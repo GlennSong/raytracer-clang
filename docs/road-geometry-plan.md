@@ -108,6 +108,14 @@ dashes) and crisp edges via `smoothstep`/`fwidth`.
 
 ---
 
+**Landed.** (Problem 2) `curbReturnFillet` — a true fixed-radius arc tangent to both
+kerbs, robust at any angle. (Problem 1) `fairHermite` — the editable road's spline is
+sampled with its curvature capped to a minimum radius (half-width + sidewalk + margin) by
+blending toward the chord, so an over-tight bend can't fold the ribbon or its sidewalk.
+Note on the journey: a per-vertex corner fillet and a tangent-magnitude scale were both
+tried and rejected (the first can't reach the target radius once it fires; the second
+trades apex curvature for endpoint hooks) — chord-blend is the one that provably converges.
+
 ## Recommended order (each independently shippable)
 
 1. **Markings → shader** (Problem 3). Biggest visual win, kills the worst bugs, mostly

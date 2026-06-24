@@ -12,13 +12,6 @@ namespace {
 
 bool isZero(const Vec2& v) { return v.x == 0.0 && v.y == 0.0; }
 
-Vec2 hermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1, double t) {
-    double t2 = t * t, t3 = t2 * t;
-    double h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t;
-    double h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
-    return p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
-}
-
 // Valid, non-degenerate edges as index pairs.
 std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
     std::vector<std::array<int, 2>> out;
@@ -32,7 +25,7 @@ std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
 // sampled as a Hermite cubic through its endpoints' tangents (Catmull-Rom auto on a
 // degree-2 through-road, a straight chord into a junction/dead-end). The original
 // nodes keep their indices (so junction degree is preserved); curve samples append.
-RoadGraph netGraph(const RoadNet& net) {
+RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     const int n = static_cast<int>(net.nodes.size());
     auto P = [&](int i) { return net.nodes[i]; };
     // Valid edge indices, and each edge's width (its override or the default).
@@ -100,15 +93,19 @@ RoadGraph netGraph(const RoadNet& net) {
         Vec2 m0 = outTan(a, b), m1 = inTan(b, a);
         double len = (P(b) - P(a)).length();
         int segs = std::max(4, static_cast<int>(std::ceil(len / 5.0)));
+        // Sample the spline with its curvature capped so the half-width (plus sidewalk)
+        // ribbon can't fold on an over-tight bend. Endpoints — the shared junction nodes —
+        // are preserved, so the graph stays stitched.
+        std::vector<Vec2> poly = fairHermite(P(a), m0, P(b), m1, segs, minTurnRadius);
+
         int prev = a;
-        for (int s = 1; s < segs; ++s) {
-            Vec2 p = hermite(P(a), m0, P(b), m1, static_cast<double>(s) / segs);
+        for (std::size_t s = 1; s + 1 < poly.size(); ++s) {     // interior -> new nodes
             int idx = static_cast<int>(g.nodes.size());
-            g.nodes.push_back(RoadNode{p});
+            g.nodes.push_back(RoadNode{poly[s]});
             g.edges.push_back(RoadEdge{prev, idx, w, RoadClass::Local});
             prev = idx;
         }
-        g.edges.push_back(RoadEdge{prev, b, w, RoadClass::Local});
+        g.edges.push_back(RoadEdge{prev, b, w, RoadClass::Local});   // last -> shared node b
     }
     return g;
 }
@@ -116,7 +113,10 @@ RoadGraph netGraph(const RoadNet& net) {
 }  // namespace
 
 RenderMesh buildRoadNetMesh(const RoadNet& net) {
-    RoadGraph g = netGraph(net);
+    // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
+    // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
+    double minTurnRadius = net.width * 0.5 + net.sidewalk + 0.5;
+    RoadGraph g = netGraph(net, minTurnRadius);
     RoadMeshParams p;
     p.lift = net.lift;
     p.color = net.color;

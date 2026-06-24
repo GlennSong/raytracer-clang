@@ -88,6 +88,17 @@ RenderMesh buildRoadMesh(const RoadGraph& graph, const RoadMeshParams& params);
 std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const Vec2& dirB,
                                    double radius, double maxTangent, double maxStep = 0.4);
 
+// Sample a Hermite spline (endpoints p0,p1 with tangents m0,m1) into `segs+1` points,
+// relaxing the tangent magnitudes if the curve would otherwise bend tighter than
+// `minRadius` (ADR-0044 fold prevention — a road that folds on itself is a generation
+// problem, fixed at the source by giving the curve a real minimum radius, like a road
+// design speed). Endpoints and tangent DIRECTIONS are preserved (the road still leaves
+// each node heading the right way); only over-tight curvature is eased toward the chord,
+// which has infinite radius — so the relaxation always converges. A curve already gentler
+// than minRadius is returned untouched. Pure + headless.
+std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1,
+                              int segs, double minRadius);
+
 // Stroke a centerline polyline into a flat filled ribbon — path stroking (ADR-0048),
 // the back-to-basics primitive. Robust for ANY curve at ANY width including bends
 // tighter than the width: per-segment trapezoids (variable half-width per point) plus

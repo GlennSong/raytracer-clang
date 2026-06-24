@@ -65,6 +65,43 @@ TEST_CASE(curb_fillet_shrinks_to_fit_the_tangent_cap) {
     CHECK_APPROX(len(arc.front() - C), 2.0, 1e-6);      // tangent point at the cap
 }
 
+namespace {
+// The tightest bend along a polyline as a radius (circumradius of each triple; +inf for a
+// straight run). Mirrors the metric fairHermite caps against.
+double minCircum(const std::vector<Vec2>& poly) {
+    double worst = 1e30;
+    for (std::size_t i = 1; i + 1 < poly.size(); ++i) {
+        const Vec2 &a = poly[i - 1], &b = poly[i], &c = poly[i + 1];
+        double ab = len(b - a), bc = len(c - b), ca = len(a - c);
+        double area2 = std::fabs(cross(b - a, c - a));
+        if (area2 < 1e-9) continue;
+        worst = std::min(worst, (ab * bc * ca) / (2.0 * area2));
+    }
+    return worst;
+}
+}
+
+TEST_CASE(fair_hermite_relaxes_an_over_tight_curve_to_the_min_radius) {
+    // A short edge with huge tangents loops back on itself (radius far below 6 m).
+    Vec2 p0(0, 0), p1(4, 0), m0(0, 30), m1(0, -30);
+    std::vector<Vec2> tight = fairHermite(p0, m0, p1, m1, 24, 0.0);   // no cap: stays tight
+    CHECK(minCircum(tight) < 6.0);
+    std::vector<Vec2> fair = fairHermite(p0, m0, p1, m1, 24, 6.0);    // capped at 6 m
+    CHECK(minCircum(fair) >= 6.0 - 0.5);                              // no longer over-tight
+    CHECK(fair.front().x == 0.0 && fair.back().x == 4.0);            // endpoints preserved
+}
+
+TEST_CASE(fair_hermite_leaves_a_gentle_curve_untouched) {
+    // Gentle tangents -> a wide curve already well above the limit: returned as-is.
+    Vec2 p0(0, 0), p1(40, 0), m0(20, 8), m1(20, -8);
+    std::vector<Vec2> ref = fairHermite(p0, m0, p1, m1, 16, 0.0);
+    std::vector<Vec2> capped = fairHermite(p0, m0, p1, m1, 16, 6.0);
+    CHECK(capped.size() == ref.size());
+    CHECK(minCircum(capped) > 6.0);
+    for (std::size_t i = 0; i < ref.size(); ++i)
+        CHECK(len(capped[i] - ref[i]) < 1e-9);          // identical samples (scale stayed 1)
+}
+
 TEST_CASE(curb_fillet_degenerates_to_empty) {
     Vec2 C(0, 0);
     CHECK(curbReturnFillet(C, Vec2(1, 0), Vec2(1, 0.001), 2.0, 100.0).empty());   // folded/parallel
