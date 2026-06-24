@@ -8,6 +8,40 @@
 
 namespace engine {
 
+std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const Vec2& dirB,
+                                   double radius, double maxTangent, double maxStep) {
+    if (radius <= 0.0 || maxTangent <= 1e-4) return {};
+    Vec2 uA = normalize(dirA), uB = normalize(dirB);
+    // Interior half-angle of the corner (between the two kerbs as they leave the corner).
+    double c = std::max(-1.0, std::min(1.0, dot(uA, uB)));
+    double phi = std::acos(c) * 0.5;
+    // Near-straight (phi -> pi/2: barely a bend) or folded/parallel (phi -> 0): no real
+    // arc — let the caller draw a straight chamfer.
+    if (phi < 0.05 || phi > 1.52) return {};
+    double tanPhi = std::tan(phi);
+    double t = radius / tanPhi;            // tangent-point distance back from the corner
+    if (t > maxTangent) {                  // shrink the radius so the fillet fits the trim
+        t = maxTangent;
+        radius = t * tanPhi;
+    }
+    Vec2 bis = normalize(uA + uB);         // bisector, pointing into the carriageway
+    Vec2 center = corner + bis * (radius / std::sin(phi));
+    Vec2 ta = corner + uA * t, tb = corner + uB * t;   // tangent points on each kerb
+    double a0 = std::atan2(ta.y - center.y, ta.x - center.x);
+    double a1 = std::atan2(tb.y - center.y, tb.x - center.x);
+    double sweep = a1 - a0;
+    while (sweep <= -3.14159265358979) sweep += 2 * 3.14159265358979;   // take the minor arc
+    while (sweep >   3.14159265358979) sweep -= 2 * 3.14159265358979;
+    int steps = std::max(1, static_cast<int>(std::ceil(std::fabs(sweep) / maxStep)));
+    std::vector<Vec2> arc;
+    arc.reserve(steps + 1);
+    for (int s = 0; s <= steps; ++s) {
+        double ang = a0 + sweep * (static_cast<double>(s) / steps);
+        arc.push_back(center + Vec2(std::cos(ang), std::sin(ang)) * radius);
+    }
+    return arc;
+}
+
 RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     RenderMesh mesh;
     const int nNodes = static_cast<int>(g.nodes.size());
@@ -223,21 +257,16 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             std::vector<Vec2>& cc = corner[k];
             cc.push_back(Aleft);
             double denom = cross(A.d, B.d);
-            if (p.cornerRadius > 0.0 && std::fabs(denom) > 0.25) {
+            if (p.cornerRadius > 0.0 && std::fabs(denom) > 1e-6) {
+                // The corner is where arm A's left kerb line meets arm B's right kerb line.
                 Vec2 pA = V + perp(A.d) * A.w, pB = V - perp(B.d) * B.w;
                 Vec2 C = pA + A.d * (cross(pB - pA, B.d) / denom);   // kerb-line crossing
-                double a0 = std::atan2(Aleft.y - C.y, Aleft.x - C.x);
-                double a1 = std::atan2(Bright.y - C.y, Bright.x - C.x);
-                double sweep = a1 - a0;
-                while (sweep < -3.14159265) sweep += 2 * 3.14159265;
-                while (sweep >  3.14159265) sweep -= 2 * 3.14159265;
-                double rA = (Aleft - C).length(), rB = (Bright - C).length();
-                int steps = std::max(2, static_cast<int>(std::ceil(std::fabs(sweep) / 0.4)));
-                for (int s = 1; s < steps; ++s) {
-                    double t = static_cast<double>(s) / steps;
-                    double ang = a0 + sweep * t, rr = rA + (rB - rA) * t;
-                    cc.push_back(C + Vec2(std::cos(ang), std::sin(ang)) * rr);
-                }
+                // A true fixed-radius arc tangent to both kerbs, capped so the tangent
+                // points stay between the corner and the mouths (no overrun of the trim).
+                double tMax = std::min(dot(Aleft - C, -A.d), dot(Bright - C, -B.d));
+                std::vector<Vec2> arc =
+                    curbReturnFillet(C, -A.d, -B.d, p.cornerRadius, tMax);
+                for (const Vec2& pt : arc) cc.push_back(pt);
             }
             cc.push_back(Bright);
         }

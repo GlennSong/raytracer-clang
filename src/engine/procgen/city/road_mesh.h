@@ -74,6 +74,20 @@ struct RoadMeshParams {
 
 RenderMesh buildRoadMesh(const RoadGraph& graph, const RoadMeshParams& params);
 
+// A circular curb-return fillet for an intersection corner (ADR-0044 corner fix). The two
+// kerb lines cross at `corner`; `dirA`/`dirB` point FROM the corner back along each kerb
+// toward the carriageway (i.e. -armDirection for the arm whose edge that kerb is). Returns
+// the arc as a polyline from the tangent point on line A to the tangent point on line B —
+// a TRUE fixed-radius arc tangent to both lines, so it reads as a real rounded kerb at ANY
+// corner angle (acute or obtuse), unlike a mouth-to-mouth chord. `radius` is the desired
+// kerb radius; `maxTangent` caps how far back the tangent points may sit (so the fillet
+// shrinks to fit a tight corner instead of overrunning the trim) — the radius is reduced
+// to honour it. Returns empty for a degenerate corner (near-straight or folded, or no
+// room), where the caller should fall back to a straight chamfer. `maxStep` is the arc
+// flattening tolerance in radians.
+std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const Vec2& dirB,
+                                   double radius, double maxTangent, double maxStep = 0.4);
+
 // Stroke a centerline polyline into a flat filled ribbon — path stroking (ADR-0048),
 // the back-to-basics primitive. Robust for ANY curve at ANY width including bends
 // tighter than the width: per-segment trapezoids (variable half-width per point) plus
