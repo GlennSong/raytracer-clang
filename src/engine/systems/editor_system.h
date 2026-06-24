@@ -135,6 +135,10 @@ private:
     // this frame; returns true when it grabbed a handle (so the click isn't also a pick).
     bool updatePathEdit(FrameContext& ctx, bool click);
     void drawPathHandles(FrameContext& ctx) const;
+    // Re-grade the CDLOD terrain to every road in the world (ADR-0044): recompute each
+    // road's cut/fill footprints from the natural ground and rebuild terrain flatten =
+    // base + roads, then re-drape the roads on the carved result. The "Conform" action.
+    void conformTerrainToRoads(FrameContext& ctx);
     void drawGroupMarkers(FrameContext& ctx) const;
     void drawCameraFrustums(FrameContext& ctx) const;
 

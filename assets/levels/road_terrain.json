@@ -4,6 +4,7 @@
   "terrain": {
     "seed": 7, "size": 320, "resolution": 280,
     "heightScale": 11, "noiseScale": 0.015, "octaves": 6, "warp": 0.2,
+    "cdlod": { "worldHalf": 512, "numLods": 6, "gridRes": 32, "rangeFactor": 2.5 },
     "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
   },
   "entities": [

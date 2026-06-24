@@ -89,6 +89,14 @@ struct TerrainLodConfig {
     // get a triangle-mesh collider so the player walks on the surface. 0 = derive
     // (~1.5 leaf nodes). The window follows the player; far colliders are freed.
     float colliderRadius = 0.0f;
+    // Road conforming (ADR-0044): the non-road cut/fill set (city/script grading) the
+    // level loaded with. The editor's "Conform terrain to roads" action rebuilds
+    // `params.flatten` = baseFlatten + fresh road footprints, so re-conforming never
+    // double-applies or strands a moved road's old grading.
+    std::vector<TerrainFlatten> baseFlatten;
+    // Bumped whenever `params` changes at runtime (a re-conform). TerrainLodSystem
+    // watches it and rebuilds its tile cache + collider window when it changes.
+    uint32_t revision = 0;
 };
 
 // Associates an entity with a local player slot (ADR-0010). This is the only

@@ -48,6 +48,10 @@ private:
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body
+    // Last TerrainLodConfig::revision the cache / collider window were built at; a
+    // mismatch (a re-conform) forces a rebuild from the new params.
+    uint32_t cacheRevision_ = 0;
+    uint32_t colliderRevision_ = 0;
 };
 
 }  // namespace engine

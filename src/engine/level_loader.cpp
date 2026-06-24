@@ -1751,11 +1751,16 @@ bool LevelLoader::load(const std::string& path,
         terrainParams.flatten = cityFlatten;   // grade flat under the city
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      scriptFlatten.begin(), scriptFlatten.end());
+        std::vector<TerrainFlatten> baseFlatten = terrainParams.flatten;   // non-road grading
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      roadFlatten.begin(), roadFlatten.end());   // carve to roads
         unsigned terrainSeed = root["terrain"].value("seed", 0u);
         Noise terrainNoise(terrainSeed);
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
+        // Hand the CDLOD config its non-road base so the editor's re-conform action can
+        // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
+        world.each<TerrainLodConfig>(
+            [&](Entity, TerrainLodConfig& c) { c.baseFlatten = baseFlatten; });
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.
         auto carvedTp = std::make_shared<TerrainParams>(terrainParams);

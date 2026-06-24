@@ -33,6 +33,14 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         [&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
     if (!cfg) return;
 
+    // A re-conform bumped the config: drop the cached tiles so they rebuild from the new
+    // params (the new grading).
+    if (cfg->revision != cacheRevision_) {
+        for (auto& kv : cache_) ctx.assets.releaseMesh(kv.second.mesh);
+        cache_.clear();
+        cacheRevision_ = cfg->revision;
+    }
+
     const CameraState& cam = ctx.view.camera;
 
     // Forward-Z frustum (the view volume is identical to the GPU's reverse-Z; CPU
@@ -104,6 +112,14 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
     ctx.world.each<TerrainLodConfig>(
         [&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
     if (!cfg) return;
+
+    // A re-conform bumped the config: drop the collider window so it rebuilds against
+    // the new grading.
+    if (cfg->revision != colliderRevision_) {
+        for (auto& kv : colliders_) physics_->physicsWorld().removeBody(kv.second);
+        colliders_.clear();
+        colliderRevision_ = cfg->revision;
+    }
 
     // Centre the window on the player (the entity PlayerSystem drives).
     Vec3 player;

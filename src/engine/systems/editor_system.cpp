@@ -186,6 +186,50 @@ EditorSystem::EditorSystem(CameraSystem& cameras, std::string levelFile,
     : cameras(cameras), levelFile(std::move(levelFile)),
       makePlayState(std::move(makePlayState)), bridge(bridge) {}
 
+// "Conform terrain to roads" (G): re-grade the CDLOD terrain so the ground meets every
+// road, then re-drape the roads on the carved result (ADR-0044 corridor conforming).
+void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
+    TerrainLodConfig* cfg = nullptr;
+    ctx.world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    if (!cfg) { LOG_WARN << "Conform: no CDLOD terrain to grade"; return; }
+
+    auto noise = std::make_shared<Noise>(cfg->seed);
+    // Natural ground = the level's non-road grading only; road profiles are measured
+    // against THIS (never against terrain a previous conform already cut for the road).
+    TerrainParams naturalParams = cfg->params;
+    naturalParams.flatten = cfg->baseFlatten;
+    std::function<double(double, double)> natural =
+        [naturalParams, noise](double x, double z) {
+            return terrainHeight(naturalParams, *noise, x, z);
+        };
+
+    // Fresh cut/fill footprints from every road, measured on the natural ground.
+    std::vector<TerrainFlatten> roads;
+    ctx.world.each<RoadNet>([&](Entity, RoadNet& net) {
+        net.heightAt = natural;
+        std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+        roads.insert(roads.end(), r.begin(), r.end());
+    });
+
+    // Re-grade: terrain flatten = base + fresh roads; bump the revision so the LOD system
+    // rebuilds its tiles + collider window from the new params.
+    cfg->params.flatten = cfg->baseFlatten;
+    cfg->params.flatten.insert(cfg->params.flatten.end(), roads.begin(), roads.end());
+    ++cfg->revision;
+
+    // Re-drape every road on the freshly carved terrain so it sits exactly on its profile.
+    TerrainParams carvedParams = cfg->params;
+    std::function<double(double, double)> carved =
+        [carvedParams, noise](double x, double z) {
+            return terrainHeight(carvedParams, *noise, x, z);
+        };
+    ctx.world.each<RoadNet>([&](Entity e, RoadNet& net) {
+        net.heightAt = carved;
+        regenerateRoad(ctx.world, e, ctx.renderer);
+    });
+    LOG_INFO << "Conformed terrain to " << roads.size() << " road footprint(s)";
+}
+
 void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("gizmo_translate", KeyCode::Num1);
     ctx.actions.bindButton("gizmo_rotate", KeyCode::Num2);
@@ -194,6 +238,7 @@ void EditorSystem::onStart(FrameContext& ctx) {
     // Held while road topology gestures are armed (Ctrl): see updatePathEdit.
     ctx.actions.bindButton("road_edit_modifier", KeyCode::LeftControl);
     ctx.actions.bindButton("road_edit_modifier", KeyCode::RightControl);
+    ctx.actions.bindButton("editor_conform", KeyCode::G);   // grade terrain to the roads
     if (bridge) bridge->attach(&ctx.world, this, levelFile);
 
     ComponentRegistry& registry = componentRegistry();
@@ -259,6 +304,9 @@ void EditorSystem::update(FrameContext& ctx) {
 
     if (ctx.actions.pressed("editor_frame") && ctx.world.alive(selected))
         frameSelected(ctx);
+
+    if (ctx.actions.pressed("editor_conform"))
+        conformTerrainToRoads(ctx);
 
     bool click = ctx.input.mouseLeftDown && !prevMouseLeft;
     prevMouseLeft = ctx.input.mouseLeftDown;
@@ -686,6 +734,9 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Save")) LevelWriter::save(levelFile, ctx.world);
+    ImGui::SameLine();
+    if (ImGui::Button("Conform Terrain"))   // grade the ground to the roads (key: G)
+        conformTerrainToRoads(ctx);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", levelFile.c_str());
 
