@@ -224,3 +224,24 @@ TEST_CASE(road_net_reads_authoring_json) {
     CHECK_APPROX(n.sidewalk, 3.0, 1e-9);
     CHECK(!buildRoadNetMesh(n).vertices.empty());
 }
+
+TEST_CASE(road_net_conform_regions_carve_a_sloped_road) {
+    RoadNet net;
+    net.nodes = { Vec2(0, 0), Vec2(40, 0) };
+    net.edges = { {0, 1} };
+    net.width = 8.0;
+    net.heightAt = [](double x, double) { return 0.4 * x; };   // 40% slope along the road
+    std::vector<TerrainFlatten> regs = roadNetConformRegions(net, 1.5, 8.0, 0.10);
+    CHECK(!regs.empty());
+    const double base = 999.0;                                 // natural ground far above
+    CHECK_APPROX(applyFlatten(regs, 20, 60, base), base, 1e-6);   // far off road -> natural
+    // On the road the terrain is graded to a <=10% profile, well below the natural 8 m.
+    CHECK(applyFlatten(regs, 20, 0, base) < 8.0);
+}
+
+TEST_CASE(road_net_conform_regions_empty_without_terrain) {
+    RoadNet net;
+    net.nodes = { Vec2(0, 0), Vec2(40, 0) };
+    net.edges = { {0, 1} };
+    CHECK(roadNetConformRegions(net).empty());                 // no heightAt -> flat -> none
+}

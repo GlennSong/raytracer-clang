@@ -130,6 +130,37 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     return buildRoadMesh(g, p);
 }
 
+std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder,
+                                                  double falloff, double maxGrade) {
+    std::vector<TerrainFlatten> out;
+    if (!net.heightAt) return out;                       // flat road: nothing to carve
+    double minR = net.width * 0.5 + net.sidewalk + 0.5;
+    RoadGraph g = netGraph(net, minR);
+    double hw = net.width * 0.5;
+    for (const std::vector<Vec2>& chain : traceChains(g)) {
+        if (chain.size() < 2) continue;
+        // Densify to a fixed step so even a straight road (2 graph nodes) has enough
+        // samples for roadProfile to smooth and grade-limit along its length.
+        const double step = 4.0;
+        std::vector<Vec2> dense;
+        for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
+            Vec2 a = chain[i], b = chain[i + 1];
+            int sub = std::max(1, static_cast<int>(std::ceil((b - a).length() / step)));
+            for (int k = 0; k < sub; ++k) dense.push_back(a + (b - a) * (double(k) / sub));
+        }
+        dense.push_back(chain.back());
+        int n = static_cast<int>(dense.size());
+        std::vector<double> ground(n), s(n);
+        for (int i = 0; i < n; ++i) ground[i] = net.heightAt(dense[i].x, dense[i].y);
+        s[0] = 0.0;
+        for (int i = 1; i < n; ++i) s[i] = s[i - 1] + (dense[i] - dense[i - 1]).length();
+        std::vector<double> profile = roadProfile(ground, s, maxGrade);
+        std::vector<TerrainFlatten> r = roadConformRegions(dense, profile, hw, shoulder, falloff);
+        out.insert(out.end(), r.begin(), r.end());
+    }
+    return out;
+}
+
 void roadNetSetWidth(RoadNet& net, double width) {
     net.width = std::max(0.5, width);
 }

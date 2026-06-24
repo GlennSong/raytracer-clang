@@ -1727,6 +1727,23 @@ bool LevelLoader::load(const std::string& path,
     }
 #endif
 
+    // Road pre-pass (ADR-0044 corridor conforming): grade the terrain to each editable
+    // road (shape:"road") BEFORE it builds, mirroring the script pre-pass, so the ground
+    // meets the road's drivable profile and no terrain pokes through.
+    std::vector<TerrainFlatten> roadFlatten;
+    if (levelGround && root.contains("entities")) {
+        for (const auto& ent : root["entities"]) {
+            if (ent.value("shape", std::string()) == "road") {
+                RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"]
+                                                                   : json::object());
+                net.heightAt = levelGround;
+                std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+                roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
+            }
+        }
+    }
+    HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
+
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     if (root.contains("terrain")) {
@@ -1734,8 +1751,18 @@ bool LevelLoader::load(const std::string& path,
         terrainParams.flatten = cityFlatten;   // grade flat under the city
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      scriptFlatten.begin(), scriptFlatten.end());
-        Noise terrainNoise(root["terrain"].value("seed", 0u));
+        terrainParams.flatten.insert(terrainParams.flatten.end(),
+                                     roadFlatten.begin(), roadFlatten.end());   // carve to roads
+        unsigned terrainSeed = root["terrain"].value("seed", 0u);
+        Noise terrainNoise(terrainSeed);
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
+        // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
+        // on its graded profile instead of the raw ground it no longer matches.
+        auto carvedTp = std::make_shared<TerrainParams>(terrainParams);
+        auto carvedNoise = std::make_shared<Noise>(terrainSeed);
+        entityGround = [carvedTp, carvedNoise](double x, double z) {
+            return terrainHeight(*carvedTp, *carvedNoise, x, z);
+        };
         if (root.contains("vegetation"))
             loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
                            renderer, assets, levelDir, "veg");
@@ -1750,7 +1777,7 @@ bool LevelLoader::load(const std::string& path,
     if (root.contains("entities"))
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, cityEnt, &cityModel, &scriptCache,
-                     levelGround ? &levelGround : nullptr);
+                     entityGround ? &entityGround : nullptr);
 
     if (root.contains("player"))
         (editorMode ? loadPlayerSpawn(root["player"], world, assets)

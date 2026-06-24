@@ -43,6 +43,15 @@ struct RoadNet {
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).
 RenderMesh buildRoadNetMesh(const RoadNet& net);
 
+// The terrain cut/fill footprints that grade the ground to this road (ADR-0044 corridor
+// conforming). Traces the net's chains, gives each a smoothed, grade-limited vertical
+// profile (roadProfile, over `net.heightAt`), and emits a flatten ramp per segment at the
+// profile, half-width = carriageway + `shoulder`, feathered over `falloff`. The loader
+// folds these into the level terrain before it builds, so the ground meets the road and no
+// terrain pokes through. Empty if `net.heightAt` is unset (a flat road needs no carving).
+std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder = 1.5,
+                                                  double falloff = 8.0, double maxGrade = 0.10);
+
 // --- editor edit ops (each leaves the net ready for buildRoadNetMesh) ----------
 // Set the default carriageway width (the inspector "Width" control — "widen a road").
 void roadNetSetWidth(RoadNet& net, double width);
