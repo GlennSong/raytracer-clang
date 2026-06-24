@@ -90,6 +90,48 @@ TEST_CASE(path_tool_drags_a_road_node_on_the_ground) {
     CHECK(regens == 1);
 }
 
+TEST_CASE(path_tool_hover_tracks_the_handle_under_the_ray) {
+    RoadNet net;
+    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
+    net.edges = { {0, 1}, {1, 2} };
+    RoadHandleSource src(net);
+    PathEditTool tool;
+    tool.bind(&src);
+
+    int n1 = -1;
+    std::vector<EditHandle> hs = tool.handles();
+    for (int i = 0; i < (int)hs.size(); ++i)
+        if (hs[i].kind == HandleKind::Knot && hs[i].index == 1) n1 = i;
+
+    CHECK(tool.updateHover(downThrough(hs[n1].position), 1.0) == n1);
+    CHECK(tool.hoveredIndex() == n1);
+    CHECK(tool.updateHover(downThrough(Vec3(100, 0, 100)), 1.0) == -1);   // empty space
+    CHECK(tool.hoveredIndex() == -1);
+}
+
+TEST_CASE(path_tool_grab_selects_the_node_and_hides_hover_while_dragging) {
+    RoadNet net;
+    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
+    net.edges = { {0, 1}, {1, 2} };
+    RoadHandleSource src(net);
+    PathEditTool tool;
+    tool.bind(&src);
+    CHECK(tool.selectedNode() == -1);
+
+    Vec3 node2 = find(tool.handles(), HandleKind::Knot, 2).position;
+    tool.updateHover(downThrough(node2), 1.0);
+    CHECK(tool.hoveredIndex() >= 0);
+
+    CHECK(tool.beginDrag(downThrough(node2), 1.0));
+    CHECK(tool.selectedNode() == 2);            // grabbing node 2 selects it
+    CHECK(tool.hoveredIndex() == -1);           // hover suppressed mid-drag
+    tool.endDrag();
+    CHECK(tool.selectedNode() == 2);            // selection persists after release
+
+    tool.clearSelection();
+    CHECK(tool.selectedNode() == -1);
+}
+
 TEST_CASE(path_tool_plane_override_and_clear) {
     RoadNet net;
     net.nodes = { Vec2(0, 0), Vec2(10, 0) };

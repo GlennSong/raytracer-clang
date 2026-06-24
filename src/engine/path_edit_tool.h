@@ -37,7 +37,8 @@ public:
 
     // Grab the handle under `ray` (within pickRadius perpendicular world units). True if
     // one was grabbed — the editor then knows the tool, not the object picker, owns this
-    // click. A miss leaves the tool idle so a plain click still selects.
+    // click. A miss leaves the tool idle so a plain click still selects. Grabbing also
+    // selects the handle's node (see selectedNode), so its handles stay lit after release.
     bool beginDrag(const EditRay& ray, double pickRadius);
     // Move the grabbed handle to where `ray` meets the constraint plane through it.
     // `viewDir` is the camera forward (only the Screen plane uses it). No-op when idle.
@@ -46,9 +47,19 @@ public:
     // didn't move commits no undo entry). Always returns to idle.
     bool endDrag();
 
+    // Cursor feedback: the handle under `ray` right now (or -1), for a hover highlight.
+    // Call when idle; returns and stores the hovered index. Cleared while dragging.
+    int updateHover(const EditRay& ray, double pickRadius);
+    int hoveredIndex() const { return dragging() ? -1 : hovered_; }
+
     bool dragging() const { return grabbed_ >= 0; }
     int grabbedIndex() const { return grabbed_; }
     HandleKind grabbedKind() const { return grabbedHandle_.kind; }
+    // The "active" node — the one whose handles the editor emphasizes and the topology
+    // ops (extend, delete) act on. Set when a handle is grabbed; -1 = none.
+    int selectedNode() const { return selectedNode_; }
+    void selectNode(int node) { selectedNode_ = node; }
+    void clearSelection() { selectedNode_ = -1; }
 
     // Drawing pass-throughs for the render pass (empty when unbound).
     std::vector<EditHandle> handles() const;
@@ -59,10 +70,14 @@ private:
     DragPlane planeOverride_ = DragPlane::Screen;
     bool hasOverride_ = false;
     int grabbed_ = -1;            // index into handles() this drag; -1 = idle
+    int hovered_ = -1;            // index of the handle under the cursor (idle feedback)
+    int selectedNode_ = -1;       // the active node (emphasis + topology target)
     EditHandle grabbedHandle_{};  // the grabbed handle; its anchor is refreshed per drag
     bool moved_ = false;          // did this drag apply at least one move?
     std::function<void()> onEdit_;
     std::function<void()> onGrab_;
+
+    int pickHandle(const EditRay& ray, double pickRadius) const;
 };
 
 }  // namespace engine

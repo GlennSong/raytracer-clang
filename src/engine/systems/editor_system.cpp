@@ -412,11 +412,12 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
     const CameraState& cam = ctx.view.camera;
     Vec3 viewDir = normalize(cam.target - cam.position);
     // Pick fatness scales with view distance so the dots stay grabbable when zoomed out.
-    double radius = 0.04 * (cam.position - cam.target).length() + 0.25;
+    double radius = 0.06 * (cam.position - cam.target).length() + 0.4;
 
     bool grabbed = false;
     if (click) grabbed = pathTool.beginDrag(ray, radius);
     else if (pathTool.dragging() && ctx.input.mouseLeftDown) pathTool.drag(ray, viewDir);
+    else pathTool.updateHover(ray, radius);   // cursor feedback when not dragging
     if (pathWasDragging && !ctx.input.mouseLeftDown) pathTool.endDrag();
     pathWasDragging = pathTool.dragging();
     return grabbed;
@@ -999,18 +1000,27 @@ void EditorSystem::drawPathHandles(FrameContext& ctx) const {
         if (toScreen(seg.first, a) && toScreen(seg.second, b))
             dl->AddLine(a, b, IM_COL32(80, 200, 255, 180), 2.0f);
 
+    int hovered = pathTool.hoveredIndex();
+    int selNode = pathTool.selectedNode();
     std::vector<EditHandle> hs = pathTool.handles();
     for (int i = 0; i < static_cast<int>(hs.size()); ++i) {
         ImVec2 s;
         if (!toScreen(hs[i].position, s)) continue;
         bool grabbed = (i == pathTool.grabbedIndex());
+        bool hover = (i == hovered);
+        bool onSelected = (hs[i].index == selNode);   // a handle of the active node
         bool tangent = hs[i].kind != HandleKind::Knot;
-        ImU32 col = grabbed   ? IM_COL32(255, 240, 80, 255)
-                    : tangent ? IM_COL32(120, 220, 120, 230)
-                              : IM_COL32(255, 170, 40, 230);
-        float r = grabbed ? 7.0f : 5.0f;
+        // Grabbed > hovered > on the selected node > idle, brightest first.
+        ImU32 col = grabbed     ? IM_COL32(255, 240, 80, 255)
+                    : hover     ? IM_COL32(255, 255, 255, 255)
+                    : onSelected ? IM_COL32(255, 210, 90, 255)
+                    : tangent   ? IM_COL32(120, 220, 120, 230)
+                                : IM_COL32(255, 170, 40, 230);
+        float r = (grabbed || hover) ? 7.5f : onSelected ? 6.0f : 5.0f;
         if (tangent) dl->AddCircle(s, r, col, 0, 2.0f);
         else dl->AddCircleFilled(s, r, col);
+        // A thin ring around the hovered dot makes the grab target unmistakable.
+        if (hover) dl->AddCircle(s, r + 3.0f, IM_COL32(255, 255, 255, 200), 0, 1.5f);
     }
 }
 

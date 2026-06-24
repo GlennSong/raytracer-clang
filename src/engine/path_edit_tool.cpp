@@ -5,7 +5,25 @@ namespace engine {
 void PathEditTool::bind(HandleSource* source) {
     source_ = source;
     grabbed_ = -1;
+    hovered_ = -1;
+    selectedNode_ = -1;
     moved_ = false;
+}
+
+// The handle under `ray` within pickRadius, or -1. Shared by hover and grab so the dot
+// you see highlighted is exactly the one a click will take.
+int PathEditTool::pickHandle(const EditRay& ray, double pickRadius) const {
+    if (!source_) return -1;
+    std::vector<EditHandle> hs = source_->handles();
+    std::vector<Vec3> pts;
+    pts.reserve(hs.size());
+    for (const EditHandle& h : hs) pts.push_back(h.position);
+    return nearestHandle(pts, ray, pickRadius);
+}
+
+int PathEditTool::updateHover(const EditRay& ray, double pickRadius) {
+    hovered_ = pickHandle(ray, pickRadius);
+    return hovered_;
 }
 
 DragPlane PathEditTool::activePlane() const {
@@ -16,15 +34,11 @@ DragPlane PathEditTool::activePlane() const {
 bool PathEditTool::beginDrag(const EditRay& ray, double pickRadius) {
     grabbed_ = -1;
     moved_ = false;
-    if (!source_) return false;
-    std::vector<EditHandle> hs = source_->handles();
-    std::vector<Vec3> pts;
-    pts.reserve(hs.size());
-    for (const EditHandle& h : hs) pts.push_back(h.position);
-    int idx = nearestHandle(pts, ray, pickRadius);
+    int idx = pickHandle(ray, pickRadius);
     if (idx < 0) return false;
     grabbed_ = idx;
-    grabbedHandle_ = hs[idx];
+    grabbedHandle_ = source_->handles()[idx];
+    selectedNode_ = grabbedHandle_.index;   // light up this node and target topology ops at it
     if (onGrab_) onGrab_();
     return true;
 }
