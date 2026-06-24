@@ -168,9 +168,12 @@ local function build_city(layout_opts, cx, cz, kind)
   local field, regions = terrain.conform(land, lay,
     { margin = 3, falloff = 16, pads = pads, pad_falloff = 12 })
   m:conform(regions)
-  m:add_solid(city.road_mesh(lay, { height = field, lift = 0.06, sidewalk = 2.4,
-    curb = 0.16, markings = true, mark_width = 0.18, crosswalks = true,
-    corner_radius = 3.0, plaza = (kind == "radial") and 16 or 0 }))
+  -- City streets via the SDF roadbed (ADR-0048): the grid's overlapping ribbons merge
+  -- into one surface with rounded junctions for free, and the dense union drapes exactly
+  -- on the conformed terrain. (Markings/crosswalks/explicit corner_radius are analytic-
+  -- only; the SDF rounds corners uniformly and markings move to a shader later.)
+  m:add_solid(city.roadbed{ layout = lay, height = field, cell = 0.8, lift = 0.06,
+    sidewalk = 2.4, curb = 0.16, grain = 0.06 })
   place_city(plan, kind)
 
   -- street lamps along the longer edges
