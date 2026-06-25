@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [260, 0.4, 260],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 } },
+    { "name": "roundabout", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": 0,      "z": 0 },
+          { "x": 80,     "z": 0 },
+          { "x": 56.57,  "z": 56.57 },
+          { "x": 0,      "z": 80 },
+          { "x": -56.57, "z": 56.57 },
+          { "x": -80,    "z": 0 },
+          { "x": -56.57, "z": -56.57 },
+          { "x": 0,      "z": -80 },
+          { "x": 56.57,  "z": -56.57 }
+        ],
+        "edges": [ [0,1], [0,2], [0,3], [0,4], [0,5], [0,6], [0,7], [0,8] ],
+        "curved": false,
+        "width": 12, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": true
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}
