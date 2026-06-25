@@ -1595,6 +1595,68 @@ int l_city_union(lua_State* L) {
     return 1;
 }
 
+// city.deck{ points={{x,z}...}, width=, heights={...} (per point) | height= (constant),
+//   thickness=, color=, side_color=, piers=(bool), pier_at={i...}, pier_spacing=,
+//   pier_depth=, pier_color= } -> a bridge-deck slab riding the per-point heights
+//   (ADR-0054), optionally on abutment piers. The grade-SEPARATED counterpart to city.union
+//   (one level): a road can ramp up onto a deck and another can pass beneath it.
+int l_city_deck(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<Vec2> pts;
+    lua_getfield(L, 1, "points");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer np = luaL_len(L, -1);
+    for (lua_Integer i = 1; i <= np; ++i) {
+        lua_geti(L, -1, i);
+        pts.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);                                       // points
+    std::vector<double> heights;
+    lua_getfield(L, 1, "heights");
+    if (lua_istable(L, -1)) {
+        lua_Integer nh = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= nh; ++i) {
+            lua_geti(L, -1, i); heights.push_back(lua_tonumber(L, -1)); lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);                                       // heights
+    if (heights.size() != pts.size())
+        heights.assign(pts.size(), optField(L, 1, "height", 0.0));
+    double width = optField(L, 1, "width", 8.0);
+    double thk = optField(L, 1, "thickness", 0.6);
+    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.09, 0.09, 0.10));
+    Vec3 sideColor = optVec3Field(L, 1, "side_color", Vec3(0.30, 0.30, 0.32));
+    RenderMesh mesh = bridgeDeck(pts, heights, width * 0.5, color, thk, sideColor);
+
+    if (optBoolField(L, 1, "piers", false)) {
+        std::vector<int> at;
+        lua_getfield(L, 1, "pier_at");
+        if (lua_istable(L, -1)) {
+            lua_Integer na = luaL_len(L, -1);
+            for (lua_Integer i = 1; i <= na; ++i) {
+                lua_geti(L, -1, i); at.push_back(static_cast<int>(lua_tointeger(L, -1)) - 1); lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);                                   // pier_at
+        if (at.empty()) {                                // auto: regular spacing where elevated
+            double spacing = optField(L, 1, "pier_spacing", 40.0), acc = spacing;
+            for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
+                if (i > 0) acc += (pts[i] - pts[i - 1]).length();
+                if (heights[i] > 1.5 && acc >= spacing) { at.push_back(i); acc = 0; }
+            }
+        }
+        double depth = optField(L, 1, "pier_depth", 3.0);
+        Vec3 pcol = optVec3Field(L, 1, "pier_color", Vec3(0.34, 0.34, 0.36));
+        RenderMesh pm = bridgePiers(pts, heights, at, width, depth, thk, pcol);
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.insert(mesh.vertices.end(), pm.vertices.begin(), pm.vertices.end());
+        for (uint32_t idx : pm.indices) mesh.indices.push_back(base + idx);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(mesh)));
+    return 1;
+}
+
 // --- material.* : a baked material bundle for a part (ADR-0043) ---------------
 // Applied to a part by world-planar projection — no authored UVs needed.
 constexpr const char* kMaterialMt = "engine.procgen.Material";
@@ -2223,6 +2285,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"road_mesh", l_city_road_mesh},
         {"stroke", l_city_stroke},
         {"union", l_city_union},
+        {"deck", l_city_deck},
         {"roadbed", l_city_roadbed},
         {"lane_markings", l_city_lane_markings},
         {nullptr, nullptr},
