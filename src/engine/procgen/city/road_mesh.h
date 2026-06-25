@@ -166,6 +166,11 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& centerline,
 RenderMesh bridgeDeck(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
                       double halfWidth, const Vec3& deckColor, double thickness = 0.6,
                       const Vec3& sideColor = Vec3(0.30, 0.30, 0.32));
+// Per-point half-width overload (ADR-0053): the deck can TAPER along its length, so a ramp can
+// narrow to a nose where it meets the mainline (a merge/diverge gore) instead of ending blunt.
+RenderMesh bridgeDeck(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                      const std::vector<double>& halfWidths, const Vec3& deckColor,
+                      double thickness = 0.6, const Vec3& sideColor = Vec3(0.30, 0.30, 0.32));
 
 // Support columns under a bridge deck (ADR-0054): for each centerline index in `atSamples`, a
 // box pier rising from the ground (`ground`, flat if unset) up to the deck underside
@@ -180,6 +185,9 @@ RenderMesh bridgePiers(const std::vector<Vec2>& centerline, const std::vector<do
 // the deck on each verge, the full length — the safety rail of an overpass/viaduct.
 RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
                         double halfWidth, double height, const Vec3& color);
+// Per-point half-width overload: barriers follow a tapering deck edge.
+RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                        const std::vector<double>& halfWidths, double height, const Vec3& color);
 
 // Lane markings painted on a deck/road that rides a vertical profile: solid edge lines, a
 // solid centreline (`centerColor`, e.g. yellow — set `center=false` for a one-way ramp), and

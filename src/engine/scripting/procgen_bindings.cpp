@@ -1624,10 +1624,21 @@ int l_city_deck(lua_State* L) {
     if (heights.size() != pts.size())
         heights.assign(pts.size(), optField(L, 1, "height", 0.0));
     double width = optField(L, 1, "width", 8.0);
+    // Optional per-point full width (a tapering deck — the merge/diverge gore, ADR-0053).
+    std::vector<double> halfW;
+    lua_getfield(L, 1, "widths");
+    if (lua_istable(L, -1)) {
+        lua_Integer nw = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= nw; ++i) { lua_geti(L, -1, i); halfW.push_back(lua_tonumber(L, -1) * 0.5); lua_pop(L, 1); }
+    }
+    lua_pop(L, 1);                                       // widths
+    if (halfW.size() != pts.size()) halfW.assign(pts.size(), width * 0.5);
+    double nominalHW = 0.0;                              // widest point — for markings lane count
+    for (double h : halfW) nominalHW = std::max(nominalHW, h);
     double thk = optField(L, 1, "thickness", 0.6);
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.09, 0.09, 0.10));
     Vec3 sideColor = optVec3Field(L, 1, "side_color", Vec3(0.30, 0.30, 0.32));
-    RenderMesh mesh = bridgeDeck(pts, heights, width * 0.5, color, thk, sideColor);
+    RenderMesh mesh = bridgeDeck(pts, heights, halfW, color, thk, sideColor);
     auto merge = [&](const RenderMesh& src) {
         uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
         mesh.vertices.insert(mesh.vertices.end(), src.vertices.begin(), src.vertices.end());
@@ -1658,7 +1669,7 @@ int l_city_deck(lua_State* L) {
     if (optBoolField(L, 1, "barriers", false)) {
         double bh = optField(L, 1, "barrier_height", 0.9);
         Vec3 bcol = optVec3Field(L, 1, "barrier_color", Vec3(0.55, 0.55, 0.57));
-        merge(deckBarriers(pts, heights, width * 0.5, bh, bcol));
+        merge(deckBarriers(pts, heights, halfW, bh, bcol));
     }
     if (optBoolField(L, 1, "markings", false)) {
         DeckMarkParams mp;
@@ -1666,7 +1677,7 @@ int l_city_deck(lua_State* L) {
         mp.center = optBoolField(L, 1, "center", mp.center);
         mp.laneColor = optVec3Field(L, 1, "lane_color", mp.laneColor);
         mp.centerColor = optVec3Field(L, 1, "center_color", mp.centerColor);
-        merge(deckMarkings(pts, heights, width * 0.5, mp));
+        merge(deckMarkings(pts, heights, nominalHW, mp));
     }
     pushMesh(L, std::make_shared<RenderMesh>(std::move(mesh)));
     return 1;

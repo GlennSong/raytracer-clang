@@ -3537,6 +3537,15 @@ point (add a template), instead of a growing pile of mesher special cases. The r
 member is also the principled fix for the spoke bug: it gives a busy node *extent*. Build
 order: patch → roundabout → diamond → trumpet → cloverleaf/stack. See plan Phase 2.
 
+**Landed since (first components).** The hand-authored grade-separated cloverleaf
+(`net_interchange.lua`) + the **merge/diverge gore** primitive: `bridgeDeck`/`deckBarriers`
+gained a per-point half-width overload, so a ramp can TAPER to a nose where it meets the
+mainline (exposed as `city.deck{ widths = {...} }`). The loops now taper into the highways
+instead of ending blunt on top of them — the connecting half of a real on/off ramp. Tests:
+`test_road_layers` (deck tapers with per-point width). Still to do: the classifier that
+detects a freeway crossing and emits the template automatically, edge-aligned gores (nose at
+the mainline's right edge, not its centreline), and the diamond/trumpet/stack recipes.
+
 ---
 
 ## ADR-0054 — Vertical profiles, a clearance solver, and bridges/underpasses (water crossings reuse the same path)

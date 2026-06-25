@@ -339,3 +339,21 @@ TEST_CASE(deck_markings_scale_lanes_with_width) {
     CHECK(narrow > 0);
     CHECK(wide > narrow);
 }
+
+// A tapering deck (per-point half-width) narrows along its length — the merge-gore primitive.
+TEST_CASE(deck_tapers_with_per_point_width) {
+    std::vector<Vec2> c;                                  // straight run along x
+    std::vector<double> y, hw;
+    for (int i = 0; i <= 10; ++i) { c.push_back(Vec2(i * 5.0, 0)); y.push_back(0.0); hw.push_back(0.5 + 0.45 * i); }
+    RenderMesh d = bridgeDeck(c, y, hw, Vec3(0.1, 0.1, 0.1), 0.4);
+    CHECK(!d.vertices.empty());
+    // Vertices near the narrow end (x≈0) hug the centerline; near the wide end (x≈50) spread out.
+    double zNarrow = 0, zWide = 0;
+    for (const Vertex& v : d.vertices) {
+        if (v.position.x < 3.0)  zNarrow = std::max(zNarrow, std::fabs((double)v.position.z));
+        if (v.position.x > 47.0) zWide   = std::max(zWide,   std::fabs((double)v.position.z));
+    }
+    CHECK(std::fabs(zNarrow - 0.5) < 1e-6);              // half-width 0.5 at the nose
+    CHECK(std::fabs(zWide - 5.0) < 1e-6);                // half-width 5.0 at the wide end
+    CHECK(zWide > zNarrow);
+}

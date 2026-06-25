@@ -48,13 +48,15 @@ for _, q in ipairs({ {1,1}, {-1,1}, {1,-1}, {-1,-1} }) do
     local r = {}; for i = #arc, 1, -1 do r[#r+1] = arc[i] end; arc = r
   end
   local aEnd, bEnd = arc[1], arc[#arc]
-  local pts = { { x = aEnd.x * 0.5, z = 0 } }                 -- merge stub onto highway A
+  -- Merge GORE at each end (ADR-0053): a stub runs onto the highway and TAPERS to a nose
+  -- (width -> ~2 m) so the ramp emerges from the road instead of ending blunt on top of it.
+  local pts = { { x = aEnd.x * 0.5, z = 0 } }
   for _, q2 in ipairs(arc) do pts[#pts+1] = q2 end
-  pts[#pts+1] = { x = 0, z = bEnd.z * 0.5 }                   -- merge stub onto highway B
-  local h, n = { 0.06 }, N
-  for i = 0, n do h[#h+1] = 0.06 + (H - 0.06) * i / n end
-  h[#h+1] = H
-  m:add_solid(city.deck{ points = pts, width = RW, heights = h, thickness = 0.5, color = DARK,
+  pts[#pts+1] = { x = 0, z = bEnd.z * 0.5 }
+  local h, w, n = { 0.06 }, { 2.0 }, N
+  for i = 0, n do h[#h+1] = 0.06 + (H - 0.06) * i / n; w[#w+1] = RW end
+  h[#h+1] = H; w[#w+1] = 2.0
+  m:add_solid(city.deck{ points = pts, widths = w, heights = h, thickness = 0.5, color = DARK,
                          barriers = true, barrier_height = 0.8,
                          markings = true, center = false, lane_width = 9 })
 end

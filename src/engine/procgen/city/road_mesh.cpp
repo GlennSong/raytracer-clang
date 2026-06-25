@@ -706,10 +706,18 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
 RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
                       double halfWidth, const Vec3& deckColor, double thickness,
                       const Vec3& sideColor) {
+    return bridgeDeck(pts, deckY, std::vector<double>(pts.size(), halfWidth), deckColor,
+                      thickness, sideColor);
+}
+
+RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
+                      const std::vector<double>& halfW, const Vec3& deckColor, double thickness,
+                      const Vec3& sideColor) {
     RenderMesh mesh;
     const int n = static_cast<int>(pts.size());
-    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
-
+    if (n < 2 || static_cast<int>(deckY.size()) != n || halfW.empty()) return mesh;
+    auto W = [&](int i) { return halfW[std::min<int>(static_cast<int>(halfW.size()) - 1,
+                                                     std::max(0, i))]; };
     auto Y = [&](int i) { return deckY[i]; };
     auto top = [&](const Vec2& v, double y) { return Vec3(v.x, y, v.y); };
     for (int i = 0; i + 1 < n; ++i) {
@@ -717,8 +725,9 @@ RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& d
         Vec2 ab = B - A; double L = ab.length();
         if (L < 1e-9) continue;
         Vec2 nrm = perp(ab / L);
-        Vec2 AL = A + nrm * halfWidth, AR = A - nrm * halfWidth;
-        Vec2 BL = B + nrm * halfWidth, BR = B - nrm * halfWidth;
+        double wa = W(i), wb = W(i + 1);
+        Vec2 AL = A + nrm * wa, AR = A - nrm * wa;
+        Vec2 BL = B + nrm * wb, BR = B - nrm * wb;
         double ya = Y(i), yb = Y(i + 1);
         // Deck top (faces up).
         MeshBuilder::emitTri(mesh, top(AL, ya), top(AR, ya), top(BR, yb), Vec3(0, 1, 0), deckColor);
@@ -773,15 +782,22 @@ RenderMesh bridgePiers(const std::vector<Vec2>& center, const std::vector<double
 
 RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
                         double halfWidth, double height, const Vec3& color) {
+    return deckBarriers(pts, deckY, std::vector<double>(pts.size(), halfWidth), height, color);
+}
+
+RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
+                        const std::vector<double>& halfW, double height, const Vec3& color) {
     RenderMesh mesh;
     const int n = static_cast<int>(pts.size());
-    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
+    if (n < 2 || static_cast<int>(deckY.size()) != n || halfW.empty()) return mesh;
+    auto W = [&](int i) { return halfW[std::min<int>(static_cast<int>(halfW.size()) - 1,
+                                                     std::max(0, i))]; };
     auto wall = [&](double side) {                       // side = +1 (left) / -1 (right)
         for (int i = 0; i + 1 < n; ++i) {
             Vec2 ab = pts[i + 1] - pts[i]; double L = ab.length();
             if (L < 1e-9) continue;
             Vec2 nrm = perp(ab / L) * side;
-            Vec2 a = pts[i] + nrm * halfWidth, b = pts[i + 1] + nrm * halfWidth;
+            Vec2 a = pts[i] + nrm * W(i), b = pts[i + 1] + nrm * W(i + 1);
             double ya = deckY[i], yb = deckY[i + 1];
             Vec3 nv(nrm.x, 0, nrm.y);                     // face inward (toward the road)
             Vec3 ba(a.x, ya, a.y), bb(b.x, yb, b.y);
