@@ -24,4 +24,12 @@ m:add_solid(city.weld{ y = 0.05, color = DARK, spines = {
   { points = pts(function(t) return 150 + t, 40*math.sin(t/55) end, 60, -120, 120), width = 14 },
   { points = line(150, -110, 150, 110), width = 12 },
 } })
+
+-- a small welded GRID: enclosed block interiors stay open (hole bridging)
+local g = {}
+for i = 0, 3 do
+  g[#g+1] = { points = line(-60, -150 + i*36, 60, -150 + i*36), width = 13 }
+  g[#g+1] = { points = line(-60 + i*40, -150, -60 + i*40, -42), width = 13 }
+end
+m:add_solid(city.weld{ spines = g, y = 0.05, color = DARK })
 return m

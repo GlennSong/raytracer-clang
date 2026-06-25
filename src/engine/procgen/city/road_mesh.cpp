@@ -195,8 +195,12 @@ std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly
             bool ear = true;                              // no other vertex inside the ear
             for (int j = 0; j < m && ear; ++j) {
                 int ij = v[j];
-                if (ij != ia && ij != ib && ij != ic && pointInTriangle(poly[ij], a, b, c))
-                    ear = false;
+                if (ij == ia || ij == ib || ij == ic) continue;
+                const Vec2& q = poly[ij];                 // a zero-width hole bridge revisits a
+                if ((q - a).length() < 1e-6 ||            // corner under a different index; that
+                    (q - b).length() < 1e-6 ||            // coincident vertex isn't really "inside"
+                    (q - c).length() < 1e-6) continue;
+                if (pointInTriangle(q, a, b, c)) ear = false;
             }
             if (!ear) continue;
             tris.push_back({ia, ib, ic});
@@ -936,13 +940,20 @@ RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Ve
         Poly2 r = ribbonOutline(s.points, s.halfWidth);
         if (r.size() >= 3) ribbons.push_back(std::move(r));
     }
+    // Split the welded loops into exterior surfaces (CCW) and holes (CW, e.g. block interiors),
+    // bridge each surface's holes in, then triangulate — so enclosed blocks stay open.
+    std::vector<Poly2> outers, holes;
+    for (Poly2& L : polygonUnion(ribbons)) (signedArea(L) > 0 ? outers : holes).push_back(std::move(L));
     RenderMesh mesh;
-    for (const Poly2& loop : polygonUnion(ribbons)) {
-        if (signedArea(loop) <= 0) continue;             // skip holes (CW) until the hole-aware pass
-        for (const std::array<int, 3>& t : triangulatePolygon(loop))
-            MeshBuilder::emitTri(mesh, Vec3(loop[t[0]].x, y, loop[t[0]].y),
-                                 Vec3(loop[t[1]].x, y, loop[t[1]].y),
-                                 Vec3(loop[t[2]].x, y, loop[t[2]].y), Vec3(0, 1, 0), color);
+    for (const Poly2& outer : outers) {
+        std::vector<Poly2> mine;
+        for (const Poly2& h : holes)
+            if (h.size() >= 3 && pointInPolygon(outer, centroid(h))) mine.push_back(h);
+        Poly2 merged = mine.empty() ? outer : bridgeHoles(outer, mine);
+        for (const std::array<int, 3>& t : triangulatePolygon(merged))
+            MeshBuilder::emitTri(mesh, Vec3(merged[t[0]].x, y, merged[t[0]].y),
+                                 Vec3(merged[t[1]].x, y, merged[t[1]].y),
+                                 Vec3(merged[t[2]].x, y, merged[t[2]].y), Vec3(0, 1, 0), color);
     }
     return mesh;
 }

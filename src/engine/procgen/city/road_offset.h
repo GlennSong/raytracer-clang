@@ -31,6 +31,12 @@ Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterL
 // exactly-collinear shared edges are not specially deduped. Pure + headless.
 std::vector<Poly2> polygonUnion(const std::vector<Poly2>& polys);
 
+// Merge holes into an outer loop by cutting zero-width BRIDGES, yielding ONE simple polygon a
+// plain ear-clipper can triangulate (the block interiors / roundabout islands the welded road
+// surrounds). `outer` is forced CCW, `holes` CW; each hole bridges to the outer boundary at a
+// mutually-visible vertex (Eberly's rightmost-vertex rule). Pure + headless.
+Poly2 bridgeHoles(const Poly2& outer, const std::vector<Poly2>& holes);
+
 }  // namespace engine
 
 #endif

@@ -25,6 +25,61 @@ bool pointOnSegInterior(const Vec2& p1, const Vec2& p2, const Vec2& q, double to
     return (q - proj).length() < tol;
 }
 
+bool pointInTri(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
+    double d1 = cross(b - a, p - a), d2 = cross(c - b, p - b), d3 = cross(a - c, p - c);
+    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0), pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(neg && pos);
+}
+
+// Reflex vertex of a CCW polygon (interior angle > 180).
+bool isReflexCCW(const Poly2& P, int i) {
+    int n = static_cast<int>(P.size());
+    Vec2 a = P[(i + n - 1) % n], b = P[i], c = P[(i + 1) % n];
+    return cross(b - a, c - b) < 0;
+}
+
+// Bridge ONE hole into `outer` (outer CCW, hole CW): cut from a mutually-visible outer vertex
+// to the hole's rightmost vertex and back (Eberly's algorithm).
+Poly2 bridgeOneHole(const Poly2& outer, const Poly2& hole) {
+    const int hn = static_cast<int>(hole.size());
+    const int on = static_cast<int>(outer.size());
+    if (hn < 3 || on < 3) return outer;
+
+    int mi = 0;                                          // hole's rightmost vertex M
+    for (int i = 1; i < hn; ++i) if (hole[i].x > hole[mi].x) mi = i;
+    Vec2 M = hole[mi];
+
+    int bestK = -1; double bestX = 1e30; Vec2 I(0, 0);   // nearest outer edge the +x ray hits
+    for (int k = 0; k < on; ++k) {
+        Vec2 a = outer[k], b = outer[(k + 1) % on];
+        if ((a.y > M.y) == (b.y > M.y)) continue;        // edge must straddle the ray
+        double t = (M.y - a.y) / (b.y - a.y);
+        double x = a.x + t * (b.x - a.x);
+        if (x >= M.x - 1e-9 && x < bestX) { bestX = x; bestK = k; I = Vec2(x, M.y); }
+    }
+    if (bestK < 0) return outer;                         // no edge to the right: give up on this hole
+
+    int vi = (outer[bestK].x >= outer[(bestK + 1) % on].x) ? bestK : (bestK + 1) % on;
+    Vec2 cand = outer[vi];
+    double bestAng = 1e30;                               // refine: a reflex vertex may block the view
+    for (int j = 0; j < on; ++j) {
+        if (!isReflexCCW(outer, j) || outer[j].x <= M.x) continue;
+        if (pointInTri(outer[j], M, I, cand)) {
+            double ang = std::atan2(std::fabs(outer[j].y - M.y), outer[j].x - M.x);
+            if (ang < bestAng) { bestAng = ang; vi = j; }
+        }
+    }
+
+    Poly2 merged;
+    merged.reserve(on + hn + 2);
+    for (int k = 0; k <= vi; ++k) merged.push_back(outer[k]);
+    for (int s = 0; s < hn; ++s) merged.push_back(hole[(mi + s) % hn]);   // the hole loop (CW)
+    merged.push_back(hole[mi]);                          // back to M
+    merged.push_back(outer[vi]);                         // ... and across the bridge
+    for (int k = vi + 1; k < on; ++k) merged.push_back(outer[k]);
+    return merged;
+}
+
 // Proper interior crossing of a->b and c->d; on a hit, `t` is along a->b (interior of both).
 bool segCrossParam(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, double& t) {
     Vec2 r = b - a, s = d - c;
@@ -158,6 +213,24 @@ std::vector<Poly2> polygonUnion(const std::vector<Poly2>& polys) {
         if (loop.size() >= 3) loops.push_back(loop);
     }
     return loops;
+}
+
+Poly2 bridgeHoles(const Poly2& outerIn, const std::vector<Poly2>& holesIn) {
+    Poly2 outer = outerIn;
+    if (signedArea(outer) < 0) std::reverse(outer.begin(), outer.end());     // outer CCW
+    std::vector<Poly2> holes;
+    holes.reserve(holesIn.size());
+    for (Poly2 h : holesIn) {
+        if (h.size() < 3) continue;
+        if (signedArea(h) > 0) std::reverse(h.begin(), h.end());             // holes CW
+        holes.push_back(std::move(h));
+    }
+    auto maxX = [](const Poly2& p) { double m = -1e30; for (const Vec2& v : p) m = std::max(m, v.x); return m; };
+    std::sort(holes.begin(), holes.end(),                                    // rightmost hole first
+              [&](const Poly2& a, const Poly2& b) { return maxX(a) > maxX(b); });
+    Poly2 merged = outer;
+    for (const Poly2& h : holes) merged = bridgeOneHole(merged, h);
+    return merged;
 }
 
 }  // namespace engine

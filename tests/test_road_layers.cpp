@@ -389,3 +389,23 @@ TEST_CASE(weld_ribbons_makes_a_solid_cross) {
     }
     CHECK(std::fabs(area - 144.0) < 0.5);            // welded cross area
 }
+
+// A "#" of four ribbons crossing THROUGH each other welds into a solid surface with its central
+// block OPEN (the enclosed cell bridged out and triangulated away). Two H ribbons (y=±5), two V
+// ribbons (x=±5), each 4 wide spanning [-15,15]: filled area = 4*120 - 4*16 = 416, central 6x6
+// hole excluded. The triangulated mesh area is the filled 416 (the hole carries no triangles).
+TEST_CASE(weld_ribbons_opens_a_block_hole) {
+    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = { a, b }; return s; };
+    std::vector<UnionSpine> sp = {
+        mk(Vec2(-15, -5), Vec2(15, -5)), mk(Vec2(-15, 5), Vec2(15, 5)),
+        mk(Vec2(-5, -15), Vec2(-5, 15)), mk(Vec2(5, -15), Vec2(5, 15)) };
+    RenderMesh m = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1));
+    double area = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vec3& A = m.vertices[m.indices[i]].position;
+        const Vec3& B = m.vertices[m.indices[i + 1]].position;
+        const Vec3& C = m.vertices[m.indices[i + 2]].position;
+        area += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
+    }
+    CHECK(std::fabs(area - 416.0) < 2.0);
+}

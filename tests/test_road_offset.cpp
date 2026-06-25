@@ -92,3 +92,30 @@ TEST_CASE(union_keeps_disjoint_polys_separate) {
     CHECK(loops.size() == 2);
     CHECK(std::fabs(loopAreaSum(loops) - 200.0) < 1e-2);
 }
+
+// A bridged hole removes its area from the outer (the bridge cut is zero-area), and the result
+// is one simple polygon a plain ear-clipper can handle (block interiors stay open).
+TEST_CASE(bridge_hole_keeps_net_area) {
+    Poly2 outer = { Vec2(0, 0), Vec2(10, 0), Vec2(10, 10), Vec2(0, 10) };   // CCW, area 100
+    Poly2 hole  = { Vec2(3, 3), Vec2(3, 7), Vec2(7, 7), Vec2(7, 3) };       // CW, area 16
+    Poly2 merged = bridgeHoles(outer, { hole });
+    CHECK(merged.size() == outer.size() + hole.size() + 2);
+    CHECK(std::fabs(area(merged) - 84.0) < 1e-6);
+}
+
+// A "#" of four ribbons that cross THROUGH each other (the real intersection case, not four
+// ribbons that merely end at shared corners) unions to TWO loops: the outer silhouette and the
+// one fully-enclosed central cell. Two H ribbons (y=±5) and two V ribbons (x=±5), each 4 wide,
+// spanning x or y in [-15,15]. Filled area = 4*120 - 4*16 overlaps = 416; central hole = 6x6 =
+// 36; so the outer loop encloses 416+36 = 452 and the hole loop encloses 36.
+TEST_CASE(union_hash_has_a_central_hole) {
+    auto rib = [](Vec2 a, Vec2 b) { return ribbonOutline({ a, b }, 2.0); };
+    std::vector<Poly2> ribs = { rib(Vec2(-15,-5), Vec2(15,-5)), rib(Vec2(-15,5), Vec2(15,5)),
+                                rib(Vec2(-5,-15), Vec2(-5,15)), rib(Vec2(5,-15), Vec2(5,15)) };
+    std::vector<Poly2> loops = polygonUnion(ribs);
+    CHECK(loops.size() == 2);
+    double maxA = 0, minA = 1e9;
+    for (const Poly2& l : loops) { double a = area(l); maxA = std::max(maxA, a); minA = std::min(minA, a); }
+    CHECK(std::fabs(maxA - 452.0) < 1.0);
+    CHECK(std::fabs(minA - 36.0) < 1.0);
+}
