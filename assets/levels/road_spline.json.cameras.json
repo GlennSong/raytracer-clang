@@ -1,6 +1,0 @@
-{
-  "cameras": [
-    { "name": "Top", "position": [0, 150, 8], "forward": [0.0, -0.998, -0.06],
-      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 } }
-  ]
-}

@@ -266,10 +266,9 @@ it" (a rule or template), it extends the system without touching the core.
    solver), `bridgeDeck` (deck slab) + `bridgePiers` (abutment columns), `RoadNet.edgeLayers`
    + JSON `edge_layers`, and the layered build (`buildLayeredRoadNetMesh`): ground roads flat
    and multilane (markings from width), each bridge chain lifted onto a FLAT deck (level span
-   over the crossing, ramps down at grade) carried on piers. Demos: `road_overpass.json` (a
-   multilane road under a bridge) and `road_grid_overpass.json` (a connected street grid under
-   a viaduct). Tests: `test_road_layers` (clearance, flat deck, piers, connectivity, the
-   crossing-on-a-vertex regression). Still to do: the water-as-lower-deck reuse.*
+   over the crossing, ramps down at grade) carried on piers. Demo: `road_overpass.json` (a
+   multilane road under a bridge). Tests: `test_road_layers` (clearance, flat deck, piers,
+   connectivity, the crossing-on-a-vertex regression). Still to do: the water-as-lower-deck reuse.*
 5. **Diamond template** (freeway × arterial) — the simplest interchange; needs 1–4.
 6. **Dual-carriageway freeways + ramps**, then **trumpet**, then **cloverleaf/stack**.
 7. **Phase 4 Layers A/B** (suitability + settlement placement), then **Layer C** (highway
