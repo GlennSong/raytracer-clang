@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [1000, 0.4, 640],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 } },
+    { "name": "roads", "shape": "script", "file": "net_city.lua" }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1, 1, 1], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}
