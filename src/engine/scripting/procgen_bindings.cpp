@@ -1604,7 +1604,8 @@ int l_city_weld(lua_State* L) {
     std::vector<UnionSpine> spines = readSpinesArg(L, 1);
     double y = optField(L, 1, "y", 0.06);
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
-    pushMesh(L, std::make_shared<RenderMesh>(weldRibbons(spines, y, color)));
+    double radius = optField(L, 1, "corner_radius", 0.0);
+    pushMesh(L, std::make_shared<RenderMesh>(weldRibbons(spines, y, color, radius)));
     return 1;
 }
 

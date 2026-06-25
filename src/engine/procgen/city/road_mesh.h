@@ -222,11 +222,14 @@ RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);
 
 // WELD spines into ONE polygonal road surface via the unified join engine (unified-road-plan):
-// each spine -> exact ribbon outline (offsetPolyline), boolean-unioned (polygonUnion), then
-// triangulated. The sharp, exact, light counterpart to unionRibbons' SDF grid — same welded
-// result, but real polygons (no grid blur) and UV-ready. Holes (CW loops, e.g. block interiors)
-// are skipped until the hole-aware triangulator lands. Flat at height `y`, vertex-coloured.
-RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color);
+// each spine -> exact ribbon outline (offsetPolyline), boolean-unioned (polygonUnion), holes
+// bridged in (bridgeHoles), then triangulated — so enclosed blocks stay open. The sharp, exact,
+// light counterpart to unionRibbons' SDF grid — same welded result, but real polygons (no grid
+// blur) and UV-ready. `cornerRadius` > 0 fillets the welded outline's convex corners (the ONE
+// rounding pass: curb returns at junctions, rounded bends and road ends — concave notches and
+// near-straight/near-spike corners are left as-is). Flat at height `y`, vertex-coloured.
+RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color,
+                       double cornerRadius = 0.0);
 
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},

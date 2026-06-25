@@ -2,6 +2,7 @@
 
 #include "../../mesh_builder.h"
 #include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
+#include "street_kit.h"           // roundPolygonCorners (the unified corner-fillet pass)
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -933,7 +934,8 @@ double segDist2(const Vec2& p, const Vec2& a, const Vec2& b) {
 }
 }  // namespace
 
-RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color) {
+RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color,
+                       double cornerRadius) {
     std::vector<Poly2> ribbons;
     for (const UnionSpine& s : spines) {
         if (s.points.size() < 2) continue;
@@ -941,9 +943,13 @@ RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Ve
         if (r.size() >= 3) ribbons.push_back(std::move(r));
     }
     // Split the welded loops into exterior surfaces (CCW) and holes (CW, e.g. block interiors),
-    // bridge each surface's holes in, then triangulate — so enclosed blocks stay open.
+    // round each loop's convex corners (the unified curb-return fillet), bridge each surface's
+    // holes in, then triangulate — so enclosed blocks stay open with rounded inner curbs.
     std::vector<Poly2> outers, holes;
-    for (Poly2& L : polygonUnion(ribbons)) (signedArea(L) > 0 ? outers : holes).push_back(std::move(L));
+    for (Poly2& L : polygonUnion(ribbons)) {
+        Poly2 R = (cornerRadius > 0.0) ? roundPolygonCorners(L, cornerRadius, 5) : L;
+        (signedArea(R) > 0 ? outers : holes).push_back(std::move(R));
+    }
     RenderMesh mesh;
     for (const Poly2& outer : outers) {
         std::vector<Poly2> mine;

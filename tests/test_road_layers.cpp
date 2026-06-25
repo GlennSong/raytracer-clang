@@ -409,3 +409,27 @@ TEST_CASE(weld_ribbons_opens_a_block_hole) {
     }
     CHECK(std::fabs(area - 416.0) < 2.0);
 }
+
+// A corner radius fillets the welded outline at a junction: the cross's four reflex notches (the
+// curb returns where perpendicular arms meet) round off, smoothing the sharp inner corners with
+// arcs. The change is small and the arcs add geometry.
+TEST_CASE(weld_corner_radius_fillets_junction) {
+    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = { a, b }; return s; };
+    std::vector<UnionSpine> sp = { mk(Vec2(-10, 0), Vec2(10, 0)), mk(Vec2(0, -10), Vec2(0, 10)) };
+    auto meshArea = [](const RenderMesh& m) {
+        double a = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vec3& A = m.vertices[m.indices[i]].position;
+            const Vec3& B = m.vertices[m.indices[i + 1]].position;
+            const Vec3& C = m.vertices[m.indices[i + 2]].position;
+            a += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
+        }
+        return a;
+    };
+    RenderMesh sharp = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1), 0.0);
+    RenderMesh round = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1), 1.5);
+    double as = meshArea(sharp), ar = meshArea(round);
+    CHECK(std::fabs(as - 144.0) < 0.5);                 // sharp cross is exact
+    CHECK(std::fabs(ar - as) < 6.0);                    // fillets nudge the area only a little
+    CHECK(round.indices.size() > sharp.indices.size()); // arcs add triangles
+}

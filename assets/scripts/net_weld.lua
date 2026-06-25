@@ -17,10 +17,10 @@ for i = 0, 7 do
   local a = i * math.pi / 4
   hub[#hub+1] = { points = line(-150, 0, -150 + 95*math.cos(a), 95*math.sin(a)), width = 12 }
 end
-m:add_solid(city.weld{ spines = hub, y = 0.05, color = DARK })
+m:add_solid(city.weld{ spines = hub, y = 0.05, color = DARK, corner_radius = 5 })
 
 -- a curved S-road crossed by a straight road (welded)
-m:add_solid(city.weld{ y = 0.05, color = DARK, spines = {
+m:add_solid(city.weld{ y = 0.05, color = DARK, corner_radius = 5, spines = {
   { points = pts(function(t) return 150 + t, 40*math.sin(t/55) end, 60, -120, 120), width = 14 },
   { points = line(150, -110, 150, 110), width = 12 },
 } })
@@ -31,5 +31,5 @@ for i = 0, 3 do
   g[#g+1] = { points = line(-60, -150 + i*36, 60, -150 + i*36), width = 13 }
   g[#g+1] = { points = line(-60 + i*40, -150, -60 + i*40, -42), width = 13 }
 end
-m:add_solid(city.weld{ spines = g, y = 0.05, color = DARK })
+m:add_solid(city.weld{ spines = g, y = 0.05, color = DARK, corner_radius = 4 })
 return m
