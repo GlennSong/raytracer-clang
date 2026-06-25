@@ -118,3 +118,26 @@ TEST_CASE(constraints_editable_hub_meshes) {
     CHECK(!m.vertices.empty());
     CHECK(m.indices.size() % 3 == 0);
 }
+
+// Coherence: terrain conform grades to the SAME roundabout the mesh shows, so the hub
+// centre (the island) is left untouched — no conform footprint runs through the origin,
+// where the raw spokes would otherwise all converge.
+TEST_CASE(constraints_conform_clears_the_island) {
+    RoadNet net;
+    net.nodes.push_back(Vec2(0, 0));
+    const int spokes = 8;
+    for (int i = 0; i < spokes; ++i) {
+        double a = (2.0 * M_PI * i) / spokes;
+        net.nodes.push_back(Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0));
+        net.edges.push_back({0, static_cast<int>(net.nodes.size()) - 1});
+    }
+    net.width = 12.0;
+    net.heightAt = [](double x, double z) { return 0.05 * x + 0.02 * z; };   // gentle slope
+    std::vector<TerrainFlatten> regions = roadNetConformRegions(net);
+    CHECK(!regions.empty());
+    double nearest = 1e30;
+    for (const TerrainFlatten& f : regions)
+        for (const Vec3& p : f.polygon)
+            nearest = std::min(nearest, std::sqrt(p.x * p.x + p.z * p.z));
+    CHECK(nearest > 4.0);     // the island is clear; roads grade around it, not through it
+}

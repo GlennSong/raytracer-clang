@@ -111,17 +111,24 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     return g;
 }
 
+// The graph the mesher AND the terrain-conform both build from: the sampled net graph put
+// through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
+// identically in the carriageway and in the ground it grades. One source keeps them in sync.
+RoadGraph constrainedNetGraph(const RoadNet& net) {
+    double minR = net.width * 0.5 + net.sidewalk + 0.5;
+    return applyConstraints(netGraph(net, minR));
+}
+
 }  // namespace
 
 RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
-    double minTurnRadius = net.width * 0.5 + net.sidewalk + 0.5;
-    RoadGraph g = netGraph(net, minTurnRadius);
-    // Local-constraints pass (ADR-0052): a node with too many arms — or two arms too
-    // acute to share a flat junction — is promoted to a roundabout, so a many-spoke hub
-    // opens into a ring instead of overlapping itself (ADR-0044 trim divergence).
-    g = applyConstraints(g);
+    // Sampled graph through the local-constraints pass (ADR-0052): a node with too many
+    // arms — or two arms too acute to share a flat junction — is promoted to a roundabout,
+    // so a many-spoke hub opens into a ring instead of overlapping itself (ADR-0044 trim
+    // divergence). The same graph feeds terrain conform, so ground and carriageway agree.
+    RoadGraph g = constrainedNetGraph(net);
     RoadMeshParams p;
     p.lift = net.lift;
     p.color = net.color;
@@ -140,8 +147,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
                                                   double falloff, double maxGrade) {
     std::vector<TerrainFlatten> out;
     if (!net.heightAt) return out;                       // flat road: nothing to carve
-    double minR = net.width * 0.5 + net.sidewalk + 0.5;
-    RoadGraph g = netGraph(net, minR);
+    RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
     double hw = net.width * 0.5;
     for (const std::vector<Vec2>& chain : traceChains(g)) {
         if (chain.size() < 2) continue;
