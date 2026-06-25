@@ -221,6 +221,13 @@ struct UnionSpine {
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);
 
+// WELD spines into ONE polygonal road surface via the unified join engine (unified-road-plan):
+// each spine -> exact ribbon outline (offsetPolyline), boolean-unioned (polygonUnion), then
+// triangulated. The sharp, exact, light counterpart to unionRibbons' SDF grid — same welded
+// result, but real polygons (no grid blur) and UV-ready. Holes (CW loops, e.g. block interiors)
+// are skipped until the hole-aware triangulator lands. Flat at height `y`, vertex-coloured.
+RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color);
+
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},
 // sidewalk is {0<=sdf<sidewalkWidth}, with a curb step between, all from one distance

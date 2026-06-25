@@ -371,3 +371,21 @@ TEST_CASE(design_rules_rank_classes_sensibly) {
     CHECK(d.forClass(RoadClass::Freeway).fullWidth() > d.forClass(RoadClass::Local).fullWidth());
     CHECK(d.clearance > 4.0 && d.rampGrade > 0.0);                            // grade-sep numbers present
 }
+
+// The unified weld assembles ribbons into a solid mesh: a cross of two ribbons has area ~144.
+TEST_CASE(weld_ribbons_makes_a_solid_cross) {
+    std::vector<UnionSpine> sp;
+    UnionSpine a; a.halfWidth = 2.0; a.points = { Vec2(-10, 0), Vec2(10, 0) }; sp.push_back(a);
+    UnionSpine b; b.halfWidth = 2.0; b.points = { Vec2(0, -10), Vec2(0, 10) }; sp.push_back(b);
+    RenderMesh m = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1));
+    CHECK(!m.vertices.empty());
+    CHECK(m.indices.size() % 3 == 0);
+    double area = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vec3& A = m.vertices[m.indices[i]].position;
+        const Vec3& B = m.vertices[m.indices[i + 1]].position;
+        const Vec3& C = m.vertices[m.indices[i + 2]].position;
+        area += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
+    }
+    CHECK(std::fabs(area - 144.0) < 0.5);            // welded cross area
+}

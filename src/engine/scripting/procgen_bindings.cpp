@@ -1595,6 +1595,19 @@ int l_city_union(lua_State* L) {
     return 1;
 }
 
+// city.weld{ spines={...} | layout=..., y=, color= } -> one POLYGONAL welded road surface
+// (the unified join engine, unified-road-plan): exact ribbon outlines boolean-unioned and
+// triangulated. Sharp, light, UV-ready — the successor to both city.union (SDF) and the
+// analytic road mesh. (Holes are skipped until the hole-aware triangulator lands.)
+int l_city_weld(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
+    double y = optField(L, 1, "y", 0.06);
+    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
+    pushMesh(L, std::make_shared<RenderMesh>(weldRibbons(spines, y, color)));
+    return 1;
+}
+
 // city.deck{ points={{x,z}...}, width=, heights={...} (per point) | height= (constant),
 //   thickness=, color=, side_color=, piers=(bool), pier_at={i...}, pier_spacing=,
 //   pier_depth=, pier_color= } -> a bridge-deck slab riding the per-point heights
@@ -2311,6 +2324,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"road_mesh", l_city_road_mesh},
         {"stroke", l_city_stroke},
         {"union", l_city_union},
+        {"weld", l_city_weld},
         {"deck", l_city_deck},
         {"roadbed", l_city_roadbed},
         {"lane_markings", l_city_lane_markings},

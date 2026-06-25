@@ -1,6 +1,7 @@
 #include "road_mesh.h"
 
 #include "../../mesh_builder.h"
+#include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -927,6 +928,24 @@ double segDist2(const Vec2& p, const Vec2& a, const Vec2& b) {
     return (p - c).lengthSquared();
 }
 }  // namespace
+
+RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color) {
+    std::vector<Poly2> ribbons;
+    for (const UnionSpine& s : spines) {
+        if (s.points.size() < 2) continue;
+        Poly2 r = ribbonOutline(s.points, s.halfWidth);
+        if (r.size() >= 3) ribbons.push_back(std::move(r));
+    }
+    RenderMesh mesh;
+    for (const Poly2& loop : polygonUnion(ribbons)) {
+        if (signedArea(loop) <= 0) continue;             // skip holes (CW) until the hole-aware pass
+        for (const std::array<int, 3>& t : triangulatePolygon(loop))
+            MeshBuilder::emitTri(mesh, Vec3(loop[t[0]].x, y, loop[t[0]].y),
+                                 Vec3(loop[t[1]].x, y, loop[t[1]].y),
+                                 Vec3(loop[t[2]].x, y, loop[t[2]].y), Vec3(0, 1, 0), color);
+    }
+    return mesh;
+}
 
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color) {
