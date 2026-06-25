@@ -1,6 +1,7 @@
 #include "road_net.h"
 
 #include "road_network.h"       // RoadGraph, RoadEdge
+#include "road_constraints.h"   // applyConstraints (min-arm-angle + roundabout promotion)
 #include <algorithm>
 #include <cmath>
 
@@ -117,6 +118,10 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
     double minTurnRadius = net.width * 0.5 + net.sidewalk + 0.5;
     RoadGraph g = netGraph(net, minTurnRadius);
+    // Local-constraints pass (ADR-0052): a node with too many arms — or two arms too
+    // acute to share a flat junction — is promoted to a roundabout, so a many-spoke hub
+    // opens into a ring instead of overlapping itself (ADR-0044 trim divergence).
+    g = applyConstraints(g);
     RoadMeshParams p;
     p.lift = net.lift;
     p.color = net.color;

@@ -64,6 +64,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/road_mesh.cpp
     src/engine/procgen/city/road_net.cpp
+    src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/city.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
@@ -243,6 +244,7 @@ add_executable(run_tests
     tests/test_texture_field.cpp
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
+    tests/test_road_constraints.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
