@@ -1,7 +1,9 @@
--- net_interchange.lua — a CLOVERLEAF interchange: two highways crossing, with four loop
--- ramps (the on/off ramps) in the quadrants. Authored as spines and merged by city.union
--- (SDF roadbed, ADR-0048), so every loop welds tangentially into the highways it joins —
--- a clean entrance/exit, no overlap. Flat (one level); grade separation is a later pass.
+-- net_interchange.lua — a CLOVERLEAF interchange, built correctly: each loop is a 270°
+-- (three-quarter) ramp that CONNECTS the two highways — it leaves one highway tangentially
+-- (the exit/diverge), curves three-quarters of a circle, and rejoins the other highway
+-- tangentially (the entrance/merge). city.union (SDF roadbed, ADR-0048) welds each ramp
+-- into the highways it touches, so cars can actually get on and off. Flat (one level for
+-- now; a real cloverleaf is grade-separated — that's the next step).
 local m = model.new()
 local DARK = { 0.09, 0.09, 0.10 }
 
@@ -13,16 +15,21 @@ end
 local function line(x0, z0, x1, z1) return { { x = x0, z = z0 }, { x = x1, z = z1 } } end
 
 local sp = {}
-sp[#sp+1] = { points = line(-280, 0, 280, 0), width = 22 }   -- highway A (E-W)
-sp[#sp+1] = { points = line(0, -280, 0, 280), width = 22 }   -- highway B (N-S)
+sp[#sp+1] = { points = line(-300, 0, 300, 0), width = 22 }   -- highway A (E-W)
+sp[#sp+1] = { points = line(0, -300, 0, 300), width = 22 }   -- highway B (N-S)
 
--- Four loop ramps: a circle in each quadrant, tangent to both highways, that carries a
--- right-turn movement around 270 degrees (the cloverleaf signature).
-local R, OFF, RW = 46, 12, 9
-for _, c in ipairs({ {1,1}, {-1,1}, {-1,-1}, {1,-1} }) do
-  local cx, cz = c[1] * (R + OFF), c[2] * (R + OFF)
-  sp[#sp+1] = { width = RW, closed = true,
-                points = pts(function(t) return cx + R*math.cos(t), cz + R*math.sin(t) end, 72, 0, 2*math.pi) }
+-- One loop ramp per quadrant. A circle of radius R centred at (±R, ±R) is tangent to both
+-- highway centrelines; we sweep the 270° arc that AVOIDS the inner quarter (the 90° nearest
+-- the crossing), so the ramp's two ends sit tangentially on the two highways and the loop
+-- bulges outward — exactly the three-quarter loop. The SDF union welds the ends in.
+local R, RW = 52, 9
+for _, q in ipairs({ {1,1}, {-1,1}, {1,-1}, {-1,-1} }) do
+  local sx, sz = q[1], q[2]
+  local cx, cz = sx * R, sz * R
+  local oa = math.atan(-sz, -sx)            -- angle from the loop centre toward the crossing
+  local a0, a1 = oa + math.rad(45), oa + math.rad(315)   -- the 270° that skips the inner quarter
+  sp[#sp+1] = { width = RW,
+                points = pts(function(t) return cx + R*math.cos(t), cz + R*math.sin(t) end, 64, a0, a1) }
 end
 
 m:add_solid(city.union{ spines = sp, cell = 0.5, y = 0.06, color = DARK })
