@@ -14,14 +14,22 @@ local function pts(fn, n, t0, t1)
 end
 
 -- Two surface cities, built at the origin then placed left / right.
-local look = { lift = 0.25, color = DARK, sidewalk = 2.2, curb = 0.15, markings = true,
-               mark_width = 0.18, crosswalks = true }
-m:add_solid(mesh.translate(city.road_mesh(
-  city.layout{ pattern = "grid", extent = 120, cell_size = 44, jitter = 0.10, seed = 3 }, look),
-  { -330, 0, 0 }))
-m:add_solid(mesh.translate(city.road_mesh(
-  city.layout{ pattern = "radial", extent = 120, ring_spacing = 34, spokes = 8, jitter = 0.05, seed = 5 }, look),
-  { 330, 0, 0 }))
+-- Two surface cities. Built with the SDF ROADBED (city.roadbed) — the distance-field weld —
+-- so every junction merges into one clean surface; the analytic city.road_mesh leaves notched
+-- corners on a jittered grid. Lane markings are overlaid as a centreline. Built at the origin,
+-- then placed left / right.
+local function surfaceCity(layout, at)
+  local bed = city.roadbed{ layout = layout, cell = 0.6, sidewalk = 2.0, curb = 0.15, lift = 0.2,
+                            road_color = DARK }
+  local marks = city.lane_markings{ layout = layout, mark_width = 0.22, lift = 0.30,
+                                    dash = 4.0, gap = 5.0, color = { 0.85, 0.85, 0.82 } }
+  m:add_solid(mesh.translate(bed, at))
+  m:add(mesh.translate(marks, at))                       -- markings: drawn, not collided
+end
+surfaceCity(city.layout{ pattern = "grid", extent = 120, cell_size = 44, jitter = 0.10, seed = 3 },
+            { -330, 0, 0 })
+surfaceCity(city.layout{ pattern = "radial", extent = 120, ring_spacing = 34, spokes = 8, jitter = 0.05, seed = 5 },
+            { 330, 0, 0 })
 
 -- Arterial: a surface multilane road (E-W) linking the two cities, passing under the freeway.
 do
