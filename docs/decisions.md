@@ -3436,6 +3436,142 @@ extend) and node drags are not yet on the command log.
 
 ---
 
+## ADR-0051 — The road graph goes 2.5D: per-node elevation/layer, per-edge class + carriageway mode, level-aware crossings
+
+**Context.** The road graph (`RoadGraph`, and the editable `RoadNet`) is a planar 2D graph
+draped on terrain: every place two edges cross in XY is forced to be an at-grade
+intersection. Grade separation — an overpass, an underpass, a freeway threading under an
+arterial, a bridge over water — is not merely unbuilt; it is *unrepresentable*. It is the
+single missing primitive behind freeways, ramps, interchanges, and water crossings.
+
+**Decision.** Promote the graph to **2.5D / layered**:
+1. **Per-node elevation + layer tag.** Two edges crossing in XY share a junction node *only*
+   if their vertical profiles meet within clearance there; otherwise they are grade-separated
+   and keep distinct nodes (no shared vertex).
+2. **Per-edge vertical profile, first-class.** Generalize `roadProfile` from "drape on
+   terrain" to a profile that may rise onto a deck or dip into a cut, bounded by class
+   max-grade and a minimum vertical clearance (~5 m) at any separation.
+3. **Per-edge class + carriageway mode.** Extend `RoadClass` with `Freeway` and `Ramp`.
+   Carriageway mode ∈ {single ribbon, dual carriageway (two ribbons + median), ramp taper}.
+   **Class is the master knob** — it sets min radius, max grade, lane count, and *access
+   policy* (who may cross at-grade vs. who must be grade-separated).
+
+**Why.** The category error behind the spoke bug and the freeway gap is the same: roads were
+treated as a flat point-graph. Adding a layer dimension and a class-driven access policy is
+what lets one machine express surface intersections *and* grade separations. See
+`docs/road-constraint-plan.md` Phase 0.
+
+---
+
+## ADR-0052 — Generate-and-constrain: a single named local-constraints pass + rule registry
+
+**Context.** Legality fixups are scattered — `planarize`, `connectComponents`,
+`pruneSteepEdges`, the `fairHermite` fold cap, the junction trim clamp — each a one-off doing
+a piece of "make this network legal." There is no shared, reusable notion of *the rules a road
+network must obey*, so the editable road obeys almost none of them and a hand-built hub
+self-destructs.
+
+**Decision.** Adopt the Parish & Müller (CityEngine, SIGGRAPH 2001) **generate-and-constrain**
+split and make the constraint half a first-class, reusable phase:
+`applyConstraints(RoadGraph, RuleSet) -> RoadGraph`. The *global-goals* half already exists
+(the tensor field, `tensorRoads`). The pass runs a **rule registry incrementally and locally**
+— each rule adjusts/snaps/rejects a candidate against its immediate neighbourhood, never via a
+global solve. Both generators (after streamline tracing) and the **editor** (on a dragged
+node's neighbourhood, so illegal configs snap or refuse live) call it.
+
+Rule catalog by scope: edge (min radius / max grade by class, min segment, max deflection),
+node (**min arm angle** → caps degree to `2π/θ_min`; max-degree → roundabout promotion;
+no-acute-merge → tangential fuse), network (planarity with level test, connectivity / dead-end
+policy, block-size feedback, class-access grammar).
+
+**Why.** The natural global look *emerges* from local legality + the goal field; nothing ever
+constrains all nodes at once (the part that does not scale). The **min-arm-angle rule** alone
+makes the over-packed hub unrepresentable, fixing the spoke bug at the source rather than in
+the mesher. Build it first as the proof of the approach. See plan Phase 1.
+
+---
+
+## ADR-0053 — Every crossing resolves to a template chosen by (classes, level, degree, angle)
+
+**Context.** A 4-way grid crossing, a many-armed roundabout, a freeway/arterial diamond, a
+freeway/freeway cloverleaf, a freeway T trumpet, and a tangential merge are today either
+unbuilt or special-cased in the mesher. They are, in fact, the *same kind of thing*: a rule
+for what a crossing of two roads becomes.
+
+**Decision.** A single **crossing resolver** classifies each crossing from
+`(classA, classB, levelDiff, degree, angle)` and rewrites it via a **parametric template
+macro** (an L-system production: crossing = non-terminal, template = production, classifier =
+which fires). Members: junction patch (deg ≤ 4 at-grade), roundabout (many arms / large
+required radius — one super-node → a ring of degree-3 nodes), diamond (freeway × surface),
+trumpet (freeway T), cloverleaf / stack (freeway × freeway), merge/fork (sub-acute). Each
+template emits nodes + edges + ramps + vertical profiles, then feeds the result **back through
+the ADR-0052 pass** so its own ramps obey radius/grade/clearance.
+
+**Why.** Unifies all intersection/interchange types under one classifier and one extension
+point (add a template), instead of a growing pile of mesher special cases. The roundabout
+member is also the principled fix for the spoke bug: it gives a busy node *extent*. Build
+order: patch → roundabout → diamond → trumpet → cloverleaf/stack. See plan Phase 2.
+
+---
+
+## ADR-0054 — Vertical profiles, a clearance solver, and bridges/underpasses (water crossings reuse the same path)
+
+**Context.** ADR-0051 gives edges a vertical profile and lets crossings be grade-separated,
+but nothing yet *makes the levels clear each other* or *builds the structure* between road and
+ground/water.
+
+**Decision.** Extend `roadProfile` into a real vertical engine: (1) a **clearance solver**
+that, at each grade-separated crossing, pushes one road's profile up (bridge) or down
+(cut/underpass) until the two decks clear, within approach-grade limits; (2) a **bridge
+structure emitter** (deck, abutments, piers to terrain; approaches via the existing
+`roadConformRegions` cut/fill); (3) **underpass** as a profile dip + deep terrain cut with a
+deck overhead. **A road × water crossing is the same template** — water is the lower deck, the
+road bridges it — so waterways reuse this engine outright rather than adding a water-specific
+path.
+
+**Why.** Grade separation needs a vertical solver; bridges and underpasses are its two signs;
+and folding water crossings into the same template is the first dividend of the
+"features are fields + templates" extensibility thesis (ADR-0055). See plan Phase 3.
+
+---
+
+## ADR-0055 — Multi-scale world layout as a field stack; closed networks (no map-edge dead ends); features extend as fields/rules/templates
+
+**Context.** Phases 0–3 make a road network legal and buildable but say nothing about *what to
+build and where*: where metropolitan areas, towns, beach towns, and freeway arteries sit; when
+a road is a city grid vs. an exit onto a highway to the next town; how blocks are decided and
+whether they are dense/radial/mixed; and — since the map is finite — how to avoid highways that
+dangle off the edge.
+
+**Decision — a top-down stack of layers, each reading fields from above and writing
+fields/seeds for below:**
+- **A. Suitability/cost fields** from terrain + water (buildability, water-proximity,
+  coastalness, attractors).
+- **B. Settlement placement** — weighted Poisson-disk on suitability, each settlement carrying
+  class (metropolis/city/town/village/beach), radius, and **character** (grid/radial/organic/
+  coastal). This is the "important waypoints" decision.
+- **C. Inter-settlement highway skeleton** — Delaunay-pruned / gravity connections (big pairs →
+  `Freeway`), routed on the cost field (avoid water/steep or pay to bridge). **Closure enforced
+  here:** min-degree ≥ 2, no node on the map boundary; lone settlements get a ring road; the
+  boundary is a redirect field that arcs roads back inward. Highways loop and arc toward places,
+  never end in space.
+- **D. Intra-settlement streets** — seed the tensor field from the settlement's character; the
+  Layer-C highway enters the boundary and degrades via the class grammar (highway → interchange/
+  exit → arterial → collector → local grid). The settlement boundary (Layer-B radius) is *where a
+  road becomes city streets vs. an exit*.
+- **E. Blocks & parcels** — planar faces (`extractBlocks`) sized by a density field peaking at
+  the centre (dense downtown, sparse suburb), feeding the block-size feedback rule.
+
+**Extensibility invariant.** A new world system contributes **fields, rules, and/or crossing
+templates — never a new pipeline stage.** Worked example (waterways): a barrier/cost field
+(routing), a coastal attractor (beach-town placement), a bridge template (crossing, ADR-0054),
+and a land-use mask (blocks) — four existing hooks, zero pipeline. The same shape covers rail (a
+class + level-crossing template), parks (a land-use field), districts (a character field),
+landmarks (placement seeds), and trade routes (attractor fields). See plan Phase 4 +
+"Extensibility."
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
