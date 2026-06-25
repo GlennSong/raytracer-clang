@@ -703,6 +703,36 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     return mesh;
 }
 
+RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
+                      double halfWidth, const Vec3& deckColor, double thickness,
+                      const Vec3& sideColor) {
+    RenderMesh mesh;
+    const int n = static_cast<int>(pts.size());
+    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
+
+    auto Y = [&](int i) { return deckY[i]; };
+    auto top = [&](const Vec2& v, double y) { return Vec3(v.x, y, v.y); };
+    for (int i = 0; i + 1 < n; ++i) {
+        Vec2 A = pts[i], B = pts[i + 1];
+        Vec2 ab = B - A; double L = ab.length();
+        if (L < 1e-9) continue;
+        Vec2 nrm = perp(ab / L);
+        Vec2 AL = A + nrm * halfWidth, AR = A - nrm * halfWidth;
+        Vec2 BL = B + nrm * halfWidth, BR = B - nrm * halfWidth;
+        double ya = Y(i), yb = Y(i + 1);
+        // Deck top (faces up).
+        MeshBuilder::emitTri(mesh, top(AL, ya), top(AR, ya), top(BR, yb), Vec3(0, 1, 0), deckColor);
+        MeshBuilder::emitTri(mesh, top(AL, ya), top(BR, yb), top(BL, yb), Vec3(0, 1, 0), deckColor);
+        // Left fascia (slab edge, faces +nrm) and right fascia (faces -nrm).
+        Vec3 nL(nrm.x, 0, nrm.y);
+        MeshBuilder::emitTri(mesh, top(AL, ya), top(BL, yb), top(BL, yb - thickness), nL, sideColor);
+        MeshBuilder::emitTri(mesh, top(AL, ya), top(BL, yb - thickness), top(AL, ya - thickness), nL, sideColor);
+        MeshBuilder::emitTri(mesh, top(AR, ya), top(AR, ya - thickness), top(BR, yb - thickness), -nL, sideColor);
+        MeshBuilder::emitTri(mesh, top(AR, ya), top(BR, yb - thickness), top(BR, yb), -nL, sideColor);
+    }
+    return mesh;
+}
+
 RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>& halfW,
                         double y, const Vec3& color, bool closed) {
     RenderMesh mesh;

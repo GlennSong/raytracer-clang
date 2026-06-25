@@ -158,6 +158,15 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& centerline,
                         const std::vector<double>& halfW, double y,
                         const Vec3& color, bool closed = false);
 
+// A bridge DECK ribbon that rides a vertical profile (ADR-0054). Unlike strokeRibbon (one
+// flat height), the deck top sits at `deckY[i]` per centerline point — feed it the output of
+// `clearanceProfile` and the deck lifts onto the bridge and ramps back to grade. A slab of
+// `thickness` is given a vertical fascia along both edges so it reads as a real deck edge,
+// not a painted stripe. Pure + headless; vertex-coloured. (Piers/abutments are a later pass.)
+RenderMesh bridgeDeck(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                      double halfWidth, const Vec3& deckColor, double thickness = 0.6,
+                      const Vec3& sideColor = Vec3(0.30, 0.30, 0.32));
+
 // Union a set of centerline spines into ONE non-overlapping filled mesh (ADR-0048).
 // Where ribbons cross or overlap, the result is a single merged surface, not stacked
 // ribbons. Method: the signed distance to a polyline IS the Minkowski sum (so round

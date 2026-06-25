@@ -139,3 +139,35 @@ TEST_CASE(clearance_hugs_ground_when_unconstrained) {
     std::vector<double> y = clearanceProfile(s, minH, 0.08);
     for (double v : y) CHECK(std::fabs(v) < 1e-12);
 }
+
+// --- the bridge deck rides the clearance profile (ADR-0054) ---
+
+// A straight road over a mid crossing: the deck top peaks at the clearance height and the
+// slab gives the mesh `thickness` of vertical extent below the deck.
+TEST_CASE(bridge_deck_rides_the_clearance_profile) {
+    std::vector<double> s, minH; int mid;
+    crossingProfile(41, 200.0, 6.0, s, minH, mid);
+    std::vector<double> y = clearanceProfile(s, minH, 0.06);
+
+    std::vector<Vec2> center(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i) center[i] = Vec2(s[i] - 100.0, 0.0);  // along x
+    RenderMesh deck = bridgeDeck(center, y, 5.0, Vec3(0.1, 0.1, 0.1), 0.6);
+
+    CHECK(!deck.vertices.empty());
+    CHECK(deck.indices.size() % 3 == 0);
+
+    double maxY = -1e30, minY = 1e30;
+    for (const Vertex& v : deck.vertices) {
+        maxY = std::max(maxY, (double)v.position.y);
+        minY = std::min(minY, (double)v.position.y);
+    }
+    CHECK(std::fabs(maxY - 6.0) < 1e-6);          // deck top peaks at the clearance
+    CHECK(std::fabs(minY - (0.0 - 0.6)) < 1e-6);  // fascia drops a slab thickness at the ends
+}
+
+// A degenerate input (mismatched lengths) yields an empty mesh, not a crash.
+TEST_CASE(bridge_deck_rejects_bad_input) {
+    std::vector<Vec2> center = { Vec2(0, 0), Vec2(10, 0) };
+    std::vector<double> y = { 1.0 };              // wrong length
+    CHECK(bridgeDeck(center, y, 4.0, Vec3(0, 0, 0)).vertices.empty());
+}
