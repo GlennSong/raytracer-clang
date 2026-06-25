@@ -450,6 +450,26 @@ void MeshBuilder::emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,
                             {base, base + 2, base + 1, base, base + 3, base + 2});
 }
 
+void MeshBuilder::emitTriUV(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
+                            const Vec3& normal, const Vec3& color,
+                            float ua, float va, float ub, float vb, float uc, float vc) {
+    uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    Vec3 edge = b - a;
+    Vec3 tan = edge.lengthSquared() > 1e-12 ? normalize(edge) : Vec3(1, 0, 0);
+    auto mk = [&](const Vec3& p, float u, float vv) {
+        Vertex v(p, normal, tan, u, vv);
+        v.color = color;
+        return v;
+    };
+    mesh.vertices.push_back(mk(a, ua, va));
+    mesh.vertices.push_back(mk(b, ub, vb));
+    mesh.vertices.push_back(mk(c, uc, vc));
+    if (dot(cross(c - a, b - a), normal) >= 0)
+        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
+    else
+        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1});
+}
+
 void MeshBuilder::emitQuadUV(RenderMesh& mesh, const Vec3& a, const Vec3& b,
                              const Vec3& c, const Vec3& d, const Vec3& normal,
                              const Vec3& color, float ua, float va, float ub, float vb,

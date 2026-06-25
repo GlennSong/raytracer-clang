@@ -65,6 +65,13 @@ struct MeshBuilder {
     static void emitTri(RenderMesh& mesh, const Vec3& a, const Vec3& b,
                         const Vec3& c, const Vec3& normal, const Vec3& color);
 
+    // emitTri with explicit per-vertex UVs — for generators that bake a meaningful
+    // parameterization (the welded carriageway's road-local u=lateral, v=arc-length,
+    // read by the RoadMarkings surface). Same winding/colour handling as emitTri.
+    static void emitTriUV(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
+                          const Vec3& normal, const Vec3& color,
+                          float ua, float va, float ub, float vb, float uc, float vc);
+
     // One quad: corners a,b,c,d in perimeter order, wound to face `normal`,
     // with 0..1 UVs (a->b is U, a->d is V) and a->b as the tangent.
     static void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,

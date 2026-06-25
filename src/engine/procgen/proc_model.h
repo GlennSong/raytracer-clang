@@ -21,6 +21,10 @@ struct ProcMaterial {
     float metallic = 0.0f;
     float roughness = 0.85f;
     double tile = 1.0;         // world units per texture repeat
+    // Analytic surface library id (renderer.h Surface; 0 = none). Evaluated at shade
+    // time from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
+    // welded carriageway's road-local u=lateral / v=arc-length, no stripe geometry.
+    int surface = 0;
 };
 
 // A model part: geometry + its material (default = untextured, vertex-coloured).

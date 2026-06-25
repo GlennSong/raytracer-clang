@@ -525,6 +525,10 @@ void bakeProcModel(const ProcModel& m, Scene& scene) {
             mat.texScale = pm.tile > 1e-6 ? 1.0 / pm.tile : 1.0;
             mat.albedoTex = addProcTexture(pm.albedo, scene);
             mat.normalTex = addProcTexture(pm.normal, scene);
+        } else {
+            // Analytic surface (e.g. RoadMarkings) reads the mesh's own road-local UV
+            // at shade time — no baked texture, paint composites over the vertex colour.
+            mat.surface = pm.surface;
         }
         int mi = scene.addMaterial(mat);
         addMeshAsTriangles(part.mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);

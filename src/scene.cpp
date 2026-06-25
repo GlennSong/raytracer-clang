@@ -238,16 +238,21 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
 // sidewalk or junction pad — so it stays plain). Normalised across the width, so it
 // tracks any road width and conforms to terrain for free. `mv` (arc-length) is baked
 // for future dashed dividers; v1 paints a double-yellow centreline + white edge lines.
-Vec3 surfRoadMarkings(const Vec3& base, double mu, double /*mv*/) {
+Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
     if (mu < 0.5) return base;                        // not carriageway: no paint
-    double lat = mu - 2.0;                            // [-1, 1], 0 = centreline
+    double lat = mu - 2.0;                            // [-1, 1], 0 = centreline, ±1 = curb
     auto band = [](double x, double c, double hw) {  // ~1 inside a line of half-width hw
         double d = std::fabs(x - c), t = std::clamp((d - hw) / 0.006, 0.0, 1.0);
         return 1.0 - t * t * (3.0 - 2.0 * t);        // smoothstep falloff (soft edge)
     };
     const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
-    double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow
-    double w = std::max(band(lat, 0.86, 0.016), band(lat, -0.86, 0.016));    // white edges
+    double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow centre
+    double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
+    // Multilane: broken white lane dividers half-way out each side (a 4-lane road), dashed along
+    // the arc-length mv — 3 m of paint every 6 m. Markings are pure texture, so any lane count
+    // reads from the same UV with no extra geometry.
+    if (std::fmod(std::fabs(mv), 6.0) < 3.0)
+        w = std::max(w, std::max(band(lat, 0.5, 0.013), band(lat, -0.5, 0.013)));
     Vec3 c = base * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
     return c;

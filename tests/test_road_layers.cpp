@@ -484,3 +484,30 @@ TEST_CASE(weld_solid_smooths_a_terrain_bump) {
     CHECK(peak < 10.0);     // the sharp 10m spike is ironed down by the grade limit
     CHECK(peak > 0.5);      // but the road still rises toward it (not flattened away)
 }
+
+// The deck carries road-local UV for the RoadMarkings surface: every upward-facing (deck) vertex
+// has u in [1,3] (2 = centerline, 1/3 = curbs) with the centerline actually reached, and v growing
+// to roughly the road length. The side walls carry u = 0 so no paint lands on them.
+TEST_CASE(weld_solid_bakes_road_local_uv) {
+    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = {};
+        for (int i = 0; i <= 20; ++i) s.points.push_back(a + (b - a) * (i / 20.0)); return s; };
+    std::vector<UnionSpine> sp = { mk(Vec2(-50, 0), Vec2(50, 0)) };   // a 100 m straight road
+    RenderMesh m = weldSolid(sp, WeldSolidParams{});
+    double maxV = 0, minDeckU = 9, maxDeckU = -9;
+    bool wallUnpainted = true;
+    for (const Vertex& v : m.vertices) {
+        if (v.normal.y > 0.9) {                                      // deck vertex (on a rail)
+            minDeckU = std::min(minDeckU, (double)v.u);
+            maxDeckU = std::max(maxDeckU, (double)v.u);
+            maxV = std::max(maxV, (double)v.v);
+        } else if (std::fabs(v.normal.y) < 0.1) {                    // wall vertex
+            if (v.u > 0.5) wallUnpainted = false;
+        }
+    }
+    CHECK(minDeckU >= 1.0 - 1e-5);            // u clamped into the carriageway band
+    CHECK(maxDeckU <= 3.0 + 1e-5);
+    CHECK(minDeckU < 1.2);                    // left rail present (u -> 1)
+    CHECK(maxDeckU > 2.8);                    // right rail present (u -> 3): centerline u=2 spans
+    CHECK(wallUnpainted);                     // walls stay at u=0 (no paint)
+    CHECK(maxV > 90.0);                       // v tracks arc-length toward the 100 m length
+}

@@ -1754,6 +1754,12 @@ int l_material_new(lua_State* L) {
         m->roughness = static_cast<float>(optField(L, 1, "roughness", m->roughness));
         m->metallic = static_cast<float>(optField(L, 1, "metallic", m->metallic));
         m->tile = optField(L, 1, "tile", m->tile);
+        // An analytic surface ("roadmarkings"/"lanes", "asphalt", ...) read from the
+        // mesh's own UV at shade time — distinct from a baked albedo/normal texture.
+        lua_getfield(L, 1, "surface");
+        if (const char* s = lua_tostring(L, -1))
+            m->surface = static_cast<int>(surfaceFromName(s));
+        lua_pop(L, 1);
     }
     pushMaterial(L, std::move(m));
     return 1;

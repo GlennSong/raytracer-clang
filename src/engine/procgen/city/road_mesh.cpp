@@ -965,35 +965,48 @@ RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Ve
 }
 
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p) {
-    // 1. A smoothed, grade-limited height per spine: sample the terrain along each centerline and
-    //    iron it flat with roadProfile, so the road follows hills but not every bump.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> h; };
+    // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
+    //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
+    //    with no terrain the height is the flat topY. These also carry the road-local UV.
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; };
     std::vector<Prof> profs;
-    if (p.heightAt) {
-        for (const UnionSpine& s : spines) {
-            const int n = static_cast<int>(s.points.size());
-            if (n < 2) continue;
-            std::vector<double> sArc(n, 0.0), ground(n);
-            for (int i = 0; i < n; ++i) ground[i] = p.heightAt(s.points[i].x, s.points[i].y);
-            for (int i = 1; i < n; ++i) sArc[i] = sArc[i - 1] + (s.points[i] - s.points[i - 1]).length();
-            profs.push_back({s.points, roadProfile(ground, sArc, p.maxGrade)});
+    for (const UnionSpine& sp : spines) {
+        const int n = static_cast<int>(sp.points.size());
+        if (n < 2) continue;
+        std::vector<double> sArc(n, 0.0), h(n, p.topY);
+        for (int i = 1; i < n; ++i) sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
+        if (p.heightAt) {
+            std::vector<double> ground(n);
+            for (int i = 0; i < n; ++i) ground[i] = p.heightAt(sp.points[i].x, sp.points[i].y);
+            h = roadProfile(ground, sArc, p.maxGrade);
         }
+        profs.push_back({sp.points, sArc, h, sp.halfWidth});
     }
-    // Surface height anywhere = the nearest spine's smoothed profile (junctions agree where the
-    // spines meet). Flat at topY when no terrain is supplied.
-    auto heightOf = [&](double x, double z) -> double {
-        if (profs.empty()) return p.topY;
-        Vec2 q(x, z);
-        double bestD2 = 1e30, bestH = p.topY;
+    // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
+    // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
+    // from it), mv = arc-length along the road (for dashed dividers). Junctions agree where spines
+    // meet. Off the carriageway (no spine) mu stays 0 so no paint lands there.
+    auto sample = [&](double x, double z, double& oh, double& omu, double& omv) {
+        oh = p.topY; omu = 0.0; omv = 0.0;
+        Vec2 q(x, z); double bestD2 = 1e30;
         for (const Prof& pr : profs)
             for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
                 const Vec2& a = pr.cl[i]; Vec2 ab = pr.cl[i + 1] - a;
                 double L2 = ab.lengthSquared();
                 double t = L2 < 1e-12 ? 0.0 : std::max(0.0, std::min(1.0, dot(q - a, ab) / L2));
-                double d2 = (q - (a + ab * t)).lengthSquared();
-                if (d2 < bestD2) { bestD2 = d2; bestH = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t; }
+                Vec2 d = q - (a + ab * t); double d2 = d.lengthSquared();
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    oh = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t;
+                    double sgn = cross(ab, d) >= 0 ? 1.0 : -1.0;        // side of the centerline
+                    double latN = std::sqrt(d2) / std::max(1e-6, pr.hw);
+                    omu = 2.0 + sgn * std::min(1.0, latN);
+                    omv = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t;
+                }
             }
-        return bestH;
+    };
+    auto heightOf = [&](double x, double z) -> double {
+        double h, mu, mv; sample(x, z, h, mu, mv); return h;
     };
 
     // 2. The welded outline (same join engine as weldRibbons), rounded at junctions.
@@ -1031,12 +1044,17 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         for (const Poly2& h : holes)
             if (h.size() >= 3 && pointInPolygon(outer, centroid(h))) mine.push_back(h);
         Poly2 merged = mine.empty() ? outer : bridgeHoles(outer, mine);
-        // Deck (faces up) and underside (faces down) share the triangulation; emitTri winds each.
+        // Deck (faces up, road-local UV so the RoadMarkings surface can paint lanes) and underside
+        // (faces down) share the triangulation; emit winds each face to its normal.
         for (const std::array<int, 3>& t : triangulatePolygon(merged)) {
             const Vec2& a = merged[t[0]]; const Vec2& b = merged[t[1]]; const Vec2& c = merged[t[2]];
-            MeshBuilder::emitTri(mesh, P3(a, 0), P3(b, 0), P3(c, 0), Vec3(0, 1, 0), p.topColor);
-            MeshBuilder::emitTri(mesh, P3(a, -p.thickness), P3(b, -p.thickness), P3(c, -p.thickness),
-                                 Vec3(0, -1, 0), p.bottomColor);
+            double ha, mua, mva, hb, mub, mvb, hc, muc, mvc;
+            sample(a.x, a.y, ha, mua, mva); sample(b.x, b.y, hb, mub, mvb); sample(c.x, c.y, hc, muc, mvc);
+            MeshBuilder::emitTriUV(mesh, Vec3(a.x, ha, a.y), Vec3(b.x, hb, b.y), Vec3(c.x, hc, c.y),
+                                   Vec3(0, 1, 0), p.topColor,
+                                   (float)mua, (float)mva, (float)mub, (float)mvb, (float)muc, (float)mvc);
+            MeshBuilder::emitTri(mesh, Vec3(a.x, ha - p.thickness, a.y), Vec3(b.x, hb - p.thickness, b.y),
+                                 Vec3(c.x, hc - p.thickness, c.y), Vec3(0, -1, 0), p.bottomColor);
         }
         wall(outer);                                            // outer skirt
         for (const Poly2& h : mine) wall(h);                    // block-interior shafts
