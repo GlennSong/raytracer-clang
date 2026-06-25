@@ -34,6 +34,9 @@ struct RoadRules {
     // w/sin(theta) geometry the trim diverges on, used here to size the ring instead.
     double roundaboutRadius = 0.0;
     double islandRadius = 4.0;     // floor on the auto radius (a real centre island)
+    double ringWidthFactor = 3.5;  // also floor the radius at widestArmHalfWidth * this, so the
+                                   // ring is a drivable annulus around a visible island
+
     double maxRadius = 60.0;       // cap so a near-parallel pair can't ask for an infinite ring
     double clearMargin = 1.0;      // extra spacing between adjacent attach points (m)
     double arcChordError = 0.3;    // ring-arc sampling tolerance (m)

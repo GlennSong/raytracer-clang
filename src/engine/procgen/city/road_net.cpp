@@ -119,16 +119,50 @@ RoadGraph constrainedNetGraph(const RoadNet& net) {
     return applyConstraints(netGraph(net, minR));
 }
 
+// Append `src` triangles into `dst`, offsetting indices.
+void appendMesh(RenderMesh& dst, const RenderMesh& src) {
+    uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
+    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+}
+
 }  // namespace
 
 RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
-    // Sampled graph through the local-constraints pass (ADR-0052): a node with too many
-    // arms — or two arms too acute to share a flat junction — is promoted to a roundabout,
-    // so a many-spoke hub opens into a ring instead of overlapping itself (ADR-0044 trim
-    // divergence). The same graph feeds terrain conform, so ground and carriageway agree.
-    RoadGraph g = constrainedNetGraph(net);
+    double minR = net.width * 0.5 + net.sidewalk + 0.5;
+    RoadGraph raw = netGraph(net, minR);
+    // Does the local-constraints pass (ADR-0052) promote any node to a roundabout?
+    bool roundabout = false;
+    for (int v = 0; v < static_cast<int>(raw.nodes.size()); ++v)
+        if (nodeNeedsRoundabout(raw, v, {})) { roundabout = true; break; }
+    RoadGraph g = applyConstraints(raw);   // promoted graph (= constrainedNetGraph)
+
+    // A ring can't be welded by the analytic per-junction pad: the sidewalks of the N
+    // degree-3 attach junctions each skirt radially outward and overlap (z-fighting flaps,
+    // ADR-0044). The SDF roadbed (ADR-0048) is the right tool for a hub — one distance field
+    // gives a continuous welded sidewalk, merges the junctions, and opens the island as a
+    // hole for free. So a net containing a roundabout is built that way; centreline markings
+    // are overlaid (the shader-UV markings need the analytic ribbon, so they're skipped here).
+    if (roundabout) {
+        RoadbedParams rp;
+        rp.cell = 0.4;
+        rp.sidewalkWidth = net.sidewalk;
+        rp.curbHeight = net.curb;
+        rp.lift = net.lift;
+        rp.roadColor = net.color;
+        rp.heightAt = net.heightAt;
+        RenderMesh mesh = unionRoadbed(g, rp);
+        if (net.markings) {
+            LaneMarkParams lp;
+            lp.heightAt = net.heightAt;
+            lp.lift = net.lift + 0.12;
+            appendMesh(mesh, laneMarkings(g, lp));
+        }
+        return mesh;
+    }
+
     RoadMeshParams p;
     p.lift = net.lift;
     p.color = net.color;

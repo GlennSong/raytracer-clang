@@ -117,6 +117,11 @@ TEST_CASE(constraints_editable_hub_meshes) {
     RenderMesh m = buildRoadNetMesh(net);
     CHECK(!m.vertices.empty());
     CHECK(m.indices.size() % 3 == 0);
+    // The roundabout opens a real island: no road geometry sits at the hub centre.
+    int nearOrigin = 0;
+    for (const Vertex& v : m.vertices)
+        if (std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z) < 5.0) ++nearOrigin;
+    CHECK(nearOrigin == 0);
 }
 
 // Coherence: terrain conform grades to the SAME roundabout the mesh shows, so the hub

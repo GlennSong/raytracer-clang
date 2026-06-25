@@ -3503,6 +3503,17 @@ with terrain-conform via `constrainedNetGraph` so the ground grades to the ring,
 spokes. A 3-way T and 4-way crossing stay flat patches. Tests: `test_road_constraints`. Still
 to do: a formal rule registry, the no-acute-merge rule, and a live editor warn/preview.
 
+**Meshing a roundabout — the SDF roadbed, not the analytic pad.** The analytic per-junction
+pad (`buildRoadMesh`) cannot weld a ring: the N degree-3 attach junctions each skirt their
+sidewalk radially outward, so the skirts overlap (z-fighting flaps) and the ring reads as a
+faceted blob. So a net that promotes a roundabout is meshed through the **SDF union roadbed**
+(ADR-0048) instead — one distance field gives a continuous welded sidewalk, merges the
+junctions, and opens the island as a hole for free; centreline markings are overlaid via
+`laneMarkings` (the shader-UV markings need the analytic ribbon, so they're skipped on this
+path). Simple roads with no roundabout stay on the crisp analytic path. The auto ring radius
+is also floored at `widestArmHalfWidth * ringWidthFactor` so the ring reads as a drivable
+annulus around a visible island, not just a merge hole.
+
 ---
 
 ## ADR-0053 — Every crossing resolves to a template chosen by (classes, level, degree, angle)

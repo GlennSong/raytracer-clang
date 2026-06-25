@@ -63,7 +63,11 @@ double tightestGap(const std::vector<Arm>& arms) {
 double chooseRadius(const std::vector<Arm>& arms, const RoadRules& r) {
     if (r.roundaboutRadius > 0.0)
         return std::clamp(r.roundaboutRadius, r.islandRadius, r.maxRadius);
-    double need = r.islandRadius;
+    // Floor the radius at a multiple of the widest arm so the ring reads as a real roundabout
+    // (a drivable annulus around a visible island), not just a hole where spokes merge.
+    double maxHalf = 0.0;
+    for (const Arm& a : arms) maxHalf = std::max(maxHalf, a.halfWidth);
+    double need = std::max(r.islandRadius, maxHalf * r.ringWidthFactor);
     for (int k = 0; k < static_cast<int>(arms.size()); ++k) {
         double half = gapAfter(arms, k) * 0.5;
         double s = std::sin(std::max(half, 1e-3));
