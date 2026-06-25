@@ -245,6 +245,7 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
+    tests/test_road_layers.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

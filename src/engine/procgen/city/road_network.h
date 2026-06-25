@@ -15,7 +15,11 @@ namespace engine {
 enum class RoadClass : uint8_t { Arterial, Collector, Local };
 
 struct RoadNode { Vec2 pos; };
-struct RoadEdge { int a = 0, b = 0; Real width = 8; RoadClass klass = RoadClass::Local; };
+// `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY
+// are the same intersection only when they share a layer; different layers pass over/under
+// (an overpass), so the crossing is NOT turned into a shared node. Default 0 = the old
+// all-at-grade behaviour.
+struct RoadEdge { int a = 0, b = 0; Real width = 8; RoadClass klass = RoadClass::Local; int layer = 0; };
 
 struct RoadGraph {
     std::vector<RoadNode> nodes;
@@ -149,6 +153,17 @@ RoadGraph connectComponents(const RoadGraph& graph, Real connectorWidth = 8);
 // Planarize: split edges wherever they cross and merge coincident nodes, so the
 // only adjacencies are at shared endpoints (precondition for face extraction).
 RoadGraph planarize(const RoadGraph& graph, Real tol = 0.5);
+
+// Layer-aware planarize (ADR-0051, the grade-separation rule). Like planarize, but a
+// crossing splits into a shared node ONLY when the two edges share a `layer`; a crossing
+// between different layers is a grade separation (overpass/underpass) and is left intact —
+// no node, the edges pass over/under each other. Edge `layer` is carried onto the splits.
+// With every edge on layer 0 this is identical to planarize.
+RoadGraph planarizeLayered(const RoadGraph& graph, Real tol = 0.5);
+
+// How many XY crossings between edges on DIFFERENT layers exist — i.e. the number of grade
+// separations the layer assignment implies. For tests / an editor read-out.
+int gradeSeparationCount(const RoadGraph& graph);
 
 // Extract the minimal interior faces (city blocks) of an already-planar graph via
 // a half-edge DCEL "next clockwise" traversal, discarding the unbounded outer

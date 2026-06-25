@@ -535,6 +535,56 @@ RoadGraph planarize(const RoadGraph& in, Real tol) {
     return out;
 }
 
+RoadGraph planarizeLayered(const RoadGraph& in, Real tol) {
+    RoadGraph out;
+    std::vector<int> remap(in.nodes.size());
+    for (std::size_t i = 0; i < in.nodes.size(); ++i)
+        remap[i] = out.addNode(in.nodes[i].pos, tol);
+
+    // addEdge carrying the layer, deduped per (endpoints, layer) so stacked levels coexist.
+    auto addLayered = [&](int a, int b, Real w, RoadClass k, int layer) {
+        if (a == b) return;
+        for (const RoadEdge& e : out.edges)
+            if (e.layer == layer && ((e.a == a && e.b == b) || (e.a == b && e.b == a))) return;
+        out.edges.push_back({a, b, w, k, layer});
+    };
+
+    for (const RoadEdge& e : in.edges) {
+        Vec2 a = in.nodes[e.a].pos, b = in.nodes[e.b].pos;
+        std::vector<std::pair<Real, Vec2>> cuts;   // (t, point) — same-layer crossings only
+        for (const RoadEdge& o : in.edges) {
+            if (&o == &e) continue;
+            if (o.layer != e.layer) continue;       // different level: passes over/under, no node
+            Vec2 c = in.nodes[o.a].pos, d = in.nodes[o.b].pos;
+            Vec2 x; Real t;
+            if (segCross(a, b, c, d, x, t)) cuts.emplace_back(t, x);
+        }
+        std::sort(cuts.begin(), cuts.end(),
+                  [](const auto& l, const auto& r) { return l.first < r.first; });
+        int prev = remap[e.a];
+        for (const auto& cut : cuts) {
+            int mid = out.addNode(cut.second, tol);
+            addLayered(prev, mid, e.width, e.klass, e.layer);
+            prev = mid;
+        }
+        addLayered(prev, remap[e.b], e.width, e.klass, e.layer);
+    }
+    return out;
+}
+
+int gradeSeparationCount(const RoadGraph& g) {
+    int count = 0;
+    for (std::size_t i = 0; i < g.edges.size(); ++i)
+        for (std::size_t j = i + 1; j < g.edges.size(); ++j) {
+            if (g.edges[i].layer == g.edges[j].layer) continue;
+            Vec2 a = g.nodes[g.edges[i].a].pos, b = g.nodes[g.edges[i].b].pos;
+            Vec2 c = g.nodes[g.edges[j].a].pos, d = g.nodes[g.edges[j].b].pos;
+            Vec2 x; Real t;
+            if (segCross(a, b, c, d, x, t)) ++count;
+        }
+    return count;
+}
+
 std::vector<Poly2> extractBlocks(const RoadGraph& g, Real minArea) {
     std::vector<Poly2> blocks;
     const int nNodes = static_cast<int>(g.nodes.size());

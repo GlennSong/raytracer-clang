@@ -119,6 +119,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_road_net.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \
 	$(TEST_DIR)/test_road_constraints.cpp \
+	$(TEST_DIR)/test_road_layers.cpp \
 	$(TEST_DIR)/test_editable_curve.cpp \
 	$(TEST_DIR)/test_curve_edit.cpp \
 	$(TEST_DIR)/test_animation_path.cpp \
