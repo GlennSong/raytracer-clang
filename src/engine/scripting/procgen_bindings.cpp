@@ -1628,6 +1628,11 @@ int l_city_deck(lua_State* L) {
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.09, 0.09, 0.10));
     Vec3 sideColor = optVec3Field(L, 1, "side_color", Vec3(0.30, 0.30, 0.32));
     RenderMesh mesh = bridgeDeck(pts, heights, width * 0.5, color, thk, sideColor);
+    auto merge = [&](const RenderMesh& src) {
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.insert(mesh.vertices.end(), src.vertices.begin(), src.vertices.end());
+        for (uint32_t idx : src.indices) mesh.indices.push_back(base + idx);
+    };
 
     if (optBoolField(L, 1, "piers", false)) {
         std::vector<int> at;
@@ -1648,10 +1653,20 @@ int l_city_deck(lua_State* L) {
         }
         double depth = optField(L, 1, "pier_depth", 3.0);
         Vec3 pcol = optVec3Field(L, 1, "pier_color", Vec3(0.34, 0.34, 0.36));
-        RenderMesh pm = bridgePiers(pts, heights, at, width, depth, thk, pcol);
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.vertices.insert(mesh.vertices.end(), pm.vertices.begin(), pm.vertices.end());
-        for (uint32_t idx : pm.indices) mesh.indices.push_back(base + idx);
+        merge(bridgePiers(pts, heights, at, width, depth, thk, pcol));
+    }
+    if (optBoolField(L, 1, "barriers", false)) {
+        double bh = optField(L, 1, "barrier_height", 0.9);
+        Vec3 bcol = optVec3Field(L, 1, "barrier_color", Vec3(0.55, 0.55, 0.57));
+        merge(deckBarriers(pts, heights, width * 0.5, bh, bcol));
+    }
+    if (optBoolField(L, 1, "markings", false)) {
+        DeckMarkParams mp;
+        mp.laneWidth = optField(L, 1, "lane_width", mp.laneWidth);
+        mp.center = optBoolField(L, 1, "center", mp.center);
+        mp.laneColor = optVec3Field(L, 1, "lane_color", mp.laneColor);
+        mp.centerColor = optVec3Field(L, 1, "center_color", mp.centerColor);
+        merge(deckMarkings(pts, heights, width * 0.5, mp));
     }
     pushMesh(L, std::make_shared<RenderMesh>(std::move(mesh)));
     return 1;

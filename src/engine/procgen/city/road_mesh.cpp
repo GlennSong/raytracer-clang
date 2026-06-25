@@ -771,6 +771,77 @@ RenderMesh bridgePiers(const std::vector<Vec2>& center, const std::vector<double
     return mesh;
 }
 
+RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
+                        double halfWidth, double height, const Vec3& color) {
+    RenderMesh mesh;
+    const int n = static_cast<int>(pts.size());
+    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
+    auto wall = [&](double side) {                       // side = +1 (left) / -1 (right)
+        for (int i = 0; i + 1 < n; ++i) {
+            Vec2 ab = pts[i + 1] - pts[i]; double L = ab.length();
+            if (L < 1e-9) continue;
+            Vec2 nrm = perp(ab / L) * side;
+            Vec2 a = pts[i] + nrm * halfWidth, b = pts[i + 1] + nrm * halfWidth;
+            double ya = deckY[i], yb = deckY[i + 1];
+            Vec3 nv(nrm.x, 0, nrm.y);                     // face inward (toward the road)
+            Vec3 ba(a.x, ya, a.y), bb(b.x, yb, b.y);
+            Vec3 ta(a.x, ya + height, a.y), tb(b.x, yb + height, b.y);
+            MeshBuilder::emitTri(mesh, ba, bb, tb, nv, color);
+            MeshBuilder::emitTri(mesh, ba, tb, ta, nv, color);
+            MeshBuilder::emitTri(mesh, ba, tb, bb, -nv, color);   // back face too (double-sided)
+            MeshBuilder::emitTri(mesh, ba, ta, tb, -nv, color);
+        }
+    };
+    wall(+1.0); wall(-1.0);
+    return mesh;
+}
+
+namespace {
+// A thin painted stripe `off` to the side of the centerline, riding `deckY + lift`, optionally
+// dashed by arc length. Used for edge lines, lane dividers, and the centreline.
+void emitStripe(RenderMesh& mesh, const std::vector<Vec2>& cl, const std::vector<double>& deckY,
+                double off, double w, double lift, const Vec3& col, double dashLen, double dashGap) {
+    const int n = static_cast<int>(cl.size());
+    double s = 0.0;
+    for (int i = 0; i + 1 < n; ++i) {
+        Vec2 ab = cl[i + 1] - cl[i]; double L = ab.length();
+        if (L < 1e-9) continue;
+        Vec2 dir = ab / L, nrm = perp(dir);
+        if (dashLen > 0.0) {                              // skip the gap part of the dash cycle
+            double phase = std::fmod(s, dashLen + dashGap);
+            if (phase >= dashLen) { s += L; continue; }
+        }
+        Vec2 a = cl[i] + nrm * off, b = cl[i + 1] + nrm * off;
+        double ya = deckY[i] + lift, yb = deckY[i + 1] + lift;
+        Vec2 aw = nrm * (w * 0.5);
+        Vec3 AL(a.x + aw.x, ya, a.y + aw.y), AR(a.x - aw.x, ya, a.y - aw.y);
+        Vec3 BL(b.x + aw.x, yb, b.y + aw.y), BR(b.x - aw.x, yb, b.y - aw.y);
+        MeshBuilder::emitTri(mesh, AL, AR, BR, Vec3(0, 1, 0), col);
+        MeshBuilder::emitTri(mesh, AL, BR, BL, Vec3(0, 1, 0), col);
+        s += L;
+    }
+}
+}  // namespace
+
+RenderMesh deckMarkings(const std::vector<Vec2>& cl, const std::vector<double>& deckY,
+                        double halfWidth, const DeckMarkParams& p) {
+    RenderMesh mesh;
+    const int n = static_cast<int>(cl.size());
+    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
+    int lanes = std::max(1, static_cast<int>(std::lround(2.0 * halfWidth / p.laneWidth)));
+    double edge = halfWidth - 0.35;                       // edge lines just inside the verge
+    emitStripe(mesh, cl, deckY,  edge, p.markWidth, p.lift, p.laneColor, 0, 0);   // solid edges
+    emitStripe(mesh, cl, deckY, -edge, p.markWidth, p.lift, p.laneColor, 0, 0);
+    if (p.center)                                         // solid centreline
+        emitStripe(mesh, cl, deckY, 0.0, p.markWidth, p.lift, p.centerColor, 0, 0);
+    for (int k = 1; k < lanes; ++k) {                     // dashed lane dividers
+        double off = -halfWidth + p.laneWidth * k;
+        if (std::fabs(off) < 0.25 && p.center) continue;  // don't overpaint the centreline
+        emitStripe(mesh, cl, deckY, off, p.markWidth, p.lift, p.laneColor, p.dashLength, p.dashGap);
+    }
+    return mesh;
+}
+
 RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>& halfW,
                         double y, const Vec3& color, bool closed) {
     RenderMesh mesh;

@@ -312,3 +312,30 @@ TEST_CASE(bridge_piers_stand_under_the_deck) {
     CHECK(std::fabs(minY) < 1e-6);                 // foot on the ground
     CHECK(std::fabs(maxY - (6.0 - 0.8)) < 1e-6);   // head at the deck underside
 }
+
+// Deck barriers: a parapet wall stands above the deck on both edges.
+TEST_CASE(deck_barriers_stand_on_the_verges) {
+    std::vector<Vec2> c = { Vec2(-10, 0), Vec2(0, 0), Vec2(10, 0) };
+    std::vector<double> y = { 5.0, 5.0, 5.0 };
+    RenderMesh b = deckBarriers(c, y, 4.0, 0.9, Vec3(0.5, 0.5, 0.5));
+    CHECK(!b.vertices.empty());
+    double maxY = -1e30, minY = 1e30, maxAbsZ = 0;
+    for (const Vertex& v : b.vertices) {
+        maxY = std::max(maxY, (double)v.position.y); minY = std::min(minY, (double)v.position.y);
+        maxAbsZ = std::max(maxAbsZ, std::fabs((double)v.position.z));
+    }
+    CHECK(std::fabs(minY - 5.0) < 1e-6);            // foot on the deck
+    CHECK(std::fabs(maxY - 5.9) < 1e-6);            // top a barrier-height above
+    CHECK(std::fabs(maxAbsZ - 4.0) < 1e-6);         // on the verges (±halfWidth)
+}
+
+// Deck markings: a wider deck gets more lane-divider stripes than a narrow one.
+TEST_CASE(deck_markings_scale_lanes_with_width) {
+    std::vector<Vec2> c = { Vec2(-50, 0), Vec2(0, 0), Vec2(50, 0) };
+    std::vector<double> y = { 0, 0, 0 };
+    DeckMarkParams mp;
+    std::size_t narrow = deckMarkings(c, y, 4.0, mp).indices.size();    // ~2 lanes
+    std::size_t wide   = deckMarkings(c, y, 12.0, mp).indices.size();   // ~7 lanes
+    CHECK(narrow > 0);
+    CHECK(wide > narrow);
+}

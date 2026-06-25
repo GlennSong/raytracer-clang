@@ -176,6 +176,28 @@ RenderMesh bridgePiers(const std::vector<Vec2>& centerline, const std::vector<do
                        double deckThk, const Vec3& color,
                        const std::function<double(double, double)>& ground = {});
 
+// Parapet barriers along both edges of a deck (ADR-0054): a low wall standing `height` above
+// the deck on each verge, the full length — the safety rail of an overpass/viaduct.
+RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                        double halfWidth, double height, const Vec3& color);
+
+// Lane markings painted on a deck/road that rides a vertical profile: solid edge lines, a
+// solid centreline (`centerColor`, e.g. yellow — set `center=false` for a one-way ramp), and
+// dashed lane dividers. Lane count = round(2*halfWidth / laneWidth). Stripes ride `lift` above
+// the deck so they sit on the surface at any height. The finishing detail that makes a deck
+// read as a multilane road.
+struct DeckMarkParams {
+    double laneWidth = 3.6;
+    double markWidth = 0.18;
+    double lift = 0.04;
+    bool   center = true;
+    double dashLength = 4.0, dashGap = 5.0;
+    Vec3   laneColor{0.85, 0.85, 0.82};
+    Vec3   centerColor{0.80, 0.70, 0.12};
+};
+RenderMesh deckMarkings(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                        double halfWidth, const DeckMarkParams& params);
+
 // Union a set of centerline spines into ONE non-overlapping filled mesh (ADR-0048).
 // Where ribbons cross or overlap, the result is a single merged surface, not stacked
 // ribbons. Method: the signed distance to a polyline IS the Minkowski sum (so round
