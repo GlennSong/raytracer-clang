@@ -964,6 +964,86 @@ RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Ve
     return mesh;
 }
 
+RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p) {
+    // 1. A smoothed, grade-limited height per spine: sample the terrain along each centerline and
+    //    iron it flat with roadProfile, so the road follows hills but not every bump.
+    struct Prof { std::vector<Vec2> cl; std::vector<double> h; };
+    std::vector<Prof> profs;
+    if (p.heightAt) {
+        for (const UnionSpine& s : spines) {
+            const int n = static_cast<int>(s.points.size());
+            if (n < 2) continue;
+            std::vector<double> sArc(n, 0.0), ground(n);
+            for (int i = 0; i < n; ++i) ground[i] = p.heightAt(s.points[i].x, s.points[i].y);
+            for (int i = 1; i < n; ++i) sArc[i] = sArc[i - 1] + (s.points[i] - s.points[i - 1]).length();
+            profs.push_back({s.points, roadProfile(ground, sArc, p.maxGrade)});
+        }
+    }
+    // Surface height anywhere = the nearest spine's smoothed profile (junctions agree where the
+    // spines meet). Flat at topY when no terrain is supplied.
+    auto heightOf = [&](double x, double z) -> double {
+        if (profs.empty()) return p.topY;
+        Vec2 q(x, z);
+        double bestD2 = 1e30, bestH = p.topY;
+        for (const Prof& pr : profs)
+            for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
+                const Vec2& a = pr.cl[i]; Vec2 ab = pr.cl[i + 1] - a;
+                double L2 = ab.lengthSquared();
+                double t = L2 < 1e-12 ? 0.0 : std::max(0.0, std::min(1.0, dot(q - a, ab) / L2));
+                double d2 = (q - (a + ab * t)).lengthSquared();
+                if (d2 < bestD2) { bestD2 = d2; bestH = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t; }
+            }
+        return bestH;
+    };
+
+    // 2. The welded outline (same join engine as weldRibbons), rounded at junctions.
+    std::vector<Poly2> ribbons;
+    for (const UnionSpine& s : spines) {
+        if (s.points.size() < 2) continue;
+        Poly2 r = ribbonOutline(s.points, s.halfWidth);
+        if (r.size() >= 3) ribbons.push_back(std::move(r));
+    }
+    std::vector<Poly2> outers, holes;
+    for (Poly2& L : polygonUnion(ribbons)) {
+        Poly2 R = (p.cornerRadius > 0.0) ? roundPolygonCorners(L, p.cornerRadius, 5) : L;
+        (signedArea(R) > 0 ? outers : holes).push_back(std::move(R));
+    }
+
+    RenderMesh mesh;
+    auto P3 = [&](const Vec2& v, double dh) { return Vec3(v.x, heightOf(v.x, v.y) + dh, v.y); };
+    // A vertical wall along a boundary loop: the outward normal is the RIGHT normal of each
+    // directed edge (away from the solid for a CCW outer; into the shaft for a CW hole loop).
+    auto wall = [&](const Poly2& loop) {
+        const int m = static_cast<int>(loop.size());
+        for (int i = 0; i < m; ++i) {
+            const Vec2& a = loop[i]; const Vec2& b = loop[(i + 1) % m];
+            Vec2 e = b - a; if (e.length() < 1e-9) continue;
+            Vec2 rn = normalize(Vec2(e.y, -e.x));               // right normal in XZ
+            Vec3 nrm(rn.x, 0, rn.y);
+            Vec3 tA = P3(a, 0), tB = P3(b, 0), bA = P3(a, -p.thickness), bB = P3(b, -p.thickness);
+            MeshBuilder::emitTri(mesh, tA, tB, bB, nrm, p.sideColor);
+            MeshBuilder::emitTri(mesh, tA, bB, bA, nrm, p.sideColor);
+        }
+    };
+
+    for (const Poly2& outer : outers) {
+        std::vector<Poly2> mine;
+        for (const Poly2& h : holes)
+            if (h.size() >= 3 && pointInPolygon(outer, centroid(h))) mine.push_back(h);
+        Poly2 merged = mine.empty() ? outer : bridgeHoles(outer, mine);
+        // Deck (faces up) and underside (faces down) share the triangulation; emitTri winds each.
+        for (const std::array<int, 3>& t : triangulatePolygon(merged)) {
+            const Vec2& a = merged[t[0]]; const Vec2& b = merged[t[1]]; const Vec2& c = merged[t[2]];
+            MeshBuilder::emitTri(mesh, P3(a, 0), P3(b, 0), P3(c, 0), Vec3(0, 1, 0), p.topColor);
+            MeshBuilder::emitTri(mesh, P3(a, -p.thickness), P3(b, -p.thickness), P3(c, -p.thickness),
+                                 Vec3(0, -1, 0), p.bottomColor);
+        }
+        wall(outer);                                            // outer skirt
+        for (const Poly2& h : mine) wall(h);                    // block-interior shafts
+    }
+    return mesh;
+}
+
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color) {
     RenderMesh mesh;

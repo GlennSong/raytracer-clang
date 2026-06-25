@@ -1609,6 +1609,31 @@ int l_city_weld(lua_State* L) {
     return 1;
 }
 
+// city.solid{ spines={...} | layout=..., y=, thickness=, corner_radius=, color=, side_color=,
+//   bottom_color=, max_grade=, height=(heightfield) } -> the welded outline EXTRUDED into a
+//   closed slab with real thickness (deck + walls + underside), riding a smoothed grade-limited
+//   profile over the optional terrain. The volumetric successor to city.weld (one-sided ribbon).
+int l_city_solid(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
+    WeldSolidParams p;
+    p.topY = optField(L, 1, "y", p.topY);
+    p.thickness = optField(L, 1, "thickness", p.thickness);
+    p.cornerRadius = optField(L, 1, "corner_radius", p.cornerRadius);
+    p.maxGrade = optField(L, 1, "max_grade", p.maxGrade);
+    p.topColor = optVec3Field(L, 1, "color", p.topColor);
+    p.sideColor = optVec3Field(L, 1, "side_color", p.sideColor);
+    p.bottomColor = optVec3Field(L, 1, "bottom_color", p.bottomColor);
+    lua_getfield(L, 1, "height");
+    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
+        HeightField h = *hf;
+        p.heightAt = [h](double x, double z) { return h(x, z); };
+    }
+    lua_pop(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(weldSolid(spines, p)));
+    return 1;
+}
+
 // city.deck{ points={{x,z}...}, width=, heights={...} (per point) | height= (constant),
 //   thickness=, color=, side_color=, piers=(bool), pier_at={i...}, pier_spacing=,
 //   pier_depth=, pier_color= } -> a bridge-deck slab riding the per-point heights
@@ -2326,6 +2351,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"stroke", l_city_stroke},
         {"union", l_city_union},
         {"weld", l_city_weld},
+        {"solid", l_city_solid},
         {"deck", l_city_deck},
         {"roadbed", l_city_roadbed},
         {"lane_markings", l_city_lane_markings},

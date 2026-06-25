@@ -433,3 +433,54 @@ TEST_CASE(weld_corner_radius_fillets_junction) {
     CHECK(std::fabs(ar - as) < 6.0);                    // fillets nudge the area only a little
     CHECK(round.indices.size() > sharp.indices.size()); // arcs add triangles
 }
+
+// The solid extrude wraps the welded outline into a closed slab: a deck up top, an underside,
+// and vertical side walls — so it has real thickness instead of a one-sided ribbon. A flat cross
+// keeps the 144 deck area, mirrors it on the bottom, and the walls span the slab's full depth.
+TEST_CASE(weld_solid_is_a_closed_slab) {
+    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = { a, b }; return s; };
+    std::vector<UnionSpine> sp = { mk(Vec2(-10, 0), Vec2(10, 0)), mk(Vec2(0, -10), Vec2(0, 10)) };
+    WeldSolidParams p;
+    p.topY = 1.0; p.thickness = 0.5;
+    RenderMesh m = weldSolid(sp, p);
+
+    double topY = -1e9, botY = 1e9;
+    bool sawTop = false, sawBottom = false, sawWall = false;
+    for (const Vertex& v : m.vertices) {
+        topY = std::max(topY, (double)v.position.y);
+        botY = std::min(botY, (double)v.position.y);
+        if (v.normal.y > 0.9) sawTop = true;
+        else if (v.normal.y < -0.9) sawBottom = true;
+        else if (std::fabs(v.normal.y) < 0.1) sawWall = true;   // horizontal-facing side wall
+    }
+    CHECK(sawTop && sawBottom && sawWall);                       // all three surface kinds present
+    CHECK(std::fabs(topY - 1.0) < 1e-6);                        // deck at topY
+    CHECK(std::fabs(botY - 0.5) < 1e-6);                        // underside thickness below
+
+    // The upward-facing deck triangles still sum to the cross area.
+    double deckArea = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vertex& A = m.vertices[m.indices[i]];
+        if (A.normal.y < 0.9) continue;
+        const Vec3& a = A.position, &b = m.vertices[m.indices[i + 1]].position,
+                    &c = m.vertices[m.indices[i + 2]].position;
+        deckArea += std::fabs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) * 0.5;
+    }
+    CHECK(std::fabs(deckArea - 144.0) < 0.5);
+}
+
+// With a terrain function the deck rides a smoothed profile: a road over a single sharp bump
+// follows the rise but irons the peak down, so the deck height stays between flat and raw.
+TEST_CASE(weld_solid_smooths_a_terrain_bump) {
+    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = {};
+        for (int i = 0; i <= 20; ++i) s.points.push_back(a + (b - a) * (i / 20.0)); return s; };
+    std::vector<UnionSpine> sp = { mk(Vec2(-50, 0), Vec2(50, 0)) };
+    WeldSolidParams p;
+    p.thickness = 0.5; p.maxGrade = 0.08;
+    p.heightAt = [](double x, double) { return std::fabs(x) < 4.0 ? 10.0 : 0.0; };  // a spike at x=0
+    RenderMesh m = weldSolid(sp, p);
+    double peak = -1e9;
+    for (const Vertex& v : m.vertices) if (v.normal.y > 0.9) peak = std::max(peak, (double)v.position.y);
+    CHECK(peak < 10.0);     // the sharp 10m spike is ironed down by the grade limit
+    CHECK(peak > 0.5);      // but the road still rises toward it (not flattened away)
+}

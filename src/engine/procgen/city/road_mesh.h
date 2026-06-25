@@ -231,6 +231,24 @@ RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
 RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color,
                        double cornerRadius = 0.0);
 
+// EXTRUDE the welded outline into a closed SOLID with real thickness — top deck, vertical side
+// walls, and a bottom — instead of a one-sided floating ribbon (unified-road-plan task 3). The
+// road rides a smoothed, grade-limited vertical profile: terrain height is sampled along each
+// spine's centerline and ironed flat by roadProfile (follows hills, irons out bumps), then any
+// surface point takes the nearest spine's smoothed height. Block-interior holes get inner walls
+// too, so an open block is a real shaft. `cornerRadius` fillets junctions as in weldRibbons.
+struct WeldSolidParams {
+    double topY = 0.06;                         // flat fallback height when no terrain is given
+    double thickness = 0.5;                     // top-to-bottom extrude depth (m)
+    double cornerRadius = 0.0;                  // junction curb-return fillet
+    double maxGrade = 0.08;                     // profile slope limit (rise/run) for smoothing
+    Vec3   topColor{0.10, 0.10, 0.11};          // asphalt deck
+    Vec3   sideColor{0.18, 0.18, 0.19};         // curb / road edge
+    Vec3   bottomColor{0.05, 0.05, 0.05};       // underside
+    std::function<double(double, double)> heightAt;  // terrain (world XZ -> height); null = flat
+};
+RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
+
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},
 // sidewalk is {0<=sdf<sidewalkWidth}, with a curb step between, all from one distance
