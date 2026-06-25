@@ -2,6 +2,7 @@
 
 #include "road_network.h"       // RoadGraph, RoadEdge
 #include "road_constraints.h"   // applyConstraints (min-arm-angle + roundabout promotion)
+#include "road_rules.h"         // DesignRules (clearance, deck thickness, ramp grade)
 #include <algorithm>
 #include <cmath>
 
@@ -151,7 +152,8 @@ bool segCrossAt(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Vec2& p4, 
 // to either side), carried on abutment piers, the way a real overpass sits. The visible
 // overpass: a flat structure on supports, not an inclined hump.
 RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
-    const double clearance = 5.0, deckThk = 0.8, rampGrade = 0.06;
+    const DesignRules& rules = defaultDesign();          // one source for the grade-sep numbers
+    const double clearance = rules.clearance, deckThk = rules.deckThickness, rampGrade = rules.rampGrade;
     const double groundSurf = net.lift;                 // flat road surface height (approx)
     double hw = net.width * 0.5;
     auto groundFn = [&](double x, double z) { return net.heightAt ? net.heightAt(x, z) : 0.0; };

@@ -12,7 +12,12 @@ namespace engine {
 // *faces* are the city blocks. Roads are the lines; blocks are the holes between
 // them. Get the graph right and blocks fall out via planar-face extraction.
 
-enum class RoadClass : uint8_t { Arterial, Collector, Local };
+// Road classes, most major first. Freeway = limited-access, grade-separated, divided; Ramp =
+// a one-way connector (on/off ramp). Arterial/Collector/Local are the surface hierarchy.
+// (Comparisons on this are ternary "is Arterial? is Collector? else Local"-style, so the two
+// new members fall through to sensible defaults in older code; DesignRules gives them real
+// parameters — ADR-0052.)
+enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp };
 
 struct RoadNode { Vec2 pos; };
 // `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY

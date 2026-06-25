@@ -24,6 +24,8 @@ namespace engine {
 // Pure + headless. Degree-2 nodes (through-roads, curve samples) and dead ends are never
 // touched. A 4-way grid crossing (degree 4, healthy angles) is left as a flat patch.
 struct RoadRules {
+    // NB: minArmAngle / maxDegree mirror DesignRules.minArmAngle / maxArmsAtGrade (road_rules.h),
+    // the canonical junction policy; keep them in sync (they will fold into one source).
     // Two arms closer than this (radians) can't share a flat junction -> promote. Default
     // ~30 deg: below it the curb corners would overlap even at a normal width.
     double minArmAngle = 0.52;

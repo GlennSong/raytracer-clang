@@ -3501,7 +3501,16 @@ replaced by a ring of attach nodes joined by sampled arcs, so every survivor is 
 3) — and `nodeNeedsRoundabout` for the classifier. Wired into `buildRoadNetMesh`, and shared
 with terrain-conform via `constrainedNetGraph` so the ground grades to the ring, not the raw
 spokes. A 3-way T and 4-way crossing stay flat patches. Tests: `test_road_constraints`. Still
-to do: a formal rule registry, the no-acute-merge rule, and a live editor warn/preview.
+to do: the no-acute-merge rule, and a live editor warn/preview.
+
+**Landed since (the rules registry).** `road_rules.h` — `DesignRules`, the single class-keyed
+table of road parameters (per `RoadClass`: min curve radius, max grade, lane width/count,
+divided-median; network-wide: min arm angle, max arms before a roundabout, bridge clearance,
+deck thickness, ramp grade) with `defaultDesign()`. `RoadClass` gained `Freeway` and `Ramp`.
+`buildLayeredRoadNetMesh` now reads clearance/deck/ramp-grade from it instead of inline magic
+numbers; the constraint pass's `RoadRules` mirrors the junction policy (to be folded in).
+Tests: `test_road_layers` (classes rank sensibly — freeway curves/climbs gently, is divided;
+ramp is one lane). This answers "where the rules live": one place, class-driven.
 
 **Meshing a roundabout — the SDF roadbed, not the analytic pad.** The analytic per-junction
 pad (`buildRoadMesh`) cannot weld a ring: the N degree-3 attach junctions each skirt their
