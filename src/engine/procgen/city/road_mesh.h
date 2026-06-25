@@ -52,6 +52,11 @@ struct RoadMeshParams {
     // white lane dividers. The lane count is derived from the road width
     // (width / laneWidth), so wider arterials read as multi-lane for free.
     bool   laneMarkings = false;
+    // Paint lane markings via the RoadMarkings surface shader (road-local UV baked on
+    // the carriageway) instead of stripe geometry (road-geometry-plan Problem 3). When
+    // set, the carriageway ribbon still bakes UV but the geometric paintLine pass is
+    // skipped; the caller sets Surface::RoadMarkings on the road material.
+    bool   shaderMarkings = false;
     double laneWidth = 3.5;             // nominal lane width -> lane count (m)
     double markWidth = 0.16;            // painted stripe width (m)
     double markLift = 0.02;             // raise stripes above the asphalt (m)

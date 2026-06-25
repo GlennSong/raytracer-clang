@@ -124,6 +124,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     p.curbHeight = net.curb;
     p.cornerRadius = net.cornerRadius;
     p.laneMarkings = net.markings;
+    p.shaderMarkings = net.markings;     // paint via the RoadMarkings surface, not geometry
     p.crosswalks = net.crosswalks;
     p.minSetback = net.width * 0.5 + 0.5;        // pad clears the curb corners
     p.heightAt = net.heightAt;

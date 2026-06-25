@@ -273,16 +273,26 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
 
     // A flat strip between two cross-sections, draped on the terrain and split along
     // its length only where the ground bends (stripSegs) — flat ground stays one quad.
+    // The carriageway ribbon: a0/b0 are the LEFT edge, a1/b1 the RIGHT, `sA`/`sB` the
+    // arc-length at the two cross-sections. Each sub-quad bakes road-local UV so the
+    // RoadMarkings surface can paint lane lines: u = lateral encoded as -1 (left) /
+    // +1 (right) offset by +2 (so non-carriageway geometry, left at u=0, is excluded),
+    // v = arc-length down the road (drives dashes). Plain asphalt where unused.
     auto addStrip = [&](const Vec2& a0, const Vec2& a1, const Vec2& b0,
-                        const Vec2& b1) {
+                        const Vec2& b1, double sA = 0.0, double sB = 0.0) {
         int segs = stripSegs((a0 + a1) * 0.5, (b0 + b1) * 0.5);
-        Vec2 prev0 = a0, prev1 = a1;
+        Vec2 prev0 = a0, prev1 = a1; double vPrev = sA;
         for (int s = 1; s <= segs; ++s) {
             double t = static_cast<double>(s) / segs;
             Vec2 c0 = lerp(a0, b0, t), c1 = lerp(a1, b1, t);
-            addTri(to3d(prev0), to3d(prev1), to3d(c1));
-            addTri(to3d(prev0), to3d(c1), to3d(c0));
-            prev0 = c0; prev1 = c1;
+            double vCur = sA + (sB - sA) * t;
+            MeshBuilder::emitQuadUV(mesh, to3d(prev0), to3d(prev1), to3d(c1), to3d(c0),
+                                    Vec3(0, 1, 0), p.color,
+                                    1.0f, static_cast<float>(vPrev),    // prev0 = left
+                                    3.0f, static_cast<float>(vPrev),    // prev1 = right
+                                    3.0f, static_cast<float>(vCur),     // c1    = right
+                                    1.0f, static_cast<float>(vCur));    // c0    = left
+            prev0 = c0; prev1 = c1; vPrev = vCur;
         }
     };
 
@@ -642,7 +652,10 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             Vec2 off = m[i] * f[i];
             L[i] = P[i] + off * hw[i]; R[i] = P[i] - off * hw[i];
         }
-        for (int i = 0; i < np - 1; ++i) addStrip(L[i], R[i], L[i + 1], R[i + 1]);
+        std::vector<double> slen(np, 0.0);          // arc-length along the centerline (for v)
+        for (int i = 1; i < np; ++i) slen[i] = slen[i - 1] + (P[i] - P[i - 1]).length();
+        for (int i = 0; i < np - 1; ++i)
+            addStrip(L[i], R[i], L[i + 1], R[i + 1], slen[i], slen[i + 1]);
         // Sidewalks use the robust offset (round convex joins, clamped concave) so the
         // raised kerb never spikes or folds, even on curves tighter than the road.
         std::vector<Vec2> li, lo, ri, ro;
@@ -651,7 +664,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         sidewalkRail(li, lo);
         sidewalkRail(ri, ro);
 
-        if (p.laneMarkings) {
+        if (p.laneMarkings && !p.shaderMarkings) {
             double hwm = hw[np / 2], inset = p.markWidth * 1.5;
             int perSide = std::max(1, static_cast<int>(std::lround(hwm / p.laneWidth)));
             double laneW = hwm / perSide;

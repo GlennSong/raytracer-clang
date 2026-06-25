@@ -232,7 +232,29 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
 // result is clamped to [0,1] per channel: an albedo above 1 would make the path
 // tracer gain energy each bounce (throughput never decays, Russian roulette
 // never terminates — a pathological slowdown), so surfaces stay conserving.
-Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n) {
+// Road lane paint composited over the asphalt from road-local mesh UV (ADR-0044 /
+// road-geometry-plan Problem 3), not stripe geometry. `mu` encodes lateral position
+// (1 = left edge, 2 = centre, 3 = right edge; < 0.5 means this isn't carriageway — a
+// sidewalk or junction pad — so it stays plain). Normalised across the width, so it
+// tracks any road width and conforms to terrain for free. `mv` (arc-length) is baked
+// for future dashed dividers; v1 paints a double-yellow centreline + white edge lines.
+Vec3 surfRoadMarkings(const Vec3& base, double mu, double /*mv*/) {
+    if (mu < 0.5) return base;                        // not carriageway: no paint
+    double lat = mu - 2.0;                            // [-1, 1], 0 = centreline
+    auto band = [](double x, double c, double hw) {  // ~1 inside a line of half-width hw
+        double d = std::fabs(x - c), t = std::clamp((d - hw) / 0.006, 0.0, 1.0);
+        return 1.0 - t * t * (3.0 - 2.0 * t);        // smoothstep falloff (soft edge)
+    };
+    const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
+    double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow
+    double w = std::max(band(lat, 0.86, 0.016), band(lat, -0.86, 0.016));    // white edges
+    Vec3 c = base * (1.0 - y) + yellow * y;
+    c = c * (1.0 - w) + white * w;
+    return c;
+}
+
+Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n,
+                  double mu, double mv) {
     double u, v; surfPlane(worldPos, n, u, v);
     Vec3 c;
     switch (id) {
@@ -246,6 +268,7 @@ Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n)
         case 8:  c = surfPavement(base, u, v); break;
         case 9:  c = surfCobble(base, u, v); break;
         case 10: c = surfWood(base, u, v); break;
+        case 11: c = surfRoadMarkings(base, mu, mv); break;
         default: return base;
     }
     return Vec3(std::clamp(c.x, 0.0, 1.0), std::clamp(c.y, 0.0, 1.0),
@@ -652,7 +675,8 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
                     n = normalize(T * tn.x + B * tn.y + rec.normal * tn.z);
                 }
             } else if (mat.surface) {
-                albedo = applySurface(mat.surface, albedo, rec.point, rec.normal);
+                albedo = applySurface(mat.surface, albedo, rec.point, rec.normal,
+                                      rec.u, rec.v);
             }
 
             radiance += throughput * sampleDirectLight(rec.point, n, v, albedo,

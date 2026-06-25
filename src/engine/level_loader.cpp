@@ -272,6 +272,8 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     Renderable r;
     r.material.albedo = Vec3(1, 1, 1);               // hue carried in vertex colour
     r.material.roughness = 0.93f;
+    if (net.markings)                                // lane paint via the surface shader
+        r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
     RenderMesh mesh = buildRoadNetMesh(net);
     if (!mesh.vertices.empty())
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));

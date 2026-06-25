@@ -71,6 +71,15 @@ struct MeshBuilder {
                          const Vec3& c, const Vec3& d, const Vec3& normal,
                          const Vec3& color);
 
+    // emitQuad with explicit per-corner UVs (a..d) instead of the implicit 0..1
+    // mapping — for generators that bake a meaningful parameterization (e.g. the road
+    // carriageway's road-local u=lateral, v=arc-length, read by the RoadMarkings
+    // surface). Same winding/colour handling as emitQuad.
+    static void emitQuadUV(RenderMesh& mesh, const Vec3& a, const Vec3& b,
+                           const Vec3& c, const Vec3& d, const Vec3& normal,
+                           const Vec3& color, float ua, float va, float ub, float vb,
+                           float uc, float vc, float ud, float vd);
+
     // Append clockwise-front indices for an up-facing (+Y) vertex lattice
     // already pushed row-major: vertex (i,j) lives at `base + j*cols + i`,
     // with +i = +X and +j = +Z. The shared triangulation for terrain grids

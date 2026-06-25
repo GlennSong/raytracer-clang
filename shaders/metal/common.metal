@@ -185,7 +185,25 @@ float3 surfWood(float3 base, float u, float v) {
     return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
 
-float3 applySurface(uint id, float3 base, float3 worldPos, float3 n) {
+// Road lane paint from road-local mesh UV (ADR-0044 / Problem 3), mirror of
+// scene.cpp surfRoadMarkings. mu = lateral (1 left / 2 centre / 3 right; < 0.5 =
+// not carriageway -> plain). Constant AA band (not fwidth) so it is legal in any
+// shader stage; MSAA/TAA cleans up the rest.
+float3 surfRoadMarkings(float3 base, float mu, float mv) {
+    if (mu < 0.5) return base;                       // not carriageway: no paint
+    float lat = mu - 2.0;                            // [-1, 1], 0 = centreline
+    float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
+    float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
+    float y  = max(yL, yR);                          // double-yellow centreline
+    float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
+    float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
+    float w  = max(wL, wR);                          // white edge lines
+    float3 c = mix(base, float3(0.82, 0.68, 0.13), y);
+    c = mix(c, float3(0.86, 0.86, 0.83), w);
+    return c;
+}
+
+float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 meshUV) {
     float2 uv = surfUV(worldPos, n);
     float3 c;
     switch (id) {
@@ -199,6 +217,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n) {
         case 8u:  c = surfPavement(base, uv.x, uv.y); break;
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
+        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y); break;
         default:  return base;
     }
     return saturate(c);   // keep albedo energy-conserving (see scene.cpp)

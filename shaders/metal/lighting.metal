@@ -301,7 +301,8 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // flag as provenance for save/load) lets its textures drive the look.
     uint surfId = (uint(mat.flags) >> 8) & 0xFFu;
     if (surfId != 0u && !(tf & 1u))
-        albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal));
+        albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal),
+                              geom.texcoord);
 
     float3 normal = normalize(geom.worldNormal);
     if (tf & 4u) {

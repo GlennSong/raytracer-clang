@@ -80,6 +80,11 @@ struct RenderMaterial {
     enum class Surface : uint32_t {
         None = 0, Brick, Concrete, Stucco, RoofTile, RoofShingle,
         CorrugatedMetal, Asphalt, Pavement, Cobblestone, WoodSiding,
+        // Road carriageway lane paint composited from road-local mesh UV (u = lateral
+        // [-1,1] offset by +2 so non-carriageway u=0 is excluded; v = arc-length for
+        // dashes) instead of baked stripe geometry (ADR-0044 / road-geometry-plan
+        // Problem 3): conforms to terrain for free, no z-fight, crisp at any distance.
+        RoadMarkings,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -119,6 +124,7 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "pavement" || s == "sidewalk") return S::Pavement;
     if (s == "cobblestone" || s == "cobble") return S::Cobblestone;
     if (s == "wood" || s == "woodsiding" || s == "siding") return S::WoodSiding;
+    if (s == "roadmarkings" || s == "road_markings" || s == "lanes") return S::RoadMarkings;
     return S::None;
 }
 
@@ -137,6 +143,7 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::Pavement:        return "pavement";
         case S::Cobblestone:     return "cobblestone";
         case S::WoodSiding:      return "wood";
+        case S::RoadMarkings:    return "roadmarkings";
         default:                 return "";
     }
 }

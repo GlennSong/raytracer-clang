@@ -108,7 +108,16 @@ dashes) and crisp edges via `smoothstep`/`fwidth`.
 
 ---
 
-**Landed.** (Problem 2) `curbReturnFillet` — a true fixed-radius arc tangent to both
+**Landed.** (Problem 3) `RoadMarkings` surface — the editable road's carriageway bakes
+road-local UV (u = lateral, encoded 1=left / 2=centre / 3=right so non-carriageway u=0 is
+excluded; v = arc-length), and `applySurface` (scene.cpp + common.metal) composites a
+double-yellow centreline + white edge lines procedurally instead of stroking stripe
+geometry. Conforms to terrain for free, no z-fight, crisp at any distance; the whole
+spike/splinter class is gone. The geometric `paintLine` pass is gated behind
+`shaderMarkings` (off for the procgen union path, which keeps its baked markings). v1 is
+2-lane (centreline + edges); multi-lane dashed dividers want a per-road lane-count param
+(v2 — the arc-length `v` is already baked for the dashes). (Problem 2) `curbReturnFillet`
+— a true fixed-radius arc tangent to both
 kerbs, robust at any angle. (Problem 1) `fairHermite` — the editable road's spline is
 sampled with its curvature capped to a minimum radius (half-width + sidewalk + margin) by
 blending toward the chord, so an over-tight bend can't fold the ribbon or its sidewalk.

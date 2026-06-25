@@ -696,7 +696,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (ent.value("shape", std::string()) == "road") {
             RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"] : json::object());
             if (levelGround) net.heightAt = levelGround;
-            int mi = scene.addMaterial(Material::pbr(Vec3(1, 1, 1), 0.0, 0.93));
+            Material rm = Material::pbr(Vec3(1, 1, 1), 0.0, 0.93);
+            if (net.markings)   // lane paint via the RoadMarkings surface, not geometry
+                rm.surface = static_cast<int>(RenderMaterial::Surface::RoadMarkings);
+            int mi = scene.addMaterial(rm);
             addMeshAsTriangles(buildRoadNetMesh(net), Vec3(), Quat::identity(),
                                Vec3(1, 1, 1), mi, scene);
             continue;
