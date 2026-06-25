@@ -23,6 +23,14 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, double d, double m
 // network before junction welding. `miterLimit` clamps corner spikes.
 Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterLimit = 4.0);
 
+// Boolean UNION of CCW polygons into boundary loops — the weld at road junctions: overlapping
+// ribbon outlines merge into one outline (exterior loops CCW; interior holes, e.g. a roundabout
+// island, come back CW). Method: split every edge at its crossings with the others, drop the
+// sub-edges whose midpoint lies inside another polygon (interior), then chain the surviving
+// boundary sub-edges into loops. Robust for ribbons that cross at an angle (the road case);
+// exactly-collinear shared edges are not specially deduped. Pure + headless.
+std::vector<Poly2> polygonUnion(const std::vector<Poly2>& polys);
+
 }  // namespace engine
 
 #endif

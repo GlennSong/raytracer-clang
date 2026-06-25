@@ -1,8 +1,42 @@
 #include "road_offset.h"
 
+#include <algorithm>
 #include <cmath>
+#include <map>
+#include <utility>
 
 namespace engine {
+
+namespace {
+
+constexpr double kEps = 1e-7;
+
+// Parameter t along p1->p2 where a point q (assumed near the line) projects.
+double paramOnSeg(const Vec2& p1, const Vec2& p2, const Vec2& q) {
+    Vec2 d = p2 - p1; double L2 = d.lengthSquared();
+    return (L2 > 1e-18) ? dot(q - p1, d) / L2 : 0.0;
+}
+
+// Is q on segment p1p2 (within tol), strictly interior in the parameter sense?
+bool pointOnSegInterior(const Vec2& p1, const Vec2& p2, const Vec2& q, double tol) {
+    double t = paramOnSeg(p1, p2, q);
+    if (t < kEps || t > 1.0 - kEps) return false;
+    Vec2 proj = p1 + (p2 - p1) * t;
+    return (q - proj).length() < tol;
+}
+
+// Proper interior crossing of a->b and c->d; on a hit, `t` is along a->b (interior of both).
+bool segCrossParam(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, double& t) {
+    Vec2 r = b - a, s = d - c;
+    double denom = cross(r, s);
+    if (std::fabs(denom) < 1e-12) return false;          // parallel/collinear
+    Vec2 ac = c - a;
+    t = cross(ac, s) / denom;
+    double u = cross(ac, r) / denom;
+    return t > kEps && t < 1.0 - kEps && u > kEps && u < 1.0 - kEps;
+}
+
+}  // namespace
 
 std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, double d, double miterLimit) {
     const int n = static_cast<int>(cl.size());
@@ -47,6 +81,83 @@ Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterL
     for (auto it = right.rbegin(); it != right.rend(); ++it) poly.push_back(*it);   // right rail, back
     if (signedArea(poly) < 0) ensureCCW(poly);                   // canonical CCW winding
     return poly;
+}
+
+std::vector<Poly2> polygonUnion(const std::vector<Poly2>& polys) {
+    struct Edge { Vec2 a, b; int poly; };
+    std::vector<Edge> E;
+    for (int p = 0; p < static_cast<int>(polys.size()); ++p) {
+        const Poly2& P = polys[p];
+        int n = static_cast<int>(P.size());
+        if (n < 3) continue;
+        for (int i = 0; i < n; ++i) E.push_back({P[i], P[(i + 1) % n], p});
+    }
+    const double tol = 1e-4;
+
+    // Split every edge at its crossings (and T-touches) with other polygons' edges; keep the
+    // sub-edges whose midpoint is NOT inside another polygon (those are on the union boundary).
+    std::vector<std::pair<Vec2, Vec2>> kept;
+    for (const Edge& e : E) {
+        std::vector<double> ts = {0.0, 1.0};
+        for (const Edge& o : E) {
+            if (o.poly == e.poly) continue;
+            double t;
+            if (segCrossParam(e.a, e.b, o.a, o.b, t)) ts.push_back(t);
+            if (pointOnSegInterior(e.a, e.b, o.a, tol)) ts.push_back(paramOnSeg(e.a, e.b, o.a));
+            if (pointOnSegInterior(e.a, e.b, o.b, tol)) ts.push_back(paramOnSeg(e.a, e.b, o.b));
+        }
+        std::sort(ts.begin(), ts.end());
+        for (int k = 0; k + 1 < static_cast<int>(ts.size()); ++k) {
+            double t0 = ts[k], t1 = ts[k + 1];
+            if (t1 - t0 < kEps) continue;
+            Vec2 A = e.a + (e.b - e.a) * t0, B = e.a + (e.b - e.a) * t1;
+            Vec2 mid = (A + B) * 0.5;
+            bool interior = false;
+            for (int p = 0; p < static_cast<int>(polys.size()); ++p) {
+                if (p == e.poly) continue;
+                if (pointInPolygon(polys[p], mid)) { interior = true; break; }
+            }
+            if (!interior) kept.push_back({A, B});
+        }
+    }
+
+    // Chain the directed boundary sub-edges into loops (vertices keyed on a tol grid; at a
+    // shared vertex pick the most-clockwise continuation to hug the boundary).
+    auto key = [&](const Vec2& v) {
+        return std::make_pair(static_cast<long long>(std::llround(v.x / tol)),
+                              static_cast<long long>(std::llround(v.y / tol)));
+    };
+    std::map<std::pair<long long, long long>, std::vector<int>> byStart;
+    for (int i = 0; i < static_cast<int>(kept.size()); ++i) byStart[key(kept[i].first)].push_back(i);
+
+    std::vector<char> used(kept.size(), 0);
+    std::vector<Poly2> loops;
+    for (int s = 0; s < static_cast<int>(kept.size()); ++s) {
+        if (used[s]) continue;
+        Poly2 loop;
+        int cur = s;
+        while (cur != -1 && !used[cur]) {
+            used[cur] = 1;
+            loop.push_back(kept[cur].first);
+            Vec2 endp = kept[cur].second;
+            Vec2 din = normalize(kept[cur].second - kept[cur].first);
+            int next = -1; double best = -1e9;
+            auto it = byStart.find(key(endp));
+            if (it != byStart.end()) {
+                for (int cand : it->second) {
+                    if (used[cand]) continue;
+                    Vec2 dout = normalize(kept[cand].second - kept[cand].first);
+                    double ang = std::atan2(cross(din, dout), dot(din, dout));  // signed turn
+                    double score = -ang;                  // most clockwise = largest score
+                    if (score > best) { best = score; next = cand; }
+                }
+            }
+            if (next == s) break;                          // closed
+            cur = next;
+        }
+        if (loop.size() >= 3) loops.push_back(loop);
+    }
+    return loops;
 }
 
 }  // namespace engine
