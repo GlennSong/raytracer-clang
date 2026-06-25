@@ -130,47 +130,55 @@ void appendMesh(RenderMesh& dst, const RenderMesh& src) {
     for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
 }
 
-// Proper interior crossing of segments p1p2 and p3p4 (shared endpoints excluded).
-bool segIntersect(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Vec2& p4) {
+// Proper interior crossing of segments p1p2 and p3p4 (shared endpoints excluded); on a hit
+// `t` is the parameter along p1p2 (so the crossing's arc position can be interpolated).
+bool segCrossAt(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Vec2& p4, double& t) {
     Vec2 d1 = p2 - p1, d2 = p4 - p3;
     double den = cross(d1, d2);
     if (std::fabs(den) < 1e-9) return false;
     Vec2 d13 = p3 - p1;
-    double t = cross(d13, d2) / den, u = cross(d13, d1) / den;
-    return t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6;
+    t = cross(d13, d2) / den;
+    double u = cross(d13, d1) / den;
+    // t in (0, 1]: include the far endpoint so a crossing that lands exactly on a sample
+    // vertex is caught once (by the segment ending there), not missed by both neighbours.
+    // u strictly interior: the bridge must cross the ground road's span, not its endpoint.
+    return t > 1e-9 && t <= 1.0 + 1e-9 && u > 1e-9 && u < 1.0 - 1e-9;
 }
 
 // Build a road graph that carries grade separations (ADR-0051/0054). Ground edges (layer 0)
 // are the normal flat road surface; each higher-layer chain is a BRIDGE — its centerline is
-// lifted onto a deck (clearanceProfile) that clears every ground road it crosses, ramping up
-// at `rampGrade` and back down. The deck is a bridgeDeck slab. The visible overpass.
+// lifted onto a FLAT deck (a level span over the roads it crosses, with ramps down at grade
+// to either side), carried on abutment piers, the way a real overpass sits. The visible
+// overpass: a flat structure on supports, not an inclined hump.
 RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
-    const double clearance = 5.0, deckThk = 0.6, rampGrade = 0.08;
+    const double clearance = 5.0, deckThk = 0.8, rampGrade = 0.06;
     const double groundSurf = net.lift;                 // flat road surface height (approx)
     double hw = net.width * 0.5;
+    auto groundFn = [&](double x, double z) { return net.heightAt ? net.heightAt(x, z) : 0.0; };
 
     int maxLayer = 0;
     for (const RoadEdge& e : g.edges) maxLayer = std::max(maxLayer, e.layer);
 
-    // Ground roads (layer 0): the existing analytic surface.
+    // Ground roads (layer 0): the existing analytic surface, with multilane markings baked as
+    // geometry (lane count from width) so the road under the bridge reads as multilane.
     RoadGraph ground;
     ground.nodes = g.nodes;
     for (const RoadEdge& e : g.edges) if (e.layer == 0) ground.edges.push_back(e);
     RoadMeshParams p;
     p.lift = net.lift; p.color = net.color; p.sidewalkWidth = net.sidewalk;
     p.curbHeight = net.curb; p.cornerRadius = net.cornerRadius;
-    p.laneMarkings = false; p.shaderMarkings = net.markings;
+    p.laneMarkings = net.markings; p.shaderMarkings = false;
     p.crosswalks = false; p.minSetback = net.width * 0.5 + 0.5; p.heightAt = net.heightAt;
     RenderMesh mesh = buildRoadMesh(ground, p);
 
-    // Each upper layer: trace its chains and lift each onto a clearing deck.
+    // Each upper layer: trace its chains and lift each onto a flat clearing deck + piers.
     for (int L = 1; L <= maxLayer; ++L) {
         RoadGraph up;
         up.nodes = g.nodes;
         for (const RoadEdge& e : g.edges) if (e.layer == L) up.edges.push_back(e);
         for (const std::vector<Vec2>& chain : traceChains(up)) {
             if (chain.size() < 2) continue;
-            // Densify so the ramp and the clearance window have enough samples.
+            // Densify so the ramps and the flat span have enough samples.
             const double step = 3.0;
             std::vector<Vec2> dense;
             for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
@@ -181,21 +189,38 @@ RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
             dense.push_back(chain.back());
             int n = static_cast<int>(dense.size());
             std::vector<double> s(n), minH(n);
-            for (int i = 0; i < n; ++i)
-                minH[i] = (net.heightAt ? net.heightAt(dense[i].x, dense[i].y) : 0.0) + groundSurf;
+            for (int i = 0; i < n; ++i) minH[i] = groundFn(dense[i].x, dense[i].y) + groundSurf;
             s[0] = 0.0;
             for (int i = 1; i < n; ++i) s[i] = s[i - 1] + (dense[i] - dense[i - 1]).length();
-            // Where the bridge crosses a ground road, require clearance over that deck.
+            // For each ground road crossed, hold the deck FLAT over a span window centred on the
+            // crossing (lower-road half-width + an overhang), so the deck is level across the road
+            // below and only ramps on the approaches. Record the window edges for pier placement.
+            std::vector<double> support;
             for (int i = 0; i + 1 < n; ++i)
                 for (const RoadEdge& e : ground.edges) {
-                    if (segIntersect(dense[i], dense[i + 1], g.nodes[e.a].pos, g.nodes[e.b].pos)) {
-                        double need = groundSurf + clearance + deckThk;
-                        minH[i] = std::max(minH[i], need);
-                        minH[i + 1] = std::max(minH[i + 1], need);
-                    }
+                    double t;
+                    if (!segCrossAt(dense[i], dense[i + 1], g.nodes[e.a].pos, g.nodes[e.b].pos, t))
+                        continue;
+                    double sCross = s[i] + t * (s[i + 1] - s[i]);
+                    double spanHalf = e.width * 0.5 + 5.0;
+                    double H = groundFn(dense[i].x, dense[i].y) + groundSurf + clearance + deckThk;
+                    for (int k = 0; k < n; ++k)
+                        if (std::fabs(s[k] - sCross) <= spanHalf) minH[k] = std::max(minH[k], H);
+                    support.push_back(sCross - spanHalf);
+                    support.push_back(sCross + spanHalf);
                 }
             std::vector<double> deckY = clearanceProfile(s, minH, rampGrade);
             appendMesh(mesh, bridgeDeck(dense, deckY, hw, net.color, deckThk));
+            // Abutment piers at the span edges (just outside the road below, where the flat deck
+            // meets the ramps) — the nearest sample to each recorded window edge.
+            std::vector<int> at;
+            for (double sp : support) {
+                int best = 0; double bd = 1e30;
+                for (int k = 0; k < n; ++k) { double d = std::fabs(s[k] - sp); if (d < bd) { bd = d; best = k; } }
+                at.push_back(best);
+            }
+            appendMesh(mesh, bridgePiers(dense, deckY, at, net.width, 3.0, deckThk,
+                                         Vec3(0.34, 0.34, 0.36), net.heightAt));
         }
     }
     return mesh;

@@ -215,3 +215,100 @@ TEST_CASE(same_layer_net_stays_flat) {
     for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
     CHECK(maxY < 2.0);     // everything sits near grade
 }
+
+// --- connected networks + a viaduct over several streets ---
+
+namespace {
+// Connected-component count over a graph's edges (isolated nodes ignored).
+int componentCount(const RoadGraph& g) {
+    int n = (int)g.nodes.size();
+    std::vector<std::vector<int>> adj(n);
+    for (const RoadEdge& e : g.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
+    std::vector<char> seen(n, 0);
+    int comps = 0;
+    for (int s = 0; s < n; ++s) {
+        if (seen[s] || adj[s].empty()) continue;
+        ++comps;
+        std::vector<int> st = { s }; seen[s] = 1;
+        while (!st.empty()) {
+            int v = st.back(); st.pop_back();
+            for (int u : adj[v]) if (!seen[u]) { seen[u] = 1; st.push_back(u); }
+        }
+    }
+    return comps;
+}
+
+// A 3x3 lattice of streets (connected) on layer 0, plus one elevated highway (layer 1).
+RoadGraph gridPlusHighway() {
+    RoadGraph g;
+    int id[3][3];
+    double xs[3] = { -80, 0, 80 }, zs[3] = { -80, 0, 80 };
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) id[i][j] = g.addNode(Vec2(xs[i], zs[j]));
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
+        if (j < 2) g.addEdge(id[i][j], id[i][j + 1], 13, RoadClass::Local);    // along z
+        if (i < 2) g.addEdge(id[i][j], id[i + 1][j], 13, RoadClass::Local);    // along x
+    }
+    int h0 = g.addNode(Vec2(-150, 40)), h1 = g.addNode(Vec2(150, 40));
+    g.edges.push_back({ h0, h1, 24, RoadClass::Arterial, 1 });                 // the viaduct
+    return g;
+}
+}  // namespace
+
+// The street grid is one connected component; the elevated highway is a separate one (it
+// crosses the grid as grade separations, neither fragmenting nor merging it).
+TEST_CASE(grid_stays_connected_under_a_viaduct) {
+    RoadGraph g = gridPlusHighway();
+    RoadGraph out = planarizeLayered(g);
+    CHECK(componentCount(out) == 2);             // grid + highway, kept apart by layer
+    CHECK(gradeSeparationCount(g) == 3);         // the highway flies over 3 cross-streets
+}
+
+// The same network as an editable RoadNet meshes with a lifted viaduct over the grid.
+TEST_CASE(grid_overpass_net_lifts_a_viaduct) {
+    RoadNet net;
+    double xs[3] = { -80, 0, 80 }, zs[3] = { -80, 0, 80 };
+    int id[3][3], k = 0;
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) { net.nodes.push_back(Vec2(xs[i], zs[j])); id[i][j] = k++; }
+    std::vector<int> layers;
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
+        if (j < 2) { net.edges.push_back({ id[i][j], id[i][j + 1] }); layers.push_back(0); }
+        if (i < 2) { net.edges.push_back({ id[i][j], id[i + 1][j] }); layers.push_back(0); }
+    }
+    int h0 = (int)net.nodes.size(); net.nodes.push_back(Vec2(-150, 40));
+    int h1 = (int)net.nodes.size(); net.nodes.push_back(Vec2(150, 40));
+    net.edges.push_back({ h0, h1 }); layers.push_back(1);
+    net.edgeWidths.assign(net.edges.size(), 0.0); net.edgeWidths.back() = 24.0;
+    net.edgeLayers = layers;
+    net.width = 13.0; net.markings = true;
+    RenderMesh m = buildRoadNetMesh(net);
+    CHECK(!m.vertices.empty());
+    double maxY = -1e30;
+    for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
+    CHECK(maxY > 4.0);                            // the viaduct cleared the grid
+}
+
+// Regression: a crossing that lands exactly on a bridge sample vertex (a 300 m straight, so
+// the midpoint sample sits on the crossing) is still detected and lifted.
+TEST_CASE(bridge_crossing_on_a_vertex_still_lifts) {
+    RoadNet net;
+    net.nodes = { Vec2(-150, 0), Vec2(150, 0), Vec2(0, -150), Vec2(0, 150) };
+    net.edges = { {0, 1}, {2, 3} };
+    net.edgeLayers = { 0, 1 };
+    net.width = 16.0; net.markings = false;
+    RenderMesh m = buildRoadNetMesh(net);
+    double maxY = -1e30;
+    for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
+    CHECK(maxY > 4.0);
+}
+
+// Bridge piers: a column under the elevated sample reaches from ground up toward the deck.
+TEST_CASE(bridge_piers_stand_under_the_deck) {
+    std::vector<Vec2> center = { Vec2(-10, 0), Vec2(0, 0), Vec2(10, 0) };
+    std::vector<double> deckY = { 6.0, 6.0, 6.0 };
+    RenderMesh piers = bridgePiers(center, deckY, { 1 }, 8.0, 3.0, 0.8, Vec3(0.3, 0.3, 0.3));
+    CHECK(!piers.vertices.empty());
+    double maxY = -1e30, minY = 1e30;
+    for (const Vertex& v : piers.vertices) { maxY = std::max(maxY, (double)v.position.y); minY = std::min(minY, (double)v.position.y); }
+    CHECK(std::fabs(minY) < 1e-6);                 // foot on the ground
+    CHECK(std::fabs(maxY - (6.0 - 0.8)) < 1e-6);   // head at the deck underside
+}

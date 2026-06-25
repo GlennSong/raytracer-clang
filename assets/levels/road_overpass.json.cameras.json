@@ -1,8 +1,10 @@
 {
   "cameras": [
+    { "name": "Elev", "position": [78, 15, 38], "forward": [-0.892, -0.130, -0.434],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 90 } },
+    { "name": "Close", "position": [48, 14, 58], "forward": [-0.640, -0.150, -0.753],
+      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 75 } },
     { "name": "Oblique", "position": [-95, 70, 150], "forward": [0.46, -0.42, -0.78],
-      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } },
-    { "name": "Side", "position": [-180, 26, 60], "forward": [0.94, -0.18, -0.29],
-      "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 180 } }
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } }
   ]
 }

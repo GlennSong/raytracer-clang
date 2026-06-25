@@ -1,0 +1,8 @@
+{
+  "cameras": [
+    { "name": "Aerial", "position": [-70, 150, 175], "forward": [0.32, -0.66, -0.68],
+      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 } },
+    { "name": "Street", "position": [120, 16, 110], "forward": [-0.66, -0.18, -0.73],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 } }
+  ]
+}

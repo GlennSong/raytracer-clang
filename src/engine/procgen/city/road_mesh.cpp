@@ -733,6 +733,44 @@ RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& d
     return mesh;
 }
 
+RenderMesh bridgePiers(const std::vector<Vec2>& center, const std::vector<double>& deckY,
+                       const std::vector<int>& atSamples, double width, double depth,
+                       double deckThk, const Vec3& color,
+                       const std::function<double(double, double)>& ground) {
+    RenderMesh mesh;
+    const int n = static_cast<int>(center.size());
+    if (n < 2 || static_cast<int>(deckY.size()) != n) return mesh;
+    auto groundY = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : 0.0; };
+    for (int idx : atSamples) {
+        if (idx < 0 || idx >= n) continue;
+        Vec2 t = (idx + 1 < n) ? center[idx + 1] - center[idx] : center[idx] - center[idx - 1];
+        double tl = t.length();
+        if (tl < 1e-9) continue;
+        t = t / tl;
+        Vec2 nrm = perp(t), c = center[idx];
+        double top = deckY[idx] - deckThk;        // rise to the deck underside
+        double bot = groundY(c);
+        if (top - bot < 0.5) continue;            // not elevated here: no pier
+        double hw = width * 0.5, hd = depth * 0.5;
+        auto P = [&](double along, double across, double yy) {
+            Vec2 p = c + t * along + nrm * across;
+            return Vec3(p.x, yy, p.y);
+        };
+        Vec3 b00 = P(-hd, -hw, bot), b10 = P(hd, -hw, bot), b11 = P(hd, hw, bot), b01 = P(-hd, hw, bot);
+        Vec3 t00 = P(-hd, -hw, top), t10 = P(hd, -hw, top), t11 = P(hd, hw, top), t01 = P(-hd, hw, top);
+        auto quad = [&](const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& nv) {
+            MeshBuilder::emitTri(mesh, a, b, cc, nv, color);
+            MeshBuilder::emitTri(mesh, a, cc, d, nv, color);
+        };
+        Vec3 nA(nrm.x, 0, nrm.y), nT(t.x, 0, t.y);
+        quad(b01, t01, t11, b11, nA);             // +across faces
+        quad(b00, b10, t10, t00, -nA);
+        quad(b10, b11, t11, t10, nT);             // +along faces
+        quad(b00, t00, t01, b01, -nT);
+    }
+    return mesh;
+}
+
 RenderMesh strokeRibbon(const std::vector<Vec2>& pts, const std::vector<double>& halfW,
                         double y, const Vec3& color, bool closed) {
     RenderMesh mesh;

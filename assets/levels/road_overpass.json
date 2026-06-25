@@ -2,19 +2,19 @@
   "version": 1,
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "entities": [
-    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [300, 0.4, 300],
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [340, 0.4, 340],
       "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 } },
     { "name": "overpass", "shape": "road", "position": [0, 0, 0],
       "road": {
         "nodes": [
-          { "x": -130, "z": 0 }, { "x": 130, "z": 0 },
-          { "x": 0, "z": -130 }, { "x": 0, "z": 130 }
+          { "x": -150, "z": 0 }, { "x": 150, "z": 0 },
+          { "x": 0, "z": -150 }, { "x": 0, "z": 150 }
         ],
-        "edges": [ [0, 1], [2, 3] ],
+        "edges": [ [0, 1, 24], [2, 3] ],
         "edge_layers": [ 0, 1 ],
         "curved": false,
-        "width": 14, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
-        "lift": 0.3, "markings": false, "crosswalks": false
+        "width": 16, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": false
       } }
   ],
   "lighting": {

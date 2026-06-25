@@ -167,6 +167,15 @@ RenderMesh bridgeDeck(const std::vector<Vec2>& centerline, const std::vector<dou
                       double halfWidth, const Vec3& deckColor, double thickness = 0.6,
                       const Vec3& sideColor = Vec3(0.30, 0.30, 0.32));
 
+// Support columns under a bridge deck (ADR-0054): for each centerline index in `atSamples`, a
+// box pier rising from the ground (`ground`, flat if unset) up to the deck underside
+// (deckY[i] - deckThk) at that point, `width` across the deck and `depth` along the road. The
+// structure that sells a flat overpass as carried on abutments straddling the road below.
+RenderMesh bridgePiers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                       const std::vector<int>& atSamples, double width, double depth,
+                       double deckThk, const Vec3& color,
+                       const std::function<double(double, double)>& ground = {});
+
 // Union a set of centerline spines into ONE non-overlapping filled mesh (ADR-0048).
 // Where ribbons cross or overlap, the result is a single merged surface, not stacked
 // ribbons. Method: the signed distance to a polyline IS the Minkowski sum (so round
