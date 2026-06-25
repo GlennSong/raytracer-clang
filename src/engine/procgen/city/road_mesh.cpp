@@ -135,6 +135,22 @@ std::vector<double> roadProfile(const std::vector<double>& ground,
     return y;
 }
 
+std::vector<double> clearanceProfile(const std::vector<double>& s,
+                                     const std::vector<double>& minHeight, double maxGrade) {
+    int n = static_cast<int>(minHeight.size());
+    std::vector<double> y = minHeight;
+    if (n == 0 || maxGrade <= 0.0 || static_cast<int>(s.size()) != n) return y;
+    // The minimal profile that dominates every constraint and obeys the slope limit is the
+    // upper envelope of downward cones (slope maxGrade) cast from each required point.
+    // Compute it in two linear sweeps: a forward pass propagates each height rightward,
+    // decaying at the grade, and a backward pass leftward; the max of the two is the envelope.
+    for (int i = 1; i < n; ++i)
+        y[i] = std::max(y[i], y[i - 1] - maxGrade * std::max(1e-6, s[i] - s[i - 1]));
+    for (int i = n - 2; i >= 0; --i)
+        y[i] = std::max(y[i], y[i + 1] - maxGrade * std::max(1e-6, s[i + 1] - s[i]));
+    return y;
+}
+
 std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerline,
                                                const std::vector<double>& profileY,
                                                double halfWidth, double shoulder,

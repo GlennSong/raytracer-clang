@@ -116,6 +116,18 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
 std::vector<double> roadProfile(const std::vector<double>& ground,
                                 const std::vector<double>& s, double maxGrade);
 
+// Vertical profile for a road that must CLEAR what it crosses (ADR-0054 grade separation).
+// `minHeight[i]` is the lowest the deck may sit at arc-length `s[i]` — the ground there, or,
+// at a crossing, the lower road's deck + clearance. Returns the MINIMAL profile that stays
+// >= minHeight everywhere and never exceeds |grade| <= maxGrade: the slope-limited upper
+// envelope of the constraints (each point casts a downward "cone" of slope maxGrade; the
+// profile is their max). So a road hugs the ground, ramps up at maxGrade to clear an
+// obstacle, and eases back down — a bridge approach falls out for free. Where the approach
+// length is too short to return to ground at grade, the ends ride high (the honest answer:
+// the ramp needs more room). Pure + headless.
+std::vector<double> clearanceProfile(const std::vector<double>& s,
+                                     const std::vector<double>& minHeight, double maxGrade);
+
 // Cut/fill footprints that grade the terrain to a road corridor (ADR-0044 terrain
 // conforming). One flatten ramp per centerline segment, set to the road's vertical profile
 // `profileY` (from roadProfile), with half-width = carriageway half-width + `shoulder` and a
