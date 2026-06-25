@@ -3461,6 +3461,12 @@ treated as a flat point-graph. Adding a layer dimension and a class-driven acces
 what lets one machine express surface intersections *and* grade separations. See
 `docs/road-constraint-plan.md` Phase 0.
 
+**Landed since.** `RoadEdge.layer` (0 = ground) and `planarizeLayered` — a crossing splits
+into a shared node only when the two edges share a layer; a cross-layer crossing stays
+intact as an overpass — plus `gradeSeparationCount`. Identical to `planarize` when every
+edge is on layer 0. Per-node elevation / carriageway mode aren't in yet; `clearanceProfile`
+(ADR-0054) supplies the deck height a layered edge rides at. Tests: `test_road_layers`.
+
 ---
 
 ## ADR-0052 — Generate-and-constrain: a single named local-constraints pass + rule registry
@@ -3488,6 +3494,14 @@ policy, block-size feedback, class-access grammar).
 constrains all nodes at once (the part that does not scale). The **min-arm-angle rule** alone
 makes the over-packed hub unrepresentable, fixing the spoke bug at the source rather than in
 the mesher. Build it first as the proof of the approach. See plan Phase 1.
+
+**Landed since.** `applyConstraints(RoadGraph, RoadRules)` with the first two rules —
+min-arm-angle and max-degree, both resolved by **roundabout promotion** (the super-node is
+replaced by a ring of attach nodes joined by sampled arcs, so every survivor is degree <=
+3) — and `nodeNeedsRoundabout` for the classifier. Wired into `buildRoadNetMesh`, and shared
+with terrain-conform via `constrainedNetGraph` so the ground grades to the ring, not the raw
+spokes. A 3-way T and 4-way crossing stay flat patches. Tests: `test_road_constraints`. Still
+to do: a formal rule registry, the no-acute-merge rule, and a live editor warn/preview.
 
 ---
 
@@ -3532,6 +3546,14 @@ path.
 **Why.** Grade separation needs a vertical solver; bridges and underpasses are its two signs;
 and folding water crossings into the same template is the first dividend of the
 "features are fields + templates" extensibility thesis (ADR-0055). See plan Phase 3.
+
+**Landed since.** `clearanceProfile(s, minHeight, maxGrade)` — the vertical solver: the
+minimal road profile that dominates a per-sample minimum height (ground, or lower-deck +
+clearance at a crossing) within the grade limit, as the slope-limited upper envelope of the
+constraints (two linear sweeps). A bridge approach falls out: hug ground, ramp up at grade
+to clear, ease down; ends ride high honestly when the approach is too short. Tests in
+`test_road_layers`. Still to do: the deck/pier mesh emitter and the per-crossing wiring that
+feeds the lower deck height + clearance in (and the water-as-lower-deck reuse).
 
 ---
 

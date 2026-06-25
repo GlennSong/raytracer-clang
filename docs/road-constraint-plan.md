@@ -251,12 +251,20 @@ it" (a rule or template), it extends the system without touching the core.
 
 ## Build order (each step shippable, lowest-risk first)
 
-1. **Min-arm-angle + roundabout-promotion rules** on the existing 2D graph — fixes the
-   original spoke bug, validates the constraint-pass shape. *(no Phase 0 yet)*
-2. **Extract the Phase 1 pass + rule registry**; refactor existing fixups behind it; editor
-   calls it on drag.
-3. **Phase 0 layered graph** + planarity-with-level-test → first working **overpass**.
-4. **Phase 3 clearance + bridge** → overpasses (and the first **water bridge**) look real.
+1. **[DONE]** **Min-arm-angle + roundabout-promotion rules** on the existing 2D graph — fixes
+   the original spoke bug, validates the constraint-pass shape. *Shipped:
+   `road_constraints.{h,cpp}` (`applyConstraints`, `nodeNeedsRoundabout`), wired into
+   `buildRoadNetMesh`; `test_road_constraints`.*
+2. **[PARTIAL]** **The Phase 1 pass + rule registry**; editor calls it on drag. *Shipped: the
+   pass runs on every editor regen via `buildRoadNetMesh`, and terrain-conform shares it
+   through `constrainedNetGraph` (mesh + ground agree). Still to do: a formal rule registry
+   and a live editor warn/preview using `nodeNeedsRoundabout`.*
+3. **[DONE]** **Phase 0 layered graph** + planarity-with-level-test. *Shipped: `RoadEdge.layer`,
+   `planarizeLayered` (same-layer → intersection, cross-layer → overpass),
+   `gradeSeparationCount`; `test_road_layers`.*
+4. **[PARTIAL]** **Phase 3 clearance + bridge**. *Shipped: `clearanceProfile` (the vertical
+   solver — slope-limited upper envelope). Still to do: the bridge-deck/pier mesh and the
+   per-crossing wiring that feeds the lower deck height + clearance into it.*
 5. **Diamond template** (freeway × arterial) — the simplest interchange; needs 1–4.
 6. **Dual-carriageway freeways + ramps**, then **trumpet**, then **cloverleaf/stack**.
 7. **Phase 4 Layers A/B** (suitability + settlement placement), then **Layer C** (highway
