@@ -30,6 +30,10 @@ struct RoadNet {
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.
     std::vector<double> edgeWidths;
+    // Optional per-edge grade-separation layer (parallel to `edges`; 0 or missing = ground,
+    // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
+    // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
+    std::vector<int> edgeLayers;
     double sidewalk = 2.5;                      // raised sidewalk width per verge (m)
     double curb = 0.16;                         // curb height (m)
     double cornerRadius = 3.0;                  // rounded kerb-return radius (m)

@@ -3566,6 +3566,15 @@ to clear, ease down; ends ride high honestly when the approach is too short. Tes
 `test_road_layers`. Still to do: the deck/pier mesh emitter and the per-crossing wiring that
 feeds the lower deck height + clearance in (and the water-as-lower-deck reuse).
 
+**Landed since (overpass end to end).** `bridgeDeck` (a deck slab riding a per-point height
+with a fascia edge), `RoadNet.edgeLayers` + JSON `edge_layers`, layer propagation through
+`netGraph`, and `buildLayeredRoadNetMesh`: ground roads (layer 0) build flat; each higher-layer
+chain is densified, its crossings with ground roads detected, its deck height solved by
+`clearanceProfile` (ground + clearance + slab at each crossing, ramped at 8%), then meshed with
+`bridgeDeck`. A net with any `layer > 0` routes here. Demo: `road_overpass.json`. Tests:
+`test_road_layers` (edge-layer round-trip, deck lifts above grade, same-layer stays flat).
+Piers/abutments and the water crossing remain open.
+
 ---
 
 ## ADR-0055 — Multi-scale world layout as a field stack; closed networks (no map-edge dead ends); features extend as fields/rules/templates

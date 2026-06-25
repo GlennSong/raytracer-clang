@@ -149,7 +149,7 @@ RoadGraph applyConstraints(const RoadGraph& in, const RoadRules& rules) {
         if (remap[i] == 0) { remap[i] = static_cast<int>(out.nodes.size()); out.nodes.push_back(g.nodes[i]); }
     out.edges.reserve(g.edges.size());
     for (const RoadEdge& e : g.edges)
-        out.edges.push_back(RoadEdge{remap[e.a], remap[e.b], e.width, e.klass});
+        out.edges.push_back(RoadEdge{remap[e.a], remap[e.b], e.width, e.klass, e.layer});
     return out;
 }
 

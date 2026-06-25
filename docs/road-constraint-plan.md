@@ -262,9 +262,11 @@ it" (a rule or template), it extends the system without touching the core.
 3. **[DONE]** **Phase 0 layered graph** + planarity-with-level-test. *Shipped: `RoadEdge.layer`,
    `planarizeLayered` (same-layer → intersection, cross-layer → overpass),
    `gradeSeparationCount`; `test_road_layers`.*
-4. **[PARTIAL]** **Phase 3 clearance + bridge**. *Shipped: `clearanceProfile` (the vertical
-   solver — slope-limited upper envelope). Still to do: the bridge-deck/pier mesh and the
-   per-crossing wiring that feeds the lower deck height + clearance into it.*
+4. **[DONE]** **Phase 3 clearance + bridge**. *Shipped: `clearanceProfile` (the vertical
+   solver), `bridgeDeck` (the deck slab), `RoadNet.edgeLayers` + JSON `edge_layers`, and the
+   layered build (`buildLayeredRoadNetMesh`): ground roads flat, each bridge chain lifted onto
+   a deck that clears the roads it crosses. Demo: `road_overpass.json`. Tests: `test_road_layers`.
+   Still to do: piers/abutments under the span, and the water-as-lower-deck reuse.*
 5. **Diamond template** (freeway × arterial) — the simplest interchange; needs 1–4.
 6. **Dual-carriageway freeways + ramps**, then **trumpet**, then **cloverleaf/stack**.
 7. **Phase 4 Layers A/B** (suitability + settlement placement), then **Layer C** (highway

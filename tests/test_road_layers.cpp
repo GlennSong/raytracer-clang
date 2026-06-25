@@ -171,3 +171,47 @@ TEST_CASE(bridge_deck_rejects_bad_input) {
     std::vector<double> y = { 1.0 };              // wrong length
     CHECK(bridgeDeck(center, y, 4.0, Vec3(0, 0, 0)).vertices.empty());
 }
+
+// --- end-to-end layered road (ADR-0051/0054): edge layers + a lifted bridge deck ---
+
+#include "../src/engine/procgen/city/road_net.h"
+#include <nlohmann/json.hpp>
+
+// edge_layers survives a JSON round-trip.
+TEST_CASE(road_net_edge_layers_roundtrip) {
+    RoadNet net;
+    net.nodes = { Vec2(-100, 0), Vec2(100, 0), Vec2(0, -100), Vec2(0, 100) };
+    net.edges = { {0, 1}, {2, 3} };
+    net.edgeLayers = { 0, 1 };
+    RoadNet back = roadNetFromJson(roadNetToJson(net));
+    CHECK(back.edgeLayers.size() == 2);
+    CHECK(back.edgeLayers[0] == 0);
+    CHECK(back.edgeLayers[1] == 1);
+}
+
+// A ground road crossed by a layer-1 road builds a deck that rises well above grade.
+TEST_CASE(layered_net_lifts_a_bridge_deck) {
+    RoadNet net;
+    net.nodes = { Vec2(-130, 0), Vec2(130, 0), Vec2(0, -130), Vec2(0, 130) };
+    net.edges = { {0, 1}, {2, 3} };
+    net.edgeLayers = { 0, 1 };
+    net.width = 14.0; net.markings = false; net.crosswalks = false;
+    RenderMesh m = buildRoadNetMesh(net);
+    CHECK(!m.vertices.empty());
+    double maxY = -1e30;
+    for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
+    CHECK(maxY > 4.0);     // the bridge cleared the ground road (≈ lift + clearance + slab)
+}
+
+// With both roads on layer 0 they intersect at grade — no lifted deck.
+TEST_CASE(same_layer_net_stays_flat) {
+    RoadNet net;
+    net.nodes = { Vec2(-130, 0), Vec2(130, 0), Vec2(0, -130), Vec2(0, 130) };
+    net.edges = { {0, 1}, {2, 3} };
+    net.edgeLayers = { 0, 0 };
+    net.width = 14.0;
+    RenderMesh m = buildRoadNetMesh(net);
+    double maxY = -1e30;
+    for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
+    CHECK(maxY < 2.0);     // everything sits near grade
+}
