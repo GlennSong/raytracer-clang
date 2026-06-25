@@ -3,7 +3,8 @@
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "entities": [
     { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [340, 0.4, 340],
-      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 } },
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
     { "name": "overpass", "shape": "road", "position": [0, 0, 0],
       "road": {
         "nodes": [
