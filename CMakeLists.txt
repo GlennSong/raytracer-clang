@@ -67,6 +67,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
+    src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
@@ -249,6 +250,7 @@ add_executable(run_tests
     tests/test_road_constraints.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
+    tests/test_road_crossings.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

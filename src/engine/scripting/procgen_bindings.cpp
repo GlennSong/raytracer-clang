@@ -12,6 +12,7 @@
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
+#include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
@@ -1634,6 +1635,70 @@ int l_city_solid(lua_State* L) {
     return 1;
 }
 
+// city.resolve{ spines={ {points={{x,z}..}, width=, layer=} .. }, weld= } -> { spines=..., nodes=
+//   {{x,z,grade_separated,arms}..} }. The crossing RESOLVER (unified-road-plan task 5): splice
+//   every centerline crossing into a shared node so loose generator output becomes ONE connected
+//   graph. result.spines feeds straight into city.solid/weld (same-grade crossings then weld);
+//   result.nodes reports each junction (grade_separated = a fly-over needing a ramp).
+int l_city_resolve(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<GraphSpine> in;
+    lua_getfield(L, 1, "spines");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    lua_Integer ns = luaL_len(L, -1);
+    for (lua_Integer si = 1; si <= ns; ++si) {
+        lua_geti(L, -1, si);
+        GraphSpine s;
+        s.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
+        s.layer = static_cast<int>(optField(L, -1, "layer", 0));
+        lua_getfield(L, -1, "points");
+        luaL_checktype(L, -1, LUA_TTABLE);
+        lua_Integer np = luaL_len(L, -1);
+        for (lua_Integer pi = 1; pi <= np; ++pi) {
+            lua_geti(L, -1, pi);
+            s.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);                                   // points
+        in.push_back(std::move(s));
+        lua_pop(L, 1);                                   // spine
+    }
+    lua_pop(L, 1);                                       // spines
+    double tol = optField(L, 1, "weld", 0.5);
+    ResolvedGraph g = resolveCrossings(in, tol);
+
+    lua_newtable(L);                                     // result
+    lua_newtable(L);                                     // result.spines
+    for (std::size_t i = 0; i < g.spines.size(); ++i) {
+        const GraphSpine& s = g.spines[i];
+        lua_newtable(L);                                 // one spine
+        lua_pushnumber(L, s.halfWidth * 2.0); lua_setfield(L, -2, "width");
+        lua_pushinteger(L, s.layer);          lua_setfield(L, -2, "layer");
+        lua_newtable(L);                                 // points
+        for (std::size_t k = 0; k < s.points.size(); ++k) {
+            lua_newtable(L);
+            lua_pushnumber(L, s.points[k].x); lua_setfield(L, -2, "x");
+            lua_pushnumber(L, s.points[k].y); lua_setfield(L, -2, "z");
+            lua_seti(L, -2, static_cast<lua_Integer>(k + 1));
+        }
+        lua_setfield(L, -2, "points");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "spines");
+    lua_newtable(L);                                     // result.nodes
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+        const CrossNode& n = g.nodes[i];
+        lua_newtable(L);
+        lua_pushnumber(L, n.pos.x);  lua_setfield(L, -2, "x");
+        lua_pushnumber(L, n.pos.y);  lua_setfield(L, -2, "z");
+        lua_pushboolean(L, n.gradeSeparated); lua_setfield(L, -2, "grade_separated");
+        lua_pushinteger(L, static_cast<lua_Integer>(n.spines.size())); lua_setfield(L, -2, "arms");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "nodes");
+    return 1;
+}
+
 // city.deck{ points={{x,z}...}, width=, heights={...} (per point) | height= (constant),
 //   thickness=, color=, side_color=, piers=(bool), pier_at={i...}, pier_spacing=,
 //   pier_depth=, pier_color= } -> a bridge-deck slab riding the per-point heights
@@ -2358,6 +2423,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"union", l_city_union},
         {"weld", l_city_weld},
         {"solid", l_city_solid},
+        {"resolve", l_city_resolve},
         {"deck", l_city_deck},
         {"roadbed", l_city_roadbed},
         {"lane_markings", l_city_lane_markings},
