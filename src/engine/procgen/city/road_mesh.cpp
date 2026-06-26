@@ -979,6 +979,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             std::vector<double> ground(n);
             for (int i = 0; i < n; ++i) ground[i] = p.heightAt(sp.points[i].x, sp.points[i].y);
             h = roadProfile(ground, sArc, p.maxGrade);
+            for (double& v : h) v += p.topY;            // topY lifts the deck above the terrain
         }
         profs.push_back({sp.points, sArc, h, sp.halfWidth});
     }
@@ -986,10 +987,11 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
     // from it), mv = arc-length along the road (for dashed dividers). Junctions agree where spines
     // meet. Off the carriageway (no spine) mu stays 0 so no paint lands there.
-    auto sample = [&](double x, double z, double& oh, double& omu, double& omv) {
-        oh = p.topY; omu = 0.0; omv = 0.0;
+    auto sample = [&](double x, double z, double& oh, double& omu, double& omv, int& oSpine) {
+        oh = p.topY; omu = 0.0; omv = 0.0; oSpine = -1;
         Vec2 q(x, z); double bestD2 = 1e30;
-        for (const Prof& pr : profs)
+        for (std::size_t pi = 0; pi < profs.size(); ++pi) {
+            const Prof& pr = profs[pi];
             for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
                 const Vec2& a = pr.cl[i]; Vec2 ab = pr.cl[i + 1] - a;
                 double L2 = ab.lengthSquared();
@@ -1002,11 +1004,13 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                     double latN = std::sqrt(d2) / std::max(1e-6, pr.hw);
                     omu = 2.0 + sgn * std::min(1.0, latN);
                     omv = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t;
+                    oSpine = static_cast<int>(pi);
                 }
             }
+        }
     };
     auto heightOf = [&](double x, double z) -> double {
-        double h, mu, mv; sample(x, z, h, mu, mv); return h;
+        double h, mu, mv; int si; sample(x, z, h, mu, mv, si); return h;
     };
 
     // 2. The welded outline (same join engine as weldRibbons), rounded at junctions.
@@ -1048,8 +1052,12 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         // (faces down) share the triangulation; emit winds each face to its normal.
         for (const std::array<int, 3>& t : triangulatePolygon(merged)) {
             const Vec2& a = merged[t[0]]; const Vec2& b = merged[t[1]]; const Vec2& c = merged[t[2]];
-            double ha, mua, mva, hb, mub, mvb, hc, muc, mvc;
-            sample(a.x, a.y, ha, mua, mva); sample(b.x, b.y, hb, mub, mvb); sample(c.x, c.y, hc, muc, mvc);
+            double ha, mua, mva, hb, mub, mvb, hc, muc, mvc; int sa, sb, sc;
+            sample(a.x, a.y, ha, mua, mva, sa); sample(b.x, b.y, hb, mub, mvb, sb);
+            sample(c.x, c.y, hc, muc, mvc, sc);
+            // A triangle straddling two roads (a junction/overlap fill) has no single road-local
+            // frame — interpolating its UV would smear paint diagonally. Leave those plain (mu=0).
+            if (sa != sb || sb != sc) { mua = mub = muc = 0.0; }
             MeshBuilder::emitTriUV(mesh, Vec3(a.x, ha, a.y), Vec3(b.x, hb, b.y), Vec3(c.x, hc, c.y),
                                    Vec3(0, 1, 0), p.topColor,
                                    (float)mua, (float)mva, (float)mub, (float)mvb, (float)muc, (float)mvc);
