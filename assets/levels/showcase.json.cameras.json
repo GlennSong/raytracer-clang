@@ -1,0 +1,5 @@
+{ "cameras": [
+  { "name": "Top", "position": [-20, 360, 80], "forward": [0.0, -0.97, -0.24],
+    "lens": { "focalLength": 24, "sensorHeight": 24, "fStop": 0, "focusDistance": 360 } },
+  { "name": "Hero", "position": [120, 95, 200], "forward": [-0.45, -0.42, -0.79],
+    "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 230 } } ] }

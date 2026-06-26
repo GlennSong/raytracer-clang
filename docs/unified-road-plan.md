@@ -1,6 +1,7 @@
 # The unified road system — one design
 
-Status: **active build** · Supersedes the road-meshing decisions scattered across ADR-0044
+Status: **shipped** (all six build steps done; see the per-step `[DONE]` notes below) ·
+Supersedes the road-meshing decisions scattered across ADR-0044
 (analytic trim + junction pad), ADR-0048 (SDF roadbed/union), ADR-0054 (deck/grade
 separation). Those documented *prototypes*; this is the single system they converge into.
 
@@ -91,16 +92,23 @@ network, not two meshes that happen to overlap.
 
 ## Build order (each step testable, each retires a prototype)
 
-1. **[DONE-ish] One spline graph + rules.** `RoadGraph`, `DesignRules` (`road_rules.h`),
-   constraint pass. Mostly consolidation; finish folding `RoadRules` into `DesignRules`.
-2. **The offset/join engine.** `road_offset.{h,cpp}`: fold-safe polyline offset, 2-D polygon
-   boolean union, corner fillet. Pure, unit-tested on cross / skew / hub / ring. *The core.*
-3. **Volumetric extrude + vertical profile.** Closed solids; smoothed terrain conform.
-4. **Road-local UV + marking texture shader.** Retire stripe geometry.
-5. **Crossing resolver.** Connect generators + editable road into one graph; real interchanges.
-6. **Collapse the scenes.** Delete the prototype demos; ship ONE scene exercising the whole
-   network (grid + radial + freeway + connected interchange + terrain + textured markings +
-   collision).
+1. **[DONE] One spline graph + rules.** `RoadGraph`, `DesignRules` (`road_rules.h`),
+   constraint pass.
+2. **[DONE] The offset/join engine.** `road_offset.{h,cpp}`: miter/fold-safe polyline offset,
+   2-D polygon boolean union, hole bridging, corner fillet (`roundPolygonCorners`). Pure,
+   unit-tested on cross / skew / overlapping squares / "#" grid with an open block. *The core.*
+3. **[DONE] Volumetric extrude + vertical profile.** `weldSolid`: closed slab (deck + side
+   walls + underside, block interiors are real shafts), seated on a smoothed grade-limited
+   profile (`roadProfile`) sampled from the nearest spine.
+4. **[DONE] Road-local UV + marking texture shader.** `weldSolid` bakes road-local UV
+   (`emitTriUV`); the `RoadMarkings` surface paints double-yellow + dashed multilane dividers +
+   white edges from it. Junction-spanning triangles stay plain. No stripe geometry.
+5. **[DONE] Crossing resolver.** `road_crossings.{h,cpp}` / `city.resolve`: splice crossings
+   into shared nodes (at-grade weld vs grade-separated flag); generators + ramps feed one graph.
+6. **[DONE] Collapse the scenes.** Deleted the prototype demos (net_grid/radial/city/
+   interchange, roadbed_network, hill_roads, net_weld, road_earthwork); shipped ONE
+   `showcase` scene — welded multilane grid + roundabout + a highway connected to the city
+   through on/off ramps, on smoothed terrain, with textured markings and real volume.
 
 ## Non-negotiables (the acceptance bar)
 - One mesher. No "analytic vs SDF" choice survives.
