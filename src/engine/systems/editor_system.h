@@ -26,8 +26,8 @@ std::vector<Vec3> roadNodeHandles(World& world, Entity e);
 bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
 // Spline tangent handles (ADR-0049): a world point per node offset along its current
 // tangent (drawn distinct from the node handles). Dragging one sets that knot's
-// tangent (handle - node), shaping the curve, and regenerates. roadTangentHandles
-// returns an empty list for a straight (non-curved) road.
+// tangent (handle - node), shaping the curve, and regenerates. Every road is a spline,
+// so every node carries a tangent handle.
 std::vector<Vec3> roadTangentHandles(World& world, Entity e);
 bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
 // Road topology editing for the viewport (ADR-0049). Each regenerates the mesh +

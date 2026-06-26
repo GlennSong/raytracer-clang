@@ -252,6 +252,15 @@ add_executable(run_tests
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
     tests/test_road_crossings.cpp
+    tests/test_road_net.cpp
+    tests/test_handle_source.cpp
+    tests/test_path_edit_tool.cpp
+    tests/test_editable_curve.cpp
+    tests/test_curve.cpp
+    tests/test_curve_edit.cpp
+    tests/test_curb_return.cpp
+    tests/test_animation_path.cpp
+    tests/test_terrain_lod.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

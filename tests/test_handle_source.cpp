@@ -47,25 +47,21 @@ TEST_CASE(curve_handle_source_drags_update_the_curve) {
     CHECK(dist(c.outHandleWorld(1), Vec3(13, 9, 0)) < 1e-6);
 }
 
-TEST_CASE(road_handle_source_knots_then_tangents_when_curved) {
+TEST_CASE(road_handle_source_exposes_knots_and_tangents) {
     RoadNet net;
     net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
     net.edges = { {0, 1}, {1, 2} };
     RoadHandleSource src(net);
     CHECK(countKind(src.handles(), HandleKind::Knot) == 3);
-    CHECK(countKind(src.handles(), HandleKind::TangentOut) == 0);   // straight: no tangents
+    CHECK(countKind(src.handles(), HandleKind::TangentOut) == 3);   // every road is a spline: a tangent/node
     CHECK(static_cast<int>(src.previewSegments().size()) == 2);     // one per edge
     CHECK(src.defaultPlane() == DragPlane::Ground);
-
-    net.curved = true;
-    CHECK(countKind(src.handles(), HandleKind::TangentOut) == 3);   // one per node now
 }
 
 TEST_CASE(road_handle_source_drags_update_the_road) {
     RoadNet net;
     net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
     net.edges = { {0, 1}, {1, 2} };
-    net.curved = true;
     RoadHandleSource src(net);
     // Move node 1 (a Knot) — only X/Z matter; the handle Y is the road surface.
     src.moveHandle(firstOf(src.handles(), HandleKind::Knot, 1), Vec3(2, 99, 8));

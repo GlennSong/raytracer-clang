@@ -1236,7 +1236,7 @@ bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Render
 std::vector<Vec3> roadTangentHandles(World& world, Entity e) {
     std::vector<Vec3> handles;
     RoadNet* net = world.get<RoadNet>(e);
-    if (!net || !net->curved) return handles;
+    if (!net) return handles;
     handles.reserve(net->nodes.size());
     for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
         Vec2 h = net->nodes[i] + roadNetTangentAt(*net, i);   // node + tangent vector

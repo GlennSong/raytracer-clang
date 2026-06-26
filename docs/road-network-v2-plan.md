@@ -113,4 +113,10 @@ graph, `shape:"road"` + `generate` recipe → `buildDistrict` → editable `Road
   inspector; any change rewrites the `generate` recipe and calls `regenerateRoadFromRecipe` to
   rebuild live. Compiles under `-DRT_ENABLE_IMGUI=ON`; panel rendering verified headlessly.
 - [ ] T2.4 (optional) — "watch it build" phase stepping (live Reseed/sliders already let you watch)
-- [ ] Phase 3 — seamless junctions
+- [x] **Phase 3 — seamless junctions (root cause was the `curved` flag).** The gaps/overlap weren't
+  cracks/SSAO/height — `curved:true` was DENSIFYING dead-straight grid edges into polylines, and that
+  needless geometry clogged the junctions. Fix: **retired the `curved` flag** — every road is now a
+  Catmull-Rom spline, sampled ADAPTIVELY (a straight run collapses back to one segment, `netGraph`).
+  Junctions render clean; genuine curves preserved (verified). Supporting: vertex-weld + arc-length
+  end-trim (`road_mesh`); pick prefers knots (`path_edit_tool`). Also synced 9 road/curve test files
+  into the CMake build — `Makefile` and `CMakeLists.txt` had drifted so they only ran under `make test`.

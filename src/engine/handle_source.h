@@ -47,8 +47,8 @@ private:
     EditableCurve* curve;
 };
 
-// Drive a RoadNet: a node handle plus (when curved) one through-tangent handle per
-// node, on the ground plane, seated on the road surface via heightAt.
+// Drive a RoadNet: a node handle plus one through-tangent handle per node (every road is a
+// spline), on the ground plane, seated on the road surface via heightAt.
 class RoadHandleSource : public HandleSource {
 public:
     explicit RoadHandleSource(RoadNet& n) : net(&n) {}

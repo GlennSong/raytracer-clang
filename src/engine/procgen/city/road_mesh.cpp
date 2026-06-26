@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -227,6 +229,63 @@ std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly
     }
     return tris;
 }
+
+namespace {
+// Weld coincident vertices into one shared, indexed mesh: collapse vertices that agree in position
+// (within posTol), normal, colour and UV into a single index, dropping triangles that go degenerate.
+// The independently-emitted ribbons and junction pads meet at the same coordinates but as SEPARATE
+// vertices (float drift -> hairline cracks / z-fight at the seam); welding fuses them into one
+// continuous surface, and turns the non-indexed soup into a compact indexed mesh. Crease edges
+// (different normals) and material seams (different colour) keep their own vertices, so nothing is
+// rounded over or smeared. (road-network-v2-plan T3.1)
+RenderMesh weldMesh(const RenderMesh& in, double posTol = 1e-3) {
+    RenderMesh out;
+    out.vertices.reserve(in.vertices.size());
+    out.indices.reserve(in.indices.size());
+    const double inv = 1.0 / posTol;
+    auto cell = [inv](double x) { return static_cast<long long>(std::floor(x * inv)); };
+    auto hash3 = [](long long x, long long y, long long z) {
+        std::uint64_t h = 1469598103934665603ull;
+        for (long long c : {x, y, z}) h = (h ^ static_cast<std::uint64_t>(c)) * 1099511628211ull;
+        return h;
+    };
+    std::unordered_map<std::uint64_t, std::vector<uint32_t>> grid;   // spatial hash -> welded indices
+    auto match = [posTol](const Vertex& a, const Vertex& b) {
+        auto c = [posTol](double x, double y) { return std::fabs(x - y) <= posTol; };
+        return c(a.position.x, b.position.x) && c(a.position.y, b.position.y) && c(a.position.z, b.position.z)
+            && c(a.normal.x, b.normal.x) && c(a.normal.y, b.normal.y) && c(a.normal.z, b.normal.z)
+            && c(a.color.x, b.color.x) && c(a.color.y, b.color.y) && c(a.color.z, b.color.z)
+            && c(a.u, b.u) && c(a.v, b.v);
+    };
+    std::vector<uint32_t> remap(in.vertices.size());
+    for (uint32_t i = 0; i < in.vertices.size(); ++i) {
+        const Vertex& v = in.vertices[i];
+        long long cx = cell(v.position.x), cy = cell(v.position.y), cz = cell(v.position.z);
+        uint32_t found = UINT32_MAX;
+        for (long long dx = -1; dx <= 1 && found == UINT32_MAX; ++dx)         // search the 27 neighbour
+            for (long long dy = -1; dy <= 1 && found == UINT32_MAX; ++dy)     // cells so a vertex pair
+                for (long long dz = -1; dz <= 1 && found == UINT32_MAX; ++dz) {  // straddling a cell edge
+                    auto it = grid.find(hash3(cx + dx, cy + dy, cz + dz));   // still welds
+                    if (it == grid.end()) continue;
+                    for (uint32_t cand : it->second)
+                        if (match(out.vertices[cand], v)) { found = cand; break; }
+                }
+        if (found == UINT32_MAX) {
+            found = static_cast<uint32_t>(out.vertices.size());
+            out.vertices.push_back(v);
+            grid[hash3(cx, cy, cz)].push_back(found);
+        }
+        remap[i] = found;
+    }
+    for (std::size_t t = 0; t + 2 < in.indices.size(); t += 3) {
+        uint32_t a = remap[in.indices[t]], b = remap[in.indices[t + 1]], c = remap[in.indices[t + 2]];
+        if (a != b && b != c && a != c) {            // drop triangles welding collapsed to a sliver
+            out.indices.push_back(a); out.indices.push_back(b); out.indices.push_back(c);
+        }
+    }
+    return out;
+}
+}  // namespace
 
 RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
     RenderMesh mesh;
@@ -655,14 +714,32 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
             double wb = g.edges[ce[std::min(np - 2, i)]].width;
             hw[i] = 0.5 * std::max(wa, wb);
         }
-        // Pull the ends back to the junction setbacks (so the chain meets the pad).
+        // Pull the ends back to the junction setbacks (so the chain meets the pad), walking the
+        // polyline by ARC LENGTH. curved:true densifies each edge into many short samples, so a
+        // setback usually spans SEVERAL of them; the old clamp to the first segment under-trimmed and
+        // the ribbon then overran the junction pad — z-fight + a terrain gap at curved junctions
+        // (road-network-v2-plan T3.2). Drop whole segments inside the setback, then land the new end
+        // partway along the next; keep at least two nodes so the chain stays a strokeable strip.
         {
             int e0 = ce.front(); double t0 = trim[e0][(g.edges[e0].a == cn[0]) ? 0 : 1];
             int eL = ce.back();  double tL = trim[eL][(g.edges[eL].b == cn[np - 1]) ? 1 : 0];
-            Vec2 d0 = P[1] - P[0]; double l0 = d0.length();
-            if (l0 > 1e-6 && t0 > 0) P[0] = P[0] + (d0 / l0) * std::min(t0, l0 - 0.1);
-            Vec2 dL = P[np - 1] - P[np - 2]; double lL = dL.length();
-            if (lL > 1e-6 && tL > 0) P[np - 1] = P[np - 1] - (dL / lL) * std::min(tL, lL - 0.1);
+            auto advance = [](std::vector<Vec2>& pts, std::vector<double>& w, double t, bool front) {
+                if (t <= 0.0 || pts.size() < 2) return;
+                if (!front) { std::reverse(pts.begin(), pts.end()); std::reverse(w.begin(), w.end()); }
+                double acc = 0.0;
+                while (pts.size() > 2) {
+                    double seg = (pts[1] - pts[0]).length();
+                    if (acc + seg >= t) break;
+                    acc += seg; pts.erase(pts.begin()); w.erase(w.begin());
+                }
+                double seg = (pts[1] - pts[0]).length();
+                double rem = std::min(std::max(0.0, t - acc), seg - 0.1);
+                if (seg > 1e-9) pts[0] = pts[0] + (pts[1] - pts[0]) * (rem / seg);
+                if (!front) { std::reverse(pts.begin(), pts.end()); std::reverse(w.begin(), w.end()); }
+            };
+            advance(P, hw, t0, true);
+            advance(P, hw, tL, false);
+            np = static_cast<int>(P.size());
         }
         // Per-vertex mitre direction m (unit, +left) and length factor f (>= 1).
         std::vector<Vec2> sn(np - 1);
@@ -720,7 +797,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         }
     }
 
-    return mesh;
+    return weldMesh(mesh);    // fuse the coincident pad/ribbon/sidewalk seams; index the mesh (T3.1)
 }
 
 RenderMesh bridgeDeck(const std::vector<Vec2>& pts, const std::vector<double>& deckY,

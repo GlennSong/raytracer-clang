@@ -43,10 +43,8 @@ std::vector<EditHandle> RoadHandleSource::handles() const {
     std::vector<EditHandle> out;
     for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
         out.push_back({roadHandlePos(*net, net->nodes[i]), HandleKind::Knot, i});
-        if (net->curved) {                          // one through-tangent handle per node
-            Vec2 t = roadNetTangentAt(*net, i);
-            out.push_back({roadHandlePos(*net, net->nodes[i] + t), HandleKind::TangentOut, i});
-        }
+        Vec2 t = roadNetTangentAt(*net, i);         // every road is a spline: one tangent handle per node
+        out.push_back({roadHandlePos(*net, net->nodes[i] + t), HandleKind::TangentOut, i});
     }
     return out;
 }

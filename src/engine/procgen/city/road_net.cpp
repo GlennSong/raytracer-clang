@@ -25,10 +25,11 @@ std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
     return out;
 }
 
-// The road's graph for the mesher: straight edges, or — when `curved` — each edge
-// sampled as a Hermite cubic through its endpoints' tangents (Catmull-Rom auto on a
-// degree-2 through-road, a straight chord into a junction/dead-end). The original
-// nodes keep their indices (so junction degree is preserved); curve samples append.
+// The road's graph for the mesher: EVERY edge is a Catmull-Rom spline, sampled as a Hermite cubic
+// through its endpoints' tangents (Catmull-Rom auto on a degree-2 through-road, a straight chord into
+// a junction/dead-end). The sampler is ADAPTIVE — an edge that doesn't actually bend collapses back to
+// a single segment, so the grid's straight runs don't densify and clog the junction meshes. The
+// original nodes keep their indices (so junction degree is preserved); curve samples append.
 RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     const int n = static_cast<int>(net.nodes.size());
     auto P = [&](int i) { return net.nodes[i]; };
@@ -50,14 +51,6 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     RoadGraph g;
     g.nodes.resize(n);
     for (int i = 0; i < n; ++i) g.nodes[i].pos = net.nodes[i];
-
-    if (!net.curved) {
-        for (int ei : ev) {
-            const std::array<int, 2>& e = net.edges[ei];
-            g.edges.push_back(RoadEdge{e[0], e[1], ewidth(ei), RoadClass::Local, elayer(ei)});
-        }
-        return g;
-    }
 
     // Per-node neighbours (for degree + the Catmull-Rom "other" neighbour).
     std::vector<std::vector<int>> nbr(n);
@@ -104,6 +97,23 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         // ribbon can't fold on an over-tight bend. Endpoints — the shared junction nodes —
         // are preserved, so the graph stays stitched.
         std::vector<Vec2> poly = fairHermite(P(a), m0, P(b), m1, segs, minTurnRadius);
+        // Adaptive tessellation: an edge that never leaves its chord (a straight run — the grid's
+        // junction-to-junction edges, whose tangents ARE the chord) collapses back to ONE segment.
+        // Densifying straight edges into len/5 collinear samples was the real cause of the overlap and
+        // terrain gaps at junctions (road-network-v2-plan T3.2); a genuine bend keeps its samples.
+        {
+            Vec2 ab = P(b) - P(a);
+            double abl = ab.length();
+            double maxDev = 0.0;
+            if (abl > 1e-9) {
+                Vec2 dir = ab * (1.0 / abl);
+                for (std::size_t s = 1; s + 1 < poly.size(); ++s) {
+                    Vec2 r = poly[s] - P(a);
+                    maxDev = std::max(maxDev, (r - dir * dot(r, dir)).length());
+                }
+            }
+            if (maxDev < 0.06) poly = {P(a), P(b)};
+        }
 
         int lay = elayer(ei);
         int prev = a;
@@ -350,7 +360,6 @@ bool roadNetSetTangent(RoadNet& net, int i, const Vec2& tangent) {
     if (static_cast<int>(net.tangents.size()) < static_cast<int>(net.nodes.size()))
         net.tangents.resize(net.nodes.size(), Vec2(0, 0));
     net.tangents[i] = tangent;
-    net.curved = true;          // a shaped tangent implies the spline is shown
     return true;
 }
 
@@ -470,7 +479,6 @@ RoadNet roadNetFromJson(const json& j) {
         for (std::size_t i = 0; i < el.size() && i < net.edgeLayers.size(); ++i)
             net.edgeLayers[i] = el[i].get<int>();
     }
-    net.curved = j.value("curved", net.curved);
     if (j.contains("tangents") && j["tangents"].is_array())
         for (const json& t : j["tangents"]) {
             if (t.is_array() && t.size() >= 2)
@@ -512,7 +520,6 @@ json roadNetToJson(const RoadNet& net) {
             layers.push_back(i < static_cast<int>(net.edgeLayers.size()) ? net.edgeLayers[i] : 0);
         j["edge_layers"] = std::move(layers);
     }
-    j["curved"] = net.curved;
     if (!net.tangents.empty()) {
         json tans = json::array();
         for (const Vec2& t : net.tangents) tans.push_back(json::array({t.x, t.y}));

@@ -15,10 +15,22 @@ void PathEditTool::bind(HandleSource* source) {
 int PathEditTool::pickHandle(const EditRay& ray, double pickRadius) const {
     if (!source_) return -1;
     std::vector<EditHandle> hs = source_->handles();
-    std::vector<Vec3> pts;
-    pts.reserve(hs.size());
-    for (const EditHandle& h : hs) pts.push_back(h.position);
-    return nearestHandle(pts, ray, pickRadius);
+    // Prefer KNOTS: a click on a node grabs the node even when a neighbour's tangent handle overlaps
+    // it (an auto-tangent on a through-node can land right on the next knot). Try knots first, then
+    // fall back to the tangents.
+    auto pick = [&](bool knotsOnly) -> int {
+        std::vector<Vec3> pts;
+        std::vector<int> map;
+        for (int i = 0; i < static_cast<int>(hs.size()); ++i) {
+            if (knotsOnly && hs[i].kind != HandleKind::Knot) continue;
+            pts.push_back(hs[i].position);
+            map.push_back(i);
+        }
+        int local = nearestHandle(pts, ray, pickRadius);
+        return local < 0 ? -1 : map[local];
+    };
+    int knot = pick(true);
+    return knot >= 0 ? knot : pick(false);
 }
 
 int PathEditTool::updateHover(const EditRay& ray, double pickRadius) {

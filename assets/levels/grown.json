@@ -9,7 +9,7 @@
       "road": {
         "generate": { "kind": "district", "radius": 140, "block_size": 42, "arterials": 3, "seed": 5,
                       "artery_width": 13, "street_width": 7 },
-        "curved": true, "width": 7, "sidewalk": 1.8, "markings": true, "crosswalks": true } }
+        "width": 7, "sidewalk": 1.8, "markings": true, "crosswalks": true } }
   ],
   "lighting": {
     "sun": { "direction": [0.4, 0.72, -0.32], "color": [1, 0.98, 0.94], "intensity": 6.0, "castsShadow": true },
