@@ -3632,6 +3632,55 @@ landmarks (placement seeds), and trade routes (attractor fields). See plan Phase
 
 ---
 
+## ADR-0056 — One unified road system: spline graph → in-house polygon join engine → solid → texture markings
+
+**Context.** Roads had grown into a disjointed pile of systems: an analytic
+junction pad (sharp mitered corners, fragile), an SDF roadbed (welds by
+rounding, no UV), and a bridge deck — each a separate mesher, none agreeing.
+Highways *overlapped* the city rather than connecting; "clovers" were one-sided
+floating planes; markings were extra geometry. The mandate: one system that is
+light, conforms to terrain but irons out bumps, welds every join (curbs, curves,
+grid intersections, roundabouts) by **one** means, has real volume, treats
+markings as **textures**, supports multilane, and is sourced from a spline graph.
+
+**Decision.** Build one pipeline (`docs/unified-road-plan.md`):
+
+1. **Join engine** (`road_offset.{h,cpp}`) — in-house 2-D polygon offsetting:
+   `ribbonOutline` strokes a centerline to a closed ribbon; `polygonUnion`
+   booleans the ribbons into welded boundary loops (exterior CCW + holes CW);
+   `bridgeHoles` (Eberly) punches block interiors; `ringRibbon` offsets a
+   **closed** centerline to an annulus (roundabout = band with an open island).
+   One corner-fillet pass (`roundPolygonCorners`) rounds every junction notch —
+   replaces both the analytic miter and the SDF round.
+2. **Volume** (`weldSolid`) — extrude the welded outline to a closed slab: deck,
+   mirrored underside, vertical side walls (outer skirt + hole shafts). The deck
+   rides a smoothed, grade-limited vertical profile (`roadProfile`): terrain is
+   sampled per spine and ironed flat, so the road follows hills, not bumps.
+3. **Markings as texture** — the `RoadMarkings` surface paints from road-local UV
+   (u = lateral in [1,3], v = arc-length) at shade time: double-yellow centre,
+   dashed white lane dividers (multilane), solid white edges. To stay crisp, the
+   paint rides its own road-aligned **strip** per spine (the ear-clipped union
+   deck is too skew to interpolate clean UV), floating just over a plain welded
+   deck; strips over another road's corridor are skipped so junctions stay plain.
+4. **Crossing resolver** (`road_crossings.{h,cpp}`) — splices every centerline
+   crossing/T into a shared node so loose generator output + a highway become one
+   connected graph; same-grade crossings weld, cross-grade are flagged for ramps.
+
+Lua surface: `city.solid`, `city.resolve`, `material.new{ surface="roadmarkings" }`.
+`assets/levels/showcase.json` is the single demo (welded multilane grid, open
+blocks, roundabout, a highway connected to the grid by ramps, on smoothed
+terrain). The analytic-pad / SDF-roadbed / bridge-deck prototype scenes
+(net_grid, net_radial, net_city, net_interchange, roadbed_network, hill_roads,
+net_weld, road_earthwork) were removed.
+
+**Owed.** Full grade-separated ramp *synthesis* from the resolver's
+grade-separated nodes (today ramps are authored spines); intersection markings
+(crosswalks/stop bars) — junctions render plain; the welded deck still uses the
+ear-clip triangulator (now with a force-progress fallback so many bridged holes
+can't leave a gap) rather than a constrained one.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

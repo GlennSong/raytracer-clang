@@ -38,9 +38,9 @@ end
 -- to meet it, and two curved on/off RAMPS splicing the highway into the arterial — so the highway
 -- CONNECTS to the city instead of overlapping it (resolve shares the nodes, the weld fuses them).
 road(sample(function(t) return 130 + 22 * math.sin(t / 80), t end, 60, -130, 130), 30)
-road(line(-30, 0, 105, 0), 20)
-road(sample(function(t) return 105 + 25 * t, -48 * (1 - t) * t * 4 end, 24, 0, 1), 12)   -- on-ramp
-road(sample(function(t) return 105 + 25 * t,  48 * (1 - t) * t * 4 end, 24, 0, 1), 12)   -- off-ramp
+road(line(-30, 0, 130, 0), 20)                                                   -- arterial T's into highway
+road(sample(function(t) return 100 + 30 * t,  44 * t * t end, 24, 0, 1), 12)     -- on-ramp merges north
+road(sample(function(t) return 100 + 30 * t, -44 * t * t end, 24, 0, 1), 12)     -- off-ramp merges south
 
 -- Gentle hills: the road follows them but irons out bumps (city.solid max_grade), so the deck reads
 -- clean rather than heaving. Resolve every crossing into a shared-node graph, then weld one solid.

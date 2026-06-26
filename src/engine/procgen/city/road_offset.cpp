@@ -138,6 +138,37 @@ Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterL
     return poly;
 }
 
+void ringRibbon(const std::vector<Vec2>& cl, double halfWidth, Poly2& outer, Poly2& inner,
+                double miterLimit) {
+    outer.clear(); inner.clear();
+    std::vector<Vec2> pts = cl;
+    if (pts.size() >= 2 && (pts.front() - pts.back()).length() < 1e-6) pts.pop_back();
+    const int n = static_cast<int>(pts.size());
+    if (n < 3 || halfWidth <= 0.0) return;
+    auto segN = [&](int i) {                              // left normal of segment i -> i+1 (wraps)
+        Vec2 t = pts[(i + 1) % n] - pts[i]; double L = t.length();
+        return (L > 1e-12) ? perp(t / L) : Vec2(0, 0);
+    };
+    Poly2 plus, minus;                                   // the +hw and -hw offset rings
+    for (int i = 0; i < n; ++i) {
+        Vec2 nPrev = segN((i + n - 1) % n), nNext = segN(i);
+        Vec2 bis = nPrev + nNext; double bl = bis.length();
+        Vec2 off = nPrev; double scale = 1.0;            // ~180° fold: fall back to prev normal
+        if (bl >= 1e-9) {
+            bis = bis / bl; double cosH = dot(bis, nPrev);
+            scale = (std::fabs(cosH) > 1e-6) ? 1.0 / cosH : 1.0; off = bis;
+        }
+        if (scale > miterLimit) scale = miterLimit;
+        plus.push_back(pts[i] + off * (halfWidth * scale));
+        minus.push_back(pts[i] - off * (halfWidth * scale));
+    }
+    // The larger-area ring is the outer rail (force CCW); the smaller is the island (force CW hole).
+    if (std::fabs(signedArea(plus)) >= std::fabs(signedArea(minus))) { outer = plus; inner = minus; }
+    else { outer = minus; inner = plus; }
+    if (signedArea(outer) < 0) std::reverse(outer.begin(), outer.end());
+    if (signedArea(inner) > 0) std::reverse(inner.begin(), inner.end());
+}
+
 std::vector<Poly2> polygonUnion(const std::vector<Poly2>& polys) {
     struct Edge { Vec2 a, b; int poly; };
     std::vector<Edge> E;

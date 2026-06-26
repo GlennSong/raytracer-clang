@@ -209,7 +209,21 @@ std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly
             clipped = true;
             break;
         }
-        if (!clipped) break;                     // no ear (degenerate/self-intersecting)
+        if (!clipped) {
+            // No ear found (a near-degenerate ring from many bridged holes can stall the strict
+            // test). Rather than break and leave the rest of the deck as a hole, force-clip the
+            // sharpest convex corner to make progress — a tiny overlap beats a missing patch.
+            int best = -1; double bestCross = 1e-9; int mm = static_cast<int>(v.size());
+            for (int i = 0; i < mm; ++i) {
+                const Vec2 &a = poly[v[(i + mm - 1) % mm]], &b = poly[v[i]], &c = poly[v[(i + 1) % mm]];
+                double cr = cross(b - a, c - a);
+                if (cr > bestCross) { bestCross = cr; best = i; }
+            }
+            if (best < 0) break;                 // truly degenerate: nothing convex left
+            int i = best, mm2 = static_cast<int>(v.size());
+            tris.push_back({v[(i + mm2 - 1) % mm2], v[i], v[(i + 1) % mm2]});
+            v.erase(v.begin() + i);
+        }
     }
     return tris;
 }
@@ -1013,18 +1027,29 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         double h, mu, mv; int si; sample(x, z, h, mu, mv, si); return h;
     };
 
-    // 2. The welded outline (same join engine as weldRibbons), rounded at junctions.
-    std::vector<Poly2> ribbons;
+    // 2. The welded outline (same join engine as weldRibbons), rounded at junctions. A CLOSED
+    //    spine (a roundabout ring) becomes an annulus: its outer rail welds with the spokes, its
+    //    inner rail is punched as a central island hole.
+    std::vector<Poly2> ribbons, forcedHoles;
     for (const UnionSpine& s : spines) {
         if (s.points.size() < 2) continue;
-        Poly2 r = ribbonOutline(s.points, s.halfWidth);
-        if (r.size() >= 3) ribbons.push_back(std::move(r));
+        bool closed = s.closed ||
+            (s.points.size() >= 4 && (s.points.front() - s.points.back()).length() < 1e-6);
+        if (closed) {
+            Poly2 outer, inner; ringRibbon(s.points, s.halfWidth, outer, inner);
+            if (outer.size() >= 3) ribbons.push_back(std::move(outer));
+            if (inner.size() >= 3) forcedHoles.push_back(std::move(inner));
+        } else {
+            Poly2 r = ribbonOutline(s.points, s.halfWidth);
+            if (r.size() >= 3) ribbons.push_back(std::move(r));
+        }
     }
     std::vector<Poly2> outers, holes;
     for (Poly2& L : polygonUnion(ribbons)) {
         Poly2 R = (p.cornerRadius > 0.0) ? roundPolygonCorners(L, p.cornerRadius, 5) : L;
         (signedArea(R) > 0 ? outers : holes).push_back(std::move(R));
     }
+    for (Poly2& h : forcedHoles) holes.push_back(std::move(h));   // roundabout islands
 
     RenderMesh mesh;
     auto P3 = [&](const Vec2& v, double dh) { return Vec3(v.x, heightOf(v.x, v.y) + dh, v.y); };
@@ -1048,24 +1073,65 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         for (const Poly2& h : holes)
             if (h.size() >= 3 && pointInPolygon(outer, centroid(h))) mine.push_back(h);
         Poly2 merged = mine.empty() ? outer : bridgeHoles(outer, mine);
-        // Deck (faces up, road-local UV so the RoadMarkings surface can paint lanes) and underside
-        // (faces down) share the triangulation; emit winds each face to its normal.
+        // Welded deck (faces up) + mirrored underside (faces down), PLAIN asphalt: it carries the
+        // junction/curb/hole shape. Lane paint rides its own road-aligned strips below, because the
+        // ear-clipped union triangles are too long/skew to interpolate clean marking UV.
         for (const std::array<int, 3>& t : triangulatePolygon(merged)) {
             const Vec2& a = merged[t[0]]; const Vec2& b = merged[t[1]]; const Vec2& c = merged[t[2]];
-            double ha, mua, mva, hb, mub, mvb, hc, muc, mvc; int sa, sb, sc;
-            sample(a.x, a.y, ha, mua, mva, sa); sample(b.x, b.y, hb, mub, mvb, sb);
-            sample(c.x, c.y, hc, muc, mvc, sc);
-            // A triangle straddling two roads (a junction/overlap fill) has no single road-local
-            // frame — interpolating its UV would smear paint diagonally. Leave those plain (mu=0).
-            if (sa != sb || sb != sc) { mua = mub = muc = 0.0; }
-            MeshBuilder::emitTriUV(mesh, Vec3(a.x, ha, a.y), Vec3(b.x, hb, b.y), Vec3(c.x, hc, c.y),
-                                   Vec3(0, 1, 0), p.topColor,
-                                   (float)mua, (float)mva, (float)mub, (float)mvb, (float)muc, (float)mvc);
+            double ha = heightOf(a.x, a.y), hb = heightOf(b.x, b.y), hc = heightOf(c.x, c.y);
+            MeshBuilder::emitTri(mesh, Vec3(a.x, ha, a.y), Vec3(b.x, hb, b.y), Vec3(c.x, hc, c.y),
+                                 Vec3(0, 1, 0), p.topColor);
             MeshBuilder::emitTri(mesh, Vec3(a.x, ha - p.thickness, a.y), Vec3(b.x, hb - p.thickness, b.y),
                                  Vec3(c.x, hc - p.thickness, c.y), Vec3(0, -1, 0), p.bottomColor);
         }
         wall(outer);                                            // outer skirt
         for (const Poly2& h : mine) wall(h);                    // block-interior shafts
+    }
+
+    // Lane MARKINGS as a thin road-aligned strip per spine, floating just over the deck. Each spine
+    // is resampled to short quads (left rail mu=1, right rail mu=3, mv = arc-length) so the paint
+    // UV interpolates exactly along/across the road — crisp double-yellow, dashed dividers, edges.
+    // A quad sitting over ANOTHER road's corridor is a junction: skip it so intersections stay plain.
+    const double markLift = 0.03, stripStep = 3.0;
+    auto distToSpine = [&](const Vec2& q, const Prof& pr) {
+        double best = 1e30;
+        for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
+            const Vec2& a = pr.cl[i]; Vec2 ab = pr.cl[i + 1] - a; double L2 = ab.lengthSquared();
+            double t = L2 < 1e-12 ? 0.0 : std::max(0.0, std::min(1.0, dot(q - a, ab) / L2));
+            best = std::min(best, (q - (a + ab * t)).length());
+        }
+        return best;
+    };
+    for (std::size_t pi = 0; pi < profs.size(); ++pi) {
+        const Prof& pr = profs[pi];
+        const double hw = pr.hw;
+        for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
+            Vec2 A = pr.cl[i], B = pr.cl[i + 1]; Vec2 ab = B - A;
+            double segLen = ab.length(); if (segLen < 1e-6) continue;
+            Vec2 nrm = perp(ab / segLen);                       // left normal
+            int steps = std::max(1, static_cast<int>(std::ceil(segLen / stripStep)));
+            for (int k = 0; k < steps; ++k) {
+                double t0 = static_cast<double>(k) / steps, t1 = static_cast<double>(k + 1) / steps;
+                Vec2 c0 = A + ab * t0, c1 = A + ab * t1;
+                Vec2 mid = (c0 + c1) * 0.5;
+                bool junction = false;                          // over another road? leave plain
+                for (std::size_t pj = 0; pj < profs.size() && !junction; ++pj)
+                    if (pj != pi && distToSpine(mid, profs[pj]) < profs[pj].hw + 0.5) junction = true;
+                if (junction) continue;
+                double s0 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t0;
+                double s1 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t1;
+                double h0 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t0 + markLift;
+                double h1 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t1 + markLift;
+                Vec3 L0(c0.x + nrm.x * hw, h0, c0.y + nrm.y * hw);
+                Vec3 R0(c0.x - nrm.x * hw, h0, c0.y - nrm.y * hw);
+                Vec3 L1(c1.x + nrm.x * hw, h1, c1.y + nrm.y * hw);
+                Vec3 R1(c1.x - nrm.x * hw, h1, c1.y - nrm.y * hw);
+                MeshBuilder::emitTriUV(mesh, L0, R0, R1, Vec3(0, 1, 0), p.topColor,
+                                       1.0f, (float)s0, 3.0f, (float)s0, 3.0f, (float)s1);
+                MeshBuilder::emitTriUV(mesh, L0, R1, L1, Vec3(0, 1, 0), p.topColor,
+                                       1.0f, (float)s0, 3.0f, (float)s1, 1.0f, (float)s1);
+            }
+        }
     }
     return mesh;
 }

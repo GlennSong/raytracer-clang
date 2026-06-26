@@ -444,24 +444,25 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
     p.topY = 1.0; p.thickness = 0.5;
     RenderMesh m = weldSolid(sp, p);
 
-    double topY = -1e9, botY = 1e9;
-    bool sawTop = false, sawBottom = false, sawWall = false;
+    double deckY = -1e9, botY = 1e9;
+    bool sawBottom = false, sawWall = false, sawStrip = false;
     for (const Vertex& v : m.vertices) {
-        topY = std::max(topY, (double)v.position.y);
         botY = std::min(botY, (double)v.position.y);
-        if (v.normal.y > 0.9) sawTop = true;
+        if (v.normal.y > 0.9 && v.u < 0.5) deckY = std::max(deckY, (double)v.position.y); // plain deck
         else if (v.normal.y < -0.9) sawBottom = true;
         else if (std::fabs(v.normal.y) < 0.1) sawWall = true;   // horizontal-facing side wall
+        if (v.u > 0.5) sawStrip = true;                          // painted marking strip
     }
-    CHECK(sawTop && sawBottom && sawWall);                       // all three surface kinds present
-    CHECK(std::fabs(topY - 1.0) < 1e-6);                        // deck at topY
+    CHECK(sawBottom && sawWall && sawStrip);                     // underside, walls, and paint strip
+    CHECK(std::fabs(deckY - 1.0) < 1e-6);                       // plain deck at topY
     CHECK(std::fabs(botY - 0.5) < 1e-6);                        // underside thickness below
 
-    // The upward-facing deck triangles still sum to the cross area.
+    // The plain (unpainted) welded deck triangles sum to the cross area; the marking strips ride
+    // above and aren't part of the deck count.
     double deckArea = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         const Vertex& A = m.vertices[m.indices[i]];
-        if (A.normal.y < 0.9) continue;
+        if (A.normal.y < 0.9 || A.u > 0.5) continue;            // only the plain deck
         const Vec3& a = A.position, &b = m.vertices[m.indices[i + 1]].position,
                     &c = m.vertices[m.indices[i + 2]].position;
         deckArea += std::fabs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) * 0.5;
@@ -485,29 +486,30 @@ TEST_CASE(weld_solid_smooths_a_terrain_bump) {
     CHECK(peak > 0.5);      // but the road still rises toward it (not flattened away)
 }
 
-// The deck carries road-local UV for the RoadMarkings surface: every upward-facing (deck) vertex
-// has u in [1,3] (2 = centerline, 1/3 = curbs) with the centerline actually reached, and v growing
-// to roughly the road length. The side walls carry u = 0 so no paint lands on them.
+// Lane paint rides road-aligned strips with road-local UV for the RoadMarkings surface: the strip
+// rails are exactly u=1 and u=3 (so the centerline u=2 spans across), v tracks arc-length to ~the
+// road length, and the strip is finely subdivided (many quads). The plain welded deck and the side
+// walls carry u=0 so no paint lands there.
 TEST_CASE(weld_solid_bakes_road_local_uv) {
     auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = {};
         for (int i = 0; i <= 20; ++i) s.points.push_back(a + (b - a) * (i / 20.0)); return s; };
     std::vector<UnionSpine> sp = { mk(Vec2(-50, 0), Vec2(50, 0)) };   // a 100 m straight road
     RenderMesh m = weldSolid(sp, WeldSolidParams{});
-    double maxV = 0, minDeckU = 9, maxDeckU = -9;
-    bool wallUnpainted = true;
+    double maxV = 0, minStripU = 9, maxStripU = -9;
+    int stripVerts = 0;
+    bool allPaintFacesUp = true;
     for (const Vertex& v : m.vertices) {
-        if (v.normal.y > 0.9) {                                      // deck vertex (on a rail)
-            minDeckU = std::min(minDeckU, (double)v.u);
-            maxDeckU = std::max(maxDeckU, (double)v.u);
+        if (v.u > 0.5) {                                             // a painted strip vertex
+            ++stripVerts;
+            minStripU = std::min(minStripU, (double)v.u);
+            maxStripU = std::max(maxStripU, (double)v.u);
             maxV = std::max(maxV, (double)v.v);
-        } else if (std::fabs(v.normal.y) < 0.1) {                    // wall vertex
-            if (v.u > 0.5) wallUnpainted = false;
+            if (v.normal.y < 0.9) allPaintFacesUp = false;           // paint only on the up-facing strip
         }
     }
-    CHECK(minDeckU >= 1.0 - 1e-5);            // u clamped into the carriageway band
-    CHECK(maxDeckU <= 3.0 + 1e-5);
-    CHECK(minDeckU < 1.2);                    // left rail present (u -> 1)
-    CHECK(maxDeckU > 2.8);                    // right rail present (u -> 3): centerline u=2 spans
-    CHECK(wallUnpainted);                     // walls stay at u=0 (no paint)
-    CHECK(maxV > 90.0);                       // v tracks arc-length toward the 100 m length
+    CHECK(std::fabs(minStripU - 1.0) < 1e-5);   // left rail exactly u=1
+    CHECK(std::fabs(maxStripU - 3.0) < 1e-5);   // right rail exactly u=3 (centerline u=2 spans)
+    CHECK(stripVerts > 60);                      // finely subdivided (100 m / ~3 m steps, 6 v/quad)
+    CHECK(allPaintFacesUp);                      // walls/underside carry no paint UV
+    CHECK(maxV > 90.0);                          // v tracks arc-length toward the 100 m length
 }

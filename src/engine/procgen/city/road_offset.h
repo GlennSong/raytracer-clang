@@ -23,6 +23,13 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, double d, double m
 // network before junction welding. `miterLimit` clamps corner spikes.
 Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterLimit = 4.0);
 
+// Annular ribbon for a CLOSED loop centerline `cl` (a roundabout ring): the road band between an
+// OUTER rail (centerline + halfWidth) and an INNER rail (centerline − halfWidth), each offset with
+// wrap-around joins (no end caps). `outer` comes back CCW (the filled disk the spokes weld onto)
+// and `inner` CW (the central island to punch as a hole). `cl` may repeat its first point as last.
+void ringRibbon(const std::vector<Vec2>& cl, double halfWidth, Poly2& outer, Poly2& inner,
+                double miterLimit = 4.0);
+
 // Boolean UNION of CCW polygons into boundary loops — the weld at road junctions: overlapping
 // ribbon outlines merge into one outline (exterior loops CCW; interior holes, e.g. a roundabout
 // island, come back CW). Method: split every edge at its crossings with the others, drop the

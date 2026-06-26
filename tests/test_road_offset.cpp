@@ -93,6 +93,26 @@ TEST_CASE(union_keeps_disjoint_polys_separate) {
     CHECK(std::fabs(loopAreaSum(loops) - 200.0) < 1e-2);
 }
 
+// A closed ring centerline becomes an annulus: an outer rail (CCW) and an inner island (CW) offset
+// to either side of the ring, so a roundabout is a band with an open centre, not a filled disk.
+TEST_CASE(ring_ribbon_is_an_annulus) {
+    std::vector<Vec2> ring;
+    for (int i = 0; i < 48; ++i) {
+        double a = 2.0 * 3.14159265358979 * i / 48;
+        ring.push_back(Vec2(20.0 * std::cos(a), 20.0 * std::sin(a)));   // R = 20 circle
+    }
+    Poly2 outer, inner;
+    ringRibbon(ring, 4.0, outer, inner);                               // half-width 4 -> [16, 24]
+    CHECK(outer.size() >= 3);
+    CHECK(inner.size() >= 3);
+    CHECK(signedArea(outer) > 0);                                      // outer CCW
+    CHECK(signedArea(inner) < 0);                                      // inner CW (a hole)
+    double aOuter = area(outer), aInner = area(inner);
+    CHECK(std::fabs(aOuter - 3.14159265 * 24.0 * 24.0) < 60.0);        // ~pi*24^2
+    CHECK(std::fabs(aInner - 3.14159265 * 16.0 * 16.0) < 40.0);        // ~pi*16^2
+    CHECK(aOuter > aInner);                                            // band has positive width
+}
+
 // A bridged hole removes its area from the outer (the bridge cut is zero-area), and the result
 // is one simple polygon a plain ear-clipper can handle (block interiors stay open).
 TEST_CASE(bridge_hole_keeps_net_area) {
