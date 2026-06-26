@@ -55,7 +55,7 @@ m:add(terrain.mesh(land, { size = 640, resolution = 240, color = { 0.34, 0.41, 0
 -- y lifts the deck above the terrain; a higher max_grade hugs the gentle hills closely so the
 -- ground never poke through the ironed deck.
 m:add_solid(city.solid{
-  spines = resolved.spines, height = land, y = 1.2, thickness = 0.6, corner_radius = 5,
+  spines = resolved.spines, height = land, y = 1.2, thickness = 0.6, corner_radius = 0,
   max_grade = 0.15, color = DARK, side_color = { 0.16, 0.16, 0.17 },
 }, PAINT)
 return m

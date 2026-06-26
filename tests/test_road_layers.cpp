@@ -457,8 +457,9 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
     CHECK(std::fabs(deckY - 1.0) < 1e-6);                       // plain deck at topY
     CHECK(std::fabs(botY - 0.5) < 1e-6);                        // underside thickness below
 
-    // The plain (unpainted) welded deck triangles sum to the cross area; the marking strips ride
-    // above and aren't part of the deck count.
+    // The plain (unpainted) deck is laid as per-spine strips that overlap at the junction, so the
+    // cross's two 20x4 = 80 strips sum to 160 (the 16 overlap counted by both); the marking strips
+    // ride above and aren't part of this count.
     double deckArea = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         const Vertex& A = m.vertices[m.indices[i]];
@@ -467,7 +468,7 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
                     &c = m.vertices[m.indices[i + 2]].position;
         deckArea += std::fabs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) * 0.5;
     }
-    CHECK(std::fabs(deckArea - 144.0) < 0.5);
+    CHECK(std::fabs(deckArea - 160.0) < 0.5);
 }
 
 // With a terrain function the deck rides a smoothed profile: a road over a single sharp bump

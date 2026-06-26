@@ -1068,30 +1068,19 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         }
     };
 
-    for (const Poly2& outer : outers) {
-        std::vector<Poly2> mine;
-        for (const Poly2& h : holes)
-            if (h.size() >= 3 && pointInPolygon(outer, centroid(h))) mine.push_back(h);
-        Poly2 merged = mine.empty() ? outer : bridgeHoles(outer, mine);
-        // Welded deck (faces up) + mirrored underside (faces down), PLAIN asphalt: it carries the
-        // junction/curb/hole shape. Lane paint rides its own road-aligned strips below, because the
-        // ear-clipped union triangles are too long/skew to interpolate clean marking UV.
-        for (const std::array<int, 3>& t : triangulatePolygon(merged)) {
-            const Vec2& a = merged[t[0]]; const Vec2& b = merged[t[1]]; const Vec2& c = merged[t[2]];
-            double ha = heightOf(a.x, a.y), hb = heightOf(b.x, b.y), hc = heightOf(c.x, c.y);
-            MeshBuilder::emitTri(mesh, Vec3(a.x, ha, a.y), Vec3(b.x, hb, b.y), Vec3(c.x, hc, c.y),
-                                 Vec3(0, 1, 0), p.topColor);
-            MeshBuilder::emitTri(mesh, Vec3(a.x, ha - p.thickness, a.y), Vec3(b.x, hb - p.thickness, b.y),
-                                 Vec3(c.x, hc - p.thickness, c.y), Vec3(0, -1, 0), p.bottomColor);
-        }
-        wall(outer);                                            // outer skirt
-        for (const Poly2& h : mine) wall(h);                    // block-interior shafts
-    }
+    // Walls from the welded outline: an outer skirt around each exterior loop, a shaft wall around
+    // each hole (open block interiors, roundabout islands). The deck itself is filled by plain
+    // per-spine strips below — robust for ANY number of holes (no hole-bridging + ear-clip to stall
+    // or over-fill a block, which is what broke the welded-polygon triangulation on a grid).
+    for (const Poly2& outer : outers) wall(outer);
+    for (const Poly2& hole : holes) wall(hole);
 
-    // Lane MARKINGS as a thin road-aligned strip per spine, floating just over the deck. Each spine
-    // is resampled to short quads (left rail mu=1, right rail mu=3, mv = arc-length) so the paint
-    // UV interpolates exactly along/across the road — crisp double-yellow, dashed dividers, edges.
-    // A quad sitting over ANOTHER road's corridor is a junction: skip it so intersections stay plain.
+    // The road SURFACE as per-spine ribbon strips, resampled to short quads. Each quad lays a plain
+    // deck (up) + underside (down); open blocks fall out for free (no strip lies over them) and
+    // strips overlapping at a junction are coplanar same-colour asphalt, so they read as one
+    // surface. Lane MARKINGS ride a third quad just above, with road-local UV (left rail u=1, right
+    // u=3, v = arc-length) so the paint interpolates exactly — crisp double-yellow, dashed lane
+    // dividers, edges. A quad over ANOTHER road's corridor is a junction: it stays plain (no paint).
     const double markLift = 0.03, stripStep = 3.0;
     auto distToSpine = [&](const Vec2& q, const Prof& pr) {
         double best = 1e30;
@@ -1113,22 +1102,33 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             for (int k = 0; k < steps; ++k) {
                 double t0 = static_cast<double>(k) / steps, t1 = static_cast<double>(k + 1) / steps;
                 Vec2 c0 = A + ab * t0, c1 = A + ab * t1;
+                double s0 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t0;
+                double s1 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t1;
+                double h0 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t0;
+                double h1 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t1;
+                Vec2 lO(nrm.x * hw, nrm.y * hw);
+                auto P = [&](const Vec2& c, double h, int side) {
+                    return Vec3(c.x + side * lO.x, h, c.y + side * lO.y);
+                };
+                // Plain deck (up) and underside (down).
+                Vec3 dL0 = P(c0, h0, +1), dR0 = P(c0, h0, -1), dL1 = P(c1, h1, +1), dR1 = P(c1, h1, -1);
+                MeshBuilder::emitTri(mesh, dL0, dR0, dR1, Vec3(0, 1, 0), p.topColor);
+                MeshBuilder::emitTri(mesh, dL0, dR1, dL1, Vec3(0, 1, 0), p.topColor);
+                Vec3 bL0 = P(c0, h0 - p.thickness, +1), bR0 = P(c0, h0 - p.thickness, -1),
+                     bL1 = P(c1, h1 - p.thickness, +1), bR1 = P(c1, h1 - p.thickness, -1);
+                MeshBuilder::emitTri(mesh, bL0, bR0, bR1, Vec3(0, -1, 0), p.bottomColor);
+                MeshBuilder::emitTri(mesh, bL0, bR1, bL1, Vec3(0, -1, 0), p.bottomColor);
+                // Markings on top, unless this quad straddles another road (a junction).
                 Vec2 mid = (c0 + c1) * 0.5;
-                bool junction = false;                          // over another road? leave plain
+                bool junction = false;
                 for (std::size_t pj = 0; pj < profs.size() && !junction; ++pj)
                     if (pj != pi && distToSpine(mid, profs[pj]) < profs[pj].hw + 0.5) junction = true;
                 if (junction) continue;
-                double s0 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t0;
-                double s1 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t1;
-                double h0 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t0 + markLift;
-                double h1 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t1 + markLift;
-                Vec3 L0(c0.x + nrm.x * hw, h0, c0.y + nrm.y * hw);
-                Vec3 R0(c0.x - nrm.x * hw, h0, c0.y - nrm.y * hw);
-                Vec3 L1(c1.x + nrm.x * hw, h1, c1.y + nrm.y * hw);
-                Vec3 R1(c1.x - nrm.x * hw, h1, c1.y - nrm.y * hw);
-                MeshBuilder::emitTriUV(mesh, L0, R0, R1, Vec3(0, 1, 0), p.topColor,
+                Vec3 mL0 = P(c0, h0 + markLift, +1), mR0 = P(c0, h0 + markLift, -1),
+                     mL1 = P(c1, h1 + markLift, +1), mR1 = P(c1, h1 + markLift, -1);
+                MeshBuilder::emitTriUV(mesh, mL0, mR0, mR1, Vec3(0, 1, 0), p.topColor,
                                        1.0f, (float)s0, 3.0f, (float)s0, 3.0f, (float)s1);
-                MeshBuilder::emitTriUV(mesh, L0, R1, L1, Vec3(0, 1, 0), p.topColor,
+                MeshBuilder::emitTriUV(mesh, mL0, mR1, mL1, Vec3(0, 1, 0), p.topColor,
                                        1.0f, (float)s0, 3.0f, (float)s1, 1.0f, (float)s1);
             }
         }
