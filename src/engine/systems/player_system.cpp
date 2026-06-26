@@ -4,8 +4,9 @@
 
 namespace engine {
 
-void PlayerSystem::onStart(FrameContext&) {
+void PlayerSystem::onStart(FrameContext& ctx) {
     camera.positionLocked = true;
+    ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
@@ -15,6 +16,7 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
         [&](Entity e, Transform& t, CharacterController& cc, ControlledBy&) {
             playerEntity = e;
             if (cc.characterId == INVALID_CHARACTER) return;
+            if (!spawnCaptured) { spawnPos = t.position; spawnCaptured = true; }   // authored spawn
 
             // Detached freecam (cam_detach): the movement axes drive the fly
             // camera, not the player — otherwise WASD would walk the player while
@@ -42,6 +44,16 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
+    // Respawn: snap the character back to its spawn (and re-settle under gravity). Works even when
+    // detached/flying, so you can always recover a player that has fallen off or through the level.
+    if (ctx.actions.pressed("player_respawn") && spawnCaptured && ctx.world.alive(playerEntity)) {
+        if (auto* cc = ctx.world.get<CharacterController>(playerEntity))
+            if (cc->characterId != INVALID_CHARACTER) {
+                physicsSys.physicsWorld().setCharacterPosition(cc->characterId, spawnPos);
+                if (auto* t = ctx.world.get<Transform>(playerEntity)) t->position = spawnPos;
+            }
+    }
+
     // Detached freecam: CameraSystem's fly view stands as-is.
     if (!camera.positionLocked) return;
 

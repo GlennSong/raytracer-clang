@@ -982,7 +982,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; };
     std::vector<Prof> profs;
     for (const UnionSpine& sp : spines) {
         const int n = static_cast<int>(sp.points.size());
@@ -995,7 +995,9 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             h = roadProfile(ground, sArc, p.maxGrade);
             for (double& v : h) v += p.topY;            // topY lifts the deck above the terrain
         }
-        profs.push_back({sp.points, sArc, h, sp.halfWidth});
+        bool closed = sp.closed ||
+            (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
+        profs.push_back({sp.points, sArc, h, sp.halfWidth, closed});
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
     // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
@@ -1075,6 +1077,46 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     for (const Poly2& outer : outers) wall(outer);
     for (const Poly2& hole : holes) wall(hole);
 
+    // Raised sidewalk band along each welded boundary loop: the carriageway edge wears a curb lip,
+    // a concrete slab steps out by sidewalkWidth, and an outer face drops back to the road slab.
+    // The band rides the loop's RIGHT normal (outward from the carriageway, same sense as wall())
+    // mitered per vertex, so it wraps junction corners as one piece instead of crossing the road.
+    if (p.sidewalkWidth > 0.0) {
+        auto rnorm = [](const Vec2& e) {
+            Vec2 n(e.y, -e.x); double l = n.length();
+            return l < 1e-9 ? Vec2(0, 0) : n * (1.0 / l);
+        };
+        auto sidewalk = [&](const Poly2& loop) {
+            const int m = static_cast<int>(loop.size());
+            if (m < 3) return;
+            std::vector<Vec2> off(m);                       // per-vertex outward mitered offset
+            for (int i = 0; i < m; ++i) {
+                Vec2 n0 = rnorm(loop[i] - loop[(i + m - 1) % m]);
+                Vec2 n1 = rnorm(loop[(i + 1) % m] - loop[i]);
+                Vec2 bis = n0 + n1; double bl = bis.length();
+                Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
+                double cosH = std::max(0.25, dot(mm, n1));   // clamp miter <= 4*width at sharp corners
+                off[i] = mm * (p.sidewalkWidth / cosH);
+            }
+            const double ch = p.curbHeight;
+            for (int i = 0; i < m; ++i) {
+                int j = (i + 1) % m;
+                const Vec2& a = loop[i]; const Vec2& b = loop[j];
+                if ((b - a).length() < 1e-9) continue;
+                Vec2 ao = a + off[i], bo = b + off[j];
+                Vec3 eo3(rnorm(b - a).x, 0, rnorm(b - a).y);  // outward (per edge)
+                Vec3 aT = P3(a, ch), bT = P3(b, ch), aR = P3(a, 0), bR = P3(b, 0);
+                Vec3 aoT = P3(ao, ch), boT = P3(bo, ch),
+                     aoB = P3(ao, -p.thickness), boB = P3(bo, -p.thickness);
+                MeshBuilder::emitQuad(mesh, aR, bR, bT, aT, eo3 * -1.0, p.curbColor);     // curb lip (road-facing)
+                MeshBuilder::emitQuad(mesh, aT, bT, boT, aoT, Vec3(0, 1, 0), p.sidewalkColor); // slab top
+                MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, p.curbColor);        // outer face
+            }
+        };
+        for (const Poly2& outer : outers) sidewalk(outer);
+        for (const Poly2& hole : holes) sidewalk(hole);
+    }
+
     // The road SURFACE as per-spine ribbon strips, resampled to short quads. Each quad lays a plain
     // deck (up) + underside (down); open blocks fall out for free (no strip lies over them) and
     // strips overlapping at a junction are coplanar same-colour asphalt, so they read as one
@@ -1094,28 +1136,56 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     for (std::size_t pi = 0; pi < profs.size(); ++pi) {
         const Prof& pr = profs[pi];
         const double hw = pr.hw;
-        for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
+        const int n = static_cast<int>(pr.cl.size());
+        if (n < 2) continue;
+        // Per-vertex MITERED rail offset (left normal * miter length). Two strips meeting at a
+        // vertex share this one offset, so their rail corners coincide and the deck stays gap-free
+        // on the outside of curves. (A per-SEGMENT normal places each strip's corner on its own
+        // tangent, leaving a comb of miter notches along every curve — the terrain showing through.)
+        // Closed rings wrap at the seam; open ends square off with the lone adjacent normal.
+        std::vector<Vec2> off(n);
+        auto segDir = [&](int a, int b) {
+            Vec2 d = pr.cl[b] - pr.cl[a]; double l = d.length();
+            return l < 1e-9 ? Vec2(0, 0) : d * (1.0 / l);
+        };
+        for (int i = 0; i < n; ++i) {
+            Vec2 dp = (i > 0) ? segDir(i - 1, i) : Vec2(0, 0);        // incoming tangent
+            Vec2 dn = (i + 1 < n) ? segDir(i, i + 1) : Vec2(0, 0);    // outgoing tangent
+            if (pr.closed) {                                          // ring: cl.back()==cl.front()
+                if (i == 0) dp = segDir(n - 2, n - 1);
+                if (i == n - 1) dn = segDir(0, 1);
+            }
+            bool hasP = dp.lengthSquared() > 1e-12, hasN = dn.lengthSquared() > 1e-12;
+            Vec2 n0 = perp(dp), n1 = perp(dn);                       // left normals
+            Vec2 bis = (hasP && hasN) ? (n0 + n1) : (hasN ? n1 : n0);
+            double bl = bis.length();
+            Vec2 mm = bl < 1e-9 ? (hasN ? n1 : n0) : bis * (1.0 / bl);
+            double cosHalf = std::max(0.25, dot(mm, hasN ? n1 : n0)); // clamp miter <= 4*hw at sharp turns
+            off[i] = mm * (hw / cosHalf);
+        }
+        for (int i = 0; i + 1 < n; ++i) {
             Vec2 A = pr.cl[i], B = pr.cl[i + 1]; Vec2 ab = B - A;
             double segLen = ab.length(); if (segLen < 1e-6) continue;
-            Vec2 nrm = perp(ab / segLen);                       // left normal
             int steps = std::max(1, static_cast<int>(std::ceil(segLen / stripStep)));
             for (int k = 0; k < steps; ++k) {
                 double t0 = static_cast<double>(k) / steps, t1 = static_cast<double>(k + 1) / steps;
                 Vec2 c0 = A + ab * t0, c1 = A + ab * t1;
+                Vec2 o0 = off[i] + (off[i + 1] - off[i]) * t0;       // mitered rail, interpolated
+                Vec2 o1 = off[i] + (off[i + 1] - off[i]) * t1;
                 double s0 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t0;
                 double s1 = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t1;
                 double h0 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t0;
                 double h1 = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t1;
-                Vec2 lO(nrm.x * hw, nrm.y * hw);
-                auto P = [&](const Vec2& c, double h, int side) {
-                    return Vec3(c.x + side * lO.x, h, c.y + side * lO.y);
+                auto P = [&](const Vec2& c, const Vec2& o, double h, int side) {
+                    return Vec3(c.x + side * o.x, h, c.y + side * o.y);
                 };
                 // Plain deck (up) and underside (down).
-                Vec3 dL0 = P(c0, h0, +1), dR0 = P(c0, h0, -1), dL1 = P(c1, h1, +1), dR1 = P(c1, h1, -1);
+                Vec3 dL0 = P(c0, o0, h0, +1), dR0 = P(c0, o0, h0, -1),
+                     dL1 = P(c1, o1, h1, +1), dR1 = P(c1, o1, h1, -1);
                 MeshBuilder::emitTri(mesh, dL0, dR0, dR1, Vec3(0, 1, 0), p.topColor);
                 MeshBuilder::emitTri(mesh, dL0, dR1, dL1, Vec3(0, 1, 0), p.topColor);
-                Vec3 bL0 = P(c0, h0 - p.thickness, +1), bR0 = P(c0, h0 - p.thickness, -1),
-                     bL1 = P(c1, h1 - p.thickness, +1), bR1 = P(c1, h1 - p.thickness, -1);
+                Vec3 bL0 = P(c0, o0, h0 - p.thickness, +1), bR0 = P(c0, o0, h0 - p.thickness, -1),
+                     bL1 = P(c1, o1, h1 - p.thickness, +1), bR1 = P(c1, o1, h1 - p.thickness, -1);
                 MeshBuilder::emitTri(mesh, bL0, bR0, bR1, Vec3(0, -1, 0), p.bottomColor);
                 MeshBuilder::emitTri(mesh, bL0, bR1, bL1, Vec3(0, -1, 0), p.bottomColor);
                 // Markings on top, unless this quad straddles another road (a junction).
@@ -1124,8 +1194,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 for (std::size_t pj = 0; pj < profs.size() && !junction; ++pj)
                     if (pj != pi && distToSpine(mid, profs[pj]) < profs[pj].hw + 0.5) junction = true;
                 if (junction) continue;
-                Vec3 mL0 = P(c0, h0 + markLift, +1), mR0 = P(c0, h0 + markLift, -1),
-                     mL1 = P(c1, h1 + markLift, +1), mR1 = P(c1, h1 + markLift, -1);
+                Vec3 mL0 = P(c0, o0, h0 + markLift, +1), mR0 = P(c0, o0, h0 + markLift, -1),
+                     mL1 = P(c1, o1, h1 + markLift, +1), mR1 = P(c1, o1, h1 + markLift, -1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR0, mR1, Vec3(0, 1, 0), p.topColor,
                                        1.0f, (float)s0, 3.0f, (float)s0, 3.0f, (float)s1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR1, mL1, Vec3(0, 1, 0), p.topColor,

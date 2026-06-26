@@ -24,6 +24,8 @@ private:
     Entity playerEntity;
     Real moveSpeed = 6.0;
     Real eyeHeight = 0.7;
+    Vec3 spawnPos{0, 0, 0};       // captured authored spawn; "respawn" returns the player here
+    bool spawnCaptured = false;
 };
 
 }  // namespace engine

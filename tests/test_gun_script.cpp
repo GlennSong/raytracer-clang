@@ -40,6 +40,18 @@ Entity makePlayer(World& w, const std::string& script) {
     return e;
 }
 
+// The gun ships holstered (slot 1 = bare hands); pressing slot 2 (Num2) draws it. Tests bind the
+// slots and press Num2 to equip before firing / before the viewmodel follows the camera.
+void bindSlots(InputMap& input) {
+    input.bindButton("slot_1", KeyCode::Num1);
+    input.bindButton("slot_2", KeyCode::Num2);
+}
+void pressKey(InputMap& input, KeyCode key) {
+    Event e(EventType::KeyPressed);
+    e.key = key;
+    input.processEvent(e);
+}
+
 // A camera looking down +Z from the origin, so aim forward = (0,0,1).
 CameraState forwardCamera() {
     CameraState c;
@@ -82,13 +94,15 @@ TEST_CASE(gun_fires_a_physics_block_along_camera_aim) {
     Entity player = makePlayer(world, gunSource());
     InputMap input;
     input.bindButton("fire", MouseButton::Left);
+    bindSlots(input);
     CameraState cam = forwardCamera();   // forward = +Z
 
     ScriptSystem sys;
     sys.setServices(&input, &cam, nullptr);
 
-    // Press fire this frame, then tick.
+    // Draw the gun (Num2) AND press fire this frame; M:update equips before it checks fire.
     input.beginFrame();
+    pressKey(input, KeyCode::Num2);
     Event click(EventType::MouseButtonPressed);
     click.button = MouseButton::Left;
     input.processEvent(click);
@@ -123,13 +137,14 @@ TEST_CASE(gun_spawns_a_procgen_model_that_follows_the_camera) {
     Entity player = makePlayer(world, gunSource());
     InputMap input;
     input.bindButton("fire", MouseButton::Left);
+    bindSlots(input);
     CameraState cam = forwardCamera();   // eye (0,1,0), forward +Z, right (-1,0,0)
 
     ScriptSystem sys;
     sys.setServices(&input, &cam, /*assets=*/nullptr);
 
     input.beginFrame();
-    sys.tick(world, 0.016);   // start() spawns the model (deferred -> created now)
+    sys.tick(world, 0.016);   // start() spawns the model (deferred -> created now), holstered
 
     // The model is the scripted entity that isn't the player (and has no physics).
     Entity model;
@@ -140,7 +155,8 @@ TEST_CASE(gun_spawns_a_procgen_model_that_follows_the_camera) {
     CHECK(!world.has<RigidBody>(model));      // a viewmodel, not a physics body
 
     input.beginFrame();
-    sys.tick(world, 0.016);   // the follow behaviour now glues it to the camera
+    pressKey(input, KeyCode::Num2);   // draw the gun; the follow behaviour now glues it to the camera
+    sys.tick(world, 0.016);
 
     Transform* t = world.get<Transform>(model);
     if (!t) { CHECK(false); return; }
@@ -159,6 +175,7 @@ TEST_CASE(gun_fires_once_per_press_not_while_held) {
     Entity player = makePlayer(world, gunSource());
     InputMap input;
     input.bindButton("fire", MouseButton::Left);
+    bindSlots(input);
     CameraState cam = forwardCamera();
 
     ScriptSystem sys;
@@ -172,8 +189,9 @@ TEST_CASE(gun_fires_once_per_press_not_while_held) {
         return n;
     };
 
-    // Frame 1: press -> one shot.
+    // Frame 1: draw the gun (Num2) and press -> one shot. equipped persists for later frames.
     input.beginFrame();
+    pressKey(input, KeyCode::Num2);
     Event click(EventType::MouseButtonPressed);
     click.button = MouseButton::Left;
     input.processEvent(click);

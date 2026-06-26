@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [420, 0.4, 420],
+      "material": { "albedo": [0.36, 0.42, 0.30], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
+    { "name": "city", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "generate": { "kind": "district", "radius": 140, "block_size": 42, "arterials": 3, "seed": 5,
+                      "artery_width": 13, "street_width": 7 },
+        "curved": true, "width": 7, "sidewalk": 1.8, "markings": true, "crosswalks": true } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.72, -0.32], "color": [1, 0.98, 0.94], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7 }
+}

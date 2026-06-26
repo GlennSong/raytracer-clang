@@ -71,6 +71,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
+	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
@@ -186,6 +187,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
+	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/camera.cpp \

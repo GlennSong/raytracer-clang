@@ -39,6 +39,7 @@ namespace {
 // keys (luaL_newmetatable / luaL_checkudata).
 constexpr const char* kSdfMt = "engine.procgen.Sdf";
 constexpr const char* kMeshMt = "engine.procgen.Mesh";
+constexpr const char* kHeightMt = "engine.procgen.Height";   // hoisted: used by city.grow above its old defn
 
 using MeshPtr = std::shared_ptr<RenderMesh>;
 
@@ -736,7 +737,10 @@ const HeightField* optHeightField(lua_State* L, int tableIdx, const char* key);
 //   `max_grade` are pruned — and because that happens before block extraction, the
 //   blocks merge across the dropped streets for free.
 // Node indices in edges are 1-based (Lua convention).
-int l_city_layout(lua_State* L) {
+// Grow a road graph from the city.layout argument table (pattern + params + optional terrain),
+// planarized and — with terrain — grade-pruned then reconnected into one net. Shared by
+// city.layout (returns the raw chord graph) and city.curves (smooths it into real splines).
+static RoadGraph buildLayoutGraph(lua_State* L) {
     std::string pattern = lua_istable(L, 1) ? optStrField(L, 1, "pattern", "grid") : "grid";
     const HeightField* terrain = optHeightField(L, 1, "terrain");
     Real maxGrade   = static_cast<Real>(optField(L, 1, "max_grade", 0.12));
@@ -783,6 +787,11 @@ int l_city_layout(lua_State* L) {
         g = connectComponents(g);                      // then heal any split into one net,
         g = planarize(g);                              // and re-split at the new connectors
     }
+    return g;
+}
+
+int l_city_layout(lua_State* L) {
+    RoadGraph g = buildLayoutGraph(L);
     std::vector<Poly2> blocks = extractBlocks(g);
 
     lua_createtable(L, 0, 3);
@@ -1008,7 +1017,6 @@ int l_tex_bake_normal(lua_State* L) {
 // texture Field. Build terrain from fbm + ridged ridges + domain warp + terraces,
 // then bake to a mesh. `terrain` is a callable table: terrain(params, seed) still
 // runs the C++ preset (generateTerrain); terrain.fbm{...} etc. compose.
-constexpr const char* kHeightMt = "engine.procgen.Height";
 
 void pushHeight(lua_State* L, HeightField f) {
     void* mem = lua_newuserdatauv(L, sizeof(HeightField), 0);
@@ -1061,6 +1069,7 @@ int l_terr_fbm(lua_State* L) {
                             static_cast<int>(optField(L, 1, "octaves", 5))));
     return 1;
 }
+
 int l_terr_ridged(lua_State* L) {
     pushHeight(L, heightRidged(static_cast<uint32_t>(optField(L, 1, "seed", 0)),
                                optField(L, 1, "freq", 0.01), optField(L, 1, "amp", 20.0),
@@ -1625,6 +1634,10 @@ int l_city_solid(lua_State* L) {
     p.topColor = optVec3Field(L, 1, "color", p.topColor);
     p.sideColor = optVec3Field(L, 1, "side_color", p.sideColor);
     p.bottomColor = optVec3Field(L, 1, "bottom_color", p.bottomColor);
+    p.sidewalkWidth = optField(L, 1, "sidewalk", p.sidewalkWidth);
+    p.curbHeight = optField(L, 1, "curb", p.curbHeight);
+    p.sidewalkColor = optVec3Field(L, 1, "sidewalk_color", p.sidewalkColor);
+    p.curbColor = optVec3Field(L, 1, "curb_color", p.curbColor);
     lua_getfield(L, 1, "height");
     if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
         HeightField h = *hf;

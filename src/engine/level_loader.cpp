@@ -4,6 +4,8 @@
 #include "procgen/terrain.h"
 #include "procgen/city/city.h"
 #include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
+#include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
+#include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -258,14 +260,56 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // regenerates the mesh through onEdited. Drapes on the level terrain (`ground`).
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
                            int index, const HeightField* ground) {
-    RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"] : json::object());
+    const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
+    RoadNet net = roadNetFromJson(roadBlock);
+
+    // A GENERATED road: instead of authored nodes, "generate" runs a procgen graph (buildDistrict)
+    // and fills the RoadNet's nodes/edges from it — so the generated city IS a real, editable RoadNet
+    // (the editor's node/tangent handles + buildRoadNetMesh's curves/markings/sidewalks/junctions),
+    // not a baked mesh. The recipe round-trips via SourceSpec; the look comes from the road block.
+    if (roadBlock.contains("generate")) {
+        const json& g = roadBlock["generate"];
+        DistrictParams dp;
+        if (g.contains("center")) {
+            const json& c = g["center"];
+            dp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+        }
+        dp.radius      = g.value("radius", 130.0);
+        dp.arterials   = g.value("arterials", 3);
+        dp.blockSize   = g.value("block_size", 36.0);
+        dp.irregular   = g.value("irregular", 0.22);
+        dp.jitter      = g.value("jitter", 0.16);
+        dp.seed        = g.value("seed", 1u);
+        dp.arteryWidth = g.value("artery_width", net.width * 1.6);
+        dp.streetWidth = g.value("street_width", net.width);
+        DistrictNet d = buildDistrict(dp);
+        // Bake the constraint pass (busy hubs -> roundabout rings, ADR-0052) INTO the graph now, so
+        // a roundabout is real nodes+edges in the editable net — with handles, intersecting the
+        // graph — rather than a ring conjured at mesh time that the node graph never sees.
+        // applyConstraints adds the ring AFTER buildDistrict's planarize, so re-planarize to node the
+        // new ring arcs against the streets they cross — otherwise a street runs through the
+        // roundabout without joining it (looks disconnected).
+        RoadGraph cg = planarize(applyConstraints(d.graph), 1.0);
+        net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
+        for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
+        for (const RoadEdge& e : cg.edges) {
+            net.edges.push_back({e.a, e.b});
+            net.edgeWidths.push_back(e.width);          // arterials wider than local streets
+        }
+
+    }
+
     if (ground) net.heightAt = *ground;
 
     Entity e = world.create();
     createEntityCommon(e, ent, world);
 
     SourceSpec spec = buildSourceSpec(ent, "road");
-    spec.recipe = roadNetToJson(net).dump();        // heightAt is re-injected on load
+    // Preserve the ORIGINAL authored block (a "generate" recipe, or hand-authored nodes) as the
+    // saved form — NOT the baked net — so load→save is a no-op and a generated road keeps its recipe
+    // instead of being frozen into geometry. The editor's regenerateRoad re-bakes this only when the
+    // road is actually edited (a node drag / width change), which is when baking is correct.
+    spec.recipe = roadBlock.dump();
     world.add<SourceSpec>(e, spec);
     world.add<RoadNet>(e, net);                      // the editable source of truth
 
@@ -710,6 +754,12 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         r.material.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
         r.material.metallic = part.material.metallic;
         r.material.roughness = part.material.roughness;
+        // Analytic surface library (renderer.h Surface): an id evaluated in-shader
+        // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
+        // road-local u/v baked onto the carriageway. Independent of texture maps,
+        // so it rides whether or not the part is `textured`.
+        if (part.material.surface != 0)
+            r.material.setSurface(static_cast<RenderMaterial::Surface>(part.material.surface));
         if (part.material.textured) {
             RenderMesh tiled = part.mesh;
             double tile = part.material.tile > 1e-6 ? part.material.tile : 1.0;
@@ -1786,9 +1836,19 @@ bool LevelLoader::load(const std::string& path,
                      editorMode, cityEnt, &cityModel, &scriptCache,
                      entityGround ? &entityGround : nullptr);
 
-    if (root.contains("player"))
-        (editorMode ? loadPlayerSpawn(root["player"], world, assets)
-                    : loadPlayer(root["player"], world));
+    // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so
+    // the first-person gun viewmodel and a settling capsule don't intrude on an overhead frame dump.
+    if (!std::getenv("RT_NO_PLAYER")) {
+        if (root.contains("player"))
+            (editorMode ? loadPlayerSpawn(root["player"], world, assets)
+                        : loadPlayer(root["player"], world));
+        else if (!editorMode) {
+            // Every playable level gets a player. With no authored spawn, drop one in from above so
+            // the character settles onto the (collidable) ground rather than the level having no actor.
+            json def; def["position"] = json::array({0.0, 200.0, 0.0});
+            loadPlayer(def, world);
+        }
+    }
 
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);

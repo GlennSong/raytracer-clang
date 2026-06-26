@@ -57,5 +57,6 @@ m:add(terrain.mesh(land, { size = 640, resolution = 240, color = { 0.34, 0.41, 0
 m:add_solid(city.solid{
   spines = resolved.spines, height = land, y = 1.2, thickness = 0.6, corner_radius = 0,
   max_grade = 0.15, color = DARK, side_color = { 0.16, 0.16, 0.17 },
+  sidewalk = 2.2, curb = 0.18,
 }, PAINT)
 return m

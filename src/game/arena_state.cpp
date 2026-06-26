@@ -94,6 +94,8 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // mid-iteration (World::each contract, ADR-0006).
     ctx.actions.bindButton("fire", MouseButton::Left);
     ctx.actions.bindButton("fire", GamepadButton::RightBumper);
+    ctx.actions.bindButton("slot_1", KeyCode::Num1);   // bare hands (start here)
+    ctx.actions.bindButton("slot_2", KeyCode::Num2);   // draw the gun
     {
         std::string gun = readTextFile("assets/scripts/gun.lua");
         if (gun.empty()) {

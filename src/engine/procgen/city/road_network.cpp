@@ -511,26 +511,42 @@ RoadGraph planarize(const RoadGraph& in, Real tol) {
     for (std::size_t i = 0; i < in.nodes.size(); ++i)
         remap[i] = out.addNode(in.nodes[i].pos, tol);
 
+    const Real tol2 = tol * tol;
     for (const RoadEdge& e : in.edges) {
         Vec2 a = in.nodes[e.a].pos, b = in.nodes[e.b].pos;
-        // Collect crossing points with every other edge.
-        std::vector<std::pair<Real, Vec2>> cuts;   // (t, point)
+        Vec2 ab = b - a; Real abLen2 = ab.lengthSquared();
+        // Every point where this edge meets another becomes a split (so the meeting gets a node):
+        std::vector<std::pair<Real, Vec2>> cuts;   // (t along a->b, point)
+        // (1) X-crossings — another edge crosses this one's interior.
         for (const RoadEdge& o : in.edges) {
             if (&o == &e) continue;
             Vec2 c = in.nodes[o.a].pos, d = in.nodes[o.b].pos;
             Vec2 x; Real t;
             if (segCross(a, b, c, d, x, t)) cuts.emplace_back(t, x);
         }
+        // (2) T-junctions — a node lying ON this edge's interior (another road ends here).
+        //     Without this, a T-intersection leaves a dangling dead-end overlapping the road
+        //     instead of a real shared node, so the network never planarizes into one graph.
+        if (abLen2 > 1e-12)
+            for (std::size_t ni = 0; ni < in.nodes.size(); ++ni) {
+                if (static_cast<int>(ni) == e.a || static_cast<int>(ni) == e.b) continue;
+                Vec2 p = in.nodes[ni].pos;
+                Real t = dot(p - a, ab) / abLen2;
+                if (t <= 1e-6 || t >= 1 - 1e-6) continue;          // strictly interior
+                if ((p - (a + ab * t)).lengthSquared() <= tol2) cuts.emplace_back(t, p);
+            }
         std::sort(cuts.begin(), cuts.end(),
                   [](const auto& l, const auto& r) { return l.first < r.first; });
-        // Chain: a -> cut0 -> cut1 -> ... -> b.
+        // Chain a -> cuts -> b, skipping duplicate split points (a crossing and a node coincide).
         int prev = remap[e.a];
+        Real lastT = -1.0;
         for (const auto& cut : cuts) {
+            if (cut.first - lastT < 1e-5) continue;
             int mid = out.addNode(cut.second, tol);
-            out.addEdge(prev, mid, e.width, e.klass);
-            prev = mid;
+            if (mid != prev) out.addEdge(prev, mid, e.width, e.klass);
+            prev = mid; lastT = cut.first;
         }
-        out.addEdge(prev, remap[e.b], e.width, e.klass);
+        if (remap[e.b] != prev) out.addEdge(prev, remap[e.b], e.width, e.klass);
     }
     return out;
 }

@@ -1,4 +1,5 @@
 #include "editor_system.h"
+#include <cstdlib>
 
 #include "../components.h"
 #include "../procgen/city/road_net.h"   // editable road regen (ADR-0049)
@@ -437,6 +438,9 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
 // when a handle was grabbed on this click, so update() skips object picking. Pure logic
 // (no ImGui) — the matching draw lives in drawPathHandles().
 bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
+    if (std::getenv("RT_SELECT_ROAD") &&
+        (!ctx.world.alive(selected) || !ctx.world.get<RoadNet>(selected)))
+        ctx.world.each<RoadNet>([&](Entity e, RoadNet&) { selected = e; });   // headless handle capture
     RoadNet* net = ctx.world.alive(selected) ? ctx.world.get<RoadNet>(selected) : nullptr;
     if (!net) {
         if (pathTool.bound()) pathTool.bind(nullptr);

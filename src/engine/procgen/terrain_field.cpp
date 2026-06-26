@@ -558,6 +558,7 @@ HeightField heightRidged(uint32_t seed, double freq, double amp, int octaves) {
     };
 }
 
+
 HeightField heightWarp(HeightField base, HeightField by, double strength) {
     return [base, by, strength](double x, double z) {
         double ox = by(x, z) * strength;

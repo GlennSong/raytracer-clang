@@ -28,12 +28,22 @@ end
 
 -- The viewmodel's own behaviour: glue itself to the camera every frame, barrel
 -- pointing where you look. Snap PrevTransform so it renders crisp (no smear).
+-- Slot 1 = bare hands (gun stowed out of sight), slot 2 = gun drawn. The viewmodel tracks the slot
+-- itself (it can't be hidden via the API, so it stows far below the world when holstered). The main
+-- script tracks the same slot keys independently to gate firing — both start on slot 1.
 local FOLLOW = [[
-local G = {}
+local G = { equipped = false }
 function G:update(e, dt)
+    if input.pressed("slot_2") then self.equipped = true end
+    if input.pressed("slot_1") then self.equipped = false end
+    if not self.equipped then                       -- holstered: stow out of sight
+        entity.set_position(e, { 0.0, -100000.0, 0.0 })
+        entity.snap_prev(e)
+        return
+    end
     local eye, fwd, right = camera.eye(), camera.forward(), camera.right()
     entity.set_position(e, {
-        eye[1] + fwd[1] * 0.35 + right[1] * 0.18 - 0.18 * 0.0,
+        eye[1] + fwd[1] * 0.35 + right[1] * 0.18,
         eye[2] + fwd[2] * 0.35 + right[2] * 0.18 - 0.18,
         eye[3] + fwd[3] * 0.35 + right[3] * 0.18,
     })
@@ -45,9 +55,10 @@ return G
 
 function M:start(e)
     self.fired = 0
+    self.equipped = false        -- start with bare hands; press 2 to draw the gun, 1 to put it away
     spawn.model{
         mesh      = build_gun(),
-        position  = camera.eye(),
+        position  = { 0.0, -100000.0, 0.0 },   -- spawn holstered (slot 1 = bare hands)
         color     = { 0.14, 0.14, 0.16 },
         metallic  = 0.9,
         roughness = 0.25,
@@ -56,6 +67,9 @@ function M:start(e)
 end
 
 function M:update(e, dt)
+    if input.pressed("slot_2") then self.equipped = true end
+    if input.pressed("slot_1") then self.equipped = false end
+    if not self.equipped then return end       -- bare hands: nothing to fire
     if self.fired >= MAX then return end
     if not input.pressed("fire") then return end
 

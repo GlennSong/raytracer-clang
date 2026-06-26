@@ -30,6 +30,7 @@
 #include <QDropEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QHeaderView>
 #include <QFileInfo>
 #include <QFileSystemModel>
 #include <QFormLayout>
@@ -525,8 +526,12 @@ int main(int argc, char** argv) {
     auto* assetsView = new QTreeView(assetsDock);
     assetsView->setModel(assetsModel);
     assetsView->setRootIndex(assetsModel->index("assets"));
+    assetsView->setColumnHidden(1, true);   // size — hide so the Name column gets the room
     assetsView->setColumnHidden(2, true);   // type
     assetsView->setColumnHidden(3, true);   // date
+    // Name was cramped to a few characters; let it stretch to the dock width and start wide.
+    assetsView->header()->setStretchLastSection(true);
+    assetsView->setColumnWidth(0, 320);
     assetsDock->setWidget(assetsView);
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
 

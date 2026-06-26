@@ -5,6 +5,7 @@
 #include "road_rules.h"         // DesignRules (clearance, deck thickness, ramp grade)
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace engine {
 
@@ -252,7 +253,12 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // gives a continuous welded sidewalk, merges the junctions, and opens the island as a
     // hole for free. So a net containing a roundabout is built that way; centreline markings
     // are overlaid (the shader-UV markings need the analytic ribbon, so they're skipped here).
-    if (roundabout) {
+    // PERF: the SDF roadbed welds a ring cleanly, but it marches a grid over the WHOLE network at
+    // 0.4 m — ~22 s for a small city (vs ~3 ms analytic), which kills realtime editing. So the
+    // analytic per-junction path is the DEFAULT; opt in to the SDF weld (RT_ROUNDABOUT_SDF) only for
+    // a hero ring where its look matters. Proper fix (owed): confine the SDF to the hub's bbox, not
+    // the whole net, so a roundabout doesn't make the entire city pay grid-march cost.
+    if (roundabout && std::getenv("RT_ROUNDABOUT_SDF")) {
         RoadbedParams rp;
         rp.cell = 0.4;
         rp.sidewalkWidth = net.sidewalk;

@@ -67,6 +67,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
+    src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
     src/engine/level_loader.cpp

@@ -128,11 +128,56 @@ recompiling, and lets one generative vocabulary serve every procgen project.
   (`spawnDocumentEntity`) carrying its recipe; the render/instance entities are
   runtime companions regenerated from it.
 
+## Playable Scenes (Engine Rule)
+
+This is a game engine: a level is a world you move through, not a diorama you fly
+over. Every scene you build is playable by construction.
+
+- **Collidable by default.** Anything an actor can stand on, walk into, or drive on
+  gets a collider in the *same* recipe that makes its geometry — never bolted on
+  later. Terrain and road surfaces take an exact triangle collider
+  (`m:collide(mesh, {friction=…})`); props/instances take a primitive
+  (`collide={shape=…}`). A bare centerline or floating decal has nothing to collide
+  with: collision becomes real only when the *body* (real width/thickness) is built,
+  so build the body and its collider together.
+- **Always a player start.** Every playable level has a player. The loader spawns a
+  default one (drop-in from above onto the collidable ground) when a level has no
+  `"player"` block, but an authored scene SHOULD place the spawn deliberately — on
+  the surface, over buildable ground, near the content — not leave it to the default.
+- **Recoverable.** Pressing **R** respawns the player at its spawn (`PlayerSystem`).
+  Treat that as a safety net, not a substitute for a sane spawn and solid ground.
+- **Verify from inside the world.** A scene that only looks right from an overhead
+  fly camera is unverified. Confirm the ground is solid and the geometry is walkable
+  from a player-height/first-person view before calling a level done — flying over it
+  hides that the actor is falling through everything.
+
 ## Engineering Ethos (Engine Rule)
 
-These are tools we are building for the long term, not a throwaway project.
-Invest in making them powerful and expressive.
+Every system here is a real, load-bearing implementation meant to be an *underlying
+system that drives an entirely procedurally generated world* — not a throwaway, not a
+demo, not a screenshot prop. Build it to be used by everything that comes after.
 
+- **No smoke and mirrors.** Build the real thing or don't claim it's built. No fakes
+  that only look right from one camera, no painted-on overlays standing in for a real
+  representation, no hardcoded result dressed up as a generator. If a thing is meant to
+  be a spline, it is a real spline — a genuine typed object that round-trips Lua → C++ →
+  Lua and is the actual source the mesh derives from — not a polyline pretending, and
+  not a polygon decal pretending to be the curve's controls. Real, end to end.
+- **Use the technology you already have.** If the capability exists in the codebase,
+  USE it — extend it, wire it in, expose it. Do NOT reinvent a worse parallel version
+  alongside it (a second mesher, a hand-rolled handle overlay next to the real
+  edit/handle system, a forked curve type). Reinventing-but-worse is how a codebase
+  rots into competing half-systems. Before writing a new system, search for the one
+  that already does it; the bar to add a *parallel* implementation is an explicit,
+  justified decision (an ADR), not convenience. What's the point of having the tech if
+  we route around it with something flimsier?
+- **One source of truth, wired through.** A generated thing flows through the *same*
+  pipeline and the *same* types the engine already uses (procgen recipe → real
+  component/asset → real renderer/edit systems). The Lua binding wraps the *same* C++
+  builder/type the engine uses, never a fork (see Procgen Authoring). Data that should
+  be inspectable/editable is promoted to the real entity that the editor/handle/edit
+  tools already operate on — not baked into a dead mesh with the editable structure
+  thrown away.
 - **Prototype, then build it right.** A prototype exists to prove an idea. Once
   proven, take the time to make it proper — parametric, single-source-of-truth,
   tested, documented (an ADR when it is a real decision) — before moving on. Do

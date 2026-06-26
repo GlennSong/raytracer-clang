@@ -284,6 +284,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // framebufferOnly drawables can't be blitted from; relax it only when a
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);  // headless wire view
     impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
     impl->metalLayer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default

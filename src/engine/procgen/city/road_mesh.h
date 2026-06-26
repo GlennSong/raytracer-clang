@@ -245,6 +245,13 @@ struct WeldSolidParams {
     Vec3   topColor{0.10, 0.10, 0.11};          // asphalt deck
     Vec3   sideColor{0.18, 0.18, 0.19};         // curb / road edge
     Vec3   bottomColor{0.05, 0.05, 0.05};       // underside
+    // Raised sidewalk: a curbed concrete band run along the welded boundary loops (the
+    // outer carriageway edge + every block-interior/island hole), offset outward by
+    // sidewalkWidth and standing curbHeight above the deck. 0 width = no sidewalks.
+    double sidewalkWidth = 0.0;                  // slab width beyond the carriageway (m)
+    double curbHeight = 0.15;                    // curb lip above the deck (m)
+    Vec3   sidewalkColor{0.55, 0.55, 0.52};      // concrete slab top
+    Vec3   curbColor{0.42, 0.42, 0.40};          // curb riser faces
     std::function<double(double, double)> heightAt;  // terrain (world XZ -> height); null = flat
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
