@@ -38,7 +38,7 @@ bool cutSpan(const Poly2& poly, const Vec2& pt, const Vec2& dir, Vec2& a, Vec2& 
 }
 
 // Recursively bisect a face along its long OBB axis until block-sized; record each cut as a street.
-void subdivideStreets(const Poly2& poly, double targetArea, double minEdge, double jitter,
+void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double jitter,
                       Rng& rng, std::vector<std::vector<Vec2>>& streets,
                       std::vector<Poly2>& blocks, int depth) {
     double ar = area(poly);
@@ -46,7 +46,11 @@ void subdivideStreets(const Poly2& poly, double targetArea, double minEdge, doub
     OBB2 obb = orientedBoundingBox(poly);
     int la = obb.longAxis();
     double longHalf = obb.half[la], shortHalf = obb.half[1 - la];
-    if (ar <= targetArea || longHalf < minEdge || shortHalf * 2.0 < minEdge) {
+    // Keep bisecting the long axis until the block's long side is within maxSize. Stop early if a
+    // split would push a child under minSize (longHalf is each child's long-axis extent), or the
+    // block is already thinner than minSize (splitting the long axis can't fix a sub-min short
+    // side). So blocks land in [minSize, maxSize] except where the footprint is itself sub-min.
+    if (longHalf * 2.0 <= maxSize || longHalf < minSize || shortHalf * 2.0 < minSize) {
         blocks.push_back(poly);
         return;
     }
@@ -58,8 +62,8 @@ void subdivideStreets(const Poly2& poly, double targetArea, double minEdge, doub
     if (left.size() < 3 || right.size() < 3) { blocks.push_back(poly); return; }
     Vec2 a, b;
     if (cutSpan(poly, sp, cutDir, a, b)) streets.push_back({a, b});
-    subdivideStreets(left, targetArea, minEdge, jitter, rng, streets, blocks, depth + 1);
-    subdivideStreets(right, targetArea, minEdge, jitter, rng, streets, blocks, depth + 1);
+    subdivideStreets(left, minSize, maxSize, jitter, rng, streets, blocks, depth + 1);
+    subdivideStreets(right, minSize, maxSize, jitter, rng, streets, blocks, depth + 1);
 }
 
 }  // namespace
@@ -84,9 +88,9 @@ DistrictNet buildDistrict(const DistrictParams& p) {
     for (int k = 0; k < p.arterials; ++k) {
         double ang = kPi * (k + rng.unit() * 0.35) / std::max(1, p.arterials);
         Vec2 dir(std::cos(ang), std::sin(ang));
-        // All arterials pass through the SAME centre, so they cross at ONE point — a single clean
-        // roundabout where every spoke meets, instead of jittered near-centre crossings that promote
-        // into a tangle of overlapping rings.
+        // All arterials pass through the SAME centre, so they cross at ONE point — a single node
+        // (capDegree later splits it into staggered <=4-arm junctions) instead of jittered
+        // near-centre crossings that scatter into a tangle of separate hubs.
         Vec2 pt = p.center;
         Vec2 a, b;
         if (cutSpan(footprint, pt, dir, a, b)) arterials.push_back({a, b});
@@ -100,11 +104,10 @@ DistrictNet buildDistrict(const DistrictParams& p) {
         faces = std::move(next);
     }
 
-    // 3. Subdivide each sector into a grid of blocks; the cuts are local streets.
-    double targetArea = p.blockSize * p.blockSize;
-    double minEdge = p.blockSize * 0.55;
+    // 3. Subdivide each sector into a grid of blocks (edges in [blockSizeMin, blockSizeMax]); the
+    //    cuts are local streets.
     for (const Poly2& f : faces)
-        subdivideStreets(f, targetArea, minEdge, p.jitter, rng, streets, d.blocks, 0);
+        subdivideStreets(f, p.blockSizeMin, p.blockSizeMax, p.jitter, rng, streets, d.blocks, 0);
 
     // 4. Assemble ONE graph and planarize: split every crossing/T into shared nodes so the
     //    arterials and street grid become a single connected network (no orphan segments).
@@ -121,7 +124,7 @@ DistrictNet buildDistrict(const DistrictParams& p) {
     // 5. Drop only genuinely TINY dangling stubs — short fragments left by a near-degenerate cut.
     //    A full-length street that ends at the city edge is a legitimate degree-1 node, so prune by
     //    LENGTH, not just degree, or the whole grid unwinds. One pass is enough for the fragments.
-    const double stubLen = p.blockSize * 0.4;
+    const double stubLen = p.blockSizeMin * 0.7;
     {
         std::vector<int> degree(planar.nodes.size(), 0);
         for (const RoadEdge& e : planar.edges) { ++degree[e.a]; ++degree[e.b]; }

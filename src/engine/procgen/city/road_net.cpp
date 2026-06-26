@@ -1,8 +1,9 @@
 #include "road_net.h"
 
 #include "road_network.h"       // RoadGraph, RoadEdge
-#include "road_constraints.h"   // applyConstraints (min-arm-angle + roundabout promotion)
+#include "road_constraints.h"   // applyConstraints, capDegree, RoadRules
 #include "road_rules.h"         // DesignRules (clearance, deck thickness, ramp grade)
+#include "district.h"           // DistrictParams, buildDistrict (generate recipe)
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -526,6 +527,51 @@ json roadNetToJson(const RoadNet& net) {
     j["crosswalks"] = net.crosswalks;
     j["color"] = json::array({net.color.x, net.color.y, net.color.z});
     return j;
+}
+
+void applyGenerateRecipe(RoadNet& net, const json& g) {
+    if (!g.is_object()) return;
+    DistrictParams dp;
+    if (g.contains("center")) {
+        const json& c = g["center"];
+        dp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+    }
+    dp.radius       = g.value("radius", 130.0);
+    dp.arterials    = g.value("arterials", 3);
+    double bs       = g.value("block_size", 36.0);   // nominal target; min/max bracket it
+    dp.blockSizeMax = g.value("block_size_max", bs);
+    dp.blockSizeMin = g.value("block_size_min", bs * 0.55);
+    dp.irregular    = g.value("irregular", 0.22);
+    dp.jitter       = g.value("jitter", 0.16);
+    dp.seed         = g.value("seed", 1u);
+    dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
+    dp.streetWidth  = g.value("street_width", net.width);
+    DistrictNet d = buildDistrict(dp);
+    // City-generation junction policy (road-network-v2-plan T1.1/T1.2): no auto roundabouts;
+    // planarize every crossing into shared nodes, then cap degree to <=4 LAST — planarize itself can
+    // lift a node past the cap when a street T's into it, so capping has to bind on the final noded
+    // graph. The result is one connected, editable, degree-capped network.
+    RoadRules rules;
+    rules.autoRoundabout = false;
+    RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
+    net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
+    for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
+    for (const RoadEdge& e : cg.edges) {
+        net.edges.push_back({e.a, e.b});
+        net.edgeWidths.push_back(e.width);          // arterials wider than local streets
+    }
+}
+
+json roadRecipeForSave(const std::string& currentRecipe, const RoadNet& net) {
+    json recipe = json::parse(currentRecipe, nullptr, false);
+    if (!recipe.is_object() || !recipe.contains("generate"))
+        return roadNetToJson(net);                  // hand-authored: the net IS the saved form
+    // Generated road: keep the "generate" block and refresh only the look from the net — never bake
+    // the nodes (baking froze the city and lost the recipe, the grown.json "save changed" bug).
+    json look = roadNetToJson(net);
+    for (const char* k : {"nodes", "edges", "edge_layers", "tangents"}) look.erase(k);
+    look["generate"] = recipe["generate"];
+    return look;
 }
 
 }  // namespace engine

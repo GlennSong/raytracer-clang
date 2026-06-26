@@ -24,6 +24,11 @@ namespace engine {
 // Pure + headless. Degree-2 nodes (through-roads, curve samples) and dead ends are never
 // touched. A 4-way grid crossing (degree 4, healthy angles) is left as a flat patch.
 struct RoadRules {
+    // Auto-promote a busy (> maxDegree) or acute (< minArmAngle) node to a roundabout ring (the
+    // rule below). On by default for hand-authored nets and the mesh path; the procedural city
+    // generator turns this OFF and instead caps degree (capDegree) + places roundabouts
+    // deliberately, so a generated grid isn't tangled with auto-rings (road-network-v2-plan T1.1).
+    bool   autoRoundabout = true;
     // NB: minArmAngle / maxDegree mirror DesignRules.minArmAngle / maxArmsAtGrade (road_rules.h),
     // the canonical junction policy; keep them in sync (they will fold into one source).
     // Two arms closer than this (radians) can't share a flat junction -> promote. Default
@@ -50,8 +55,16 @@ struct RoadRules {
 RoadGraph applyConstraints(const RoadGraph& graph, const RoadRules& rules = {});
 
 // Would node `v` be promoted under `rules`? (degree > maxDegree, or its tightest adjacent
-// arm gap < minArmAngle). Exposed for the editor (warn / preview) and for tests.
+// arm gap < minArmAngle). False when rules.autoRoundabout is off. Exposed for the editor
+// (warn / preview) and for tests.
 bool nodeNeedsRoundabout(const RoadGraph& graph, int v, const RoadRules& rules);
+
+// Cap node degree: split every node with more than `rules.maxDegree` arms into two nodes a
+// short distance apart, joined by a short link, so the busiest crossing a flat junction has to
+// mesh holds at most `maxDegree` arms — the procedural-city alternative to promoting it to a
+// roundabout (road-network-v2-plan T1.2). Arms are partitioned by bearing; repeated until every
+// node is within the cap. Pure + headless. A graph already within the cap is returned unchanged.
+RoadGraph capDegree(const RoadGraph& graph, const RoadRules& rules = {});
 
 }  // namespace engine
 

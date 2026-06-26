@@ -167,8 +167,9 @@ Vec3 defaultShapeSize(const std::string& shape) {
     return Vec3(1, 1, 1);   // box, wedge
 }
 
-// Rebuild an editable road's carriageway from its RoadNet and keep the saved
-// recipe in sync, after a property edit or a node drag (ADR-0049).
+// Rebuild an editable road's carriageway from its RoadNet and keep the saved recipe in sync, after a
+// property edit or a node drag (ADR-0049). A generated road keeps its recipe — roadRecipeForSave
+// preserves the "generate" block instead of baking the nodes (road-network-v2-plan T2.1).
 void regenerateRoad(World& world, Entity e, Renderer& renderer) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return;
@@ -177,7 +178,24 @@ void regenerateRoad(World& world, Entity e, Renderer& renderer) {
         if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
     }
     if (SourceSpec* spec = world.get<SourceSpec>(e))
-        spec->recipe = roadNetToJson(*net).dump();   // the saved form tracks the live net
+        spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
+}
+
+// Rebuild a generated road from its (edited) generate recipe — the tuning panel's Regenerate. Re-runs
+// buildDistrict from the updated params (which the caller has written into spec.recipe), re-meshes,
+// and keeps the recipe a generate recipe. No-op for a hand-authored road. (road-network-v2-plan T2.3)
+void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
+    RoadNet* net = world.get<RoadNet>(e);
+    SourceSpec* spec = net ? world.get<SourceSpec>(e) : nullptr;
+    if (!spec) return;
+    nlohmann::json recipe = nlohmann::json::parse(spec->recipe, nullptr, false);
+    if (!recipe.is_object() || !recipe.contains("generate")) return;
+    applyGenerateRecipe(*net, recipe["generate"]);
+    if (Renderable* r = world.get<Renderable>(e)) {
+        RenderMesh mesh = buildRoadNetMesh(*net);
+        if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
+    }
+    spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
 }
 
 }  // namespace
@@ -851,6 +869,53 @@ void EditorSystem::drawInspector(FrameContext& ctx) {
     else if (SourceSpec* spec = ctx.world.get<SourceSpec>(selected))
         ImGui::Text("%s", spec->meshFile.empty() ? spec->shape.c_str()
                                                  : spec->meshFile.c_str());
+
+    // Road Generation (road-network-v2-plan T2.2/T2.3): for a GENERATED road, sliders over the
+    // district recipe with a LIVE regenerate, so you can watch the network rebuild as you tune it.
+    // First in the inspector — it's the primary control for a generated city.
+    if (RoadNet* rnet = ctx.world.get<RoadNet>(selected))
+        if (SourceSpec* rspec = ctx.world.get<SourceSpec>(selected)) {
+            nlohmann::json recipe = nlohmann::json::parse(rspec->recipe, nullptr, false);
+            if (recipe.is_object() && recipe.contains("generate") && recipe["generate"].is_object()) {
+                ImGui::SeparatorText("Road Generation");
+                nlohmann::json& g = recipe["generate"];
+                float bsNominal = static_cast<float>(g.value("block_size", 36.0));
+                float radius    = static_cast<float>(g.value("radius", 130.0));
+                int   arterials = g.value("arterials", 3);
+                float blockMax  = static_cast<float>(g.value("block_size_max", static_cast<double>(bsNominal)));
+                float blockMin  = static_cast<float>(g.value("block_size_min", bsNominal * 0.55));
+                float irregular = static_cast<float>(g.value("irregular", 0.22));
+                float jitter    = static_cast<float>(g.value("jitter", 0.16));
+                float arteryW   = static_cast<float>(g.value("artery_width", rnet->width * 1.6));
+                float streetW   = static_cast<float>(g.value("street_width", rnet->width));
+                int   seed      = static_cast<int>(g.value("seed", 1u));
+
+                bool changed = false;
+                changed |= ImGui::SliderFloat("Radius", &radius, 40.0f, 400.0f, "%.0f m");
+                changed |= ImGui::SliderInt("Arterials", &arterials, 0, 8);
+                changed |= ImGui::SliderFloat("Block max", &blockMax, 12.0f, 120.0f, "%.0f m");
+                changed |= ImGui::SliderFloat("Block min", &blockMin, 6.0f, 100.0f, "%.0f m");
+                changed |= ImGui::SliderFloat("Irregular", &irregular, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Jitter", &jitter, 0.0f, 0.5f, "%.2f");
+                changed |= ImGui::SliderFloat("Artery width", &arteryW, 4.0f, 30.0f, "%.1f m");
+                changed |= ImGui::SliderFloat("Street width", &streetW, 3.0f, 20.0f, "%.1f m");
+                changed |= ImGui::SliderInt("Seed", &seed, 1, 9999);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reseed")) { seed = (seed * 1103515 + 12345) & 0x7fff; changed = true; }
+
+                if (changed) {
+                    if (blockMin > blockMax) blockMin = blockMax;     // keep the bracket sane
+                    g.erase("block_size");                            // normalise to explicit min/max
+                    g["radius"] = radius;            g["arterials"] = arterials;
+                    g["block_size_max"] = blockMax;  g["block_size_min"] = blockMin;
+                    g["irregular"] = irregular;      g["jitter"] = jitter;
+                    g["artery_width"] = arteryW;     g["street_width"] = streetW;
+                    g["seed"] = seed;
+                    rspec->recipe = recipe.dump();                    // panel writes the params...
+                    regenerateRoadFromRecipe(ctx.world, selected, ctx.renderer);   // ...then rebuilds live
+                }
+            }
+        }
 
     // Every section below is generated from describeProperties via the
     // registry — the same single source the Qt inspector renders from.

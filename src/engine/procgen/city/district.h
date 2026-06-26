@@ -18,7 +18,8 @@ struct DistrictParams {
     Vec2 center{0, 0};
     double radius = 130;       // city footprint radius (m)
     int    arterials = 3;      // major roads splitting the footprint into sectors
-    double blockSize = 34;     // target block edge (m) — smaller = denser
+    double blockSizeMin = 20;  // smallest block edge (m) — a hard floor; blocks never split below it
+    double blockSizeMax = 36;  // largest block edge (m) — a block longer than this keeps subdividing
     double irregular = 0.22;   // footprint irregularity (0 = circle)
     double jitter = 0.16;      // street-position randomization (fraction of extent)
     double arteryWidth = 6;    // carriageway width tagged on arterial edges

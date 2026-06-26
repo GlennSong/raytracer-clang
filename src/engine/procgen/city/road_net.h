@@ -92,6 +92,18 @@ int  roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist);
 RoadNet roadNetFromJson(const nlohmann::json& j);
 nlohmann::json roadNetToJson(const RoadNet& net);
 
+// Build a generated road's graph from a "generate" recipe block (district kind): runs buildDistrict,
+// caps junction degree to <=4, planarizes, and fills net.nodes/edges/edgeWidths — leaving the look
+// params and heightAt untouched. Shared by the loader (initial build) and the editor (regenerate
+// from the tuning panel). No-op if `generate` isn't a recipe object. (road-network-v2-plan T2.1)
+void applyGenerateRecipe(RoadNet& net, const nlohmann::json& generate);
+
+// The JSON to SAVE for an (edited) road, given its current recipe and live net: a GENERATED road
+// keeps its "generate" block with only the look refreshed from `net` (never baking the nodes — that
+// lost the recipe, the grown.json "save changed" bug); a hand-authored road serialises the net in
+// full. The editor's regenerate writes this back to SourceSpec.recipe. (road-network-v2-plan T2.1)
+nlohmann::json roadRecipeForSave(const std::string& currentRecipe, const RoadNet& net);
+
 }  // namespace engine
 
 #endif

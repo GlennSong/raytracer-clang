@@ -267,37 +267,11 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     // and fills the RoadNet's nodes/edges from it — so the generated city IS a real, editable RoadNet
     // (the editor's node/tangent handles + buildRoadNetMesh's curves/markings/sidewalks/junctions),
     // not a baked mesh. The recipe round-trips via SourceSpec; the look comes from the road block.
-    if (roadBlock.contains("generate")) {
-        const json& g = roadBlock["generate"];
-        DistrictParams dp;
-        if (g.contains("center")) {
-            const json& c = g["center"];
-            dp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
-        }
-        dp.radius      = g.value("radius", 130.0);
-        dp.arterials   = g.value("arterials", 3);
-        dp.blockSize   = g.value("block_size", 36.0);
-        dp.irregular   = g.value("irregular", 0.22);
-        dp.jitter      = g.value("jitter", 0.16);
-        dp.seed        = g.value("seed", 1u);
-        dp.arteryWidth = g.value("artery_width", net.width * 1.6);
-        dp.streetWidth = g.value("street_width", net.width);
-        DistrictNet d = buildDistrict(dp);
-        // Bake the constraint pass (busy hubs -> roundabout rings, ADR-0052) INTO the graph now, so
-        // a roundabout is real nodes+edges in the editable net — with handles, intersecting the
-        // graph — rather than a ring conjured at mesh time that the node graph never sees.
-        // applyConstraints adds the ring AFTER buildDistrict's planarize, so re-planarize to node the
-        // new ring arcs against the streets they cross — otherwise a street runs through the
-        // roundabout without joining it (looks disconnected).
-        RoadGraph cg = planarize(applyConstraints(d.graph), 1.0);
-        net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
-        for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
-        for (const RoadEdge& e : cg.edges) {
-            net.edges.push_back({e.a, e.b});
-            net.edgeWidths.push_back(e.width);          // arterials wider than local streets
-        }
-
-    }
+    // A GENERATED road runs its recipe into the net's graph — shared with the editor's regenerate
+    // (applyGenerateRecipe), so a generated city stays a real editable RoadNet whose recipe
+    // round-trips instead of baking to frozen geometry (road-network-v2-plan T2.1).
+    if (roadBlock.contains("generate"))
+        applyGenerateRecipe(net, roadBlock["generate"]);
 
     if (ground) net.heightAt = *ground;
 

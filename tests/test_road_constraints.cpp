@@ -2,6 +2,7 @@
 
 #include "../src/engine/procgen/city/road_constraints.h"
 #include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/district.h"
 #include <cmath>
 
 using namespace engine;
@@ -145,4 +146,99 @@ TEST_CASE(constraints_conform_clears_the_island) {
         for (const Vec3& p : f.polygon)
             nearest = std::min(nearest, std::sqrt(p.x * p.x + p.z * p.z));
     CHECK(nearest > 4.0);     // the island is clear; roads grade around it, not through it
+}
+
+// With auto-roundabouts OFF (the city generator's policy), a busy hub is left untouched — no ring
+// is added (capDegree handles the degree instead), and nodeNeedsRoundabout reports false.
+TEST_CASE(constraints_skip_auto_roundabout_when_disabled) {
+    RoadGraph g = radialHub(8);
+    RoadRules rules; rules.autoRoundabout = false;
+    CHECK(!nodeNeedsRoundabout(g, 0, rules));
+    RoadGraph out = applyConstraints(g, rules);
+    CHECK(out.nodes.size() == g.nodes.size());     // unchanged: no ring
+    CHECK(out.edges.size() == g.edges.size());
+}
+
+// capDegree splits an over-busy hub into staggered junctions, each within the degree cap, without
+// dropping a single arm.
+TEST_CASE(cap_degree_splits_a_busy_hub) {
+    RoadGraph g = radialHub(8);                     // hub = degree 8
+    RoadRules rules;                                // maxDegree = 4
+    RoadGraph out = capDegree(g, rules);
+    CHECK(maxDegree(out) <= rules.maxDegree);       // no crossing exceeds the cap
+    CHECK(everyNodeReferenced(out));                // no orphan nodes
+    int rim = 0;                                    // all 8 spoke endpoints survive at ~60 m
+    for (const RoadNode& n : out.nodes)
+        if (std::fabs(n.pos.length() - 60.0) < 1e-3) ++rim;
+    CHECK(rim == 8);
+}
+
+// A graph already within the cap is returned unchanged.
+TEST_CASE(cap_degree_leaves_a_four_way_alone) {
+    RoadGraph g = radialHub(4);
+    RoadGraph out = capDegree(g, {});
+    CHECK(out.nodes.size() == g.nodes.size());
+    CHECK(out.edges.size() == g.edges.size());
+}
+
+// Block subdivision honours the [min,max] size bracket: a tighter max packs in more blocks, and no
+// block's long edge runs past the max unless splitting would breach the min floor (or the footprint
+// piece is itself thinner than min).
+TEST_CASE(district_blocks_respect_size_bracket) {
+    auto blockCount = [](double mn, double mx) {
+        DistrictParams p; p.radius = 120; p.seed = 7;
+        p.blockSizeMin = mn; p.blockSizeMax = mx;
+        return buildDistrict(p).blocks.size();
+    };
+    CHECK(blockCount(14, 28) > blockCount(40, 80));   // smaller blocks -> more of them
+
+    DistrictParams p; p.radius = 120; p.seed = 7; p.blockSizeMin = 14; p.blockSizeMax = 28;
+    int violations = 0;
+    for (const Poly2& b : buildDistrict(p).blocks) {
+        OBB2 obb = orientedBoundingBox(b);
+        double lo = std::max(obb.half[0], obb.half[1]) * 2.0;
+        double sh = std::min(obb.half[0], obb.half[1]) * 2.0;
+        if (!(lo <= p.blockSizeMax + 1e-6 || lo < 2.0 * p.blockSizeMin || sh < p.blockSizeMin))
+            ++violations;
+    }
+    CHECK(violations == 0);
+}
+
+// applyGenerateRecipe turns a "generate" block into the editable net's graph: a connected,
+// degree-capped network (no auto-roundabout) that meshes. The loader and the editor's regenerate
+// (the tuning panel) share this one path. (road-network-v2-plan T2.1)
+TEST_CASE(generate_recipe_builds_capped_net) {
+    RoadNet net;
+    nlohmann::json g = {{"radius", 120}, {"arterials", 3}, {"block_size_max", 30},
+                        {"block_size_min", 16}, {"seed", 4}};
+    applyGenerateRecipe(net, g);
+    CHECK(!net.nodes.empty());
+    CHECK(net.edges.size() == net.edgeWidths.size());
+    std::vector<int> deg(net.nodes.size(), 0);
+    for (const std::array<int, 2>& e : net.edges) { ++deg[e[0]]; ++deg[e[1]]; }
+    int mx = 0; for (int d : deg) mx = std::max(mx, d);
+    CHECK(mx <= RoadRules{}.maxDegree);          // capped: no junction over 4 arms, even post-planarize
+    RenderMesh m = buildRoadNetMesh(net);
+    CHECK(!m.vertices.empty());                  // and it meshes
+}
+
+// A generated road's recipe survives an edit: roadRecipeForSave keeps the "generate" block (refreshes
+// only the look) instead of baking the nodes — the grown.json "save should be the same" fix. (T2.1)
+TEST_CASE(generated_road_recipe_survives_edit) {
+    RoadNet net;
+    nlohmann::json gen = {{"radius", 110}, {"arterials", 2}, {"seed", 3}};
+    applyGenerateRecipe(net, gen);                      // net now holds the baked nodes/edges
+    CHECK(!net.nodes.empty());
+    std::string recipe = nlohmann::json{{"generate", gen}, {"width", 7}, {"curved", true}}.dump();
+    net.width = 9.0;                                    // simulate a Width edit in the inspector
+    nlohmann::json saved = roadRecipeForSave(recipe, net);
+    CHECK(saved.contains("generate"));                 // recipe preserved...
+    CHECK(!saved.contains("nodes"));                   // ...NOT baked into geometry
+    CHECK(saved["generate"]["radius"] == 110);         // the generate block is intact
+    CHECK(saved["width"] == 9.0);                       // the look edit is captured
+
+    RoadNet hand;                                      // a hand-authored road still bakes (the net IS source)
+    hand.nodes = {Vec2(0, 0), Vec2(10, 0)}; hand.edges = {{0, 1}};
+    nlohmann::json handSaved = roadRecipeForSave("{}", hand);
+    CHECK(handSaved.contains("nodes"));
 }
