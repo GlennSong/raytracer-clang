@@ -383,10 +383,38 @@ else()
     if(Vulkan_FOUND)
         list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
+
+        # Compile GLSL -> SPIR-V offline (ADR-0057): keeps the runtime dependency
+        # -free (no libshaderc). glslc ships with the Vulkan SDK.
+        if(NOT Vulkan_GLSLC_EXECUTABLE)
+            message(FATAL_ERROR
+                "glslc not found — the Vulkan SDK's GLSL compiler is required to "
+                "build the viewer's shaders. Install the Vulkan SDK or configure "
+                "without the viewer.")
+        endif()
+        set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
+        set(VK_SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders/vulkan)
+        file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
+        set(VK_SHADERS mesh.vert mesh.frag)
+        set(VK_SPV_FILES "")
+        foreach(shader ${VK_SHADERS})
+            add_custom_command(
+                OUTPUT ${VK_SHADER_OUT_DIR}/${shader}.spv
+                COMMAND ${Vulkan_GLSLC_EXECUTABLE}
+                        ${VK_SHADER_SRC_DIR}/${shader}
+                        -o ${VK_SHADER_OUT_DIR}/${shader}.spv
+                DEPENDS ${VK_SHADER_SRC_DIR}/${shader}
+                COMMENT "glslc ${shader} -> ${shader}.spv"
+                VERBATIM)
+            list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
+        endforeach()
+        add_custom_target(viewer_vulkan_shaders DEPENDS ${VK_SPV_FILES})
+
         # RT_HAVE_VULKAN also gates the Vulkan surface code in window.cpp, so the
         # windowing seam (Window::createVulkanSurface) compiles only where the SDK
-        # exists and macOS never pulls in vulkan.h.
-        set(PLATFORM_DEFINES RT_HAVE_VULKAN=1)
+        # exists and macOS never pulls in vulkan.h. RT_VULKAN_SHADER_DIR is where
+        # the backend loads the compiled .spv at runtime.
+        set(PLATFORM_DEFINES RT_HAVE_VULKAN=1 "RT_VULKAN_SHADER_DIR=\"${VK_SHADER_OUT_DIR}\"")
         message(STATUS "Vulkan found — building the viewer with the Vulkan backend")
     else()
         list(APPEND VIEWER_SOURCES src/renderer/null_renderer.cpp)
@@ -404,6 +432,10 @@ target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
 target_link_libraries(viewer PRIVATE engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
+# Build the SPIR-V shaders before the viewer that loads them (Vulkan builds only).
+if(TARGET viewer_vulkan_shaders)
+    add_dependencies(viewer viewer_vulkan_shaders)
+endif()
 
 if(RT_ENABLE_PHYSICS)
     target_link_libraries(viewer PRIVATE Jolt)

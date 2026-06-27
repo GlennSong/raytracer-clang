@@ -1,28 +1,49 @@
 # `src/renderer/vulkan/` — Agent Guide
 
 The Vulkan backend (Linux + Windows), the second implementation of the
-`Renderer` seam (`../AGENTS.md`). **Status: Phase 0 landed** — device/swapchain
-bring-up + a cleared frame (`vulkan_renderer.{h,cpp}`). Written against the
-Vulkan 1.0 spec; **unverified on device** (no GPU/SDK in CI — needs a real
-Linux/Windows run with the validation layers). Phases 1+ (draws, shaders, post)
-are still to do. Decision: ADR-0057. Plan: `docs/vulkan-renderer-plan.md`.
-Reference for feature parity: `../metal/AGENTS.md` (match its pass graph and
-conventions).
+`Renderer` seam (`../AGENTS.md`). **Status: Phases 0–1 landed** — device/
+swapchain bring-up, the SPIR-V shader toolchain, and forward lit single-mesh
+draws (`vulkan_renderer.{h,cpp}`, `shaders/vulkan/mesh.{vert,frag}`). Written
+against the Vulkan 1.0 spec; **unverified on device** (no GPU/SDK in CI — needs a
+real Linux/Windows run with the validation layers). Phases 2+ (textures, full
+forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
+`docs/vulkan-renderer-plan.md`. Parity reference: `../metal/AGENTS.md`.
 
-### What exists after Phase 0
+### What exists after Phase 1
 - `vulkan_renderer.h` — `VulkanRenderer : Renderer`, pimpl (no Vulkan in header).
-- `vulkan_renderer.cpp` — instance (+ debug messenger in debug) → surface (via
-  the Window seam) → physical/logical device → swapchain → image views → render
-  pass (clear→present) → framebuffers → command pool/buffers → per-frame sync →
-  `drawFrame` (acquire → clear render pass → submit → present, with
-  swapchain-recreate on resize/out-of-date). Defines `Renderer::create()`.
-- **Stubs until later phases:** `uploadMesh` keeps CPU bounds only (no VkBuffer
-  yet — Phase 1); `uploadTexture` returns a valid handle with no GPU upload
-  (Phase 2); `setCamera`/`setLights`/`drawMesh` are no-ops.
+- `vulkan_renderer.cpp` — instance (+ debug messenger) → surface (Window seam) →
+  device → swapchain → depth → render pass (color+depth) → framebuffers → command
+  buffers → per-frame sync → descriptor set layout + per-frame global UBO +
+  descriptor pool/sets → forward graphics pipeline → `drawFrame`. Defines
+  `Renderer::create()`.
+- **Rendering:** `uploadMesh` packs the (double) engine `Vertex` to float
+  `GpuVertex`, uploads device-local vertex/index buffers via a staging copy.
+  `setCamera`/`setLights` fill a `GlobalsUBO` (viewProjection with the clip-space
+  Y-flip baked in by `packMat4`, camera pos, sun, ambient). `drawMesh` queues a
+  draw with a `MeshPush` push-constant (model + albedo/metallic + emission/
+  roughness). `endFrame` uploads the UBO and records the queued draws.
+- Shaders compile **offline**: `glslc` in CMake turns `shaders/vulkan/*.{vert,
+  frag}` into `.spv` under `RT_VULKAN_SHADER_DIR` (a compile-def path), loaded at
+  pipeline creation. `mesh.frag` is real Cook-Torrance GGX (sun + ambient).
+- **Stubs until later phases:** `uploadTexture` returns a valid handle, no GPU
+  image yet (Phase 2). No shadows/IBL/post/instancing/terrain. Back-face culling
+  is **off** in Phase 1 (`VK_CULL_MODE_NONE`) until winding is confirmed on
+  device — Phase 2 turns it on. No reverse-Z yet (standard [0,1] depth, LESS_OR_EQUAL).
 - Seam plumbing: `Window::createVulkanSurface` + `requiredVulkanInstanceExtensions`
   (`window.cpp`, GLFW-sealed, gated by `RT_HAVE_VULKAN`); `Renderer::setWindow`
-  (`renderer.h`) hands the window over before `initialize` (the native handle is
-  null on Linux); CMake selects this backend when `find_package(Vulkan)` succeeds.
+  (`renderer.h`) hands the window over before `initialize` (native handle is null
+  on Linux); CMake selects this backend when `find_package(Vulkan)` succeeds.
+
+### Conventions decided in code (Phase 1)
+- **Matrices:** engine `Mat4` is row-major double, `M*v`; `packMat4` transposes to
+  column-major float for GLSL (matching Metal's `toSimd`) and, for the
+  viewProjection, negates clip row 1 = the Vulkan Y-flip. Model matrices are
+  packed without the flip (the VP carries it).
+- **Depth:** `perspective`/`orthographic` already target [0,1]; Phase 1 uses
+  forward-Z (clear 1.0, `LESS_OR_EQUAL`). Reverse-Z (parity with Metal) is a
+  later refinement.
+- **Push constants** for per-draw data (≤128 B); a per-frame **UBO** for globals;
+  bigger arrays (lights, instances) become UBO/SSBO in later phases.
 
 > When code lands here, keep this guide in sync — it exists so future work
 > doesn't re-derive the structure. Update it at the end of each phase.
@@ -106,7 +127,8 @@ validation layers on (no GPU in CI — same constraint Metal has).
 0. **Device + swapchain** → clear screen, clean validation log, resize works.
    *(Code landed; verify on device.)*
 1. **First lit mesh** → vertex/index upload, one UBO + descriptor set, depth,
-   `common.metal`→GLSL. Verify Y-orientation + depth vs Metal.
+   `common.metal`→GLSL. Verify Y-orientation + depth vs Metal. *(Code landed;
+   verify on device — then enable back-face culling in Phase 2.)*
 2. **Full forward pass** → all lights, PBR + texture maps, the `applySurface`
    library, instancing, `drawTerrain` CDLOD morph.
 3. **Cascaded shadows.**
