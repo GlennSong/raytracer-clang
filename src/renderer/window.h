@@ -7,6 +7,7 @@
 #include <vector>
 #include <functional>
 #include <memory>
+#include <cstdint>
 
 namespace engine {
 
@@ -55,6 +56,23 @@ public:
     // for the renderer to bind its surface to. The only seam through which a
     // platform handle crosses into the renderer.
     virtual void* nativeWindowHandle() const = 0;
+
+    // Vulkan windowing seam (ADR-0057). Implemented behind this interface (in
+    // window.cpp via GLFW) so neither GLFW nor Vulkan types leak into engine or
+    // backend code. The instance is passed as an opaque pointer (VkInstance is a
+    // dispatchable handle) and the created surface is written to outSurface (a
+    // VkSurfaceKHR, always 64-bit). Returns false if the build lacks Vulkan
+    // support or surface creation fails. Defaults to unsupported.
+    virtual bool createVulkanSurface(void* /*instance*/,
+                                     uint64_t* /*outSurface*/) const {
+        return false;
+    }
+    // Instance extensions the windowing system requires for a Vulkan surface
+    // (e.g. VK_KHR_surface + the platform surface extension). Empty when the
+    // build has no Vulkan support.
+    virtual std::vector<std::string> requiredVulkanInstanceExtensions() const {
+        return {};
+    }
 
     virtual const InputState& getInput() const = 0;
     virtual const std::vector<Event>& getEvents() const = 0;

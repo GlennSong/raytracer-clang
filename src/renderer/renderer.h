@@ -11,6 +11,8 @@
 
 namespace engine {
 
+class Window;
+
 struct MeshTag {};
 struct BufferTag {};
 struct TextureTag {};
@@ -322,6 +324,14 @@ struct CameraState {
 class Renderer {
 public:
     virtual ~Renderer() = default;
+
+    // Hand the windowing seam to backends that create their own surface from it
+    // rather than from the opaque native handle. Vulkan needs this: the native
+    // handle is null on Linux (window.cpp), so the backend asks the Window for a
+    // surface via Window::createVulkanSurface (ADR-0057). The Application calls
+    // this before initialize(); backends that bind via the native handle (Metal)
+    // ignore it. Default no-op so NullRenderer and other backends stay valid.
+    virtual void setWindow(Window* /*window*/) {}
 
     // windowHandle is an opaque native OS window pointer (e.g. NSWindow* on
     // macOS) from Window::nativeWindowHandle() — never a windowing-library type.

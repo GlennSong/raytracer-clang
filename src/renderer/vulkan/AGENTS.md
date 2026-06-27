@@ -1,10 +1,28 @@
 # `src/renderer/vulkan/` — Agent Guide
 
 The Vulkan backend (Linux + Windows), the second implementation of the
-`Renderer` seam (`../AGENTS.md`). **Status: not yet built** — this guide is the
-spec to build against. Decision: ADR-0057. Plan + phase breakdown:
-`docs/vulkan-renderer-plan.md`. Reference implementation for feature parity:
-`../metal/AGENTS.md` (match its pass graph and conventions).
+`Renderer` seam (`../AGENTS.md`). **Status: Phase 0 landed** — device/swapchain
+bring-up + a cleared frame (`vulkan_renderer.{h,cpp}`). Written against the
+Vulkan 1.0 spec; **unverified on device** (no GPU/SDK in CI — needs a real
+Linux/Windows run with the validation layers). Phases 1+ (draws, shaders, post)
+are still to do. Decision: ADR-0057. Plan: `docs/vulkan-renderer-plan.md`.
+Reference for feature parity: `../metal/AGENTS.md` (match its pass graph and
+conventions).
+
+### What exists after Phase 0
+- `vulkan_renderer.h` — `VulkanRenderer : Renderer`, pimpl (no Vulkan in header).
+- `vulkan_renderer.cpp` — instance (+ debug messenger in debug) → surface (via
+  the Window seam) → physical/logical device → swapchain → image views → render
+  pass (clear→present) → framebuffers → command pool/buffers → per-frame sync →
+  `drawFrame` (acquire → clear render pass → submit → present, with
+  swapchain-recreate on resize/out-of-date). Defines `Renderer::create()`.
+- **Stubs until later phases:** `uploadMesh` keeps CPU bounds only (no VkBuffer
+  yet — Phase 1); `uploadTexture` returns a valid handle with no GPU upload
+  (Phase 2); `setCamera`/`setLights`/`drawMesh` are no-ops.
+- Seam plumbing: `Window::createVulkanSurface` + `requiredVulkanInstanceExtensions`
+  (`window.cpp`, GLFW-sealed, gated by `RT_HAVE_VULKAN`); `Renderer::setWindow`
+  (`renderer.h`) hands the window over before `initialize` (the native handle is
+  null on Linux); CMake selects this backend when `find_package(Vulkan)` succeeds.
 
 > When code lands here, keep this guide in sync — it exists so future work
 > doesn't re-derive the structure. Update it at the end of each phase.
@@ -86,6 +104,7 @@ Each phase is independently verifiable on real Linux/Windows hardware with the
 validation layers on (no GPU in CI — same constraint Metal has).
 
 0. **Device + swapchain** → clear screen, clean validation log, resize works.
+   *(Code landed; verify on device.)*
 1. **First lit mesh** → vertex/index upload, one UBO + descriptor set, depth,
    `common.metal`→GLSL. Verify Y-orientation + depth vs Metal.
 2. **Full forward pass** → all lights, PBR + texture maps, the `applySurface`

@@ -11,7 +11,11 @@ This is a planning document; each phase lands with its own work and updates
 decision is **ADR-0057**. Roadmap cross-reference: Tier 5 "Second rendering
 backend (Vulkan)".
 
-**Status:** Not started. ADR-0057 written (Pending).
+**Status:** Phase 0 implemented (device/swapchain bring-up + cleared frame,
+`src/renderer/vulkan/vulkan_renderer.{h,cpp}`) — written against the Vulkan 1.0
+spec but **unverified on device** (no GPU/SDK in CI; needs a Linux/Windows run
+with the validation layers). ADR-0057 accepted in principle (Pending). Phases 1+
+(draws, shaders, post) to do.
 
 ---
 

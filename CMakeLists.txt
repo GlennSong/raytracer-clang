@@ -375,13 +375,23 @@ if(APPLE)
     )
     set(PLATFORM_DEFINES USE_METAL=1)
 else()
-    # No GPU backend on this platform yet (Vulkan is the planned one):
-    # NullRenderer keeps the targets linking, e.g. for Linux CI/development.
-    # When Vulkan lands:
-    #     find_package(Vulkan REQUIRED)
-    #     list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
-    #     set(PLATFORM_LIBS Vulkan::Vulkan)
-    list(APPEND VIEWER_SOURCES src/renderer/null_renderer.cpp)
+    # Non-Apple (Linux/Windows): use the Vulkan backend when the SDK is present,
+    # else fall back to NullRenderer so the target still links (e.g. headless CI
+    # with no Vulkan SDK). Exactly one of the two provides Renderer::create().
+    # ADR-0057; see src/renderer/vulkan/AGENTS.md.
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
+        set(PLATFORM_LIBS Vulkan::Vulkan)
+        # RT_HAVE_VULKAN also gates the Vulkan surface code in window.cpp, so the
+        # windowing seam (Window::createVulkanSurface) compiles only where the SDK
+        # exists and macOS never pulls in vulkan.h.
+        set(PLATFORM_DEFINES RT_HAVE_VULKAN=1)
+        message(STATUS "Vulkan found — building the viewer with the Vulkan backend")
+    else()
+        list(APPEND VIEWER_SOURCES src/renderer/null_renderer.cpp)
+        message(STATUS "Vulkan not found — viewer uses NullRenderer (no GPU output)")
+    endif()
 endif()
 
 add_executable(viewer
