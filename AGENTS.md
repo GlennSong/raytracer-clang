@@ -45,6 +45,7 @@ src/
     window.h / window.cpp     — Windowing + input (GLFW), the platform boundary
     settings.h / settings.cpp — Persisted viewer settings
     metal/metal_renderer.mm   — Metal backend implementation (macOS)
+    vulkan/vulkan_renderer.cpp — Vulkan backend (Linux/Windows, in progress; ADR-0057)
   engine/
     clock.h / clock.cpp       — Fixed-timestep simulation clock
     world.h / world.cpp       — Entity / Transform world model (sparse-set ECS)
@@ -72,6 +73,12 @@ src/
 
 Each module is one header + one implementation file. Keep includes minimal —
 a module should only include what it directly uses.
+
+**Per-area guides.** Subsystems with non-obvious internals carry their own
+`AGENTS.md` — read it before working in that directory rather than re-reading the
+source. Current guides: `src/renderer/AGENTS.md` (the RHI/window seams and how
+backends plug in), `src/renderer/metal/AGENTS.md` (Metal backend internals — the
+parity reference), and `src/renderer/vulkan/AGENTS.md` (Vulkan backend spec).
 
 ## Platform Abstraction (Engine Rule)
 
