@@ -537,16 +537,23 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         for (const std::array<int, 3>& t : triangulatePolygon(ring))
             addTri(to3d(ring[t[0]]), to3d(ring[t[1]]), to3d(ring[t[2]]));
 
-        // Sidewalk wraps each corner as ONE rail — inner = the corner polyline, outer
-        // = each point pushed radially out from the node — so the kerb sweeps a
-        // rounded corner smoothly instead of fanning into disjoint slats.
+        // Sidewalk wraps each corner as ONE rail — inner = the corner polyline, outer = each point
+        // pushed out by sidewalkWidth. The push direction SWEEPS from arm A's outward normal at the
+        // start mouth to arm B's at the end mouth, so the corner sidewalk meets each arm's sidewalk
+        // exactly (both offset along the same normal there). A radial push from the node diverged from
+        // the arm normals as the corner angle sharpened, tearing a gap open at acute junctions.
         for (int k = 0; k < m; ++k) {
-            std::vector<Vec2> out(corner[k].size());
-            for (std::size_t i = 0; i < corner[k].size(); ++i) {
-                Vec2 rad = corner[k][i] - V; double rl = rad.length();
-                out[i] = corner[k][i] + ((rl > 1e-6) ? rad / rl : Vec2(0, 1)) * p.sidewalkWidth;
+            const Arm& A = arms[k]; const Arm& B = arms[(k + 1) % m];
+            Vec2 nA = perp(A.d), nB = perp(B.d) * -1.0;   // arm A's left / arm B's right outward normal
+            std::vector<Vec2>& cc = corner[k];
+            std::vector<Vec2> out(cc.size());
+            for (std::size_t i = 0; i < cc.size(); ++i) {
+                double t = (cc.size() > 1) ? static_cast<double>(i) / (cc.size() - 1) : 0.0;
+                Vec2 dir = nA * (1.0 - t) + nB * t;
+                double dl = dir.length();
+                out[i] = cc[i] + ((dl > 1e-6) ? dir / dl : nA) * p.sidewalkWidth;
             }
-            sidewalkRail(corner[k], out);
+            sidewalkRail(cc, out);
         }
 
         // Crosswalk across each arm, just outside the pad mouth (where the ribbon
