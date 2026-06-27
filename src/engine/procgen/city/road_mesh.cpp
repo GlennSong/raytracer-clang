@@ -1410,7 +1410,7 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
             Vec2 a = s.points[k], b = s.points[(k + 1) % n];
             Vec2 d = b - a; double len = d.length();
             Vec2 tan = len > 1e-9 ? d * (1.0 / len) : Vec2(1, 0);
-            int steps = std::max(1, static_cast<int>(len / (cell * 0.5)));
+            int steps = std::max(1, static_cast<int>(len / (cell * 0.35)));   // dense -> smoother field
             for (int t = 0; t <= steps; ++t) {
                 double f = static_cast<double>(t) / steps;
                 Vec2 q = a + d * f;
@@ -1423,8 +1423,13 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
         }
     }
     std::vector<Seed> back(seed.size());
-    for (int step = 1 << static_cast<int>(std::floor(std::log2(std::max(2, std::max(nx, nz) - 1))));
-         step >= 1; step /= 2) {
+    // Only cells within (maxHW + sidewalk) of a road are ever used, so the flood only has to reach
+    // that far — cap the JFA start step to the band width instead of the whole grid (far cells stay
+    // unseeded = "outside", which the marcher skips). Fewer passes, same band result.
+    int bandCells = static_cast<int>((maxHW + sw + cell) / cell) + 2;
+    int startStep = 1; while (startStep < bandCells) startStep *= 2;
+    startStep = std::min(startStep, 1 << static_cast<int>(std::floor(std::log2(std::max(2, std::max(nx, nz) - 1)))));
+    for (int step = startStep; step >= 1; step /= 2) {
         back = seed;
         for (int j = 0; j < nz; ++j)
             for (int i = 0; i < nx; ++i) {
@@ -1445,6 +1450,22 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
             }
         seed.swap(back);
     }
+    // Rasterise the junction-interior suppress disks into a mask: markings are off inside them.
+    std::vector<char> noMark(static_cast<std::size_t>(nx) * nz, 0);
+    for (std::size_t d = 0; d < p.noPaintCenters.size(); ++d) {
+        Vec2 c = p.noPaintCenters[d];
+        double r = d < p.noPaintRadii.size() ? p.noPaintRadii[d] : 0.0;
+        if (r <= 0) continue;
+        int i0 = std::max(0, static_cast<int>((c.x - r - minX) / cell));
+        int i1 = std::min(nx - 1, static_cast<int>((c.x + r - minX) / cell) + 1);
+        int j0 = std::max(0, static_cast<int>((c.y - r - minZ) / cell));
+        int j1 = std::min(nz - 1, static_cast<int>((c.y + r - minZ) / cell) + 1);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) {
+                double dx = X(i) - c.x, dz = Z(j) - c.y;
+                if (dx * dx + dz * dz <= r * r) noMark[gi(i, j)] = 1;
+            }
+    }
     std::vector<double> sdf(static_cast<std::size_t>(nx) * nz);
     std::vector<double> gU(static_cast<std::size_t>(nx) * nz, 0.0);   // road-local UV per grid node
     std::vector<double> gV(static_cast<std::size_t>(nx) * nz, 0.0);
@@ -1454,11 +1475,26 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
             if (!s.has) { sdf[gi(i, j)] = 1e9; continue; }
             double ox = X(i) - s.px, oz = Z(j) - s.pz;               // node - nearest centreline point
             sdf[gi(i, j)] = std::sqrt(ox * ox + oz * oz) - s.hw;
+            if (noMark[gi(i, j)]) continue;                          // junction interior: no markings (gU=0)
             double along   = ox * s.tx + oz * s.tz;                  // down the road
             double lateral = static_cast<double>(s.tx) * oz - static_cast<double>(s.tz) * ox;  // across (signed)
             gU[gi(i, j)] = 2.0 + lateral / std::max(0.5, static_cast<double>(s.hw));   // 1 left, 2 centre, 3 right
             gV[gi(i, j)] = static_cast<double>(s.u) + along;         // arc-length, for the dash pattern
         }
+
+    // Light smoothing of the field near the contours tames the marching-squares wobble along the
+    // medial axis where two roads meet (the acute-wedge "squiggle"); a straight edge is a linear field,
+    // so the average leaves it put.
+    for (int pass = 0; pass < 3; ++pass) {
+        std::vector<double> sm = sdf;
+        for (int j = 1; j < nz - 1; ++j)
+            for (int i = 1; i < nx - 1; ++i) {
+                double a = sdf[gi(i, j)];
+                if (a > sw + cell) continue;                         // only near the contours we mesh
+                sm[gi(i, j)] = (4.0 * a + sdf[gi(i-1,j)] + sdf[gi(i+1,j)] + sdf[gi(i,j-1)] + sdf[gi(i,j+1)]) / 8.0;
+            }
+        sdf.swap(sm);
+    }
 
     auto drape = [&](const Vec2& v) { return (p.heightAt ? p.heightAt(v.x, v.y) : 0.0) + p.lift; };
     // A deterministic per-cell value jitter so the flat bands read as a textured surface.

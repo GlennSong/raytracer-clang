@@ -274,6 +274,11 @@ struct RoadbedParams {
     Vec3   sidewalkColor{0.58, 0.58, 0.55};
     Vec3   curbColor{0.50, 0.50, 0.48};
     std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
+    // Junction interiors (centre + radius) where lane markings are SUPPRESSED — a crossing reads as
+    // plain asphalt, and the road-local UV is ambiguous there anyway (two roads meet), so this is also
+    // the fix for the marking glitch in the middle of an intersection.
+    std::vector<Vec2>   noPaintCenters;
+    std::vector<double> noPaintRadii;
 };
 RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedParams& params);
 

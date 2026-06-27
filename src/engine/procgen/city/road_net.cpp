@@ -277,8 +277,19 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
         rp.lift = net.lift;
         rp.roadColor = net.color;
         rp.heightAt = net.heightAt;
-        // Markings now come from the SDF's baked road-local UV + the RoadMarkings shader (set on the
-        // road material in level_loader), not a separate geometry overlay.
+        // Suppress lane markings inside each junction (degree >= 3): the crossing reads as plain
+        // asphalt and the road-local UV is ambiguous there. Radius ~ the widest incident road.
+        std::vector<int> deg(g.nodes.size(), 0);
+        std::vector<double> jw(g.nodes.size(), 0.0);
+        for (const RoadEdge& e : g.edges) {
+            ++deg[e.a]; ++deg[e.b];
+            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
+            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
+        }
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v)
+            if (deg[v] >= 3) { rp.noPaintCenters.push_back(g.nodes[v].pos); rp.noPaintRadii.push_back(jw[v] * 0.85); }
+        // Markings come from the SDF's baked road-local UV + the RoadMarkings shader (set on the road
+        // material in level_loader), not a geometry overlay.
         return unionRoadbed(g, rp);
     }
 
