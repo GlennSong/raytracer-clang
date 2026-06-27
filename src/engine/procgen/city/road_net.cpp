@@ -277,14 +277,9 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
         rp.lift = net.lift;
         rp.roadColor = net.color;
         rp.heightAt = net.heightAt;
-        RenderMesh mesh = unionRoadbed(g, rp);
-        if (net.markings) {
-            LaneMarkParams lp;
-            lp.heightAt = net.heightAt;
-            lp.lift = net.lift + 0.12;
-            appendMesh(mesh, laneMarkings(g, lp));
-        }
-        return mesh;
+        // Markings now come from the SDF's baked road-local UV + the RoadMarkings shader (set on the
+        // road material in level_loader), not a separate geometry overlay.
+        return unionRoadbed(g, rp);
     }
 
     RoadMeshParams p;

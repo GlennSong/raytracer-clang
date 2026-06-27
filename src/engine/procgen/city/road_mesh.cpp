@@ -1390,27 +1390,36 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
     // centreline in O(cells * logN) passes instead of the O(cells * segments) brute force. sdf =
     // distance to that nearest centreline point minus its half-width. (JFA also hands back the nearest
     // point itself, which is what a later pass uses to bake road-local UVs.)
-    struct Seed { float px, pz, hw; int has; };
-    std::vector<Seed> seed(static_cast<std::size_t>(nx) * nz, Seed{0, 0, 0, 0});
-    auto plant = [&](int i, int j, float px, float pz, float hw) {
+    // A seed carries its centreline point + half-width AND arc-length + tangent, so the flooded result
+    // gives every cell road-local UVs (U = lateral/hw, V = arc-length down the road) that the
+    // RoadMarkings shader paints from — the "UV from the graph" fix: JFA's nearest point IS the UV anchor.
+    struct Seed { float px, pz, hw, u, tx, tz; int has; };
+    std::vector<Seed> seed(static_cast<std::size_t>(nx) * nz, Seed{0, 0, 0, 0, 0, 0, 0});
+    auto plant = [&](int i, int j, const Seed& cand) {
         if (i < 0 || i >= nx || j < 0 || j >= nz) return;
         Seed& s = seed[gi(i, j)];
         float cx = static_cast<float>(X(i)), cz = static_cast<float>(Z(j));
-        float dn = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
-        if (!s.has || dn < (s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz)) s = {px, pz, hw, 1};
+        float dn = (cand.px - cx) * (cand.px - cx) + (cand.pz - cz) * (cand.pz - cz);
+        if (!s.has || dn < (s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz)) s = cand;
     };
     for (const UnionSpine& s : spines) {
         int n = static_cast<int>(s.points.size()); if (n < 2) continue;
         int segs = s.closed ? n : n - 1;
+        double arc = 0.0;
         for (int k = 0; k < segs; ++k) {
             Vec2 a = s.points[k], b = s.points[(k + 1) % n];
-            int steps = std::max(1, static_cast<int>((b - a).length() / (cell * 0.5)));
+            Vec2 d = b - a; double len = d.length();
+            Vec2 tan = len > 1e-9 ? d * (1.0 / len) : Vec2(1, 0);
+            int steps = std::max(1, static_cast<int>(len / (cell * 0.5)));
             for (int t = 0; t <= steps; ++t) {
-                Vec2 q = a + (b - a) * (static_cast<double>(t) / steps);
+                double f = static_cast<double>(t) / steps;
+                Vec2 q = a + d * f;
                 plant(static_cast<int>(std::lround((q.x - minX) / cell)),
                       static_cast<int>(std::lround((q.y - minZ) / cell)),
-                      static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(s.halfWidth));
+                      Seed{static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(s.halfWidth),
+                           static_cast<float>(arc + len * f), static_cast<float>(tan.x), static_cast<float>(tan.y), 1});
             }
+            arc += len;
         }
     }
     std::vector<Seed> back(seed.size());
@@ -1437,13 +1446,18 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
         seed.swap(back);
     }
     std::vector<double> sdf(static_cast<std::size_t>(nx) * nz);
+    std::vector<double> gU(static_cast<std::size_t>(nx) * nz, 0.0);   // road-local UV per grid node
+    std::vector<double> gV(static_cast<std::size_t>(nx) * nz, 0.0);
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
             const Seed& s = seed[gi(i, j)];
-            float cx = static_cast<float>(X(i)), cz = static_cast<float>(Z(j));
-            sdf[gi(i, j)] = s.has
-                ? std::sqrt(static_cast<double>((s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz))) - s.hw
-                : 1e9;
+            if (!s.has) { sdf[gi(i, j)] = 1e9; continue; }
+            double ox = X(i) - s.px, oz = Z(j) - s.pz;               // node - nearest centreline point
+            sdf[gi(i, j)] = std::sqrt(ox * ox + oz * oz) - s.hw;
+            double along   = ox * s.tx + oz * s.tz;                  // down the road
+            double lateral = static_cast<double>(s.tx) * oz - static_cast<double>(s.tz) * ox;  // across (signed)
+            gU[gi(i, j)] = 2.0 + lateral / std::max(0.5, static_cast<double>(s.hw));   // 1 left, 2 centre, 3 right
+            gV[gi(i, j)] = static_cast<double>(s.u) + along;         // arc-length, for the dash pattern
         }
 
     auto drape = [&](const Vec2& v) { return (p.heightAt ? p.heightAt(v.x, v.y) : 0.0) + p.lift; };
@@ -1453,7 +1467,7 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
         h = (h ^ (h >> 13)) * 1274126177u;
         return (1.0 - p.grain) + p.grain * ((h >> 8) & 0xffff) / 65535.0 * 2.0;
     };
-    struct SVtx { Vec2 p; double s; };
+    struct SVtx { Vec2 p; double s; double u; double v; };
     auto clip = [](const std::vector<SVtx>& poly, double thr, bool below) {
         std::vector<SVtx> out; int n = static_cast<int>(poly.size());
         for (int i = 0; i < n; ++i) {
@@ -1463,7 +1477,7 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
             if (ain) out.push_back(A);
             if (ain != bin) {
                 double t = (thr - A.s) / (B.s - A.s);
-                out.push_back({A.p + (B.p - A.p) * t, thr});
+                out.push_back({A.p + (B.p - A.p) * t, thr, A.u + (B.u - A.u) * t, A.v + (B.v - A.v) * t});
             }
         }
         return out;
@@ -1473,24 +1487,32 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
         for (int i = 0; i < nx - 1; ++i) {
             double s00 = sdf[gi(i,j)], s10 = sdf[gi(i+1,j)], s11 = sdf[gi(i+1,j+1)], s01 = sdf[gi(i,j+1)];
             if (s00 >= sw && s10 >= sw && s11 >= sw && s01 >= sw) continue;     // wholly outside
-            SVtx corners[4] = { {Vec2(X(i),   Z(j)),   s00}, {Vec2(X(i+1), Z(j)),   s10},
-                                {Vec2(X(i+1), Z(j+1)), s11}, {Vec2(X(i),   Z(j+1)), s01} };
+            SVtx corners[4] = {
+                {Vec2(X(i),   Z(j)),   s00, gU[gi(i,j)],     gV[gi(i,j)]},
+                {Vec2(X(i+1), Z(j)),   s10, gU[gi(i+1,j)],   gV[gi(i+1,j)]},
+                {Vec2(X(i+1), Z(j+1)), s11, gU[gi(i+1,j+1)], gV[gi(i+1,j+1)]},
+                {Vec2(X(i),   Z(j+1)), s01, gU[gi(i,j+1)],   gV[gi(i,j+1)]} };
             std::vector<SVtx> cellPoly(corners, corners + 4);
             double g = grainAt(i, j);
 
-            auto fan = [&](const std::vector<SVtx>& poly, double extraH, Vec3 col) {
+            auto fan = [&](const std::vector<SVtx>& poly, double extraH, Vec3 col, bool uv) {
                 col = col * g;
                 for (std::size_t k = 1; k + 1 < poly.size(); ++k) {
-                    Vec2 a = poly[0].p, b = poly[k].p, c = poly[k + 1].p;
-                    double a2 = (b.x-a.x)*(c.y-a.y) - (c.x-a.x)*(b.y-a.y);
+                    const SVtx& A = poly[0]; const SVtx& B = poly[k]; const SVtx& C = poly[k + 1];
+                    double a2 = (B.p.x-A.p.x)*(C.p.y-A.p.y) - (C.p.x-A.p.x)*(B.p.y-A.p.y);
                     if (std::fabs(a2) < 1e-9) continue;
-                    MeshBuilder::emitTri(mesh,
-                        Vec3(a.x, drape(a) + extraH, a.y), Vec3(b.x, drape(b) + extraH, b.y),
-                        Vec3(c.x, drape(c) + extraH, c.y), Vec3(0, 1, 0), col);
+                    Vec3 va(A.p.x, drape(A.p) + extraH, A.p.y), vb(B.p.x, drape(B.p) + extraH, B.p.y),
+                         vc(C.p.x, drape(C.p) + extraH, C.p.y);
+                    if (uv)   // carriageway: bake road-local UV so the RoadMarkings shader paints lines
+                        MeshBuilder::emitTriUV(mesh, va, vb, vc, Vec3(0, 1, 0), col,
+                            static_cast<float>(A.u), static_cast<float>(A.v), static_cast<float>(B.u),
+                            static_cast<float>(B.v), static_cast<float>(C.u), static_cast<float>(C.v));
+                    else
+                        MeshBuilder::emitTri(mesh, va, vb, vc, Vec3(0, 1, 0), col);
                 }
             };
-            fan(clip(cellPoly, 0.0, true), 0.0, p.roadColor);                   // carriageway
-            fan(clip(clip(cellPoly, sw, true), 0.0, false), p.curbHeight, p.sidewalkColor);  // walk
+            fan(clip(cellPoly, 0.0, true), 0.0, p.roadColor, true);                              // carriageway (UV)
+            fan(clip(clip(cellPoly, sw, true), 0.0, false), p.curbHeight, p.sidewalkColor, false);  // walk
 
             // Curb face: the vertical step up the sdf=0 contour, facing the street.
             std::vector<Vec2> zc;
