@@ -577,6 +577,56 @@ static RoadGraph warpGraph(const RoadGraph& in, double curviness) {
     return out;
 }
 
+// Spread acute junctions so the mesher's corners stay weldable: at an acute intersection the curb
+// returns overrun and the sidewalk/pad slivers (no per-corner math fully saves a <~30deg crossing).
+// For each real junction (degree >= 3) any adjacent arm pair closer than `minAngle` is opened up —
+// both far nodes rotated around the junction by half the deficit — over a few capped passes so the
+// corrections settle. NOT a roundabout: topology is untouched, only the approach angles are relaxed.
+static RoadGraph deAcute(const RoadGraph& in, double minAngle) {
+    const double kTwoPi = 6.283185307179586;
+    RoadGraph g = in;
+    auto rotateFar = [&](int v, int far, double ang) {
+        Vec2 c = g.nodes[v].pos, d = g.nodes[far].pos - c;
+        double cs = std::cos(ang), sn = std::sin(ang);
+        g.nodes[far].pos = c + Vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
+    };
+    for (int pass = 0; pass < 6; ++pass) {
+        std::vector<std::vector<int>> inc(g.nodes.size());
+        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+            inc[g.edges[e].a].push_back(e);
+            inc[g.edges[e].b].push_back(e);
+        }
+        bool changed = false;
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+            if (static_cast<int>(inc[v].size()) < 3) continue;            // only real junctions
+            struct Arm { int far; double ang; };
+            std::vector<Arm> arms;
+            for (int e : inc[v]) {
+                int far = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
+                Vec2 d = g.nodes[far].pos - g.nodes[v].pos;
+                if (d.lengthSquared() > 1e-9) arms.push_back({far, std::atan2(d.y, d.x)});
+            }
+            int n = static_cast<int>(arms.size());
+            if (n < 3) continue;
+            std::sort(arms.begin(), arms.end(), [](const Arm& a, const Arm& b) { return a.ang < b.ang; });
+            for (int k = 0; k < n; ++k) {
+                Arm& a0 = arms[k];
+                Arm& a1 = arms[(k + 1) % n];
+                double gap = a1.ang - a0.ang;
+                if (gap <= 0) gap += kTwoPi;
+                if (gap >= minAngle || gap < 1e-3) continue;
+                double corr = std::min((minAngle - gap) * 0.5, 0.12);     // half each, capped per pass
+                rotateFar(v, a0.far, -corr);
+                rotateFar(v, a1.far, corr);
+                a0.ang -= corr; a1.ang += corr;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+    return g;
+}
+
 void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (!g.is_object()) return;
     DistrictParams dp;
@@ -604,6 +654,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     rules.autoRoundabout = false;
     RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
     if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
+    cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {
