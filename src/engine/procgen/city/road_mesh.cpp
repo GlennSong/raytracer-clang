@@ -1385,18 +1385,65 @@ RenderMesh unionRoadbed(const std::vector<UnionSpine>& spines, const RoadbedPara
     auto Z = [&](int j) { return minZ + j * cell; };
     auto gi = [&](int i, int j) { return j * nx + i; };
 
+    // SDF via the Jump Flood Algorithm (JFA): seed grid cells from the centrelines, then flood the
+    // "nearest seed" outward in HALVING steps — N/2, N/4, ... 1 — so every cell learns its nearest
+    // centreline in O(cells * logN) passes instead of the O(cells * segments) brute force. sdf =
+    // distance to that nearest centreline point minus its half-width. (JFA also hands back the nearest
+    // point itself, which is what a later pass uses to bake road-local UVs.)
+    struct Seed { float px, pz, hw; int has; };
+    std::vector<Seed> seed(static_cast<std::size_t>(nx) * nz, Seed{0, 0, 0, 0});
+    auto plant = [&](int i, int j, float px, float pz, float hw) {
+        if (i < 0 || i >= nx || j < 0 || j >= nz) return;
+        Seed& s = seed[gi(i, j)];
+        float cx = static_cast<float>(X(i)), cz = static_cast<float>(Z(j));
+        float dn = (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
+        if (!s.has || dn < (s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz)) s = {px, pz, hw, 1};
+    };
+    for (const UnionSpine& s : spines) {
+        int n = static_cast<int>(s.points.size()); if (n < 2) continue;
+        int segs = s.closed ? n : n - 1;
+        for (int k = 0; k < segs; ++k) {
+            Vec2 a = s.points[k], b = s.points[(k + 1) % n];
+            int steps = std::max(1, static_cast<int>((b - a).length() / (cell * 0.5)));
+            for (int t = 0; t <= steps; ++t) {
+                Vec2 q = a + (b - a) * (static_cast<double>(t) / steps);
+                plant(static_cast<int>(std::lround((q.x - minX) / cell)),
+                      static_cast<int>(std::lround((q.y - minZ) / cell)),
+                      static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(s.halfWidth));
+            }
+        }
+    }
+    std::vector<Seed> back(seed.size());
+    for (int step = 1 << static_cast<int>(std::floor(std::log2(std::max(2, std::max(nx, nz) - 1))));
+         step >= 1; step /= 2) {
+        back = seed;
+        for (int j = 0; j < nz; ++j)
+            for (int i = 0; i < nx; ++i) {
+                float cx = static_cast<float>(X(i)), cz = static_cast<float>(Z(j));
+                Seed best = seed[gi(i, j)];
+                float bd = best.has ? (best.px - cx) * (best.px - cx) + (best.pz - cz) * (best.pz - cz) : 1e30f;
+                for (int dj = -1; dj <= 1; ++dj)
+                    for (int di = -1; di <= 1; ++di) {
+                        if (!di && !dj) continue;
+                        int ni = i + di * step, nj = j + dj * step;
+                        if (ni < 0 || ni >= nx || nj < 0 || nj >= nz) continue;
+                        const Seed& s = seed[gi(ni, nj)];
+                        if (!s.has) continue;
+                        float d = (s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz);
+                        if (d < bd) { bd = d; best = s; }
+                    }
+                back[gi(i, j)] = best;
+            }
+        seed.swap(back);
+    }
     std::vector<double> sdf(static_cast<std::size_t>(nx) * nz);
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
-            Vec2 pt(X(i), Z(j)); double best = 1e30;
-            for (const UnionSpine& s : spines) {
-                int n = static_cast<int>(s.points.size()); if (n < 2) continue;
-                int segs = s.closed ? n : n - 1; double d2 = 1e30;
-                for (int k = 0; k < segs; ++k)
-                    d2 = std::min(d2, segDist2(pt, s.points[k], s.points[(k + 1) % n]));
-                best = std::min(best, std::sqrt(d2) - s.halfWidth);
-            }
-            sdf[gi(i, j)] = best;
+            const Seed& s = seed[gi(i, j)];
+            float cx = static_cast<float>(X(i)), cz = static_cast<float>(Z(j));
+            sdf[gi(i, j)] = s.has
+                ? std::sqrt(static_cast<double>((s.px - cx) * (s.px - cx) + (s.pz - cz) * (s.pz - cz))) - s.hw
+                : 1e9;
         }
 
     auto drape = [&](const Vec2& v) { return (p.heightAt ? p.heightAt(v.x, v.y) : 0.0) + p.lift; };

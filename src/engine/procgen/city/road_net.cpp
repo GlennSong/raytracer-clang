@@ -269,7 +269,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // analytic per-junction path is the DEFAULT; opt in to the SDF weld (RT_ROUNDABOUT_SDF) only for
     // a hero ring where its look matters. Proper fix (owed): confine the SDF to the hub's bbox, not
     // the whole net, so a roundabout doesn't make the entire city pay grid-march cost.
-    if (roundabout && std::getenv("RT_ROUNDABOUT_SDF")) {
+    if ((roundabout && std::getenv("RT_ROUNDABOUT_SDF")) || std::getenv("RT_SDF_ROADS")) {
         RoadbedParams rp;
         rp.cell = 0.4;
         rp.sidewalkWidth = net.sidewalk;
