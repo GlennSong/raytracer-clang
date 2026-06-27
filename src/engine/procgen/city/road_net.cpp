@@ -536,6 +536,48 @@ json roadNetToJson(const RoadNet& net) {
     return j;
 }
 
+// Bow a generated grid into curved streets: split each long edge at its midpoint and push that point
+// off the chord by a smooth position-driven field (low-frequency sine), so neighbouring streets sweep
+// together into coherent curves rather than random wiggles. Short junction-internal edges are left
+// straight, so the intersections (degree >= 3, straight tangents) stay clean — the curve lives in the
+// degree-2 mid-spans where the Catmull-Rom sampler renders it.
+static RoadGraph bowGraph(const RoadGraph& in, double curviness) {
+    const double freq = 0.03;        // field wavelength ~210 m: broad sweeps, not jitter
+    RoadGraph out;
+    out.nodes = in.nodes;
+    for (const RoadEdge& e : in.edges) {
+        Vec2 a = in.nodes[e.a].pos, b = in.nodes[e.b].pos;
+        Vec2 ab = b - a;
+        double len = ab.length();
+        // Only bow real spans. Short edges (junction links, capDegree cluster stubs, slivers between
+        // tightly-packed crossings) stay straight, or they bow into each other and spiral.
+        if (len < 26.0) { out.edges.push_back(e); continue; }
+        Vec2 mid = (a + b) * 0.5;
+        // Skip DENSE clusters: where many nodes pack close (a capDegree hub split, a tangle of
+        // crossings), bowing the short radiating edges nests them into spirals — keep those straight.
+        int near = 0;
+        for (const RoadNode& nd : in.nodes)
+            if ((nd.pos - mid).lengthSquared() < 22.0 * 22.0) ++near;
+        if (near > 5) { out.edges.push_back(e); continue; }
+        Vec2 perp(-ab.y / len, ab.x / len);
+        // ONE bow per edge — a single arc through the midpoint. (A multi-point wiggle spirals where
+        // edges pack together; a single arc can't.) The offset is driven by a smooth position field
+        // so neighbouring streets sweep the same way, and the effective length is CAPPED so a long
+        // arterial draws a gentle sweep instead of a wild swing. Endpoints are the junction nodes
+        // (straight tangents), so the road leaves each intersection straight and bows in the middle.
+        // A single diagonal traveling wave, NOT sin(x)+sin(y): the 2D sum interferes into concentric
+        // ring patterns where streets nest into swirls; one directional wave gives coherent bands of
+        // sweep with no rings.
+        double field = std::sin(mid.x * freq + mid.y * freq * 0.6 + 0.7);
+        Vec2 m = mid + perp * (curviness * std::min(len, 70.0) * 0.5 * field);
+        int mi = static_cast<int>(out.nodes.size());
+        out.nodes.push_back(RoadNode{m});
+        out.edges.push_back(RoadEdge{e.a, mi, e.width, e.klass, e.layer});
+        out.edges.push_back(RoadEdge{mi, e.b, e.width, e.klass, e.layer});
+    }
+    return out;
+}
+
 void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (!g.is_object()) return;
     DistrictParams dp;
@@ -553,6 +595,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     dp.seed         = g.value("seed", 1u);
     dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
     dp.streetWidth  = g.value("street_width", net.width);
+    double curviness = g.value("curviness", 0.0);    // 0 = straight grid; >0 sweeps streets into curves
     DistrictNet d = buildDistrict(dp);
     // City-generation junction policy (road-network-v2-plan T1.1/T1.2): no auto roundabouts;
     // planarize every crossing into shared nodes, then cap degree to <=4 LAST — planarize itself can
@@ -561,6 +604,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     RoadRules rules;
     rules.autoRoundabout = false;
     RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
+    if (curviness > 0.0) cg = bowGraph(cg, curviness);   // every road is a spline — give them real curve
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {

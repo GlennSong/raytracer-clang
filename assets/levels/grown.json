@@ -57,6 +57,7 @@
           "arterials": 3,
           "artery_width": 13,
           "block_size": 42,
+          "curviness": 0.22,
           "kind": "district",
           "radius": 140,
           "seed": 5,
