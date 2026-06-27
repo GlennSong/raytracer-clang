@@ -541,39 +541,38 @@ json roadNetToJson(const RoadNet& net) {
 // together into coherent curves rather than random wiggles. Short junction-internal edges are left
 // straight, so the intersections (degree >= 3, straight tangents) stay clean — the curve lives in the
 // degree-2 mid-spans where the Catmull-Rom sampler renders it.
-static RoadGraph bowGraph(const RoadGraph& in, double curviness) {
-    const double freq = 0.03;        // field wavelength ~210 m: broad sweeps, not jitter
+static RoadGraph warpGraph(const RoadGraph& in, double curviness) {
+    const double f = 0.016;                 // warp field wavelength ~ 1/f ~ 60 m
+    const double spacing = 34.0;            // sample along each edge so the spline has points to bend
+    const double amp = curviness * 42.0;    // displacement magnitude (m)
+    // DOMAIN WARP: displace every node — and points sampled along each edge — by a smooth low-frequency
+    // vector field. Because the displacement is a continuous function of POSITION, neighbours move
+    // together, so a gentle warp is injective: the grid deforms into flowing organic streets WITHOUT
+    // roads crossing each other, and a capDegree cluster shifts as one unit instead of spiralling.
+    // (Per-edge bowing moved each edge on its own and so could cross its neighbours.) The Catmull-Rom
+    // sampler renders the warped chains as curves; junctions keep straight tangents and stay clean.
+    auto warp = [&](const Vec2& p) {
+        double dx = std::sin(p.y * f) + 0.5 * std::sin(p.y * f * 2.1 + 1.3);
+        double dy = std::sin(p.x * f + 2.4) + 0.5 * std::sin(p.x * f * 1.7 + 4.1);
+        return Vec2(dx * amp, dy * amp);
+    };
     RoadGraph out;
-    out.nodes = in.nodes;
+    out.nodes.reserve(in.nodes.size());
+    for (const RoadNode& n : in.nodes) out.nodes.push_back(RoadNode{n.pos + warp(n.pos)});
     for (const RoadEdge& e : in.edges) {
-        Vec2 a = in.nodes[e.a].pos, b = in.nodes[e.b].pos;
-        Vec2 ab = b - a;
-        double len = ab.length();
-        // Only bow real spans. Short edges (junction links, capDegree cluster stubs, slivers between
-        // tightly-packed crossings) stay straight, or they bow into each other and spiral.
-        if (len < 26.0) { out.edges.push_back(e); continue; }
-        Vec2 mid = (a + b) * 0.5;
-        // Skip DENSE clusters: where many nodes pack close (a capDegree hub split, a tangle of
-        // crossings), bowing the short radiating edges nests them into spirals — keep those straight.
-        int near = 0;
-        for (const RoadNode& nd : in.nodes)
-            if ((nd.pos - mid).lengthSquared() < 22.0 * 22.0) ++near;
-        if (near > 5) { out.edges.push_back(e); continue; }
-        Vec2 perp(-ab.y / len, ab.x / len);
-        // ONE bow per edge — a single arc through the midpoint. (A multi-point wiggle spirals where
-        // edges pack together; a single arc can't.) The offset is driven by a smooth position field
-        // so neighbouring streets sweep the same way, and the effective length is CAPPED so a long
-        // arterial draws a gentle sweep instead of a wild swing. Endpoints are the junction nodes
-        // (straight tangents), so the road leaves each intersection straight and bows in the middle.
-        // A single diagonal traveling wave, NOT sin(x)+sin(y): the 2D sum interferes into concentric
-        // ring patterns where streets nest into swirls; one directional wave gives coherent bands of
-        // sweep with no rings.
-        double field = std::sin(mid.x * freq + mid.y * freq * 0.6 + 0.7);
-        Vec2 m = mid + perp * (curviness * std::min(len, 70.0) * 0.5 * field);
-        int mi = static_cast<int>(out.nodes.size());
-        out.nodes.push_back(RoadNode{m});
-        out.edges.push_back(RoadEdge{e.a, mi, e.width, e.klass, e.layer});
-        out.edges.push_back(RoadEdge{mi, e.b, e.width, e.klass, e.layer});
+        Vec2 a = in.nodes[e.a].pos, b = in.nodes[e.b].pos;   // ORIGINAL positions: sample, then warp
+        double len = (b - a).length();
+        int segs = std::max(1, static_cast<int>(std::lround(len / spacing)));
+        int prev = e.a;
+        for (int i = 1; i < segs; ++i) {
+            double t = static_cast<double>(i) / segs;
+            Vec2 p = a + (b - a) * t;
+            int mi = static_cast<int>(out.nodes.size());
+            out.nodes.push_back(RoadNode{p + warp(p)});
+            out.edges.push_back(RoadEdge{prev, mi, e.width, e.klass, e.layer});
+            prev = mi;
+        }
+        out.edges.push_back(RoadEdge{prev, e.b, e.width, e.klass, e.layer});
     }
     return out;
 }
@@ -604,7 +603,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     RoadRules rules;
     rules.autoRoundabout = false;
     RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
-    if (curviness > 0.0) cg = bowGraph(cg, curviness);   // every road is a spline — give them real curve
+    if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {

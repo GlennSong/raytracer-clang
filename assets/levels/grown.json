@@ -56,10 +56,10 @@
         "generate": {
           "arterials": 3,
           "artery_width": 13,
-          "block_size": 42,
+          "block_size": 90,
           "curviness": 0.22,
           "kind": "district",
-          "radius": 140,
+          "radius": 200,
           "seed": 5,
           "street_width": 7
         },
