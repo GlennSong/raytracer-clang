@@ -10,18 +10,26 @@ layout(location = 2) in vec3 inTangent;
 layout(location = 3) in vec2 inTexcoord;
 layout(location = 4) in vec3 inColor;
 
+// Must match the block layout in mesh.frag and GlobalsUBO in vulkan_renderer.cpp.
+struct Light {
+    vec4 positionIntensity;
+    vec4 directionInner;
+    vec4 colorOuter;
+    vec4 typeRange;
+};
 layout(set = 0, binding = 0) uniform Globals {
-    mat4 viewProjection;
-    vec4 cameraPosition;   // xyz
-    vec4 sunDirection;     // xyz, toward the light source
-    vec4 sunColor;         // rgb = color * intensity
-    vec4 ambient;          // rgb = ambient color * multiplier
+    mat4  viewProjection;
+    vec4  cameraPosition;
+    vec4  ambient;
+    ivec4 lightCount;
+    Light lights[32];
 } g;
 
 layout(push_constant) uniform Push {
-    mat4 model;
-    vec4 albedoMetallic;   // rgb = albedo, a = metallic
-    vec4 emissionRough;    // rgb = emission, a = roughness
+    mat4  model;
+    vec4  albedoMetallic;
+    vec4  emissionRough;
+    uvec4 surfaceFlags;
 } pc;
 
 layout(location = 0) out vec3 outWorldPos;

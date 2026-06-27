@@ -11,12 +11,18 @@ This is a planning document; each phase lands with its own work and updates
 decision is **ADR-0057**. Roadmap cross-reference: Tier 5 "Second rendering
 backend (Vulkan)".
 
-**Status:** Phases 0–1 implemented — device/swapchain bring-up, the offline
-SPIR-V toolchain, and forward lit single-mesh draws
+**Status:** Phases 0–2 implemented (2 partial) — device/swapchain bring-up, the
+offline SPIR-V toolchain, forward lit draws, and the full multi-light
+Cook-Torrance model + the procedural-surface library
 (`src/renderer/vulkan/vulkan_renderer.{h,cpp}`, `shaders/vulkan/mesh.{vert,frag}`).
 Written against the Vulkan 1.0 spec but **unverified on device** (no GPU/SDK in
 CI; needs a Linux/Windows run with the validation layers). ADR-0057 accepted in
-principle (Pending). Phases 2+ (textures, full forward, shadows, IBL, post) to do.
+principle (Pending).
+
+Still owed in Phase 2: **texture maps** (albedo/normal/MR/AO/emissive sampling —
+needs VkImage upload + material descriptor sets), **instancing**
+(`drawMeshInstanced`), and **terrain morph** (`drawTerrain`). Then Phases 3+
+(shadows, IBL/environment, post stack).
 
 ---
 

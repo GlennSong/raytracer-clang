@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -56,21 +57,34 @@ struct GpuVertex {
     float color[3];
 };
 
-// std140-compatible global uniforms (set 0, binding 0). Mirrors the Globals
-// block in shaders/vulkan/mesh.{vert,frag}: mat4 + 4 vec4 = 128 bytes.
-struct GlobalsUBO {
-    float viewProjection[16];
-    float cameraPosition[4];
-    float sunDirection[4];
-    float sunColor[4];
-    float ambient[4];
+// One light, packed into 4 vec4 (std140). Mirrors the Light struct in the
+// shaders. Maps the engine's GPULight fields: positionIntensity = (pos, intensity),
+// directionInner = (dir, innerCos), colorOuter = (color, outerCos),
+// typeRange = (type, range, _, _). type: 0 point, 1 directional, 2 spot.
+struct GpuLight {
+    float positionIntensity[4];
+    float directionInner[4];
+    float colorOuter[4];
+    float typeRange[4];
 };
 
-// Per-draw push constants. Mirrors the Push block in the shaders (<=128 bytes).
+// std140-compatible global uniforms (set 0, binding 0). Mirrors the Globals
+// block in shaders/vulkan/mesh.{vert,frag}. Offsets: viewProjection 0,
+// cameraPosition 64, ambient 80, lightCount 96, lights 112; total 2160 bytes.
+struct GlobalsUBO {
+    float   viewProjection[16];
+    float   cameraPosition[4];
+    float   ambient[4];          // rgb = ambient color * multiplier
+    int32_t lightCount[4];       // x = active light count
+    GpuLight lights[32];
+};
+
+// Per-draw push constants. Mirrors the Push block in the shaders (112 <= 128 B).
 struct MeshPush {
-    float model[16];
-    float albedoMetallic[4];   // rgb albedo, a metallic
-    float emissionRough[4];    // rgb emission, a roughness
+    float    model[16];
+    float    albedoMetallic[4];  // rgb albedo, a metallic
+    float    emissionRough[4];   // rgb emission, a roughness
+    uint32_t surfaceFlags[4];    // x surfaceId, y rawFlags, z textureFlags
 };
 
 struct GpuMesh {
@@ -1140,7 +1154,8 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 1: forward lit meshes)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 2: forward + multi-light + surfaces)",
+             width, height);
     return true;
 }
 
@@ -1299,20 +1314,47 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
 }
 
 void VulkanRenderer::setLights(const SceneLighting& lighting) {
-    const DirectionalLight& sun = lighting.sun;
-    impl->cpuGlobals.sunDirection[0] = static_cast<float>(sun.direction.x);
-    impl->cpuGlobals.sunDirection[1] = static_cast<float>(sun.direction.y);
-    impl->cpuGlobals.sunDirection[2] = static_cast<float>(sun.direction.z);
-    impl->cpuGlobals.sunDirection[3] = 0.0f;
-    impl->cpuGlobals.sunColor[0] = static_cast<float>(sun.color.x) * sun.intensity;
-    impl->cpuGlobals.sunColor[1] = static_cast<float>(sun.color.y) * sun.intensity;
-    impl->cpuGlobals.sunColor[2] = static_cast<float>(sun.color.z) * sun.intensity;
-    impl->cpuGlobals.sunColor[3] = 1.0f;
     float amb = lighting.ambientMultiplier;
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
     impl->cpuGlobals.ambient[3] = 1.0f;
+
+    int n = 0;
+    auto setColor = [](float* dst, const Vec3& c, float w) {
+        dst[0] = static_cast<float>(c.x);
+        dst[1] = static_cast<float>(c.y);
+        dst[2] = static_cast<float>(c.z);
+        dst[3] = w;
+    };
+
+    // Directional sun (type 1): intensity in positionIntensity.w, dir normalized.
+    if (n < 32) {
+        GpuLight& l = impl->cpuGlobals.lights[n++];
+        setColor(l.positionIntensity, Vec3(0, 0, 0), lighting.sun.intensity);
+        setColor(l.directionInner, normalize(lighting.sun.direction), 0.0f);
+        setColor(l.colorOuter, lighting.sun.color, 0.0f);
+        l.typeRange[0] = 1.0f; l.typeRange[1] = 0.0f; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+    }
+    // Point lights (type 0).
+    for (const PointLight& p : lighting.pointLights) {
+        if (n >= 32) break;
+        GpuLight& l = impl->cpuGlobals.lights[n++];
+        setColor(l.positionIntensity, p.position, p.intensity);
+        setColor(l.directionInner, Vec3(0, 0, 0), 0.0f);
+        setColor(l.colorOuter, p.color, 0.0f);
+        l.typeRange[0] = 0.0f; l.typeRange[1] = p.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+    }
+    // Spot lights (type 2): cones stored as cosines.
+    for (const SpotLight& s : lighting.spotLights) {
+        if (n >= 32) break;
+        GpuLight& l = impl->cpuGlobals.lights[n++];
+        setColor(l.positionIntensity, s.position, s.intensity);
+        setColor(l.directionInner, normalize(s.direction), std::cos(s.innerConeAngle));
+        setColor(l.colorOuter, s.color, std::cos(s.outerConeAngle));
+        l.typeRange[0] = 2.0f; l.typeRange[1] = s.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+    }
+    impl->cpuGlobals.lightCount[0] = n;
 }
 
 void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
@@ -1328,6 +1370,10 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.push.emissionRough[1] = static_cast<float>(material.emission.y);
     item.push.emissionRough[2] = static_cast<float>(material.emission.z);
     item.push.emissionRough[3] = material.roughness;
+    item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
+    item.push.surfaceFlags[1] = material.flags;
+    item.push.surfaceFlags[2] = 0u;   // textureFlags — Phase 2b (texture maps)
+    item.push.surfaceFlags[3] = 0u;
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }
