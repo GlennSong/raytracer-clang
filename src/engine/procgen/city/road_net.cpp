@@ -269,6 +269,32 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // analytic per-junction path is the DEFAULT; opt in to the SDF weld (RT_ROUNDABOUT_SDF) only for
     // a hero ring where its look matters. Proper fix (owed): confine the SDF to the hub's bbox, not
     // the whole net, so a roundabout doesn't make the entire city pay grid-march cost.
+    if (std::getenv("RT_WELD_ROADS")) {
+        // Polygon-union weld (the "complex join"): each road -> exact +/-width outline, boolean-unioned
+        // (polygonUnion) into ONE surface, plus a raised sidewalk band along the welded boundary. Crisp,
+        // light, UV-ready — and a union has no double-coverage, so the sidewalks CAN'T overlap (the
+        // analytic per-junction flaw). Prototype: A/B against the analytic/SDF on the same scene.
+        WeldSolidParams wp;
+        wp.topY = net.lift;
+        wp.thickness = 0.5;
+        wp.cornerRadius = net.cornerRadius;
+        wp.sidewalkWidth = net.sidewalk;
+        wp.curbHeight = net.curb;
+        wp.topColor = net.color;
+        wp.heightAt = net.heightAt;
+        // Feed weldSolid one spine per CHAIN (a whole road as a smooth polyline), not per edge — a
+        // per-edge curve would union into dozens of tiny rectangles whose jagged boundary spikes the
+        // sidewalk offset. One polyline -> one smooth ribbon outline.
+        std::vector<UnionSpine> spines;
+        for (const std::vector<Vec2>& chain : traceChains(g)) {
+            if (chain.size() < 2) continue;
+            UnionSpine s;
+            s.points = chain;
+            s.halfWidth = net.width * 0.5;
+            spines.push_back(std::move(s));
+        }
+        return weldSolid(spines, wp);
+    }
     if ((roundabout && std::getenv("RT_ROUNDABOUT_SDF")) || std::getenv("RT_SDF_ROADS")) {
         RoadbedParams rp;
         rp.cell = 0.4;
