@@ -25,7 +25,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  cameraPosition;
     vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength)
     vec4  cascadeSplit;       // far view-space depth of cascades 0..3
-    ivec4 counts;             // x lightCount, y cascadeCount, z envMode
+    ivec4 counts;             // x lightCount, y cascadeCount, z envMode, w debugView
     vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
     vec4  skySunDir;          // xyz dir, w disc intensity
     vec4  skySunColor;
@@ -423,6 +423,39 @@ void main() {
     vec3 envSpecular = prefiltered * Famb;
     vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
 
-    outColor = vec4(direct + ambient + emission, 1.0);
+    // Debug views that need lit-pass data write display-ready values into the HDR
+    // target; the composite shows them raw (counts.w carries the selector — see
+    // Renderer::debugView). Buffer views (AO=1, SSR=2, normals=4) stay
+    // composite-side. Parity with post.metal's debug modes.
+    int dbg = g.counts.w;
+    if (dbg == 3) {
+        // Linearized view depth (white = near, black = far). Normalized by the
+        // furthest cascade split when shadows exist, else a scene-scale fallback.
+        float vd = -(g.view * vec4(inWorldPos, 1.0)).z;
+        float farDist = (g.counts.y > 0) ? g.cascadeSplit[g.counts.y - 1] : 200.0;
+        float lin = clamp(1.0 - vd / max(farDist, 1e-3), 0.0, 1.0);
+        outColor = vec4(vec3(lin), 1.0);
+    } else if (dbg == 5) {
+        outColor = vec4(vec3(sunShadow), 1.0);              // white = lit, black = shadowed
+    } else if (dbg == 6) {
+        outColor = vec4(pow(albedo, vec3(1.0 / 2.2)), 1.0); // raw albedo (gamma only)
+    } else if (dbg == 7) {
+        float ndv = dot(N, V);                              // green = front, red = back
+        outColor = ndv >= 0.0 ? vec4(0.0, ndv, 0.0, 1.0) : vec4(-ndv, 0.0, 0.0, 1.0);
+    } else if (dbg == 8) {
+        // Shadow cascades: red/green/blue/yellow = cascade 0..3.
+        vec3 tint = vec3(0.0);
+        if (g.counts.y > 0) {
+            float vd = -(g.view * vec4(inWorldPos, 1.0)).z;
+            int cc = g.counts.y, ci = cc - 1;
+            for (int i = 0; i < cc; ++i) if (vd < g.cascadeSplit[i]) { ci = i; break; }
+            vec3 tints[4] = vec3[4](vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0),
+                                    vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0));
+            tint = tints[clamp(ci, 0, 3)];
+        }
+        outColor = vec4(tint, 1.0);
+    } else {
+        outColor = vec4(direct + ambient + emission, 1.0);
+    }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

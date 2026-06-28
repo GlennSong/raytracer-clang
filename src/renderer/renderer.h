@@ -423,7 +423,7 @@ public:
     float vegetationDrawDistance = 0.0f;
 
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
-    // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
+    // 5=shadow, 6=albedo, 7=facing (green=front / red=back), 8=shadow cascades
     int debugView = 0;
 
     // Wireframe: 0=off, 1=wireframe only, 2=wireframe overlaid on the shaded image

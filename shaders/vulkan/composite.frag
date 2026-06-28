@@ -28,7 +28,7 @@ layout(push_constant) uniform Push {
     float lensCA;
     float lensVignette;
     float lensAspect;
-    int   debugView;        // 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals
+    int   debugView;        // 0 normal; see the switch in main()
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -82,12 +82,33 @@ vec3 tonemapAgX(vec3 val) {
 }
 
 void main() {
-    // Debug views bypass lens/tonemap and show a raw buffer (ADR-0057). 5/6/7
-    // (shadow/albedo/facing) need lit-pass output not available here yet.
-    if (pc.debugView == 1) { outColor = vec4(vec3(texture(aoTex, inUV).r), 1.0); return; }
-    if (pc.debugView == 2) { outColor = vec4(texture(ssrTex, inUV).rgb, 1.0); return; }
-    if (pc.debugView == 3) { outColor = vec4(vec3(texture(depthTex, inUV).r), 1.0); return; }
-    if (pc.debugView == 4) { outColor = vec4(texture(normalTex, inUV).rgb, 1.0); return; }
+    // Debug views bypass lens/tonemap (ADR-0057; parity with post.metal):
+    //   1 AO, 2 SSR, 4 normals       — buffer views, read here.
+    //   3 depth, 5 shadow, 6 albedo, 7 facing, 8 cascades
+    //                                — written display-ready into the HDR target
+    //                                  by mesh.frag; shown raw, background guarded
+    //                                  by depth (forward-Z: 1.0 == far/sky).
+    if (pc.debugView != 0) {
+        float dpt = texture(depthTex, inUV).r;
+        bool bg = dpt >= 1.0;
+        if (pc.debugView == 1) {                 // ambient occlusion (white = none)
+            float ao = bg ? 1.0 : texture(aoTex, inUV).r;
+            outColor = vec4(vec3(ao), 1.0); return;
+        }
+        if (pc.debugView == 2) {                 // SSR (reflected color where it hit)
+            vec4 s = texture(ssrTex, inUV);
+            outColor = vec4(s.rgb * s.a, 1.0); return;
+        }
+        if (pc.debugView == 4) {                 // world normals (G-buffer, encoded)
+            outColor = bg ? vec4(0.5, 0.5, 1.0, 1.0)
+                          : vec4(texture(normalTex, inUV).rgb, 1.0);
+            return;
+        }
+        // 3/5/6/7/8: raw HDR (mesh.frag wrote the debug value); flat background.
+        vec3 c = texture(hdrTex, inUV).rgb;
+        if (bg) c = (pc.debugView == 5) ? vec3(0.3) : vec3(0.0);
+        outColor = vec4(c, 1.0); return;
+    }
 
     // Lens distortion (Brown radial) + lateral CA, around the aspect-corrected
     // center. Neutral params (or lens disabled) => exact passthrough. Ported from

@@ -87,7 +87,7 @@ struct GlobalsUBO {
     float    cameraPosition[4];
     float    ambient[4];             // rgb = ambient tint * multiplier (IBL strength)
     float    cascadeSplit[4];        // far view-space depth of cascades 0..3
-    int32_t  counts[4];              // x lightCount, y cascadeCount, z envMode
+    int32_t  counts[4];              // x lightCount, y cascadeCount, z envMode, w debugView
     float    shadowParams[4];        // x normalBias, y pcfRadius, z mapSize, w strength
     // Procedural sky (ADR-0016), mirrored from SceneLighting::sky.
     float    skySunDir[4];           // xyz toward sun, w sun disc intensity
@@ -131,7 +131,8 @@ struct CompositePush {
     float    lensCA;          // lateral chromatic aberration
     float    lensVignette;
     float    lensAspect;      // width / height
-    int32_t  debugView;      // 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals
+    int32_t  debugView;      // 0 normal; 1 AO/2 SSR/4 normals composite-side,
+                             // 3/5/6/7/8 raw HDR (mesh.frag writes them)
 };
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
@@ -3942,6 +3943,11 @@ void VulkanRenderer::endFrame() {
     impl->ssrBlendStrength = ssrParams.blendStrength;
     impl->lensEnabledFrame = lensEffectsEnabled;
     impl->debugViewFrame = debugView;
+    // Carry the debug-view selector into the globals UBO (the unused counts.w) so
+    // the lit pass can write debug content (shadow/albedo/facing/cascades/depth)
+    // into the HDR target; composite shows those raw. Buffer views (AO/SSR/
+    // normals) stay composite-side. See shaders/vulkan/{mesh,composite}.frag.
+    impl->cpuGlobals.counts[3] = debugView;
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.
