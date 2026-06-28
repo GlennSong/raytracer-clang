@@ -74,20 +74,33 @@ vec3 tonemapAgX(vec3 val) {
 }
 
 void main() {
-    vec3 hdr = texture(hdrTex, inUV).rgb;
-    // SSAO darkens the scene (approximation of Metal applying it to ambient
-    // only), clamped to aoFloor so creases don't go fully black.
+    // Lens distortion (Brown radial) + lateral CA, around the aspect-corrected
+    // center. Neutral params (or lens disabled) => exact passthrough. Ported from
+    // post.metal fragmentLensWarp, folded into the composite to avoid a pass.
+    vec2 centered = inUV - 0.5;
+    float on = pc.lensEnabled != 0 ? 1.0 : 0.0;
+    float k1 = pc.lensK1 * on, k2 = pc.lensK2 * on;
+    float ca = pc.lensCA * on, vig = pc.lensVignette * on;
+    vec2 ap = centered * vec2(pc.lensAspect, 1.0);
+    float r2 = dot(ap, ap);
+    float distort = 1.0 + k1 * r2 + k2 * r2 * r2;
+    vec2 uvG = 0.5 + centered * distort;
+    vec2 uvR = 0.5 + centered * distort * (1.0 + ca);
+    vec2 uvB = 0.5 + centered * distort * (1.0 - ca);
+
+    // CA splits the HDR channels; the post terms use the (distorted) green UV.
+    vec3 hdr = vec3(texture(hdrTex, uvR).r, texture(hdrTex, uvG).g, texture(hdrTex, uvB).b);
     if (pc.ssaoEnabled != 0)
-        hdr *= max(texture(aoTex, inUV).r, pc.aoFloor);
-    // SSR: rgb = reflected color, a = confidence (already scaled by blendStrength).
+        hdr *= max(texture(aoTex, uvG).r, pc.aoFloor);
     if (pc.ssrEnabled != 0) {
-        vec4 ssr = texture(ssrTex, inUV);
+        vec4 ssr = texture(ssrTex, uvG);
         hdr = mix(hdr, ssr.rgb, clamp(ssr.a, 0.0, 1.0));
     }
     if (pc.bloomEnabled != 0)
-        hdr += texture(bloomTex, inUV).rgb * pc.bloomIntensity;
+        hdr += texture(bloomTex, uvG).rgb * pc.bloomIntensity;
     hdr *= pc.exposure;
     hdr = applyGrade(hdr, pc.gradeContrast, pc.gradeSaturation);
     vec3 color = (pc.tonemapOp == 1) ? tonemapAgX(hdr) : tonemapACES(hdr);
+    color *= 1.0 - vig * smoothstep(0.0, 1.0, r2);   // vignette
     outColor = vec4(color, 1.0);
 }

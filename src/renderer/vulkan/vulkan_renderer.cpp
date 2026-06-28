@@ -120,6 +120,12 @@ struct CompositePush {
     int32_t  ssaoEnabled;
     float    aoFloor;
     int32_t  ssrEnabled;
+    int32_t  lensEnabled;
+    float    lensK1;          // Brown radial distortion
+    float    lensK2;
+    float    lensCA;          // lateral chromatic aberration
+    float    lensVignette;
+    float    lensAspect;      // width / height
     float    _pad;
 };
 
@@ -332,6 +338,11 @@ struct VulkanRenderer::Impl {
     float ssrThickness = 0.3f;
     float ssrMaxRoughness = 0.6f;
     float ssrBlendStrength = 0.5f;
+
+    // Lens effects (Phase 5b): distortion + chromatic aberration + vignette,
+    // folded into the composite. From the active camera's LensParams.
+    bool  lensEnabledFrame = true;
+    float lensK1 = 0.0f, lensK2 = 0.0f, lensCA = 0.0f, lensVignette = 0.0f, lensAspect = 1.0f;
 
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -2942,6 +2953,12 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.ssaoEnabled = ssaoEnabledFrame ? 1 : 0;
     cpush.aoFloor = ssaoFloor;
     cpush.ssrEnabled = ssrEnabledFrame ? 1 : 0;
+    cpush.lensEnabled = lensEnabledFrame ? 1 : 0;
+    cpush.lensK1 = lensK1;
+    cpush.lensK2 = lensK2;
+    cpush.lensCA = lensCA;
+    cpush.lensVignette = lensVignette;
+    cpush.lensAspect = lensAspect;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3056,7 +3073,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO + SSR)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO + SSR + lens)", width, height);
     return true;
 }
 
@@ -3346,6 +3363,13 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->camPos = camera.position;
     impl->camNear = camera.nearPlane;
     impl->camFar = camera.farPlane;
+
+    // Lens effects from the active camera (applied in composite).
+    impl->lensK1 = static_cast<float>(camera.lens.distortionK1);
+    impl->lensK2 = static_cast<float>(camera.lens.distortionK2);
+    impl->lensCA = static_cast<float>(camera.lens.chromaticAberration);
+    impl->lensVignette = static_cast<float>(camera.lens.vignette);
+    impl->lensAspect = aspect;
 }
 
 void VulkanRenderer::setLights(const SceneLighting& lighting) {
@@ -3524,6 +3548,7 @@ void VulkanRenderer::endFrame() {
     impl->ssrThickness = ssrParams.thickness;
     impl->ssrMaxRoughness = ssrParams.maxRoughness;
     impl->ssrBlendStrength = ssrParams.blendStrength;
+    impl->lensEnabledFrame = lensEffectsEnabled;
     impl->drawFrame();
 }
 

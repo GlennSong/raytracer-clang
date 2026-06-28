@@ -166,8 +166,14 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   normal G-buffer's `.a`). Half-res; composite mixes it in by confidence. Driven
   by `ssrEnabled` + `ssrParams` (maxRayDist/thickness/maxRoughness/blendStrength).
   Fixed-step march (no binary refine) — an approximation of Metal's `ssrRayMarch`.
-- **Phase 5b (still owed):** a blur/temporal pass for SSAO (+ refine SSR with a
-  binary search); lens (distortion/CA/vignette) + DOF; debug views/wireframe.
+- **Phase 5b — lens effects (code landed; verify on device):** Brown radial
+  distortion + lateral chromatic aberration + vignette, **folded into the
+  composite** (ported from `post.metal` fragmentLensWarp) so there's no extra
+  pass — distortion warps the sample UV, CA splits the HDR channels, vignette
+  darkens corners; exact passthrough at neutral params. Driven by the active
+  camera's `LensParams` (`lensEffectsEnabled` gates it).
+- **Phase 5b (still owed):** DOF (off by default — needs a CoC gather); an SSAO
+  blur/temporal pass (+ SSR binary-search refine); debug views/wireframe.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.
