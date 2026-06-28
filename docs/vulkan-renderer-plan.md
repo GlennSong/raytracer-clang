@@ -192,14 +192,22 @@ ever been written, never built — no SDK in CI). It now builds with clang and
 renders `assets/levels/arena.json` (1280×720, forward + multi-light + CSM). The
 first compile surfaced bugs fixed in `f7a0908` (shader `patch` keyword),
 `204e4c5` (shader `g.lightCount` → `g.counts.x`), `8e25546` (43 printf-style
-`LOG_*` calls vs the stream logger). Open items found on device:
+`LOG_*` calls vs the stream logger).
 
-- **ImGui overlay does not render on Vulkan.** With `-DRT_ENABLE_IMGUI=ON` the
-  tilde toggle and GLFW input work, but nothing draws: `vulkan_renderer.cpp`
-  references ImGui nowhere and CMake compiles no `imgui_impl_vulkan` (only
-  `imgui_impl_glfw` + Apple's `imgui_impl_metal`). Metal renders the overlay via
-  `metal_renderer`'s draw-data submission. **To do:** add `imgui_impl_vulkan`
-  (init with instance/device/queue/render pass + a descriptor pool) and submit
+**Update 2026-06-28:** Phase 4a (sky + IBL) and Phase 5a (HDR target + tonemap
+composite) compile (clang, new `sky.*`/`composite.*` shaders) and run clean on
+device — backend reports "Phase 5a", scene loads, **no validation errors** — and
+the shadow-attribute warning below was fixed (`98e1b8a`). Open items:
+
+- **ImGui crashes on Vulkan with `-DRT_ENABLE_IMGUI=ON`** (verified 2026-06-28 on
+  Phase 5a). Not just "doesn't draw" — it asserts `GImGui != 0 ... No current
+  context` at the first `ImGui::NewFrame`, because `ImGui::CreateContext()` is
+  never called on the non-Apple path (that wiring lives in the Metal renderer).
+  `vulkan_renderer.cpp` references ImGui nowhere, and CMake compiles no
+  `imgui_impl_vulkan` (only `imgui_impl_glfw` + Apple's `imgui_impl_metal`).
+  Default build (ImGui OFF) is unaffected. **To do (full ImGui-on-Vulkan):**
+  create the ImGui context on this path, add `imgui_impl_vulkan` (init with
+  instance/device/queue/render pass + a descriptor pool), and submit
   `ImGui::GetDrawData()` in the frame, mirroring the Metal path.
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
