@@ -140,7 +140,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_nav_graph.cpp \
 	$(TEST_DIR)/test_pathfind.cpp \
 	$(TEST_DIR)/test_agent_sim.cpp \
-	$(TEST_DIR)/test_traffic_system.cpp
+	$(TEST_DIR)/test_traffic_system.cpp \
+	$(TEST_DIR)/test_traffic_city.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \

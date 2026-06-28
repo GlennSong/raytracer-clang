@@ -3811,7 +3811,16 @@ pedestrians) rebuilt each fixed step, so RenderSystem draws the whole crowd as
 two instanced batches. Built lazily on the first `fixedUpdate` after load and
 registered in `ArenaState`. `build`/`step` take a `World` directly so the spawn +
 pose-sync logic is unit-tested headless (the GPU mesh upload is the only
-AssetManager-gated part); the in-viewer render is macOS-gated like the rest.
+AssetManager-gated part). **Render path is backend-agnostic:** the crowd draws
+through the generic `Renderer` seam (`drawMeshInstanced`, whose default loops
+`drawMesh`), so it renders on **both** Metal and the new Vulkan backend (ADR-0057)
+with no traffic-specific wiring — i.e. verifiable on a Linux/Vulkan viewer build,
+not Metal-only. (Coalesced GPU instancing on Vulkan — Metal already batches by
+mesh handle — is an open perf optimization, noted in the tech-debt register; the
+default per-instance loop is correct meanwhile.) The nav stack is additionally
+proven headless over the real grid/radial/tensor generators
+(`tests/test_traffic_city.cpp`): connectivity, routing, a simulated commute day,
+and determinism over a generated city.
 
 *Chase camera (landed, verified):* `FollowCameraController` — a pure, window-free
 third-person rig (orbit behind a tracked target, look-to-orbit, zoom-dolly),
@@ -3891,6 +3900,7 @@ to be replaced; listed here so they stay visible.
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
 | Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
 | Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
+| Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
