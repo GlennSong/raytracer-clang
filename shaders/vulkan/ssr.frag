@@ -68,7 +68,9 @@ void main() {
 
     float stepLen = pc.maxRayDist / float(STEPS);
     vec3 rayPos = P + N * 0.02;                      // bias off the surface
+    vec3 prevPos = rayPos;                           // last position in front of geometry
     for (int i = 0; i < STEPS; ++i) {
+        prevPos = rayPos;
         rayPos += R * stepLen;
         vec4 clip = g.viewProjection * vec4(rayPos, 1.0);
         if (clip.w <= 0.0) return;
@@ -81,13 +83,35 @@ void main() {
         float rayDist = distance(g.cameraPosition.xyz, rayPos);
         float sceneDist = distance(g.cameraPosition.xyz, sceneP);
         if (rayDist > sceneDist && (rayDist - sceneDist) < pc.thickness + stepLen) {
+            // Binary-refine the crossing between the last in-front position and
+            // this behind position. The coarse fixed world-step quantises the hit
+            // to step boundaries, which makes a tall reflection look repeated /
+            // laddered; a few bisections localise it to the true surface.
+            vec3 a = prevPos, b = rayPos;
+            vec2 hitUV = suv;
+            for (int j = 0; j < 5; ++j) {
+                vec3 mid = 0.5 * (a + b);
+                vec4 mc = g.viewProjection * vec4(mid, 1.0);
+                if (mc.w <= 0.0) break;
+                vec2 muv = (mc.xy / mc.w) * 0.5 + 0.5;
+                if (muv.x < 0.0 || muv.x > 1.0 || muv.y < 0.0 || muv.y > 1.0) break;
+                float md = texture(depthTex, muv).r;
+                if (md >= 1.0) { a = mid; continue; }   // sky: midpoint is in front
+                vec3 mP = reconstructWorld(muv, md);
+                if (distance(g.cameraPosition.xyz, mid) >
+                    distance(g.cameraPosition.xyz, mP)) {
+                    b = mid; hitUV = muv;               // behind geometry → pull far end in
+                } else {
+                    a = mid;                            // in front → pull near end in
+                }
+            }
             // Hit. Confidence: fade at screen edges, by Fresnel, and by roughness.
-            vec2 edge = smoothstep(0.0, 0.15, suv) * (1.0 - smoothstep(0.85, 1.0, suv));
+            vec2 edge = smoothstep(0.0, 0.15, hitUV) * (1.0 - smoothstep(0.85, 1.0, hitUV));
             float edgeFade = edge.x * edge.y;
             float fresnel = pow(clamp(1.0 - max(dot(N, -V), 0.0), 0.0, 1.0), 3.0);
             float roughFade = 1.0 - smoothstep(0.0, pc.maxRoughness, roughness);
             float conf = edgeFade * mix(0.2, 1.0, fresnel) * roughFade * pc.blendStrength;
-            outColor = vec4(texture(hdrTex, suv).rgb, clamp(conf, 0.0, 1.0));
+            outColor = vec4(texture(hdrTex, hitUV).rgb, clamp(conf, 0.0, 1.0));
             return;
         }
     }

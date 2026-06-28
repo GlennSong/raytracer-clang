@@ -71,8 +71,14 @@ void main() {
     vec3 P = reconstructWorld(inUV, depth);
     vec3 N = normalize(texture(normalTex, inUV).rgb * 2.0 - 1.0);
 
-    // Random per-pixel rotation for the kernel basis.
-    vec3 rnd = normalize(vec3(hash(inUV) * 2.0 - 1.0, hash(inUV + 0.137) * 2.0 - 1.0, 0.0));
+    // Per-pixel rotation of the kernel basis. Interleaved gradient noise keyed on
+    // the (half-res) fragment coordinate gives a fine, near-uniform dither that
+    // the box-blur pass resolves cleanly. The old sine-hash on UV aliased into
+    // low-frequency splotches that a small blur can't remove.
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                             vec2(0.06711056, 0.00583715))));
+    float ang = ign * 6.2831853;
+    vec3 rnd = vec3(cos(ang), sin(ang), 0.0);
     vec3 T = normalize(rnd - N * dot(rnd, N));
     vec3 B = cross(N, T);
     mat3 TBN = mat3(T, B, N);
