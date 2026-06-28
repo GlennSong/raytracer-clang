@@ -11,6 +11,8 @@
 
 namespace engine {
 
+class Window;
+
 struct MeshTag {};
 struct BufferTag {};
 struct TextureTag {};
@@ -323,6 +325,14 @@ class Renderer {
 public:
     virtual ~Renderer() = default;
 
+    // Hand the windowing seam to backends that create their own surface from it
+    // rather than from the opaque native handle. Vulkan needs this: the native
+    // handle is null on Linux (window.cpp), so the backend asks the Window for a
+    // surface via Window::createVulkanSurface (ADR-0057). The Application calls
+    // this before initialize(); backends that bind via the native handle (Metal)
+    // ignore it. Default no-op so NullRenderer and other backends stay valid.
+    virtual void setWindow(Window* /*window*/) {}
+
     // windowHandle is an opaque native OS window pointer (e.g. NSWindow* on
     // macOS) from Window::nativeWindowHandle() — never a windowing-library type.
     virtual bool initialize(void* windowHandle, int width, int height) = 0;
@@ -413,7 +423,7 @@ public:
     float vegetationDrawDistance = 0.0f;
 
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
-    // 5=shadow, 6=albedo, 7=facing (green=front / red=back)
+    // 5=shadow, 6=albedo, 7=facing (green=front / red=back), 8=shadow cascades
     int debugView = 0;
 
     // Wireframe: 0=off, 1=wireframe only, 2=wireframe overlaid on the shaded image

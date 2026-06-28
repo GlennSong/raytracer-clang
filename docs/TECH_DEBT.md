@@ -338,6 +338,15 @@ took shortcuts worth paying down before the binding surface grows much more.
 
 ## Verification gap (the meta-debt)
 
+- **No CI exists, and the render backends are never compiled in it.** This is the
+  root of the gap below. The Vulkan backend shipped Phases 0–3 *never compiled*
+  (no SDK in the loop), and Metal shaders are runtime-compiled, so neither
+  `vulkan_renderer.cpp`/`shaders/vulkan/*` nor `shaders/metal/*` is validated until
+  someone runs the app on the right machine — the first real Vulkan compile (a
+  Windows session) found a reserved-keyword shader bug, a wrong uniform field, and
+  43 broken logging calls. **Plan:** `docs/ci-plan.md` — staged (headless
+  build+tests → backend compile + offline shader validation on both Vulkan/Metal →
+  headless offscreen render + cross-backend golden-image parity via lavapipe/Metal).
 - **Most scripting/flora *integration* is macOS-render-unverified.** Headless
   tests cover generation and logic (counts, taper, determinism, spawn, follow
   math), but the in-game wiring only builds/runs on macOS: `arena_state` (gun +

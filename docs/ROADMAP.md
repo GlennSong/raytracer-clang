@@ -511,7 +511,8 @@ Items that become relevant as the world grows large.
 - **Mixed precision / large world coordinates** — revisit ADR-0005 when float
   positions lose precision at world scale.
 - **Second rendering backend (Vulkan)** — validate the platform abstraction
-  (ADR-0001).
+  (ADR-0001). Targets Linux + Windows from one backend, at parity with Metal.
+  Planned in `docs/vulkan-renderer-plan.md` (ADR-0057).
 - **Multithreaded systems** — parallel system execution, job system for
   procgen workloads. *Foundation done: a minimal shared-queue `JobSystem`
   (`src/job_system.*`, ADR-0014) — `parallelFor` + counter-based `run`/`wait`,

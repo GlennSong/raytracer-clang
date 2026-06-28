@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <functional>
 #include <string>
 #include <vector>
@@ -72,7 +73,21 @@ inline int runAllTests() {
     for (auto& testCase : testRegistry()) {
         currentCaseFailedChecks() = 0;
         std::printf("[ RUN  ] %s\n", testCase.name.c_str());
-        testCase.fn();
+        std::fflush(stdout);  // flush before the case so a crash names the culprit
+        try {
+            testCase.fn();
+        } catch (const std::exception& e) {
+            std::printf("[ FAIL ] %s threw: %s\n", testCase.name.c_str(), e.what());
+            ++totalFailedChecks();
+            ++currentCaseFailedChecks();
+            continue;
+        } catch (...) {
+            std::printf("[ FAIL ] %s threw a non-std exception\n",
+                        testCase.name.c_str());
+            ++totalFailedChecks();
+            ++currentCaseFailedChecks();
+            continue;
+        }
         if (currentCaseFailedChecks() == 0) {
             std::printf("[  OK  ] %s\n", testCase.name.c_str());
             ++passedCases;

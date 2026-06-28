@@ -3681,6 +3681,81 @@ can't leave a gap) rather than a constrained one.
 
 ---
 
+## ADR-0057 — Vulkan is the second render backend (Linux + Windows), behind the existing seam
+**Status:** Pending · **Date:** 2026-06-27
+
+**Context.** The engine has shipped one GPU backend (Metal, macOS) behind the
+`Renderer` RHI seam (ADR-0001), whose revisit trigger explicitly names this
+moment: "adding a second backend (Vulkan) — at which point validate the seam
+holds." We want the realtime viewer to run on PC and Linux at graphical parity
+with Metal. The `Renderer` interface is lean and backend-neutral (resource
+upload + draw dispatch; projection/view math is engine-side), so a second
+backend is an implementation of that interface, not an engine change. The
+feature set to match is ordinary forward shading + screen-space post (CSM
+shadows, SSAO, SSR, bloom, tonemap, lens effects, IBL from a baked cubemap,
+instancing, CDLOD terrain morph) — no compute, tessellation, or ray-tracing
+extensions today.
+
+**Decision.** Add a Vulkan backend (`src/renderer/vulkan/vulkan_renderer.cpp`)
+as a third `Renderer` implementation, selected by CMake on non-Apple platforms
+in place of `NullRenderer`. **One backend covers both targets** — Vulkan runs on
+Linux and Windows, the two platforms asked for. Specific choices:
+
+- **Surface creation stays behind the seam.** The backend must not reach through
+  GLFW (ADR-0001), but `glfwCreateWindowSurface` needs the `GLFWwindow*`. So
+  `Window` gains a pimpl'd `createVulkanSurface(VkInstance) -> VkSurfaceKHR`
+  (declared with forward-declared Vulkan handle types, no GLFW types leaked),
+  keeping GLFW sealed in `window.cpp`. `GLFW_NO_API` is already hinted
+  (`window.cpp:264`), so the window is created context-free and Vulkan-ready.
+- **Shaders compile offline to SPIR-V.** Metal compiles MSL from source strings
+  at runtime; Vulkan consumes SPIR-V. We port the six MSL files to GLSL and
+  compile them with `glslc`/`glslangValidator` at build time via a CMake custom
+  command, shipping `.spv` artifacts. This keeps the runtime **dependency-free**
+  (no `libshaderc` link), consistent with the no-external-deps rule, at the cost
+  of no shader hot-reload on this backend (acceptable; revisit if iteration hurts).
+- **Convention fixes are localized to the backend**, not the engine: Vulkan's
+  Y-flipped clip space and [0,1] depth range are absorbed in the projection
+  upload / viewport setup so engine math (`Mat4::perspective`, `lookAt`) is
+  unchanged and shared with Metal and the offline tracer.
+
+**Alternatives considered.**
+- **WebGPU (Dawn / wgpu-native).** One backend for macOS+Linux+Windows (could
+  eventually retire Metal) with nicer WGSL shaders — rejected for now: pulls in
+  a heavy native dependency (Dawn's GN/C++ build; wgpu is Rust), a hard clash
+  with the standard-library-only rule. Revisit only if dual-backend maintenance
+  becomes the dominant cost.
+- **bgfx / sokol_gfx.** Mature cross-platform abstractions — rejected: each
+  imposes its own shader pipeline and would mean rewriting the RHI *to their
+  API* instead of behind our own seam, plus the same dependency objection.
+- **OpenGL.** Least code, most direct MSL→GLSL port — rejected: deprecated on
+  macOS (we have Metal there), a dead-end API, and it forecloses the compute /
+  `VK_KHR_ray_tracing` path that a raytracing project will plausibly want.
+
+**Consequences / tech debt.**
+- Validates ADR-0001's seam with a real second backend (its revisit trigger).
+- Largest new cost is Vulkan boilerplate: the backend will be materially larger
+  than `metal_renderer.mm` (~2000 lines) — instance/device/swapchain, descriptor
+  sets/layouts, explicit render passes, pipelines, memory allocation, and manual
+  barriers/sync are all explicit. The render *logic* is the same forward+post
+  pipeline.
+- New build step (GLSL→SPIR-V) and a parallel shader tree to keep in lockstep
+  with `shaders/metal/*` until/unless the two are unified; a divergence risk to
+  watch. The shared `shaders/metal/shader_types.h` GPU-struct header can be
+  reused across both to keep CPU/GPU layouts in sync.
+- No GPU in CI: like Metal today, the backend is validated by hand on Linux/
+  Windows hardware with the Vulkan validation layers; unit tests stay CPU-only.
+- Built incrementally (clear screen → lit mesh → full forward → shadows → post
+  stack → instancing/terrain), each stage independently verifiable, so the work
+  lands in reviewable slices rather than one drop.
+
+**Revisit trigger.** Dual-backend (Metal + Vulkan) shader/maintenance cost
+outgrowing the no-deps benefit (reconsider WebGPU and retiring Metal); needing a
+mobile/console/web target; or adopting hardware ray tracing or a compute-driven
+pipeline (Vulkan compute / `VK_KHR_ray_tracing`), at which point the SPIR-V
+toolchain and descriptor model here are the foundation.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
