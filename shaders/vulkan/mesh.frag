@@ -35,6 +35,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyCloud;
     Light lights[32];
     vec4  fog;                // rgb fog color, w density (0 = off)
+    vec4  shadowTint;         // rgb artistic shadow tint, w ambientStrength
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -322,7 +323,7 @@ float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
 
 // ---- main ------------------------------------------------------------------
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0, float sunShadow) {
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow) {
     vec3 directLight = vec3(0.0);
     float a = max(roughness * roughness, 0.002);
     float a2 = a * a;
@@ -358,8 +359,8 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
         vec3 F = fresnelSchlickVec(VdotH, f0);
         vec3 specular = D * Vis * F;
         vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-        float sh = (type == 1) ? sunShadow : 1.0;   // only the sun casts shadows
-        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL * sh);
+        vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   // only the sun casts shadows
+        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
     }
     return directLight;
 }
@@ -401,15 +402,22 @@ void main() {
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
 
     // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
-    // looks down -z, so -(view * worldPos).z. strength scales the darkening.
-    float sunShadow = 1.0;
+    // looks down -z, so -(view * worldPos).z.
+    float sunVis = 1.0;
     if (g.counts.y > 0) {
         float viewDepth = -(g.view * vec4(inWorldPos, 1.0)).z;
-        sunShadow = computeShadow(inWorldPos, N, viewDepth);
-        sunShadow = mix(1.0, sunShadow, g.shadowParams.w);
+        sunVis = computeShadow(inWorldPos, N, viewDepth);
     }
+    float strength = g.shadowParams.w;
+    float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
+    // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward
+    // the tint; ambientStrength (shadowTint.w) controls how much the same shadow
+    // darkens IBL (so a bright sky doesn't fill shadows back in). Tint 0 = plain
+    // darkening, identical to the untinted scalar.
+    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
+    vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);
 
-    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, sunShadow);
+    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow);
 
     // Image-based lighting from the procedural sky (analytic approximation of
     // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
@@ -430,7 +438,7 @@ void main() {
     vec3 kd = (1.0 - Famb) * (1.0 - metallic);
     vec3 envDiffuse = kd * albedo * irradiance * ao;
     vec3 envSpecular = prefiltered * Famb;
-    vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
+    vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb * ambientShadow;
 
     // Debug views that need lit-pass data write display-ready values into the HDR
     // target; the composite shows them raw (counts.w carries the selector — see

@@ -35,6 +35,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyCloud;
     Light lights[32];
     vec4  fog;             // rgb fog color, w density (matches GlobalsUBO)
+    vec4  shadowTint;      // rgb artistic tint, w ambientStrength
 } g;
 
 layout(push_constant) uniform Push {

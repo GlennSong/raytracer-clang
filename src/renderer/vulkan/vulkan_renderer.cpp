@@ -98,8 +98,9 @@ struct GlobalsUBO {
     float    skyCloud[4];            // x coverage, y density, z scale, w time
     GpuLight lights[32];
     // Appended after the lights array so every earlier offset is unchanged (and
-    // shaders that don't read fog can omit it). rgb = fog color, w = density.
+    // shaders that don't read these can omit them).
     float    fog[4];                 // aerial-perspective fog (ADR-0016); w 0 = off
+    float    shadowTint[4];          // rgb artistic shadow tint, w ambientStrength
 };
 
 // Per-draw push constants for the forward pass (112 <= 128 B).
@@ -4403,6 +4404,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         impl->cpuGlobals.shadowParams[1] = lighting.shadow.pcfRadius;
         impl->cpuGlobals.shadowParams[2] = static_cast<float>(Impl::SHADOW_MAP_SIZE);
         impl->cpuGlobals.shadowParams[3] = lighting.shadowArtistic.strength;
+        impl->cpuGlobals.shadowTint[0] = static_cast<float>(lighting.shadowArtistic.tint.x);
+        impl->cpuGlobals.shadowTint[1] = static_cast<float>(lighting.shadowArtistic.tint.y);
+        impl->cpuGlobals.shadowTint[2] = static_cast<float>(lighting.shadowArtistic.tint.z);
+        impl->cpuGlobals.shadowTint[3] = lighting.shadowArtistic.ambientStrength;
     }
 }
 

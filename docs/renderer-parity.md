@@ -58,7 +58,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | Cascaded shadow maps + PCF | ✅ | ✅ | Device-verified (Phase 3). |
 | Shadow strength | ✅ | ✅ | |
-| Shadow artistic tint / ambientStrength | ✅ | ⚠️ | Strength wired; tint deferred in Vulkan. |
+| Shadow artistic tint / ambientStrength | ✅ | 🟡 | Occluded direct + ambient lerp toward `shadowTint` (globals); `ambientStrength` darkens IBL separately. Ported from `lighting.metal`. Unverified on device. |
 
 ### Environment & IBL
 | Feature | Metal | Vulkan | Notes |
