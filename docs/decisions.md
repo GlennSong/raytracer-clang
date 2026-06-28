@@ -3867,10 +3867,12 @@ above) on a Jolt/Lua build — likely small Jolt member-name/ctor touch-ups and
 handling/feel tuning. The kinematic-far/physics-near handoff and a level-JSON
 `vehicles` block (above). `NavGraph` is rebuilt from the `RoadNet` on demand
 rather than cached on an entity; junction turn-restrictions and traffic-signal
-arbitration are not modelled (all turns except U-turns allowed); AI agents do not
-yet avoid each other or the player's car (no car-following / inter-agent
-collision). Destroyed `Vehicle` entities don't `removeVehicle` (no destroy hook,
-same bounded-leak class as the ScriptBehaviour note below).
+arbitration are not modelled (all turns except U-turns allowed). Same-lane
+**car-following** now keeps agents queued behind each other (`carFollowingCap`,
+headless-tested), but cross-traffic at junctions and the player's physics car are
+not yet avoided (no junction right-of-way / inter-agent collision). Destroyed
+`Vehicle` entities don't `removeVehicle` (no destroy hook, same bounded-leak class
+as the ScriptBehaviour note below).
 
 ---
 

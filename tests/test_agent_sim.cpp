@@ -71,6 +71,32 @@ TEST_CASE(agent_commutes_and_arrives) {
     CHECK(anyAtWork);    // and at least one completes its commute
 }
 
+TEST_CASE(car_following_cap_ramps) {
+    // Far ahead → free speed; at/under the bumper gap → full stop; in between →
+    // linear ramp.
+    CHECK_APPROX(carFollowingCap(10.0, 100.0, 5.0, 14.0), 10.0, 1e-9);  // clear road
+    CHECK_APPROX(carFollowingCap(10.0, 14.0, 5.0, 14.0), 10.0, 1e-9);   // at slowZone
+    CHECK_APPROX(carFollowingCap(10.0, 5.0, 5.0, 14.0), 0.0, 1e-9);     // at minGap
+    CHECK_APPROX(carFollowingCap(10.0, 3.0, 5.0, 14.0), 0.0, 1e-9);     // inside minGap
+    // Midpoint gap 9.5 → (9.5-5)/(14-5) = 0.5 → half speed.
+    CHECK_APPROX(carFollowingCap(10.0, 9.5, 5.0, 14.0), 5.0, 1e-9);
+}
+
+TEST_CASE(car_following_keeps_commute_flowing) {
+    // Dense traffic on a small grid still completes commutes (no gridlock from
+    // the car-following cap).
+    NavGraph nav = cityNav();
+    AgentSim sim;
+    sim.build(nav, 60, 0, 314);
+    bool anyAtWork = false;
+    for (int i = 0; i < 6000 && !anyAtWork; ++i) {
+        sim.step(0.1, 0.3);
+        for (const Agent& a : sim.agents())
+            if (a.activity == AgentActivity::AtWork) anyAtWork = true;
+    }
+    CHECK(anyAtWork);
+}
+
 TEST_CASE(agent_clock_wraps) {
     NavGraph nav = cityNav();
     AgentSim sim;

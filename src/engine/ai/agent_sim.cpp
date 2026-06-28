@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <unordered_map>
 
 namespace engine {
 
@@ -9,7 +11,20 @@ namespace {
 constexpr Real kWalkSpeed = 1.4;   // m/s, comfortable pedestrian pace
 constexpr Real kCarAccel  = 6.0;   // m/s^2
 constexpr Real kPedAccel  = 1.0;   // m/s^2
+
+// Car-following spacing per kind: minGap = full stop distance (bumper-to-bumper
+// plus a buffer), slowZone = start easing off the throttle below this gap.
+constexpr Real kCarMinGap   = 5.0;
+constexpr Real kCarSlowZone = 14.0;
+constexpr Real kPedMinGap   = 0.8;
+constexpr Real kPedSlowZone = 2.5;
 }  // namespace
+
+Real carFollowingCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
+    if (gap <= minGap) return 0.0;
+    if (gap >= slowZone) return freeSpeed;
+    return freeSpeed * (gap - minGap) / (slowZone - minGap);
+}
 
 uint32_t AgentSim::nextRandom() {
     // xorshift32 — the house deterministic RNG (matches procgen's Rng).
@@ -84,12 +99,16 @@ void AgentSim::refreshPose(Agent& a) {
     a.heading = nav->direction(li);
 }
 
-void AgentSim::advance(Agent& a, Real dt) {
+void AgentSim::advance(Agent& a, Real dt, Real gap) {
     if (!a.moving) return;
 
     int li = a.route.links[a.leg];
     Real target = (a.kind == AgentKind::Car) ? classSpeed(nav->links[li].klass) : kWalkSpeed;
     Real accel = (a.kind == AgentKind::Car) ? kCarAccel : kPedAccel;
+    // Don't drive into the agent ahead: cap the target by the leading gap.
+    Real minGap = (a.kind == AgentKind::Car) ? kCarMinGap : kPedMinGap;
+    Real slowZone = (a.kind == AgentKind::Car) ? kCarSlowZone : kPedSlowZone;
+    target = carFollowingCap(target, gap, minGap, slowZone);
     a.speed = std::min(target, a.speed + accel * dt);
 
     Real motion = a.speed * dt;
@@ -115,6 +134,35 @@ void AgentSim::advance(Agent& a, Real dt) {
     }
 }
 
+void AgentSim::computeGaps() {
+    const Real INF = std::numeric_limits<Real>::infinity();
+    gaps_.assign(agentList.size(), INF);
+
+    // Bucket moving agents by (link, lane): cars share a lane bucket, pedestrians
+    // share one verge bucket per link (distinct from any car lane).
+    std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
+    for (int i = 0; i < static_cast<int>(agentList.size()); ++i) {
+        const Agent& a = agentList[i];
+        if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
+        int li = a.route.links[a.leg];
+        int laneKey = (a.kind == AgentKind::Car) ? a.lane : 1024;
+        long long key = static_cast<long long>(li) * 4096 + laneKey;
+        lanes[key].push_back({a.distOnLeg, i});
+    }
+
+    // On each lane, an agent's leader is the next one further along; the gap is
+    // their centre-to-centre distance. Sort by (dist, index) for determinism.
+    for (auto& kv : lanes) {
+        std::vector<std::pair<Real, int>>& v = kv.second;
+        std::sort(v.begin(), v.end(), [](const std::pair<Real, int>& a,
+                                          const std::pair<Real, int>& b) {
+            return a.first != b.first ? a.first < b.first : a.second < b.second;
+        });
+        for (std::size_t k = 0; k + 1 < v.size(); ++k)
+            gaps_[v[k].second] = v[k + 1].first - v[k].first;   // frontmost keeps INF
+    }
+}
+
 void AgentSim::step(Real dt, Real hoursPerSecond) {
     if (!nav || agentList.empty()) return;
 
@@ -122,6 +170,7 @@ void AgentSim::step(Real dt, Real hoursPerSecond) {
     clockHours = std::fmod(clockHours, 24.0);
     if (clockHours < 0) clockHours += 24.0;
 
+    // Pass 1: schedule transitions — may start trips, but moves no one yet.
     for (Agent& a : agentList) {
         switch (a.activity) {
             case AgentActivity::AtHome:
@@ -140,8 +189,12 @@ void AgentSim::step(Real dt, Real hoursPerSecond) {
             case AgentActivity::Returning:
                 break;
         }
-        if (a.moving) advance(a, dt);
     }
+
+    // Pass 2: leading gaps from everyone's current position. Pass 3: advance.
+    computeGaps();
+    for (std::size_t i = 0; i < agentList.size(); ++i)
+        if (agentList[i].moving) advance(agentList[i], dt, gaps_[i]);
 }
 
 }  // namespace engine
