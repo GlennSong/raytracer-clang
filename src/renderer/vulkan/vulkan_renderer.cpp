@@ -153,6 +153,12 @@ struct SsaoPush {
     float _pad;
 };
 
+// SSAO blur push constants (AO texel size).
+struct SsaoBlurPush {
+    float texelX;
+    float texelY;
+};
+
 // SSR push constants.
 struct SsrPush {
     float maxRayDist;
@@ -322,15 +328,23 @@ struct VulkanRenderer::Impl {
     VkSampler gbufferSampler = VK_NULL_HANDLE;   // nearest clamp (depth + normal)
     VkImage aoImage = VK_NULL_HANDLE;
     VkDeviceMemory aoMemory = VK_NULL_HANDLE;
-    VkImageView aoView = VK_NULL_HANDLE;         // half-res R8 AO
+    VkImageView aoView = VK_NULL_HANDLE;         // half-res R8 AO (raw)
     VkFramebuffer aoFramebuffer = VK_NULL_HANDLE;
+    VkImage aoBlurImage = VK_NULL_HANDLE;        // box-blurred AO (composite reads this)
+    VkDeviceMemory aoBlurMemory = VK_NULL_HANDLE;
+    VkImageView aoBlurView = VK_NULL_HANDLE;
+    VkFramebuffer aoBlurFramebuffer = VK_NULL_HANDLE;
     VkExtent2D aoExtent{0, 0};
     VkRenderPass ssaoRenderPass = VK_NULL_HANDLE;
     VkDescriptorSetLayout gbufferSetLayout = VK_NULL_HANDLE;  // set 1: depth + normal
+    VkDescriptorSetLayout ssaoBlurSetLayout = VK_NULL_HANDLE; // single sampler (raw AO)
     VkDescriptorPool ssaoPool = VK_NULL_HANDLE;
     VkDescriptorSet gbufferSet = VK_NULL_HANDLE;
+    VkDescriptorSet ssaoBlurSet = VK_NULL_HANDLE;
     VkPipelineLayout ssaoPipelineLayout = VK_NULL_HANDLE;
     VkPipeline ssaoPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout ssaoBlurPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline ssaoBlurPipeline = VK_NULL_HANDLE;
     bool  ssaoEnabledFrame = true;
     float ssaoRadius = 1.5f;
     float ssaoIntensity = 0.8f;
@@ -1036,7 +1050,7 @@ bool VulkanRenderer::Impl::createCommandPool() {
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
     VkDescriptorImageInfo imgs[6]{};
-    VkImageView views[6] = {hdrView, bloomView[0], aoView, ssrView, depthView, normalView};
+    VkImageView views[6] = {hdrView, bloomView[0], aoBlurView, ssrView, depthView, normalView};
     for (uint32_t i = 0; i < 6; ++i) {
         imgs[i].sampler = compositeSampler;
         imgs[i].imageView = views[i];
@@ -1343,7 +1357,12 @@ void VulkanRenderer::Impl::updateSsaoDescriptors() {
     imgs[1].sampler = gbufferSampler;
     imgs[1].imageView = normalView;
     imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    std::array<VkWriteDescriptorSet, 2> writes{};
+    // The blur set samples the raw AO target (aoView); recreated each swapchain.
+    VkDescriptorImageInfo aoInfo{};
+    aoInfo.sampler = gbufferSampler;
+    aoInfo.imageView = aoView;
+    aoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkWriteDescriptorSet, 3> writes{};
     for (uint32_t i = 0; i < 2; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = gbufferSet;
@@ -1352,7 +1371,13 @@ void VulkanRenderer::Impl::updateSsaoDescriptors() {
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &imgs[i];
     }
-    vkUpdateDescriptorSets(device, 2, writes.data(), 0, nullptr);
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = ssaoBlurSet;
+    writes[2].dstBinding = 0;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &aoInfo;
+    vkUpdateDescriptorSets(device, 3, writes.data(), 0, nullptr);
 }
 
 bool VulkanRenderer::Impl::createSsaoResources() {
@@ -1361,6 +1386,10 @@ bool VulkanRenderer::Impl::createSsaoResources() {
     if (!createColorTarget(aoExtent.width, aoExtent.height, VK_FORMAT_R8_UNORM,
                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                            aoImage, aoMemory, aoView))
+        return false;
+    if (!createColorTarget(aoExtent.width, aoExtent.height, VK_FORMAT_R8_UNORM,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           aoBlurImage, aoBlurMemory, aoBlurView))
         return false;
 
     if (ssaoRenderPass == VK_NULL_HANDLE) {
@@ -1411,6 +1440,8 @@ bool VulkanRenderer::Impl::createSsaoResources() {
     fb.height = aoExtent.height;
     fb.layers = 1;
     if (vkCreateFramebuffer(device, &fb, nullptr, &aoFramebuffer) != VK_SUCCESS) return false;
+    fb.pAttachments = &aoBlurView;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &aoBlurFramebuffer) != VK_SUCCESS) return false;
 
     if (gbufferSampler == VK_NULL_HANDLE) {
         VkSamplerCreateInfo s{};
@@ -1439,12 +1470,26 @@ bool VulkanRenderer::Impl::createSsaoResources() {
         if (vkCreateDescriptorSetLayout(device, &l, nullptr, &gbufferSetLayout) != VK_SUCCESS)
             return false;
 
-        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+        // Blur set layout: a single sampler over the raw AO target.
+        VkDescriptorSetLayoutBinding bb{};
+        bb.binding = 0;
+        bb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bb.descriptorCount = 1;
+        bb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo bl{};
+        bl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        bl.bindingCount = 1;
+        bl.pBindings = &bb;
+        if (vkCreateDescriptorSetLayout(device, &bl, nullptr, &ssaoBlurSetLayout) != VK_SUCCESS)
+            return false;
+
+        // Pool feeds two sets: the G-buffer set (2 samplers) and the blur set (1).
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
         VkDescriptorPoolCreateInfo p{};
         p.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         p.poolSizeCount = 1;
         p.pPoolSizes = &size;
-        p.maxSets = 1;
+        p.maxSets = 2;
         if (vkCreateDescriptorPool(device, &p, nullptr, &ssaoPool) != VK_SUCCESS) return false;
         VkDescriptorSetAllocateInfo a{};
         a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1452,6 +1497,8 @@ bool VulkanRenderer::Impl::createSsaoResources() {
         a.descriptorSetCount = 1;
         a.pSetLayouts = &gbufferSetLayout;
         if (vkAllocateDescriptorSets(device, &a, &gbufferSet) != VK_SUCCESS) return false;
+        a.pSetLayouts = &ssaoBlurSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &ssaoBlurSet) != VK_SUCCESS) return false;
     }
     updateSsaoDescriptors();
 
@@ -1534,6 +1581,85 @@ bool VulkanRenderer::Impl::createSsaoResources() {
             return false;
         }
     }
+
+    if (ssaoBlurPipeline == VK_NULL_HANDLE) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SsaoBlurPush)};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &ssaoBlurSetLayout;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &ssaoBlurPipelineLayout) != VK_SUCCESS)
+            return false;
+
+        VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+        VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/ssao_blur.frag.spv");
+        if (!vert || !frag) return false;
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{};
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &ba;
+        std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+        dynamic.pDynamicStates = dyn.data();
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState = &vp;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &ms;
+        info.pDepthStencilState = &ds;
+        info.pColorBlendState = &blend;
+        info.pDynamicState = &dynamic;
+        info.layout = ssaoBlurPipelineLayout;
+        info.renderPass = ssaoRenderPass;
+        info.subpass = 0;
+        VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                    &ssaoBlurPipeline);
+        vkDestroyShaderModule(device, vert, nullptr);
+        vkDestroyShaderModule(device, frag, nullptr);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] SSAO blur pipeline creation failed");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1555,6 +1681,25 @@ void VulkanRenderer::Impl::recordSsao(VkCommandBuffer cmd) {
     SsaoPush push{ssaoRadius, ssaoBias, ssaoIntensity, 0.0f};
     vkCmdPushConstants(cmd, ssaoPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(SsaoPush), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    // Blur pass: raw AO (aoImage) → aoBlurImage. The render pass external
+    // dependencies serialise the color write above with this fragment read.
+    VkRenderPassBeginInfo brp{};
+    brp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    brp.renderPass = ssaoRenderPass;
+    brp.framebuffer = aoBlurFramebuffer;
+    brp.renderArea.extent = aoExtent;
+    vkCmdBeginRenderPass(cmd, &brp, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoBlurPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoBlurPipelineLayout, 0,
+                            1, &ssaoBlurSet, 0, nullptr);
+    SsaoBlurPush bpush{1.0f / float(aoExtent.width), 1.0f / float(aoExtent.height)};
+    vkCmdPushConstants(cmd, ssaoBlurPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(SsaoBlurPush), &bpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 }
@@ -2852,6 +2997,14 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     aoView = VK_NULL_HANDLE;
     aoImage = VK_NULL_HANDLE;
     aoMemory = VK_NULL_HANDLE;
+    if (aoBlurFramebuffer) vkDestroyFramebuffer(device, aoBlurFramebuffer, nullptr);
+    if (aoBlurView) vkDestroyImageView(device, aoBlurView, nullptr);
+    if (aoBlurImage) vkDestroyImage(device, aoBlurImage, nullptr);
+    if (aoBlurMemory) vkFreeMemory(device, aoBlurMemory, nullptr);
+    aoBlurFramebuffer = VK_NULL_HANDLE;
+    aoBlurView = VK_NULL_HANDLE;
+    aoBlurImage = VK_NULL_HANDLE;
+    aoBlurMemory = VK_NULL_HANDLE;
     if (normalView) vkDestroyImageView(device, normalView, nullptr);
     if (normalImage) vkDestroyImage(device, normalImage, nullptr);
     if (normalMemory) vkFreeMemory(device, normalMemory, nullptr);
@@ -3255,15 +3408,23 @@ void VulkanRenderer::shutdown() {
     if (impl->ssaoPipeline) vkDestroyPipeline(impl->device, impl->ssaoPipeline, nullptr);
     if (impl->ssaoPipelineLayout)
         vkDestroyPipelineLayout(impl->device, impl->ssaoPipelineLayout, nullptr);
+    if (impl->ssaoBlurPipeline) vkDestroyPipeline(impl->device, impl->ssaoBlurPipeline, nullptr);
+    if (impl->ssaoBlurPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->ssaoBlurPipelineLayout, nullptr);
     if (impl->ssaoPool) vkDestroyDescriptorPool(impl->device, impl->ssaoPool, nullptr);
     if (impl->gbufferSetLayout)
         vkDestroyDescriptorSetLayout(impl->device, impl->gbufferSetLayout, nullptr);
+    if (impl->ssaoBlurSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->ssaoBlurSetLayout, nullptr);
     if (impl->gbufferSampler) vkDestroySampler(impl->device, impl->gbufferSampler, nullptr);
     if (impl->ssaoRenderPass) vkDestroyRenderPass(impl->device, impl->ssaoRenderPass, nullptr);
     impl->ssaoPipeline = VK_NULL_HANDLE;
     impl->ssaoPipelineLayout = VK_NULL_HANDLE;
+    impl->ssaoBlurPipeline = VK_NULL_HANDLE;
+    impl->ssaoBlurPipelineLayout = VK_NULL_HANDLE;
     impl->ssaoPool = VK_NULL_HANDLE;
     impl->gbufferSetLayout = VK_NULL_HANDLE;
+    impl->ssaoBlurSetLayout = VK_NULL_HANDLE;
     impl->gbufferSampler = VK_NULL_HANDLE;
     impl->ssaoRenderPass = VK_NULL_HANDLE;
 

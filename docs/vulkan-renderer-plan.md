@@ -165,8 +165,12 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   `invViewProjection` (same basis as the verified skybox), samples a
   cosine-weighted hemisphere kernel against the depth buffer, and writes a
   half-res AO target the composite multiplies in (clamped to `aoFloor`). Driven
-  by `ssaoEnabled` + `ssaoParams`. World-space; an approximation of Metal's GTAO
-  (no temporal reprojection or AO blur yet).
+  by `ssaoEnabled` + `ssaoParams`. World-space; an approximation of Metal's GTAO.
+- **Phase 5b — SSAO blur (code landed; verify on device):** a 4×4 box blur
+  (`ssao_blur.frag`) over the half-res raw AO target denoises the
+  hemisphere-kernel sampling before the composite reads it. Runs as a second
+  fullscreen pass (raw `aoImage` → `aoBlurImage`) reusing the SSAO render pass;
+  the composite now samples the blurred target. No temporal reprojection yet.
 - **Phase 5b — SSR (code landed; verify on device):** world-space ray march of
   the reflection ray against the depth buffer (`ssr.frag`), sampling the HDR
   scene on a hit; faded by screen edge + Fresnel + roughness (packed in the
@@ -179,8 +183,8 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   pass — distortion warps the sample UV, CA splits the HDR channels, vignette
   darkens corners; exact passthrough at neutral params. Driven by the active
   camera's `LensParams` (`lensEffectsEnabled` gates it).
-- **Phase 5b (still owed):** DOF (off by default — needs a CoC gather); an SSAO
-  blur/temporal pass (+ SSR binary-search refine); debug views/wireframe.
+- **Phase 5b (still owed):** DOF (off by default — needs a CoC gather); SSAO
+  temporal reprojection (+ SSR binary-search refine); wireframe debug view.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.
