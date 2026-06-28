@@ -1,5 +1,6 @@
 #include "nav_graph.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace engine {
@@ -91,6 +92,21 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         addLink(e.a, e.b, e);                                  // forward
         if (!(params.oneWayRamps && e.klass == RoadClass::Ramp))
             addLink(e.b, e.a, e);                              // reverse (two-way)
+    }
+
+    // Flag intersections: a node with three or more distinct neighbours (counting
+    // both edge endpoints, so one-way ramps still register). Agents slow here.
+    std::vector<std::vector<int>> nbr(g.nodes.size());
+    for (const NavLink& l : g.links) {
+        nbr[l.from].push_back(l.to);
+        nbr[l.to].push_back(l.from);
+    }
+    g.junction.assign(g.nodes.size(), 0);
+    for (int i = 0; i < n; ++i) {
+        std::vector<int>& v = nbr[i];
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+        if (v.size() >= 3) g.junction[i] = 1;
     }
     return g;
 }

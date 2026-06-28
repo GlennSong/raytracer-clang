@@ -31,9 +31,16 @@ struct NavGraph {
     std::vector<Vec2> nodes;                // node positions (world XZ; Vec2.x=x, .y=z)
     std::vector<NavLink> links;             // directed links
     std::vector<std::vector<int>> outLinks; // node -> indices of links departing it
+    std::vector<uint8_t> junction;          // 1 if the node is an intersection (deg >= 3)
 
     int nodeCount() const { return static_cast<int>(nodes.size()); }
     int linkCount() const { return static_cast<int>(links.size()); }
+
+    // True if `node` is an intersection (three or more distinct neighbours) — a
+    // place agents slow for / will yield at (ADR-0058).
+    bool isJunction(int node) const {
+        return node >= 0 && node < static_cast<int>(junction.size()) && junction[node];
+    }
 
     // Unit travel direction of a link (zero-length links report {1,0}).
     Vec2 direction(int link) const;

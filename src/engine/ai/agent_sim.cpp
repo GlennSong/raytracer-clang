@@ -18,6 +18,12 @@ constexpr Real kCarMinGap   = 5.0;
 constexpr Real kCarSlowZone = 14.0;
 constexpr Real kPedMinGap   = 0.8;
 constexpr Real kPedSlowZone = 2.5;
+
+// Junction easing: within this distance of an intersection a car eases to (at
+// most) the junction speed. A slowdown, never a stop, so it can't deadlock; full
+// right-of-way arbitration is future work.
+constexpr Real kJunctionApproach = 9.0;   // m
+constexpr Real kJunctionSpeed    = 4.0;   // m/s (~14 km/h)
 }  // namespace
 
 Real carFollowingCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
@@ -105,6 +111,13 @@ void AgentSim::advance(Agent& a, Real dt, Real gap) {
     int li = a.route.links[a.leg];
     Real target = (a.kind == AgentKind::Car) ? classSpeed(nav->links[li].klass) : kWalkSpeed;
     Real accel = (a.kind == AgentKind::Car) ? kCarAccel : kPedAccel;
+    // Ease off approaching an intersection (cars only): a slowdown to the junction
+    // speed, never a stop, so traffic reads as cautious at crossings without risk
+    // of gridlock.
+    if (a.kind == AgentKind::Car && nav->isJunction(nav->links[li].to)) {
+        Real distToEnd = nav->links[li].length - a.distOnLeg;
+        if (distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
+    }
     // Don't drive into the agent ahead: cap the target by the leading gap.
     Real minGap = (a.kind == AgentKind::Car) ? kCarMinGap : kPedMinGap;
     Real slowZone = (a.kind == AgentKind::Car) ? kCarSlowZone : kPedSlowZone;

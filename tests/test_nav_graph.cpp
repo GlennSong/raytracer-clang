@@ -84,6 +84,30 @@ TEST_CASE(nav_sidewalk_outside_carriageway) {
     CHECK_APPROX(std::fabs(s.y), 5.0, 1e-9);
 }
 
+TEST_CASE(nav_flags_junctions_by_degree) {
+    // A plus/cross: centre node 0 with four arms (1..4). The centre is a junction
+    // (4 neighbours); the arm tips are not (1 neighbour each).
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(10, 0)}, {Vec2(-10, 0)},
+                {Vec2(0, 10)}, {Vec2(0, -10)} };
+    g.edges = {
+        RoadEdge{0, 1, 8, RoadClass::Local, 0},
+        RoadEdge{0, 2, 8, RoadClass::Local, 0},
+        RoadEdge{0, 3, 8, RoadClass::Local, 0},
+        RoadEdge{0, 4, 8, RoadClass::Local, 0},
+    };
+    NavGraph nav = buildNavGraph(g);
+    CHECK(nav.isJunction(0));
+    CHECK(!nav.isJunction(1));
+    CHECK(!nav.isJunction(4));
+}
+
+TEST_CASE(nav_straight_road_has_no_junction) {
+    NavGraph nav = buildNavGraph(straightRoad());
+    CHECK(!nav.isJunction(0));
+    CHECK(!nav.isJunction(1));
+}
+
 TEST_CASE(nav_nearest_queries) {
     NavGraph nav = buildNavGraph(straightRoad());
     CHECK(nav.nearestNode(Vec2(0.4, 0.1)) == 0);
