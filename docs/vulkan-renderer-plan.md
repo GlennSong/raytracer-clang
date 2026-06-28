@@ -366,11 +366,13 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   window) and loads the scene with **0 validation errors / 0 surface failures**;
   ImGui-on-Vulkan also initializes in the editor. The Win32 path in
   `vulkan_viewport.cpp` compiled first try. *Owed:* interactive resize + input-feel
-  check (not exercised by a headless launch). **Run note (Windows):** `editor_app`
-  links the *debug* Qt DLLs, so to launch it put `…\vcpkg\installed\x64-windows\
-  debug\bin` on `PATH` and set `QT_QPA_PLATFORM_PLUGIN_PATH=…\debug\Qt6\plugins\
-  platforms` (vcpkg doesn't auto-deploy Qt next to the exe; release build → use the
-  non-`debug` paths).
+  check (not exercised by a headless launch). **Run note (Windows):** vcpkg copies
+  the Qt **DLLs** next to `editor_app.exe` but not the **plugins**, so the app used
+  to abort with "Could not find the Qt platform plugin 'windows'". A CMake
+  POST_BUILD step now copies the config-matching `Qt6::QWindowsIntegrationPlugin`
+  into `<build>/platforms/`, so `.\build\editor_app.exe` launches self-contained —
+  no `QT_QPA_PLATFORM_PLUGIN_PATH`/`PATH` juggling. (Debug build → needs the debug
+  CRT, available in a VS dev shell; a Release build would drop that dependency.)
 
 ## File map (new)
 

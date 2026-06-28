@@ -574,6 +574,23 @@ if(Qt6_FOUND)
             message(STATUS "Vulkan not found — editor uses NullRenderer (no GPU output)")
         endif()
     endif()
+
+    # Deploy the Qt platform plugin next to editor_app so it launches
+    # self-contained on Windows. vcpkg copies the Qt DLLs beside the exe but not
+    # the plugins, and Qt searches <exe-dir>/platforms/ for the windowing
+    # integration; without it the app aborts with "Could not find the Qt platform
+    # plugin 'windows'". The imported target resolves to the config-matching
+    # (debug/release) plugin. No-op on macOS/Linux (handled by frameworks/rpath).
+    if(WIN32 AND TARGET Qt6::QWindowsIntegrationPlugin)
+        add_custom_command(TARGET editor_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    $<TARGET_FILE_DIR:editor_app>/platforms
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt6::QWindowsIntegrationPlugin>
+                    $<TARGET_FILE_DIR:editor_app>/platforms/
+            VERBATIM)
+    endif()
+
     # Headless widget-interaction tests for the generated inspector (the
     # path that once crashed via a dangling visitor capture). Offscreen Qt.
     add_executable(editor_qt_tests
