@@ -376,7 +376,13 @@ void main() {
     float ao = 1.0;
 
     // Texture maps (glTF convention: MR = (_, roughness=g, metallic=b)).
-    if ((texFlags & 1u) != 0u) albedo *= texture(albedoMap, inTexcoord).rgb;
+    // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
+    // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
+    if ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u) {
+        vec4 albedoTex = texture(albedoMap, inTexcoord);
+        if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
+        if ((pc.surfaceFlags.y & 2u) != 0u && albedoTex.a < 0.5) discard;
+    }
     if ((texFlags & 2u) != 0u) {
         vec2 mr = texture(metallicRoughnessMap, inTexcoord).gb;
         roughness = clamp(roughness * mr.x, 0.04, 1.0);

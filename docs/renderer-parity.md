@@ -51,7 +51,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
 | Fog | ✅ | 🟡 | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. Unverified on device. |
 | Transparency / alpha blending | ✅ | 🟡 | Material `opacity < 1` routes to a blended pipeline (src-alpha/one-minus, no depth write, normal G-buffer masked), drawn back-to-front after opaque. Unverified on device. |
-| Alpha-tested foliage + depth prepass | ✅ | ❌ | No alpha cutout / prepass path in Vulkan. **Parity gap.** |
+| Alpha-tested foliage + depth prepass | ✅ | 🟡 | `mesh.frag` discards under the albedo alpha mask (FLAG_ALPHA_TEST) — the visual cutout. The depth-prepass overdraw optimization (perf, not visual) is still a follow-up. Unverified on device. |
 
 ### Shadows
 | Feature | Metal | Vulkan | Notes |
