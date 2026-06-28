@@ -17,6 +17,11 @@
 
 #include <vulkan/vulkan.h>
 
+#ifdef RT_ENABLE_IMGUI
+#include "imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -344,6 +349,10 @@ struct VulkanRenderer::Impl {
     bool  lensEnabledFrame = true;
     float lensK1 = 0.0f, lensK2 = 0.0f, lensCA = 0.0f, lensVignette = 0.0f, lensAspect = 1.0f;
     int   debugViewFrame = 0;   // mirrored from Renderer::debugView
+
+    // Dear ImGui (ADR-0011); only used when RT_ENABLE_IMGUI is defined.
+    VkDescriptorPool imguiPool = VK_NULL_HANDLE;
+    bool imguiInitialized = false;
 
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -2967,6 +2976,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+#ifdef RT_ENABLE_IMGUI
+    // ImGui overlay, into the same swapchain pass (draw data finalized in endFrame).
+    if (imguiInitialized) {
+        ImDrawData* dd = ImGui::GetDrawData();
+        if (dd) ImGui_ImplVulkan_RenderDrawData(dd, cmd);
+    }
+#endif
     vkCmdEndRenderPass(cmd);
 
     vkEndCommandBuffer(cmd);
@@ -3332,6 +3348,14 @@ RenderStats VulkanRenderer::getRenderStats() const { return impl->stats; }
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
     impl->drawQueue.clear();
+#ifdef RT_ENABLE_IMGUI
+    // Backend new-frame here; the GLFW new-frame ran in Window::pollEvents, and
+    // ImGui::NewFrame() must come after both (mirrors the Metal backend).
+    if (impl->imguiInitialized) {
+        ImGui_ImplVulkan_NewFrame();
+        ImGui::NewFrame();
+    }
+#endif
 }
 
 void VulkanRenderer::setCamera(const CameraState& camera) {
@@ -3555,7 +3579,95 @@ void VulkanRenderer::endFrame() {
     impl->ssrBlendStrength = ssrParams.blendStrength;
     impl->lensEnabledFrame = lensEffectsEnabled;
     impl->debugViewFrame = debugView;
+#ifdef RT_ENABLE_IMGUI
+    // Finalize the ImGui draw data (built by systems during render) before the
+    // command buffer records it inside the composite pass.
+    if (impl->imguiInitialized) ImGui::Render();
+#endif
     impl->drawFrame();
+}
+
+// Defined unconditionally (the header declares the overrides); the body is a
+// no-op unless RT_ENABLE_IMGUI is set, so the default build links cleanly.
+void VulkanRenderer::initDebugUi(void* windowHandle) {
+    (void)windowHandle;
+#ifdef RT_ENABLE_IMGUI
+    // Create the ImGui context here (the non-Apple path never did, which crashed
+    // at the first NewFrame). Window::initDebugUi attaches the GLFW backend after.
+    if (!impl->device) return;
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+
+    // A generously-sized descriptor pool for ImGui's font/texture descriptors.
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 64;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &size;
+    if (vkCreateDescriptorPool(impl->device, &poolInfo, nullptr, &impl->imguiPool) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] ImGui descriptor pool creation failed");
+        return;
+    }
+
+    ImGui_ImplVulkan_InitInfo init{};
+    init.Instance = impl->instance;
+    init.PhysicalDevice = impl->physicalDevice;
+    init.Device = impl->device;
+    init.QueueFamily = impl->graphicsFamily;
+    init.Queue = impl->graphicsQueue;
+    init.DescriptorPool = impl->imguiPool;
+    init.MinImageCount = 2;
+    init.ImageCount = static_cast<uint32_t>(impl->swapchainImages.size());
+    init.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    // ImGui draws into the composite (swapchain) render pass. The RenderPass field
+    // moved into InitInfo in ImGui 1.90; older versions take it as a 2nd arg.
+#if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19000
+    init.RenderPass = impl->compositeRenderPass;
+    ImGui_ImplVulkan_Init(&init);
+    ImGui_ImplVulkan_CreateFontsTexture();   // 1.90+: no command buffer needed
+#else
+    ImGui_ImplVulkan_Init(&init, impl->compositeRenderPass);
+    // Older ImGui: upload fonts via a one-time command buffer.
+    VkCommandBufferAllocateInfo cba{};
+    cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cba.commandPool = impl->commandPool;
+    cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cba.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(impl->device, &cba, &cmd);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+    ImGui_ImplVulkan_CreateFontsTexture(cmd);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(impl->graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(impl->graphicsQueue);
+    vkFreeCommandBuffers(impl->device, impl->commandPool, 1, &cmd);
+    ImGui_ImplVulkan_DestroyFontUploadObjects();
+#endif
+    impl->imguiInitialized = true;
+    LOG_INFO("[vulkan] ImGui backend initialized");
+#endif
+}
+
+void VulkanRenderer::shutdownDebugUi() {
+#ifdef RT_ENABLE_IMGUI
+    if (!impl->imguiInitialized) return;
+    vkDeviceWaitIdle(impl->device);
+    ImGui_ImplVulkan_Shutdown();
+    if (impl->imguiPool) vkDestroyDescriptorPool(impl->device, impl->imguiPool, nullptr);
+    impl->imguiPool = VK_NULL_HANDLE;
+    ImGui::DestroyContext();   // Window::shutdownDebugUi (GLFW) ran first
+    impl->imguiInitialized = false;
+#endif
+}
 }
 
 // The non-Apple factory. Exactly one Renderer::create() is linked per target.

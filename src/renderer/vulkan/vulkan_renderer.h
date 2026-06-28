@@ -39,6 +39,10 @@ public:
                   const RenderMaterial& material) override;
     void endFrame() override;
 
+    // Dear ImGui (ADR-0011). No-ops unless RT_ENABLE_IMGUI is defined.
+    void initDebugUi(void* windowHandle) override;
+    void shutdownDebugUi() override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

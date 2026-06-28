@@ -478,6 +478,10 @@ if(RT_ENABLE_IMGUI)
             ${IMGUI_DIR}/backends/imgui_impl_metal.mm
             PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
+    elseif(Vulkan_FOUND)
+        # ImGui's Vulkan backend; vulkan_renderer.cpp drives it (ADR-0057).
+        target_sources(viewer PRIVATE ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
+        target_link_libraries(viewer PRIVATE Vulkan::Vulkan)
     endif()
     target_include_directories(viewer SYSTEM PRIVATE ${IMGUI_DIR}/backends)
 endif()

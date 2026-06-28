@@ -243,10 +243,15 @@ loads — but with **one new validation error** (first item below). Open items:
   never called on the non-Apple path (that wiring lives in the Metal renderer).
   `vulkan_renderer.cpp` references ImGui nowhere, and CMake compiles no
   `imgui_impl_vulkan` (only `imgui_impl_glfw` + Apple's `imgui_impl_metal`).
-  Default build (ImGui OFF) is unaffected. **To do (full ImGui-on-Vulkan):**
-  create the ImGui context on this path, add `imgui_impl_vulkan` (init with
-  instance/device/queue/render pass + a descriptor pool), and submit
-  `ImGui::GetDrawData()` in the frame, mirroring the Metal path.
+  Default build (ImGui OFF) is unaffected. *Addressed (code landed; verify on
+  device):* `VulkanRenderer::initDebugUi` now creates the context +
+  `ImGui_ImplVulkan_Init` (into the composite render pass, with its own
+  descriptor pool); `beginFrame` does the backend new-frame + `ImGui::NewFrame`,
+  `endFrame` calls `ImGui::Render`, and the composite pass records
+  `ImGui_ImplVulkan_RenderDrawData`. CMake compiles `imgui_impl_vulkan.cpp` on
+  the non-Apple Vulkan path. The `ImGui_ImplVulkan_Init` signature is guarded by
+  `IMGUI_VERSION_NUM` (RenderPass-in-InitInfo for ≥1.90, 2nd-arg below) — confirm
+  it matches the pinned ImGui submodule when building with `-DRT_ENABLE_IMGUI=ON`.
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
   (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code
