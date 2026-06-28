@@ -122,7 +122,9 @@ reads garbage (a 0 `shadowMapSize` → NaN). This is the #1 footgun in the file.
 - **New post effect / knob:** add the field to `Renderer` (`../renderer.h`),
   read it into the matching `*Uniforms` in `shader_types.h`, build its
   pipeline in `initialize`, slot it into the `endFrame` graph, and mirror it in
-  the Vulkan backend (parity, ADR-0057).
+  the Vulkan backend (parity, ADR-0057). **Record it in
+  `docs/renderer-parity.md`** — the Metal↔Vulkan ledger — so the other backend's
+  gap is tracked until it catches up and is device-verified.
 - **New geometry feature:** decide which of the 7 geometry pipelines it rides (or
   add one), and whether it needs a shadow-caster variant.
 - **Touching shadows or skybox:** re-check the shared-slot restore after skybox.

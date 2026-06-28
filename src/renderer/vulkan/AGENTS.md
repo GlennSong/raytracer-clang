@@ -60,6 +60,12 @@ forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
 > When code lands here, keep this guide in sync — it exists so future work
 > doesn't re-derive the structure. Update it at the end of each phase.
 
+> **Also update `docs/renderer-parity.md`** with every feature add/change: it is
+> the Metal↔Vulkan parity ledger. New Vulkan code is `🟡` (unverified — no GPU in
+> CI) until it's run on real hardware, then `✅` with a dated Verification-Log
+> line. Anything Metal has that Vulkan doesn't goes in as `❌`/`⚠️` so the gap is
+> tracked, not lost.
+
 ## Target shape
 
 | Concern | Choice (ADR-0057) |

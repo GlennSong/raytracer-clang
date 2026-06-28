@@ -10,6 +10,13 @@ directory for a graphics or OS symbol.
 > gamepad, ADR-0016 environment, ADR-0017 lighting, ADR-0036 CDLOD terrain,
 > ADR-0057 Vulkan).
 
+> **Parity is a hard requirement (Metal ↔ Vulkan).** When you add or change a
+> renderer feature, update `docs/renderer-parity.md` in the same change: set the
+> touched backend's status, mark the other backend's gap if it now lags, and
+> leave new code `🟡` (implemented, unverified) until it's confirmed on real
+> hardware — then flip it to `✅` and add a dated line to that file's
+> Verification Log. The matrix is the cross-platform backlog; keep it honest.
+
 ## The two seams
 
 | Seam | Interface | Crosses as | Implementations |
