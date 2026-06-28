@@ -93,6 +93,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
+	$(TEST_DIR)/test_follow_camera.cpp \
 	$(TEST_DIR)/test_scene_camera.cpp \
 	$(TEST_DIR)/test_camera_store.cpp \
 	$(TEST_DIR)/test_lens.cpp \
@@ -151,6 +152,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/input/player_input.cpp \
 	$(SRC_DIR)/engine/camera/orbit_camera_controller.cpp \
 	$(SRC_DIR)/engine/camera/fly_camera_controller.cpp \
+	$(SRC_DIR)/engine/camera/follow_camera_controller.cpp \
 	$(SRC_DIR)/engine/camera/scene_camera.cpp \
 	$(SRC_DIR)/engine/camera_store.cpp \
 	$(SRC_DIR)/engine/level_writer.cpp \
