@@ -472,7 +472,9 @@ void main() {
             float f = 1.0 - exp(-g.fog.w * dist);
             color = mix(color, g.fog.rgb, f);
         }
-        outColor = vec4(color, 1.0);
+        // Opacity (float bits in the spare push slot) → output alpha for the
+        // transparent blend pass; ignored by the opaque pipeline (blend off).
+        outColor = vec4(color, uintBitsToFloat(pc.surfaceFlags.w));
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

@@ -207,6 +207,7 @@ struct DrawItem {
     MeshHandle mesh;
     MeshPush push;
     std::array<TextureHandle, 5> textures;   // albedo, MR, normal, AO, emissive
+    float opacity = 1.0f;                     // < 1 → transparent pass (back-to-front)
 };
 
 bool hasValidationLayer() {
@@ -449,7 +450,8 @@ struct VulkanRenderer::Impl {
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;
-    VkPipeline wirePipeline = VK_NULL_HANDLE;   // VK_POLYGON_MODE_LINE debug view
+    VkPipeline wirePipeline = VK_NULL_HANDLE;          // VK_POLYGON_MODE_LINE debug view
+    VkPipeline transparentPipeline = VK_NULL_HANDLE;   // alpha blend, no depth write
 
     // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
@@ -2683,6 +2685,34 @@ bool VulkanRenderer::Impl::createPipeline() {
         LOG_ERROR("[vulkan] wireframe pipeline creation failed");
         return false;
     }
+
+    // Transparent variant (material opacity < 1): the same mesh shaders, but alpha
+    // blend onto the HDR attachment, no depth write, and mask the normal G-buffer
+    // (attachment 1) so SSAO/SSR keep the opaque surface seen through the glass.
+    // Needs independentBlend (already enabled). Drawn back-to-front after opaque.
+    VkShaderModule tvert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.vert.spv");
+    VkShaderModule tfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.frag.spv");
+    if (!tvert || !tfrag) return false;
+    stages[0].module = tvert;
+    stages[1].module = tfrag;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    blendAttachments[0].blendEnable = VK_TRUE;
+    blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+    blendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAttachments[1].colorWriteMask = 0;   // don't write the normal G-buffer
+    VkResult tresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                 &transparentPipeline);
+    vkDestroyShaderModule(device, tvert, nullptr);
+    vkDestroyShaderModule(device, tfrag, nullptr);
+    if (tresult != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] transparent pipeline creation failed");
+        return false;
+    }
     return true;
 }
 
@@ -3520,11 +3550,33 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // pipeline layout: mode 1 replaces the fills with the LINE-mode wire pipeline;
     // mode 2 draws the shaded fills then re-draws edges on top. Wire draws read a
     // flat color from the push (mesh_wire.frag) and skip the material set.
-    auto recordGeometry = [&](VkPipeline pipe, bool wire, bool countStats) {
+    // Split opaque (depth write, no blend) from transparent (alpha blend, no depth
+    // write, sorted back-to-front). Wireframe modes draw everything as lines.
+    std::vector<const DrawItem*> opaque, transparent;
+    for (const DrawItem& item : drawQueue) {
+        GpuMesh* m = meshes.get(item.mesh);
+        if (!m || m->indexCount == 0) continue;
+        (item.opacity < 1.0f ? transparent : opaque).push_back(&item);
+    }
+    const float cx = cpuGlobals.cameraPosition[0], cy = cpuGlobals.cameraPosition[1],
+                cz = cpuGlobals.cameraPosition[2];
+    auto camDistSq = [&](const DrawItem* it) {
+        float dx = it->push.model[12] - cx, dy = it->push.model[13] - cy,
+              dz = it->push.model[14] - cz;
+        return dx * dx + dy * dy + dz * dz;
+    };
+    std::sort(transparent.begin(), transparent.end(),
+              [&](const DrawItem* a, const DrawItem* b) { return camDistSq(a) > camDistSq(b); });
+    std::vector<const DrawItem*> allItems = opaque;
+    allItems.insert(allItems.end(), transparent.begin(), transparent.end());
+
+    auto recordGeometry = [&](const std::vector<const DrawItem*>& items, VkPipeline pipe,
+                              bool wire, bool countStats) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                                 &descriptorSets[currentFrame], 0, nullptr);
-        for (const DrawItem& item : drawQueue) {
+        for (const DrawItem* itemPtr : items) {
+            const DrawItem& item = *itemPtr;
             GpuMesh* m = meshes.get(item.mesh);
             if (!m || m->indexCount == 0) continue;
 
@@ -3581,11 +3633,12 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     };
 
     if (wireframeFrame == 1) {
-        recordGeometry(wirePipeline, /*wire=*/true, /*countStats=*/true);
+        recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/true);
     } else {
-        recordGeometry(meshPipeline, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(opaque, meshPipeline, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
         if (wireframeFrame == 2)
-            recordGeometry(wirePipeline, /*wire=*/true, /*countStats=*/false);
+            recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/false);
     }
 
     vkCmdEndRenderPass(cmd);
@@ -3811,6 +3864,8 @@ void VulkanRenderer::shutdown() {
     if (impl->meshPipeline) vkDestroyPipeline(impl->device, impl->meshPipeline, nullptr);
     if (impl->wirePipeline) vkDestroyPipeline(impl->device, impl->wirePipeline, nullptr);
     impl->wirePipeline = VK_NULL_HANDLE;
+    if (impl->transparentPipeline) vkDestroyPipeline(impl->device, impl->transparentPipeline, nullptr);
+    impl->transparentPipeline = VK_NULL_HANDLE;
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
@@ -4374,7 +4429,10 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
     item.push.surfaceFlags[1] = material.flags;
     item.push.surfaceFlags[2] = textureFlags;
-    item.push.surfaceFlags[3] = 0u;
+    // Stash opacity (float bits) in the spare push slot so mesh.frag can write it
+    // as the output alpha for the transparent blend pass.
+    std::memcpy(&item.push.surfaceFlags[3], &material.opacity, sizeof(float));
+    item.opacity = material.opacity;
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }

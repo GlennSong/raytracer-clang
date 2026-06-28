@@ -50,7 +50,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from `common.metal`. |
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
 | Fog | ✅ | 🟡 | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. Unverified on device. |
-| Transparency / alpha blending | ✅ | ❌ | Vulkan mesh pipeline is opaque-only (`blendEnable = FALSE`). **Parity gap.** |
+| Transparency / alpha blending | ✅ | 🟡 | Material `opacity < 1` routes to a blended pipeline (src-alpha/one-minus, no depth write, normal G-buffer masked), drawn back-to-front after opaque. Unverified on device. |
 | Alpha-tested foliage + depth prepass | ✅ | ❌ | No alpha cutout / prepass path in Vulkan. **Parity gap.** |
 
 ### Shadows
@@ -108,7 +108,8 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   backend via the Qt surface.
 - **Pending device check (Vulkan):** HDR equirect IBL (4b); debug views
   (albedo/depth fixes); wireframe; depth of field; SSAO box-blur + IGN rotation;
-  SSR binary-search refinement; **normal mapping (TBN); aerial-perspective fog**.
+  SSR binary-search refinement; normal mapping (TBN); aerial-perspective fog;
+  **mipmaps; transparency / alpha blending**.
 
 ## Known non-goals (both backends)
 Per ADR-0057: unifying the viewer with the offline path tracer, compute shaders,
