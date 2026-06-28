@@ -8,6 +8,7 @@
 layout(set = 0, binding = 0) uniform sampler2D hdrTex;
 layout(set = 0, binding = 1) uniform sampler2D bloomTex;
 layout(set = 0, binding = 2) uniform sampler2D aoTex;
+layout(set = 0, binding = 3) uniform sampler2D ssrTex;
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -18,6 +19,8 @@ layout(push_constant) uniform Push {
     float bloomIntensity;
     int   ssaoEnabled;
     float aoFloor;
+    int   ssrEnabled;
+    float _pad;
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -76,6 +79,11 @@ void main() {
     // only), clamped to aoFloor so creases don't go fully black.
     if (pc.ssaoEnabled != 0)
         hdr *= max(texture(aoTex, inUV).r, pc.aoFloor);
+    // SSR: rgb = reflected color, a = confidence (already scaled by blendStrength).
+    if (pc.ssrEnabled != 0) {
+        vec4 ssr = texture(ssrTex, inUV);
+        hdr = mix(hdr, ssr.rgb, clamp(ssr.a, 0.0, 1.0));
+    }
     if (pc.bloomEnabled != 0)
         hdr += texture(bloomTex, inUV).rgb * pc.bloomIntensity;
     hdr *= pc.exposure;

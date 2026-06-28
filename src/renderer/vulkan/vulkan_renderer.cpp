@@ -119,6 +119,8 @@ struct CompositePush {
     float    bloomIntensity;
     int32_t  ssaoEnabled;
     float    aoFloor;
+    int32_t  ssrEnabled;
+    float    _pad;
 };
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
@@ -138,6 +140,14 @@ struct SsaoPush {
     float bias;
     float intensity;
     float _pad;
+};
+
+// SSR push constants.
+struct SsrPush {
+    float maxRayDist;
+    float thickness;
+    float maxRoughness;
+    float blendStrength;
 };
 
 struct GpuMesh {
@@ -303,6 +313,26 @@ struct VulkanRenderer::Impl {
     float ssaoBias = 0.05f;
     float ssaoFloor = 0.15f;
 
+    // SSR (Phase 5b): world-space ray march of the reflection ray against the
+    // depth buffer, sampling the HDR scene at the hit. Half-res; composite adds
+    // it by confidence. Reuses the normal G-buffer (roughness packed in .a).
+    VkImage ssrImage = VK_NULL_HANDLE;
+    VkDeviceMemory ssrMemory = VK_NULL_HANDLE;
+    VkImageView ssrView = VK_NULL_HANDLE;          // half-res RGBA16F (rgb + confidence)
+    VkFramebuffer ssrFramebuffer = VK_NULL_HANDLE;
+    VkExtent2D ssrExtent{0, 0};
+    VkRenderPass ssrRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ssrSetLayout = VK_NULL_HANDLE;   // set 1: depth, normal, hdr
+    VkDescriptorPool ssrPool = VK_NULL_HANDLE;
+    VkDescriptorSet ssrSet = VK_NULL_HANDLE;
+    VkPipelineLayout ssrPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline ssrPipeline = VK_NULL_HANDLE;
+    bool  ssrEnabledFrame = true;
+    float ssrMaxRayDist = 20.0f;
+    float ssrThickness = 0.3f;
+    float ssrMaxRoughness = 0.6f;
+    float ssrBlendStrength = 0.5f;
+
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> commandBuffers{};
@@ -390,6 +420,9 @@ struct VulkanRenderer::Impl {
     bool createSsaoResources();
     void updateSsaoDescriptors();
     void recordSsao(VkCommandBuffer cmd);
+    bool createSsrResources();
+    void updateSsrDescriptors();
+    void recordSsr(VkCommandBuffer cmd);
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
                            VkImage& image, VkDeviceMemory& memory, VkImageView& view);
     bool createCommandPool();
@@ -594,6 +627,11 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
     }
     const char* deviceExt = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     VkPhysicalDeviceFeatures features{};
+    // The MRT scene pass masks the normal attachment on the sky pipeline (writes
+    // color, not normals), so its per-attachment blend state differs from the HDR
+    // attachment — which requires independentBlend (VUID-...-pAttachments-00605).
+    // Widely supported; verified needed by the first Phase 5b device run.
+    features.independentBlend = VK_TRUE;
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -954,15 +992,15 @@ bool VulkanRenderer::Impl::createCommandPool() {
 }
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
-    VkDescriptorImageInfo imgs[3]{};
-    VkImageView views[3] = {hdrView, bloomView[0], aoView};
-    for (uint32_t i = 0; i < 3; ++i) {
+    VkDescriptorImageInfo imgs[4]{};
+    VkImageView views[4] = {hdrView, bloomView[0], aoView, ssrView};
+    for (uint32_t i = 0; i < 4; ++i) {
         imgs[i].sampler = compositeSampler;
         imgs[i].imageView = views[i];
         imgs[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
-    std::array<VkWriteDescriptorSet, 3> writes{};
-    for (uint32_t i = 0; i < 3; ++i) {
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    for (uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -970,7 +1008,7 @@ void VulkanRenderer::Impl::updateCompositeDescriptor() {
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &imgs[i];
     }
-    vkUpdateDescriptorSets(device, 3, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device, 4, writes.data(), 0, nullptr);
 }
 
 bool VulkanRenderer::Impl::createColorTarget(uint32_t w, uint32_t h, VkFormat fmt,
@@ -1476,6 +1514,221 @@ void VulkanRenderer::Impl::recordSsao(VkCommandBuffer cmd) {
     vkCmdEndRenderPass(cmd);
 }
 
+void VulkanRenderer::Impl::updateSsrDescriptors() {
+    VkDescriptorImageInfo imgs[3]{};
+    imgs[0].sampler = gbufferSampler;
+    imgs[0].imageView = depthView;
+    imgs[0].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    imgs[1].sampler = gbufferSampler;
+    imgs[1].imageView = normalView;
+    imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgs[2].sampler = compositeSampler;   // linear, for the HDR color fetch
+    imgs[2].imageView = hdrView;
+    imgs[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = ssrSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imgs[i];
+    }
+    vkUpdateDescriptorSets(device, 3, writes.data(), 0, nullptr);
+}
+
+bool VulkanRenderer::Impl::createSsrResources() {
+    ssrExtent = {std::max(1u, swapchainExtent.width / 2),
+                 std::max(1u, swapchainExtent.height / 2)};
+    if (!createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           ssrImage, ssrMemory, ssrView))
+        return false;
+
+    if (ssrRenderPass == VK_NULL_HANDLE) {
+        VkAttachmentDescription color{};
+        color.format = kHdrFormat;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp.attachmentCount = 1;
+        rp.pAttachments = &color;
+        rp.subpassCount = 1;
+        rp.pSubpasses = &subpass;
+        rp.dependencyCount = static_cast<uint32_t>(deps.size());
+        rp.pDependencies = deps.data();
+        if (vkCreateRenderPass(device, &rp, nullptr, &ssrRenderPass) != VK_SUCCESS) return false;
+    }
+
+    VkFramebufferCreateInfo fb{};
+    fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb.renderPass = ssrRenderPass;
+    fb.attachmentCount = 1;
+    fb.pAttachments = &ssrView;
+    fb.width = ssrExtent.width;
+    fb.height = ssrExtent.height;
+    fb.layers = 1;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &ssrFramebuffer) != VK_SUCCESS) return false;
+
+    if (ssrSetLayout == VK_NULL_HANDLE) {
+        std::array<VkDescriptorSetLayoutBinding, 3> b{};   // depth, normal, hdr
+        for (uint32_t i = 0; i < 3; ++i) {
+            b[i].binding = i;
+            b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo l{};
+        l.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l.bindingCount = static_cast<uint32_t>(b.size());
+        l.pBindings = b.data();
+        if (vkCreateDescriptorSetLayout(device, &l, nullptr, &ssrSetLayout) != VK_SUCCESS)
+            return false;
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+        VkDescriptorPoolCreateInfo p{};
+        p.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        p.poolSizeCount = 1;
+        p.pPoolSizes = &size;
+        p.maxSets = 1;
+        if (vkCreateDescriptorPool(device, &p, nullptr, &ssrPool) != VK_SUCCESS) return false;
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = ssrPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &ssrSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &ssrSet) != VK_SUCCESS) return false;
+    }
+    updateSsrDescriptors();
+
+    if (ssrPipeline == VK_NULL_HANDLE) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SsrPush)};
+        std::array<VkDescriptorSetLayout, 2> setLayouts{descriptorSetLayout, ssrSetLayout};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+        pl.pSetLayouts = setLayouts.data();
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &ssrPipelineLayout) != VK_SUCCESS)
+            return false;
+
+        VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+        VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/ssr.frag.spv");
+        if (!vert || !frag) return false;
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{};
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &ba;
+        std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+        dynamic.pDynamicStates = dyn.data();
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState = &vp;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &ms;
+        info.pDepthStencilState = &ds;
+        info.pColorBlendState = &blend;
+        info.pDynamicState = &dynamic;
+        info.layout = ssrPipelineLayout;
+        info.renderPass = ssrRenderPass;
+        info.subpass = 0;
+        VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                    &ssrPipeline);
+        vkDestroyShaderModule(device, vert, nullptr);
+        vkDestroyShaderModule(device, frag, nullptr);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] SSR pipeline creation failed");
+            return false;
+        }
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::recordSsr(VkCommandBuffer cmd) {
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = ssrRenderPass;
+    rp.framebuffer = ssrFramebuffer;
+    rp.renderArea.extent = ssrExtent;
+    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0, 0, float(ssrExtent.width), float(ssrExtent.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, ssrExtent};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipeline);
+    std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], ssrSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipelineLayout, 0,
+                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+    SsrPush push{ssrMaxRayDist, ssrThickness, ssrMaxRoughness, ssrBlendStrength};
+    vkCmdPushConstants(cmd, ssrPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(SsrPush), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+}
+
 bool VulkanRenderer::Impl::createCompositeResources() {
     VkSamplerCreateInfo samp{};
     samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1487,8 +1740,8 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};   // 0 HDR, 1 bloom, 2 AO
-    for (uint32_t i = 0; i < 3; ++i) {
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};   // 0 HDR, 1 bloom, 2 AO, 3 SSR
+    for (uint32_t i = 0; i < 4; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
@@ -1501,7 +1754,7 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
@@ -2497,6 +2750,14 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
         bloomImage[i] = VK_NULL_HANDLE;
         bloomMemory[i] = VK_NULL_HANDLE;
     }
+    if (ssrFramebuffer) vkDestroyFramebuffer(device, ssrFramebuffer, nullptr);
+    if (ssrView) vkDestroyImageView(device, ssrView, nullptr);
+    if (ssrImage) vkDestroyImage(device, ssrImage, nullptr);
+    if (ssrMemory) vkFreeMemory(device, ssrMemory, nullptr);
+    ssrFramebuffer = VK_NULL_HANDLE;
+    ssrView = VK_NULL_HANDLE;
+    ssrImage = VK_NULL_HANDLE;
+    ssrMemory = VK_NULL_HANDLE;
     if (aoFramebuffer) vkDestroyFramebuffer(device, aoFramebuffer, nullptr);
     if (aoView) vkDestroyImageView(device, aoView, nullptr);
     if (aoImage) vkDestroyImage(device, aoImage, nullptr);
@@ -2543,9 +2804,9 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
 
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
         !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers() ||
-        !createBloomResources() || !createSsaoResources())
+        !createBloomResources() || !createSsaoResources() || !createSsrResources())
         return false;
-    updateCompositeDescriptor();   // HDR + bloom + AO views were recreated
+    updateCompositeDescriptor();   // HDR + bloom + AO + SSR views were recreated
 
     renderFinished.resize(swapchainImages.size());
     imagesInFlight.assign(swapchainImages.size(), VK_NULL_HANDLE);
@@ -2654,6 +2915,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // sampleable; composite gates whether they're applied).
     recordBloom(cmd);
     recordSsao(cmd);
+    recordSsr(cmd);
 
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
     // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
@@ -2679,6 +2941,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.bloomIntensity = bloomIntensity;
     cpush.ssaoEnabled = ssaoEnabledFrame ? 1 : 0;
     cpush.aoFloor = ssaoFloor;
+    cpush.ssrEnabled = ssrEnabledFrame ? 1 : 0;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2783,6 +3046,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createMaterialResources() &&
               impl->createBloomResources() &&
               impl->createSsaoResources() &&
+              impl->createSsrResources() &&
               impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
@@ -2792,7 +3056,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO + SSR)", width, height);
     return true;
 }
 
@@ -2867,6 +3131,20 @@ void VulkanRenderer::shutdown() {
     }
 
     impl->cleanupSwapchain();
+
+    // SSR resources (size-independent; target/framebuffer go via cleanupSwapchain).
+    if (impl->ssrPipeline) vkDestroyPipeline(impl->device, impl->ssrPipeline, nullptr);
+    if (impl->ssrPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->ssrPipelineLayout, nullptr);
+    if (impl->ssrPool) vkDestroyDescriptorPool(impl->device, impl->ssrPool, nullptr);
+    if (impl->ssrSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->ssrSetLayout, nullptr);
+    if (impl->ssrRenderPass) vkDestroyRenderPass(impl->device, impl->ssrRenderPass, nullptr);
+    impl->ssrPipeline = VK_NULL_HANDLE;
+    impl->ssrPipelineLayout = VK_NULL_HANDLE;
+    impl->ssrPool = VK_NULL_HANDLE;
+    impl->ssrSetLayout = VK_NULL_HANDLE;
+    impl->ssrRenderPass = VK_NULL_HANDLE;
 
     // SSAO resources (size-independent; targets/framebuffer go via cleanupSwapchain).
     if (impl->ssaoPipeline) vkDestroyPipeline(impl->device, impl->ssaoPipeline, nullptr);
@@ -3241,6 +3519,11 @@ void VulkanRenderer::endFrame() {
     impl->ssaoIntensity = ssaoParams.intensity;
     impl->ssaoBias = ssaoParams.bias;
     impl->ssaoFloor = ssaoParams.aoFloor;
+    impl->ssrEnabledFrame = ssrEnabled;
+    impl->ssrMaxRayDist = ssrParams.maxRayDist;
+    impl->ssrThickness = ssrParams.thickness;
+    impl->ssrMaxRoughness = ssrParams.maxRoughness;
+    impl->ssrBlendStrength = ssrParams.blendStrength;
     impl->drawFrame();
 }
 

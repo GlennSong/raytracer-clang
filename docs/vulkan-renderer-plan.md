@@ -160,9 +160,14 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   half-res AO target the composite multiplies in (clamped to `aoFloor`). Driven
   by `ssaoEnabled` + `ssaoParams`. World-space; an approximation of Metal's GTAO
   (no temporal reprojection or AO blur yet).
-- **Phase 5b (still owed):** SSR (reuses the normal G-buffer + HDR + depth); a
-  blur/temporal pass for SSAO; lens (distortion/CA/vignette) + DOF; debug
-  views/wireframe.
+- **Phase 5b — SSR (code landed; verify on device):** world-space ray march of
+  the reflection ray against the depth buffer (`ssr.frag`), sampling the HDR
+  scene on a hit; faded by screen edge + Fresnel + roughness (packed in the
+  normal G-buffer's `.a`). Half-res; composite mixes it in by confidence. Driven
+  by `ssrEnabled` + `ssrParams` (maxRayDist/thickness/maxRoughness/blendStrength).
+  Fixed-step march (no binary refine) — an approximation of Metal's `ssrRayMarch`.
+- **Phase 5b (still owed):** a blur/temporal pass for SSAO (+ refine SSR with a
+  binary search); lens (distortion/CA/vignette) + DOF; debug views/wireframe.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.

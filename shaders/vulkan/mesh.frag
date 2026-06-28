@@ -409,5 +409,5 @@ void main() {
     vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
 
     outColor = vec4(direct + ambient + emission, 1.0);
-    outNormal = vec4(N * 0.5 + 0.5, 1.0);   // world-space normal for SSAO
+    outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }
