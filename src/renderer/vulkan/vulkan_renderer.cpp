@@ -97,6 +97,9 @@ struct GlobalsUBO {
     float    skyGround[4];
     float    skyCloud[4];            // x coverage, y density, z scale, w time
     GpuLight lights[32];
+    // Appended after the lights array so every earlier offset is unchanged (and
+    // shaders that don't read fog can omit it). rgb = fog color, w = density.
+    float    fog[4];                 // aerial-perspective fog (ADR-0016); w 0 = off
 };
 
 // Per-draw push constants for the forward pass (112 <= 128 B).
@@ -4170,6 +4173,12 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     // envMode: 1 = HDR equirect (when bound and the live toggle is on), else 0 = procedural.
     impl->cpuGlobals.counts[2] = (impl->envBound && environmentMapEnabled) ? 1 : 0;
     impl->sceneExposure = lighting.exposure;
+
+    // Aerial-perspective fog (matches Metal's lightData.fog* + the offline tracer).
+    impl->cpuGlobals.fog[0] = static_cast<float>(lighting.fog.color.x);
+    impl->cpuGlobals.fog[1] = static_cast<float>(lighting.fog.color.y);
+    impl->cpuGlobals.fog[2] = static_cast<float>(lighting.fog.color.z);
+    impl->cpuGlobals.fog[3] = lighting.fog.enabled ? lighting.fog.density : 0.0f;
 
     int n = 0;
     auto setColor = [](float* dst, const Vec3& c, float w) {

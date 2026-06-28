@@ -34,6 +34,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyGround;
     vec4  skyCloud;
     Light lights[32];
+    vec4  fog;                // rgb fog color, w density (0 = off)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -66,6 +67,7 @@ layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inWorldNormal;
 layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
+layout(location = 4) in vec3 inWorldTangent;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -379,9 +381,16 @@ void main() {
     }
     if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
-    // bit 2 (normal map) deferred: needs a tangent-space basis (TBN), later phase.
 
     vec3 N = normalize(inWorldNormal);
+    // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
+    // against N, then T,B,N form the TBN basis (ported from lighting.metal).
+    if ((texFlags & 4u) != 0u) {
+        vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
+        vec3 B = cross(N, T);
+        vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
+        N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+    }
 
     uint rawFlags = pc.surfaceFlags.y;
     if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
@@ -455,7 +464,15 @@ void main() {
         }
         outColor = vec4(tint, 1.0);
     } else {
-        outColor = vec4(direct + ambient + emission, 1.0);
+        vec3 color = direct + ambient + emission;
+        // Aerial-perspective fog (ports lighting.metal): lerp toward fog color by
+        // 1-exp(-density*dist) in scene-linear space, before the composite tonemap.
+        if (g.fog.w > 0.0) {
+            float dist = length(inWorldPos - g.cameraPosition.xyz);
+            float f = 1.0 - exp(-g.fog.w * dist);
+            color = mix(color, g.fog.rgb, f);
+        }
+        outColor = vec4(color, 1.0);
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

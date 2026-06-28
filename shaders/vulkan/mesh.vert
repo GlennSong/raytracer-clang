@@ -34,6 +34,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyGround;
     vec4  skyCloud;
     Light lights[32];
+    vec4  fog;             // rgb fog color, w density (matches GlobalsUBO)
 } g;
 
 layout(push_constant) uniform Push {
@@ -47,6 +48,7 @@ layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outWorldNormal;
 layout(location = 2) out vec2 outTexcoord;
 layout(location = 3) out vec3 outColor;
+layout(location = 4) out vec3 outWorldTangent;
 
 void main() {
     vec4 world = pc.model * vec4(inPosition, 1.0);
@@ -54,6 +56,8 @@ void main() {
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
     mat3 normalMatrix = mat3(transpose(inverse(pc.model)));
     outWorldNormal = normalize(normalMatrix * inNormal);
+    // Tangent in world space for normal mapping (matches Metal's model*tangent).
+    outWorldTangent = normalize((pc.model * vec4(inTangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
     outColor = inColor;
     gl_Position = g.viewProjection * world;

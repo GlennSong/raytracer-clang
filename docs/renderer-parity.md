@@ -45,11 +45,11 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | PBR (albedo/metallic/roughness/emission) | ✅ | ✅ | Cook-Torrance GGX; verified rendering `arena.json`. |
 | Texture maps: albedo / MR / AO / emissive | ✅ | ✅ | glTF MR convention. |
-| Normal mapping (TBN) | ✅ | ❌ | Vulkan `mesh.frag` bit 2 deferred — needs a tangent basis. **Parity gap.** |
+| Normal mapping (TBN) | ✅ | 🟡 | Vulkan `mesh.vert` passes world tangent; `mesh.frag` builds the TBN and perturbs N on texFlags bit 2 (ported from `lighting.metal`). Unverified on device. |
 | Per-vertex tint | ✅ | ✅ | |
 | Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from `common.metal`. |
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
-| Fog | ✅ | ❌ | Absent from the Vulkan shaders/backend. **Parity gap.** |
+| Fog | ✅ | 🟡 | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. Unverified on device. |
 | Transparency / alpha blending | ✅ | ❌ | Vulkan mesh pipeline is opaque-only (`blendEnable = FALSE`). **Parity gap.** |
 | Alpha-tested foliage + depth prepass | ✅ | ❌ | No alpha cutout / prepass path in Vulkan. **Parity gap.** |
 
@@ -108,7 +108,7 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   backend via the Qt surface.
 - **Pending device check (Vulkan):** HDR equirect IBL (4b); debug views
   (albedo/depth fixes); wireframe; depth of field; SSAO box-blur + IGN rotation;
-  SSR binary-search refinement.
+  SSR binary-search refinement; **normal mapping (TBN); aerial-perspective fog**.
 
 ## Known non-goals (both backends)
 Per ADR-0057: unifying the viewer with the offline path tracer, compute shaders,
