@@ -66,7 +66,7 @@ vec3 kernelSample(int i) {
 
 void main() {
     float depth = texture(depthTex, inUV).r;
-    if (depth >= 1.0) { outAO = 1.0; return; }   // background
+    if (depth <= 0.0) { outAO = 1.0; return; }   // background (reverse-Z far = 0)
 
     vec3 P = reconstructWorld(inUV, depth);
     vec3 N = normalize(texture(normalTex, inUV).rgb * 2.0 - 1.0);

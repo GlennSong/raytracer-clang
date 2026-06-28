@@ -55,7 +55,7 @@ vec3 reconstructWorld(vec2 uv, float depth) {
 void main() {
     outColor = vec4(0.0);
     float depth = texture(depthTex, inUV).r;
-    if (depth >= 1.0) return;                       // sky: no reflection
+    if (depth <= 0.0) return;                       // sky: no reflection (reverse-Z far = 0)
 
     vec4 nr = texture(normalTex, inUV);
     float roughness = nr.a;
@@ -78,7 +78,7 @@ void main() {
         if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) return;
 
         float sd = texture(depthTex, suv).r;
-        if (sd >= 1.0) continue;                     // sky pixel, keep marching
+        if (sd <= 0.0) continue;                     // sky pixel, keep marching (reverse-Z)
         vec3 sceneP = reconstructWorld(suv, sd);
         float rayDist = distance(g.cameraPosition.xyz, rayPos);
         float sceneDist = distance(g.cameraPosition.xyz, sceneP);
@@ -96,7 +96,7 @@ void main() {
                 vec2 muv = (mc.xy / mc.w) * 0.5 + 0.5;
                 if (muv.x < 0.0 || muv.x > 1.0 || muv.y < 0.0 || muv.y > 1.0) break;
                 float md = texture(depthTex, muv).r;
-                if (md >= 1.0) { a = mid; continue; }   // sky: midpoint is in front
+                if (md <= 0.0) { a = mid; continue; }   // sky: midpoint is in front (reverse-Z)
                 vec3 mP = reconstructWorld(muv, md);
                 if (distance(g.cameraPosition.xyz, mid) >
                     distance(g.cameraPosition.xyz, mP)) {

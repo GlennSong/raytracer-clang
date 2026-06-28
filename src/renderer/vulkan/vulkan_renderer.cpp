@@ -2809,7 +2809,7 @@ bool VulkanRenderer::Impl::createPipeline() {
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = VK_TRUE;
     depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;   // reverse-Z (near=1, far=0)
 
     // Two attachments (HDR color + world-normal G-buffer), both opaque writes.
     VkPipelineColorBlendAttachmentState blendAttachment{};
@@ -3725,7 +3725,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     std::array<VkClearValue, 3> clears{};
     clears[0].color = {{0.05f, 0.06f, 0.08f, 1.0f}};   // HDR
     clears[1].color = {{0.5f, 0.5f, 1.0f, 0.0f}};      // normal (+Z, unused for sky)
-    clears[2].depthStencil = {1.0f, 0};
+    clears[2].depthStencil = {0.0f, 0};                 // reverse-Z: far = 0
 
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -4456,6 +4456,15 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
         proj = Mat4::perspective(camera.fovDegrees * 3.14159265358979 / 180.0, aspect,
                                  camera.nearPlane, camera.farPlane);
     }
+    // Reverse-Z: remap clip depth so the near plane is at NDC z=1 and the far
+    // plane at z=0. With a float depth buffer this puts the precision where it's
+    // needed (distant geometry no longer z-fights — fixes CDLOD terrain flicker),
+    // matching the Metal backend. R: clip.z' = clip.w - clip.z.
+    Mat4 reverseZ;
+    reverseZ.m[2][2] = -1.0;
+    reverseZ.m[2][3] = 1.0;
+    proj = reverseZ * proj;
+
     Mat4 vp = proj * view;
     packMat4(vp, impl->cpuGlobals.viewProjection, /*flipY=*/true);
     packMat4(view, impl->cpuGlobals.view, /*flipY=*/false);   // for view-space depth
@@ -4472,7 +4481,7 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->cpuGlobals.cameraPosition[2] = static_cast<float>(camera.position.z);
     impl->cpuGlobals.cameraPosition[3] = 1.0f;
 
-    // Captured for the cascade fit in setLights (un-flipped, forward-Z VP).
+    // Captured for the cascade fit in setLights (un-flipped, reverse-Z VP).
     impl->camViewProj = vp;
     impl->camPos = camera.position;
     impl->camNear = camera.nearPlane;
@@ -4580,10 +4589,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         Vec3 sunDir = normalize(sun.direction);
         Vec3 up = (std::abs(sunDir.y) > 0.99) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
         Mat4 invVP = impl->camViewProj.inverse();
-        // Forward-Z NDC: near plane at z=0, far at z=1 (Metal uses reverse-Z here).
+        // Reverse-Z NDC: near plane at z=1, far at z=0 (camViewProj is reverse-Z).
         auto corner = [&](Real x, Real y, Real z) { return invVP.transformPoint(Vec3(x, y, z)); };
-        Vec3 nearC[4] = {corner(-1,-1,0), corner(1,-1,0), corner(1,1,0), corner(-1,1,0)};
-        Vec3 farC[4]  = {corner(-1,-1,1), corner(1,-1,1), corner(1,1,1), corner(-1,1,1)};
+        Vec3 nearC[4] = {corner(-1,-1,1), corner(1,-1,1), corner(1,1,1), corner(-1,1,1)};
+        Vec3 farC[4]  = {corner(-1,-1,0), corner(1,-1,0), corner(1,1,0), corner(-1,1,0)};
 
         Real prevFar = camNear;
         for (int c = 0; c < cc; ++c) {

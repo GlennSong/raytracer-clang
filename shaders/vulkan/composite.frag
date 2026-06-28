@@ -89,10 +89,10 @@ void main() {
     //   3 depth, 5 shadow, 6 albedo, 7 facing, 8 cascades
     //                                — written display-ready into the HDR target
     //                                  by mesh.frag; shown raw, background guarded
-    //                                  by depth (forward-Z: 1.0 == far/sky).
+    //                                  by depth (reverse-Z: 0.0 == far/sky).
     if (pc.debugView != 0) {
         float dpt = texture(depthTex, inUV).r;
-        bool bg = dpt >= 1.0;
+        bool bg = dpt <= 0.0;
         if (pc.debugView == 1) {                 // ambient occlusion (white = none)
             float ao = bg ? 1.0 : texture(aoTex, inUV).r;
             outColor = vec4(vec3(ao), 1.0); return;
