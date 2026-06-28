@@ -155,8 +155,8 @@ vec3 surfCorrugated(vec3 base, float u, float v) {
     return base * shade * (1.0 - rmask) + vec3(0.40, 0.22, 0.12) * rmask;
 }
 vec3 surfAsphalt(vec3 base, float u, float v) {
-    float spk = vnoise2(u * 30.0, v * 30.0), patch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    float spk = vnoise2(u * 30.0, v * 30.0), blotch = fbm2(u * 0.4, v * 0.4);
+    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (blotch - 0.5), 0.5, 1.4);
     return base * shade;
 }
 vec3 surfPavement(vec3 base, float u, float v) {
