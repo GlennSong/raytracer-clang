@@ -3681,6 +3681,75 @@ can't leave a gap) rather than a constrained one.
 
 ---
 
+## ADR-0057 — A living-world agent layer: runtime NavGraph + A* + deterministic agent sim, then physics vehicles in Lua
+
+**Context.** The procgen pipeline builds beautiful but *empty* worlds — spline
+road graphs, welded junctions, scattered forests — with no motion in them. The
+engine already has the three things a traffic/crowd system needs and most
+engines lack at this stage: a **deterministic seeded sim** (ADR-0002), **Jolt
+physics** (ADR-0012) — and Jolt v5.5.0 ships the full vehicle API
+(`VehicleConstraint`/`WheeledVehicleController`) — and a **real spline road
+graph** (ADR-0049/0056). The wishlist (June 2026): cars and pedestrians that
+*use* the generated roads; a car the player can jump into and drive with a
+forgiving, video-game feel; vehicle bodies authored in **Lua** like `flora` and
+`gun.lua`; and agents with a *reason* to move — a daily schedule, home→work→home.
+
+The blocker: the road network is consumed at mesh-build time and discarded. The
+`RoadNet`/`RoadGraph` exist only long enough to stroke ribbons; nothing
+navigable survives to runtime. (`netGraph(net)` already samples every edge into a
+fine straight-segment polyline that follows the rendered centerline exactly — the
+ideal source for a nav graph, computed and thrown away.)
+
+**Decision.** Build the system in phases over the existing value types and seams,
+deterministic from a seed, headless/CI-testable before any GPU/physics work
+(ADR-0002, "small reversible steps"). Confirmed scope (June 2026): **Jolt wheeled
+vehicle tuned arcade-forgiving** for the player car; **hybrid simulation** —
+AI agents kinematic on lane splines (scales to hundreds), the player's car (and
+optionally a few near it) on full Jolt physics; vehicle bodies authored in Lua.
+
+*Phase 1 (this ADR — the navigation foundation, headless):* a new `engine/ai/`
+module, pure data + pure functions, no ECS/render/physics:
+1. **`NavGraph`** (`nav_graph.{h,cpp}`) — the persistent, *directed* lane graph
+   derived from a (sampled) `RoadGraph`. Each undirected `RoadEdge` becomes two
+   `NavLink`s (one per direction; one-way for `Ramp`); lane count per direction
+   is derived from carriageway width. Geometry helpers place a point in a lane
+   (`laneCenter`, right-hand traffic) or on the sidewalk verge (`sidewalkPoint`),
+   plus `nearestNode`/`nearestLink` to snap trip ends. Built from the *same*
+   `netGraph(net)` the mesher uses, so lanes line up with the visible asphalt.
+2. **Pathfinding** (`pathfind.{h,cpp}`) — A* over the directed lane graph. Cost is
+   **travel time** (`length / classSpeed`), so routes prefer arterials over local
+   streets like real driving; the heuristic is straight-line time at the fastest
+   class speed (admissible → optimal). Deterministic tie-break by link index.
+3. **Agent sim** (`agent_sim.{h,cpp}`) — a deterministic `AgentSim` owning cars
+   and pedestrians, each with a `home` and `work` node and a daily schedule
+   (depart-for-work / depart-for-home, per-agent jittered). A wrapping in-world
+   clock drives state transitions (AtHome→Commuting→AtWork→Returning); agents A*
+   to their destination and advance along the route by arc length at a
+   class-appropriate speed (cars) or walking speed (pedestrians). Same seed + dt
+   sequence → identical trajectories.
+
+*Later phases (planned, not in this ADR):* an ECS `TrafficSystem` that spawns
+entities from `AgentSim` and renders them instanced; a `vehicle.*` Lua surface
+(pure body/wheel recipe like `flora`, plus an effectful drive behaviour like
+`gun.lua`); a `VehicleId` extension of the `PhysicsWorld` seam wrapping Jolt's
+`WheeledVehicleController` (no Jolt types in headers, per ADR-0012); player
+enter/exit (`ControlledBy` swap) and a chase `CameraController`; the
+kinematic-far/physics-near handoff.
+
+**Why this shape.** It is a *convergence* of shipped systems, not a new pillar:
+the nav graph falls out of the road graph; A* rides the existing curve/arc-length
+math; the sim obeys the deterministic-clock discipline already used for physics.
+Phase 1 is entirely pure and unit-tested on Linux/CI (`make test`), matching the
+engine's culture and de-risking the GPU/physics phases that follow.
+
+**Owed.** Everything past Phase 1 (above). Phase 1 itself keeps `NavGraph`
+rebuilt from the `RoadNet` on demand rather than cached on an entity; junction
+turn-restrictions and traffic-signal arbitration are not modelled (all turns
+except U-turns allowed); agents do not yet avoid each other (no car-following /
+collision) — that arrives with the ECS/physics phases.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

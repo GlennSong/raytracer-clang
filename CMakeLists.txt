@@ -70,6 +70,9 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
+    src/engine/ai/nav_graph.cpp
+    src/engine/ai/pathfind.cpp
+    src/engine/ai/agent_sim.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -261,6 +264,9 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_nav_graph.cpp
+    tests/test_pathfind.cpp
+    tests/test_agent_sim.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

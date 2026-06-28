@@ -1,0 +1,71 @@
+#ifndef RAYTRACER_ENGINE_AI_NAV_GRAPH_H
+#define RAYTRACER_ENGINE_AI_NAV_GRAPH_H
+
+#include "../procgen/city/road_network.h"   // RoadGraph, RoadEdge, RoadClass, Vec2
+#include <vector>
+
+namespace engine {
+
+// A runtime, queryable navigation graph derived from the road network (ADR-0057).
+// The procedural pipeline consumes the RoadGraph at mesh-build time and discards
+// it; agents need it to live. NavGraph is the persistent, *directed* lane graph
+// that vehicles and pedestrians route over and drive on. Pure data + pure
+// builders — no ECS, no rendering, no physics — so it builds and is unit-tested
+// headless (Linux/CI), like the rest of the procgen substrate.
+
+// One directed traversal of a road edge. An undirected RoadEdge becomes two
+// NavLinks (one per direction); a one-way class (Ramp) becomes one. The geometry
+// is the straight segment from->to: the source RoadGraph is already finely
+// sampled (netGraph collapses straight runs and keeps bends as chains of short
+// edges), so a curved road is a *chain* of NavLinks and each link is straight.
+struct NavLink {
+    int from = 0;                       // NavGraph node index (tail)
+    int to = 0;                         // NavGraph node index (head)
+    Real length = 0;                    // segment length (m)
+    Real width = 8;                     // carriageway width of the source road (m)
+    RoadClass klass = RoadClass::Local;
+    int lanes = 1;                      // lanes available in THIS direction
+};
+
+struct NavGraph {
+    std::vector<Vec2> nodes;                // node positions (world XZ; Vec2.x=x, .y=z)
+    std::vector<NavLink> links;             // directed links
+    std::vector<std::vector<int>> outLinks; // node -> indices of links departing it
+
+    int nodeCount() const { return static_cast<int>(nodes.size()); }
+    int linkCount() const { return static_cast<int>(links.size()); }
+
+    // Unit travel direction of a link (zero-length links report {1,0}).
+    Vec2 direction(int link) const;
+
+    // Point at parameter t in [0,1] along a link's centreline.
+    Vec2 pointOnLink(int link, Real t) const;
+
+    // Centre of lane `lane` (0 = lane nearest the road centreline) at param t,
+    // offset to the driving side. Right-hand traffic: lanes sit to the RIGHT of
+    // the travel direction, lane i at (0.5 + i) * laneWidth from the centreline.
+    Vec2 laneCenter(int link, int lane, Real t, Real laneWidth = 3.5) const;
+
+    // A pedestrian point at param t: on the verge just outside the kerb, on the
+    // right of travel. `verge` is the extra offset beyond the carriageway edge.
+    Vec2 sidewalkPoint(int link, Real t, Real verge = 1.0) const;
+
+    // Nearest node / nearest link to a world point — for snapping trip ends.
+    // Return -1 if the graph is empty.
+    int nearestNode(const Vec2& p) const;
+    int nearestLink(const Vec2& p) const;
+};
+
+// Build a NavGraph from an already-sampled RoadGraph (e.g. netGraph(net), or any
+// of the generators in road_network.h). Surface roads are two-way; Ramp is
+// one-way in its stored direction when `oneWayRamps`. Lanes per direction are
+// derived from width: max(1, round(width / laneWidth / 2)).
+struct NavBuildParams {
+    Real laneWidth = 3.5;
+    bool oneWayRamps = true;
+};
+NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params = {});
+
+}  // namespace engine
+
+#endif

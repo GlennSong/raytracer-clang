@@ -135,7 +135,10 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_model_importer.cpp \
 	$(TEST_DIR)/test_instance_tlas.cpp \
 	$(TEST_DIR)/test_texture_field.cpp \
-	$(TEST_DIR)/test_terrain_field.cpp
+	$(TEST_DIR)/test_terrain_field.cpp \
+	$(TEST_DIR)/test_nav_graph.cpp \
+	$(TEST_DIR)/test_pathfind.cpp \
+	$(TEST_DIR)/test_agent_sim.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -190,6 +193,9 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
+	$(SRC_DIR)/engine/ai/nav_graph.cpp \
+	$(SRC_DIR)/engine/ai/pathfind.cpp \
+	$(SRC_DIR)/engine/ai/agent_sim.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \
