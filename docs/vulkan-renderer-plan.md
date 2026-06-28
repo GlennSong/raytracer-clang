@@ -176,15 +176,23 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   scene on a hit; faded by screen edge + Fresnel + roughness (packed in the
   normal G-buffer's `.a`). Half-res; composite mixes it in by confidence. Driven
   by `ssrEnabled` + `ssrParams` (maxRayDist/thickness/maxRoughness/blendStrength).
-  Fixed-step march (no binary refine) — an approximation of Metal's `ssrRayMarch`.
+  The coarse fixed-step march now binary-refines the crossing (5 bisections),
+  fixing the repeated/laddered look device testing showed on tall reflections.
 - **Phase 5b — lens effects (code landed; verify on device):** Brown radial
   distortion + lateral chromatic aberration + vignette, **folded into the
   composite** (ported from `post.metal` fragmentLensWarp) so there's no extra
   pass — distortion warps the sample UV, CA splits the HDR channels, vignette
   darkens corners; exact passthrough at neutral params. Driven by the active
   camera's `LensParams` (`lensEffectsEnabled` gates it).
+- **Phase 5b — debug views + wireframe (code landed; verify on device):** the
+  composite shows the buffer views (AO/SSR/normals); the lit pass writes the
+  rest (depth/shadow/albedo/facing/cascades) into the HDR target via the unused
+  `counts.w` selector. Wireframe (`Renderer::wireframe`) uses a LINE-mode variant
+  of the mesh pipeline (`mesh_wire.frag`, flat color from the push) needing the
+  `fillModeNonSolid` feature: mode 1 replaces the fills, mode 2 overlays edges on
+  the shaded image.
 - **Phase 5b (still owed):** DOF (off by default — needs a CoC gather); SSAO
-  temporal reprojection (+ SSR binary-search refine); wireframe debug view.
+  temporal reprojection.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.

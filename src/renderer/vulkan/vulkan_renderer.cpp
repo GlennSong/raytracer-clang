@@ -377,6 +377,8 @@ struct VulkanRenderer::Impl {
     bool  lensEnabledFrame = true;
     float lensK1 = 0.0f, lensK2 = 0.0f, lensCA = 0.0f, lensVignette = 0.0f, lensAspect = 1.0f;
     int   debugViewFrame = 0;   // mirrored from Renderer::debugView
+    int   wireframeFrame = 0;   // mirrored from Renderer::wireframe (0 off,1 only,2 overlay)
+    float wireColor[3] = {0.1f, 1.0f, 0.5f};
 
     // HDR environment (Phase 4b): an equirectangular RGBA16F map (with mips for
     // roughness-LOD specular) sampled for the skybox + IBL when bound. Bound at
@@ -409,6 +411,7 @@ struct VulkanRenderer::Impl {
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;
+    VkPipeline wirePipeline = VK_NULL_HANDLE;   // VK_POLYGON_MODE_LINE debug view
 
     // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
@@ -690,6 +693,9 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
     // attachment — which requires independentBlend (VUID-...-pAttachments-00605).
     // Widely supported; verified needed by the first Phase 5b device run.
     features.independentBlend = VK_TRUE;
+    // VK_POLYGON_MODE_LINE for the wireframe debug view (Renderer::wireframe).
+    // Core-but-optional; effectively universal on desktop GPUs.
+    features.fillModeNonSolid = VK_TRUE;
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -2359,6 +2365,25 @@ bool VulkanRenderer::Impl::createPipeline() {
         LOG_ERROR("[vulkan] vkCreateGraphicsPipelines failed");
         return false;
     }
+
+    // Wireframe variant (Renderer::wireframe debug view): same layout/state as the
+    // mesh pipeline but LINE polygon mode and a flat-color fragment shader. Used
+    // for both wireframe-only (mode 1, drawn in place of the fills) and overlay
+    // (mode 2, re-drawn on top — LESS_OR_EQUAL + depth write lets coincident edges
+    // pass). Needs the fillModeNonSolid device feature (enabled above).
+    VkShaderModule wvert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.vert.spv");
+    VkShaderModule wfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_wire.frag.spv");
+    if (!wvert || !wfrag) return false;
+    stages[0].module = wvert;
+    stages[1].module = wfrag;
+    raster.polygonMode = VK_POLYGON_MODE_LINE;
+    VkResult wresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &wirePipeline);
+    vkDestroyShaderModule(device, wvert, nullptr);
+    vkDestroyShaderModule(device, wfrag, nullptr);
+    if (wresult != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] wireframe pipeline creation failed");
+        return false;
+    }
     return true;
 }
 
@@ -3114,54 +3139,76 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                             &descriptorSets[currentFrame], 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                            &descriptorSets[currentFrame], 0, nullptr);
+    // Geometry. The wireframe debug view (Renderer::wireframe) shares the mesh
+    // pipeline layout: mode 1 replaces the fills with the LINE-mode wire pipeline;
+    // mode 2 draws the shaded fills then re-draws edges on top. Wire draws read a
+    // flat color from the push (mesh_wire.frag) and skip the material set.
+    auto recordGeometry = [&](VkPipeline pipe, bool wire, bool countStats) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                                &descriptorSets[currentFrame], 0, nullptr);
+        for (const DrawItem& item : drawQueue) {
+            GpuMesh* m = meshes.get(item.mesh);
+            if (!m || m->indexCount == 0) continue;
 
-    for (const DrawItem& item : drawQueue) {
-        GpuMesh* m = meshes.get(item.mesh);
-        if (!m || m->indexCount == 0) continue;
-
-        // Material textures (set 1): a transient set from this frame's pool.
-        VkDescriptorSet matSet = VK_NULL_HANDLE;
-        VkDescriptorSetAllocateInfo dsa{};
-        dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dsa.descriptorPool = materialPools[currentFrame];
-        dsa.descriptorSetCount = 1;
-        dsa.pSetLayouts = &materialSetLayout;
-        if (vkAllocateDescriptorSets(device, &dsa, &matSet) != VK_SUCCESS) {
-            if (!materialPoolExhaustedWarned) {
-                LOG_WARN("[vulkan] material descriptor pool exhausted; some draws skipped this frame");
-                materialPoolExhaustedWarned = true;
+            MeshPush push = item.push;
+            if (wire) {
+                push.albedoMetallic[0] = wireColor[0];   // flat line color
+                push.albedoMetallic[1] = wireColor[1];
+                push.albedoMetallic[2] = wireColor[2];
+            } else {
+                // Material textures (set 1): a transient set from this frame's pool.
+                VkDescriptorSet matSet = VK_NULL_HANDLE;
+                VkDescriptorSetAllocateInfo dsa{};
+                dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                dsa.descriptorPool = materialPools[currentFrame];
+                dsa.descriptorSetCount = 1;
+                dsa.pSetLayouts = &materialSetLayout;
+                if (vkAllocateDescriptorSets(device, &dsa, &matSet) != VK_SUCCESS) {
+                    if (!materialPoolExhaustedWarned) {
+                        LOG_WARN("[vulkan] material descriptor pool exhausted; some draws skipped this frame");
+                        materialPoolExhaustedWarned = true;
+                    }
+                    continue;
+                }
+                std::array<VkDescriptorImageInfo, 5> imgs{};
+                std::array<VkWriteDescriptorSet, 5> writes{};
+                for (uint32_t k = 0; k < 5; ++k) {
+                    imgs[k].sampler = textureSampler;
+                    imgs[k].imageView = textureViewOr(item.textures[k]);
+                    imgs[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    writes[k].dstSet = matSet;
+                    writes[k].dstBinding = k;
+                    writes[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    writes[k].descriptorCount = 1;
+                    writes[k].pImageInfo = &imgs[k];
+                }
+                vkUpdateDescriptorSets(device, 5, writes.data(), 0, nullptr);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
+                                        &matSet, 0, nullptr);
             }
-            continue;
-        }
-        std::array<VkDescriptorImageInfo, 5> imgs{};
-        std::array<VkWriteDescriptorSet, 5> writes{};
-        for (uint32_t k = 0; k < 5; ++k) {
-            imgs[k].sampler = textureSampler;
-            imgs[k].imageView = textureViewOr(item.textures[k]);
-            imgs[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[k].dstSet = matSet;
-            writes[k].dstBinding = k;
-            writes[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[k].descriptorCount = 1;
-            writes[k].pImageInfo = &imgs[k];
-        }
-        vkUpdateDescriptorSets(device, 5, writes.data(), 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
-                                &matSet, 0, nullptr);
 
-        vkCmdPushConstants(cmd, pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPush), &item.push);
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &m->vertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, m->indexCount, 1, 0, 0, 0);
-        stats.drawCalls++;
-        stats.trianglesDrawn += m->indexCount / 3;
+            vkCmdPushConstants(cmd, pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(MeshPush), &push);
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &m->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, m->indexCount, 1, 0, 0, 0);
+            if (countStats) {
+                stats.drawCalls++;
+                stats.trianglesDrawn += m->indexCount / 3;
+            }
+        }
+    };
+
+    if (wireframeFrame == 1) {
+        recordGeometry(wirePipeline, /*wire=*/true, /*countStats=*/true);
+    } else {
+        recordGeometry(meshPipeline, /*wire=*/false, /*countStats=*/true);
+        if (wireframeFrame == 2)
+            recordGeometry(wirePipeline, /*wire=*/true, /*countStats=*/false);
     }
 
     vkCmdEndRenderPass(cmd);
@@ -3381,6 +3428,8 @@ void VulkanRenderer::shutdown() {
     impl->skyPipeline = VK_NULL_HANDLE;
     impl->skyPipelineLayout = VK_NULL_HANDLE;
     if (impl->meshPipeline) vkDestroyPipeline(impl->device, impl->meshPipeline, nullptr);
+    if (impl->wirePipeline) vkDestroyPipeline(impl->device, impl->wirePipeline, nullptr);
+    impl->wirePipeline = VK_NULL_HANDLE;
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
@@ -3948,6 +3997,10 @@ void VulkanRenderer::endFrame() {
     // into the HDR target; composite shows those raw. Buffer views (AO/SSR/
     // normals) stay composite-side. See shaders/vulkan/{mesh,composite}.frag.
     impl->cpuGlobals.counts[3] = debugView;
+    impl->wireframeFrame = wireframe;
+    impl->wireColor[0] = static_cast<float>(wireframeColor.x);
+    impl->wireColor[1] = static_cast<float>(wireframeColor.y);
+    impl->wireColor[2] = static_cast<float>(wireframeColor.z);
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.
