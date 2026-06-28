@@ -3973,14 +3973,25 @@ void VulkanRenderer::initDebugUi(void* windowHandle) {
     init.DescriptorPool = impl->imguiPool;
     init.MinImageCount = 2;
     init.ImageCount = static_cast<uint32_t>(impl->swapchainImages.size());
+    // ImGui draws into the composite (swapchain) render pass. Where the render
+    // pass + MSAA fields live in ImGui_ImplVulkan_InitInfo has shifted twice, so
+    // this is version-guarded:
+    //   < 1.90    : RenderPass is the 2nd arg to Init; fonts via a command buffer.
+    //   1.90–1.91 : RenderPass/MSAASamples flat in InitInfo; CreateFontsTexture().
+    //   >= 1.92   : both moved into init.PipelineInfoMain, and the explicit
+    //               CreateFontsTexture() was removed (fonts built lazily on first
+    //               use). IMGUI_VERSION_NUM 19200 == 1.92.0.
+#if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19200
+    init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init.PipelineInfoMain.RenderPass = impl->compositeRenderPass;
+    ImGui_ImplVulkan_Init(&init);            // fonts auto-managed in 1.92+
+#elif defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19000
     init.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    // ImGui draws into the composite (swapchain) render pass. The RenderPass field
-    // moved into InitInfo in ImGui 1.90; older versions take it as a 2nd arg.
-#if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19000
     init.RenderPass = impl->compositeRenderPass;
     ImGui_ImplVulkan_Init(&init);
     ImGui_ImplVulkan_CreateFontsTexture();   // 1.90+: no command buffer needed
 #else
+    init.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ImGui_ImplVulkan_Init(&init, impl->compositeRenderPass);
     // Older ImGui: upload fonts via a one-time command buffer.
     VkCommandBufferAllocateInfo cba{};

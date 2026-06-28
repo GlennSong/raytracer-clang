@@ -290,13 +290,16 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   `endFrame` calls `ImGui::Render`, and the composite pass records
   `ImGui_ImplVulkan_RenderDrawData`. CMake compiles `imgui_impl_vulkan.cpp` on
   the non-Apple Vulkan path. The `ImGui_ImplVulkan_Init` signature is guarded by
-  `IMGUI_VERSION_NUM` (RenderPass-in-InitInfo for ≥1.90), but **the pinned
-  submodule is ImGui 1.92.8 (19280), where the API moved again** — so
-  `-DRT_ENABLE_IMGUI=ON` currently **fails to compile** (verified on device
-  2026-06-28): `MSAASamples`/`RenderPass` are now `init.PipelineInfoMain.*`, and
-  `ImGui_ImplVulkan_CreateFontsTexture()` was removed (fonts auto-managed since
-  1.92). The `≥19000` branch needs a `≥19200` variant (or pin ImGui to the
-  targeted version). Default build (ImGui OFF) is unaffected and verified clean.
+  `IMGUI_VERSION_NUM` across a three-tier ladder: `<1.90` (RenderPass as the 2nd
+  Init arg + command-buffer font upload), `1.90–1.91` (RenderPass/MSAASamples
+  flat in `InitInfo` + `CreateFontsTexture()`), and **`≥1.92` (19200)** where
+  `MSAASamples`/`RenderPass` moved into `init.PipelineInfoMain.*` and the explicit
+  `ImGui_ImplVulkan_CreateFontsTexture()` was removed (fonts built lazily). The
+  pinned submodule is ImGui 1.92.8, so the `≥19200` branch is the live path.
+  *Addressed (code landed; verify `-DRT_ENABLE_IMGUI=ON` builds + runs on
+  device — ImGui 1.92's `ImGui_ImplVulkan_InitInfo` couldn't be compiled in CI).*
+  This is Vulkan-only: the Metal backend uses `imgui_impl_metal` whose API is
+  unchanged across the bump. Default build (ImGui OFF) is unaffected.
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
   (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code
