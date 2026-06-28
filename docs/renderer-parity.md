@@ -65,7 +65,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | Procedural sky + day/night + FBM clouds | ✅ | ✅ | `sky.frag`; part of the verified arena render. |
 | HDR equirectangular environment | ✅ | 🟡 | Vulkan samples the equirect directly (`uploadTextureHDR`); unverified. |
-| IBL: irradiance + GGX-prefilter + BRDF LUT | ✅ | ⚠️ | Vulkan uses an **analytic procedural-sky approximation**, not a baked prefiltered cube + LUT. **Parity gap** for accurate HDR-lit ambient/specular. |
+| IBL: irradiance + GGX-prefilter + BRDF LUT | ✅ | ⚠️ | **BRDF LUT done** (🟡, baked split-sum at set 0 binding 3, used by `mesh.frag`). Irradiance + GGX-prefilter still use the analytic sky/equirect approximation — the baked prefiltered + irradiance cubes are the next IBL stage. |
 | Reflection probes (parallax) | ✅ | ❌ | `setReflectionProbes` is a no-op in Vulkan. **Parity gap.** |
 
 ### Screen-space post
