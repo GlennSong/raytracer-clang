@@ -96,9 +96,19 @@ struct GpuMesh {
     BoundingSphere bounds;
 };
 
+struct GpuTexture {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+};
+
+// Material texture slots, in the order the fragment shader samples them and the
+// textureFlags bits are assigned (matching the Metal backend): 0 albedo,
+// 1 metallic-roughness, 2 normal, 3 AO, 4 emissive.
 struct DrawItem {
     MeshHandle mesh;
     MeshPush push;
+    std::array<TextureHandle, 5> textures;   // albedo, MR, normal, AO, emissive
 };
 
 bool hasValidationLayer() {
@@ -192,11 +202,19 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;
 
+    // Material textures (set 1): a per-frame transient descriptor pool reset each
+    // frame, so each draw gets a fresh set with no cross-frame lifetime issues.
+    VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
+    std::array<VkDescriptorPool, MAX_FRAMES_IN_FLIGHT> materialPools{};
+    VkSampler textureSampler = VK_NULL_HANDLE;
+    GpuTexture defaultTexture;   // 1x1 white, stands in for absent maps
+    bool materialPoolExhaustedWarned = false;
+
     bool framebufferResized = false;
     bool initialized = false;
 
     SlotMap<GpuMesh, MeshTag> meshes;
-    SlotMap<uint8_t, TextureTag> textures;   // Phase 2 will give these real GPU data
+    SlotMap<GpuTexture, TextureTag> textures;
     RenderStats stats;
 
     GlobalsUBO cpuGlobals{};
@@ -220,6 +238,7 @@ struct VulkanRenderer::Impl {
     bool createGlobalsBuffers();
     bool createDescriptorPool();
     bool createDescriptorSets();
+    bool createMaterialResources();
     bool createPipeline();
 
     bool recreateSwapchain();
@@ -242,6 +261,12 @@ struct VulkanRenderer::Impl {
                                  VkBufferUsageFlags usage, VkBuffer& buffer, VkDeviceMemory& memory);
     VkShaderModule loadShaderModule(const std::string& path);
     void destroyMesh(GpuMesh& m);
+
+    bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out);
+    void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
+                               VkImageLayout from, VkImageLayout to);
+    void destroyTexture(GpuTexture& t);
+    VkImageView textureViewOr(TextureHandle h) const;   // view, or default white
 };
 
 // ---------------------------------------------------------------------------
@@ -766,10 +791,11 @@ bool VulkanRenderer::Impl::createPipeline() {
     pushRange.offset = 0;
     pushRange.size = sizeof(MeshPush);
 
+    std::array<VkDescriptorSetLayout, 2> setLayouts{descriptorSetLayout, materialSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &descriptorSetLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    layoutInfo.pSetLayouts = setLayouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
@@ -973,6 +999,195 @@ void VulkanRenderer::Impl::destroyMesh(GpuMesh& m) {
     m = GpuMesh{};
 }
 
+void VulkanRenderer::Impl::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
+                                                 VkImageLayout from, VkImageLayout to) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = from;
+    barrier.newLayout = to;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags srcStage, dstStage;
+    if (from == VK_IMAGE_LAYOUT_UNDEFINED && to == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else {  // TRANSFER_DST -> SHADER_READ_ONLY
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+}
+
+bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                            GpuTexture& out) {
+    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * 4;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      staging, stagingMem))
+        return false;
+    void* mapped = nullptr;
+    vkMapMemory(device, stagingMem, 0, size, 0, &mapped);
+    std::memcpy(mapped, rgba, static_cast<size_t>(size));
+    vkUnmapMemory(device, stagingMem);
+
+    VkImageCreateInfo image{};
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.extent = {w, h, 1};
+    image.mipLevels = 1;   // mip generation is a later refinement
+    image.arrayLayers = 1;
+    image.format = VK_FORMAT_R8G8B8A8_UNORM;   // matches Metal's RGBA8Unorm (no sRGB decode)
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(device, &image, nullptr, &out.image) != VK_SUCCESS) {
+        vkDestroyBuffer(device, staging, nullptr);
+        vkFreeMemory(device, stagingMem, nullptr);
+        return false;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, out.image, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &out.memory) != VK_SUCCESS) {
+        vkDestroyImage(device, out.image, nullptr);
+        vkDestroyBuffer(device, staging, nullptr);
+        vkFreeMemory(device, stagingMem, nullptr);
+        out.image = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindImageMemory(device, out.image, out.memory, 0);
+
+    // One-time upload: transition, copy, transition to shader-read.
+    VkCommandBufferAllocateInfo cba{};
+    cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cba.commandPool = commandPool;
+    cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cba.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(device, &cba, &cmd);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+    transitionImageLayout(cmd, out.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyBufferToImage(cmd, staging, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    transitionImageLayout(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+    vkDestroyBuffer(device, staging, nullptr);
+    vkFreeMemory(device, stagingMem, nullptr);
+
+    VkImageViewCreateInfo view{};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = out.image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = VK_FORMAT_R8G8B8A8_UNORM;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.levelCount = 1;
+    view.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(device, &view, nullptr, &out.view) != VK_SUCCESS) {
+        destroyTexture(out);
+        return false;
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::destroyTexture(GpuTexture& t) {
+    if (t.view) vkDestroyImageView(device, t.view, nullptr);
+    if (t.image) vkDestroyImage(device, t.image, nullptr);
+    if (t.memory) vkFreeMemory(device, t.memory, nullptr);
+    t = GpuTexture{};
+}
+
+VkImageView VulkanRenderer::Impl::textureViewOr(TextureHandle h) const {
+    const GpuTexture* t = textures.get(h);
+    return (t && t->view) ? t->view : defaultTexture.view;
+}
+
+bool VulkanRenderer::Impl::createMaterialResources() {
+    // 5 combined image samplers (albedo, MR, normal, AO, emissive).
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    for (uint32_t i = 0; i < bindings.size(); ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &materialSetLayout) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] material set layout creation failed");
+        return false;
+    }
+
+    constexpr uint32_t MAX_MATERIAL_SETS = 2048;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorPoolSize size{};
+        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        size.descriptorCount = MAX_MATERIAL_SETS * 5;
+        VkDescriptorPoolCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        info.poolSizeCount = 1;
+        info.pPoolSizes = &size;
+        info.maxSets = MAX_MATERIAL_SETS;
+        if (vkCreateDescriptorPool(device, &info, nullptr, &materialPools[i]) != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] material descriptor pool creation failed");
+            return false;
+        }
+    }
+
+    VkSamplerCreateInfo sampler{};
+    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler.magFilter = VK_FILTER_LINEAR;
+    sampler.minFilter = VK_FILTER_LINEAR;
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(device, &sampler, nullptr, &textureSampler) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] sampler creation failed");
+        return false;
+    }
+
+    const uint8_t white[4] = {255, 255, 255, 255};
+    if (!createImageRGBA8(white, 1, 1, defaultTexture)) {
+        LOG_ERROR("[vulkan] default texture creation failed");
+        return false;
+    }
+    return true;
+}
+
 // ---- swapchain lifecycle ----
 
 void VulkanRenderer::Impl::cleanupSwapchain() {
@@ -1048,6 +1263,38 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     for (const DrawItem& item : drawQueue) {
         GpuMesh* m = meshes.get(item.mesh);
         if (!m || m->indexCount == 0) continue;
+
+        // Material textures (set 1): a transient set from this frame's pool.
+        VkDescriptorSet matSet = VK_NULL_HANDLE;
+        VkDescriptorSetAllocateInfo dsa{};
+        dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsa.descriptorPool = materialPools[currentFrame];
+        dsa.descriptorSetCount = 1;
+        dsa.pSetLayouts = &materialSetLayout;
+        if (vkAllocateDescriptorSets(device, &dsa, &matSet) != VK_SUCCESS) {
+            if (!materialPoolExhaustedWarned) {
+                LOG_WARN("[vulkan] material descriptor pool exhausted; some draws skipped this frame");
+                materialPoolExhaustedWarned = true;
+            }
+            continue;
+        }
+        std::array<VkDescriptorImageInfo, 5> imgs{};
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (uint32_t k = 0; k < 5; ++k) {
+            imgs[k].sampler = textureSampler;
+            imgs[k].imageView = textureViewOr(item.textures[k]);
+            imgs[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[k].dstSet = matSet;
+            writes[k].dstBinding = k;
+            writes[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[k].descriptorCount = 1;
+            writes[k].pImageInfo = &imgs[k];
+        }
+        vkUpdateDescriptorSets(device, 5, writes.data(), 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
+                                &matSet, 0, nullptr);
+
         vkCmdPushConstants(cmd, pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(MeshPush), &item.push);
@@ -1067,6 +1314,10 @@ void VulkanRenderer::Impl::drawFrame() {
     if (!initialized || width == 0 || height == 0) return;
 
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+
+    // This frame's prior submission is done: recycle its transient material sets.
+    vkResetDescriptorPool(device, materialPools[currentFrame], 0);
+    materialPoolExhaustedWarned = false;
 
     uint32_t imageIndex = 0;
     VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
@@ -1148,6 +1399,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createGlobalsBuffers() &&
               impl->createDescriptorPool() &&
               impl->createDescriptorSets() &&
+              impl->createMaterialResources() &&
               impl->createPipeline();
     if (!ok) {
         LOG_ERROR("[vulkan] initialization failed");
@@ -1169,6 +1421,16 @@ void VulkanRenderer::shutdown() {
 
     impl->meshes.forEach([&](MeshHandle, GpuMesh& m) { impl->destroyMesh(m); });
     impl->meshes.clear();
+    impl->textures.forEach([&](TextureHandle, GpuTexture& t) { impl->destroyTexture(t); });
+    impl->textures.clear();
+    impl->destroyTexture(impl->defaultTexture);
+    if (impl->textureSampler) vkDestroySampler(impl->device, impl->textureSampler, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        if (impl->materialPools[i]) vkDestroyDescriptorPool(impl->device, impl->materialPools[i], nullptr);
+    if (impl->materialSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->materialSetLayout, nullptr);
+    impl->textureSampler = VK_NULL_HANDLE;
+    impl->materialSetLayout = VK_NULL_HANDLE;
 
     if (impl->meshPipeline) vkDestroyPipeline(impl->device, impl->meshPipeline, nullptr);
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
@@ -1276,14 +1538,35 @@ BoundingSphere VulkanRenderer::getMeshBounds(MeshHandle handle) const {
     return m ? m->bounds : BoundingSphere{};
 }
 
-TextureHandle VulkanRenderer::uploadTexture(int /*width*/, int /*height*/,
-                                            int /*channels*/, const uint8_t* /*data*/) {
-    // Phase 2 gives textures real GPU images + samplers; for now hand back a
-    // valid handle so the material/asset layer keeps working.
-    return impl->textures.insert(0);
+TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
+                                            const uint8_t* data) {
+    GpuTexture tex;
+    if (impl->device && data && width > 0 && height > 0) {
+        // Expand to RGBA8 (the engine hands us 1..4 channels; the GPU image is
+        // always 4-channel to match the Metal backend's upload path).
+        std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4, 255);
+        for (size_t p = 0; p < static_cast<size_t>(width) * height; ++p) {
+            for (int c = 0; c < 4; ++c) {
+                rgba[p * 4 + c] = (c < channels) ? data[p * channels + c]
+                                                 : (c == 3 ? 255 : 0);
+            }
+        }
+        if (!impl->createImageRGBA8(rgba.data(), static_cast<uint32_t>(width),
+                                    static_cast<uint32_t>(height), tex)) {
+            LOG_ERROR("[vulkan] uploadTexture failed");
+            tex = GpuTexture{};
+        }
+    }
+    return impl->textures.insert(tex);
 }
 
-void VulkanRenderer::removeTexture(TextureHandle handle) { impl->textures.erase(handle); }
+void VulkanRenderer::removeTexture(TextureHandle handle) {
+    GpuTexture* t = impl->textures.get(handle);
+    if (!t) return;
+    if (impl->device) vkDeviceWaitIdle(impl->device);
+    impl->destroyTexture(*t);
+    impl->textures.erase(handle);
+}
 
 RenderStats VulkanRenderer::getRenderStats() const { return impl->stats; }
 
@@ -1370,9 +1653,16 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.push.emissionRough[1] = static_cast<float>(material.emission.y);
     item.push.emissionRough[2] = static_cast<float>(material.emission.z);
     item.push.emissionRough[3] = material.roughness;
+    // Material texture slots in shader order: albedo, MR, normal, AO, emissive.
+    item.textures = {material.albedoMap, material.metallicRoughnessMap,
+                     material.normalMap, material.aoMap, material.emissiveMap};
+    uint32_t textureFlags = 0;
+    for (uint32_t k = 0; k < item.textures.size(); ++k)
+        if (item.textures[k].valid()) textureFlags |= (1u << k);
+
     item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
     item.push.surfaceFlags[1] = material.flags;
-    item.push.surfaceFlags[2] = 0u;   // textureFlags — Phase 2b (texture maps)
+    item.push.surfaceFlags[2] = textureFlags;
     item.push.surfaceFlags[3] = 0u;
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;

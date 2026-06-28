@@ -32,6 +32,15 @@ layout(push_constant) uniform Push {
     uvec4 surfaceFlags;       // x surfaceId, y rawFlags, z textureFlags
 } pc;
 
+// Material textures (set 1). textureFlags bits: 0 albedo, 1 metallic-roughness,
+// 2 normal (sampled in a later phase — needs TBN), 3 AO, 4 emissive. Absent maps
+// are bound to a 1x1 white default, so an unflagged sample is harmless.
+layout(set = 1, binding = 0) uniform sampler2D albedoMap;
+layout(set = 1, binding = 1) uniform sampler2D metallicRoughnessMap;
+layout(set = 1, binding = 2) uniform sampler2D normalMap;
+layout(set = 1, binding = 3) uniform sampler2D aoMap;
+layout(set = 1, binding = 4) uniform sampler2D emissiveMap;
+
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inWorldNormal;
 layout(location = 2) in vec2 inTexcoord;
@@ -263,6 +272,19 @@ void main() {
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
     vec3 emission = pc.emissionRough.rgb;
+    uint texFlags = pc.surfaceFlags.z;
+    float ao = 1.0;
+
+    // Texture maps (glTF convention: MR = (_, roughness=g, metallic=b)).
+    if ((texFlags & 1u) != 0u) albedo *= texture(albedoMap, inTexcoord).rgb;
+    if ((texFlags & 2u) != 0u) {
+        vec2 mr = texture(metallicRoughnessMap, inTexcoord).gb;
+        roughness = clamp(roughness * mr.x, 0.04, 1.0);
+        metallic = clamp(metallic * mr.y, 0.0, 1.0);
+    }
+    if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
+    if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
+    // bit 2 (normal map) deferred: needs a tangent-space basis (TBN), later phase.
 
     vec3 N = normalize(inWorldNormal);
 
@@ -276,8 +298,8 @@ void main() {
 
     vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0);
     // Flat ambient stand-in until IBL lands (Phase 4 replaces this with
-    // irradiance + prefiltered specular weighted by the BRDF LUT).
-    vec3 ambient = g.ambient.rgb * albedo * (1.0 - metallic);
+    // irradiance + prefiltered specular weighted by the BRDF LUT). AO modulates it.
+    vec3 ambient = g.ambient.rgb * albedo * (1.0 - metallic) * ao;
 
     outColor = vec4(direct + ambient + emission, 1.0);
 }

@@ -19,10 +19,14 @@ Written against the Vulkan 1.0 spec but **unverified on device** (no GPU/SDK in
 CI; needs a Linux/Windows run with the validation layers). ADR-0057 accepted in
 principle (Pending).
 
-Still owed in Phase 2: **texture maps** (albedo/normal/MR/AO/emissive sampling —
-needs VkImage upload + material descriptor sets), **instancing**
-(`drawMeshInstanced`), and **terrain morph** (`drawTerrain`). Then Phases 3+
-(shadows, IBL/environment, post stack).
+Phase 2 textures landed: `uploadTexture` creates real RGBA8 `VkImage`s (staging
+upload + layout transitions); a per-frame transient descriptor pool binds a
+material set (set 1: albedo/MR/AO/emissive sampled, gated by textureFlags; a 1x1
+white default stands in for absent maps). **Normal mapping is deferred** (needs a
+TBN basis), as are **mipmaps**. Instanced and terrain geometry already render via
+the base `Renderer` defaults (which call `drawMesh`); the dedicated
+`drawMeshInstanced` batching and `drawTerrain` CDLOD **morph** are owed
+refinements. Then Phases 3+ (shadows, IBL/environment, post stack).
 
 ---
 
