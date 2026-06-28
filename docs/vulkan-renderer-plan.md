@@ -190,6 +190,15 @@ first compile surfaced bugs fixed in `f7a0908` (shader `patch` keyword),
   attributes 1–4 "not consumed by vertex shader" — the shadow pipeline's vertex
   input declares the full layout but its vertex shader uses only position. Trim
   the shadow pipeline's `VkVertexInputAttributeDescription`s to position-only.
+- **Qt editor viewport is unrendered on non-Apple.** `editor_app` builds wherever
+  Qt6 is installed and its Qt shell/UX runs on Windows/Linux, but the embedded 3D
+  viewport links `null_renderer.cpp` there (`CMakeLists.txt` editor block: Metal on
+  APPLE, else NullRenderer) — the standalone-viewer Vulkan path does **not** apply.
+  The editor embeds the renderer through `HostedWindow`/`EngineViewport`, which
+  binds to a native view (NSView on macOS, `editor_main.cpp:109`). **To do:** drive
+  a `VkSurfaceKHR` from the Qt widget's `HWND`/`xcb` window through `HostedWindow`
+  so the editor viewport renders on Vulkan, mirroring the Metal `CAMetalLayer`
+  embedding. Distinct from the viewer's surface path (viewer owns a GLFW window).
 
 ## File map (new)
 
