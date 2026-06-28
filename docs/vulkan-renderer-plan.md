@@ -132,10 +132,17 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   (irradiance ≈ sky in the normal dir; specular ≈ sky in the reflection dir blurred
   by roughness, with roughness-aware Fresnel) replacing the flat-ambient stand-in.
   Sky params ride the globals UBO from `SceneLighting::sky`.
-- **Phase 4b (owed):** HDR equirect→cubemap bake (`uploadTextureHDR`/
-  `setEnvironmentMap` — currently no-ops, so HDR levels show the procedural sky),
-  GGX-prefilter + irradiance + BRDF-LUT **compute** (replacing the analytic
-  approximation), and reflection probes (`setReflectionProbes`) with parallax.
+- **Phase 4b — HDR equirect IBL (code landed; verify on device):**
+  `uploadTextureHDR` creates an RGBA16F equirectangular map (float→half on CPU);
+  `setEnvironmentMap` binds it at set 0 binding 2 (a 1x1 default until set) and
+  flips `envMode`. `mesh.frag`/`sky.frag` sample the equirect (lat-long) for the
+  skybox + IBL when `envMode==1` (irradiance from the N sample, specular from the
+  R sample blended by roughness), else fall back to the procedural sky.
+  `environmentMapEnabled` is the live toggle.
+- **Phase 4b (still owed):** a real GGX-prefiltered cubemap split-sum (cubemap
+  bake + prefilter/irradiance/BRDF-LUT **compute**, replacing the single-sample
+  equirect approximation + the missing roughness mip chain) and reflection probes
+  (`setReflectionProbes`) with parallax.
 - **Verify:** sky orientation matches; ambient/reflections read right; sun disc
   clips to white until the Phase 5 tonemap lands (expected).
 

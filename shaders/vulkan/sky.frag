@@ -29,8 +29,17 @@ layout(set = 0, binding = 0) uniform Globals {
     Light lights[32];
 } g;
 
+layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
+
 layout(location = 0) in vec3 inViewDir;
 layout(location = 0) out vec4 outColor;
+
+vec3 sampleEquirect(vec3 dir) {
+    const float PI = 3.14159265359;
+    float u = atan(dir.z, dir.x) * (0.5 / PI) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / PI);
+    return texture(envEquirect, vec2(u, v)).rgb;
+}
 
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
@@ -88,7 +97,12 @@ vec3 applyClouds(vec3 baseSky, vec3 dir) {
 
 void main() {
     vec3 dir = normalize(inViewDir);
-    vec3 col = sampleEnvironment(dir);
-    col = applyClouds(col, dir);
+    vec3 col;
+    if (g.counts.z == 1) {
+        col = sampleEquirect(dir);   // HDR environment background (no clouds)
+    } else {
+        col = sampleEnvironment(dir);
+        col = applyClouds(col, dir);
+    }
     outColor = vec4(col, 1.0);
 }

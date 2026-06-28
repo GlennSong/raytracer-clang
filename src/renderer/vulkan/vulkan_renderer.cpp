@@ -205,6 +205,19 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     return VK_FALSE;
 }
 
+// Minimal IEEE-754 float→half (RGBA16F env upload). Ignores subnormals/rounding
+// — fine for an environment map.
+uint16_t floatToHalf(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, 4);
+    uint32_t sign = (x >> 16) & 0x8000u;
+    int32_t exp = static_cast<int32_t>((x >> 23) & 0xff) - 127 + 15;
+    uint32_t mant = x & 0x7fffffu;
+    if (exp <= 0) return static_cast<uint16_t>(sign);
+    if (exp >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13));
+}
+
 std::vector<char> readFile(const std::string& path) {
     std::ifstream f(path, std::ios::ate | std::ios::binary);
     if (!f) return {};
@@ -350,6 +363,14 @@ struct VulkanRenderer::Impl {
     float lensK1 = 0.0f, lensK2 = 0.0f, lensCA = 0.0f, lensVignette = 0.0f, lensAspect = 1.0f;
     int   debugViewFrame = 0;   // mirrored from Renderer::debugView
 
+    // HDR environment (Phase 4b): an equirectangular RGBA16F map (with mips for
+    // roughness-LOD specular) sampled for the skybox + IBL when bound. Bound at
+    // set 0 binding 2; a 1x1 default stands in when none is set. The full
+    // GGX-prefiltered-cubemap split-sum + reflection probes are a later refinement.
+    VkSampler envSampler = VK_NULL_HANDLE;   // linear, wrap-u/clamp-v, mipped
+    VkImageView envView = VK_NULL_HANDLE;     // current equirect (or default)
+    bool envBound = false;
+
     // Dear ImGui (ADR-0011); only used when RT_ENABLE_IMGUI is defined.
     VkDescriptorPool imguiPool = VK_NULL_HANDLE;
     bool imguiInitialized = false;
@@ -446,6 +467,7 @@ struct VulkanRenderer::Impl {
     void recordSsr(VkCommandBuffer cmd);
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
                            VkImage& image, VkDeviceMemory& memory, VkImageView& view);
+    void updateGlobalEnvDescriptor();   // write env equirect into set 0 binding 2
     bool createCommandPool();
     bool createCommandBuffers();
     bool createSyncObjects();
@@ -1912,7 +1934,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -1921,6 +1943,10 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = 2;   // HDR environment equirect (skybox + IBL)
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -1947,8 +1973,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 2;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -1994,7 +2020,43 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[1].pImageInfo = &shadow;
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
+
+    // Env equirect sampler (wrap-u/clamp-v, linear + mips for roughness LOD).
+    VkSamplerCreateInfo s{};
+    s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    s.magFilter = VK_FILTER_LINEAR;
+    s.minFilter = VK_FILTER_LINEAR;
+    s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    s.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(device, &s, nullptr, &envSampler) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] env sampler creation failed");
+        return false;
+    }
+    // Binding 2 (env) is written after createMaterialResources, once the default
+    // texture exists (see initialize()).
     return true;
+}
+
+void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
+    VkImageView view = envView ? envView : defaultTexture.view;
+    if (!view) return;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorImageInfo img{};
+        img.sampler = envSampler;
+        img.imageView = view;
+        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSets[i];
+        write.dstBinding = 2;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
 }
 
 VkShaderModule VulkanRenderer::Impl::loadShaderModule(const std::string& path) {
@@ -3093,8 +3155,11 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         LOG_ERROR("[vulkan] initialization failed");
         return false;
     }
+    // Env binding 2 defaults to the 1x1 white texture until setEnvironmentMap.
+    impl->envView = impl->defaultTexture.view;
+    impl->updateGlobalEnvDescriptor();
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: post stack + debug views)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 4b: + HDR equirect IBL)", width, height);
     return true;
 }
 
@@ -3111,6 +3176,8 @@ void VulkanRenderer::shutdown() {
     impl->textures.forEach([&](TextureHandle, GpuTexture& t) { impl->destroyTexture(t); });
     impl->textures.clear();
     impl->destroyTexture(impl->defaultTexture);
+    if (impl->envSampler) vkDestroySampler(impl->device, impl->envSampler, nullptr);
+    impl->envSampler = VK_NULL_HANDLE;
     if (impl->textureSampler) vkDestroySampler(impl->device, impl->textureSampler, nullptr);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         if (impl->materialPools[i]) vkDestroyDescriptorPool(impl->device, impl->materialPools[i], nullptr);
@@ -3335,6 +3402,115 @@ TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
     return impl->textures.insert(tex);
 }
 
+TextureHandle VulkanRenderer::uploadTextureHDR(int width, int height, int channels,
+                                               const float* data) {
+    // RGBA16F equirectangular env map, single mip (roughness blur is approximated
+    // in the shader by blending toward the N-direction sample; a real GGX-
+    // prefiltered mip chain is a later refinement).
+    GpuTexture tex;
+    if (impl->device && data && width > 0 && height > 0) {
+        uint32_t w = static_cast<uint32_t>(width), h = static_cast<uint32_t>(height);
+        std::vector<uint16_t> half(static_cast<size_t>(w) * h * 4);
+        for (size_t p = 0; p < static_cast<size_t>(w) * h; ++p)
+            for (int c = 0; c < 4; ++c) {
+                float v = (c < channels) ? data[p * channels + c] : (c == 3 ? 1.0f : 0.0f);
+                half[p * 4 + c] = floatToHalf(v);
+            }
+        VkDeviceSize size = half.size() * sizeof(uint16_t);
+        VkBuffer staging = VK_NULL_HANDLE;
+        VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+        if (impl->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                staging, stagingMem)) {
+            void* mapped = nullptr;
+            vkMapMemory(impl->device, stagingMem, 0, size, 0, &mapped);
+            std::memcpy(mapped, half.data(), static_cast<size_t>(size));
+            vkUnmapMemory(impl->device, stagingMem);
+
+            VkImageCreateInfo image{};
+            image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            image.imageType = VK_IMAGE_TYPE_2D;
+            image.extent = {w, h, 1};
+            image.mipLevels = 1;
+            image.arrayLayers = 1;
+            image.format = kHdrFormat;
+            image.tiling = VK_IMAGE_TILING_OPTIMAL;
+            image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            image.samples = VK_SAMPLE_COUNT_1_BIT;
+            image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (vkCreateImage(impl->device, &image, nullptr, &tex.image) == VK_SUCCESS) {
+                VkMemoryRequirements req;
+                vkGetImageMemoryRequirements(impl->device, tex.image, &req);
+                VkMemoryAllocateInfo alloc{};
+                alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                alloc.allocationSize = req.size;
+                alloc.memoryTypeIndex = impl->findMemoryType(req.memoryTypeBits,
+                                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                vkAllocateMemory(impl->device, &alloc, nullptr, &tex.memory);
+                vkBindImageMemory(impl->device, tex.image, tex.memory, 0);
+
+                VkCommandBufferAllocateInfo cba{};
+                cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                cba.commandPool = impl->commandPool;
+                cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                cba.commandBufferCount = 1;
+                VkCommandBuffer cmd = VK_NULL_HANDLE;
+                vkAllocateCommandBuffers(impl->device, &cba, &cmd);
+                VkCommandBufferBeginInfo begin{};
+                begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkBeginCommandBuffer(cmd, &begin);
+                impl->transitionImageLayout(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkBufferImageCopy region{};
+                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = {w, h, 1};
+                vkCmdCopyBufferToImage(cmd, staging, tex.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                impl->transitionImageLayout(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                vkEndCommandBuffer(cmd);
+                VkSubmitInfo submit{};
+                submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                submit.commandBufferCount = 1;
+                submit.pCommandBuffers = &cmd;
+                vkQueueSubmit(impl->graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+                vkQueueWaitIdle(impl->graphicsQueue);
+                vkFreeCommandBuffers(impl->device, impl->commandPool, 1, &cmd);
+
+                VkImageViewCreateInfo view{};
+                view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                view.image = tex.image;
+                view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                view.format = kHdrFormat;
+                view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                view.subresourceRange.levelCount = 1;
+                view.subresourceRange.layerCount = 1;
+                vkCreateImageView(impl->device, &view, nullptr, &tex.view);
+            }
+            vkDestroyBuffer(impl->device, staging, nullptr);
+            vkFreeMemory(impl->device, stagingMem, nullptr);
+        }
+        if (!tex.view) { impl->destroyTexture(tex); LOG_ERROR("[vulkan] uploadTextureHDR failed"); }
+    }
+    return impl->textures.insert(tex);
+}
+
+void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
+    GpuTexture* t = impl->textures.get(equirect);
+    if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+    if (t && t->view) {
+        impl->envView = t->view;
+        impl->envBound = true;
+    } else {
+        impl->envView = impl->defaultTexture.view;   // restore procedural sky
+        impl->envBound = false;
+    }
+    impl->updateGlobalEnvDescriptor();
+}
+
 void VulkanRenderer::removeTexture(TextureHandle handle) {
     GpuTexture* t = impl->textures.get(handle);
     if (!t) return;
@@ -3425,7 +3601,8 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCloud[1] = sky.cloudsEnabled ? sky.cloudDensity : 0.0f;
     impl->cpuGlobals.skyCloud[2] = sky.cloudScale;
     impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
-    impl->cpuGlobals.counts[2] = 0;   // envMode: procedural
+    // envMode: 1 = HDR equirect (when bound and the live toggle is on), else 0 = procedural.
+    impl->cpuGlobals.counts[2] = (impl->envBound && environmentMapEnabled) ? 1 : 0;
     impl->sceneExposure = lighting.exposure;
 
     int n = 0;

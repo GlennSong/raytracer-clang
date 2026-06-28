@@ -37,6 +37,14 @@ layout(set = 0, binding = 0) uniform Globals {
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
+
+const float ENV_PI = 3.14159265359;
+vec3 sampleEquirect(vec3 dir) {
+    float u = atan(dir.z, dir.x) * (0.5 / ENV_PI) + 0.5;
+    float v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / ENV_PI);
+    return texture(envEquirect, vec2(u, v)).rgb;
+}
 
 layout(push_constant) uniform Push {
     mat4  model;
@@ -400,8 +408,15 @@ void main() {
     // the ambient tint * multiplier as the overall IBL strength.
     float NdotV = max(dot(N, V), 1e-4);
     vec3 R = reflect(-V, N);
-    vec3 irradiance = sampleEnvironment(N);
-    vec3 prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur
+    // IBL source: HDR equirect when bound (counts.z==1), else the procedural sky.
+    vec3 irradiance, prefiltered;
+    if (g.counts.z == 1) {
+        irradiance = sampleEquirect(N);
+        prefiltered = mix(sampleEquirect(R), irradiance, roughness);
+    } else {
+        irradiance = sampleEnvironment(N);
+        prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur
+    }
     vec3 Famb = fresnelSchlickRoughness(NdotV, f0, roughness);
     vec3 kd = (1.0 - Famb) * (1.0 - metallic);
     vec3 envDiffuse = kd * albedo * irradiance * ao;
