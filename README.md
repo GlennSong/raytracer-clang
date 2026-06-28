@@ -89,9 +89,12 @@ Authoring").
   - **Linux:** GLFW + the Vulkan SDK and X11/Wayland dev headers, e.g. on
     Debian/Ubuntu:
     `sudo apt install cmake clang libglfw3-dev libvulkan-dev vulkan-tools glslang-tools spirv-tools`
-  - **Windows:** the [Vulkan SDK](https://vulkan.lunarg.com/) (provides headers,
-    the loader, and `glslc`) and GLFW. Configure with CMake + your generator of
-    choice (Visual Studio or Ninja).
+  - **Windows:** the [Vulkan SDK](https://vulkan.lunarg.com/) (headers, loader,
+    `glslc`) and GLFW via [vcpkg](https://vcpkg.io) (`vcpkg install glfw3`). Build
+    with **clang** (CMake defaults to MSVC, which rejects the project's `-Wextra`).
+    The Qt **editor** additionally needs `vcpkg install qtbase`. Full recipe —
+    toolchain, configure, running the viewer + editor — in
+    **[docs/windows-build.md](docs/windows-build.md)**.
 
 > **Note:** the Vulkan backend is under construction (ADR-0057). On non-Apple
 > platforms today the `viewer` links a `NullRenderer` (window + UI run, nothing
