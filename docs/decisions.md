@@ -3738,12 +3738,39 @@ registered in `ArenaState`. `build`/`step` take a `World` directly so the spawn 
 pose-sync logic is unit-tested headless (the GPU mesh upload is the only
 AssetManager-gated part); the in-viewer render is macOS-gated like the rest.
 
-*Later phases (planned, not in this ADR):* a `vehicle.*` Lua surface
-(pure body/wheel recipe like `flora`, plus an effectful drive behaviour like
-`gun.lua`); a `VehicleId` extension of the `PhysicsWorld` seam wrapping Jolt's
-`WheeledVehicleController` (no Jolt types in headers, per ADR-0012); player
-enter/exit (`ControlledBy` swap) and a chase `CameraController`; the
-kinematic-far/physics-near handoff.
+*Chase camera (landed, verified):* `FollowCameraController` — a pure, window-free
+third-person rig (orbit behind a tracked target, look-to-orbit, zoom-dolly),
+unit-tested headless like the fly/orbit controllers. The camera half of "jump in
+and drive", landed ahead of the physics car so it ships verified.
+
+*Phases 3-4 (landed, UNVERIFIED — submodule-gated):* the drivable physics car and
+its Lua authoring. This sandbox cannot fetch the Jolt/Lua submodules (the git
+proxy only allows the repo, so submodule clones 403), so this code is written
+against the documented Jolt v5.5.0 vehicle API and the existing flora/gun Lua
+patterns but has NOT been compiled here — it must be built/tuned on a submodule
+machine. What was added:
+- **`PhysicsWorld` vehicle seam** — Jolt-free `VehicleConfig`/`VehicleWheel`, an
+  opaque `VehicleId`, and `addVehicle`/`setVehicleInput`/`vehiclePosition`/
+  `wheelTransform`/`removeVehicle`, wrapping Jolt's `WheeledVehicleController` +
+  `VehicleConstraint` + a raycast collision tester in the .cpp (no JPH:: in the
+  header, per ADR-0012).
+- **`Vehicle`/`InVehicle` components + `VehicleSystem`** — creates the Jolt
+  vehicle from the config + Transform, drives it from the seated driver's input,
+  writes chassis + wheel transforms back, and owns the enter/exit interaction
+  (board a nearby car with G, suppress on-foot movement via `InVehicle`, switch
+  the view to the chase camera; `PlayerSystem` yields while seated).
+- **Lua bodies** — `assets/scripts/vehicles.lua` (`vehicle.sedan/hatchback`,
+  authored over the procgen `mesh.*` builders like `flora`), a `VehicleSpec`
+  reader (`scripting/vehicle_spec.cpp`) that runs the recipe and reads the body
+  mesh + handling params, and `spawnVehicle` to build the entity. `ArenaState`
+  spawns a demo sedan near the player.
+The non-submodule-bound glue (VehicleSystem, the camera switch, the arena hook,
+components) was nonetheless syntax-checked (`clang -fsyntax-only`) against the
+real engine headers; only the Jolt body code and the Lua reader are uncompiled.
+
+*Later phases (planned):* the kinematic-far / physics-near handoff (promote AI
+traffic cars near the player to full Jolt vehicles, demote distant ones); a
+level-JSON `vehicles` block (the demo spawn in `ArenaState` is the placeholder).
 
 **Why this shape.** It is a *convergence* of shipped systems, not a new pillar:
 the nav graph falls out of the road graph; A* rides the existing curve/arc-length
@@ -3751,11 +3778,15 @@ math; the sim obeys the deterministic-clock discipline already used for physics.
 Phase 1 is entirely pure and unit-tested on Linux/CI (`make test`), matching the
 engine's culture and de-risking the GPU/physics phases that follow.
 
-**Owed.** Everything past Phase 1 (above). Phase 1 itself keeps `NavGraph`
-rebuilt from the `RoadNet` on demand rather than cached on an entity; junction
-turn-restrictions and traffic-signal arbitration are not modelled (all turns
-except U-turns allowed); agents do not yet avoid each other (no car-following /
-collision) — that arrives with the ECS/physics phases.
+**Owed.** A compile/tune pass on the submodule-gated vehicle code (Phases 3-4
+above) on a Jolt/Lua build — likely small Jolt member-name/ctor touch-ups and
+handling/feel tuning. The kinematic-far/physics-near handoff and a level-JSON
+`vehicles` block (above). `NavGraph` is rebuilt from the `RoadNet` on demand
+rather than cached on an entity; junction turn-restrictions and traffic-signal
+arbitration are not modelled (all turns except U-turns allowed); AI agents do not
+yet avoid each other or the player's car (no car-following / inter-agent
+collision). Destroyed `Vehicle` entities don't `removeVehicle` (no destroy hook,
+same bounded-leak class as the ScriptBehaviour note below).
 
 ---
 
@@ -3783,6 +3814,8 @@ to be replaced; listed here so they stay visible.
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
+| Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0057) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
+| Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0057) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |

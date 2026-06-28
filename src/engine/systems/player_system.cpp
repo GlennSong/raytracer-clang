@@ -15,6 +15,9 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
     ctx.world.each<Transform, CharacterController, ControlledBy>(
         [&](Entity e, Transform& t, CharacterController& cc, ControlledBy&) {
             playerEntity = e;
+            // Seated in a vehicle (ADR-0057): VehicleSystem owns the pose and the
+            // chase camera owns the view, so on-foot movement is suppressed.
+            if (ctx.world.has<InVehicle>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
             if (!spawnCaptured) { spawnPos = t.position; spawnCaptured = true; }   // authored spawn
 
@@ -53,6 +56,11 @@ void PlayerSystem::update(FrameContext& ctx) {
                 if (auto* t = ctx.world.get<Transform>(playerEntity)) t->position = spawnPos;
             }
     }
+
+    // Driving: the chase camera (CameraSystem follow) owns the view; don't pin
+    // the first-person eye over it.
+    if (ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))
+        return;
 
     // Detached freecam: CameraSystem's fly view stands as-is.
     if (!camera.positionLocked) return;

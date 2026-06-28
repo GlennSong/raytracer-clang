@@ -5,6 +5,8 @@
 #include "../camera_store.h"
 #include "../../log.h"
 
+#include <cmath>
+
 namespace engine {
 
 void CameraSystem::registerBindings(InputMap& actions) const {
@@ -120,6 +122,25 @@ void CameraSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
+
+    // Chase camera (ADR-0057): while following a vehicle, the view tracks it and
+    // the editor controllers / placed cameras are bypassed. A dead target (the
+    // car was destroyed) drops the follow back to the normal view.
+    if (followTarget.valid() &&
+        (!ctx.world.alive(followTarget) || !ctx.world.has<Transform>(followTarget)))
+        followTarget = Entity{};
+    if (followTarget.valid()) {
+        const Transform& t = *ctx.world.get<Transform>(followTarget);
+        // Heading about Y in the FlyCamera yaw convention (yaw 0 looks down -Z):
+        // forward = orientation * +Z, then yaw = atan2(fx, -fz).
+        Vec3 fwd = t.orientation.rotate(Vec3(0, 0, 1));
+        Real yawDeg = radiansToDegrees(std::atan2(fwd.x, -fwd.z));
+        follow.setTarget(t.position, yawDeg);
+        follow.update(gatherInput(ctx), ctx.frameDelta);
+        ctx.view.camera = follow.cameraState(aspect);
+        ctx.view.activeCameraEntity = Entity{};
+        return;
+    }
 
     Entity viewBefore = activeCamera;
 

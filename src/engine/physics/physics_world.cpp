@@ -17,6 +17,9 @@
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
@@ -136,6 +139,14 @@ inline Vec3 fromJolt(JPH::RVec3Arg v) {
 inline Quat fromJolt(JPH::QuatArg q) {
     return Quat(q.GetX(), q.GetY(), q.GetZ(), q.GetW());
 }
+inline Mat4 fromJolt(const JPH::Mat44& m) {
+    Mat4 r;
+    for (int row = 0; row < 4; ++row)
+        for (int col = 0; col < 4; ++col)
+            r.m[row][col] = static_cast<Real>(m(static_cast<JPH::uint>(row),
+                                                static_cast<JPH::uint>(col)));
+    return r;
+}
 
 constexpr JPH::uint MAX_BODIES = 10240;
 constexpr JPH::uint MAX_BODY_PAIRS = 10240;
@@ -163,6 +174,16 @@ struct PhysicsWorld::Impl {
         float stepHeight = 0.4f;
     };
     std::vector<Character> characters;
+
+    // Wheeled vehicles (ADR-0057). Each owns a VehicleConstraint (also a step
+    // listener) over a dynamic chassis body. Slots are never compacted so
+    // VehicleIds stay valid; removeVehicle releases the ref and invalidates the id.
+    struct Vehicle {
+        JPH::Ref<JPH::VehicleConstraint> constraint;
+        JPH::BodyID body;
+        int wheels = 0;
+    };
+    std::vector<Vehicle> vehicles;
 
     JPH::BodyInterface& bodies() { return physicsSystem.GetBodyInterface(); }
     const JPH::BodyInterface& bodies() const {
@@ -436,6 +457,161 @@ void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
     if (!impl || id >= impl->characters.size()) return;
     if (JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr())
         ch->SetPosition(toJoltR(position));
+}
+
+// --- Wheeled vehicle (ADR-0057) --------------------------------------------
+// UNVERIFIED: written against the documented Jolt v5.5.0 vehicle API; the Jolt
+// submodule can't be fetched in this environment, so this has NOT been compiled.
+// Likely tuning/rename touch-ups on a real build (member names on WheelSettingsWV
+// / VehicleEngineSettings, the collision-tester ctor signature).
+
+PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
+                                                 const Vec3& position,
+                                                 const Quat& orientation) {
+    if (!impl) return INVALID_VEHICLE;
+
+    // Chassis: a dynamic box, mass overridden, sleeping disabled so the controller
+    // keeps stepping. (Lowering the centre of mass via an OffsetCenterOfMassShape
+    // is the usual anti-roll tweak — left as a tuning follow-up.)
+    JPH::BoxShapeSettings shapeSettings(toJolt(cfg.chassisHalfExtent));
+    JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
+    if (shapeRes.HasError()) return INVALID_VEHICLE;
+
+    JPH::BodyCreationSettings bodySettings(shapeRes.Get(), toJoltR(position),
+                                           toJolt(orientation),
+                                           JPH::EMotionType::Dynamic, Layers::MOVING);
+    bodySettings.mOverrideMassProperties =
+        JPH::EOverrideMassProperties::CalculateInertia;
+    bodySettings.mMassPropertiesOverride.mMass = static_cast<float>(cfg.mass);
+    bodySettings.mFriction = static_cast<float>(cfg.friction);
+    bodySettings.mAllowSleeping = false;
+    JPH::Body* chassis = impl->bodies().CreateBody(bodySettings);
+    if (!chassis) return INVALID_VEHICLE;
+    impl->bodies().AddBody(chassis->GetID(), JPH::EActivation::Activate);
+
+    JPH::VehicleConstraintSettings vs;
+    vs.mUp = JPH::Vec3(0, 1, 0);
+    vs.mForward = JPH::Vec3(0, 0, 1);
+    for (const VehicleWheel& w : cfg.wheels) {
+        JPH::WheelSettingsWV* ws = new JPH::WheelSettingsWV();
+        ws->mPosition = toJolt(w.position);
+        ws->mRadius = static_cast<float>(w.radius);
+        ws->mWidth = static_cast<float>(w.width);
+        ws->mSuspensionMinLength = static_cast<float>(w.suspensionMin);
+        ws->mSuspensionMaxLength = static_cast<float>(w.suspensionMax);
+        ws->mSuspensionSpring.mFrequency = static_cast<float>(w.suspensionFrequency);
+        ws->mSuspensionSpring.mDamping = static_cast<float>(w.suspensionDamping);
+        ws->mMaxSteerAngle = w.steered
+            ? JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees))
+            : 0.0f;
+        ws->mMaxBrakeTorque = static_cast<float>(cfg.brakeTorque);
+        ws->mMaxHandBrakeTorque =
+            w.handBrake ? static_cast<float>(cfg.handBrakeTorque) : 0.0f;
+        vs.mWheels.push_back(ws);
+    }
+
+    JPH::WheeledVehicleControllerSettings* controller =
+        new JPH::WheeledVehicleControllerSettings();
+    controller->mEngine.mMaxTorque = static_cast<float>(cfg.engineTorque);
+    controller->mEngine.mMaxRPM = static_cast<float>(cfg.maxRPM);
+
+    // One differential per driven wheel pair (in declaration order), torque split
+    // evenly across them. A standard 4-wheeler with two driven fronts/rears gets
+    // one differential; an all-wheel-drive layout gets two.
+    std::vector<int> driven;
+    for (int i = 0; i < static_cast<int>(cfg.wheels.size()); ++i)
+        if (cfg.wheels[i].driven) driven.push_back(i);
+    for (size_t i = 0; i + 1 < driven.size(); i += 2) {
+        JPH::VehicleDifferentialSettings d;
+        d.mLeftWheel = driven[i];
+        d.mRightWheel = driven[i + 1];
+        controller->mDifferentials.push_back(d);
+    }
+    if (!controller->mDifferentials.empty()) {
+        float ratio = 1.0f / static_cast<float>(controller->mDifferentials.size());
+        for (JPH::VehicleDifferentialSettings& d : controller->mDifferentials)
+            d.mEngineTorqueRatio = ratio;
+    }
+    vs.mController = controller;
+
+    JPH::VehicleConstraint* constraint = new JPH::VehicleConstraint(*chassis, vs);
+    // Raycast wheels against the moving layer's ground. (CastCylinder is the
+    // higher-fidelity alternative if wheels clip kerbs.)
+    constraint->SetVehicleCollisionTester(
+        new JPH::VehicleCollisionTesterRay(Layers::MOVING));
+    impl->physicsSystem.AddConstraint(constraint);
+    impl->physicsSystem.AddStepListener(constraint);
+
+    Impl::Vehicle v;
+    v.constraint = constraint;
+    v.body = chassis->GetID();
+    v.wheels = static_cast<int>(cfg.wheels.size());
+    impl->vehicles.push_back(std::move(v));
+    return static_cast<VehicleId>(impl->vehicles.size() - 1);
+}
+
+void PhysicsWorld::removeVehicle(VehicleId id) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (v.constraint) {
+        impl->physicsSystem.RemoveStepListener(v.constraint.GetPtr());
+        impl->physicsSystem.RemoveConstraint(v.constraint.GetPtr());
+        v.constraint = nullptr;
+    }
+    if (!v.body.IsInvalid()) {
+        impl->bodies().RemoveBody(v.body);
+        impl->bodies().DestroyBody(v.body);
+        v.body = JPH::BodyID();
+    }
+}
+
+void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
+                                   Real brake, Real handBrake) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    JPH::VehicleConstraint* c = impl->vehicles[id].constraint.GetPtr();
+    if (!c) return;
+    auto* wc = static_cast<JPH::WheeledVehicleController*>(c->GetController());
+    wc->SetDriverInput(static_cast<float>(forward), static_cast<float>(right),
+                       static_cast<float>(brake), static_cast<float>(handBrake));
+    // Throttle/steer is meaningless on a sleeping body — wake it.
+    if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
+        impl->bodies().ActivateBody(impl->vehicles[id].body);
+}
+
+Vec3 PhysicsWorld::vehiclePosition(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return Vec3();
+    return fromJolt(impl->bodies().GetPosition(impl->vehicles[id].body));
+}
+
+Quat PhysicsWorld::vehicleOrientation(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return Quat();
+    return fromJolt(impl->bodies().GetRotation(impl->vehicles[id].body));
+}
+
+Vec3 PhysicsWorld::vehicleVelocity(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return Vec3();
+    return fromJolt(impl->bodies().GetLinearVelocity(impl->vehicles[id].body));
+}
+
+int PhysicsWorld::vehicleWheelCount(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return 0;
+    return impl->vehicles[id].wheels;
+}
+
+Mat4 PhysicsWorld::wheelTransform(VehicleId id, int wheel) const {
+    if (!impl || id >= impl->vehicles.size()) return Mat4::identity();
+    const JPH::VehicleConstraint* c = impl->vehicles[id].constraint.GetPtr();
+    if (!c || wheel < 0 || wheel >= impl->vehicles[id].wheels) return Mat4::identity();
+    // The wheel mesh is a cylinder spun about its local X (the axle); pass that as
+    // the model's right, Y as up. Tune to the actual wheel mesh axis on a build.
+    JPH::Mat44 m = c->GetWheelWorldTransform(static_cast<JPH::uint>(wheel),
+                                             JPH::Vec3::sAxisX(), JPH::Vec3::sAxisY());
+    return fromJolt(m);
+}
+
+PhysicsBodyId PhysicsWorld::vehicleBody(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return INVALID_PHYSICS_BODY;
+    return impl->vehicles[id].body.GetIndexAndSequenceNumber();
 }
 
 void PhysicsWorld::optimizeBroadPhase() {

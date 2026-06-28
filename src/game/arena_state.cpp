@@ -9,6 +9,7 @@
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/traffic_system.h"
+#include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
@@ -18,6 +19,9 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
 #include "../engine/scripting/script_behaviour.h"
+#include "../engine/scripting/script_vm.h"
+#include "../engine/scripting/procgen_bindings.h"
+#include "../engine/scripting/vehicle_spec.h"
 #include "../renderer/event.h"
 #include <fstream>
 #include <sstream>
@@ -63,6 +67,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<MotionSystem>();
     addSystem<TrafficSystem>();   // cars + pedestrians over the road network (ADR-0057)
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0057)
+#endif
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
@@ -114,6 +121,30 @@ void ArenaState::onEnter(FrameContext& ctx) {
                     sb.source = gun;
                     ctx.world.add<ScriptBehaviour>(e, sb);
                 }
+            }
+        }
+    }
+
+    // Demo car (ADR-0057): author the body in Lua (vehicles.lua), spawn it near
+    // the player; VehicleSystem creates the Jolt vehicle and the player can board
+    // it with G. A level-JSON "vehicles" block is the productionization of this
+    // hook. UNVERIFIED: needs the Lua + Jolt submodules to build/tune.
+    {
+        std::string lib = readTextFile("assets/scripts/vehicles.lua");
+        if (lib.empty()) {
+            LOG_WARN << "assets/scripts/vehicles.lua not found; no demo car";
+        } else {
+            ScriptVM vm;
+            openProcgenLibrary(vm);
+            std::string err;
+            if (!vm.doString(lib, &err)) {
+                LOG_WARN << "vehicles.lua: " << err;
+            } else {
+                VehicleSpec spec;
+                if (loadVehicleSpec(vm, "return vehicle.sedan(seed, {})", 1, spec, &err))
+                    spawnVehicle(ctx.world, ctx.assets, spec, Vec3(6, 1.0, 0), 0.0);
+                else
+                    LOG_WARN << "vehicle spec: " << err;
             }
         }
     }

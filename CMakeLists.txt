@@ -180,6 +180,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
+        src/engine/scripting/vehicle_spec.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -365,6 +366,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
         src/engine/systems/shooting_system.cpp
+        src/engine/systems/vehicle_system.cpp
     )
 endif()
 
@@ -468,6 +470,7 @@ if(Qt6_FOUND)
             src/engine/systems/physics_system.cpp
             src/engine/systems/player_system.cpp
             src/engine/systems/shooting_system.cpp
+            src/engine/systems/vehicle_system.cpp
         )
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;

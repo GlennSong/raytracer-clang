@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../camera/orbit_camera_controller.h"
 #include "../camera/fly_camera_controller.h"
+#include "../camera/follow_camera_controller.h"
 #include "../camera/scene_camera.h"
 
 namespace engine {
@@ -27,6 +28,13 @@ public:
     FlyCameraController& flyController() { return fly; }
     Entity activeSceneCamera() const { return activeCamera; }
 
+    // Chase-camera control (ADR-0057): while a target is set, the view follows it
+    // (third-person), overriding the editor controllers and placed cameras. Used
+    // by VehicleSystem on vehicle enter/exit.
+    void setFollowTarget(Entity target) { followTarget = target; }
+    void clearFollowTarget() { followTarget = Entity{}; }
+    Entity followingEntity() const { return followTarget; }
+
     // For the camera panel (and future pose sources): request a view switch
     // (validity is re-checked next update; an invalid handle means the editor)
     // and place a camera at the current editor framing.
@@ -41,6 +49,8 @@ private:
 
     OrbitCameraController orbit;
     FlyCameraController fly;
+    FollowCameraController follow;
+    Entity followTarget;        // valid => chase this entity (vehicle), overrides all
     CameraController* active = &orbit;
     bool flyActive = false;
     bool freeLook = false;      // detached freecam: mouse looks without a button

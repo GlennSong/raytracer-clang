@@ -90,6 +90,61 @@ public:
     GroundState characterGroundState(CharacterId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
+    // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0057) ------------------
+    // A physics-driven car: a dynamic box chassis with raycast wheels, suspension,
+    // steering, engine + brakes — Jolt's WheeledVehicleController, tuned arcade-
+    // forgiving by the caller's VehicleConfig. All Jolt-free here; the constraint
+    // lives in the .cpp. NOTE: this code is written against the documented Jolt
+    // v5.5.0 vehicle API but is UNVERIFIED in this environment (the Jolt submodule
+    // can't be fetched here) — compile and tune on a submodule build.
+
+    // One wheel, positioned relative to the chassis origin (chassis-local metres).
+    struct VehicleWheel {
+        Vec3 position{0, 0, 0};        // attachment point (chassis-local)
+        Real radius = 0.35;
+        Real width = 0.25;
+        Real suspensionMin = 0.20;     // suspension travel (m)
+        Real suspensionMax = 0.45;
+        Real suspensionFrequency = 1.5;// spring frequency (Hz)
+        Real suspensionDamping = 0.5;  // spring damping ratio
+        bool steered = false;          // turns with steering input (front wheels)
+        bool driven = true;            // receives engine torque
+        bool handBrake = false;        // gets the handbrake (rear wheels)
+    };
+
+    struct VehicleConfig {
+        Vec3 chassisHalfExtent{1.0, 0.5, 2.1};   // x=half-width, y=half-height, z=half-length
+        Real mass = 1500.0;            // kg
+        Real maxSteerDegrees = 30.0;
+        Real engineTorque = 500.0;     // peak engine torque (Nm)
+        Real maxRPM = 6000.0;
+        Real brakeTorque = 1500.0;
+        Real handBrakeTorque = 4000.0;
+        Real friction = 1.0;           // chassis material friction
+        std::vector<VehicleWheel> wheels;
+    };
+
+    using VehicleId = uint32_t;
+    static constexpr VehicleId INVALID_VEHICLE = 0xFFFFFFFFu;
+
+    // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
+    VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
+                         const Quat& orientation);
+    void removeVehicle(VehicleId id);
+    // Driver input, each in [-1,1] (brake/handBrake in [0,1]): forward (throttle,
+    // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
+    void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,
+                         Real handBrake = 0.0);
+    Vec3 vehiclePosition(VehicleId id) const;
+    Quat vehicleOrientation(VehicleId id) const;
+    Vec3 vehicleVelocity(VehicleId id) const;
+    int vehicleWheelCount(VehicleId id) const;
+    // World transform of wheel `wheel` (for rendering a wheel mesh).
+    Mat4 wheelTransform(VehicleId id, int wheel) const;
+    // The chassis rigid-body handle (so the body's transform can be read like any
+    // other, and the player can be parented/seated relative to it).
+    PhysicsBodyId vehicleBody(VehicleId id) const;
+
     // Call once after the initial static bodies are added.
     void optimizeBroadPhase();
 

@@ -197,6 +197,29 @@ struct MeshCollider {
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
+// A physics-driven car (ADR-0057). VehicleSystem creates the Jolt vehicle from
+// `config` + the entity's Transform, drives it from the seated driver's input,
+// and writes the chassis Transform back each fixed step. The entity also carries
+// a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
+// `wheelEntities` are optional child Renderables whose transforms VehicleSystem
+// refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
+struct Vehicle {
+    PhysicsWorld::VehicleConfig config;
+    PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
+    Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
+    // Live driver input, written by VehicleSystem each step (for inspection/debug).
+    Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
+    std::vector<Entity> wheelEntities;   // rendered wheels (optional)
+};
+
+// Marks a player entity currently seated in a vehicle (ADR-0057). PlayerSystem
+// suppresses on-foot character movement while this is present; the enter/exit
+// logic in VehicleSystem adds it on entry and removes it on exit. `vehicle` is
+// the car entity being driven.
+struct InVehicle {
+    Entity vehicle;
+};
+
 // --- Document hierarchy (stable ids + parenting) --------------------------
 // Document entities (those carrying a SourceSpec) reference one another by
 // stable id, not by runtime Handle. These helpers index and compose that

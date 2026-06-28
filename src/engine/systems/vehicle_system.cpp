@@ -1,0 +1,187 @@
+#include "vehicle_system.h"
+
+#include "../components.h"
+#include "../asset_manager.h"
+#include "../mesh_builder.h"
+#include "physics_system.h"
+#include "camera_system.h"
+
+#include <vector>
+
+namespace engine {
+
+void VehicleSystem::onStart(FrameContext& ctx) {
+    // Driving actions (global; single-player drive for now). Throttle/steer are
+    // axes, brake/handbrake/enter are buttons. Gamepad face-button names may differ
+    // per backend — adjust on a real build.
+    ctx.actions.bindAxis("drive_throttle", KeyCode::W, 1.0);
+    ctx.actions.bindAxis("drive_throttle", KeyCode::S, -1.0);
+    ctx.actions.bindAxis("drive_throttle", GamepadAxis::RightTrigger, 1.0);
+    ctx.actions.bindAxis("drive_throttle", GamepadAxis::LeftTrigger, -1.0);
+
+    ctx.actions.bindAxis("drive_steer", KeyCode::D, 1.0);
+    ctx.actions.bindAxis("drive_steer", KeyCode::A, -1.0);
+    ctx.actions.bindAxis("drive_steer", GamepadAxis::LeftX, 1.0);
+
+    ctx.actions.bindButton("drive_brake", KeyCode::Space);
+    ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
+
+    ctx.actions.bindButton("enter_vehicle", KeyCode::G);
+    ctx.actions.bindButton("enter_vehicle", GamepadButton::DpadUp);
+}
+
+void VehicleSystem::createVehicles(FrameContext& ctx) {
+    // Collect vehicles awaiting a Jolt body first — spawning wheel entities is a
+    // structural mutation, forbidden inside World::each (ADR-0006).
+    std::vector<Entity> pending;
+    ctx.world.each<Transform, Vehicle>([&](Entity e, Transform&, Vehicle& v) {
+        if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) pending.push_back(e);
+    });
+    if (pending.empty()) return;
+
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    for (Entity e : pending) {
+        Vehicle* v = ctx.world.get<Vehicle>(e);
+        Transform* t = ctx.world.get<Transform>(e);
+        if (!v || !t) continue;
+        v->vehicleId = pw.addVehicle(v->config, t->position, t->orientation);
+        if (v->vehicleId == PhysicsWorld::INVALID_VEHICLE) continue;
+        if (!ctx.world.has<PrevTransform>(e)) ctx.world.add<PrevTransform>(e, {*t});
+
+        // Lazily build a shared wheel mesh: a cylinder rotated so its axis is the
+        // axle (local X), matching wheelTransform's right=X / up=Y convention.
+        if (!wheelMesh.valid() && !v->config.wheels.empty()) {
+            const PhysicsWorld::VehicleWheel& w0 = v->config.wheels[0];
+            RenderMesh wheel = MeshBuilder::cylinder(static_cast<float>(w0.radius),
+                                                     static_cast<float>(w0.width));
+            MeshBuilder::transform(
+                wheel, Mat4::trs(Vec3(0, 0, 0),
+                                 Quat::fromAxisAngle(Vec3(0, 0, 1), PI * 0.5),
+                                 Vec3(1, 1, 1)));
+            wheelMesh = ctx.assets.acquireMesh(wheel, "vehicle:wheel");
+        }
+        for (size_t i = 0; i < v->config.wheels.size(); ++i) {
+            Entity we = ctx.world.create();
+            Transform wt;
+            ctx.world.add<Transform>(we, wt);
+            ctx.world.add<PrevTransform>(we, {wt});
+            Renderable r;
+            r.mesh = wheelMesh;
+            r.material.albedo = Vec3(0.05, 0.05, 0.06);
+            r.material.metallic = 0.1f;
+            r.material.roughness = 0.8f;
+            r.material.opacity = 1.0f;
+            ctx.world.add<Renderable>(we, r);
+            v->wheelEntities.push_back(we);
+        }
+    }
+}
+
+void VehicleSystem::driveVehicles(FrameContext& ctx) {
+    Real throttle = ctx.actions.axis("drive_throttle");
+    Real steer = ctx.actions.axis("drive_steer");
+    Real brake = ctx.actions.held("drive_brake") ? 1.0 : 0.0;
+    Real hand = ctx.actions.held("drive_handbrake") ? 1.0 : 0.0;
+
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
+        if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+        if (v.driver.valid()) {
+            v.throttle = throttle;
+            v.steer = steer;
+            v.brake = brake;
+            v.handBrake = hand;
+        } else {
+            // Parked: hold the brake so it doesn't creep on a slope.
+            v.throttle = 0;
+            v.steer = 0;
+            v.brake = 1.0;
+            v.handBrake = 0;
+        }
+        pw.setVehicleInput(v.vehicleId, v.throttle, v.steer, v.brake, v.handBrake);
+    });
+}
+
+void VehicleSystem::writeBack(FrameContext& ctx) {
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    ctx.world.each<Transform, PrevTransform, Vehicle>(
+        [&](Entity, Transform& t, PrevTransform& prev, Vehicle& v) {
+            if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+            prev.value = t;
+            t.position = pw.vehiclePosition(v.vehicleId);
+            t.orientation = pw.vehicleOrientation(v.vehicleId);
+
+            for (size_t i = 0; i < v.wheelEntities.size(); ++i) {
+                Entity we = v.wheelEntities[i];
+                if (!ctx.world.alive(we)) continue;
+                Transform* wt = ctx.world.get<Transform>(we);
+                if (!wt) continue;
+                if (PrevTransform* wp = ctx.world.get<PrevTransform>(we))
+                    wp->value = *wt;
+                *wt = transformFromMatrix(
+                    pw.wheelTransform(v.vehicleId, static_cast<int>(i)));
+            }
+
+            // Keep the seated driver glued to the chassis so they ride along and
+            // are sensibly placed when they get out.
+            if (v.driver.valid() && ctx.world.alive(v.driver)) {
+                if (Transform* pt = ctx.world.get<Transform>(v.driver))
+                    pt->position = t.position;
+            }
+        });
+}
+
+void VehicleSystem::handleEnterExit(FrameContext& ctx) {
+    if (!ctx.actions.pressed("enter_vehicle")) return;
+
+    // The (first) player entity.
+    Entity player;
+    Vec3 playerPos;
+    ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform& t, ControlledBy&) {
+        if (!player.valid()) { player = e; playerPos = t.position; }
+    });
+    if (!player.valid()) return;
+
+    if (ctx.world.has<InVehicle>(player)) {
+        // --- get out ---
+        Entity car = ctx.world.get<InVehicle>(player)->vehicle;
+        if (car.valid() && ctx.world.alive(car) && ctx.world.has<Vehicle>(car))
+            ctx.world.get<Vehicle>(car)->driver = Entity{};
+        if (car.valid() && ctx.world.has<Transform>(car)) {
+            const Transform& ct = *ctx.world.get<Transform>(car);
+            Vec3 out = ct.position + ct.orientation.rotate(Vec3(1, 0, 0)) * 2.0 +
+                       Vec3(0, 0.5, 0);
+            if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = out;
+            if (CharacterController* cc = ctx.world.get<CharacterController>(player))
+                physicsSys.physicsWorld().setCharacterPosition(cc->characterId, out);
+        }
+        cameras.clearFollowTarget();
+        ctx.world.remove<InVehicle>(player);   // structural — after the each() above
+    } else {
+        // --- get in: nearest unoccupied car within reach ---
+        Entity best;
+        Real bestD2 = enterRadius * enterRadius;
+        ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
+            if (v.driver.valid()) return;
+            Real d2 = (t.position - playerPos).lengthSquared();
+            if (d2 <= bestD2) { bestD2 = d2; best = e; }
+        });
+        if (best.valid()) {
+            ctx.world.get<Vehicle>(best)->driver = player;
+            cameras.setFollowTarget(best);
+            ctx.world.add<InVehicle>(player, InVehicle{best});   // structural
+        }
+    }
+}
+
+void VehicleSystem::update(FrameContext& ctx) {
+    handleEnterExit(ctx);
+}
+
+void VehicleSystem::fixedUpdate(FrameContext& ctx) {
+    createVehicles(ctx);
+    driveVehicles(ctx);
+    writeBack(ctx);
+}
+
+}  // namespace engine
