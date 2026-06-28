@@ -350,10 +350,18 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   a `VkSurfaceKHR` from the Qt widget's `HWND`/`xcb` window through `HostedWindow`
   so the editor viewport renders on Vulkan, mirroring the Metal `CAMetalLayer`
   embedding. Distinct from the viewer's surface path (viewer owns a GLFW window).
-  *Addressed (`ac099af`): code landed.* **Untested on this Windows machine — Qt6
-  is not installed, so `editor_app` is skipped (`find_package(Qt6)` not found).**
-  Needs a Qt6 install (e.g. vcpkg `qtbase`) to build + device-verify the editor's
-  Vulkan viewport here; the viewer path is verified.
+  ***Fixed + device-verified 2026-06-28 (`ac099af`):*** with Qt6 installed (vcpkg
+  `qtbase` 6.11.1), `editor_app` builds and the Vulkan viewport works on Windows:
+  `vkCreateWin32SurfaceKHR` succeeds on the Qt widget's `HWND`, the backend
+  initializes at the **embedded viewport size** (e.g. 1839×1017, not the full
+  window) and loads the scene with **0 validation errors / 0 surface failures**;
+  ImGui-on-Vulkan also initializes in the editor. The Win32 path in
+  `vulkan_viewport.cpp` compiled first try. *Owed:* interactive resize + input-feel
+  check (not exercised by a headless launch). **Run note (Windows):** `editor_app`
+  links the *debug* Qt DLLs, so to launch it put `…\vcpkg\installed\x64-windows\
+  debug\bin` on `PATH` and set `QT_QPA_PLATFORM_PLUGIN_PATH=…\debug\Qt6\plugins\
+  platforms` (vcpkg doesn't auto-deploy Qt next to the exe; release build → use the
+  non-`debug` paths).
 
 ## File map (new)
 
