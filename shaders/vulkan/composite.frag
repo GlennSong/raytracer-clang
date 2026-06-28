@@ -6,12 +6,15 @@
 // SSAO/SSR/bloom/lens/DOF here.
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTex;
+layout(set = 0, binding = 1) uniform sampler2D bloomTex;
 
 layout(push_constant) uniform Push {
     float exposure;
     int   tonemapOp;        // 0 = ACES, 1 = AgX
     float gradeContrast;
     float gradeSaturation;
+    int   bloomEnabled;
+    float bloomIntensity;
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -66,6 +69,8 @@ vec3 tonemapAgX(vec3 val) {
 
 void main() {
     vec3 hdr = texture(hdrTex, inUV).rgb;
+    if (pc.bloomEnabled != 0)
+        hdr += texture(bloomTex, inUV).rgb * pc.bloomIntensity;
     hdr *= pc.exposure;
     hdr = applyGrade(hdr, pc.gradeContrast, pc.gradeSaturation);
     vec3 color = (pc.tonemapOp == 1) ? tonemapAgX(hdr) : tonemapACES(hdr);

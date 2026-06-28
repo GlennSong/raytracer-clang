@@ -147,9 +147,14 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   switched to **UNORM** (the tonemap folds in the sRGB encode). This fixes the
   clipping sun and matches Metal's view transform. Driven by
   `tonemapOperator`/`gradeParams`/`SceneLighting::exposure`.
-- **Phase 5b (owed):** the effects on top of the HDR target — SSAO (+ temporal),
-  SSR, bloom, lens (distortion/CA/vignette) + DOF, and the debug views/wireframe.
-  Needs a view-normal G-buffer (SSAO/SSR) + half-res targets (bloom).
+- **Phase 5b — bloom (code landed; verify on device):** bright-pass (soft-knee)
+  + separable Gaussian (H,V) at half-res (`bloom.frag`, two ping-pong RGBA16F
+  targets), added back in the composite before tonemap. Driven by `bloomEnabled`
+  + `bloomParams` (threshold/knee/intensity). Simpler than Metal's 5-mip pyramid
+  — a single blurred level; the pyramid is a later refinement.
+- **Phase 5b (still owed):** SSAO (+ temporal) and SSR — both need a view-normal
+  G-buffer (MRT in the scene pass); lens (distortion/CA/vignette) + DOF; the
+  debug views/wireframe.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.

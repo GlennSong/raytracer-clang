@@ -115,6 +115,20 @@ struct CompositePush {
     int32_t  tonemapOp;      // 0 = ACES, 1 = AgX
     float    gradeContrast;
     float    gradeSaturation;
+    int32_t  bloomEnabled;
+    float    bloomIntensity;
+    float    _pad[2];
+};
+
+// Bloom pass push constants. dir is the blur direction in texels (0 for the
+// bright pass); threshold/knee used by the bright pass only.
+struct BloomPush {
+    float texelX, texelY;
+    float dirX, dirY;
+    float threshold;
+    float knee;
+    float brightPass;        // 1.0 = bright-pass (threshold), 0.0 = blur
+    float _pad;
 };
 
 struct GpuMesh {
@@ -233,6 +247,28 @@ struct VulkanRenderer::Impl {
     float gradeContrast = 1.0f;
     float gradeSaturation = 1.0f;
 
+    // Bloom (Phase 5b): bright-pass → separable Gaussian (H,V) at half res, added
+    // back in composite. Two half-res RGBA16F targets ping-pong. (Metal uses a
+    // 5-mip pyramid; a single blurred level is the simpler first cut.)
+    VkImage bloomImage[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory bloomMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView bloomView[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkFramebuffer bloomFramebuffer[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkExtent2D bloomExtent{0, 0};
+    VkRenderPass bloomRenderPass = VK_NULL_HANDLE;
+    VkSampler bloomSampler = VK_NULL_HANDLE;        // linear clamp
+    VkDescriptorSetLayout bloomSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool bloomPool = VK_NULL_HANDLE;
+    VkDescriptorSet bloomSetBright = VK_NULL_HANDLE;   // samples HDR
+    VkDescriptorSet bloomSetH = VK_NULL_HANDLE;        // samples bloomView[0]
+    VkDescriptorSet bloomSetV = VK_NULL_HANDLE;        // samples bloomView[1]
+    VkPipelineLayout bloomPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline bloomPipeline = VK_NULL_HANDLE;   // one shader; bright vs blur via push
+    bool  bloomEnabledFrame = true;
+    float bloomThreshold = 1.0f;
+    float bloomKnee = 0.5f;
+    float bloomIntensity = 0.3f;
+
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> commandBuffers{};
@@ -314,6 +350,11 @@ struct VulkanRenderer::Impl {
     bool createFramebuffers();           // composite framebuffers (per swapchain image)
     bool createCompositeResources();     // sampler, descriptor, pipeline
     void updateCompositeDescriptor();
+    bool createBloomResources();
+    void updateBloomDescriptors();
+    void recordBloom(VkCommandBuffer cmd);
+    bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
+                           VkImage& image, VkDeviceMemory& memory, VkImageView& view);
     bool createCommandPool();
     bool createCommandBuffers();
     bool createSyncObjects();
@@ -858,18 +899,302 @@ bool VulkanRenderer::Impl::createCommandPool() {
 }
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
-    VkDescriptorImageInfo img{};
-    img.sampler = compositeSampler;
-    img.imageView = hdrView;
-    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = compositeSet;
-    write.dstBinding = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.descriptorCount = 1;
-    write.pImageInfo = &img;
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    VkDescriptorImageInfo imgs[2]{};
+    imgs[0].sampler = compositeSampler;
+    imgs[0].imageView = hdrView;
+    imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgs[1].sampler = compositeSampler;
+    imgs[1].imageView = bloomView[0];   // final blurred bloom (V pass output)
+    imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = compositeSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imgs[i];
+    }
+    vkUpdateDescriptorSets(device, 2, writes.data(), 0, nullptr);
+}
+
+bool VulkanRenderer::Impl::createColorTarget(uint32_t w, uint32_t h, VkFormat fmt,
+                                             VkImageUsageFlags usage, VkImage& image,
+                                             VkDeviceMemory& memory, VkImageView& view) {
+    VkImageCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.extent = {w, h, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.format = fmt;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ci.usage = usage;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(device, &ci, nullptr, &image) != VK_SUCCESS) return false;
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, image, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &memory) != VK_SUCCESS) return false;
+    vkBindImageMemory(device, image, memory, 0);
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = fmt;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.layerCount = 1;
+    return vkCreateImageView(device, &vi, nullptr, &view) == VK_SUCCESS;
+}
+
+void VulkanRenderer::Impl::updateBloomDescriptors() {
+    VkDescriptorSet sets[3] = {bloomSetBright, bloomSetH, bloomSetV};
+    VkImageView views[3] = {hdrView, bloomView[0], bloomView[1]};
+    for (int i = 0; i < 3; ++i) {
+        VkDescriptorImageInfo img{};
+        img.sampler = bloomSampler;
+        img.imageView = views[i];
+        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = sets[i];
+        write.dstBinding = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+}
+
+bool VulkanRenderer::Impl::createBloomResources() {
+    bloomExtent = {std::max(1u, swapchainExtent.width / 2),
+                   std::max(1u, swapchainExtent.height / 2)};
+    for (int i = 0; i < 2; ++i)
+        if (!createColorTarget(bloomExtent.width, bloomExtent.height, kHdrFormat,
+                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               bloomImage[i], bloomMemory[i], bloomView[i]))
+            return false;
+
+    // Render pass shared by all three bloom passes (each overwrites its target).
+    if (bloomRenderPass == VK_NULL_HANDLE) {
+        VkAttachmentDescription color{};
+        color.format = kHdrFormat;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp.attachmentCount = 1;
+        rp.pAttachments = &color;
+        rp.subpassCount = 1;
+        rp.pSubpasses = &subpass;
+        rp.dependencyCount = static_cast<uint32_t>(deps.size());
+        rp.pDependencies = deps.data();
+        if (vkCreateRenderPass(device, &rp, nullptr, &bloomRenderPass) != VK_SUCCESS) return false;
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        VkFramebufferCreateInfo fb{};
+        fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fb.renderPass = bloomRenderPass;
+        fb.attachmentCount = 1;
+        fb.pAttachments = &bloomView[i];
+        fb.width = bloomExtent.width;
+        fb.height = bloomExtent.height;
+        fb.layers = 1;
+        if (vkCreateFramebuffer(device, &fb, nullptr, &bloomFramebuffer[i]) != VK_SUCCESS)
+            return false;
+    }
+
+    if (bloomSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo s{};
+        s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        s.magFilter = VK_FILTER_LINEAR;
+        s.minFilter = VK_FILTER_LINEAR;
+        s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device, &s, nullptr, &bloomSampler) != VK_SUCCESS) return false;
+    }
+
+    if (bloomSetLayout == VK_NULL_HANDLE) {
+        VkDescriptorSetLayoutBinding b{};
+        b.binding = 0;
+        b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo l{};
+        l.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l.bindingCount = 1;
+        l.pBindings = &b;
+        if (vkCreateDescriptorSetLayout(device, &l, nullptr, &bloomSetLayout) != VK_SUCCESS)
+            return false;
+
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+        VkDescriptorPoolCreateInfo p{};
+        p.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        p.poolSizeCount = 1;
+        p.pPoolSizes = &size;
+        p.maxSets = 3;
+        if (vkCreateDescriptorPool(device, &p, nullptr, &bloomPool) != VK_SUCCESS) return false;
+        std::array<VkDescriptorSetLayout, 3> layouts{bloomSetLayout, bloomSetLayout, bloomSetLayout};
+        VkDescriptorSet sets[3];
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = bloomPool;
+        a.descriptorSetCount = 3;
+        a.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(device, &a, sets) != VK_SUCCESS) return false;
+        bloomSetBright = sets[0];
+        bloomSetH = sets[1];
+        bloomSetV = sets[2];
+    }
+    updateBloomDescriptors();
+
+    if (bloomPipeline == VK_NULL_HANDLE) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(BloomPush)};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &bloomSetLayout;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &bloomPipelineLayout) != VK_SUCCESS)
+            return false;
+
+        VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+        VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/bloom.frag.spv");
+        if (!vert || !frag) return false;
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{};
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &ba;
+        std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+        dynamic.pDynamicStates = dyn.data();
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState = &vp;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &ms;
+        info.pDepthStencilState = &ds;
+        info.pColorBlendState = &blend;
+        info.pDynamicState = &dynamic;
+        info.layout = bloomPipelineLayout;
+        info.renderPass = bloomRenderPass;
+        info.subpass = 0;
+        VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                    &bloomPipeline);
+        vkDestroyShaderModule(device, vert, nullptr);
+        vkDestroyShaderModule(device, frag, nullptr);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] bloom pipeline creation failed");
+            return false;
+        }
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::recordBloom(VkCommandBuffer cmd) {
+    VkViewport vp{0, 0, float(bloomExtent.width), float(bloomExtent.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, bloomExtent};
+    float tx = 1.0f / float(bloomExtent.width);
+    float ty = 1.0f / float(bloomExtent.height);
+
+    auto pass = [&](VkFramebuffer fb, VkDescriptorSet src, BloomPush push) {
+        VkRenderPassBeginInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass = bloomRenderPass;
+        rp.framebuffer = fb;
+        rp.renderArea.extent = bloomExtent;
+        vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomPipelineLayout, 0, 1,
+                                &src, 0, nullptr);
+        vkCmdPushConstants(cmd, bloomPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(BloomPush), &push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+    };
+
+    // Bright-pass: HDR → bloomImage[0].
+    BloomPush bright{tx, ty, 0.0f, 0.0f, bloomThreshold, bloomKnee, 1.0f, 0.0f};
+    pass(bloomFramebuffer[0], bloomSetBright, bright);
+    // Blur H: bloomImage[0] → bloomImage[1].
+    BloomPush bh{tx, ty, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    pass(bloomFramebuffer[1], bloomSetH, bh);
+    // Blur V: bloomImage[1] → bloomImage[0] (final, sampled by composite).
+    BloomPush bv{tx, ty, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    pass(bloomFramebuffer[0], bloomSetV, bv);
 }
 
 bool VulkanRenderer::Impl::createCompositeResources() {
@@ -883,19 +1208,21 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};   // 0 = HDR scene, 1 = bloom
+    for (uint32_t i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = 1;
-    layout.pBindings = &binding;
+    layout.bindingCount = static_cast<uint32_t>(bindings.size());
+    layout.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
@@ -1876,6 +2203,16 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
 // ---- swapchain lifecycle ----
 
 void VulkanRenderer::Impl::cleanupSwapchain() {
+    for (int i = 0; i < 2; ++i) {
+        if (bloomFramebuffer[i]) vkDestroyFramebuffer(device, bloomFramebuffer[i], nullptr);
+        if (bloomView[i]) vkDestroyImageView(device, bloomView[i], nullptr);
+        if (bloomImage[i]) vkDestroyImage(device, bloomImage[i], nullptr);
+        if (bloomMemory[i]) vkFreeMemory(device, bloomMemory[i], nullptr);
+        bloomFramebuffer[i] = VK_NULL_HANDLE;
+        bloomView[i] = VK_NULL_HANDLE;
+        bloomImage[i] = VK_NULL_HANDLE;
+        bloomMemory[i] = VK_NULL_HANDLE;
+    }
     if (sceneFramebuffer) vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
     sceneFramebuffer = VK_NULL_HANDLE;
     if (hdrView) vkDestroyImageView(device, hdrView, nullptr);
@@ -1907,9 +2244,10 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
     cleanupSwapchain();
 
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
-        !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers())
+        !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers() ||
+        !createBloomResources())
         return false;
-    updateCompositeDescriptor();   // HDR view was recreated
+    updateCompositeDescriptor();   // HDR + bloom views were recreated
 
     renderFinished.resize(swapchainImages.size());
     imagesInFlight.assign(swapchainImages.size(), VK_NULL_HANDLE);
@@ -2013,8 +2351,12 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     vkCmdEndRenderPass(cmd);
 
+    // Bloom: bright-pass + separable blur of the HDR target (always run so the
+    // bloom view stays in a sampleable layout; composite gates the add).
+    recordBloom(cmd);
+
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
-    // HDR scene target. (Phase 5b adds SSAO/SSR/bloom/lens/DOF here.)
+    // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
     VkRenderPassBeginInfo crp{};
     crp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     crp.renderPass = compositeRenderPass;
@@ -2028,11 +2370,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0, 1,
                             &compositeSet, 0, nullptr);
-    CompositePush cpush;
+    CompositePush cpush{};
     cpush.exposure = sceneExposure;
     cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
     cpush.gradeContrast = gradeContrast;
     cpush.gradeSaturation = gradeSaturation;
+    cpush.bloomEnabled = bloomEnabledFrame ? 1 : 0;
+    cpush.bloomIntensity = bloomIntensity;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2135,6 +2479,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createDescriptorPool() &&
               impl->createDescriptorSets() &&
               impl->createMaterialResources() &&
+              impl->createBloomResources() &&
               impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
@@ -2144,8 +2489,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5a: + HDR target & tonemap composite)",
-             width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom)", width, height);
     return true;
 }
 
@@ -2220,6 +2564,22 @@ void VulkanRenderer::shutdown() {
     }
 
     impl->cleanupSwapchain();
+
+    // Bloom resources (size-independent; the targets/framebuffers go via cleanupSwapchain).
+    if (impl->bloomPipeline) vkDestroyPipeline(impl->device, impl->bloomPipeline, nullptr);
+    if (impl->bloomPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->bloomPipelineLayout, nullptr);
+    if (impl->bloomPool) vkDestroyDescriptorPool(impl->device, impl->bloomPool, nullptr);
+    if (impl->bloomSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->bloomSetLayout, nullptr);
+    if (impl->bloomSampler) vkDestroySampler(impl->device, impl->bloomSampler, nullptr);
+    if (impl->bloomRenderPass) vkDestroyRenderPass(impl->device, impl->bloomRenderPass, nullptr);
+    impl->bloomPipeline = VK_NULL_HANDLE;
+    impl->bloomPipelineLayout = VK_NULL_HANDLE;
+    impl->bloomPool = VK_NULL_HANDLE;
+    impl->bloomSetLayout = VK_NULL_HANDLE;
+    impl->bloomSampler = VK_NULL_HANDLE;
+    impl->bloomRenderPass = VK_NULL_HANDLE;
 
     // Composite (tonemap) resources.
     if (impl->compositePipeline) vkDestroyPipeline(impl->device, impl->compositePipeline, nullptr);
@@ -2549,10 +2909,14 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
 }
 
 void VulkanRenderer::endFrame() {
-    // Mirror the live tonemap/grade knobs (Renderer base members) for composite.
+    // Mirror the live tonemap/grade/bloom knobs (Renderer base members).
     impl->tonemapOp = tonemapOperator;
     impl->gradeContrast = gradeParams.contrast;
     impl->gradeSaturation = gradeParams.saturation;
+    impl->bloomEnabledFrame = bloomEnabled;
+    impl->bloomThreshold = bloomParams.threshold;
+    impl->bloomKnee = bloomParams.knee;
+    impl->bloomIntensity = bloomParams.intensity;
     impl->drawFrame();
 }
 
