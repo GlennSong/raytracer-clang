@@ -3705,6 +3705,16 @@ void VulkanRenderer::beginFrame() {
     // ImGui::NewFrame() must come after both (mirrors the Metal backend).
     if (impl->imguiInitialized) {
         ImGui_ImplVulkan_NewFrame();
+        // Window::pollEvents normally runs ImGui_ImplGlfw_NewFrame first (it sets
+        // io.DisplaySize from the window size). But beginFrame also fires via the
+        // window draw callback during show/resize — before pollEvents has run this
+        // frame — leaving DisplaySize at ImGui's (-1,-1) default, which asserts in
+        // NewFrame(). Fall back to the swapchain extent when it's unset; a normal
+        // frame's GLFW new-frame then restores the proper logical size + DPI scale.
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.DisplaySize.x < 0.0f || io.DisplaySize.y < 0.0f)
+            io.DisplaySize = ImVec2(static_cast<float>(impl->swapchainExtent.width),
+                                    static_cast<float>(impl->swapchainExtent.height));
         ImGui::NewFrame();
     }
 #endif
@@ -3952,13 +3962,20 @@ void VulkanRenderer::initDebugUi(void* windowHandle) {
     ImGui::CreateContext();
 
     // A generously-sized descriptor pool for ImGui's font/texture descriptors.
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
+    // ImGui 1.92's imgui_impl_vulkan splits the combined image+sampler into
+    // separate VK_DESCRIPTOR_TYPE_SAMPLER + VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+    // descriptors, so the pool must offer all three types it may allocate.
+    VkDescriptorPoolSize sizes[]{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 64},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64},
+    };
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = 64;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &size;
+    poolInfo.poolSizeCount = 3;
+    poolInfo.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(impl->device, &poolInfo, nullptr, &impl->imguiPool) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] ImGui descriptor pool creation failed");
         return;

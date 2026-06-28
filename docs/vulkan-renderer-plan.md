@@ -310,6 +310,16 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   `imgui_impl_vulkan` allocates a `VK_DESCRIPTOR_TYPE_SAMPLER` descriptor, but
   `initDebugUi`'s pool only declares `COMBINED_IMAGE_SAMPLER`; add a `SAMPLER`
   pool size. Default build (ImGui OFF) verified clean (no asserts/validation).
+  ***Fixed (verified on device 2026-06-28):*** `-DRT_ENABLE_IMGUI=ON` now runs
+  fully clean — 0 asserts, 0 pool warnings, 0 validation errors. (1) Root cause
+  of the DisplaySize assert was a frame-loop ordering gap: `ImGui::NewFrame` (in
+  the Vulkan `beginFrame`) can fire via the window draw callback during
+  show/resize *before* `pollEvents`/`ImGui_ImplGlfw_NewFrame` sets `DisplaySize`,
+  leaving it at ImGui's `(-1,-1)` default — `beginFrame` now falls back to the
+  swapchain extent when `DisplaySize` is unset (a normal frame's GLFW new-frame
+  still restores the proper logical size + DPI scale). (2) ImGui 1.92 splits the
+  combined sampler into separate `SAMPLER` + `SAMPLED_IMAGE` descriptors, so the
+  pool now declares all three types. Overlay toggles with the tilde/grave key.
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
   (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code
