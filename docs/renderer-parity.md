@@ -45,20 +45,20 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | PBR (albedo/metallic/roughness/emission) | ✅ | ✅ | Cook-Torrance GGX; verified rendering `arena.json`. |
 | Texture maps: albedo / MR / AO / emissive | ✅ | ✅ | glTF MR convention. |
-| Normal mapping (TBN) | ✅ | 🟡 | Vulkan `mesh.vert` passes world tangent; `mesh.frag` builds the TBN and perturbs N on texFlags bit 2 (ported from `lighting.metal`). Unverified on device. |
+| Normal mapping (TBN) | ✅ | ✅ | Vulkan `mesh.vert` passes world tangent; `mesh.frag` builds the TBN and perturbs N on texFlags bit 2 (ported from `lighting.metal`). |
 | Per-vertex tint | ✅ | ✅ | |
 | Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from `common.metal`. |
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
-| Fog | ✅ | 🟡 | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. Unverified on device. |
+| Fog | ✅ | ✅ | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. |
 | Transparency / alpha blending | ✅ | 🟡 | Material `opacity < 1` routes to a blended pipeline (src-alpha/one-minus, no depth write, normal G-buffer masked), drawn back-to-front after opaque. Unverified on device. |
-| Alpha-tested foliage + depth prepass | ✅ | 🟡 | `mesh.frag` discards under the albedo alpha mask (FLAG_ALPHA_TEST) — the visual cutout. The depth-prepass overdraw optimization (perf, not visual) is still a follow-up. Unverified on device. |
+| Alpha-tested foliage + depth prepass | ✅ | ✅ | `mesh.frag` discards under the albedo alpha mask (FLAG_ALPHA_TEST) — the visual cutout. The depth-prepass overdraw optimization (perf, not visual) is still a follow-up. |
 
 ### Shadows
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Cascaded shadow maps + PCF | ✅ | ✅ | Device-verified (Phase 3). |
 | Shadow strength | ✅ | ✅ | |
-| Shadow artistic tint / ambientStrength | ✅ | 🟡 | Occluded direct + ambient lerp toward `shadowTint` (globals); `ambientStrength` darkens IBL separately. Ported from `lighting.metal`. Unverified on device. |
+| Shadow artistic tint / ambientStrength | ✅ | 🟡 | Occluded direct + ambient lerp toward `shadowTint` (globals); `ambientStrength` darkens IBL separately. Ported from `lighting.metal`. |
 
 ### Environment & IBL
 | Feature | Metal | Vulkan | Notes |
@@ -83,15 +83,15 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Instanced rendering (correctness) | ✅ | ⚠️ | Vulkan renders via the CPU `drawMesh` fallback — visually correct but no GPU batching (perf, not a visual gap). |
-| Vegetation wind sway | ✅ | 🟡 | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. Unverified on device. |
+| Vegetation wind sway | ✅ | ✅ | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. |
 | CDLOD terrain morph | ✅ | 🟡 | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Unverified on device. |
-| Mipmaps | ✅ | 🟡 | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). Unverified on device. |
+| Mipmaps | ✅ | ✅ | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). |
 
 ### Debug & tooling
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Debug views (AO/SSR/depth/normals/shadow/albedo/facing/cascades) | ✅ | 🟡 | Full set implemented; albedo/depth fixes recent, unverified. |
-| Wireframe (modes 1 & 2) | ✅ | 🟡 | LINE-mode pipeline; written blind, unverified. |
+| Wireframe (modes 1 & 2) | ✅ | ✅ | LINE-mode pipeline; device-verified. |
 | Dear ImGui overlay | ✅ | ✅ | Vulkan backend (1.92 API) device-verified. |
 | Editor viewport (hosted window) | ✅ | ✅ | Vulkan surface from the Qt viewport; device-verified on Windows. |
 | Gamepad | ✅ | ✅ | Standalone viewer uses GLFW's joystick path off-Apple; the hosted editor's GCController poll is macOS-only. |
@@ -106,11 +106,17 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   (`independentBlend` fix confirmed needed). ImGui-on-Vulkan overlay works
   (1.92 `PipelineInfoMain` API). Editor viewport renders through the Vulkan
   backend via the Qt surface.
-- **Pending device check (Vulkan):** HDR equirect IBL (4b); debug views
-  (albedo/depth fixes); wireframe; depth of field; SSAO box-blur + IGN rotation;
-  SSR binary-search refinement; normal mapping (TBN); aerial-perspective fog;
-  mipmaps; transparency / alpha blending; **shadow tint; vegetation wind;
-  terrain morph**.
+- **2026-06-28 (Windows / RTX 3060, 2nd pass):** confirmed working — mipmaps
+  (smooth distant textures), normal mapping (surface detail), fog, vegetation
+  wind + alpha-cut foliage, wireframe, SSAO (blur). Diagnosed + fixed: distant
+  terrain flicker was forward-Z precision → switched to **reverse-Z** (re-verify).
+  Clarified (not bugs): brick/checkerboard "speed lines" are procedural-surface
+  aliasing (shared with Metal); DOF needs the camera panel + a low f-stop
+  (f/8 gives sub-pixel CoC).
+- **Pending device check (Vulkan):** reverse-Z (terrain flicker re-verify);
+  CDLOD terrain morph; transparency; shadow tint; HDR equirect IBL (4b) + BRDF
+  LUT; debug views (albedo/depth); depth of field (with a low f-stop); SSR
+  binary-search refinement.
 
 ## Known non-goals (both backends)
 Per ADR-0057: unifying the viewer with the offline path tracer, compute shaders,
