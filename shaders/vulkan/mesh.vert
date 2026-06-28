@@ -36,6 +36,8 @@ layout(set = 0, binding = 0) uniform Globals {
     Light lights[32];
     vec4  fog;             // rgb fog color, w density (matches GlobalsUBO)
     vec4  shadowTint;      // rgb artistic tint, w ambientStrength
+    vec4  wind1;           // xyz wind dir, w wind time
+    vec4  wind2;           // x frequency, y height, z amplitude
 } g;
 
 layout(push_constant) uniform Push {
@@ -53,6 +55,19 @@ layout(location = 4) out vec3 outWorldTangent;
 
 void main() {
     vec4 world = pc.model * vec4(inPosition, 1.0);
+
+    // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
+    // height above the model's base (planted root, moving tips) and phase-offset
+    // by world XZ so a field doesn't sway in unison. Ports lighting.metal.
+    if ((pc.surfaceFlags.y & 4u) != 0u) {
+        float baseY = pc.model[3].y;
+        float weight = clamp((world.y - baseY) / max(g.wind2.y, 0.001), 0.0, 1.0);
+        weight *= weight;
+        float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
+        float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
+        world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
+    }
+
     outWorldPos = world.xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
     mat3 normalMatrix = mat3(transpose(inverse(pc.model)));

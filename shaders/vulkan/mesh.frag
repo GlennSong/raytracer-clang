@@ -36,6 +36,8 @@ layout(set = 0, binding = 0) uniform Globals {
     Light lights[32];
     vec4  fog;                // rgb fog color, w density (0 = off)
     vec4  shadowTint;         // rgb artistic shadow tint, w ambientStrength
+    vec4  wind1;              // xyz wind dir, w time (used by mesh.vert)
+    vec4  wind2;              // x frequency, y height, z amplitude
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;

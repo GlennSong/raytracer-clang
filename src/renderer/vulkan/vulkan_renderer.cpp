@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -101,6 +102,8 @@ struct GlobalsUBO {
     // shaders that don't read these can omit them).
     float    fog[4];                 // aerial-perspective fog (ADR-0016); w 0 = off
     float    shadowTint[4];          // rgb artistic shadow tint, w ambientStrength
+    float    wind1[4];               // xyz wind direction, w wind time (seconds)
+    float    wind2[4];               // x frequency, y height, z amplitude (FLAG_WIND)
 };
 
 // Per-draw push constants for the forward pass (112 <= 128 B).
@@ -419,6 +422,7 @@ struct VulkanRenderer::Impl {
     int   debugViewFrame = 0;   // mirrored from Renderer::debugView
     int   wireframeFrame = 0;   // mirrored from Renderer::wireframe (0 off,1 only,2 overlay)
     float wireColor[3] = {0.1f, 1.0f, 0.5f};
+    std::chrono::steady_clock::time_point windStart = std::chrono::steady_clock::now();
 
     // HDR environment (Phase 4b): an equirectangular RGBA16F map (with mips for
     // roughness-LOD specular) sampled for the skybox + IBL when bound. Bound at
@@ -4474,6 +4478,16 @@ void VulkanRenderer::endFrame() {
     impl->wireColor[2] = static_cast<float>(wireframeColor.z);
     // DOF runs only with a real aperture (pinhole = perfectly sharp → no pass).
     impl->dofEnabledFrame = dofEnabled && impl->dofAperture > 0.0f;
+    // Wind sway (FLAG_WIND vegetation) — same constants as the Metal backend; the
+    // vertex shader applies it per-instance from the model matrix base.
+    float windTime = std::chrono::duration<float>(
+                         std::chrono::steady_clock::now() - impl->windStart).count();
+    impl->cpuGlobals.wind1[0] = 0.85f;  impl->cpuGlobals.wind1[1] = 0.0f;
+    impl->cpuGlobals.wind1[2] = 0.30f;  impl->cpuGlobals.wind1[3] = windTime;
+    impl->cpuGlobals.wind2[0] = 1.6f;   // frequency
+    impl->cpuGlobals.wind2[1] = 2.5f;   // height
+    impl->cpuGlobals.wind2[2] = 0.12f;  // amplitude
+    impl->cpuGlobals.wind2[3] = 0.0f;
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.
