@@ -342,6 +342,44 @@ if(RT_ENABLE_PHYSICS)
 endif()
 
 # ============================================================
+# Vulkan SPIR-V shaders (ADR-0057). Compile GLSL -> SPIR-V offline with glslc
+# so the runtime stays dependency-free (no libshaderc). Shared by the viewer
+# and the editor app, so build the target once (guard on NOT TARGET) and export
+# VK_SHADER_OUT_DIR to the caller's scope. Requires find_package(Vulkan) first.
+# ============================================================
+function(rt_build_vulkan_shaders)
+    set(VK_SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders/vulkan)
+    set(VK_SHADER_OUT_DIR ${VK_SHADER_OUT_DIR} PARENT_SCOPE)
+    if(TARGET vulkan_shaders)
+        return()
+    endif()
+    if(NOT Vulkan_GLSLC_EXECUTABLE)
+        message(FATAL_ERROR
+            "glslc not found — the Vulkan SDK's GLSL compiler is required to "
+            "build the Vulkan shaders. Install the Vulkan SDK or configure "
+            "without the Vulkan targets.")
+    endif()
+    set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
+    file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
+    set(VK_SHADERS mesh.vert mesh.frag mesh_shadow.vert sky.vert sky.frag
+                   composite.vert composite.frag bloom.frag ssao.frag
+                   ssao_blur.frag ssr.frag)
+    set(VK_SPV_FILES "")
+    foreach(shader ${VK_SHADERS})
+        add_custom_command(
+            OUTPUT ${VK_SHADER_OUT_DIR}/${shader}.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE}
+                    ${VK_SHADER_SRC_DIR}/${shader}
+                    -o ${VK_SHADER_OUT_DIR}/${shader}.spv
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader}
+            COMMENT "glslc ${shader} -> ${shader}.spv"
+            VERBATIM)
+        list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
+    endforeach()
+    add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
+endfunction()
+
+# ============================================================
 # Interactive viewer (GPU + windowing) — only when GLFW is available, so the
 # rest of the project still configures on headless/CI machines.
 # ============================================================
@@ -391,32 +429,8 @@ else()
         list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
-        # Compile GLSL -> SPIR-V offline (ADR-0057): keeps the runtime dependency
-        # -free (no libshaderc). glslc ships with the Vulkan SDK.
-        if(NOT Vulkan_GLSLC_EXECUTABLE)
-            message(FATAL_ERROR
-                "glslc not found — the Vulkan SDK's GLSL compiler is required to "
-                "build the viewer's shaders. Install the Vulkan SDK or configure "
-                "without the viewer.")
-        endif()
-        set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
-        set(VK_SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders/vulkan)
-        file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
-        set(VK_SHADERS mesh.vert mesh.frag mesh_shadow.vert sky.vert sky.frag
-                       composite.vert composite.frag bloom.frag ssao.frag ssao_blur.frag ssr.frag)
-        set(VK_SPV_FILES "")
-        foreach(shader ${VK_SHADERS})
-            add_custom_command(
-                OUTPUT ${VK_SHADER_OUT_DIR}/${shader}.spv
-                COMMAND ${Vulkan_GLSLC_EXECUTABLE}
-                        ${VK_SHADER_SRC_DIR}/${shader}
-                        -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-                DEPENDS ${VK_SHADER_SRC_DIR}/${shader}
-                COMMENT "glslc ${shader} -> ${shader}.spv"
-                VERBATIM)
-            list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
-        endforeach()
-        add_custom_target(viewer_vulkan_shaders DEPENDS ${VK_SPV_FILES})
+        # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
+        rt_build_vulkan_shaders()
 
         # RT_HAVE_VULKAN also gates the Vulkan surface code in window.cpp, so the
         # windowing seam (Window::createVulkanSurface) compiles only where the SDK
@@ -441,8 +455,8 @@ target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party
 target_link_libraries(viewer PRIVATE engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 # Build the SPIR-V shaders before the viewer that loads them (Vulkan builds only).
-if(TARGET viewer_vulkan_shaders)
-    add_dependencies(viewer viewer_vulkan_shaders)
+if(TARGET vulkan_shaders)
+    add_dependencies(viewer vulkan_shaders)
 endif()
 
 if(RT_ENABLE_PHYSICS)
@@ -531,7 +545,34 @@ if(Qt6_FOUND)
             target_sources(editor_app PRIVATE ${IMGUI_DIR}/backends/imgui_impl_metal.mm)
         endif()
     else()
-        target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
+        # Non-Apple: render the viewport with the Vulkan backend when the SDK is
+        # present (ADR-0057), wiring the Qt viewport's native handle into a
+        # VkSurfaceKHR via vulkan_viewport.cpp. Without Vulkan, fall back to the
+        # NullRenderer so the shell (panels, document loop) still builds and runs.
+        find_package(Vulkan QUIET)
+        if(Vulkan_FOUND)
+            rt_build_vulkan_shaders()   # shared target; sets VK_SHADER_OUT_DIR
+            target_sources(editor_app PRIVATE
+                src/renderer/vulkan/vulkan_renderer.cpp
+                src/editor_app/vulkan_viewport.cpp
+            )
+            target_link_libraries(editor_app PRIVATE Vulkan::Vulkan)
+            target_compile_definitions(editor_app PRIVATE
+                RT_HAVE_VULKAN=1
+                "RT_VULKAN_SHADER_DIR=\"${VK_SHADER_OUT_DIR}\"")
+            add_dependencies(editor_app vulkan_shaders)
+            if(RT_ENABLE_IMGUI)
+                # The Vulkan backend submits ImGui draw data (no GLFW backend).
+                target_sources(editor_app PRIVATE
+                    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
+                target_include_directories(editor_app SYSTEM PRIVATE
+                    ${IMGUI_DIR}/backends)
+            endif()
+            message(STATUS "Vulkan found — editor viewport uses the Vulkan backend")
+        else()
+            target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
+            message(STATUS "Vulkan not found — editor uses NullRenderer (no GPU output)")
+        endif()
     endif()
     # Headless widget-interaction tests for the generated inspector (the
     # path that once crashed via a dangling visitor capture). Offscreen Qt.

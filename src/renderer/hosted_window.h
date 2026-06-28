@@ -40,10 +40,35 @@ public:
     void newDebugUiFrame() override;
     void shutdownDebugUi() override {}
 
+    // Vulkan surface seam (ADR-0057). The host owns the windowing toolkit, so
+    // it supplies surface creation and the required instance extensions;
+    // HostedWindow itself stays platform/toolkit-free (and headless-testable).
+    // Unset → these behave like the base Window (no Vulkan support), so the
+    // NullRenderer/Metal paths and the headless tests are unaffected.
+    bool createVulkanSurface(void* instance, uint64_t* outSurface) const override {
+        return vulkanSurfaceFn ? vulkanSurfaceFn(instance, outSurface) : false;
+    }
+    std::vector<std::string> requiredVulkanInstanceExtensions() const override {
+        return vulkanExtensionsFn ? vulkanExtensionsFn()
+                                  : std::vector<std::string>{};
+    }
+
     // --- Host integration --------------------------------------------------
     // The native view the renderer binds to (e.g. an NSView*/CAMetalLayer*
     // from the Qt viewport widget). Set before Application::initialize.
     void setNativeHandle(void* handle) { nativeHandle = handle; }
+
+    // Install the host's Vulkan surface provider (see createVulkanSurface).
+    // Both callbacks come as a pair; the host knows its toolkit's native
+    // handles and how to turn them into a VkSurfaceKHR for the given instance.
+    using VulkanSurfaceFn =
+        std::function<bool(void* instance, uint64_t* outSurface)>;
+    using VulkanExtensionsFn = std::function<std::vector<std::string>()>;
+    void setVulkanSurfaceProvider(VulkanExtensionsFn extensions,
+                                  VulkanSurfaceFn surface) {
+        vulkanExtensionsFn = std::move(extensions);
+        vulkanSurfaceFn = std::move(surface);
+    }
 
     // Geometry, in the host's coordinate spaces (logical points vs pixels).
     void setSizes(int winW, int winH, int fbW, int fbH);
@@ -90,6 +115,8 @@ private:
     bool relativeMode = false;
     double pendingDeltaX = 0.0, pendingDeltaY = 0.0;
     std::function<void(CursorMode)> cursorModeCallback;
+    VulkanExtensionsFn vulkanExtensionsFn;
+    VulkanSurfaceFn vulkanSurfaceFn;
 
     double deltaTime = 0.0;
     bool firstPoll = true;

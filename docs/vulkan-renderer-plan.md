@@ -191,6 +191,25 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
 - **Verify:** colors match Metal; `tonemapOperator` (ACES↔AgX) + grade sliders
   drive it; sun no longer clips.
 
+### Phase 6 — Editor viewport (code landed; verify on device)
+The Qt editor now renders its viewport through the Vulkan backend on PC/Linux
+(it was NullRenderer off-Apple). Design: `HostedWindow` implements the Vulkan
+surface seam (`createVulkanSurface` / `requiredVulkanInstanceExtensions`) by
+delegating to a host-installed provider (`setVulkanSurfaceProvider`) — the
+hosted window stays toolkit-free and headless-testable (new
+`test_hosted_window` case). The Qt shell (`editor_main.cpp`) resolves the
+platform-native handles (HWND on Windows; X11 `Display*` + window XID via Qt's
+`QX11Application` native interface) and hands them to
+`src/editor_app/vulkan_viewport.cpp`, which owns the Vulkan + Win32/Xlib surface
+headers — deliberately a separate TU because Xlib's macros (`None`, `Status`,
+`Bool`) collide with Qt. Win32 + Xlib are implemented; Wayland falls back with a
+clear log (run under `QT_QPA_PLATFORM=xcb`, i.e. Xwayland). CMake: a shared
+`rt_build_vulkan_shaders()` function builds one `vulkan_shaders` target for both
+the viewer and the editor; `editor_app` links the Vulkan backend +
+`vulkan_viewport.cpp` on non-Apple when `find_package(Vulkan)` succeeds, else
+`null_renderer.cpp`. **Verify on device:** the viewport renders at parity with
+the standalone viewer; resize tracks the Qt widget; play/edit input feel matches.
+
 ### Phase 6 — Parity sweep & polish
 - Side-by-side a set of representative levels (forest, city_arena, an HDR-lit
   scene) Metal vs Vulkan; chase remaining differences.

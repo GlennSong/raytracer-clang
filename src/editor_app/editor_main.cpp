@@ -20,6 +20,18 @@
 #include "../log.h"
 #include "property_inspector.h"
 
+// Vulkan viewport surface seam (ADR-0057). Present only on non-Apple targets
+// where the Vulkan backend is compiled in (RT_HAVE_VULKAN). Qt extracts the
+// native handles here; vulkan_viewport.cpp owns the Vulkan/Xlib headers.
+#if defined(RT_HAVE_VULKAN)
+#include "vulkan_viewport.h"
+#include <QGuiApplication>
+#if !defined(_WIN32) && __has_include(<QtGui/qguiapplication_platform.h>)
+#include <QtGui/qguiapplication_platform.h>
+#define RT_EDITOR_VK_X11 1
+#endif
+#endif
+
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
@@ -618,6 +630,49 @@ int main(int argc, char** argv) {
                          static_cast<int>(viewport->width() * scale),
                          static_cast<int>(viewport->height() * scale));
     }
+
+    // Vulkan backend (PC/Linux): hand the renderer a surface for the Qt
+    // viewport. Resolve the toolkit-native handles from the Qt platform plugin
+    // and defer the actual VkSurfaceKHR creation to the platform helper. The
+    // callbacks fire during app.initialize() below, by which point the native
+    // window is realized (mainWindow.show() above).
+#if defined(RT_HAVE_VULKAN)
+    {
+        const QString plat = QGuiApplication::platformName();
+        hosted->setVulkanSurfaceProvider(
+            [plat]() -> std::vector<std::string> {
+                if (plat == "windows")
+                    return editor::vulkanInstanceExtensions(
+                        editor::VkPlatform::Win32);
+                if (plat == "xcb")
+                    return editor::vulkanInstanceExtensions(
+                        editor::VkPlatform::Xlib);
+                return {};
+            },
+            [plat, viewport](void* instance, uint64_t* outSurface) -> bool {
+                const unsigned long long winId =
+                    static_cast<unsigned long long>(viewport->winId());
+                if (plat == "windows")
+                    return editor::createVulkanSurface(
+                        instance, editor::VkPlatform::Win32, nullptr, winId,
+                        outSurface);
+#if defined(RT_EDITOR_VK_X11)
+                if (plat == "xcb") {
+                    void* display = nullptr;
+                    if (auto* x11 = qApp->nativeInterface<
+                                        QNativeInterface::QX11Application>())
+                        display = x11->display();
+                    return editor::createVulkanSurface(
+                        instance, editor::VkPlatform::Xlib, display, winId,
+                        outSurface);
+                }
+#endif
+                LOG_ERROR << "[editor] no Vulkan surface path for Qt platform "
+                          << plat.toStdString();
+                return false;
+            });
+    }
+#endif
 
     engine::Application app;
     if (!app.initialize({1280, 720, "Editor", "settings.json"},

@@ -33,6 +33,18 @@ forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
   (`window.cpp`, GLFW-sealed, gated by `RT_HAVE_VULKAN`); `Renderer::setWindow`
   (`renderer.h`) hands the window over before `initialize` (native handle is null
   on Linux); CMake selects this backend when `find_package(Vulkan)` succeeds.
+- **Editor viewport (hosted) surface:** the same backend renders the Qt editor's
+  viewport. `HostedWindow` (`../hosted_window.h`) implements the surface seam by
+  delegating to a host-installed provider (`setVulkanSurfaceProvider`), so the
+  hosted window stays toolkit-free and headless-testable. The Qt host
+  (`src/editor_app/editor_main.cpp`) resolves the platform-native handles from
+  the Qt plugin and calls `src/editor_app/vulkan_viewport.cpp`, which owns the
+  Vulkan/Win32/Xlib surface headers (kept out of any Qt TU — Xlib's macros
+  collide with Qt). Win32 + Xlib paths exist; Wayland falls back (run with
+  `QT_QPA_PLATFORM=xcb`). CMake builds `editor_app` with this backend on
+  non-Apple when Vulkan is found, else `null_renderer.cpp`. Shared SPIR-V build:
+  the `rt_build_vulkan_shaders()` CMake function (one `vulkan_shaders` target for
+  both the viewer and the editor).
 
 ### Conventions decided in code (Phase 1)
 - **Matrices:** engine `Mat4` is row-major double, `M*v`; `packMat4` transposes to
