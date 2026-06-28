@@ -1,4 +1,4 @@
--- Procedural vehicle bodies (ADR-0057) — authored in Lua over the procgen
+-- Procedural vehicle bodies (ADR-0058) — authored in Lua over the procgen
 -- builders, exactly like flora.lua and the gun. Defines a global `vehicle` table:
 --
 --   vehicle.sedan(seed, opts)      -> spec   four-door car

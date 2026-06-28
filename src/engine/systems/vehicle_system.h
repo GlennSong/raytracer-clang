@@ -8,7 +8,7 @@ namespace engine {
 class PhysicsSystem;
 class CameraSystem;
 
-// Drives the player-controllable physics cars (ADR-0057). For every entity with
+// Drives the player-controllable physics cars (ADR-0058). For every entity with
 // a Vehicle component it creates the Jolt vehicle (PhysicsWorld::addVehicle) from
 // the config + Transform, feeds the seated driver's input each fixed step, and
 // writes the chassis (and wheel) transforms back for rendering. It also owns the

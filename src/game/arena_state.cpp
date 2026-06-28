@@ -66,9 +66,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
 #endif
     addSystem<MotionSystem>();
-    addSystem<TrafficSystem>();   // cars + pedestrians over the road network (ADR-0057)
+    addSystem<TrafficSystem>();   // cars + pedestrians over the road network (ADR-0058)
 #ifdef RT_ENABLE_PHYSICS
-    addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0057)
+    addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0058)
 #endif
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
@@ -125,7 +125,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
         }
     }
 
-    // Demo car (ADR-0057): author the body in Lua (vehicles.lua), spawn it near
+    // Demo car (ADR-0058): author the body in Lua (vehicles.lua), spawn it near
     // the player; VehicleSystem creates the Jolt vehicle and the player can board
     // it with G. A level-JSON "vehicles" block is the productionization of this
     // hook. UNVERIFIED: needs the Lua + Jolt submodules to build/tune.

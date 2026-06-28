@@ -242,7 +242,7 @@ RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
 
 }  // namespace
 
-// Public accessor (ADR-0057): hand runtime consumers the same sampled+constrained
+// Public accessor (ADR-0058): hand runtime consumers the same sampled+constrained
 // graph the mesher uses, without exposing the file-local builder above.
 RoadGraph navRoadGraph(const RoadNet& net) { return constrainedNetGraph(net); }
 

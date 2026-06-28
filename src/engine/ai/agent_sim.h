@@ -11,7 +11,7 @@ namespace engine {
 enum class AgentKind : uint8_t { Car, Pedestrian };
 
 // What an agent is doing right now. The daily loop is
-// AtHome -> Commuting -> AtWork -> Returning -> AtHome (ADR-0057).
+// AtHome -> Commuting -> AtWork -> Returning -> AtHome (ADR-0058).
 enum class AgentActivity : uint8_t { AtHome, Commuting, AtWork, Returning };
 
 // One simulated inhabitant. Lives between a `home` node and a `work` node, with a

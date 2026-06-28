@@ -28,7 +28,7 @@ public:
     FlyCameraController& flyController() { return fly; }
     Entity activeSceneCamera() const { return activeCamera; }
 
-    // Chase-camera control (ADR-0057): while a target is set, the view follows it
+    // Chase-camera control (ADR-0058): while a target is set, the view follows it
     // (third-person), overriding the editor controllers and placed cameras. Used
     // by VehicleSystem on vehicle enter/exit.
     void setFollowTarget(Entity target) { followTarget = target; }

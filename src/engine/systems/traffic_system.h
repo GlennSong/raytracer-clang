@@ -8,7 +8,7 @@
 
 namespace engine {
 
-// The ECS bridge that brings the navigation foundation (ADR-0057) to life: it
+// The ECS bridge that brings the navigation foundation (ADR-0058) to life: it
 // builds a NavGraph from the level's RoadNet entities, runs a deterministic
 // AgentSim of cars + pedestrians over it, and bakes their poses into two
 // InstanceGroups (one per kind) so RenderSystem draws the whole crowd as two

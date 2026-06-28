@@ -153,3 +153,36 @@ TEST_CASE(hosted_window_publishes_injected_gamepads) {
     CHECK_APPROX(win.getGamepads()[0].axes[static_cast<size_t>(GamepadAxis::LeftX)],
                  0.5, 1e-6);
 }
+
+TEST_CASE(hosted_window_vulkan_surface_provider) {
+    // The Vulkan surface seam (ADR-0057): the host owns the toolkit, so it
+    // supplies surface creation + the required instance extensions. Unset, the
+    // hosted window reports no Vulkan support (matching the base Window), which
+    // keeps the NullRenderer/Metal paths and headless tests unaffected.
+    HostedWindow win;
+    win.initialize(800, 600, "test");
+
+    uint64_t surface = 0;
+    CHECK(win.requiredVulkanInstanceExtensions().empty());
+    CHECK(!win.createVulkanSurface(reinterpret_cast<void*>(0x1), &surface));
+
+    // Once the host installs a provider, both seam methods delegate to it.
+    void* seenInstance = nullptr;
+    win.setVulkanSurfaceProvider(
+        []() -> std::vector<std::string> {
+            return {"VK_KHR_surface", "VK_KHR_test_surface"};
+        },
+        [&seenInstance](void* instance, uint64_t* out) {
+            seenInstance = instance;
+            *out = 0xABCD;
+            return true;
+        });
+
+    auto exts = win.requiredVulkanInstanceExtensions();
+    CHECK(exts.size() == 2);
+    CHECK(exts[0] == "VK_KHR_surface");
+
+    CHECK(win.createVulkanSurface(reinterpret_cast<void*>(0x42), &surface));
+    CHECK(surface == 0xABCD);
+    CHECK(seenInstance == reinterpret_cast<void*>(0x42));
+}

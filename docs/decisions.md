@@ -3681,7 +3681,82 @@ can't leave a gap) rather than a constrained one.
 
 ---
 
-## ADR-0057 — A living-world agent layer: runtime NavGraph + A* + deterministic agent sim, then physics vehicles in Lua
+## ADR-0057 — Vulkan is the second render backend (Linux + Windows), behind the existing seam
+**Status:** Pending · **Date:** 2026-06-27
+
+**Context.** The engine has shipped one GPU backend (Metal, macOS) behind the
+`Renderer` RHI seam (ADR-0001), whose revisit trigger explicitly names this
+moment: "adding a second backend (Vulkan) — at which point validate the seam
+holds." We want the realtime viewer to run on PC and Linux at graphical parity
+with Metal. The `Renderer` interface is lean and backend-neutral (resource
+upload + draw dispatch; projection/view math is engine-side), so a second
+backend is an implementation of that interface, not an engine change. The
+feature set to match is ordinary forward shading + screen-space post (CSM
+shadows, SSAO, SSR, bloom, tonemap, lens effects, IBL from a baked cubemap,
+instancing, CDLOD terrain morph) — no compute, tessellation, or ray-tracing
+extensions today.
+
+**Decision.** Add a Vulkan backend (`src/renderer/vulkan/vulkan_renderer.cpp`)
+as a third `Renderer` implementation, selected by CMake on non-Apple platforms
+in place of `NullRenderer`. **One backend covers both targets** — Vulkan runs on
+Linux and Windows, the two platforms asked for. Specific choices:
+
+- **Surface creation stays behind the seam.** The backend must not reach through
+  GLFW (ADR-0001), but `glfwCreateWindowSurface` needs the `GLFWwindow*`. So
+  `Window` gains a pimpl'd `createVulkanSurface(VkInstance) -> VkSurfaceKHR`
+  (declared with forward-declared Vulkan handle types, no GLFW types leaked),
+  keeping GLFW sealed in `window.cpp`. `GLFW_NO_API` is already hinted
+  (`window.cpp:264`), so the window is created context-free and Vulkan-ready.
+- **Shaders compile offline to SPIR-V.** Metal compiles MSL from source strings
+  at runtime; Vulkan consumes SPIR-V. We port the six MSL files to GLSL and
+  compile them with `glslc`/`glslangValidator` at build time via a CMake custom
+  command, shipping `.spv` artifacts. This keeps the runtime **dependency-free**
+  (no `libshaderc` link), consistent with the no-external-deps rule, at the cost
+  of no shader hot-reload on this backend (acceptable; revisit if iteration hurts).
+- **Convention fixes are localized to the backend**, not the engine: Vulkan's
+  Y-flipped clip space and [0,1] depth range are absorbed in the projection
+  upload / viewport setup so engine math (`Mat4::perspective`, `lookAt`) is
+  unchanged and shared with Metal and the offline tracer.
+
+**Alternatives considered.**
+- **WebGPU (Dawn / wgpu-native).** One backend for macOS+Linux+Windows (could
+  eventually retire Metal) with nicer WGSL shaders — rejected for now: pulls in
+  a heavy native dependency (Dawn's GN/C++ build; wgpu is Rust), a hard clash
+  with the standard-library-only rule. Revisit only if dual-backend maintenance
+  becomes the dominant cost.
+- **bgfx / sokol_gfx.** Mature cross-platform abstractions — rejected: each
+  imposes its own shader pipeline and would mean rewriting the RHI *to their
+  API* instead of behind our own seam, plus the same dependency objection.
+- **OpenGL.** Least code, most direct MSL→GLSL port — rejected: deprecated on
+  macOS (we have Metal there), a dead-end API, and it forecloses the compute /
+  `VK_KHR_ray_tracing` path that a raytracing project will plausibly want.
+
+**Consequences / tech debt.**
+- Validates ADR-0001's seam with a real second backend (its revisit trigger).
+- Largest new cost is Vulkan boilerplate: the backend will be materially larger
+  than `metal_renderer.mm` (~2000 lines) — instance/device/swapchain, descriptor
+  sets/layouts, explicit render passes, pipelines, memory allocation, and manual
+  barriers/sync are all explicit. The render *logic* is the same forward+post
+  pipeline.
+- New build step (GLSL→SPIR-V) and a parallel shader tree to keep in lockstep
+  with `shaders/metal/*` until/unless the two are unified; a divergence risk to
+  watch. The shared `shaders/metal/shader_types.h` GPU-struct header can be
+  reused across both to keep CPU/GPU layouts in sync.
+- No GPU in CI: like Metal today, the backend is validated by hand on Linux/
+  Windows hardware with the Vulkan validation layers; unit tests stay CPU-only.
+- Built incrementally (clear screen → lit mesh → full forward → shadows → post
+  stack → instancing/terrain), each stage independently verifiable, so the work
+  lands in reviewable slices rather than one drop.
+
+**Revisit trigger.** Dual-backend (Metal + Vulkan) shader/maintenance cost
+outgrowing the no-deps benefit (reconsider WebGPU and retiring Metal); needing a
+mobile/console/web target; or adopting hardware ray tracing or a compute-driven
+pipeline (Vulkan compute / `VK_KHR_ray_tracing`), at which point the SPIR-V
+toolchain and descriptor model here are the foundation.
+
+---
+
+## ADR-0058 — A living-world agent layer: runtime NavGraph + A* + deterministic agent sim, then physics vehicles in Lua
 
 **Context.** The procgen pipeline builds beautiful but *empty* worlds — spline
 road graphs, welded junctions, scattered forests — with no motion in them. The
@@ -3814,8 +3889,8 @@ to be replaced; listed here so they stay visible.
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
-| Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0057) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
-| Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0057) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
+| Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
+| Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |

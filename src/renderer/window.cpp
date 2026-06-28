@@ -1,4 +1,10 @@
 #define GLFW_INCLUDE_NONE
+// Include Vulkan before glfw3.h (only where the build has it) so GLFW declares
+// its Vulkan interop — glfwCreateWindowSurface / glfwGetRequiredInstanceExtensions
+// — without us defining GLFW_INCLUDE_VULKAN (which would force vulkan.h on macOS).
+#if defined(RT_HAVE_VULKAN)
+#include <vulkan/vulkan.h>
+#endif
 #include "window.h"
 #include "gamepad_gc.h"
 #include "../log.h"
@@ -38,6 +44,8 @@ public:
     void getSize(int& width, int& height) const override;
     void getFramebufferSize(int& width, int& height) const override;
     void* nativeWindowHandle() const override;
+    bool createVulkanSurface(void* instance, uint64_t* outSurface) const override;
+    std::vector<std::string> requiredVulkanInstanceExtensions() const override;
     const InputState& getInput() const override;
     const std::vector<Event>& getEvents() const override;
     const GamepadSet& getGamepads() const override;
@@ -401,6 +409,40 @@ void* GlfwWindow::nativeWindowHandle() const {
     return glfwGetWin32Window(impl->window);
 #else
     return nullptr;
+#endif
+}
+
+bool GlfwWindow::createVulkanSurface(void* instance, uint64_t* outSurface) const {
+#if defined(RT_HAVE_VULKAN)
+    if (!instance || !outSurface) return false;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkResult result = glfwCreateWindowSurface(
+        reinterpret_cast<VkInstance>(instance), impl->window, nullptr, &surface);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("glfwCreateWindowSurface failed (VkResult %d)", static_cast<int>(result));
+        return false;
+    }
+    // VkSurfaceKHR is a non-dispatchable handle (always 64-bit); carry it across
+    // the seam as a uint64_t so window.h stays free of Vulkan headers.
+    *outSurface = reinterpret_cast<uint64_t>(surface);
+    return true;
+#else
+    (void)instance;
+    (void)outSurface;
+    return false;
+#endif
+}
+
+std::vector<std::string> GlfwWindow::requiredVulkanInstanceExtensions() const {
+#if defined(RT_HAVE_VULKAN)
+    uint32_t count = 0;
+    const char** names = glfwGetRequiredInstanceExtensions(&count);
+    std::vector<std::string> extensions;
+    extensions.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) extensions.emplace_back(names[i]);
+    return extensions;
+#else
+    return {};
 #endif
 }
 

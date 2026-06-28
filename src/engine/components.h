@@ -197,7 +197,7 @@ struct MeshCollider {
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
-// A physics-driven car (ADR-0057). VehicleSystem creates the Jolt vehicle from
+// A physics-driven car (ADR-0058). VehicleSystem creates the Jolt vehicle from
 // `config` + the entity's Transform, drives it from the seated driver's input,
 // and writes the chassis Transform back each fixed step. The entity also carries
 // a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
@@ -212,7 +212,7 @@ struct Vehicle {
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
 };
 
-// Marks a player entity currently seated in a vehicle (ADR-0057). PlayerSystem
+// Marks a player entity currently seated in a vehicle (ADR-0058). PlayerSystem
 // suppresses on-foot character movement while this is present; the enter/exit
 // logic in VehicleSystem adds it on entry and removes it on exit. `vehicle` is
 // the car entity being driven.

@@ -6,7 +6,7 @@
 
 namespace engine {
 
-// A runtime, queryable navigation graph derived from the road network (ADR-0057).
+// A runtime, queryable navigation graph derived from the road network (ADR-0058).
 // The procedural pipeline consumes the RoadGraph at mesh-build time and discards
 // it; agents need it to live. NavGraph is the persistent, *directed* lane graph
 // that vehicles and pedestrians route over and drive on. Pure data + pure

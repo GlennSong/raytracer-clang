@@ -90,7 +90,7 @@ public:
     GroundState characterGroundState(CharacterId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
-    // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0057) ------------------
+    // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0058) ------------------
     // A physics-driven car: a dynamic box chassis with raycast wheels, suspension,
     // steering, engine + brakes — Jolt's WheeledVehicleController, tuned arcade-
     // forgiving by the caller's VehicleConfig. All Jolt-free here; the constraint

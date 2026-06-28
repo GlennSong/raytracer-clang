@@ -29,6 +29,10 @@ bool Application::initialize(const Config& config,
     window->getFramebufferSize(framebufferWidth, framebufferHeight);
 
     rendererPtr = Renderer::create();
+    // Hand over the windowing seam before initialize() so a backend that builds
+    // its own surface from it (Vulkan; the native handle is null on Linux) can.
+    // The Metal/Null backends ignore this (ADR-0057).
+    rendererPtr->setWindow(window.get());
     if (!rendererPtr->initialize(window->nativeWindowHandle(),
                                  framebufferWidth, framebufferHeight)) {
         return false;

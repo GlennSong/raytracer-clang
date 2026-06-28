@@ -13,7 +13,7 @@ class ScriptVM;
 class AssetManager;
 struct RenderMesh;
 
-// The data a `vehicle.*` Lua recipe returns (ADR-0057): a body mesh + material
+// The data a `vehicle.*` Lua recipe returns (ADR-0058): a body mesh + material
 // intent and the physics handling config. The Lua authoring mirrors flora/gun;
 // this is the C++ side the host reads back.
 struct VehicleSpec {

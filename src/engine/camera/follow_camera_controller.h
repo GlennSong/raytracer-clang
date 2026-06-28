@@ -5,7 +5,7 @@
 
 namespace engine {
 
-// Third-person chase camera (ADR-0057): sits behind and above a tracked target
+// Third-person chase camera (ADR-0058): sits behind and above a tracked target
 // (a driven vehicle) and looks at it. The owning system feeds the target's pose
 // each frame via setTarget(); look input orbits the camera around the target
 // (right stick / mouse) and zoom dollies in/out. Pure and window-free like the
