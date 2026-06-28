@@ -228,10 +228,9 @@ loads — but with **one new validation error** (first item below). Open items:
   attachments identical unless `independentBlend` is on. Phase 5b added a second
   color attachment (world-normal, `mesh.frag` `outNormal` at location 1) with a
   different blend state than the HDR color attachment. Found on device 2026-06-28;
-  the cloud agent has no GPU to catch it. **Fix (pick one):** enable
-  `independentBlend` in the `VkPhysicalDeviceFeatures` at device creation, *or*
-  give both attachments identical (blend-disabled) state — the forward pass is
-  opaque, so blend-disabled on both is the simpler correct choice.
+  the cloud agent has no GPU to catch it. *Fixed:* the sky pipeline is what
+  differs (it masks the normal attachment), so `independentBlend` is now enabled
+  in `createLogicalDevice` (the mesh pipeline already used identical attachments).
 - **ImGui crashes on Vulkan with `-DRT_ENABLE_IMGUI=ON`** (verified 2026-06-28 on
   Phase 5a). Not just "doesn't draw" — it asserts `GImGui != 0 ... No current
   context` at the first `ImGui::NewFrame`, because `ImGui::CreateContext()` is
