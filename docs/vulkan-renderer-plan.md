@@ -300,6 +300,16 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   device — ImGui 1.92's `ImGui_ImplVulkan_InitInfo` couldn't be compiled in CI).*
   This is Vulkan-only: the Metal backend uses `imgui_impl_metal` whose API is
   unchanged across the bump. Default build (ImGui OFF) is unaffected.
+  **Device test 2026-06-28 (`3c69731`):** `-DRT_ENABLE_IMGUI=ON` now *compiles*
+  and no longer crashes — the context is created ("[vulkan] ImGui backend
+  initialized") — but the overlay is **still non-functional**, two issues left:
+  (1) `ImGui::NewFrame` asserts `Invalid DisplaySize value` (imgui.cpp:10943)
+  *every frame* — `io.DisplaySize` is never set on this path (the platform
+  new-frame that should feed the window size isn't running before
+  `ImGui::NewFrame`); (2) a descriptor-pool **WARN** — ImGui 1.92's
+  `imgui_impl_vulkan` allocates a `VK_DESCRIPTOR_TYPE_SAMPLER` descriptor, but
+  `initDebugUi`'s pool only declares `COMBINED_IMAGE_SAMPLER`; add a `SAMPLER`
+  pool size. Default build (ImGui OFF) verified clean (no asserts/validation).
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
   (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code
@@ -322,6 +332,10 @@ fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
   a `VkSurfaceKHR` from the Qt widget's `HWND`/`xcb` window through `HostedWindow`
   so the editor viewport renders on Vulkan, mirroring the Metal `CAMetalLayer`
   embedding. Distinct from the viewer's surface path (viewer owns a GLFW window).
+  *Addressed (`ac099af`): code landed.* **Untested on this Windows machine — Qt6
+  is not installed, so `editor_app` is skipped (`find_package(Qt6)` not found).**
+  Needs a Qt6 install (e.g. vcpkg `qtbase`) to build + device-verify the editor's
+  Vulkan viewport here; the viewer path is verified.
 
 ## File map (new)
 
