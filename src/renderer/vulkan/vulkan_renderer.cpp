@@ -133,6 +133,7 @@ struct CompositePush {
     float    lensAspect;      // width / height
     int32_t  debugView;      // 0 normal; 1 AO/2 SSR/4 normals composite-side,
                              // 3/5/6/7/8 raw HDR (mesh.frag writes them)
+    int32_t  dofEnabled;     // 1 → read the DOF-blurred scene instead of HDR
 };
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
@@ -166,6 +167,19 @@ struct SsrPush {
     float thickness;
     float maxRoughness;
     float blendStrength;
+};
+
+// Depth-of-field push constants (thin-lens CoC + gather params). Mirrors Metal's
+// DOFUniforms; texel is 1/resolution for the gather offsets.
+struct DofPush {
+    float focusDistance;   // world units
+    float focalLength;     // meters
+    float aperture;        // diameter, meters
+    float cocScale;        // sensor meters → pixels
+    float maxCocPixels;
+    float texelX;
+    float texelY;
+    float _pad;
 };
 
 struct GpuMesh {
@@ -372,6 +386,27 @@ struct VulkanRenderer::Impl {
     float ssrMaxRoughness = 0.6f;
     float ssrBlendStrength = 0.5f;
 
+    // Depth of field (Phase 5b): a single fullscreen scatter-as-gather on the HDR
+    // scene, before composite (composite reads dofView at binding 6 when enabled).
+    // Full-res; reads the globals UBO (set 0) for view-depth reconstruction and
+    // hdr+depth (set 1). Off by default (Renderer::dofEnabled + a real aperture).
+    VkImage dofImage = VK_NULL_HANDLE;
+    VkDeviceMemory dofMemory = VK_NULL_HANDLE;
+    VkImageView dofView = VK_NULL_HANDLE;          // full-res RGBA16F (blurred scene)
+    VkFramebuffer dofFramebuffer = VK_NULL_HANDLE;
+    VkExtent2D dofExtent{0, 0};
+    VkRenderPass dofRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dofSetLayout = VK_NULL_HANDLE;   // set 1: hdr, depth
+    VkDescriptorPool dofPool = VK_NULL_HANDLE;
+    VkDescriptorSet dofSet = VK_NULL_HANDLE;
+    VkPipelineLayout dofPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline dofPipeline = VK_NULL_HANDLE;
+    bool  dofEnabledFrame = false;
+    float dofFocusDistance = 10.0f;
+    float dofFocalLength = 0.05f;   // meters
+    float dofAperture = 0.0f;       // meters (0 = pinhole → pass skipped)
+    float dofSensorHeight = 24.0f;  // mm
+
     // Lens effects (Phase 5b): distortion + chromatic aberration + vignette,
     // folded into the composite. From the active camera's LensParams.
     bool  lensEnabledFrame = true;
@@ -483,6 +518,9 @@ struct VulkanRenderer::Impl {
     bool createSsrResources();
     void updateSsrDescriptors();
     void recordSsr(VkCommandBuffer cmd);
+    bool createDofResources();
+    void updateDofDescriptors();
+    void recordDof(VkCommandBuffer cmd);
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
                            VkImage& image, VkDeviceMemory& memory, VkImageView& view);
     void updateGlobalEnvDescriptor();   // write env equirect into set 0 binding 2
@@ -1056,17 +1094,19 @@ bool VulkanRenderer::Impl::createCommandPool() {
 }
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
-    VkDescriptorImageInfo imgs[6]{};
-    VkImageView views[6] = {hdrView, bloomView[0], aoBlurView, ssrView, depthView, normalView};
-    for (uint32_t i = 0; i < 6; ++i) {
+    VkDescriptorImageInfo imgs[7]{};
+    // 0 HDR, 1 bloom, 2 AO, 3 SSR, 4 depth, 5 normals, 6 DOF (when dofEnabled).
+    VkImageView views[7] = {hdrView, bloomView[0], aoBlurView, ssrView, depthView,
+                            normalView, dofView};
+    for (uint32_t i = 0; i < 7; ++i) {
         imgs[i].sampler = compositeSampler;
         imgs[i].imageView = views[i];
         // Binding 4 is the depth attachment, which lives in DEPTH_READ_ONLY.
         imgs[i].imageLayout = (i == 4) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
-    std::array<VkWriteDescriptorSet, 6> writes{};
-    for (uint32_t i = 0; i < 6; ++i) {
+    std::array<VkWriteDescriptorSet, 7> writes{};
+    for (uint32_t i = 0; i < 7; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -1074,7 +1114,7 @@ void VulkanRenderer::Impl::updateCompositeDescriptor() {
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &imgs[i];
     }
-    vkUpdateDescriptorSets(device, 6, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device, 7, writes.data(), 0, nullptr);
 }
 
 bool VulkanRenderer::Impl::createColorTarget(uint32_t w, uint32_t h, VkFormat fmt,
@@ -1940,6 +1980,261 @@ void VulkanRenderer::Impl::recordSsr(VkCommandBuffer cmd) {
     vkCmdEndRenderPass(cmd);
 }
 
+void VulkanRenderer::Impl::updateDofDescriptors() {
+    // The composite sampler (linear, clamp) is created lazily by SSR/composite;
+    // it exists by the time DOF resources are built (DOF is created after SSR).
+    VkDescriptorImageInfo imgs[2]{};
+    imgs[0].sampler = compositeSampler;
+    imgs[0].imageView = hdrView;
+    imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgs[1].sampler = gbufferSampler;
+    imgs[1].imageView = depthView;
+    imgs[1].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = dofSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imgs[i];
+    }
+    vkUpdateDescriptorSets(device, 2, writes.data(), 0, nullptr);
+}
+
+bool VulkanRenderer::Impl::createDofResources() {
+    dofExtent = swapchainExtent;   // full-res
+    if (!createColorTarget(dofExtent.width, dofExtent.height, kHdrFormat,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           dofImage, dofMemory, dofView))
+        return false;
+
+    // The composite statically samples dofView every frame, but the DOF pass
+    // (which leaves it SHADER_READ) only runs when enabled. Put it in a valid
+    // sampled layout up front so the DOF-off frames don't read an UNDEFINED image.
+    {
+        VkCommandBufferAllocateInfo cba{};
+        cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cba.commandPool = commandPool;
+        cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cba.commandBufferCount = 1;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(device, &cba, &cmd);
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &begin);
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = dofImage;
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmd;
+        vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+        vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+    }
+
+    if (dofRenderPass == VK_NULL_HANDLE) {
+        VkAttachmentDescription color{};
+        color.format = kHdrFormat;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp.attachmentCount = 1;
+        rp.pAttachments = &color;
+        rp.subpassCount = 1;
+        rp.pSubpasses = &subpass;
+        rp.dependencyCount = static_cast<uint32_t>(deps.size());
+        rp.pDependencies = deps.data();
+        if (vkCreateRenderPass(device, &rp, nullptr, &dofRenderPass) != VK_SUCCESS) return false;
+    }
+
+    VkFramebufferCreateInfo fb{};
+    fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb.renderPass = dofRenderPass;
+    fb.attachmentCount = 1;
+    fb.pAttachments = &dofView;
+    fb.width = dofExtent.width;
+    fb.height = dofExtent.height;
+    fb.layers = 1;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &dofFramebuffer) != VK_SUCCESS) return false;
+
+    if (dofSetLayout == VK_NULL_HANDLE) {
+        std::array<VkDescriptorSetLayoutBinding, 2> b{};   // hdr, depth
+        for (uint32_t i = 0; i < 2; ++i) {
+            b[i].binding = i;
+            b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo l{};
+        l.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l.bindingCount = static_cast<uint32_t>(b.size());
+        l.pBindings = b.data();
+        if (vkCreateDescriptorSetLayout(device, &l, nullptr, &dofSetLayout) != VK_SUCCESS)
+            return false;
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+        VkDescriptorPoolCreateInfo p{};
+        p.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        p.poolSizeCount = 1;
+        p.pPoolSizes = &size;
+        p.maxSets = 1;
+        if (vkCreateDescriptorPool(device, &p, nullptr, &dofPool) != VK_SUCCESS) return false;
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = dofPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &dofSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &dofSet) != VK_SUCCESS) return false;
+    }
+    updateDofDescriptors();
+
+    if (dofPipeline == VK_NULL_HANDLE) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DofPush)};
+        std::array<VkDescriptorSetLayout, 2> setLayouts{descriptorSetLayout, dofSetLayout};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+        pl.pSetLayouts = setLayouts.data();
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &dofPipelineLayout) != VK_SUCCESS)
+            return false;
+
+        VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+        VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/dof.frag.spv");
+        if (!vert || !frag) return false;
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{};
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &ba;
+        std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+        dynamic.pDynamicStates = dyn.data();
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState = &vp;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &ms;
+        info.pDepthStencilState = &ds;
+        info.pColorBlendState = &blend;
+        info.pDynamicState = &dynamic;
+        info.layout = dofPipelineLayout;
+        info.renderPass = dofRenderPass;
+        info.subpass = 0;
+        VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                    &dofPipeline);
+        vkDestroyShaderModule(device, vert, nullptr);
+        vkDestroyShaderModule(device, frag, nullptr);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] DOF pipeline creation failed");
+            return false;
+        }
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::recordDof(VkCommandBuffer cmd) {
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = dofRenderPass;
+    rp.framebuffer = dofFramebuffer;
+    rp.renderArea.extent = dofExtent;
+    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0, 0, float(dofExtent.width), float(dofExtent.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, dofExtent};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipeline);
+    std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], dofSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipelineLayout, 0,
+                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+    DofPush push{dofFocusDistance, dofFocalLength, dofAperture,
+                 dofExtent.height * 1000.0f / dofSensorHeight, 16.0f,
+                 1.0f / float(dofExtent.width), 1.0f / float(dofExtent.height), 0.0f};
+    vkCmdPushConstants(cmd, dofPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(DofPush), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+}
+
 bool VulkanRenderer::Impl::createCompositeResources() {
     VkSamplerCreateInfo samp{};
     samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1952,9 +2247,10 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     if (compositeSampler == VK_NULL_HANDLE &&
         vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
-    // 0 HDR, 1 bloom, 2 AO, 3 SSR, 4 depth, 5 normals (4,5 for debug views).
-    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
-    for (uint32_t i = 0; i < 6; ++i) {
+    // 0 HDR, 1 bloom, 2 AO, 3 SSR, 4 depth, 5 normals (4,5 for debug views),
+    // 6 DOF (the blurred scene, read instead of HDR when dofEnabled).
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    for (uint32_t i = 0; i < 7; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
@@ -1967,7 +2263,7 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
@@ -3030,6 +3326,14 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     ssrView = VK_NULL_HANDLE;
     ssrImage = VK_NULL_HANDLE;
     ssrMemory = VK_NULL_HANDLE;
+    if (dofFramebuffer) vkDestroyFramebuffer(device, dofFramebuffer, nullptr);
+    if (dofView) vkDestroyImageView(device, dofView, nullptr);
+    if (dofImage) vkDestroyImage(device, dofImage, nullptr);
+    if (dofMemory) vkFreeMemory(device, dofMemory, nullptr);
+    dofFramebuffer = VK_NULL_HANDLE;
+    dofView = VK_NULL_HANDLE;
+    dofImage = VK_NULL_HANDLE;
+    dofMemory = VK_NULL_HANDLE;
     if (aoFramebuffer) vkDestroyFramebuffer(device, aoFramebuffer, nullptr);
     if (aoView) vkDestroyImageView(device, aoView, nullptr);
     if (aoImage) vkDestroyImage(device, aoImage, nullptr);
@@ -3084,9 +3388,10 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
 
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
         !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers() ||
-        !createBloomResources() || !createSsaoResources() || !createSsrResources())
+        !createBloomResources() || !createSsaoResources() || !createSsrResources() ||
+        !createDofResources())
         return false;
-    updateCompositeDescriptor();   // HDR + bloom + AO + SSR views were recreated
+    updateCompositeDescriptor();   // HDR + bloom + AO + SSR + DOF views were recreated
 
     renderFinished.resize(swapchainImages.size());
     imagesInFlight.assign(swapchainImages.size(), VK_NULL_HANDLE);
@@ -3218,6 +3523,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordBloom(cmd);
     recordSsao(cmd);
     recordSsr(cmd);
+    // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
+    if (dofEnabledFrame) recordDof(cmd);
 
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
     // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
@@ -3251,6 +3558,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.lensVignette = lensVignette;
     cpush.lensAspect = lensAspect;
     cpush.debugView = debugViewFrame;
+    cpush.dofEnabled = dofEnabledFrame ? 1 : 0;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3363,6 +3671,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createBloomResources() &&
               impl->createSsaoResources() &&
               impl->createSsrResources() &&
+              impl->createDofResources() &&
               impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
@@ -3468,6 +3777,20 @@ void VulkanRenderer::shutdown() {
     impl->ssrPool = VK_NULL_HANDLE;
     impl->ssrSetLayout = VK_NULL_HANDLE;
     impl->ssrRenderPass = VK_NULL_HANDLE;
+
+    // DOF resources (size-independent; target/framebuffer go via cleanupSwapchain).
+    if (impl->dofPipeline) vkDestroyPipeline(impl->device, impl->dofPipeline, nullptr);
+    if (impl->dofPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->dofPipelineLayout, nullptr);
+    if (impl->dofPool) vkDestroyDescriptorPool(impl->device, impl->dofPool, nullptr);
+    if (impl->dofSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->dofSetLayout, nullptr);
+    if (impl->dofRenderPass) vkDestroyRenderPass(impl->device, impl->dofRenderPass, nullptr);
+    impl->dofPipeline = VK_NULL_HANDLE;
+    impl->dofPipelineLayout = VK_NULL_HANDLE;
+    impl->dofPool = VK_NULL_HANDLE;
+    impl->dofSetLayout = VK_NULL_HANDLE;
+    impl->dofRenderPass = VK_NULL_HANDLE;
 
     // SSAO resources (size-independent; targets/framebuffer go via cleanupSwapchain).
     if (impl->ssaoPipeline) vkDestroyPipeline(impl->device, impl->ssaoPipeline, nullptr);
@@ -3811,6 +4134,13 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->lensCA = static_cast<float>(camera.lens.chromaticAberration);
     impl->lensVignette = static_cast<float>(camera.lens.vignette);
     impl->lensAspect = aspect;
+
+    // Depth-of-field inputs (thin-lens). cocScale is derived per-frame in recordDof
+    // from the framebuffer height and sensorHeight.
+    impl->dofFocusDistance = static_cast<float>(camera.lens.focusDistance);
+    impl->dofFocalLength = static_cast<float>(camera.lens.focalLength / 1000.0);   // mm → m
+    impl->dofAperture = static_cast<float>(camera.lens.apertureDiameter());        // meters
+    impl->dofSensorHeight = static_cast<float>(camera.lens.sensorHeight);          // mm
 }
 
 void VulkanRenderer::setLights(const SceneLighting& lighting) {
@@ -4001,6 +4331,8 @@ void VulkanRenderer::endFrame() {
     impl->wireColor[0] = static_cast<float>(wireframeColor.x);
     impl->wireColor[1] = static_cast<float>(wireframeColor.y);
     impl->wireColor[2] = static_cast<float>(wireframeColor.z);
+    // DOF runs only with a real aperture (pinhole = perfectly sharp → no pass).
+    impl->dofEnabledFrame = dofEnabled && impl->dofAperture > 0.0f;
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.

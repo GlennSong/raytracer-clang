@@ -191,8 +191,17 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   of the mesh pipeline (`mesh_wire.frag`, flat color from the push) needing the
   `fillModeNonSolid` feature: mode 1 replaces the fills, mode 2 overlays edges on
   the shaded image.
-- **Phase 5b (still owed):** DOF (off by default — needs a CoC gather); SSAO
-  temporal reprojection.
+- **Phase 5b — depth of field (code landed; verify on device):** a full-res
+  scatter-as-gather (`dof.frag`, ports `post.metal` dofGather) runs after SSR and
+  before composite when `dofEnabled` + a real aperture. A thin-lens circle of
+  confusion (focusDistance/focalLength/aperture from the camera `LensParams`,
+  view depth reconstructed via `invViewProjection`) drives a 24-tap golden-angle
+  spiral, each tap weighted so in-focus geometry doesn't smear onto blur. Writes
+  a full-res target the composite reads at binding 6 in place of the HDR (gated by
+  a push flag). Off by default → the pass is skipped (zero cost); the target is
+  pre-transitioned to SHADER_READ so the always-bound descriptor stays valid.
+- **Phase 5b (still owed):** SSAO temporal reprojection (needs motion vectors +
+  history; the box blur covers the spatial denoise for now).
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.

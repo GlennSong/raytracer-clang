@@ -11,6 +11,7 @@ layout(set = 0, binding = 2) uniform sampler2D aoTex;
 layout(set = 0, binding = 3) uniform sampler2D ssrTex;
 layout(set = 0, binding = 4) uniform sampler2D depthTex;     // debug views
 layout(set = 0, binding = 5) uniform sampler2D normalTex;    // debug views
+layout(set = 0, binding = 6) uniform sampler2D dofTex;       // DOF-blurred scene
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -29,6 +30,7 @@ layout(push_constant) uniform Push {
     float lensVignette;
     float lensAspect;
     int   debugView;        // 0 normal; see the switch in main()
+    int   dofEnabled;       // 1 → sample the DOF-blurred scene instead of HDR
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -124,8 +126,13 @@ void main() {
     vec2 uvR = 0.5 + centered * distort * (1.0 + ca);
     vec2 uvB = 0.5 + centered * distort * (1.0 - ca);
 
-    // CA splits the HDR channels; the post terms use the (distorted) green UV.
-    vec3 hdr = vec3(texture(hdrTex, uvR).r, texture(hdrTex, uvG).g, texture(hdrTex, uvB).b);
+    // CA splits the scene channels; the post terms use the (distorted) green UV.
+    // When DOF is on, the blurred scene (dofTex) replaces the sharp HDR.
+    vec3 hdr;
+    if (pc.dofEnabled != 0)
+        hdr = vec3(texture(dofTex, uvR).r, texture(dofTex, uvG).g, texture(dofTex, uvB).b);
+    else
+        hdr = vec3(texture(hdrTex, uvR).r, texture(hdrTex, uvG).g, texture(hdrTex, uvB).b);
     if (pc.ssaoEnabled != 0)
         hdr *= max(texture(aoTex, uvG).r, pc.aoFloor);
     if (pc.ssrEnabled != 0) {
