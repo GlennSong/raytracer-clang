@@ -85,7 +85,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Instanced rendering (correctness) | ✅ | ⚠️ | Vulkan renders via the CPU `drawMesh` fallback — visually correct but no GPU batching (perf). |
 | Vegetation wind sway | ✅ | ❌ | The fallback uses the static mesh pipeline; no wind animation. **Parity gap** for vegetation. |
 | CDLOD terrain morph | ✅ | ⚠️ | Vulkan `drawTerrain` falls back to a plain draw — renders, but LOD pops/cracks (no morph band). |
-| Mipmaps | ✅ | ❌ | Vulkan uploads a single mip; distant textures alias. **Parity gap.** |
+| Mipmaps | ✅ | 🟡 | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). Unverified on device. |
 
 ### Debug & tooling
 | Feature | Metal | Vulkan | Notes |
