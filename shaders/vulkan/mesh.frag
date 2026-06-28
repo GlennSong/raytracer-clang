@@ -60,6 +60,7 @@ layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
 
 // ---- BRDF (ported from lighting.metal) ------------------------------------
 float distributionGGX(float NdotH, float a2) {
@@ -408,4 +409,5 @@ void main() {
     vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
 
     outColor = vec4(direct + ambient + emission, 1.0);
+    outNormal = vec4(N * 0.5 + 0.5, 1.0);   // world-space normal for SSAO
 }

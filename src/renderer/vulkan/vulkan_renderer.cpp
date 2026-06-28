@@ -117,7 +117,8 @@ struct CompositePush {
     float    gradeSaturation;
     int32_t  bloomEnabled;
     float    bloomIntensity;
-    float    _pad[2];
+    int32_t  ssaoEnabled;
+    float    aoFloor;
 };
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
@@ -128,6 +129,14 @@ struct BloomPush {
     float threshold;
     float knee;
     float brightPass;        // 1.0 = bright-pass (threshold), 0.0 = blur
+    float _pad;
+};
+
+// SSAO push constants.
+struct SsaoPush {
+    float radius;
+    float bias;
+    float intensity;
     float _pad;
 };
 
@@ -269,6 +278,31 @@ struct VulkanRenderer::Impl {
     float bloomKnee = 0.5f;
     float bloomIntensity = 0.3f;
 
+    // SSAO (Phase 5b): the scene pass also writes world-space normals to a
+    // second color attachment; an SSAO pass reads depth + normals to a half-res
+    // AO target the composite multiplies in. World-space reconstruction reuses
+    // viewProjection / invViewProjection (already in the UBO) — no extra matrix.
+    VkImage normalImage = VK_NULL_HANDLE;
+    VkDeviceMemory normalMemory = VK_NULL_HANDLE;
+    VkImageView normalView = VK_NULL_HANDLE;     // RGBA8 world normal *0.5+0.5
+    VkSampler gbufferSampler = VK_NULL_HANDLE;   // nearest clamp (depth + normal)
+    VkImage aoImage = VK_NULL_HANDLE;
+    VkDeviceMemory aoMemory = VK_NULL_HANDLE;
+    VkImageView aoView = VK_NULL_HANDLE;         // half-res R8 AO
+    VkFramebuffer aoFramebuffer = VK_NULL_HANDLE;
+    VkExtent2D aoExtent{0, 0};
+    VkRenderPass ssaoRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSetLayout gbufferSetLayout = VK_NULL_HANDLE;  // set 1: depth + normal
+    VkDescriptorPool ssaoPool = VK_NULL_HANDLE;
+    VkDescriptorSet gbufferSet = VK_NULL_HANDLE;
+    VkPipelineLayout ssaoPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline ssaoPipeline = VK_NULL_HANDLE;
+    bool  ssaoEnabledFrame = true;
+    float ssaoRadius = 1.5f;
+    float ssaoIntensity = 0.8f;
+    float ssaoBias = 0.05f;
+    float ssaoFloor = 0.15f;
+
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> commandBuffers{};
@@ -353,6 +387,9 @@ struct VulkanRenderer::Impl {
     bool createBloomResources();
     void updateBloomDescriptors();
     void recordBloom(VkCommandBuffer cmd);
+    bool createSsaoResources();
+    void updateSsaoDescriptors();
+    void recordSsao(VkCommandBuffer cmd);
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
                            VkImage& image, VkDeviceMemory& memory, VkImageView& view);
     bool createCommandPool();
@@ -669,7 +706,7 @@ bool VulkanRenderer::Impl::createDepthResources() {
     image.format = kDepthFormat;
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     image.samples = VK_SAMPLE_COUNT_1_BIT;
     image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateImage(device, &image, nullptr, &depthImage) != VK_SUCCESS) {
@@ -744,10 +781,21 @@ bool VulkanRenderer::Impl::createHdrResources() {
         LOG_ERROR("[vulkan] HDR vkCreateImageView failed");
         return false;
     }
+    // World-normal G-buffer (scene-pass color attachment 1), RGBA8.
+    if (!createColorTarget(swapchainExtent.width, swapchainExtent.height,
+                           VK_FORMAT_R8G8B8A8_UNORM,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           normalImage, normalMemory, normalView)) {
+        LOG_ERROR("[vulkan] normal G-buffer creation failed");
+        return false;
+    }
     return true;
 }
 
 bool VulkanRenderer::Impl::createRenderPass() {
+    // Two color attachments: 0 = HDR scene, 1 = world-normal G-buffer. Both are
+    // sampled afterward (composite reads HDR; SSAO reads normals + depth), so
+    // their final layout is SHADER_READ_ONLY and depth's is DEPTH_READ_ONLY.
     VkAttachmentDescription color{};
     color.format = kHdrFormat;
     color.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -756,25 +804,30 @@ bool VulkanRenderer::Impl::createRenderPass() {
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // sampled by composite
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription normal = color;
+    normal.format = VK_FORMAT_R8G8B8A8_UNORM;
 
     VkAttachmentDescription depth{};
     depth.format = kDepthFormat;
     depth.samples = VK_SAMPLE_COUNT_1_BIT;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;   // SSAO samples it
     depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    std::array<VkAttachmentReference, 2> colorRefs{
+        VkAttachmentReference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        VkAttachmentReference{1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+    VkAttachmentReference depthRef{2, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
 
     std::array<VkSubpassDependency, 2> deps{};
@@ -787,15 +840,17 @@ bool VulkanRenderer::Impl::createRenderPass() {
     deps[0].srcAccessMask = 0;
     deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    // Scene HDR writes must be visible to the composite pass's fragment read.
+    // Scene color + depth writes must be visible to the SSAO/composite reads.
     deps[1].srcSubpass = 0;
     deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    std::array<VkAttachmentDescription, 2> attachments{color, depth};
+    std::array<VkAttachmentDescription, 3> attachments{color, normal, depth};
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     info.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -850,7 +905,7 @@ bool VulkanRenderer::Impl::createCompositeRenderPass() {
 }
 
 bool VulkanRenderer::Impl::createSceneFramebuffer() {
-    std::array<VkImageView, 2> attachments{hdrView, depthView};
+    std::array<VkImageView, 3> attachments{hdrView, normalView, depthView};
     VkFramebufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     info.renderPass = renderPass;
@@ -899,15 +954,15 @@ bool VulkanRenderer::Impl::createCommandPool() {
 }
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
-    VkDescriptorImageInfo imgs[2]{};
-    imgs[0].sampler = compositeSampler;
-    imgs[0].imageView = hdrView;
-    imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imgs[1].sampler = compositeSampler;
-    imgs[1].imageView = bloomView[0];   // final blurred bloom (V pass output)
-    imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    for (uint32_t i = 0; i < 2; ++i) {
+    VkDescriptorImageInfo imgs[3]{};
+    VkImageView views[3] = {hdrView, bloomView[0], aoView};
+    for (uint32_t i = 0; i < 3; ++i) {
+        imgs[i].sampler = compositeSampler;
+        imgs[i].imageView = views[i];
+        imgs[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (uint32_t i = 0; i < 3; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -915,7 +970,7 @@ void VulkanRenderer::Impl::updateCompositeDescriptor() {
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &imgs[i];
     }
-    vkUpdateDescriptorSets(device, 2, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device, 3, writes.data(), 0, nullptr);
 }
 
 bool VulkanRenderer::Impl::createColorTarget(uint32_t w, uint32_t h, VkFormat fmt,
@@ -1197,6 +1252,230 @@ void VulkanRenderer::Impl::recordBloom(VkCommandBuffer cmd) {
     pass(bloomFramebuffer[0], bloomSetV, bv);
 }
 
+void VulkanRenderer::Impl::updateSsaoDescriptors() {
+    VkDescriptorImageInfo imgs[2]{};
+    imgs[0].sampler = gbufferSampler;
+    imgs[0].imageView = depthView;
+    imgs[0].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    imgs[1].sampler = gbufferSampler;
+    imgs[1].imageView = normalView;
+    imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = gbufferSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imgs[i];
+    }
+    vkUpdateDescriptorSets(device, 2, writes.data(), 0, nullptr);
+}
+
+bool VulkanRenderer::Impl::createSsaoResources() {
+    aoExtent = {std::max(1u, swapchainExtent.width / 2),
+                std::max(1u, swapchainExtent.height / 2)};
+    if (!createColorTarget(aoExtent.width, aoExtent.height, VK_FORMAT_R8_UNORM,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           aoImage, aoMemory, aoView))
+        return false;
+
+    if (ssaoRenderPass == VK_NULL_HANDLE) {
+        VkAttachmentDescription color{};
+        color.format = VK_FORMAT_R8_UNORM;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp.attachmentCount = 1;
+        rp.pAttachments = &color;
+        rp.subpassCount = 1;
+        rp.pSubpasses = &subpass;
+        rp.dependencyCount = static_cast<uint32_t>(deps.size());
+        rp.pDependencies = deps.data();
+        if (vkCreateRenderPass(device, &rp, nullptr, &ssaoRenderPass) != VK_SUCCESS) return false;
+    }
+
+    VkFramebufferCreateInfo fb{};
+    fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb.renderPass = ssaoRenderPass;
+    fb.attachmentCount = 1;
+    fb.pAttachments = &aoView;
+    fb.width = aoExtent.width;
+    fb.height = aoExtent.height;
+    fb.layers = 1;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &aoFramebuffer) != VK_SUCCESS) return false;
+
+    if (gbufferSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo s{};
+        s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        s.magFilter = VK_FILTER_NEAREST;
+        s.minFilter = VK_FILTER_NEAREST;
+        s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device, &s, nullptr, &gbufferSampler) != VK_SUCCESS) return false;
+    }
+
+    if (gbufferSetLayout == VK_NULL_HANDLE) {
+        std::array<VkDescriptorSetLayoutBinding, 2> b{};   // depth, normal
+        for (uint32_t i = 0; i < 2; ++i) {
+            b[i].binding = i;
+            b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo l{};
+        l.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l.bindingCount = static_cast<uint32_t>(b.size());
+        l.pBindings = b.data();
+        if (vkCreateDescriptorSetLayout(device, &l, nullptr, &gbufferSetLayout) != VK_SUCCESS)
+            return false;
+
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+        VkDescriptorPoolCreateInfo p{};
+        p.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        p.poolSizeCount = 1;
+        p.pPoolSizes = &size;
+        p.maxSets = 1;
+        if (vkCreateDescriptorPool(device, &p, nullptr, &ssaoPool) != VK_SUCCESS) return false;
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = ssaoPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &gbufferSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &gbufferSet) != VK_SUCCESS) return false;
+    }
+    updateSsaoDescriptors();
+
+    if (ssaoPipeline == VK_NULL_HANDLE) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SsaoPush)};
+        std::array<VkDescriptorSetLayout, 2> setLayouts{descriptorSetLayout, gbufferSetLayout};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+        pl.pSetLayouts = setLayouts.data();
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &ssaoPipelineLayout) != VK_SUCCESS)
+            return false;
+
+        VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+        VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/ssao.frag.spv");
+        if (!vert || !frag) return false;
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        raster.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+        VkPipelineColorBlendStateCreateInfo blend{};
+        blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &ba;
+        std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{};
+        dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+        dynamic.pDynamicStates = dyn.data();
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vi;
+        info.pInputAssemblyState = &ia;
+        info.pViewportState = &vp;
+        info.pRasterizationState = &raster;
+        info.pMultisampleState = &ms;
+        info.pDepthStencilState = &ds;
+        info.pColorBlendState = &blend;
+        info.pDynamicState = &dynamic;
+        info.layout = ssaoPipelineLayout;
+        info.renderPass = ssaoRenderPass;
+        info.subpass = 0;
+        VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                    &ssaoPipeline);
+        vkDestroyShaderModule(device, vert, nullptr);
+        vkDestroyShaderModule(device, frag, nullptr);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] SSAO pipeline creation failed");
+            return false;
+        }
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::recordSsao(VkCommandBuffer cmd) {
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = ssaoRenderPass;
+    rp.framebuffer = aoFramebuffer;
+    rp.renderArea.extent = aoExtent;
+    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0, 0, float(aoExtent.width), float(aoExtent.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, aoExtent};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipeline);
+    std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], gbufferSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipelineLayout, 0,
+                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+    SsaoPush push{ssaoRadius, ssaoBias, ssaoIntensity, 0.0f};
+    vkCmdPushConstants(cmd, ssaoPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(SsaoPush), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+}
+
 bool VulkanRenderer::Impl::createCompositeResources() {
     VkSamplerCreateInfo samp{};
     samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1208,8 +1487,8 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};   // 0 = HDR scene, 1 = bloom
-    for (uint32_t i = 0; i < 2; ++i) {
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};   // 0 HDR, 1 bloom, 2 AO
+    for (uint32_t i = 0; i < 3; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
@@ -1222,7 +1501,7 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
@@ -1540,14 +1819,16 @@ bool VulkanRenderer::Impl::createPipeline() {
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
+    // Two attachments (HDR color + world-normal G-buffer), both opaque writes.
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     blendAttachment.blendEnable = VK_FALSE;
+    std::array<VkPipelineColorBlendAttachmentState, 2> blendAttachments{blendAttachment, blendAttachment};
     VkPipelineColorBlendStateCreateInfo blend{};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blendAttachment;
+    blend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    blend.pAttachments = blendAttachments.data();
 
     std::array<VkDynamicState, 2> dynamics{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{};
@@ -1634,13 +1915,16 @@ bool VulkanRenderer::Impl::createSkyPipeline() {
     ds.depthTestEnable = VK_FALSE;
     ds.depthWriteEnable = VK_FALSE;
 
-    VkPipelineColorBlendAttachmentState blendAttachment{};
-    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    // Scene pass has 2 color attachments; the sky writes color (0), not the
+    // normal G-buffer (1). SSAO ignores sky pixels via depth==far.
+    std::array<VkPipelineColorBlendAttachmentState, 2> blendAttachments{};
+    blendAttachments[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachments[1].colorWriteMask = 0;
     VkPipelineColorBlendStateCreateInfo blend{};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blendAttachment;
+    blend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    blend.pAttachments = blendAttachments.data();
 
     std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{};
@@ -2213,6 +2497,20 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
         bloomImage[i] = VK_NULL_HANDLE;
         bloomMemory[i] = VK_NULL_HANDLE;
     }
+    if (aoFramebuffer) vkDestroyFramebuffer(device, aoFramebuffer, nullptr);
+    if (aoView) vkDestroyImageView(device, aoView, nullptr);
+    if (aoImage) vkDestroyImage(device, aoImage, nullptr);
+    if (aoMemory) vkFreeMemory(device, aoMemory, nullptr);
+    aoFramebuffer = VK_NULL_HANDLE;
+    aoView = VK_NULL_HANDLE;
+    aoImage = VK_NULL_HANDLE;
+    aoMemory = VK_NULL_HANDLE;
+    if (normalView) vkDestroyImageView(device, normalView, nullptr);
+    if (normalImage) vkDestroyImage(device, normalImage, nullptr);
+    if (normalMemory) vkFreeMemory(device, normalMemory, nullptr);
+    normalView = VK_NULL_HANDLE;
+    normalImage = VK_NULL_HANDLE;
+    normalMemory = VK_NULL_HANDLE;
     if (sceneFramebuffer) vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
     sceneFramebuffer = VK_NULL_HANDLE;
     if (hdrView) vkDestroyImageView(device, hdrView, nullptr);
@@ -2245,9 +2543,9 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
 
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
         !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers() ||
-        !createBloomResources())
+        !createBloomResources() || !createSsaoResources())
         return false;
-    updateCompositeDescriptor();   // HDR + bloom views were recreated
+    updateCompositeDescriptor();   // HDR + bloom + AO views were recreated
 
     renderFinished.resize(swapchainImages.size());
     imagesInFlight.assign(swapchainImages.size(), VK_NULL_HANDLE);
@@ -2267,10 +2565,11 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
 
-    // Scene pass → offscreen HDR target (sky + geometry, linear HDR).
-    std::array<VkClearValue, 2> clears{};
-    clears[0].color = {{0.05f, 0.06f, 0.08f, 1.0f}};
-    clears[1].depthStencil = {1.0f, 0};
+    // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
+    std::array<VkClearValue, 3> clears{};
+    clears[0].color = {{0.05f, 0.06f, 0.08f, 1.0f}};   // HDR
+    clears[1].color = {{0.5f, 0.5f, 1.0f, 0.0f}};      // normal (+Z, unused for sky)
+    clears[2].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -2351,9 +2650,10 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     vkCmdEndRenderPass(cmd);
 
-    // Bloom: bright-pass + separable blur of the HDR target (always run so the
-    // bloom view stays in a sampleable layout; composite gates the add).
+    // Bloom + SSAO read the scene outputs (always run so their views stay
+    // sampleable; composite gates whether they're applied).
     recordBloom(cmd);
+    recordSsao(cmd);
 
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
     // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
@@ -2377,6 +2677,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.gradeSaturation = gradeSaturation;
     cpush.bloomEnabled = bloomEnabledFrame ? 1 : 0;
     cpush.bloomIntensity = bloomIntensity;
+    cpush.ssaoEnabled = ssaoEnabledFrame ? 1 : 0;
+    cpush.aoFloor = ssaoFloor;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2480,6 +2782,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createDescriptorSets() &&
               impl->createMaterialResources() &&
               impl->createBloomResources() &&
+              impl->createSsaoResources() &&
               impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
@@ -2489,7 +2792,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO)", width, height);
     return true;
 }
 
@@ -2564,6 +2867,22 @@ void VulkanRenderer::shutdown() {
     }
 
     impl->cleanupSwapchain();
+
+    // SSAO resources (size-independent; targets/framebuffer go via cleanupSwapchain).
+    if (impl->ssaoPipeline) vkDestroyPipeline(impl->device, impl->ssaoPipeline, nullptr);
+    if (impl->ssaoPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->ssaoPipelineLayout, nullptr);
+    if (impl->ssaoPool) vkDestroyDescriptorPool(impl->device, impl->ssaoPool, nullptr);
+    if (impl->gbufferSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->gbufferSetLayout, nullptr);
+    if (impl->gbufferSampler) vkDestroySampler(impl->device, impl->gbufferSampler, nullptr);
+    if (impl->ssaoRenderPass) vkDestroyRenderPass(impl->device, impl->ssaoRenderPass, nullptr);
+    impl->ssaoPipeline = VK_NULL_HANDLE;
+    impl->ssaoPipelineLayout = VK_NULL_HANDLE;
+    impl->ssaoPool = VK_NULL_HANDLE;
+    impl->gbufferSetLayout = VK_NULL_HANDLE;
+    impl->gbufferSampler = VK_NULL_HANDLE;
+    impl->ssaoRenderPass = VK_NULL_HANDLE;
 
     // Bloom resources (size-independent; the targets/framebuffers go via cleanupSwapchain).
     if (impl->bloomPipeline) vkDestroyPipeline(impl->device, impl->bloomPipeline, nullptr);
@@ -2917,6 +3236,11 @@ void VulkanRenderer::endFrame() {
     impl->bloomThreshold = bloomParams.threshold;
     impl->bloomKnee = bloomParams.knee;
     impl->bloomIntensity = bloomParams.intensity;
+    impl->ssaoEnabledFrame = ssaoEnabled;
+    impl->ssaoRadius = ssaoParams.radius;
+    impl->ssaoIntensity = ssaoParams.intensity;
+    impl->ssaoBias = ssaoParams.bias;
+    impl->ssaoFloor = ssaoParams.aoFloor;
     impl->drawFrame();
 }
 

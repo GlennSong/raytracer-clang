@@ -7,6 +7,7 @@
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTex;
 layout(set = 0, binding = 1) uniform sampler2D bloomTex;
+layout(set = 0, binding = 2) uniform sampler2D aoTex;
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -15,6 +16,8 @@ layout(push_constant) uniform Push {
     float gradeSaturation;
     int   bloomEnabled;
     float bloomIntensity;
+    int   ssaoEnabled;
+    float aoFloor;
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -69,6 +72,10 @@ vec3 tonemapAgX(vec3 val) {
 
 void main() {
     vec3 hdr = texture(hdrTex, inUV).rgb;
+    // SSAO darkens the scene (approximation of Metal applying it to ambient
+    // only), clamped to aoFloor so creases don't go fully black.
+    if (pc.ssaoEnabled != 0)
+        hdr *= max(texture(aoTex, inUV).r, pc.aoFloor);
     if (pc.bloomEnabled != 0)
         hdr += texture(bloomTex, inUV).rgb * pc.bloomIntensity;
     hdr *= pc.exposure;

@@ -152,9 +152,17 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   targets), added back in the composite before tonemap. Driven by `bloomEnabled`
   + `bloomParams` (threshold/knee/intensity). Simpler than Metal's 5-mip pyramid
   — a single blurred level; the pyramid is a later refinement.
-- **Phase 5b (still owed):** SSAO (+ temporal) and SSR — both need a view-normal
-  G-buffer (MRT in the scene pass); lens (distortion/CA/vignette) + DOF; the
-  debug views/wireframe.
+- **Phase 5b — G-buffer + SSAO (code landed; verify on device):** the scene pass
+  is now MRT — color 0 = HDR, color 1 = a world-normal G-buffer (RGBA8); depth is
+  stored + sampleable. `ssao.frag` reconstructs world position from depth via
+  `invViewProjection` (same basis as the verified skybox), samples a
+  cosine-weighted hemisphere kernel against the depth buffer, and writes a
+  half-res AO target the composite multiplies in (clamped to `aoFloor`). Driven
+  by `ssaoEnabled` + `ssaoParams`. World-space; an approximation of Metal's GTAO
+  (no temporal reprojection or AO blur yet).
+- **Phase 5b (still owed):** SSR (reuses the normal G-buffer + HDR + depth); a
+  blur/temporal pass for SSAO; lens (distortion/CA/vignette) + DOF; debug
+  views/wireframe.
 - **Known debt:** the HDR + depth scene targets are single (shared across frames
   in flight), matching the existing single-depth simplification — a cross-frame
   aliasing hazard. Make them per-frame when it bites.
