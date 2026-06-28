@@ -210,8 +210,23 @@ first compile surfaced bugs fixed in `f7a0908` (shader `patch` keyword),
 **Update 2026-06-28:** Phase 4a (sky + IBL) and Phase 5a (HDR target + tonemap
 composite) compile (clang, new `sky.*`/`composite.*` shaders) and run clean on
 device — backend reports "Phase 5a", scene loads, **no validation errors** — and
-the shadow-attribute warning below was fixed (`98e1b8a`). Open items:
+the shadow-attribute warning below was fixed (`98e1b8a`).
 
+**Update 2026-06-28 (Phase 5b):** bloom + SSAO (world-normal G-buffer; new
+`bloom.frag`/`ssao.frag`) compile and run — backend reports "Phase 5b", scene
+loads — but with **one new validation error** (first item below). Open items:
+
+- **Phase 5b G-buffer pipeline violates VUID-…-pAttachments-00605.**
+  `vkCreateGraphicsPipelines` for the mesh/G-buffer pass:
+  `pColorBlendState->pAttachments[1]` differs from `pAttachments[0]` while the
+  `independentBlend` device feature is not enabled — the spec requires all blend
+  attachments identical unless `independentBlend` is on. Phase 5b added a second
+  color attachment (world-normal, `mesh.frag` `outNormal` at location 1) with a
+  different blend state than the HDR color attachment. Found on device 2026-06-28;
+  the cloud agent has no GPU to catch it. **Fix (pick one):** enable
+  `independentBlend` in the `VkPhysicalDeviceFeatures` at device creation, *or*
+  give both attachments identical (blend-disabled) state — the forward pass is
+  opaque, so blend-disabled on both is the simpler correct choice.
 - **ImGui crashes on Vulkan with `-DRT_ENABLE_IMGUI=ON`** (verified 2026-06-28 on
   Phase 5a). Not just "doesn't draw" — it asserts `GImGui != 0 ... No current
   context` at the first `ImGui::NewFrame`, because `ImGui::CreateContext()` is
