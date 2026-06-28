@@ -15,10 +15,14 @@ backend (Vulkan)".
 SPIR-V toolchain, forward lit draws, the full multi-light Cook-Torrance model +
 procedural-surface library + texture maps, and **cascaded shadow maps**
 (`src/renderer/vulkan/vulkan_renderer.{h,cpp}`,
-`shaders/vulkan/mesh.{vert,frag}`, `mesh_shadow.vert`). Phase 4a adds the procedural-sky skybox + analytic procedural-sky IBL
-(`sky.{vert,frag}`; `mesh.frag` ambient). Written against the Vulkan 1.0 spec;
-Phases 0–3 are device-verified on Windows (renders `arena.json`), Phase 4 is
-**unverified on device**. ADR-0057 accepted in principle (Pending).
+`shaders/vulkan/mesh.{vert,frag}`, `mesh_shadow.vert`). Phase 4a adds the procedural-sky skybox + analytic IBL; Phase 5a adds the
+offscreen-HDR + tonemap composite (`composite.{vert,frag}`; the scene renders to
+an HDR target, composite tonemaps to a UNORM swapchain). Written against the
+Vulkan 1.0 spec; Phases 0–3 are device-verified on Windows (renders
+`arena.json`), Phases 4–5 are **unverified on device**. Note: Phase 5a
+restructured the frame loop (offscreen target + composite pass + swapchain
+format), so the whole render path needs re-verification. ADR-0057 accepted in
+principle (Pending).
 
 Phase 2 textures landed: `uploadTexture` creates real RGBA8 `VkImage`s (staging
 upload + layout transitions); a per-frame transient descriptor pool binds a
@@ -136,11 +140,21 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   clips to white until the Phase 5 tonemap lands (expected).
 
 ### Phase 5 — Post-processing stack
-- Offscreen HDR render targets + the post chain from `post.metal`, one effect at
-  a time, each verified before the next: SSAO (+ temporal history) → SSR → bloom
-  → tonemap + grade → lens effects + DOF. Plus the debug views and wireframe.
-- **Verify:** each effect matches Metal; the `Renderer`'s live toggles/params
-  (`ssaoEnabled`, `ssrParams`, `bloomParams`, `tonemapOperator`, …) all drive it.
+- **Phase 5a (code landed; verify on device):** the offscreen-HDR + composite
+  architecture. The scene (sky + geometry) now renders to a linear `RGBA16F` HDR
+  target; a composite pass tonemaps it (ACES/AgX) + grade + exposure into the
+  swapchain (`composite.{vert,frag}`, ported from `post.metal`). The swapchain
+  switched to **UNORM** (the tonemap folds in the sRGB encode). This fixes the
+  clipping sun and matches Metal's view transform. Driven by
+  `tonemapOperator`/`gradeParams`/`SceneLighting::exposure`.
+- **Phase 5b (owed):** the effects on top of the HDR target — SSAO (+ temporal),
+  SSR, bloom, lens (distortion/CA/vignette) + DOF, and the debug views/wireframe.
+  Needs a view-normal G-buffer (SSAO/SSR) + half-res targets (bloom).
+- **Known debt:** the HDR + depth scene targets are single (shared across frames
+  in flight), matching the existing single-depth simplification — a cross-frame
+  aliasing hazard. Make them per-frame when it bites.
+- **Verify:** colors match Metal; `tonemapOperator` (ACES↔AgX) + grade sliders
+  drive it; sun no longer clips.
 
 ### Phase 6 — Parity sweep & polish
 - Side-by-side a set of representative levels (forest, city_arena, an HDR-lit

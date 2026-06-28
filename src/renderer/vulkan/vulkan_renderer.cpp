@@ -39,6 +39,7 @@ namespace {
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr int RT_MAX_CASCADES = 4;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 #if defined(NDEBUG)
 constexpr bool kEnableValidation = false;
@@ -106,6 +107,14 @@ struct MeshPush {
 struct ShadowPush {
     float lightViewProj[16];
     float model[16];
+};
+
+// Composite (tonemap) push constants.
+struct CompositePush {
+    float    exposure;
+    int32_t  tonemapOp;      // 0 = ACES, 1 = AgX
+    float    gradeContrast;
+    float    gradeSaturation;
 };
 
 struct GpuMesh {
@@ -203,7 +212,28 @@ struct VulkanRenderer::Impl {
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    // Offscreen HDR scene target (Phase 5): geometry + sky render here in linear
+    // HDR; the composite pass tonemaps it into the swapchain. Single target,
+    // matching the existing single shared depth buffer (frames-in-flight aliasing
+    // of scene targets is pre-existing debt — see plan).
+    VkImage hdrImage = VK_NULL_HANDLE;
+    VkDeviceMemory hdrMemory = VK_NULL_HANDLE;
+    VkImageView hdrView = VK_NULL_HANDLE;
+    VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;   // HDR + depth (scene pass)
+
+    VkRenderPass compositeRenderPass = VK_NULL_HANDLE;
+    VkSampler compositeSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout compositeSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool compositePool = VK_NULL_HANDLE;
+    VkDescriptorSet compositeSet = VK_NULL_HANDLE;
+    VkPipelineLayout compositePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline compositePipeline = VK_NULL_HANDLE;
+    float sceneExposure = 1.0f;
+    int   tonemapOp = 0;          // mirrored from Renderer::tonemapOperator each frame
+    float gradeContrast = 1.0f;
+    float gradeSaturation = 1.0f;
+
+    VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::array<VkCommandBuffer, MAX_FRAMES_IN_FLIGHT> commandBuffers{};
 
@@ -277,8 +307,13 @@ struct VulkanRenderer::Impl {
     bool createSwapchain();
     bool createImageViews();
     bool createDepthResources();
+    bool createHdrResources();
     bool createRenderPass();
-    bool createFramebuffers();
+    bool createCompositeRenderPass();
+    bool createSceneFramebuffer();
+    bool createFramebuffers();           // composite framebuffers (per swapchain image)
+    bool createCompositeResources();     // sampler, descriptor, pipeline
+    void updateCompositeDescriptor();
     bool createCommandPool();
     bool createCommandBuffers();
     bool createSyncObjects();
@@ -505,9 +540,13 @@ bool VulkanRenderer::Impl::createSwapchain() {
     vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(formatCount);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data());
+    // Prefer a UNORM swapchain: the composite tonemap (ACES/AgX) folds the sRGB
+    // encode into its output, so the presented image is already encoded — an sRGB
+    // swapchain would gamma it twice. (Pre-Phase-5 wrote linear to an sRGB
+    // swapchain; that path is gone now that everything goes through composite.)
     VkSurfaceFormatKHR chosen = formats[0];
     for (const VkSurfaceFormatKHR& f : formats)
-        if (f.format == VK_FORMAT_B8G8R8A8_SRGB &&
+        if (f.format == VK_FORMAT_B8G8R8A8_UNORM &&
             f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { chosen = f; break; }
 
     VkPresentModeKHR present = VK_PRESENT_MODE_FIFO_KHR;  // always available, v-sync
@@ -623,16 +662,60 @@ bool VulkanRenderer::Impl::createDepthResources() {
     return true;
 }
 
+bool VulkanRenderer::Impl::createHdrResources() {
+    VkImageCreateInfo image{};
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.extent = {swapchainExtent.width, swapchainExtent.height, 1};
+    image.mipLevels = 1;
+    image.arrayLayers = 1;
+    image.format = kHdrFormat;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(device, &image, nullptr, &hdrImage) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] HDR vkCreateImage failed");
+        return false;
+    }
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, hdrImage, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &hdrMemory) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] HDR vkAllocateMemory failed");
+        return false;
+    }
+    vkBindImageMemory(device, hdrImage, hdrMemory, 0);
+
+    VkImageViewCreateInfo view{};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = hdrImage;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = kHdrFormat;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.levelCount = 1;
+    view.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(device, &view, nullptr, &hdrView) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] HDR vkCreateImageView failed");
+        return false;
+    }
+    return true;
+}
+
 bool VulkanRenderer::Impl::createRenderPass() {
     VkAttachmentDescription color{};
-    color.format = swapchainFormat;
+    color.format = kHdrFormat;
     color.samples = VK_SAMPLE_COUNT_1_BIT;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // sampled by composite
 
     VkAttachmentDescription depth{};
     depth.format = kDepthFormat;
@@ -653,16 +736,23 @@ bool VulkanRenderer::Impl::createRenderPass() {
     subpass.pColorAttachments = &colorRef;
     subpass.pDepthStencilAttachment = &depthRef;
 
-    VkSubpassDependency dep{};
-    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dep.dstSubpass = 0;
-    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.srcAccessMask = 0;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    std::array<VkSubpassDependency, 2> deps{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = 0;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // Scene HDR writes must be visible to the composite pass's fragment read.
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     std::array<VkAttachmentDescription, 2> attachments{color, depth};
     VkRenderPassCreateInfo info{};
@@ -671,8 +761,8 @@ bool VulkanRenderer::Impl::createRenderPass() {
     info.pAttachments = attachments.data();
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
-    info.dependencyCount = 1;
-    info.pDependencies = &dep;
+    info.dependencyCount = static_cast<uint32_t>(deps.size());
+    info.pDependencies = deps.data();
 
     if (vkCreateRenderPass(device, &info, nullptr, &renderPass) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vkCreateRenderPass failed");
@@ -681,15 +771,69 @@ bool VulkanRenderer::Impl::createRenderPass() {
     return true;
 }
 
+bool VulkanRenderer::Impl::createCompositeRenderPass() {
+    VkAttachmentDescription color{};
+    color.format = swapchainFormat;
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;   // composite writes every pixel
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    VkSubpassDependency dep{};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = 0;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    VkRenderPassCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    info.attachmentCount = 1;
+    info.pAttachments = &color;
+    info.subpassCount = 1;
+    info.pSubpasses = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies = &dep;
+    if (vkCreateRenderPass(device, &info, nullptr, &compositeRenderPass) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] composite render pass creation failed");
+        return false;
+    }
+    return true;
+}
+
+bool VulkanRenderer::Impl::createSceneFramebuffer() {
+    std::array<VkImageView, 2> attachments{hdrView, depthView};
+    VkFramebufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    info.renderPass = renderPass;
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments = attachments.data();
+    info.width = swapchainExtent.width;
+    info.height = swapchainExtent.height;
+    info.layers = 1;
+    if (vkCreateFramebuffer(device, &info, nullptr, &sceneFramebuffer) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] scene framebuffer creation failed");
+        return false;
+    }
+    return true;
+}
+
 bool VulkanRenderer::Impl::createFramebuffers() {
+    // Composite framebuffers — one per swapchain image (color only).
     framebuffers.resize(swapchainImageViews.size());
     for (size_t i = 0; i < swapchainImageViews.size(); ++i) {
-        std::array<VkImageView, 2> attachments{swapchainImageViews[i], depthView};
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        info.renderPass = renderPass;
-        info.attachmentCount = static_cast<uint32_t>(attachments.size());
-        info.pAttachments = attachments.data();
+        info.renderPass = compositeRenderPass;
+        info.attachmentCount = 1;
+        info.pAttachments = &swapchainImageViews[i];
         info.width = swapchainExtent.width;
         info.height = swapchainExtent.height;
         info.layers = 1;
@@ -708,6 +852,141 @@ bool VulkanRenderer::Impl::createCommandPool() {
     info.queueFamilyIndex = graphicsFamily;
     if (vkCreateCommandPool(device, &info, nullptr, &commandPool) != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vkCreateCommandPool failed");
+        return false;
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::updateCompositeDescriptor() {
+    VkDescriptorImageInfo img{};
+    img.sampler = compositeSampler;
+    img.imageView = hdrView;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = compositeSet;
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &img;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+bool VulkanRenderer::Impl::createCompositeResources() {
+    VkSamplerCreateInfo samp{};
+    samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samp.magFilter = VK_FILTER_LINEAR;
+    samp.minFilter = VK_FILTER_LINEAR;
+    samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo layout{};
+    layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout.bindingCount = 1;
+    layout.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
+        return false;
+
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo pool{};
+    pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &size;
+    pool.maxSets = 1;
+    if (vkCreateDescriptorPool(device, &pool, nullptr, &compositePool) != VK_SUCCESS) return false;
+
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool = compositePool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &compositeSetLayout;
+    if (vkAllocateDescriptorSets(device, &alloc, &compositeSet) != VK_SUCCESS) return false;
+    updateCompositeDescriptor();
+
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(CompositePush)};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &compositeSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &compositePipelineLayout) != VK_SUCCESS)
+        return false;
+
+    VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+    VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.frag.spv");
+    if (!vert || !frag) return false;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    VkPipelineColorBlendAttachmentState ba{};
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &ba;
+    std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+    dynamic.pDynamicStates = dyn.data();
+    VkGraphicsPipelineCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertexInput;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &blend;
+    info.pDynamicState = &dynamic;
+    info.layout = compositePipelineLayout;
+    info.renderPass = compositeRenderPass;
+    info.subpass = 0;
+    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                &compositePipeline);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] composite pipeline creation failed");
         return false;
     }
     return true;
@@ -1597,6 +1876,14 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
 // ---- swapchain lifecycle ----
 
 void VulkanRenderer::Impl::cleanupSwapchain() {
+    if (sceneFramebuffer) vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
+    sceneFramebuffer = VK_NULL_HANDLE;
+    if (hdrView) vkDestroyImageView(device, hdrView, nullptr);
+    if (hdrImage) vkDestroyImage(device, hdrImage, nullptr);
+    if (hdrMemory) vkFreeMemory(device, hdrMemory, nullptr);
+    hdrView = VK_NULL_HANDLE;
+    hdrImage = VK_NULL_HANDLE;
+    hdrMemory = VK_NULL_HANDLE;
     if (depthView) vkDestroyImageView(device, depthView, nullptr);
     if (depthImage) vkDestroyImage(device, depthImage, nullptr);
     if (depthMemory) vkFreeMemory(device, depthMemory, nullptr);
@@ -1619,8 +1906,10 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
     renderFinished.clear();
     cleanupSwapchain();
 
-    if (!createSwapchain() || !createImageViews() || !createDepthResources() || !createFramebuffers())
+    if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
+        !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers())
         return false;
+    updateCompositeDescriptor();   // HDR view was recreated
 
     renderFinished.resize(swapchainImages.size());
     imagesInFlight.assign(swapchainImages.size(), VK_NULL_HANDLE);
@@ -1640,6 +1929,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
 
+    // Scene pass → offscreen HDR target (sky + geometry, linear HDR).
     std::array<VkClearValue, 2> clears{};
     clears[0].color = {{0.05f, 0.06f, 0.08f, 1.0f}};
     clears[1].depthStencil = {1.0f, 0};
@@ -1647,7 +1937,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rp.renderPass = renderPass;
-    rp.framebuffer = framebuffers[imageIndex];
+    rp.framebuffer = sceneFramebuffer;
     rp.renderArea.offset = {0, 0};
     rp.renderArea.extent = swapchainExtent;
     rp.clearValueCount = static_cast<uint32_t>(clears.size());
@@ -1722,6 +2012,32 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
 
     vkCmdEndRenderPass(cmd);
+
+    // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
+    // HDR scene target. (Phase 5b adds SSAO/SSR/bloom/lens/DOF here.)
+    VkRenderPassBeginInfo crp{};
+    crp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    crp.renderPass = compositeRenderPass;
+    crp.framebuffer = framebuffers[imageIndex];
+    crp.renderArea.offset = {0, 0};
+    crp.renderArea.extent = swapchainExtent;
+    crp.clearValueCount = 0;
+    vkCmdBeginRenderPass(cmd, &crp, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0, 1,
+                            &compositeSet, 0, nullptr);
+    CompositePush cpush;
+    cpush.exposure = sceneExposure;
+    cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
+    cpush.gradeContrast = gradeContrast;
+    cpush.gradeSaturation = gradeSaturation;
+    vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(CompositePush), &cpush);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
     vkEndCommandBuffer(cmd);
 }
 
@@ -1804,8 +2120,11 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createLogicalDevice() &&
               impl->createSwapchain() &&
               impl->createImageViews() &&
-              impl->createRenderPass() &&
               impl->createDepthResources() &&
+              impl->createHdrResources() &&
+              impl->createRenderPass() &&
+              impl->createCompositeRenderPass() &&
+              impl->createSceneFramebuffer() &&
               impl->createFramebuffers() &&
               impl->createCommandPool() &&
               impl->createCommandBuffers() &&
@@ -1816,6 +2135,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createDescriptorPool() &&
               impl->createDescriptorSets() &&
               impl->createMaterialResources() &&
+              impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
               impl->createSkyPipeline();
@@ -1824,7 +2144,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 4: + procedural sky & analytic IBL)",
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5a: + HDR target & tonemap composite)",
              width, height);
     return true;
 }
@@ -1900,6 +2220,23 @@ void VulkanRenderer::shutdown() {
     }
 
     impl->cleanupSwapchain();
+
+    // Composite (tonemap) resources.
+    if (impl->compositePipeline) vkDestroyPipeline(impl->device, impl->compositePipeline, nullptr);
+    if (impl->compositePipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->compositePipelineLayout, nullptr);
+    if (impl->compositePool) vkDestroyDescriptorPool(impl->device, impl->compositePool, nullptr);
+    if (impl->compositeSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->compositeSetLayout, nullptr);
+    if (impl->compositeSampler) vkDestroySampler(impl->device, impl->compositeSampler, nullptr);
+    if (impl->compositeRenderPass)
+        vkDestroyRenderPass(impl->device, impl->compositeRenderPass, nullptr);
+    impl->compositePipeline = VK_NULL_HANDLE;
+    impl->compositePipelineLayout = VK_NULL_HANDLE;
+    impl->compositePool = VK_NULL_HANDLE;
+    impl->compositeSetLayout = VK_NULL_HANDLE;
+    impl->compositeSampler = VK_NULL_HANDLE;
+    impl->compositeRenderPass = VK_NULL_HANDLE;
 
     if (impl->commandPool) vkDestroyCommandPool(impl->device, impl->commandPool, nullptr);
     if (impl->renderPass) vkDestroyRenderPass(impl->device, impl->renderPass, nullptr);
@@ -2079,6 +2416,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCloud[2] = sky.cloudScale;
     impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
     impl->cpuGlobals.counts[2] = 0;   // envMode: procedural
+    impl->sceneExposure = lighting.exposure;
 
     int n = 0;
     auto setColor = [](float* dst, const Vec3& c, float w) {
@@ -2210,7 +2548,13 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     impl->stats.entitiesSubmitted++;
 }
 
-void VulkanRenderer::endFrame() { impl->drawFrame(); }
+void VulkanRenderer::endFrame() {
+    // Mirror the live tonemap/grade knobs (Renderer base members) for composite.
+    impl->tonemapOp = tonemapOperator;
+    impl->gradeContrast = gradeParams.contrast;
+    impl->gradeSaturation = gradeParams.saturation;
+    impl->drawFrame();
+}
 
 // The non-Apple factory. Exactly one Renderer::create() is linked per target.
 std::unique_ptr<Renderer> Renderer::create() {

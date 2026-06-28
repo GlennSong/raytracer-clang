@@ -402,7 +402,8 @@ else()
         set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
         set(VK_SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders/vulkan)
         file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
-        set(VK_SHADERS mesh.vert mesh.frag mesh_shadow.vert sky.vert sky.frag)
+        set(VK_SHADERS mesh.vert mesh.frag mesh_shadow.vert sky.vert sky.frag
+                       composite.vert composite.frag)
         set(VK_SPV_FILES "")
         foreach(shader ${VK_SHADERS})
             add_custom_command(
