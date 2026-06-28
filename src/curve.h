@@ -174,6 +174,8 @@ std::vector<double> Spline<T>::uniformArcLengthParams(int count, int subdiv) con
     for (int i = 0; i < count; i++) {
         double target = total * i / (count - 1);
         while (j < steps && cum[j + 1] < target) j++;
+        if (j >= steps) j = steps - 1;  // fp rounding can push target past cum[steps];
+                                        // keep j+1 within [0, steps] (last sample is set below)
         double segLen = cum[j + 1] - cum[j];
         double f = segLen > 1e-12 ? (target - cum[j]) / segLen : 0.0;
         out[i] = us[j] + (us[j + 1] - us[j]) * f;

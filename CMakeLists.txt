@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Threads back the JobSystem (and the offline tracer that now uses it).
 find_package(Threads REQUIRED)
 
+# On Windows the UCRT headers gate M_PI (and the other M_* math constants)
+# behind _USE_MATH_DEFINES. clang targets the MSVC runtime here, so define it
+# project-wide before any translation unit includes <cmath>. No-op elsewhere.
+if(WIN32)
+    add_compile_definitions(_USE_MATH_DEFINES)
+endif()
+
 # The Jolt job adapter derives from a JPH polymorphic base. Jolt is built without
 # C++ RTTI, so this one TU must match — otherwise its typeinfo references a base
 # typeinfo symbol Jolt never emitted (link error). Applies in every target that
