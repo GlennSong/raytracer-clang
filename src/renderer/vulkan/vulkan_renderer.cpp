@@ -70,18 +70,26 @@ struct GpuLight {
 };
 
 // std140-compatible global uniforms (set 0, binding 0). Mirrors the Globals
-// block in shaders/vulkan/mesh.{vert,frag}. Offsets: viewProjection 0, view 64,
-// cascadeVP 128, cameraPosition 384, ambient 400, cascadeSplit 416, counts 432,
-// shadowParams 448, lights 464; total 2512 bytes.
+// block in shaders/vulkan/{mesh,sky}.*. Offsets: viewProjection 0, view 64,
+// invViewProjection 128, cascadeVP 192, cameraPosition 448, ambient 464,
+// cascadeSplit 480, counts 496, shadowParams 512, sky* 528..608, lights 624.
 struct GlobalsUBO {
     float    viewProjection[16];
     float    view[16];
-    float    cascadeVP[4][16];   // per-cascade light view-projection (CSM)
+    float    invViewProjection[16];  // inverse of the flipped VP (skybox ray, IBL)
+    float    cascadeVP[4][16];       // per-cascade light view-projection (CSM)
     float    cameraPosition[4];
-    float    ambient[4];         // rgb = ambient color * multiplier
-    float    cascadeSplit[4];    // far view-space depth of cascades 0..3
-    int32_t  counts[4];          // x lightCount, y cascadeCount
-    float    shadowParams[4];    // x normalBias, y pcfRadius, z mapSize, w strength
+    float    ambient[4];             // rgb = ambient tint * multiplier (IBL strength)
+    float    cascadeSplit[4];        // far view-space depth of cascades 0..3
+    int32_t  counts[4];              // x lightCount, y cascadeCount, z envMode
+    float    shadowParams[4];        // x normalBias, y pcfRadius, z mapSize, w strength
+    // Procedural sky (ADR-0016), mirrored from SceneLighting::sky.
+    float    skySunDir[4];           // xyz toward sun, w sun disc intensity
+    float    skySunColor[4];         // rgb
+    float    skyZenith[4];
+    float    skyHorizon[4];
+    float    skyGround[4];
+    float    skyCloud[4];            // x coverage, y density, z scale, w time
     GpuLight lights[32];
 };
 
@@ -215,6 +223,10 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;
 
+    // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
+    VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline skyPipeline = VK_NULL_HANDLE;
+
     // Material textures (set 1): a per-frame transient descriptor pool reset each
     // frame, so each draw gets a fresh set with no cross-frame lifetime issues.
     VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
@@ -278,6 +290,7 @@ struct VulkanRenderer::Impl {
     bool createShadowResources();
     bool createShadowPipeline();
     bool createPipeline();
+    bool createSkyPipeline();
     void recordShadowPass(VkCommandBuffer cmd);
 
     bool recreateSwapchain();
@@ -962,6 +975,98 @@ bool VulkanRenderer::Impl::createPipeline() {
     return true;
 }
 
+bool VulkanRenderer::Impl::createSkyPipeline() {
+    // Fullscreen-triangle skybox; reads only the global UBO (set 0), no push, no
+    // vertex buffer. Drawn first in the main pass with depth test/write off so it
+    // fills the background; geometry then overwrites with depth.
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout;
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &skyPipelineLayout) != VK_SUCCESS)
+        return false;
+
+    VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/sky.vert.spv");
+    VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/sky.frag.spv");
+    if (!vert || !frag) return false;
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blendAttachment;
+
+    std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+    dynamic.pDynamicStates = dyn.data();
+
+    VkGraphicsPipelineCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertexInput;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &blend;
+    info.pDynamicState = &dynamic;
+    info.layout = skyPipelineLayout;
+    info.renderPass = renderPass;
+    info.subpass = 0;
+    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &skyPipeline);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] sky pipeline creation failed");
+        return false;
+    }
+    return true;
+}
+
 // ---- memory / buffer helpers ----
 
 uint32_t VulkanRenderer::Impl::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const {
@@ -1560,6 +1665,12 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     VkRect2D scissor{{0, 0}, swapchainExtent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // Skybox first (fills the background; depth untouched), then geometry.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipelineLayout, 0, 1,
+                            &descriptorSets[currentFrame], 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                             &descriptorSets[currentFrame], 0, nullptr);
@@ -1706,13 +1817,14 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createDescriptorSets() &&
               impl->createMaterialResources() &&
               impl->createShadowPipeline() &&
-              impl->createPipeline();
+              impl->createPipeline() &&
+              impl->createSkyPipeline();
     if (!ok) {
         LOG_ERROR("[vulkan] initialization failed");
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 3: forward + multi-light + CSM shadows)",
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 4: + procedural sky & analytic IBL)",
              width, height);
     return true;
 }
@@ -1759,6 +1871,10 @@ void VulkanRenderer::shutdown() {
     impl->shadowImage = VK_NULL_HANDLE;
     impl->shadowMemory = VK_NULL_HANDLE;
 
+    if (impl->skyPipeline) vkDestroyPipeline(impl->device, impl->skyPipeline, nullptr);
+    if (impl->skyPipelineLayout) vkDestroyPipelineLayout(impl->device, impl->skyPipelineLayout, nullptr);
+    impl->skyPipeline = VK_NULL_HANDLE;
+    impl->skyPipelineLayout = VK_NULL_HANDLE;
     if (impl->meshPipeline) vkDestroyPipeline(impl->device, impl->meshPipeline, nullptr);
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
@@ -1918,6 +2034,14 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     Mat4 vp = proj * view;
     packMat4(vp, impl->cpuGlobals.viewProjection, /*flipY=*/true);
     packMat4(view, impl->cpuGlobals.view, /*flipY=*/false);   // for view-space depth
+
+    // Inverse of the *flipped* clip transform (Flip*vp), so the skybox/IBL ray
+    // reconstruction is the exact inverse of what geometry uses. Flip negates
+    // clip row 1; it is its own inverse.
+    Mat4 flip;
+    flip.m[1][1] = -1.0;
+    Mat4 invFlippedVP = (flip * vp).inverse();
+    packMat4(invFlippedVP, impl->cpuGlobals.invViewProjection, /*flipY=*/false);
     impl->cpuGlobals.cameraPosition[0] = static_cast<float>(camera.position.x);
     impl->cpuGlobals.cameraPosition[1] = static_cast<float>(camera.position.y);
     impl->cpuGlobals.cameraPosition[2] = static_cast<float>(camera.position.z);
@@ -1936,6 +2060,25 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
     impl->cpuGlobals.ambient[3] = 1.0f;
+
+    // Procedural sky (ADR-0016) → skybox + analytic IBL. HDR equirect mode is a
+    // later refinement, so envMode is always procedural (0) for now.
+    const ProceduralSky& sky = lighting.sky;
+    Vec3 sd = normalize(sky.sunDirection);
+    auto set3 = [](float* d, const Vec3& v, float w) {
+        d[0] = static_cast<float>(v.x); d[1] = static_cast<float>(v.y);
+        d[2] = static_cast<float>(v.z); d[3] = w;
+    };
+    set3(impl->cpuGlobals.skySunDir, sd, sky.sunDiscIntensity);
+    set3(impl->cpuGlobals.skySunColor, sky.sunColor, 0.0f);
+    set3(impl->cpuGlobals.skyZenith, sky.zenithColor, 0.0f);
+    set3(impl->cpuGlobals.skyHorizon, sky.horizonColor, 0.0f);
+    set3(impl->cpuGlobals.skyGround, sky.groundColor, 0.0f);
+    impl->cpuGlobals.skyCloud[0] = sky.cloudCoverage;
+    impl->cpuGlobals.skyCloud[1] = sky.cloudsEnabled ? sky.cloudDensity : 0.0f;
+    impl->cpuGlobals.skyCloud[2] = sky.cloudScale;
+    impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
+    impl->cpuGlobals.counts[2] = 0;   // envMode: procedural
 
     int n = 0;
     auto setColor = [](float* dst, const Vec3& c, float w) {

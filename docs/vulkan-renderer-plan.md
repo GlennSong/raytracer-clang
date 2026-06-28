@@ -15,10 +15,10 @@ backend (Vulkan)".
 SPIR-V toolchain, forward lit draws, the full multi-light Cook-Torrance model +
 procedural-surface library + texture maps, and **cascaded shadow maps**
 (`src/renderer/vulkan/vulkan_renderer.{h,cpp}`,
-`shaders/vulkan/mesh.{vert,frag}`, `mesh_shadow.vert`). Written against the
-Vulkan 1.0 spec but **unverified on device** (no GPU/SDK in CI; needs a
-Linux/Windows run with the validation layers). ADR-0057 accepted in principle
-(Pending).
+`shaders/vulkan/mesh.{vert,frag}`, `mesh_shadow.vert`). Phase 4a adds the procedural-sky skybox + analytic procedural-sky IBL
+(`sky.{vert,frag}`; `mesh.frag` ambient). Written against the Vulkan 1.0 spec;
+Phases 0–3 are device-verified on Windows (renders `arena.json`), Phase 4 is
+**unverified on device**. ADR-0057 accepted in principle (Pending).
 
 Phase 2 textures landed: `uploadTexture` creates real RGBA8 `VkImage`s (staging
 upload + layout transitions); a per-frame transient descriptor pool binds a
@@ -121,10 +121,19 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
   tune constants if needed.
 
 ### Phase 4 — Environment & IBL
-- Port `environment.metal`: skybox (procedural sky + clouds), equirect→cubemap
-  bake (`uploadTextureHDR`, `setEnvironmentMap`), irradiance + prefiltered spec
-  + BRDF LUT precompute, reflection probes (`setReflectionProbes`) with parallax.
-- **Verify:** HDR and procedural-sky modes both match; probe reflections correct.
+- **Phase 4a (code landed; verify on device):** procedural day/night sky + FBM
+  cloud **skybox** (`sky.vert`/`sky.frag`, fullscreen triangle, drawn first with
+  depth off; ray reconstructed via the inverse of the *flipped* clip transform so
+  it matches geometry), and **analytic procedural-sky IBL** in `mesh.frag`
+  (irradiance ≈ sky in the normal dir; specular ≈ sky in the reflection dir blurred
+  by roughness, with roughness-aware Fresnel) replacing the flat-ambient stand-in.
+  Sky params ride the globals UBO from `SceneLighting::sky`.
+- **Phase 4b (owed):** HDR equirect→cubemap bake (`uploadTextureHDR`/
+  `setEnvironmentMap` — currently no-ops, so HDR levels show the procedural sky),
+  GGX-prefilter + irradiance + BRDF-LUT **compute** (replacing the analytic
+  approximation), and reflection probes (`setReflectionProbes`) with parallax.
+- **Verify:** sky orientation matches; ambient/reflections read right; sun disc
+  clips to white until the Phase 5 tonemap lands (expected).
 
 ### Phase 5 — Post-processing stack
 - Offscreen HDR render targets + the post chain from `post.metal`, one effect at

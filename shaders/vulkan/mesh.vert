@@ -20,12 +20,19 @@ struct Light {
 layout(set = 0, binding = 0) uniform Globals {
     mat4  viewProjection;
     mat4  view;
+    mat4  invViewProjection;
     mat4  cascadeVP[4];
     vec4  cameraPosition;
     vec4  ambient;
     vec4  cascadeSplit;
-    ivec4 counts;          // x lightCount, y cascadeCount
+    ivec4 counts;          // x lightCount, y cascadeCount, z envMode
     vec4  shadowParams;    // x normalBias, y pcfRadius, z mapSize, w strength
+    vec4  skySunDir;
+    vec4  skySunColor;
+    vec4  skyZenith;
+    vec4  skyHorizon;
+    vec4  skyGround;
+    vec4  skyCloud;
     Light lights[32];
 } g;
 

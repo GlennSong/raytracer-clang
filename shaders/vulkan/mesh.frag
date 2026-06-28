@@ -20,12 +20,19 @@ struct Light {
 layout(set = 0, binding = 0) uniform Globals {
     mat4  viewProjection;
     mat4  view;
+    mat4  invViewProjection;
     mat4  cascadeVP[4];
     vec4  cameraPosition;
-    vec4  ambient;            // rgb = ambient color * multiplier
+    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength)
     vec4  cascadeSplit;       // far view-space depth of cascades 0..3
-    ivec4 counts;             // x lightCount, y cascadeCount
+    ivec4 counts;             // x lightCount, y cascadeCount, z envMode
     vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
+    vec4  skySunDir;          // xyz dir, w disc intensity
+    vec4  skySunColor;
+    vec4  skyZenith;
+    vec4  skyHorizon;
+    vec4  skyGround;
+    vec4  skyCloud;
     Light lights[32];
 } g;
 
@@ -71,6 +78,30 @@ float distanceAttenuation(float dist, float range) {
     float ratio2 = (dist * dist) / max(range * range, 1e-4);
     float window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
     return window * window / max(dist * dist, 1e-4);
+}
+
+// Roughness-aware Fresnel for the ambient/IBL term.
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    vec3 r = max(vec3(1.0 - roughness), F0);
+    return F0 + (r - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Procedural-sky environment (no clouds — they are never baked into IBL),
+// ported from environment.metal sampleEnvironment. Used as an analytic stand-in
+// for Metal's baked irradiance/prefiltered cubes (Phase 4b adds the real bake).
+vec3 sampleEnvironment(vec3 dir) {
+    float skyBlend = clamp(dir.y, 0.0, 1.0);
+    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
+    vec3 col = mix(lowerHaze, sky, horizonBlend);
+    float disc = g.skySunDir.w;
+    vec3 sc = g.skySunColor.rgb;
+    float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
+    col += sc * pow(sunDot, 256.0) * 8.0 * disc;
+    col += sc * pow(sunDot, 32.0) * 1.0 * disc;
+    col += sc * pow(sunDot, 4.0) * 0.15 * disc;
+    return col;
 }
 
 // ---- Procedural surface library (ported byte-for-byte from common.metal) ---
@@ -361,9 +392,20 @@ void main() {
     }
 
     vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, sunShadow);
-    // Flat ambient stand-in until IBL lands (Phase 4 replaces this with
-    // irradiance + prefiltered specular weighted by the BRDF LUT). AO modulates it.
-    vec3 ambient = g.ambient.rgb * albedo * (1.0 - metallic) * ao;
+
+    // Image-based lighting from the procedural sky (analytic approximation of
+    // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
+    // real cubemap bake + BRDF LUT, and HDR-equirect mode). g.ambient carries
+    // the ambient tint * multiplier as the overall IBL strength.
+    float NdotV = max(dot(N, V), 1e-4);
+    vec3 R = reflect(-V, N);
+    vec3 irradiance = sampleEnvironment(N);
+    vec3 prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur
+    vec3 Famb = fresnelSchlickRoughness(NdotV, f0, roughness);
+    vec3 kd = (1.0 - Famb) * (1.0 - metallic);
+    vec3 envDiffuse = kd * albedo * irradiance * ao;
+    vec3 envSpecular = prefiltered * Famb;
+    vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
 
     outColor = vec4(direct + ambient + emission, 1.0);
 }
