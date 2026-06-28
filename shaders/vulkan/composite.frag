@@ -9,6 +9,8 @@ layout(set = 0, binding = 0) uniform sampler2D hdrTex;
 layout(set = 0, binding = 1) uniform sampler2D bloomTex;
 layout(set = 0, binding = 2) uniform sampler2D aoTex;
 layout(set = 0, binding = 3) uniform sampler2D ssrTex;
+layout(set = 0, binding = 4) uniform sampler2D depthTex;     // debug views
+layout(set = 0, binding = 5) uniform sampler2D normalTex;    // debug views
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -20,7 +22,13 @@ layout(push_constant) uniform Push {
     int   ssaoEnabled;
     float aoFloor;
     int   ssrEnabled;
-    float _pad;
+    int   lensEnabled;
+    float lensK1;
+    float lensK2;
+    float lensCA;
+    float lensVignette;
+    float lensAspect;
+    int   debugView;        // 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -74,6 +82,13 @@ vec3 tonemapAgX(vec3 val) {
 }
 
 void main() {
+    // Debug views bypass lens/tonemap and show a raw buffer (ADR-0057). 5/6/7
+    // (shadow/albedo/facing) need lit-pass output not available here yet.
+    if (pc.debugView == 1) { outColor = vec4(vec3(texture(aoTex, inUV).r), 1.0); return; }
+    if (pc.debugView == 2) { outColor = vec4(texture(ssrTex, inUV).rgb, 1.0); return; }
+    if (pc.debugView == 3) { outColor = vec4(vec3(texture(depthTex, inUV).r), 1.0); return; }
+    if (pc.debugView == 4) { outColor = vec4(texture(normalTex, inUV).rgb, 1.0); return; }
+
     // Lens distortion (Brown radial) + lateral CA, around the aspect-corrected
     // center. Neutral params (or lens disabled) => exact passthrough. Ported from
     // post.metal fragmentLensWarp, folded into the composite to avoid a pass.

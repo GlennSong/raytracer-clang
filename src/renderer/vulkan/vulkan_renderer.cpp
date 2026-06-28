@@ -126,7 +126,7 @@ struct CompositePush {
     float    lensCA;          // lateral chromatic aberration
     float    lensVignette;
     float    lensAspect;      // width / height
-    float    _pad;
+    int32_t  debugView;      // 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals
 };
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
@@ -343,6 +343,7 @@ struct VulkanRenderer::Impl {
     // folded into the composite. From the active camera's LensParams.
     bool  lensEnabledFrame = true;
     float lensK1 = 0.0f, lensK2 = 0.0f, lensCA = 0.0f, lensVignette = 0.0f, lensAspect = 1.0f;
+    int   debugViewFrame = 0;   // mirrored from Renderer::debugView
 
     VkRenderPass renderPass = VK_NULL_HANDLE;   // scene pass (HDR color + depth)
     VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -1003,15 +1004,17 @@ bool VulkanRenderer::Impl::createCommandPool() {
 }
 
 void VulkanRenderer::Impl::updateCompositeDescriptor() {
-    VkDescriptorImageInfo imgs[4]{};
-    VkImageView views[4] = {hdrView, bloomView[0], aoView, ssrView};
-    for (uint32_t i = 0; i < 4; ++i) {
+    VkDescriptorImageInfo imgs[6]{};
+    VkImageView views[6] = {hdrView, bloomView[0], aoView, ssrView, depthView, normalView};
+    for (uint32_t i = 0; i < 6; ++i) {
         imgs[i].sampler = compositeSampler;
         imgs[i].imageView = views[i];
-        imgs[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // Binding 4 is the depth attachment, which lives in DEPTH_READ_ONLY.
+        imgs[i].imageLayout = (i == 4) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                       : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
-    std::array<VkWriteDescriptorSet, 4> writes{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    std::array<VkWriteDescriptorSet, 6> writes{};
+    for (uint32_t i = 0; i < 6; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -1019,7 +1022,7 @@ void VulkanRenderer::Impl::updateCompositeDescriptor() {
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &imgs[i];
     }
-    vkUpdateDescriptorSets(device, 4, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device, 6, writes.data(), 0, nullptr);
 }
 
 bool VulkanRenderer::Impl::createColorTarget(uint32_t w, uint32_t h, VkFormat fmt,
@@ -1751,8 +1754,9 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};   // 0 HDR, 1 bloom, 2 AO, 3 SSR
-    for (uint32_t i = 0; i < 4; ++i) {
+    // 0 HDR, 1 bloom, 2 AO, 3 SSR, 4 depth, 5 normals (4,5 for debug views).
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+    for (uint32_t i = 0; i < 6; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
@@ -1765,7 +1769,7 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &compositeSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
@@ -2959,6 +2963,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.lensCA = lensCA;
     cpush.lensVignette = lensVignette;
     cpush.lensAspect = lensAspect;
+    cpush.debugView = debugViewFrame;
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3073,7 +3078,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
         return false;
     }
     impl->initialized = true;
-    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: + bloom + SSAO + SSR + lens)", width, height);
+    LOG_INFO("[vulkan] backend initialized (%dx%d, Phase 5b: post stack + debug views)", width, height);
     return true;
 }
 
@@ -3549,6 +3554,7 @@ void VulkanRenderer::endFrame() {
     impl->ssrMaxRoughness = ssrParams.maxRoughness;
     impl->ssrBlendStrength = ssrParams.blendStrength;
     impl->lensEnabledFrame = lensEffectsEnabled;
+    impl->debugViewFrame = debugView;
     impl->drawFrame();
 }
 
