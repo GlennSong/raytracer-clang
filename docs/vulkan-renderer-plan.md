@@ -188,8 +188,9 @@ first compile surfaced bugs fixed in `f7a0908` (shader `patch` keyword),
   the same line happily, so flipping it would just break Metal.
 - **Validation warnings (benign):** `vkCreateGraphicsPipelines` reports vertex
   attributes 1–4 "not consumed by vertex shader" — the shadow pipeline's vertex
-  input declares the full layout but its vertex shader uses only position. Trim
-  the shadow pipeline's `VkVertexInputAttributeDescription`s to position-only.
+  input declares the full layout but its vertex shader uses only position.
+  *Fixed:* the shadow pipeline now declares a position-only vertex attribute
+  (binding stride unchanged; same interleaved buffer, offset 0).
 - **Qt editor viewport is unrendered on non-Apple.** `editor_app` builds wherever
   Qt6 is installed and its Qt shell/UX runs on Windows/Linux, but the embedded 3D
   viewport links `null_renderer.cpp` there (`CMakeLists.txt` editor block: Metal on

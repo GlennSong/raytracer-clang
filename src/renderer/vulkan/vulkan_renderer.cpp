@@ -1372,20 +1372,19 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     stage.module = vert;
     stage.pName = "main";
 
-    // Same vertex layout as the forward pipeline (the shader only reads position).
+    // Position-only vertex input: the shadow vertex shader reads nothing else, so
+    // declaring the full layout just triggers "attribute N not consumed"
+    // validation warnings. The binding stride stays sizeof(GpuVertex) — the same
+    // interleaved vertex buffer is bound, we only read position at offset 0.
     VkVertexInputBindingDescription binding{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    std::array<VkVertexInputAttributeDescription, 5> attrs{};
-    attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, position)};
-    attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, normal)};
-    attrs[2] = {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, tangent)};
-    attrs[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertex, texcoord)};
-    attrs[4] = {4, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, color)};
+    VkVertexInputAttributeDescription posAttr{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
+                                              offsetof(GpuVertex, position)};
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
-    vertexInput.pVertexAttributeDescriptions = attrs.data();
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions = &posAttr;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
