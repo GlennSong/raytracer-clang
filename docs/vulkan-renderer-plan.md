@@ -236,7 +236,17 @@ the shadow-attribute warning below was fixed (`98e1b8a`).
 
 **Update 2026-06-28 (Phase 5b):** bloom + SSAO (world-normal G-buffer; new
 `bloom.frag`/`ssao.frag`) compile and run — backend reports "Phase 5b", scene
-loads — but with **one new validation error** (first item below). Open items:
+loads — but with **one new validation error** (first item below).
+
+**Update 2026-06-28 (Phase 5b post stack):** SSR + lens effects + debug views
+build and run **validation-clean** on device (default config) after two fixes
+pushed this session: a build-breaking stray `}` in `vulkan_renderer.cpp` (closed
+`namespace engine` early, so `Renderer::create` didn't compile — broke both
+configs), and a null `compositeSampler` in the SSR descriptor write
+(`updateSsrDescriptors` runs before `createCompositeResources`; the sampler is
+now created lazily on first use, guarded in both places). The independentBlend
+fix is confirmed clean on device. `-DRT_ENABLE_IMGUI=ON` still fails to compile
+(ImGui-version item below). Open items:
 
 - **Phase 5b G-buffer pipeline violates VUID-…-pAttachments-00605.**
   `vkCreateGraphicsPipelines` for the mesh/G-buffer pass:
@@ -261,8 +271,13 @@ loads — but with **one new validation error** (first item below). Open items:
   `endFrame` calls `ImGui::Render`, and the composite pass records
   `ImGui_ImplVulkan_RenderDrawData`. CMake compiles `imgui_impl_vulkan.cpp` on
   the non-Apple Vulkan path. The `ImGui_ImplVulkan_Init` signature is guarded by
-  `IMGUI_VERSION_NUM` (RenderPass-in-InitInfo for ≥1.90, 2nd-arg below) — confirm
-  it matches the pinned ImGui submodule when building with `-DRT_ENABLE_IMGUI=ON`.
+  `IMGUI_VERSION_NUM` (RenderPass-in-InitInfo for ≥1.90), but **the pinned
+  submodule is ImGui 1.92.8 (19280), where the API moved again** — so
+  `-DRT_ENABLE_IMGUI=ON` currently **fails to compile** (verified on device
+  2026-06-28): `MSAASamples`/`RenderPass` are now `init.PipelineInfoMain.*`, and
+  `ImGui_ImplVulkan_CreateFontsTexture()` was removed (fonts auto-managed since
+  1.92). The `≥19000` branch needs a `≥19200` variant (or pin ImGui to the
+  targeted version). Default build (ImGui OFF) is unaffected and verified clean.
 - **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
   Traced and *not* reproduced statically: mouse input is platform-identical
   (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code

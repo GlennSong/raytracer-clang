@@ -1712,6 +1712,20 @@ void VulkanRenderer::Impl::updateSsrDescriptors() {
     imgs[1].sampler = gbufferSampler;
     imgs[1].imageView = normalView;
     imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // createCompositeResources (which owns this sampler) runs after createSsrResources
+    // — SSR feeds the composite — so create it on first use here, else this write
+    // binds a null sampler (VUID-…-00325). Mirrors the lazy gbuffer/bloom samplers.
+    if (compositeSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo samp{};
+        samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samp.magFilter = VK_FILTER_LINEAR;
+        samp.minFilter = VK_FILTER_LINEAR;
+        samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        vkCreateSampler(device, &samp, nullptr, &compositeSampler);
+    }
     imgs[2].sampler = compositeSampler;   // linear, for the HDR color fetch
     imgs[2].imageView = hdrView;
     imgs[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1928,7 +1942,8 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
+    if (compositeSampler == VK_NULL_HANDLE &&
+        vkCreateSampler(device, &samp, nullptr, &compositeSampler) != VK_SUCCESS) return false;
 
     // 0 HDR, 1 bloom, 2 AO, 3 SSR, 4 depth, 5 normals (4,5 for debug views).
     std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
@@ -4005,7 +4020,6 @@ void VulkanRenderer::shutdownDebugUi() {
     ImGui::DestroyContext();   // Window::shutdownDebugUi (GLFW) ran first
     impl->imguiInitialized = false;
 #endif
-}
 }
 
 // The non-Apple factory. Exactly one Renderer::create() is linked per target.
