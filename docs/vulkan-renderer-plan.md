@@ -162,6 +162,35 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
 
 ---
 
+## Device-verified findings (Windows + NVIDIA RTX 3060, 2026-06-27)
+
+First time the backend was compiled and run on a real GPU (Phases 0–3 had only
+ever been written, never built — no SDK in CI). It now builds with clang and
+renders `assets/levels/arena.json` (1280×720, forward + multi-light + CSM). The
+first compile surfaced bugs fixed in `f7a0908` (shader `patch` keyword),
+`204e4c5` (shader `g.lightCount` → `g.counts.x`), `8e25546` (43 printf-style
+`LOG_*` calls vs the stream logger). Open items found on device:
+
+- **ImGui overlay does not render on Vulkan.** With `-DRT_ENABLE_IMGUI=ON` the
+  tilde toggle and GLFW input work, but nothing draws: `vulkan_renderer.cpp`
+  references ImGui nowhere and CMake compiles no `imgui_impl_vulkan` (only
+  `imgui_impl_glfw` + Apple's `imgui_impl_metal`). Metal renders the overlay via
+  `metal_renderer`'s draw-data submission. **To do:** add `imgui_impl_vulkan`
+  (init with instance/device/queue/render pass + a descriptor pool) and submit
+  `ImGui::GetDrawData()` in the frame, mirroring the Metal path.
+- **Camera left/right is inverted vs Metal** (yaw feels backwards; pitch is fine).
+  Traced and *not* reproduced statically: mouse input is platform-identical
+  (`window.cpp:164`, plain GLFW delta), camera yaw is shared engine code
+  (`camera_system.cpp:108`, `-mouseDeltaX`), and the Vulkan matrices only apply a
+  *vertical* Y-flip (`packMat4`, transpose verified — no X mirror). No code cause
+  for a Vulkan-only horizontal inversion was found; needs an on-device A/B vs a
+  Metal screenshot. **The fix is NOT the shared `-mouseDeltaX` sign** — Metal uses
+  the same line happily, so flipping it would just break Metal.
+- **Validation warnings (benign):** `vkCreateGraphicsPipelines` reports vertex
+  attributes 1–4 "not consumed by vertex shader" — the shadow pipeline's vertex
+  input declares the full layout but its vertex shader uses only position. Trim
+  the shadow pipeline's `VkVertexInputAttributeDescription`s to position-only.
+
 ## File map (new)
 
 ```
