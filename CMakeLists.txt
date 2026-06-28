@@ -98,6 +98,7 @@ add_library(engine_core STATIC
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
+    src/engine/systems/traffic_system.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -267,6 +268,7 @@ add_executable(run_tests
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
     tests/test_agent_sim.cpp
+    tests/test_traffic_system.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

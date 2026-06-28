@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 
 #include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
+#include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
 #include <nlohmann/json.hpp>
 #include <array>
 #include <functional>
@@ -45,6 +46,14 @@ struct RoadNet {
 
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).
 RenderMesh buildRoadNetMesh(const RoadNet& net);
+
+// The sampled + constrained road graph the mesher builds from: every edge sampled
+// to a fine polyline (a curved road becomes a chain of short straight edges; a
+// straight run collapses back to one), with the local roundabout constraints
+// applied — exactly the geometry the carriageway is meshed over. Exposed so
+// runtime consumers (the navigation graph, ADR-0057) route on the SAME centrelines
+// the asphalt is drawn on. (Wraps the file-local builder; defined in road_net.cpp.)
+RoadGraph navRoadGraph(const RoadNet& net);
 
 // The terrain cut/fill footprints that grade the ground to this road (ADR-0044 corridor
 // conforming). Traces the net's chains, gives each a smoothed, grade-limited vertical

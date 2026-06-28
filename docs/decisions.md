@@ -3728,8 +3728,17 @@ module, pure data + pure functions, no ECS/render/physics:
    class-appropriate speed (cars) or walking speed (pedestrians). Same seed + dt
    sequence → identical trajectories.
 
-*Later phases (planned, not in this ADR):* an ECS `TrafficSystem` that spawns
-entities from `AgentSim` and renders them instanced; a `vehicle.*` Lua surface
+*Phase 2 (landed):* an ECS `TrafficSystem` (`systems/traffic_system.{h,cpp}`)
+that builds the NavGraph from the level's `RoadNet` entities (via the new public
+`navRoadGraph` accessor — the same sampled+constrained graph the mesher uses),
+runs the `AgentSim`, and bakes agent poses into two `InstanceGroup`s (cars,
+pedestrians) rebuilt each fixed step, so RenderSystem draws the whole crowd as
+two instanced batches. Built lazily on the first `fixedUpdate` after load and
+registered in `ArenaState`. `build`/`step` take a `World` directly so the spawn +
+pose-sync logic is unit-tested headless (the GPU mesh upload is the only
+AssetManager-gated part); the in-viewer render is macOS-gated like the rest.
+
+*Later phases (planned, not in this ADR):* a `vehicle.*` Lua surface
 (pure body/wheel recipe like `flora`, plus an effectful drive behaviour like
 `gun.lua`); a `VehicleId` extension of the `PhysicsWorld` seam wrapping Jolt's
 `WheeledVehicleController` (no Jolt types in headers, per ADR-0012); player

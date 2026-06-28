@@ -8,6 +8,7 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
+#include "../engine/systems/traffic_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
@@ -61,6 +62,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
 #endif
     addSystem<MotionSystem>();
+    addSystem<TrafficSystem>();   // cars + pedestrians over the road network (ADR-0057)
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
