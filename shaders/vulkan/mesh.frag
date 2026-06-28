@@ -286,7 +286,7 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
     float a2 = a * a;
     float NdotV = max(dot(N, V), 1e-4);
 
-    int count = min(g.lightCount.x, 32);
+    int count = min(g.counts.x, 32);
     for (int i = 0; i < count; ++i) {
         Light light = g.lights[i];
         int type = int(light.typeRange.x);
