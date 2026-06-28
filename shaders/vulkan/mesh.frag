@@ -42,6 +42,7 @@ layout(set = 0, binding = 0) uniform Globals {
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
+layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -445,7 +446,10 @@ void main() {
     vec3 Famb = fresnelSchlickRoughness(NdotV, f0, roughness);
     vec3 kd = (1.0 - Famb) * (1.0 - metallic);
     vec3 envDiffuse = kd * albedo * irradiance * ao;
-    vec3 envSpecular = prefiltered * Famb;
+    // Split-sum specular (ADR-0017): the baked BRDF LUT gives (scale, bias) so
+    // envSpecular = prefiltered * (F0 * scale + bias) — matches Metal's IBL.
+    vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
+    vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
     vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb * ambientShadow;
 
     // Debug views that need lit-pass data write display-ready values into the HDR

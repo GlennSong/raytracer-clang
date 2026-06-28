@@ -435,6 +435,12 @@ struct VulkanRenderer::Impl {
     VkImageView envView = VK_NULL_HANDLE;     // current equirect (or default)
     bool envBound = false;
 
+    // Split-sum BRDF integration LUT (set 0 binding 3), baked once at init.
+    VkImage brdfLutImage = VK_NULL_HANDLE;
+    VkDeviceMemory brdfLutMemory = VK_NULL_HANDLE;
+    VkImageView brdfLutView = VK_NULL_HANDLE;
+    VkSampler brdfLutSampler = VK_NULL_HANDLE;
+
     // Dear ImGui (ADR-0011); only used when RT_ENABLE_IMGUI is defined.
     VkDescriptorPool imguiPool = VK_NULL_HANDLE;
     bool imguiInitialized = false;
@@ -538,6 +544,7 @@ struct VulkanRenderer::Impl {
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
                            VkImage& image, VkDeviceMemory& memory, VkImageView& view);
     void updateGlobalEnvDescriptor();   // write env equirect into set 0 binding 2
+    bool createBrdfLut();               // bake the split-sum LUT (set 0 binding 3)
     bool createCommandPool();
     bool createCommandBuffers();
     bool createSyncObjects();
@@ -2411,7 +2418,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -2424,6 +2431,10 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].binding = 3;   // split-sum BRDF integration LUT
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -2450,8 +2461,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 2;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -2482,7 +2493,11 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         shadow.sampler = shadowSampler;
         shadow.imageView = shadowArrayView;
         shadow.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        std::array<VkWriteDescriptorSet, 2> writes{};
+        VkDescriptorImageInfo lut{};
+        lut.sampler = brdfLutSampler;
+        lut.imageView = brdfLutView;
+        lut.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        std::array<VkWriteDescriptorSet, 3> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -2495,6 +2510,12 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &shadow;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = descriptorSets[i];
+        writes[2].dstBinding = 3;   // BRDF LUT (binding 2 = env, written later)
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &lut;
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
@@ -2534,6 +2555,161 @@ void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
         write.pImageInfo = &img;
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
+}
+
+bool VulkanRenderer::Impl::createBrdfLut() {
+    const uint32_t SIZE = 256;
+    const VkFormat fmt = VK_FORMAT_R16G16_SFLOAT;
+    if (!createColorTarget(SIZE, SIZE, fmt,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           brdfLutImage, brdfLutMemory, brdfLutView))
+        return false;
+
+    VkSamplerCreateInfo ss{};
+    ss.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ss.magFilter = VK_FILTER_LINEAR;
+    ss.minFilter = VK_FILTER_LINEAR;
+    ss.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    ss.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ss.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ss.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device, &ss, nullptr, &brdfLutSampler) != VK_SUCCESS) return false;
+
+    // One-time bake: a fullscreen pass integrating the split-sum BRDF (no inputs).
+    VkAttachmentDescription color{};
+    color.format = fmt;
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &ref;
+    VkRenderPassCreateInfo rpci{};
+    rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpci.attachmentCount = 1;
+    rpci.pAttachments = &color;
+    rpci.subpassCount = 1;
+    rpci.pSubpasses = &subpass;
+    VkRenderPass rp = VK_NULL_HANDLE;
+    if (vkCreateRenderPass(device, &rpci, nullptr, &rp) != VK_SUCCESS) return false;
+
+    VkFramebufferCreateInfo fbci{};
+    fbci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbci.renderPass = rp;
+    fbci.attachmentCount = 1;
+    fbci.pAttachments = &brdfLutView;
+    fbci.width = SIZE;
+    fbci.height = SIZE;
+    fbci.layers = 1;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    if (vkCreateFramebuffer(device, &fbci, nullptr, &fb) != VK_SUCCESS) return false;
+
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;   // no sets, no push
+    VkPipelineLayout pl = VK_NULL_HANDLE;
+    if (vkCreatePipelineLayout(device, &plci, nullptr, &pl) != VK_SUCCESS) return false;
+
+    VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+    VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/brdf_lut.frag.spv");
+    if (!vert || !frag) return false;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport vpr{0, 0, float(SIZE), float(SIZE), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, {SIZE, SIZE}};
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.pViewports = &vpr;
+    vp.scissorCount = 1;
+    vp.pScissors = &sc;
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    VkPipelineColorBlendAttachmentState ba{};
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &ba;
+    VkGraphicsPipelineCreateInfo gpi{};
+    gpi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpi.stageCount = 2;
+    gpi.pStages = stages;
+    gpi.pVertexInputState = &vi;
+    gpi.pInputAssemblyState = &ia;
+    gpi.pViewportState = &vp;
+    gpi.pRasterizationState = &raster;
+    gpi.pMultisampleState = &ms;
+    gpi.pDepthStencilState = &ds;
+    gpi.pColorBlendState = &blend;
+    gpi.layout = pl;
+    gpi.renderPass = rp;
+    VkPipeline pipe = VK_NULL_HANDLE;
+    VkResult pr = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+    if (pr != VK_SUCCESS) { LOG_ERROR("[vulkan] BRDF LUT pipeline creation failed"); return false; }
+
+    VkCommandBufferAllocateInfo cba{};
+    cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cba.commandPool = commandPool;
+    cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cba.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(device, &cba, &cmd);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+    VkRenderPassBeginInfo rpb{};
+    rpb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpb.renderPass = rp;
+    rpb.framebuffer = fb;
+    rpb.renderArea.extent = {SIZE, SIZE};
+    vkCmdBeginRenderPass(cmd, &rpb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+
+    vkDestroyPipeline(device, pipe, nullptr);
+    vkDestroyPipelineLayout(device, pl, nullptr);
+    vkDestroyFramebuffer(device, fb, nullptr);
+    vkDestroyRenderPass(device, rp, nullptr);
+    return true;
 }
 
 VkShaderModule VulkanRenderer::Impl::loadShaderModule(const std::string& path) {
@@ -3827,6 +4003,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createDescriptorSetLayout() &&
               impl->createGlobalsBuffers() &&
               impl->createDescriptorPool() &&
+              impl->createBrdfLut() &&
               impl->createDescriptorSets() &&
               impl->createMaterialResources() &&
               impl->createBloomResources() &&
@@ -3864,6 +4041,14 @@ void VulkanRenderer::shutdown() {
     impl->destroyTexture(impl->defaultTexture);
     if (impl->envSampler) vkDestroySampler(impl->device, impl->envSampler, nullptr);
     impl->envSampler = VK_NULL_HANDLE;
+    if (impl->brdfLutSampler) vkDestroySampler(impl->device, impl->brdfLutSampler, nullptr);
+    if (impl->brdfLutView) vkDestroyImageView(impl->device, impl->brdfLutView, nullptr);
+    if (impl->brdfLutImage) vkDestroyImage(impl->device, impl->brdfLutImage, nullptr);
+    if (impl->brdfLutMemory) vkFreeMemory(impl->device, impl->brdfLutMemory, nullptr);
+    impl->brdfLutSampler = VK_NULL_HANDLE;
+    impl->brdfLutView = VK_NULL_HANDLE;
+    impl->brdfLutImage = VK_NULL_HANDLE;
+    impl->brdfLutMemory = VK_NULL_HANDLE;
     if (impl->textureSampler) vkDestroySampler(impl->device, impl->textureSampler, nullptr);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         if (impl->materialPools[i]) vkDestroyDescriptorPool(impl->device, impl->materialPools[i], nullptr);
