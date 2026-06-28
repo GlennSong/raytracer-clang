@@ -11,13 +11,14 @@ This is a planning document; each phase lands with its own work and updates
 decision is **ADR-0057**. Roadmap cross-reference: Tier 5 "Second rendering
 backend (Vulkan)".
 
-**Status:** Phases 0–2 implemented (2 partial) — device/swapchain bring-up, the
-offline SPIR-V toolchain, forward lit draws, and the full multi-light
-Cook-Torrance model + the procedural-surface library
-(`src/renderer/vulkan/vulkan_renderer.{h,cpp}`, `shaders/vulkan/mesh.{vert,frag}`).
-Written against the Vulkan 1.0 spec but **unverified on device** (no GPU/SDK in
-CI; needs a Linux/Windows run with the validation layers). ADR-0057 accepted in
-principle (Pending).
+**Status:** Phases 0–3 implemented — device/swapchain bring-up, the offline
+SPIR-V toolchain, forward lit draws, the full multi-light Cook-Torrance model +
+procedural-surface library + texture maps, and **cascaded shadow maps**
+(`src/renderer/vulkan/vulkan_renderer.{h,cpp}`,
+`shaders/vulkan/mesh.{vert,frag}`, `mesh_shadow.vert`). Written against the
+Vulkan 1.0 spec but **unverified on device** (no GPU/SDK in CI; needs a
+Linux/Windows run with the validation layers). ADR-0057 accepted in principle
+(Pending).
 
 Phase 2 textures landed: `uploadTexture` creates real RGBA8 `VkImage`s (staging
 upload + layout transitions); a per-frame transient descriptor pool binds a
@@ -109,10 +110,15 @@ means on real Linux/Windows hardware with the Vulkan validation layers enabled
 - **Verify:** a full level renders at parity; instancing + terrain morph correct;
   `RenderStats` populated.
 
-### Phase 3 — Shadows
-- CSM: shadow-map array, the shadow render pass (`shadows.metal`), cascade fit
-  (already engine-side), PCF, bias/normal-bias, artistic tint/strength.
-- **Verify:** cascades line up with Metal; no acne/peter-panning beyond Metal's.
+### Phase 3 — Shadows  *(code landed; verify on device)*
+- CSM: depth array (a layer per cascade), depth-only shadow pipeline
+  (`mesh_shadow.vert`), the cascade fit ported from Metal's `setLights`
+  (forward-Z corner reconstruction; the shadow VP carries no clip Y-flip so the
+  depth write and the PCF read use the same NDC→uv mapping), PCF via
+  `sampler2DArrayShadow`, normal-bias + dynamic depth-bias. Shadow strength is
+  wired; artistic **tint** and `ambientStrength` are deferred.
+- **Verify:** cascades line up; no acne/peter-panning; flip depth-bias sign or
+  tune constants if needed.
 
 ### Phase 4 — Environment & IBL
 - Port `environment.metal`: skybox (procedural sky + clouds), equirect→cubemap

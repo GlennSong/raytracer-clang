@@ -19,11 +19,17 @@ struct Light {
 
 layout(set = 0, binding = 0) uniform Globals {
     mat4  viewProjection;
+    mat4  view;
+    mat4  cascadeVP[4];
     vec4  cameraPosition;
     vec4  ambient;            // rgb = ambient color * multiplier
-    ivec4 lightCount;         // x = active light count
+    vec4  cascadeSplit;       // far view-space depth of cascades 0..3
+    ivec4 counts;             // x lightCount, y cascadeCount
+    vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
     Light lights[32];
 } g;
+
+layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 
 layout(push_constant) uniform Push {
     mat4  model;
@@ -224,9 +230,57 @@ vec3 applyCheckerboard(vec3 albedo, vec3 worldPos) {
     return dark ? albedo * 0.3 : albedo;
 }
 
+// ---- cascaded shadows (ported from shadows.metal) --------------------------
+// Vulkan: no uv y-flip (the shadow VP is unflipped, so write and read use the
+// same NDC->uv mapping). Forward-Z light depth in [0,1].
+float sampleCascade(int slice, vec3 worldPos, vec3 N) {
+    vec3 biased = worldPos + N * g.shadowParams.x;          // normalBias
+    vec4 clip = g.cascadeVP[slice] * vec4(biased, 1.0);
+    vec3 ndc = clip.xyz / clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+    if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+    float texel = 1.0 / g.shadowParams.z;                   // 1 / mapSize
+    float pcf = g.shadowParams.y;                           // pcfRadius
+    float s = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x) {
+            vec2 off = vec2(float(x), float(y)) * texel * pcf;
+            s += texture(shadowMap, vec4(uv + off, float(slice), ndc.z));
+        }
+    return s / 9.0;
+}
+
+float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
+    int count = g.counts.y;
+    if (count <= 0) return 1.0;
+    int c = count - 1;
+    for (int i = 0; i < count; ++i)
+        if (viewDepth < g.cascadeSplit[i]) { c = i; break; }
+
+    float v = sampleCascade(c, worldPos, N);
+    if (c + 1 < count) {
+        float splitFar = g.cascadeSplit[c];
+        float splitNear = (c == 0) ? 0.0 : g.cascadeSplit[c - 1];
+        float bandStart = mix(splitFar, splitNear, 0.15);
+        if (viewDepth > bandStart) {
+            float t = clamp((viewDepth - bandStart) / (splitFar - bandStart), 0.0, 1.0);
+            v = mix(v, sampleCascade(c + 1, worldPos, N), t);
+        }
+    } else {
+        float farSplit = g.cascadeSplit[count - 1];
+        float fadeStart = farSplit * 0.8;
+        if (viewDepth > fadeStart) {
+            float t = clamp((viewDepth - fadeStart) / (farSplit - fadeStart), 0.0, 1.0);
+            v = mix(v, 1.0, t);
+        }
+    }
+    return v;
+}
+
 // ---- main ------------------------------------------------------------------
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0) {
+                      float metallic, float roughness, vec3 f0, float sunShadow) {
     vec3 directLight = vec3(0.0);
     float a = max(roughness * roughness, 0.002);
     float a2 = a * a;
@@ -262,7 +316,8 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
         vec3 F = fresnelSchlickVec(VdotH, f0);
         vec3 specular = D * Vis * F;
         vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL);
+        float sh = (type == 1) ? sunShadow : 1.0;   // only the sun casts shadows
+        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL * sh);
     }
     return directLight;
 }
@@ -296,7 +351,16 @@ void main() {
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
 
-    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0);
+    // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
+    // looks down -z, so -(view * worldPos).z. strength scales the darkening.
+    float sunShadow = 1.0;
+    if (g.counts.y > 0) {
+        float viewDepth = -(g.view * vec4(inWorldPos, 1.0)).z;
+        sunShadow = computeShadow(inWorldPos, N, viewDepth);
+        sunShadow = mix(1.0, sunShadow, g.shadowParams.w);
+    }
+
+    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, sunShadow);
     // Flat ambient stand-in until IBL lands (Phase 4 replaces this with
     // irradiance + prefiltered specular weighted by the BRDF LUT). AO modulates it.
     vec3 ambient = g.ambient.rgb * albedo * (1.0 - metallic) * ao;
