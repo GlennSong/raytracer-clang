@@ -84,7 +84,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | Instanced rendering (correctness) | ✅ | ⚠️ | Vulkan renders via the CPU `drawMesh` fallback — visually correct but no GPU batching (perf, not a visual gap). |
 | Vegetation wind sway | ✅ | ✅ | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. |
-| CDLOD terrain morph | ✅ | 🟡 | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Unverified on device. |
+| CDLOD terrain morph | ✅ | ✅ | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Device-verified (stable after the reverse-Z fix). |
 | Mipmaps | ✅ | ✅ | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). |
 
 ### Debug & tooling
@@ -109,12 +109,12 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
 - **2026-06-28 (Windows / RTX 3060, 2nd pass):** confirmed working — mipmaps
   (smooth distant textures), normal mapping (surface detail), fog, vegetation
   wind + alpha-cut foliage, wireframe, SSAO (blur). Diagnosed + fixed: distant
-  terrain flicker was forward-Z precision → switched to **reverse-Z** (re-verify).
+  terrain flicker was forward-Z precision → switched to **reverse-Z** (confirmed:
+  terrain no longer flickers; CDLOD renders stable).
   Clarified (not bugs): brick/checkerboard "speed lines" are procedural-surface
   aliasing (shared with Metal); DOF needs the camera panel + a low f-stop
   (f/8 gives sub-pixel CoC).
-- **Pending device check (Vulkan):** reverse-Z (terrain flicker re-verify);
-  CDLOD terrain morph; transparency; shadow tint; HDR equirect IBL (4b) + BRDF
+- **Pending device check (Vulkan):** transparency; shadow tint; HDR equirect IBL (4b) + BRDF
   LUT; debug views (albedo/depth); depth of field (with a low f-stop); SSR
   binary-search refinement.
 
