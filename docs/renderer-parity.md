@@ -84,7 +84,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | --- | --- | --- | --- |
 | Instanced rendering (correctness) | ✅ | ⚠️ | Vulkan renders via the CPU `drawMesh` fallback — visually correct but no GPU batching (perf, not a visual gap). |
 | Vegetation wind sway | ✅ | 🟡 | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. Unverified on device. |
-| CDLOD terrain morph | ✅ | ⚠️ | Vulkan `drawTerrain` falls back to a plain draw — renders, but LOD pops/cracks (no morph band). |
+| CDLOD terrain morph | ✅ | 🟡 | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Unverified on device. |
 | Mipmaps | ✅ | 🟡 | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). Unverified on device. |
 
 ### Debug & tooling
@@ -109,7 +109,8 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
 - **Pending device check (Vulkan):** HDR equirect IBL (4b); debug views
   (albedo/depth fixes); wireframe; depth of field; SSAO box-blur + IGN rotation;
   SSR binary-search refinement; normal mapping (TBN); aerial-perspective fog;
-  **mipmaps; transparency / alpha blending**.
+  mipmaps; transparency / alpha blending; **shadow tint; vegetation wind;
+  terrain morph**.
 
 ## Known non-goals (both backends)
 Per ADR-0057: unifying the viewer with the offline path tracer, compute shaders,

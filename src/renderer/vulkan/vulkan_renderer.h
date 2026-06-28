@@ -40,6 +40,8 @@ public:
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
+    void drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                     float morphStart, float morphEnd) override;
     void endFrame() override;
 
     // Dear ImGui (ADR-0011). No-ops unless RT_ENABLE_IMGUI is defined.

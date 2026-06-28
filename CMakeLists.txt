@@ -361,7 +361,7 @@ function(rt_build_vulkan_shaders)
     endif()
     set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
     file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
-    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert
+    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag)
     set(VK_SPV_FILES "")

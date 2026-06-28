@@ -106,12 +106,14 @@ struct GlobalsUBO {
     float    wind2[4];               // x frequency, y height, z amplitude (FLAG_WIND)
 };
 
-// Per-draw push constants for the forward pass (112 <= 128 B).
+// Per-draw push constants for the forward pass (120 <= 128 B).
 struct MeshPush {
     float    model[16];
     float    albedoMetallic[4];  // rgb albedo, a metallic
     float    emissionRough[4];   // rgb emission, a roughness
     uint32_t surfaceFlags[4];    // x surfaceId, y rawFlags, z textureFlags
+    float    morphStart;         // CDLOD terrain morph band (terrain.vert only)
+    float    morphEnd;
 };
 
 // Per-draw push constants for the shadow (depth-only) pass: the cascade's light
@@ -212,6 +214,7 @@ struct DrawItem {
     MeshPush push;
     std::array<TextureHandle, 5> textures;   // albedo, MR, normal, AO, emissive
     float opacity = 1.0f;                     // < 1 → transparent pass (back-to-front)
+    bool  terrain = false;                    // → terrainPipeline (CDLOD morph in vert)
 };
 
 bool hasValidationLayer() {
@@ -457,6 +460,7 @@ struct VulkanRenderer::Impl {
     VkPipeline meshPipeline = VK_NULL_HANDLE;
     VkPipeline wirePipeline = VK_NULL_HANDLE;          // VK_POLYGON_MODE_LINE debug view
     VkPipeline transparentPipeline = VK_NULL_HANDLE;   // alpha blend, no depth write
+    VkPipeline terrainPipeline = VK_NULL_HANDLE;       // CDLOD morph (terrain.vert)
 
     // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
@@ -2718,6 +2722,29 @@ bool VulkanRenderer::Impl::createPipeline() {
         LOG_ERROR("[vulkan] transparent pipeline creation failed");
         return false;
     }
+
+    // CDLOD terrain variant: opaque (reset the transparent state above) but with
+    // terrain.vert, which morphs each vertex toward its coarser-LOD position by
+    // camera distance. Same layout + mesh.frag shading.
+    VkShaderModule cvert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/terrain.vert.spv");
+    VkShaderModule cfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.frag.spv");
+    if (!cvert || !cfrag) return false;
+    stages[0].module = cvert;
+    stages[1].module = cfrag;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    blendAttachments[0].blendEnable = VK_FALSE;
+    blendAttachments[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachments[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkResult cresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                 &terrainPipeline);
+    vkDestroyShaderModule(device, cvert, nullptr);
+    vkDestroyShaderModule(device, cfrag, nullptr);
+    if (cresult != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] terrain pipeline creation failed");
+        return false;
+    }
     return true;
 }
 
@@ -3557,11 +3584,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // flat color from the push (mesh_wire.frag) and skip the material set.
     // Split opaque (depth write, no blend) from transparent (alpha blend, no depth
     // write, sorted back-to-front). Wireframe modes draw everything as lines.
-    std::vector<const DrawItem*> opaque, transparent;
+    std::vector<const DrawItem*> opaque, terrainItems, transparent;
     for (const DrawItem& item : drawQueue) {
         GpuMesh* m = meshes.get(item.mesh);
         if (!m || m->indexCount == 0) continue;
-        (item.opacity < 1.0f ? transparent : opaque).push_back(&item);
+        if (item.terrain) terrainItems.push_back(&item);
+        else if (item.opacity < 1.0f) transparent.push_back(&item);
+        else opaque.push_back(&item);
     }
     const float cx = cpuGlobals.cameraPosition[0], cy = cpuGlobals.cameraPosition[1],
                 cz = cpuGlobals.cameraPosition[2];
@@ -3573,6 +3602,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     std::sort(transparent.begin(), transparent.end(),
               [&](const DrawItem* a, const DrawItem* b) { return camDistSq(a) > camDistSq(b); });
     std::vector<const DrawItem*> allItems = opaque;
+    allItems.insert(allItems.end(), terrainItems.begin(), terrainItems.end());
     allItems.insert(allItems.end(), transparent.begin(), transparent.end());
 
     auto recordGeometry = [&](const std::vector<const DrawItem*>& items, VkPipeline pipe,
@@ -3641,6 +3671,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/true);
     } else {
         recordGeometry(opaque, meshPipeline, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(terrainItems, terrainPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
         if (wireframeFrame == 2)
             recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/false);
@@ -3871,6 +3902,8 @@ void VulkanRenderer::shutdown() {
     impl->wirePipeline = VK_NULL_HANDLE;
     if (impl->transparentPipeline) vkDestroyPipeline(impl->device, impl->transparentPipeline, nullptr);
     impl->transparentPipeline = VK_NULL_HANDLE;
+    if (impl->terrainPipeline) vkDestroyPipeline(impl->device, impl->terrainPipeline, nullptr);
+    impl->terrainPipeline = VK_NULL_HANDLE;
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
@@ -4441,7 +4474,42 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     // Stash opacity (float bits) in the spare push slot so mesh.frag can write it
     // as the output alpha for the transparent blend pass.
     std::memcpy(&item.push.surfaceFlags[3], &material.opacity, sizeof(float));
+    item.push.morphStart = 0.0f;   // terrain-only (drawTerrain sets these)
+    item.push.morphEnd = 0.0f;
     item.opacity = material.opacity;
+    impl->drawQueue.push_back(item);
+    impl->stats.entitiesSubmitted++;
+}
+
+void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                                 float morphStart, float morphEnd) {
+    // CDLOD node (ADR-0036): world-space mesh, identity model; terrain.vert morphs
+    // each vertex toward its coarser-LOD position (packed in the tangent slot) over
+    // [morphStart, morphEnd] camera distance. Shares the lit fragment + material.
+    DrawItem item;
+    item.mesh = handle;
+    packMat4(Mat4(), item.push.model, /*flipY=*/false);   // identity (verts are world-space)
+    item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
+    item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);
+    item.push.albedoMetallic[2] = static_cast<float>(material.albedo.z);
+    item.push.albedoMetallic[3] = material.metallic;
+    item.push.emissionRough[0] = static_cast<float>(material.emission.x);
+    item.push.emissionRough[1] = static_cast<float>(material.emission.y);
+    item.push.emissionRough[2] = static_cast<float>(material.emission.z);
+    item.push.emissionRough[3] = material.roughness;
+    item.textures = {material.albedoMap, material.metallicRoughnessMap,
+                     material.normalMap, material.aoMap, material.emissiveMap};
+    uint32_t textureFlags = 0;
+    for (uint32_t k = 0; k < item.textures.size(); ++k)
+        if (item.textures[k].valid()) textureFlags |= (1u << k);
+    item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
+    item.push.surfaceFlags[1] = material.flags;
+    item.push.surfaceFlags[2] = textureFlags;
+    float one = 1.0f;
+    std::memcpy(&item.push.surfaceFlags[3], &one, sizeof(float));   // opaque
+    item.push.morphStart = morphStart;
+    item.push.morphEnd = morphEnd;
+    item.terrain = true;
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }
