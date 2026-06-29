@@ -66,7 +66,7 @@ void AgentSim::build(const NavGraph& graph, int carCount, int pedCount, uint32_t
         a.departWork = 7.5 + randomUnit() * 1.5;     // ~07:30–09:00
         a.departHome = 16.5 + randomUnit() * 1.5;    // ~16:30–18:00
         a.activity = AgentActivity::AtHome;
-        a.pos = graph.nodes[a.home];
+        a.pos = idlePose(a.home, a.kind);
         agentList.push_back(a);
     }
 }
@@ -80,7 +80,7 @@ void AgentSim::startTrip(Agent& a, int originNode, int goalNode) {
         // Unreachable (or origin == goal): treat as already arrived so the daily
         // loop still advances instead of stalling.
         a.moving = false;
-        a.pos = nav->nodes[goalNode];
+        a.pos = idlePose(goalNode, a.kind);
         a.activity = (a.activity == AgentActivity::Commuting) ? AgentActivity::AtWork
                                                               : AgentActivity::AtHome;
         return;
@@ -92,6 +92,20 @@ void AgentSim::startTrip(Agent& a, int originNode, int goalNode) {
                  : 0;
     a.moving = true;
     refreshPose(a);
+}
+
+Vec2 AgentSim::idlePose(int node, AgentKind kind) const {
+    if (!nav || node < 0 || node >= nav->nodeCount()) return Vec2();
+    const std::vector<int>& out = nav->outLinks[node];
+    if (out.empty()) return nav->nodes[node];
+    int li = out[0];
+    Vec2 dir = nav->direction(li);
+    Vec2 right(dir.y, -dir.x);                      // right of travel (RH traffic)
+    Real hw = nav->links[li].width * 0.5;
+    // Cars pull over to the curb; pedestrians wait on the sidewalk beyond it.
+    Real off = (kind == AgentKind::Car) ? hw - 1.2 : hw + 1.2;
+    if (off < 0.5) off = 0.5;
+    return nav->nodes[node] + right * off;
 }
 
 void AgentSim::refreshPose(Agent& a) {
@@ -138,7 +152,7 @@ void AgentSim::advance(Agent& a, Real dt, Real gap) {
         int dest = nav->links[a.route.links.back()].to;
         a.moving = false;
         a.speed = 0;
-        a.pos = nav->nodes[dest];
+        a.pos = idlePose(dest, a.kind);
         a.activity = (a.activity == AgentActivity::Commuting) ? AgentActivity::AtWork
                                                               : AgentActivity::AtHome;
         a.route.links.clear();

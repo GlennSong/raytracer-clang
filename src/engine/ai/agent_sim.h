@@ -69,6 +69,9 @@ private:
     void advance(Agent& a, Real dt, Real gap);
     void computeGaps();                // per-lane leader gaps for moving agents
     void refreshPose(Agent& a);
+    // Resting pose at a node, OFF the centreline: cars at the curb, pedestrians on
+    // the sidewalk — so parked agents don't sit in the middle of the road.
+    Vec2 idlePose(int node, AgentKind kind) const;
     uint32_t nextRandom();
     Real randomUnit();
 

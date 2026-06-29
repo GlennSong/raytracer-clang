@@ -97,6 +97,20 @@ TEST_CASE(car_following_keeps_commute_flowing) {
     CHECK(anyAtWork);
 }
 
+TEST_CASE(idle_agents_park_off_the_centerline) {
+    NavGraph nav = cityNav();
+    AgentSim sim;
+    sim.build(nav, 30, 30, 55);   // everyone starts idle at home
+    bool carOffset = false, pedOffset = false;
+    for (const Agent& a : sim.agents()) {
+        Real d = (a.pos - nav.nodes[a.home]).length();
+        if (a.kind == AgentKind::Car && d > 0.5) carOffset = true;
+        if (a.kind == AgentKind::Pedestrian && d > 0.5) pedOffset = true;
+    }
+    CHECK(carOffset);   // parked cars pull off the road node (to the curb)
+    CHECK(pedOffset);   // idle pedestrians wait off the road node (on the sidewalk)
+}
+
 TEST_CASE(agent_clock_wraps) {
     NavGraph nav = cityNav();
     AgentSim sim;
