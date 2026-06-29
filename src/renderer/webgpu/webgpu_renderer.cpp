@@ -6,23 +6,24 @@
 // instancing, or terrain morph yet — those are later phases, mirroring the
 // Vulkan backend's phasing in docs/webgpu-renderer-plan.md).
 //
-// Structure deliberately mirrors src/renderer/vulkan/vulkan_renderer.cpp: pack
-// the engine's (double) Vertex to a float GpuVertex, queue draws during the
-// frame, and record the whole render pass in endFrame(). WebGPU has no push
-// constants, so per-draw data rides a single dynamic uniform buffer (one 256-
-// byte-aligned slot per draw) instead of the Vulkan push-constant path.
+// Structure mirrors src/renderer/vulkan/vulkan_renderer.cpp: pack the engine's
+// (double) Vertex to a float GpuVertex, queue draws during the frame, and record
+// the whole render pass in endFrame(). WebGPU has no push constants, so per-draw
+// data rides a single dynamic uniform buffer (one 256-byte slot per draw).
 //
-// UNVERIFIED ON DEVICE: there is no emsdk/WebGPU in CI. Written against the
-// webgpu.h C API as Emscripten ships it (emsdk ~3.1.x: the surface-based
-// swapchain API, WGPUShaderModuleWGSLDescriptor, char* labels). Newer emsdk
-// renamed some types (WGPUShaderSourceWGSL, WGPUStringView) — see AGENTS.md if
-// the build fails to compile against your toolchain.
+// Targets the **emdawnwebgpu** port (Dawn's standardized webgpu.h), which is how
+// Emscripten 4.0.10+/6.x ship WebGPU — the legacy `-sUSE_WEBGPU`/
+// `emscripten_webgpu_get_device()` binding was removed. Built with `-sASYNCIFY`
+// so the async adapter/device request can be awaited inside the synchronous
+// Renderer::initialize() seam (emscripten_sleep yields to the browser until the
+// callbacks fire). Compiles + links against emsdk 6.0.1; in-browser behaviour is
+// still unverified (no GPU in CI).
 
 #include "../renderer.h"
 #include "../../log.h"
 
 #include <webgpu/webgpu.h>
-#include <emscripten/html5_webgpu.h>
+#include <emscripten/emscripten.h>
 
 #include <cmath>
 #include <cstring>
@@ -32,18 +33,23 @@ namespace engine {
 
 namespace {
 
-// One slot of per-draw uniform data, padded so each draw sits on a
-// 256-byte dynamic-offset boundary (the conservative minUniformBufferOffset-
-// Alignment; queried alignment refinement is a later optimization).
+// One slot of per-draw uniform data, padded so each draw sits on a 256-byte
+// dynamic-offset boundary (conservative minUniformBufferOffsetAlignment).
 constexpr uint64_t kDrawStride = 256;
 
 // Phase 1 swapchain format. navigator.gpu.getPreferredCanvasFormat() returns
 // "bgra8unorm" on every current platform, so we hardcode the non-sRGB form and
 // do the linear->sRGB encode in the shader (see WGSL fs_main). A later phase can
-// query the surface capabilities and switch to a *-srgb view to drop the manual
-// gamma.
+// query surface capabilities and switch to a *-srgb view to drop the gamma.
 constexpr WGPUTextureFormat kSwapFormat = WGPUTextureFormat_BGRA8Unorm;
 constexpr WGPUTextureFormat kDepthFormat = WGPUTextureFormat_Depth24Plus;
+
+WGPUStringView sv(const char* s) {
+    WGPUStringView v;
+    v.data = s;
+    v.length = s ? std::strlen(s) : 0;
+    return v;
+}
 
 // Float vertex as the GPU sees it (the engine Vertex is double-precision). Must
 // match the vertex layout below and the @location inputs in the WGSL.
@@ -197,13 +203,29 @@ public:
             return false;
         }
 
-        // The device is created on the JS side before the module runs and handed
-        // over via Module.preinitializedWebGPUDevice (see web/index.html). This
-        // keeps initialize() synchronous — the Renderer seam has no async path.
-        device_ = emscripten_webgpu_get_device();
+        // Adapter + device are acquired asynchronously (the only API the
+        // standardized webgpu.h offers); -sASYNCIFY lets us await them here so
+        // the Renderer seam stays synchronous. emscripten_sleep yields to the
+        // browser event loop, where the AllowSpontaneous callbacks resolve.
+        WGPURequestAdapterCallbackInfo aci = {};
+        aci.mode = WGPUCallbackMode_AllowSpontaneous;
+        aci.callback = &WebGpuRenderer::onAdapter;
+        aci.userdata1 = this;
+        wgpuInstanceRequestAdapter(instance_, nullptr, aci);
+        while (!adapterDone_) emscripten_sleep(1);
+        if (!adapter_) {
+            LOG_ERROR("WebGPU: no GPU adapter (navigator.gpu unavailable?)");
+            return false;
+        }
+
+        WGPURequestDeviceCallbackInfo dci = {};
+        dci.mode = WGPUCallbackMode_AllowSpontaneous;
+        dci.callback = &WebGpuRenderer::onDevice;
+        dci.userdata1 = this;
+        wgpuAdapterRequestDevice(adapter_, nullptr, dci);
+        while (!deviceDone_) emscripten_sleep(1);
         if (!device_) {
-            LOG_ERROR("WebGPU: no preinitialized device (Module.preinitializedWebGPUDevice "
-                      "missing or navigator.gpu unavailable)");
+            LOG_ERROR("WebGPU: failed to acquire a device");
             return false;
         }
         queue_ = wgpuDeviceGetQueue(device_);
@@ -230,6 +252,7 @@ public:
         if (surface_) { wgpuSurfaceRelease(surface_); surface_ = nullptr; }
         if (queue_)   { wgpuQueueRelease(queue_); queue_ = nullptr; }
         if (device_)  { wgpuDeviceRelease(device_); device_ = nullptr; }
+        if (adapter_) { wgpuAdapterRelease(adapter_); adapter_ = nullptr; }
         if (instance_) { wgpuInstanceRelease(instance_); instance_ = nullptr; }
     }
 
@@ -391,7 +414,7 @@ public:
             wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging.data(), staging.size());
         }
 
-        WGPUSurfaceTexture surfaceTexture;
+        WGPUSurfaceTexture surfaceTexture = {};
         wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
         if (!surfaceTexture.texture) {
             LOG_WARN("WebGPU: no current surface texture this frame");
@@ -403,6 +426,7 @@ public:
 
         WGPURenderPassColorAttachment color = {};
         color.view = backbuffer;
+        color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
         color.loadOp = WGPULoadOp_Clear;
         color.storeOp = WGPUStoreOp_Store;
         color.clearValue = clearColor_;
@@ -442,12 +466,9 @@ public:
         wgpuCommandBufferRelease(commands);
         wgpuCommandEncoderRelease(encoder);
         wgpuTextureViewRelease(backbuffer);
-        // On the web the browser presents automatically after the queue work
-        // resolves; wgpuSurfacePresent is a no-op there but is the spec call.
-#ifndef __EMSCRIPTEN__
-        wgpuSurfacePresent(surface_);
-#endif
         wgpuTextureRelease(surfaceTexture.texture);
+        // The browser presents automatically after the queue work resolves;
+        // there is no wgpuSurfacePresent on the web.
     }
 
 private:
@@ -463,9 +484,24 @@ private:
         GpuDraw data;
     };
 
+    // ---- async device acquisition callbacks --------------------------------
+
+    static void onAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter,
+                          WGPUStringView /*message*/, void* userdata1, void*) {
+        auto* self = static_cast<WebGpuRenderer*>(userdata1);
+        if (status == WGPURequestAdapterStatus_Success) self->adapter_ = adapter;
+        self->adapterDone_ = true;
+    }
+    static void onDevice(WGPURequestDeviceStatus status, WGPUDevice device,
+                         WGPUStringView /*message*/, void* userdata1, void*) {
+        auto* self = static_cast<WebGpuRenderer*>(userdata1);
+        if (status == WGPURequestDeviceStatus_Success) self->device_ = device;
+        self->deviceDone_ = true;
+    }
+
     // ---- resource helpers --------------------------------------------------
 
-    WGPUBuffer createBuffer(WGPUBufferUsageFlags usage, const void* data, size_t size) {
+    WGPUBuffer createBuffer(WGPUBufferUsage usage, const void* data, size_t size) {
         // WebGPU requires buffer sizes (and mapped writes) to be 4-byte aligned.
         size_t aligned = (size + 3) & ~size_t(3);
         WGPUBufferDescriptor desc = {};
@@ -496,9 +532,9 @@ private:
     }
 
     bool createSurface() {
-        WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc = {};
-        canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
-        canvasDesc.selector = "#canvas";
+        WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc = {};
+        canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
+        canvasDesc.selector = sv("#canvas");
         WGPUSurfaceDescriptor surfaceDesc = {};
         surfaceDesc.nextInChain = &canvasDesc.chain;
         surface_ = wgpuInstanceCreateSurface(instance_, &surfaceDesc);
@@ -540,9 +576,9 @@ private:
     }
 
     bool createPipeline() {
-        WGPUShaderModuleWGSLDescriptor wgslDesc = {};
-        wgslDesc.chain.sType = WGPUSType_ShaderModuleWGSLDescriptor;
-        wgslDesc.code = kMeshWgsl;
+        WGPUShaderSourceWGSL wgslDesc = {};
+        wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wgslDesc.code = sv(kMeshWgsl);
         WGPUShaderModuleDescriptor moduleDesc = {};
         moduleDesc.nextInChain = &wgslDesc.chain;
         WGPUShaderModule module = wgpuDeviceCreateShaderModule(device_, &moduleDesc);
@@ -573,13 +609,14 @@ private:
         plDesc.bindGroupLayouts = &bindLayout_;
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device_, &plDesc);
 
-        // Vertex layout — must match GpuVertex / the WGSL @location inputs.
+        // Vertex layout — must match GpuVertex / the WGSL @location inputs. Set
+        // fields by name (WGPUVertexAttribute leads with nextInChain).
         WGPUVertexAttribute attrs[5] = {};
-        attrs[0] = {WGPUVertexFormat_Float32x3, offsetof(GpuVertex, position), 0};
-        attrs[1] = {WGPUVertexFormat_Float32x3, offsetof(GpuVertex, normal),   1};
-        attrs[2] = {WGPUVertexFormat_Float32x3, offsetof(GpuVertex, tangent),  2};
-        attrs[3] = {WGPUVertexFormat_Float32x2, offsetof(GpuVertex, texcoord), 3};
-        attrs[4] = {WGPUVertexFormat_Float32x3, offsetof(GpuVertex, color),    4};
+        attrs[0].format = WGPUVertexFormat_Float32x3; attrs[0].offset = offsetof(GpuVertex, position); attrs[0].shaderLocation = 0;
+        attrs[1].format = WGPUVertexFormat_Float32x3; attrs[1].offset = offsetof(GpuVertex, normal);   attrs[1].shaderLocation = 1;
+        attrs[2].format = WGPUVertexFormat_Float32x3; attrs[2].offset = offsetof(GpuVertex, tangent);  attrs[2].shaderLocation = 2;
+        attrs[3].format = WGPUVertexFormat_Float32x2; attrs[3].offset = offsetof(GpuVertex, texcoord); attrs[3].shaderLocation = 3;
+        attrs[4].format = WGPUVertexFormat_Float32x3; attrs[4].offset = offsetof(GpuVertex, color);    attrs[4].shaderLocation = 4;
         WGPUVertexBufferLayout vbLayout = {};
         vbLayout.arrayStride = sizeof(GpuVertex);
         vbLayout.stepMode = WGPUVertexStepMode_Vertex;
@@ -592,19 +629,26 @@ private:
 
         WGPUFragmentState fragment = {};
         fragment.module = module;
-        fragment.entryPoint = "fs_main";
+        fragment.entryPoint = sv("fs_main");
         fragment.targetCount = 1;
         fragment.targets = &colorTarget;
 
         WGPUDepthStencilState depthState = {};
         depthState.format = kDepthFormat;
-        depthState.depthWriteEnabled = true;
+        depthState.depthWriteEnabled = WGPUOptionalBool_True;
         depthState.depthCompare = WGPUCompareFunction_LessEqual;
+        // Depth-only format: a canonical no-stencil face state (Always/Keep) so
+        // the zero-init doesn't leave Undefined compare values.
+        depthState.stencilFront.compare = WGPUCompareFunction_Always;
+        depthState.stencilFront.failOp = WGPUStencilOperation_Keep;
+        depthState.stencilFront.depthFailOp = WGPUStencilOperation_Keep;
+        depthState.stencilFront.passOp = WGPUStencilOperation_Keep;
+        depthState.stencilBack = depthState.stencilFront;
 
         WGPURenderPipelineDescriptor desc = {};
         desc.layout = pipelineLayout;
         desc.vertex.module = module;
-        desc.vertex.entryPoint = "vs_main";
+        desc.vertex.entryPoint = sv("vs_main");
         desc.vertex.bufferCount = 1;
         desc.vertex.buffers = &vbLayout;
         desc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
@@ -677,9 +721,12 @@ private:
     int width_ = 1, height_ = 1;
 
     WGPUInstance instance_ = nullptr;
+    WGPUAdapter adapter_ = nullptr;
     WGPUDevice device_ = nullptr;
     WGPUQueue queue_ = nullptr;
     WGPUSurface surface_ = nullptr;
+    bool adapterDone_ = false;
+    bool deviceDone_ = false;
 
     WGPUTexture depthTexture_ = nullptr;
     WGPUTextureView depthView_ = nullptr;

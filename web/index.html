@@ -2,13 +2,10 @@
 <!--
   Web shell for the WebGPU/WASM viewer (ADR-0058).
 
-  WebGPU device creation is async (navigator.gpu.requestAdapter / requestDevice),
-  but the engine's Renderer::initialize() is synchronous. We bridge that by
-  creating the device HERE, before the wasm module runs, and handing it over via
-  Module.preinitializedWebGPUDevice — the WebGPU backend reads it back through
-  emscripten_webgpu_get_device(). The module is built with -sMODULARIZE=1
-  -sEXPORT_NAME=createViewer, so it does not auto-run; we instantiate it only
-  once the device is ready.
+  The wasm module acquires the WebGPU device itself (the backend calls
+  RequestAdapter/RequestDevice, awaited via ASYNCIFY), so this page only has to
+  provide the canvas and instantiate the MODULARIZE'd module (createViewer). The
+  navigator.gpu check below is just for a friendly error on unsupported browsers.
 
   Build (with an active emsdk):
     emcmake cmake -S . -B build-web
@@ -52,15 +49,6 @@
                     'Chrome, Edge, Safari 18+, or Firefox with WebGPU enabled.');
       }
 
-      let device;
-      try {
-        const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) return fail('No suitable GPU adapter found.');
-        device = await adapter.requestDevice();
-      } catch (e) {
-        return fail('Failed to acquire a WebGPU device: ' + e);
-      }
-
       const canvas = document.getElementById('canvas');
       // Back the canvas with device pixels so rendering is crisp on HiDPI.
       const dpr = window.devicePixelRatio || 1;
@@ -74,7 +62,6 @@
       try {
         await createViewer({
           canvas,
-          preinitializedWebGPUDevice: device,
           print: (text) => console.log(text),
           printErr: (text) => console.warn(text),
         });

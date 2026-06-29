@@ -619,23 +619,48 @@ endif()
 # find_package calls don't resolve), so only this block needs adding.
 # ============================================================
 if(EMSCRIPTEN)
-    add_executable(viewer_web
+    set(WEB_SOURCES
         src/web_main.cpp
         src/renderer/window.cpp
         src/renderer/webgpu/webgpu_renderer.cpp
         src/game/arena_state.cpp
     )
-    target_compile_options(viewer_web PRIVATE -Wall -Wextra)
+    # engine_core's terrain_lod_system references PhysicsWorld, so the host must
+    # bring the physics sources + Jolt (same as the desktop viewer). Jolt is
+    # cross-platform C++ and compiles to wasm.
+    if(RT_ENABLE_PHYSICS)
+        list(APPEND WEB_SOURCES
+            src/engine/physics/physics_world.cpp
+            src/engine/physics/jolt_job_adapter.cpp
+            src/engine/systems/physics_system.cpp
+            src/engine/systems/player_system.cpp
+            src/engine/systems/shooting_system.cpp
+        )
+    endif()
+    add_executable(viewer_web ${WEB_SOURCES})
+    if(RT_ENABLE_PHYSICS)
+        target_link_libraries(viewer_web PRIVATE Jolt)
+        target_compile_definitions(viewer_web PRIVATE RT_ENABLE_PHYSICS=1)
+    endif()
+    # WebGPU comes from the emdawnwebgpu port (Dawn's standardized webgpu.h) —
+    # the legacy -sUSE_WEBGPU binding was removed in Emscripten 6.x. Default is
+    # the remote port (auto-downloaded); override with a local emdawnwebgpu.port.py
+    # path (-DRT_EMDAWN_PORT=...) for offline builds. The port flag is needed at
+    # both compile (header include path) and link (JS glue).
+    set(RT_EMDAWN_PORT "emdawnwebgpu" CACHE STRING
+        "emdawnwebgpu port name, or path to a local emdawnwebgpu.port.py")
+    target_compile_options(viewer_web PRIVATE -Wall -Wextra "--use-port=${RT_EMDAWN_PORT}")
     target_include_directories(viewer_web SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
     target_link_libraries(viewer_web PRIVATE engine_core)
 
-    # WebGPU + the GLFW shim, a growable heap, and MODULARIZE so the page can
-    # instantiate the module only after it has created the WebGPU device
-    # (web/index.html passes it as Module.preinitializedWebGPUDevice). The assets
-    # are baked into the virtual FS so the level/scripts load over the FS API.
+    # The GLFW shim, a growable heap, and MODULARIZE so the page instantiates the
+    # module by name (web/index.html). ASYNCIFY lets the backend await the async
+    # WebGPU adapter/device request inside the synchronous Renderer::initialize().
+    # The assets are baked into the virtual FS so the level/scripts load via FS.
     target_link_options(viewer_web PRIVATE
-        "-sUSE_WEBGPU=1"
+        "--use-port=${RT_EMDAWN_PORT}"
         "-sUSE_GLFW=3"
+        "-sASYNCIFY=1"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=createViewer"

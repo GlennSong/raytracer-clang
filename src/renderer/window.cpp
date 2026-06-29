@@ -135,6 +135,7 @@ static GlfwWindow::Impl* implOf(GLFWwindow* window) {
 // GamepadButton/GamepadAxis enums mirror GLFW's standard layout order, but we
 // map explicitly (and normalize triggers from GLFW's [-1, 1] to [0, 1]) so the
 // neutral types stay decoupled from GLFW values.
+#ifndef __EMSCRIPTEN__  // unused on the web (no glfwGetGamepadState there)
 static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
     out.connected = true;
     for (std::size_t i = 0; i < GAMEPAD_BUTTON_COUNT; i++)
@@ -153,6 +154,7 @@ static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
     out.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] =
         (in.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
 }
+#endif
 
 static void onCursorPos(GLFWwindow* window, double xpos, double ypos) {
     auto* impl = implOf(window);
@@ -256,6 +258,9 @@ GlfwWindow::~GlfwWindow() {
 bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     if (!glfwInit()) return false;
 
+    // Emscripten's GLFW shim doesn't implement the gamepad-mapping API; the web
+    // build skips loading the SDL controller DB (browser gamepads come mapped).
+#ifndef __EMSCRIPTEN__
     {
         std::ifstream file("gamecontrollerdb.txt");
         if (file) {
@@ -268,6 +273,7 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
                 LOG_WARN << "gamecontrollerdb.txt found but glfwUpdateGamepadMappings failed";
         }
     }
+#endif
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -347,12 +353,18 @@ void GlfwWindow::pollEvents() {
     for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
         GamepadState& slot = impl->gamepads[jid];
 
+        // Emscripten's GLFW shim lacks glfwGetGamepadState; the web build leaves
+        // the slots cleared (browser gamepad support is a later phase).
+#ifndef __EMSCRIPTEN__
         GLFWgamepadstate gs;
         if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &gs)) {
             fillGamepadState(slot, gs);
         } else {
             slot = GamepadState{};
         }
+#else
+        slot = GamepadState{};
+#endif
     }
 
     // GCController overlay: fills slots that GLFW left empty (or overwrites

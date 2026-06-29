@@ -3783,11 +3783,14 @@ choices:
   null on the web (window.cpp's non-Apple path); the backend creates its surface
   from the `#canvas` selector (`WGPUSurfaceDescriptorFromCanvasHTMLSelector`), so
   no new seam method is needed (contrast Vulkan's `createVulkanSurface`).
-- **Device creation is bridged async→sync in JS.** WebGPU adapter/device
-  acquisition is async, but `Renderer::initialize()` is synchronous. The HTML
-  shell (`web/index.html`) requests the device *before* instantiating the wasm
-  module (`-sMODULARIZE=1`) and passes it as `Module.preinitializedWebGPUDevice`;
-  the backend reads it via `emscripten_webgpu_get_device()`. No `-sASYNCIFY`.
+- **WebGPU via the emdawnwebgpu port, device acquired with ASYNCIFY.** Emscripten
+  6.x removed the legacy `-sUSE_WEBGPU` binding (and `emscripten_webgpu_get_device`)
+  in favour of the **emdawnwebgpu** port (Dawn's standardized `<webgpu/webgpu.h>`,
+  `--use-port=emdawnwebgpu`). Adapter/device acquisition is async-only there, but
+  `Renderer::initialize()` is synchronous, so the backend awaits
+  `RequestAdapter`/`RequestDevice` with `emscripten_sleep` under `-sASYNCIFY` —
+  keeping the async dance contained in the backend (no JS device handoff; the
+  MODULARIZE'd module just needs the canvas).
 - **WGSL shaders embedded as source strings**, compiled at runtime — matching the
   Metal backend (which compiles MSL strings) rather than the Vulkan offline
   SPIR-V path, since the web build has no build-time shader compiler step and
@@ -3814,11 +3817,13 @@ choices:
 - A **third shader tree** (MSL + GLSL + WGSL) to keep in lockstep — the dominant
   long-term cost ADR-0057 flagged. A future shader-transpile step (Tint/Naga, or
   generating WGSL from the GLSL) could retire it; out of scope for the foundation.
-- **No GPU/emsdk in CI**, so the backend is **unverified on device** — written
-  against the webgpu.h C API as Emscripten ships it (~emsdk 3.1.x:
-  surface-based swapchain, `WGPUShaderModuleWGSLDescriptor`, `char*` labels).
-  Newer emsdk renamed some types (`WGPUShaderSourceWGSL`, `WGPUStringView`); see
-  `src/renderer/webgpu/AGENTS.md` for the adjustments if it fails to compile.
+- **Compiles + links on emsdk 6.0.1** (`viewer_web`: WebGPU backend + Jolt +
+  engine_core, all to wasm); **in-browser behaviour unverified** (no GPU in CI).
+  The emdawnwebgpu Dawn-specific API is explicitly not stable, so a newer port may
+  need small edits — `src/renderer/webgpu/AGENTS.md` lists the current gotchas.
+- **Bundle size** (verified, with physics): ~1.6 MB gzipped over the wire at `-O2`
+  (4.6 MB raw), ~1.3 MB gzipped at `-Oz` (wasm dominates; Jolt is a large share).
+  Comparable to a medium SPA — not a blocker for a desktop-browser target.
 - Built incrementally like Vulkan (clear screen → lit mesh → full forward →
   shadows → post → instancing/terrain), each stage independently verifiable.
   **This ADR lands Phases 0+1** (bring-up + forward single-light Cook-Torrance);

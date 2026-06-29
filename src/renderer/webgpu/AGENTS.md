@@ -1,19 +1,18 @@
 # `src/renderer/webgpu/` — Agent Guide
 
 The WebGPU backend (browser / WebAssembly), an implementation of the `Renderer`
-seam (`../AGENTS.md`) compiled under Emscripten. **Status: Phases 0–1 landed** —
-device/surface bring-up, a cleared swapchain with depth, and forward lit
-single-directional-light Cook-Torrance draws (`webgpu_renderer.cpp`, WGSL
-embedded in that file). **Unverified on device** (no emsdk/GPU in CI — needs a
-real browser run). Decision: ADR-0058. Plan: `docs/webgpu-renderer-plan.md`.
-Parity reference: `../metal/AGENTS.md`.
+seam (`../AGENTS.md`) compiled under Emscripten. **Status: Phases 0–1 landed —
+compiles + links against emsdk 6.0.1** (the `viewer_web` target builds clean).
+In-browser behaviour is **unverified** (no GPU in CI — needs a real browser run).
+Decision: ADR-0058. Plan: `docs/webgpu-renderer-plan.md`. Parity reference:
+`../metal/AGENTS.md`.
 
 ### What exists after Phase 1
 - `webgpu_renderer.cpp` — `WebGpuRenderer : Renderer` (file-local class). Defines
-  `Renderer::create()`. instance (`wgpuCreateInstance`) → device
-  (`emscripten_webgpu_get_device`, preinitialized in JS) → queue → surface (from
-  the `#canvas` selector) → surface configure → depth target → forward pipeline +
-  uniform buffers/bind group.
+  `Renderer::create()`. instance (`wgpuCreateInstance`) → async adapter+device
+  (`wgpuInstanceRequestAdapter` / `wgpuAdapterRequestDevice`, awaited via ASYNCIFY
+  — see below) → queue → surface (from the `#canvas` selector) → surface
+  configure → depth target → forward pipeline + uniform buffers/bind group.
 - **Rendering:** `uploadMesh` packs the (double) engine `Vertex` to a float
   `GpuVertex` and uploads vertex/index buffers (`wgpuQueueWriteBuffer`).
   `setCamera`/`setLights` fill a `GpuGlobals` UBO (view-projection — **no Y-flip**;
@@ -36,18 +35,27 @@ Parity reference: `../metal/AGENTS.md`.
   builds the `viewer_web` target; `src/web_main.cpp` is the entry point;
   `web/index.html` is the shell.
 
-### webgpu.h API-churn notes (read this first if it won't compile)
-Written against the webgpu.h C API as Emscripten ships it around **emsdk 3.1.x**.
-Newer emsdk/Dawn revisions renamed things; adjust if the build breaks:
-- Shader source: `WGPUShaderModuleWGSLDescriptor` + `.code` (`const char*`) →
-  newer `WGPUShaderSourceWGSL` and string fields as `WGPUStringView`
-  (`{ .data, .length }`) instead of NUL-terminated `const char*`.
-- Swapchain: this backend uses the **surface-based** API
-  (`wgpuSurfaceConfigure` / `wgpuSurfaceGetCurrentTexture`). Much older emsdk used
-  `WGPUSwapChain` (`wgpuDeviceCreateSwapChain` / `wgpuSwapChainGetCurrentTextureView`).
-- `WGPURenderPassColorAttachment::depthSlice` exists on newer headers
-  (zero-init = slice 0); harmless on older ones.
-- `entryPoint` / `label` are `const char*` here; newer headers use `WGPUStringView`.
+### WebGPU binding: emdawnwebgpu (NOT the legacy `-sUSE_WEBGPU`)
+Emscripten 6.x removed the old `-sUSE_WEBGPU` binding (and
+`emscripten_webgpu_get_device`). This backend targets the **emdawnwebgpu** port —
+Dawn's implementation of the standardized `<webgpu/webgpu.h>` — pulled in by
+`--use-port=emdawnwebgpu` (compile + link). Consequences for the code:
+- **All string fields are `WGPUStringView`** (`{data, length}`), not `const char*`
+  — use the `sv()` helper. Shader source is `WGPUShaderSourceWGSL`; the canvas
+  surface source is `WGPUEmscriptenSurfaceSourceCanvasHTMLSelector`.
+- **Device acquisition is async-only.** `RequestAdapter`/`RequestDevice` take
+  callbacks and the browser can't block, so `initialize()` awaits them with
+  `emscripten_sleep` under **`-sASYNCIFY`** (set in the CMake link options). If you
+  drop ASYNCIFY, the device handshake will hang — restructure to a callback-driven
+  startup instead.
+- Field gotchas vs. older samples: `WGPURenderPassColorAttachment.depthSlice` must
+  be `WGPU_DEPTH_SLICE_UNDEFINED`; `WGPUDepthStencilState.depthWriteEnabled` is a
+  `WGPUOptionalBool` (not a bool); `WGPUVertexAttribute` leads with `nextInChain`
+  (set fields by name, don't aggregate-init positionally).
+- The port is a small (~130 KB) header+JS-glue package; the actual Dawn
+  implementation runs in the browser's `navigator.gpu`. For offline builds, fetch
+  the `emdawnwebgpu_pkg-*.zip` from the Dawn releases and point
+  `-DRT_EMDAWN_PORT=<path>/emdawnwebgpu.port.py`.
 
 ### Conventions
 - Single-threaded: the web build links **without `-pthread`**. Do not introduce
