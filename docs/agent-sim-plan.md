@@ -94,10 +94,21 @@ helper) graduates from the app into `engine/`.
   bounded by `speed / minRadius`, turns still complete (~60 deg at a Y junction),
   and steering stays deterministic.
 
-**Phase 6 — Physics + render integration (device).**
-- Near/driven cars run Jolt wheeled physics fed by the agent brain; far cars
-  kinematic (hybrid). Cars/peds/signs/lights drawn as instanced models. Traffic
-  lights show their state (emissive lens). Device-verified.
+**Phase 6 — Physics + render integration.** 🚧 render done; hybrid physics device-side
+- *Render bridge (done, headless-tested).* `citysim::CityRenderSystem`
+  (`src/apps/citysim/city_render.{h,cpp}`) builds the NavGraph from the level's
+  RoadNets, runs the CitySim, and bakes poses into InstanceGroups: one for cars,
+  one for pedestrians, and one per signal state whose emissive lenses light up to
+  show each stoplight phase. `arena_state` now registers it in place of the old
+  AgentSim-backed `TrafficSystem`. Covered by `tests/test_city_render.cpp`
+  (build from RoadNet, agents move when stepped, signal lenses light up and
+  change state with the phase). The bridge is an APPLICATION layer that depends
+  on core; core never depends on it.
+- *Remaining (device).* Near/driven cars running Jolt wheeled physics fed by the
+  agent brain (far cars stay kinematic — the hybrid model). The player car
+  already uses Jolt via `VehicleSystem`; wiring AI cars onto Jolt near the camera
+  is the device-verified follow-up. Instanced car/ped/signal meshes are simple
+  boxes today; richer authored models are a later content pass.
 
 ## Test strategy
 

@@ -107,6 +107,13 @@ add_library(engine_core STATIC
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/traffic_system.cpp
+    # Agent-based city simulation app (ADR-0059). Pure C++, headless-safe; the
+    # game (arena_state) registers citysim::CityRenderSystem. Lives under
+    # src/apps/citysim but compiles into the shared lib like traffic_system.
+    src/apps/citysim/traffic_signal.cpp
+    src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_render.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -287,9 +294,7 @@ add_executable(run_tests
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_city_steering.cpp
-    src/apps/citysim/traffic_signal.cpp
-    src/apps/citysim/traffic_rules.cpp
-    src/apps/citysim/city_sim.cpp
+    tests/test_city_render.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

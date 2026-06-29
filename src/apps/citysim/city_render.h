@@ -1,0 +1,79 @@
+#ifndef RAYTRACER_APPS_CITYSIM_CITY_RENDER_H
+#define RAYTRACER_APPS_CITYSIM_CITY_RENDER_H
+
+#include "../../engine/system.h"
+#include "../../engine/ai/nav_graph.h"
+#include "city_sim.h"
+#include <functional>
+
+namespace citysim {
+
+// The ECS render bridge for the agent-based city simulation (ADR-0059 Phase 6).
+// It builds a NavGraph from the level's RoadNet entities, runs a deterministic
+// CitySim of driver+pedestrian agents over it, and bakes their poses into
+// InstanceGroups so RenderSystem draws the whole city as a few instanced
+// batches: one for cars, one for pedestrians, and one per signal state (red /
+// yellow / green) whose emissive lenses light up to show each stoplight phase.
+//
+// This is the APPLICATION layer (apps/citysim). It depends on the core engine
+// (World, components, AssetManager) but the core never depends on it. The
+// reusable primitives it stands on — NavGraph, A*, perception — live in core.
+//
+// build()/step() take a World directly (like TrafficSystem) so the spawn +
+// pose-bake logic is unit-tested headless; mesh upload is the only part that
+// needs the AssetManager (skipped, with null mesh handles, when absent).
+struct CityRenderParams {
+    int cars = 40;
+    int pedestrians = 40;
+    uint32_t seed = 1;
+    Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
+    Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0059)
+    engine::Vec3 carSize{2.0, 1.4, 4.2};   // x = width, y = height, z = length (travel)
+    engine::Vec3 pedSize{0.5, 1.8, 0.5};
+    Real signalLensSize = 0.5;             // emissive cube edge (m)
+    Real signalHeight = 5.0;               // lens height above the road (m)
+};
+
+class CityRenderSystem : public engine::System {
+public:
+    explicit CityRenderSystem(const CityRenderParams& params = {}) : params_(params) {}
+
+    void fixedUpdate(engine::FrameContext& ctx) override;
+
+    // --- testable core (no FrameContext) -----------------------------------
+    // Build the NavGraph from every RoadNet in `world`, seed the CitySim, and
+    // create the instance-group entities. `assets` may be null (tests): then the
+    // groups carry a null MeshHandle and only the transforms are populated.
+    // No-op (returns false) if the world holds no navigable roads.
+    bool build(engine::World& world, engine::AssetManager* assets);
+
+    // Advance the sim by `dt` seconds and re-bake every InstanceGroup.
+    void step(engine::World& world, Real dt);
+
+    bool built() const { return built_; }
+    const CitySim& sim() const { return sim_; }
+    const engine::NavGraph& nav() const { return nav_; }
+    engine::Entity carGroup() const { return carGroup_; }
+    engine::Entity pedGroup() const { return pedGroup_; }
+    engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
+
+private:
+    void syncGroups(engine::World& world);
+    engine::Mat4 agentPose(const Agent& a) const;   // box sized by a.mode (car/ped)
+    engine::Mat4 signalLensPose(int link) const;    // emissive lens for a signalled approach
+    Real groundAt(Real x, Real z) const;
+
+    CityRenderParams params_;
+    engine::NavGraph nav_;
+    CitySim sim_;
+    engine::Entity carGroup_;
+    engine::Entity pedGroup_;
+    engine::Entity signalGroups_[3];   // indexed by SignalState (Green/Yellow/Red)
+    std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
+    Real roadLift_ = 0.0;
+    bool built_ = false;
+};
+
+}  // namespace citysim
+
+#endif

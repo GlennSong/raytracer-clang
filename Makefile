@@ -148,7 +148,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_sim.cpp \
 	$(TEST_DIR)/test_city_signals.cpp \
 	$(TEST_DIR)/test_city_perception.cpp \
-	$(TEST_DIR)/test_city_steering.cpp
+	$(TEST_DIR)/test_city_steering.cpp \
+	$(TEST_DIR)/test_city_render.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -211,6 +212,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
+	$(SRC_DIR)/apps/citysim/city_render.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

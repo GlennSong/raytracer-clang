@@ -8,7 +8,7 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
-#include "../engine/systems/traffic_system.h"
+#include "../apps/citysim/city_render.h"
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
@@ -63,7 +63,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
 #endif
     addSystem<MotionSystem>();
-    addSystem<TrafficSystem>();   // cars + pedestrians over the road network (ADR-0058)
+    // Agent-based city: drivers + pedestrians with acceleration, signals,
+    // perception, and bounded-radius steering over the road network (ADR-0059).
+    addSystem<citysim::CityRenderSystem>();
 #ifdef RT_ENABLE_PHYSICS
     addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0058)
 #endif

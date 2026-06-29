@@ -3911,10 +3911,25 @@ phase, phases cycle green→yellow→red, perpendicular arms never both green); 
 `traffic_rules.{h,cpp}` (pure `approachStop` / `signalSpeedCap` /
 `nearestObstacleAhead`). 12 tests; suite 566/566.
 
-**Owed.** Phases 2-6 (agent framework + possession, signals/crosswalks in the
-loop, perception-driven avoidance + faults, turn-radius steering, Jolt+render
-integration) — see the plan. The existing `engine/ai/agent_sim` + `TrafficSystem`
-behaviour migrates into `CitySim` in Phase 2.
+**Phases 2-5 (landed, headless).** `CitySim` (`src/apps/citysim/city_sim.{h,cpp}`)
+is the agent framework: agents possess cars (two-way link), commute on a daily
+schedule, follow lanes/gaps, obey signals (hard stop line at red) and crosswalks,
+brake for what they SEE in a vision cone, make deterministic perception faults
+below reliability 1.0, and steer through junctions on a bounded-turn-radius arc
+(rate-limited heading) instead of snapping. Tests: `test_city_sim`,
+`test_city_signals`, `test_city_perception`, `test_city_steering`.
+
+**Phase 6 (render landed, headless-tested; hybrid physics device-side).** App
+`CityRenderSystem` (`src/apps/citysim/city_render.{h,cpp}`) builds the NavGraph
+from the level's RoadNets, runs the `CitySim`, and bakes poses into
+InstanceGroups — one for cars, one for pedestrians, one per signal state with an
+emissive lens that lights up for the active phase. `arena_state` now registers it
+in place of the old AgentSim-backed `TrafficSystem`. App sources compile into
+`engine_core` (like `traffic_system.cpp`) so viewer/editor link them; the
+core→app dependency direction is preserved (the bridge depends on core, not vice
+versa). Tests: `test_city_render`. Remaining device-side: running near/driven AI
+cars on Jolt wheeled physics (the hybrid model — far cars stay kinematic); the
+player car already uses Jolt via `VehicleSystem`.
 
 ---
 
@@ -3945,6 +3960,8 @@ to be replaced; listed here so they stay visible.
 | Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
 | Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
+| AI city cars are kinematic, not Jolt | `apps/citysim/city_sim.cpp`, `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | The CitySim moves driver/ped agents kinematically along the NavGraph (deterministic, headless-tested); only the player's car runs Jolt wheeled physics (`VehicleSystem`). The "hybrid" model (near/driven cars on Jolt, far cars kinematic) isn't wired — AI cars never collide physically | A near-camera handoff that spawns/possesses a Jolt vehicle for AI cars within range and feeds it the agent brain; device-verified tuning |
+| City agents/signals render as boxes | `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | Cars, pedestrians, and signal lenses are `MeshBuilder::box` instances (emissive lens for signal state). Functional and instanced, but not authored models | Authored/instanced car + pedestrian + signal-head models (a content pass); Lua-authored vehicle bodies already exist (ADR-0058) and could feed the car group |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
