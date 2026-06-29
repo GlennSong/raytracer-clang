@@ -606,3 +606,52 @@ if(Qt6_FOUND)
 else()
     message(STATUS "Qt6 not found — skipping the editor application")
 endif()
+
+# ============================================================
+# Web target (WebGPU + WebAssembly) — built under the Emscripten toolchain
+# (`emcmake cmake -S . -B build-web`). ADR-0058. The WebGPU backend
+# (src/renderer/webgpu/webgpu_renderer.cpp) is the web implementation of the
+# `Renderer` seam and provides Renderer::create(); the GLFW window backend is
+# Emscripten's built-in GLFW3 shim (-sUSE_GLFW=3), so window.cpp is reused as-is.
+# Single-threaded by design (Application forces JobSystem synchronous mode under
+# __EMSCRIPTEN__), so the build needs no -pthread / SharedArrayBuffer / COOP-COEP.
+# Physics/Qt/Vulkan paths above are skipped on this toolchain (their
+# find_package calls don't resolve), so only this block needs adding.
+# ============================================================
+if(EMSCRIPTEN)
+    add_executable(viewer_web
+        src/web_main.cpp
+        src/renderer/window.cpp
+        src/renderer/webgpu/webgpu_renderer.cpp
+        src/game/arena_state.cpp
+    )
+    target_compile_options(viewer_web PRIVATE -Wall -Wextra)
+    target_include_directories(viewer_web SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(viewer_web PRIVATE engine_core)
+
+    # WebGPU + the GLFW shim, a growable heap, and MODULARIZE so the page can
+    # instantiate the module only after it has created the WebGPU device
+    # (web/index.html passes it as Module.preinitializedWebGPUDevice). The assets
+    # are baked into the virtual FS so the level/scripts load over the FS API.
+    target_link_options(viewer_web PRIVATE
+        "-sUSE_WEBGPU=1"
+        "-sUSE_GLFW=3"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sMODULARIZE=1"
+        "-sEXPORT_NAME=createViewer"
+        "-sENVIRONMENT=web"
+        "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
+    )
+    # Emit viewer_web.js (+ .wasm + .data); web/index.html loads it.
+    set_target_properties(viewer_web PROPERTIES OUTPUT_NAME "viewer_web")
+
+    # Copy the hand-written shell next to the build output so the directory is
+    # servable as-is (the MODULARIZE build has no auto-generated HTML).
+    add_custom_command(TARGET viewer_web POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/index.html
+                $<TARGET_FILE_DIR:viewer_web>/index.html
+        VERBATIM)
+
+    message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")
+endif()

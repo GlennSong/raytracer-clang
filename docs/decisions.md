@@ -3756,6 +3756,83 @@ toolchain and descriptor model here are the foundation.
 
 ---
 
+## ADR-0058 — WebGPU is the web render backend (Emscripten/WASM), behind the existing seam
+**Status:** Pending · **Date:** 2026-06-29
+
+**Context.** ADR-0057's revisit trigger named "needing a … web target" as the
+moment to reconsider WebGPU. We want the realtime viewer to run in a browser.
+The same property that made Vulkan a backend-not-an-engine change holds here: the
+`Renderer` RHI seam (ADR-0001) is backend-neutral, and the frame loop is already
+decomposed into `begin()`/`runFrame()` (application.h, the editor host path), so
+the browser's requestAnimationFrame-driven loop is a drop-in for the blocking
+`while (running())` loop. ADR-0057 rejected WebGPU only as a *desktop* backend,
+because Dawn/wgpu are heavy native dependencies that clash with the
+standard-library-only rule. On the **web** that objection disappears: the
+toolchain (Emscripten) *is* the build target and ships WebGPU bindings — there is
+no third-party native library to vendor.
+
+**Decision.** Add a WebGPU backend (`src/renderer/webgpu/webgpu_renderer.cpp`) as
+the web implementation of `Renderer`, selected by CMake under the Emscripten
+toolchain (`if(EMSCRIPTEN)`) and providing `Renderer::create()`. Specific
+choices:
+
+- **Reuse the GLFW window seam via Emscripten's GLFW3 shim** (`-sUSE_GLFW=3`), so
+  `window.cpp` is reused unchanged (it already hints `GLFW_NO_API`, so no GL
+  context is created and the canvas is WebGPU-ready). No web-specific `Window`.
+- **The surface is the canvas, not the native handle.** `nativeWindowHandle()` is
+  null on the web (window.cpp's non-Apple path); the backend creates its surface
+  from the `#canvas` selector (`WGPUSurfaceDescriptorFromCanvasHTMLSelector`), so
+  no new seam method is needed (contrast Vulkan's `createVulkanSurface`).
+- **Device creation is bridged async→sync in JS.** WebGPU adapter/device
+  acquisition is async, but `Renderer::initialize()` is synchronous. The HTML
+  shell (`web/index.html`) requests the device *before* instantiating the wasm
+  module (`-sMODULARIZE=1`) and passes it as `Module.preinitializedWebGPUDevice`;
+  the backend reads it via `emscripten_webgpu_get_device()`. No `-sASYNCIFY`.
+- **WGSL shaders embedded as source strings**, compiled at runtime — matching the
+  Metal backend (which compiles MSL strings) rather than the Vulkan offline
+  SPIR-V path, since the web build has no build-time shader compiler step and
+  file I/O is awkward in the browser FS.
+- **Single-threaded.** `Application` forces `JobSystem` synchronous mode under
+  `__EMSCRIPTEN__`, so the build links without `-pthread` and needs no
+  `SharedArrayBuffer` / cross-origin-isolation (COOP/COEP) headers to be served.
+  Revisit if a profile shows the main thread is the bottleneck (then opt into
+  pthreads + the isolation headers, or move sim work to a worker).
+
+**Alternatives considered.**
+- **WebGL2 (via Emscripten).** Widest browser reach and Emscripten's most mature
+  path — rejected as the primary path: it is a global-state-machine API that maps
+  poorly onto the command-encoder-style `Renderer` seam (we'd fight our own
+  abstraction), it forecloses compute, and it is the legacy direction. Kept in
+  reserve as a separate fallback project if supporting pre-WebGPU browsers / very
+  old devices becomes a hard requirement.
+- **Native build + pixel streaming** (run Vulkan/Metal server-side, stream
+  frames) — rejected: not "compiling to the web"; heavy infra, latency, and cost.
+- **Dawn/wgpu compiled to wasm ourselves** — rejected: redundant. Emscripten
+  already provides the WebGPU C API mapped onto the browser's `navigator.gpu`.
+
+**Consequences / tech debt.**
+- A **third shader tree** (MSL + GLSL + WGSL) to keep in lockstep — the dominant
+  long-term cost ADR-0057 flagged. A future shader-transpile step (Tint/Naga, or
+  generating WGSL from the GLSL) could retire it; out of scope for the foundation.
+- **No GPU/emsdk in CI**, so the backend is **unverified on device** — written
+  against the webgpu.h C API as Emscripten ships it (~emsdk 3.1.x:
+  surface-based swapchain, `WGPUShaderModuleWGSLDescriptor`, `char*` labels).
+  Newer emsdk renamed some types (`WGPUShaderSourceWGSL`, `WGPUStringView`); see
+  `src/renderer/webgpu/AGENTS.md` for the adjustments if it fails to compile.
+- Built incrementally like Vulkan (clear screen → lit mesh → full forward →
+  shadows → post → instancing/terrain), each stage independently verifiable.
+  **This ADR lands Phases 0+1** (bring-up + forward single-light Cook-Torrance);
+  later phases are tracked in `docs/webgpu-renderer-plan.md`.
+- The `Real = double` engine math (ADR-0005) stays valid CPU-side; the GPU side
+  is `f32` only (matrices/vertices are packed to float on upload, as on Vulkan).
+
+**Revisit trigger.** Needing pre-WebGPU browser support (reconsider a WebGL2
+fallback); the three-way shader divergence becoming painful (adopt a transpile
+step); or the single-threaded main loop becoming the bottleneck (opt into
+pthreads + COOP/COEP).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

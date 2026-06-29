@@ -21,7 +21,7 @@ directory for a graphics or OS symbol.
 
 | Seam | Interface | Crosses as | Implementations |
 | --- | --- | --- | --- |
-| Rendering (RHI) | `Renderer` (`renderer.h`) | backend-neutral structs only | `metal/`, `vulkan/` (planned), `null_renderer.cpp` |
+| Rendering (RHI) | `Renderer` (`renderer.h`) | backend-neutral structs only | `metal/`, `vulkan/` (planned), `webgpu/` (web, Phases 0–1), `null_renderer.cpp` |
 | Windowing + input | `Window` (`window.h`) | our `Event`/`KeyCode`, opaque `void*` native handle | `window.cpp` (GLFW), `hosted_window.*` (editor embed) |
 
 **The rule (load-bearing, from `AGENTS.md`):** no `GLFW_*`, `NSWindow`/`HWND`,

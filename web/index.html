@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<!--
+  Web shell for the WebGPU/WASM viewer (ADR-0058).
+
+  WebGPU device creation is async (navigator.gpu.requestAdapter / requestDevice),
+  but the engine's Renderer::initialize() is synchronous. We bridge that by
+  creating the device HERE, before the wasm module runs, and handing it over via
+  Module.preinitializedWebGPUDevice — the WebGPU backend reads it back through
+  emscripten_webgpu_get_device(). The module is built with -sMODULARIZE=1
+  -sEXPORT_NAME=createViewer, so it does not auto-run; we instantiate it only
+  once the device is ready.
+
+  Build (with an active emsdk):
+    emcmake cmake -S . -B build-web
+    cmake --build build-web --target viewer_web
+  then serve build-web/ over HTTP (WebGPU needs a secure context — localhost
+  counts) and open index.html, e.g.:
+    python3 -m http.server --directory build-web
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Raytracer Engine — WebGPU</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+    #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    #error {
+      position: fixed; inset: 0; display: none; place-content: center;
+      color: #e66; font: 16px/1.5 system-ui, sans-serif; text-align: center;
+      padding: 2rem;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" tabindex="0"></canvas>
+  <div id="error"></div>
+
+  <!-- Emitted by the viewer_web target (MODULARIZE → global createViewer). -->
+  <script src="viewer_web.js"></script>
+  <script>
+    (async () => {
+      const fail = (msg) => {
+        const el = document.getElementById('error');
+        el.style.display = 'grid';
+        el.textContent = msg;
+        console.error(msg);
+      };
+
+      if (!('gpu' in navigator)) {
+        return fail('WebGPU is not available in this browser. Try a recent ' +
+                    'Chrome, Edge, Safari 18+, or Firefox with WebGPU enabled.');
+      }
+
+      let device;
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) return fail('No suitable GPU adapter found.');
+        device = await adapter.requestDevice();
+      } catch (e) {
+        return fail('Failed to acquire a WebGPU device: ' + e);
+      }
+
+      const canvas = document.getElementById('canvas');
+      // Back the canvas with device pixels so rendering is crisp on HiDPI.
+      const dpr = window.devicePixelRatio || 1;
+      const resize = () => {
+        canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+        canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+      };
+      resize();
+      window.addEventListener('resize', resize);
+
+      try {
+        await createViewer({
+          canvas,
+          preinitializedWebGPUDevice: device,
+          print: (text) => console.log(text),
+          printErr: (text) => console.warn(text),
+        });
+      } catch (e) {
+        fail('Failed to start the engine: ' + e);
+      }
+    })();
+  </script>
+</body>
+</html>
