@@ -1,8 +1,0 @@
-{ "cameras": [
-  { "name": "Aerial", "position": [-50, 400, 430], "forward": [0.0, -0.73, -0.68],
-    "lens": { "focalLength": 20, "sensorHeight": 24, "fStop": 0, "focusDistance": 460 } },
-  { "name": "Radial", "position": [-285, 115, 200], "forward": [0.0, -0.55, -0.83],
-    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 190 } },
-  { "name": "Tensor", "position": [185, 120, 270], "forward": [0.0, -0.52, -0.85],
-    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 } }
-] }

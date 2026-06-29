@@ -1,0 +1,3146 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.05, 0.05, 0.08],
+    "hdr": "../env/tree_lined_driveway_1k.hdr"
+  },
+  "entities": [
+    {
+      "shape": "box",
+      "size": [50, 2, 50],
+      "position": [0, -1, 0],
+      "material": {
+        "albedo": [0.7, 0.7, 0.7],
+        "roughness": 0.8,
+        "flags": ["checkerboard"]
+      },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [50, 4, 1],
+      "position": [0, 2, -25],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [50, 4, 1],
+      "position": [0, 2, 25],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [1, 4, 50],
+      "position": [-25, 2, 0],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [1, 4, 50],
+      "position": [25, 2, 0],
+      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [6, 0.5, 4],
+      "position": [-10, 0.8, -10],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": 15 },
+      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [6, 0.5, 4],
+      "position": [10, 0.8, 10],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": -15 },
+      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [2, 4, 2],
+      "position": [-6, 2, 5],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [2, 4, 2],
+      "position": [6, 2, -5],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [4, 2, 1],
+      "position": [0, 1, -8],
+      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [-5, 1.5, -3],
+      "material": { "albedo": [0.9, 0.2, 0.2], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [5, 1.5, 3],
+      "material": { "albedo": [0.2, 0.7, 0.2], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [-3, 1.5, 8],
+      "material": { "albedo": [0.2, 0.3, 0.9], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1, 1, 1],
+      "position": [8, 1.5, -8],
+      "material": { "albedo": [0.9, 0.8, 0.1], "roughness": 0.3 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+    },
+    {
+      "shape": "cone",
+      "size": [1.5, 3, 1],
+      "position": [12, 1.5, 0],
+      "material": { "albedo": [0.8, 0.4, 0.1], "roughness": 0.4, "metallic": 0.2 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "torus",
+      "size": [2, 0.4, 1],
+      "position": [-12, 2, 0],
+      "orientation": { "axis": [1, 0, 0], "angleDeg": 90 },
+      "material": { "albedo": [0.9, 0.1, 0.6], "roughness": 0.2, "metallic": 0.8 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "wedge",
+      "size": [4, 2, 3],
+      "position": [0, 0, 15],
+      "material": { "albedo": [0.2, 0.6, 0.4], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.6 }
+    },
+    {
+      "shape": "capsule",
+      "size": [0.8, 2, 1],
+      "position": [-8, 2, -12],
+      "material": { "albedo": [0.3, 0.7, 0.9], "roughness": 0.25, "metallic": 0.6 },
+      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.4 }
+    },
+    {
+      "mesh": "../models/DamagedHelmet.glb",
+      "position": [0, 3, -3],
+      "scale": [1.5, 1.5, 1.5],
+      "physics": { "motion": "static" }
+    },
+    {
+      "name": "oak",
+      "shape": "tree",
+      "position": [-15, 0, -8],
+      "tree": {
+        "seed": 7,
+        "iterations": 6,
+        "trunkLength": 1.7,
+        "branchAngle": 35,
+        "angleJitter": 16,
+        "radiusScale": 1.4,
+        "barkColor": [0.32, 0.23, 0.15],
+        "leafColor": [0.20, 0.46, 0.14]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
+    },
+    {
+      "name": "birch",
+      "shape": "tree",
+      "position": [16, 0, 9],
+      "tree": {
+        "seed": 23,
+        "iterations": 6,
+        "trunkLength": 1.9,
+        "branchAngle": 28,
+        "angleJitter": 12,
+        "branchesPerNode": 2,
+        "radiusScale": 1.1,
+        "barkColor": [0.78, 0.76, 0.70],
+        "leafColor": [0.40, 0.55, 0.18]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
+    }
+  ],
+  "player": {
+    "position": [0, 1, 5],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.7, -0.4],
+      "color": [1.0, 0.93, 0.80],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "pointLights": [
+      { "position": [0, 12, 0],     "color": [1.0, 0.95, 0.9], "intensity": 450, "range": 30 },
+      { "position": [-15, 8, -15],  "color": [0.4, 0.5, 1.0],  "intensity": 240, "range": 25 },
+      { "position": [15, 8, 15],    "color": [1.0, 0.7, 0.3],  "intensity": 240, "range": 25 }
+    ],
+    "spotLights": [
+      {
+        "position": [0, 10, 0],
+        "direction": [0, -1, 0],
+        "color": [1.0, 0.9, 0.8],
+        "intensity": 520,
+        "range": 20,
+        "innerConeAngle": 0.3,
+        "outerConeAngle": 0.5
+      }
+    ],
+    "exposure": 0.35,
+    "ambientMultiplier": 0.45
+  },
+  "reflectionProbes": [
+    {
+      "position": [0, 3, 0],
+      "radius": 35,
+      "boxMin": [-25, -1, -25],
+      "boxMax": [25, 10, 25]
+    }
+  ]
+}
+{ "cameras": [
+  { "name": "Helmet", "position": [0, 3.1, 3.0], "forward": [0, -0.02, -1.0],
+    "lens": { "focalLength": 50, "sensorHeight": 24, "fStop": 0, "focusDistance": 6.0 } }
+] }
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86],
+    "fog": { "density": 0.005, "color": [0.62, 0.71, 0.84] }
+  },
+  "terrain": {
+    "seed": 21,
+    "heightScale": 16,
+    "noiseScale": 0.004,
+    "octaves": 6,
+    "warp": 0.25,
+    "mountainHeight": 240,
+    "mountainScale": 0.0016,
+    "mountainMaskScale": 0.0008,
+    "mountainMaskLo": -0.10,
+    "mountainMaskHi": 0.34,
+    "rangeSpine": [[-1800, -600], [-600, 200], [700, -200], [1800, 700]],
+    "rangeWidth": 520,
+    "rangeHeight": 300,
+    "rangeVariation": 0.6,
+    "cdlod": {
+      "worldHalf": 2048,
+      "numLods": 7,
+      "gridRes": 32,
+      "rangeFactor": 2.5
+    },
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "vegetation": {
+    "seed": 7,
+    "region": 900,
+    "count": 1400,
+    "drawDistance": 300,
+    "maxSlopeDeg": 45,
+    "minScale": 0.6,
+    "maxScale": 1.3,
+    "spacingFactor": 0.9,
+    "densityScale": 0.04,
+    "densityThreshold": -0.6,
+    "focus": [0, 0, 200],
+    "focusRadius": 160,
+    "focusScale": 1.6,
+    "focusClear": 6,
+    "clusterCount": 0,
+    "clusterRadius": 18,
+    "species": [
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='oak'})",  "variants": 3, "collide": true },
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='pine'})", "variants": 3, "collide": true },
+      { "kind": "script", "script": "return flora.param_tree(seed, {species='birch'})","variants": 3, "collide": true },
+      { "kind": "rock", "variants": 3, "material": { "albedo": [0.5, 0.5, 0.52], "roughness": 1.0 } }
+    ]
+  },
+  "player": {
+    "position": [0, 120, 200],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.62, 0.34, 0.4],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "shadow": {
+      "distance": 700,
+      "cascades": 4,
+      "normalBias": 0.15
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86],
+    "fog": { "density": 0.0025, "color": [0.62, 0.71, 0.84] }
+  },
+  "terrain": {
+    "seed": 1337,
+    "chunks": 16,
+    "chunkSize": 120,
+    "chunkResolution": 64,
+    "colliderRadius": 200,
+    "heightScale": 7,
+    "noiseScale": 0.012,
+    "octaves": 7,
+    "warp": 0.25,
+    "mountainHeight": 95,
+    "mountainScale": 0.0032,
+    "material": {
+      "albedo": [1.0, 1.0, 1.0],
+      "roughness": 1.0
+    }
+  },
+  "player": {
+    "position": [0, 6, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.65, 0.28, 0.42],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Vista",
+      "position": [0, 130, 250],
+      "forward": [0, -0.26, -0.965],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 250 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "downtown",
+      "shape": "city",
+      "position": [0, 0, 0],
+      "city": {
+        "extent": 150,
+        "cellSize": 78,
+        "roadJitter": 0.14,
+        "downtownRadius": 70,
+        "midtownRadius": 150,
+        "parkFraction": 0.08,
+        "buildChance": 0.92,
+        "seed": 7
+      }
+    }
+  ],
+  "player": {
+    "position": [0, 2, 180],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.55, -0.5],
+      "color": [1.0, 0.95, 0.85],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Skyline",
+      "position": [185, 95, 200],
+      "forward": [-0.62, -0.42, -0.66],
+      "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 260 }
+    },
+    {
+      "name": "Street",
+      "position": [150, 10, 38],
+      "forward": [-0.96, -0.03, -0.26],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "terrain": {
+    "seed": 21,
+    "size": 560,
+    "resolution": 260,
+    "heightScale": 24,
+    "noiseScale": 0.015,
+    "octaves": 5,
+    "warp": 0.3,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "entities": [
+    {
+      "name": "the_city",
+      "shape": "city",
+      "position": [0, 0, 0],
+      "city": {
+        "onTerrain": true,
+        "extent": 200,
+        "cellSize": 80,
+        "roadJitter": 0.12,
+        "downtownRadius": 82,
+        "midtownRadius": 180,
+        "parkFraction": 0.1,
+        "buildChance": 0.92,
+        "scatterTrees": true,
+        "seed": 11
+      }
+    }
+  ],
+  "player": {
+    "position": [0, 4, 200],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.42, 0.52, -0.5],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Arena",
+      "position": [185, 78, 205],
+      "forward": [-0.62, -0.30, -0.72],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 270 }
+    },
+    {
+      "name": "Approach",
+      "position": [40, 26, 215],
+      "forward": [-0.12, -0.16, -0.98],
+      "lens": { "focalLength": 38, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 }
+    },
+    {
+      "name": "OldTown",
+      "position": [150, 46, -150],
+      "forward": [-0.55, -0.33, 0.77],
+      "lens": { "focalLength": 40, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
+    },
+    {
+      "name": "Intersection",
+      "position": [26, 8, 42],
+      "forward": [-0.69, -0.21, -0.69],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 28 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "city",
+      "shape": "script",
+      "file": "city.lua",
+      "opts": { "pattern": "grid", "seed": 7, "roadbed": true,
+                "sidewalk": 2.6, "curb": 0.16 }
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.5, -0.4],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Aerial",
+      "position": [155, 90, 210],
+      "forward": [-0.52, -0.30, -0.76],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 250 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "city", "shape": "script", "file": "city.lua",
+      "opts": { "pattern": "radial", "seed": 5, "extent": 210, "ring_spacing": 60,
+                "spokes": 6, "ring_subdiv": 7, "jitter": 0.03, "center_plaza": true,
+                "terrain_amp": 9, "terrain_size": 480,
+                "roadbed": true, "sidewalk": 2.6, "curb": 0.18,
+                "downtown_radius": 78, "midtown_radius": 150 } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.45, 0.5, -0.4], "color": [1.0, 0.96, 0.86],
+             "intensity": 8.0, "castsShadow": true },
+    "exposure": 0.5, "ambientMultiplier": 0.6
+  }
+}
+{ "cameras": [
+  { "name": "Aerial", "position": [40, 230, 250], "forward": [-0.14, -0.72, -0.68],
+    "lens": { "focalLength": 26, "sensorHeight": 24, "fStop": 0, "focusDistance": 300 } },
+  { "name": "Hub", "position": [70, 120, 130], "forward": [-0.45, -0.62, -0.64],
+    "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } } ] }
+{
+  "version": 1,
+  "environment": { "skyColor": [0.52, 0.66, 0.86] },
+  "terrain": {
+    "seed": 7,
+    "size": 300,
+    "resolution": 320,
+    "heightScale": 11,
+    "noiseScale": 0.016,
+    "octaves": 6,
+    "warp": 0.25,
+    "mountainHeight": 55,
+    "mountainScale": 0.004,
+    "erode": true,
+    "erodeDroplets": 90000,
+    "erodeThermal": 14,
+    "erodeTalus": 1.0,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "player": {
+    "position": [0, 8, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.62, 0.32, 0.4],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Vista",
+      "position": [0, 95, 150],
+      "forward": [0, -0.42, -0.91],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
+    }
+  ]
+}
+{
+ "version": 1,
+ "environment": {
+  "skyColor": [
+   0.46,
+   0.64,
+   0.86
+  ]
+ },
+ "terrain": {
+  "seed": 1337,
+  "size": 140,
+  "resolution": 128,
+  "heightScale": 8,
+  "noiseScale": 0.03,
+  "octaves": 5,
+  "warp": 0.3,
+  "material": {
+   "albedo": [1.0, 1.0, 1.0],
+   "roughness": 1.0
+  }
+ },
+ "entities": [
+  {
+   "name": "hero_tree",
+   "shape": "tree",
+   "position": [0, 0, 0],
+   "tree": {
+    "seed": 99,
+    "iterations": 7,
+    "trunkLength": 3.2,
+    "lengthFalloff": 0.9,
+    "branchAngle": 38,
+    "angleJitter": 18,
+    "radiusScale": 2.8,
+    "pipeExponent": 2.5,
+    "leavesPerTip": 12,
+    "leafThickness": 0.07,
+    "leafSize": 0.22,
+    "droop": 0.24,
+    "wander": 0.08,
+    "barkColor": [0.30, 0.22, 0.14],
+    "leafColor": [0.20, 0.46, 0.13]
+   },
+   "physics": { "motion": "static", "friction": 0.9 }
+  }
+ ],
+ "vegetation": {
+  "seed": 24,
+  "region": 120,
+  "count": 700,
+  "maxSlopeDeg": 34,
+  "minScale": 0.5,
+  "maxScale": 1.1,
+  "spacingFactor": 0.8,
+  "densityScale": 0.05,
+  "densityThreshold": -0.5,
+  "focus": [0, 0, 0],
+  "focusRadius": 55,
+  "focusScale": 1.7,
+  "focusClear": 9,
+  "clusterCount": 11,
+  "clusterRadius": 13,
+  "species": [
+   {
+    "kind": "script",
+    "script": "return flora.param_tree(seed, {species='oak'})",
+    "variants": 3,
+    "collide": true
+   },
+   {
+    "kind": "script",
+    "script": "return flora.param_tree(seed, {species='pine'})",
+    "variants": 3,
+    "collide": true
+   },
+   {
+    "kind": "script",
+    "script": "return flora.param_tree(seed, {species='birch'})",
+    "variants": 3,
+    "collide": true
+   },
+   {
+    "kind": "rock",
+    "variants": 3,
+    "material": {
+     "albedo": [0.5, 0.5, 0.52],
+     "roughness": 1.0
+    }
+   }
+  ]
+ },
+ "player": {
+  "position": [
+   0,
+   6,
+   12
+  ],
+  "collider": {
+   "shape": "capsule",
+   "radius": 0.3,
+   "halfHeight": 0.4
+  },
+  "friction": 0.5
+ },
+ "lighting": {
+  "sun": {
+   "direction": [
+    0.4,
+    0.85,
+    0.3
+   ],
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "intensity": 7.0,
+   "castsShadow": true
+  },
+  "pointLights": [
+   {
+    "position": [
+     0,
+     20,
+     0
+    ],
+    "color": [
+     1.0,
+     0.95,
+     0.9
+    ],
+    "intensity": 220,
+    "range": 60
+   }
+  ],
+  "exposure": 1.0,
+  "ambientMultiplier": 0.6
+ },
+ "foliage": {
+  "seed": 77,
+  "region": 120,
+  "count": 7000,
+  "maxSlopeDeg": 28,
+  "minScale": 0.8,
+  "maxScale": 1.3,
+  "spacingFactor": 0.45,
+  "densityScale": 0.04,
+  "densityThreshold": -0.85,
+  "species": [
+   {
+    "kind": "script",
+    "script": "return flora.grass(seed, {radius=1.6})",
+    "variants": 4,
+    "wind": true,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   },
+   {
+    "kind": "script",
+    "script": "return flora.flower(seed, {})",
+    "variants": 1,
+    "material": {
+     "albedo": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "roughness": 1.0
+    }
+   }
+  ]
+ }
+}{
+  "entities": [
+    {
+      "id": 1,
+      "material": {
+        "albedo": [
+          0.36,
+          0.42,
+          0.3
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 1.0
+      },
+      "name": "ground",
+      "physics": {
+        "friction": 0.9,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        -0.3,
+        0.0
+      ],
+      "shape": "box",
+      "size": [
+        420.0,
+        0.4,
+        420.0
+      ]
+    },
+    {
+      "id": 2,
+      "name": "city",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "generate": {
+          "arterials": 3,
+          "artery_width": 13,
+          "block_size": 90,
+          "curviness": 0.22,
+          "kind": "district",
+          "radius": 200,
+          "seed": 5,
+          "street_width": 7
+        },
+        "lift": 0.3,
+        "markings": true,
+        "sidewalk": 1.8,
+        "width": 7.0
+      },
+      "shape": "road"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "version": 1
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [380, 0.4, 240],
+      "material": { "albedo": [0.40, 0.46, 0.34], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
+    { "name": "roads", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          {"x": -100, "z": 0}, {"x": -40, "z": 0}, {"x": -160, "z": 0}, {"x": -100, "z": 60}, {"x": -100, "z": -60},
+          {"x": 90, "z": 0}, {"x": 150, "z": 0}, {"x": 30, "z": 0}, {"x": 136, "z": 38.6}, {"x": 44, "z": -38.6}
+        ],
+        "edges": [ [0,1], [0,2], [0,3], [0,4], [5,6], [5,7], [5,8], [5,9] ],
+        "width": 8, "sidewalk": 2.5, "markings": true, "crosswalks": true } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.72, -0.32], "color": [1, 0.98, 0.94], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7 }
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "tree", "shape": "script", "file": "lsystem_tree.lua", "seed": 3 }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.5, 0.6, -0.4], "color": [1.0, 0.96, 0.86],
+             "intensity": 7.0, "castsShadow": true },
+    "exposure": 0.5, "ambientMultiplier": 0.6
+  }
+}
+{ "cameras": [ { "name": "View", "position": [12, 7, 15], "forward": [-0.6, -0.22, -0.77], "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 18 } } ] }
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "city",
+      "shape": "script",
+      "file": "lua_city.lua"
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.5, -0.4],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Aerial",
+      "position": [150, 110, 200],
+      "forward": [-0.557, -0.371, -0.743],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 250 }
+    },
+    {
+      "name": "Street",
+      "position": [40, 8, 150],
+      "forward": [-0.18, -0.12, -0.98],
+      "lens": { "focalLength": 36, "sensorHeight": 24, "fStop": 0, "focusDistance": 120 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "city",
+      "shape": "script",
+      "file": "lua_city_terrain.lua"
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.5, -0.4],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Aerial",
+      "position": [155, 70, 205],
+      "forward": [-0.52, -0.22, -0.76],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 240 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86],
+    "fog": { "density": 0.0005, "color": [0.62, 0.71, 0.84] }
+  },
+  "terrain": {
+    "seed": 1337,
+    "size": 360,
+    "resolution": 320,
+    "heightScale": 7,
+    "noiseScale": 0.012,
+    "octaves": 7,
+    "warp": 0.25,
+    "mountainHeight": 95,
+    "mountainScale": 0.0032,
+    "lodRings": 5,
+    "lodCells": 96,
+    "material": {
+      "albedo": [1.0, 1.0, 1.0],
+      "roughness": 1.0
+    }
+  },
+  "player": {
+    "position": [0, 6, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.65, 0.28, 0.42],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Vista",
+      "position": [0, 130, 250],
+      "forward": [0, -0.26, -0.965],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 250 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.52, 0.66, 0.86] },
+  "terrain": {
+    "seed": 12,
+    "size": 600,
+    "resolution": 340,
+    "heightScale": 5,
+    "noiseScale": 0.02,
+    "octaves": 6,
+    "warp": 0.2,
+    "mountainScale": 0.006,
+    "range": {
+      "length": 72,
+      "branchAngle": 42,
+      "falloff": 0.5,
+      "leaderFalloff": 0.93,
+      "iterations": 5,
+      "height": 145,
+      "depthFalloff": 0.58,
+      "angleJitter": 14,
+      "width": 95,
+      "seed": 5
+    },
+    "erode": true,
+    "erodeDroplets": 90000,
+    "erodeThermal": 12,
+    "erodeTalus": 1.0,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "player": {
+    "position": [0, 8, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.62, 0.34, 0.4],
+      "color": [1.0, 0.92, 0.78],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.4
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Vista",
+      "position": [360, 150, 150],
+      "forward": [-0.93, -0.30, 0.20],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 320 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [320, 0.4, 320],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
+    { "name": "road", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": -90, "z": -14 }, { "x": -45, "z": 12 }, { "x": 0, "z": 16 },
+          { "x": 45, "z": 6 }, { "x": 90, "z": -12 }, { "x": 6, "z": 70 }
+        ],
+        "edges": [ [0, 1], [1, 2], [2, 3], [3, 4], [2, 5] ],
+        "curved": true,
+        "width": 12, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": true
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}
+{
+  "cameras": [
+    { "name": "Top", "position": [0, 150, 30], "forward": [0.0, -0.98, -0.2],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 } },
+    { "name": "Street", "position": [-70, 14, 40], "forward": [0.55, -0.28, -0.78],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 90 } }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [340, 0.4, 340],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
+    { "name": "overpass", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": -150, "z": 0 }, { "x": 150, "z": 0 },
+          { "x": 0, "z": -150 }, { "x": 0, "z": 150 }
+        ],
+        "edges": [ [0, 1, 24], [2, 3] ],
+        "edge_layers": [ 0, 1 ],
+        "curved": false,
+        "width": 16, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": false
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}
+{
+  "cameras": [
+    { "name": "Elev", "position": [78, 15, 38], "forward": [-0.892, -0.130, -0.434],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 90 } },
+    { "name": "Close", "position": [48, 14, 58], "forward": [-0.640, -0.150, -0.753],
+      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 75 } },
+    { "name": "Oblique", "position": [-95, 70, 150], "forward": [0.46, -0.42, -0.78],
+      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "ground", "shape": "box", "position": [0, -0.3, 0], "size": [260, 0.4, 260],
+      "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9 } },
+    { "name": "roundabout", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": 0,      "z": 0 },
+          { "x": 80,     "z": 0 },
+          { "x": 56.57,  "z": 56.57 },
+          { "x": 0,      "z": 80 },
+          { "x": -56.57, "z": 56.57 },
+          { "x": -80,    "z": 0 },
+          { "x": -56.57, "z": -56.57 },
+          { "x": 0,      "z": -80 },
+          { "x": 56.57,  "z": -56.57 }
+        ],
+        "edges": [ [0,1], [0,2], [0,3], [0,4], [0,5], [0,6], [0,7], [0,8] ],
+        "curved": false,
+        "width": 12, "sidewalk": 2.6, "curb": 0.18, "corner_radius": 3.0,
+        "lift": 0.3, "markings": true, "crosswalks": true
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7
+  }
+}
+{
+  "cameras": [
+    { "name": "Top", "position": [0, 220, 55], "forward": [0.0, -0.972, -0.235],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 220 } },
+    { "name": "Oblique", "position": [-120, 95, 130], "forward": [0.6, -0.45, -0.66],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 180 } }
+  ]
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "terrain": {
+    "seed": 7, "size": 320, "resolution": 280,
+    "heightScale": 11, "noiseScale": 0.015, "octaves": 6, "warp": 0.2,
+    "cdlod": { "worldHalf": 512, "numLods": 6, "gridRes": 32, "rangeFactor": 2.5 },
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "entities": [
+    { "name": "road", "shape": "road", "position": [0, 0, 0], "onTerrain": true,
+      "road": {
+        "nodes": [
+          { "x": -130, "z": -40 }, { "x": -70, "z": -10 }, { "x": 0, "z": 12 },
+          { "x": 70, "z": -6 }, { "x": 130, "z": -50 }
+        ],
+        "edges": [ [0, 1], [1, 2], [2, 3], [3, 4] ],
+        "curved": true, "width": 12, "sidewalk": 2.6, "curb": 0.18,
+        "corner_radius": 3.0, "lift": 0.25, "markings": true
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.7, -0.3], "color": [1, 1, 1], "intensity": 7.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    { "name": "Oblique", "position": [0, 60, 95], "forward": [0, -0.5, -0.866],
+      "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 100 } },
+    { "name": "TopDown", "position": [0, 34, 13], "forward": [0, -1, -0.02],
+      "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 34 } }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "block",
+      "shape": "script",
+      "file": "blockdemo.lua",
+      "seed": 1
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.42, 0.52, -0.5],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Block",
+      "position": [26, 16, 34],
+      "forward": [-0.55, -0.38, -0.74],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 42 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "house",
+      "shape": "script",
+      "file": "brickhouse.lua"
+    },
+    {
+      "shape": "box",
+      "size": [40, 0.2, 40],
+      "position": [0, -0.1, 0],
+      "material": { "albedo": [0.42, 0.44, 0.40], "roughness": 1.0 }
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.42, 0.52, -0.5],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "House",
+      "position": [16, 9, 18],
+      "forward": [-0.62, -0.34, -0.70],
+      "lens": { "focalLength": 38, "sensorHeight": 24, "fStop": 0, "focusDistance": 24 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "land",
+      "shape": "script",
+      "file": "terrain_demo.lua"
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.42, -0.3],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Land",
+      "position": [150, 75, 175],
+      "forward": [-0.64, -0.32, -0.70],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 230 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "entities": [
+    {
+      "name": "land",
+      "shape": "script",
+      "file": "terrain_eroded.lua"
+    }
+  ],
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.42, -0.3],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
+{
+  "cameras": [
+    {
+      "name": "Land",
+      "position": [150, 75, 175],
+      "forward": [-0.64, -0.32, -0.70],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 230 }
+    }
+  ]
+}
+{
+  "version": 1,
+  "_comment": "Minimal lighting baseline: ONE directional sun, no point/spot lights, no HDR/IBL, low ambient. Use this to confirm sun shadows work in isolation, then add layers back one at a time.",
+  "environment": {
+    "skyColor": [0.05, 0.05, 0.08]
+  },
+  "entities": [
+    {
+      "shape": "box",
+      "size": [40, 1, 40],
+      "position": [0, -0.5, 0],
+      "material": { "albedo": [0.7, 0.7, 0.7], "roughness": 0.9 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "box",
+      "size": [2, 4, 2],
+      "position": [-3, 2, 0],
+      "material": { "albedo": [0.8, 0.3, 0.3], "roughness": 0.8 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    },
+    {
+      "shape": "sphere",
+      "size": [1.5, 1.5, 1.5],
+      "position": [3, 1.5, 0],
+      "material": { "albedo": [0.3, 0.5, 0.8], "roughness": 0.5 },
+      "physics": { "motion": "static", "friction": 0.5 }
+    }
+  ],
+  "player": {
+    "position": [0, 2, 10]
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.5, -0.4],
+      "color": [1.0, 0.98, 0.92],
+      "intensity": 3.0,
+      "castsShadow": true
+    },
+    "exposure": 1.0,
+    "ambientMultiplier": 0.15
+  }
+}
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    { "name": "roads", "shape": "script", "file": "showcase.lua" }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.72, -0.32], "color": [1, 0.98, 0.94], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.7 }
+}
+{ "cameras": [
+  { "name": "Top", "position": [-20, 360, 80], "forward": [0.0, -0.97, -0.24],
+    "lens": { "focalLength": 24, "sensorHeight": 24, "fStop": 0, "focusDistance": 360 } },
+  { "name": "Hero", "position": [120, 95, 200], "forward": [-0.45, -0.42, -0.79],
+    "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 230 } } ] }
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "terrain": {
+    "size": 120, "resolution": 96, "heightScale": 3.0,
+    "noiseScale": 0.02, "octaves": 4, "seed": 5,
+    "material": { "albedo": [0.42, 0.46, 0.34], "roughness": 0.95 }
+  },
+  "materials": {
+    "brick":    { "albedo": [1,1,1], "surface": "brick" },
+    "concrete": { "albedo": [1,1,1], "surface": "concrete" },
+    "cobble":   { "albedo": [1,1,1], "surface": "cobblestone" },
+    "wood":     { "albedo": [1,1,1], "surface": "wood" },
+    "metal":    { "albedo": [1,1,1], "surface": "corrugated" },
+    "tile":     { "albedo": [1,1,1], "surface": "rooftile" },
+    "pavement": { "albedo": [1,1,1], "surface": "pavement" }
+  },
+  "entities": [
+    { "name": "plaza", "shape": "box", "position": [0, 0.1, 0], "size": [26, 0.2, 16], "material": "pavement" },
+
+    { "name": "w1", "shape": "box", "position": [-9, 2.1, -5], "size": [4, 4, 0.5], "material": "brick" },
+    { "name": "w2", "shape": "box", "position": [-3, 2.1, -5], "size": [4, 4, 0.5], "material": "concrete" },
+    { "name": "w3", "shape": "box", "position": [ 3, 2.1, -5], "size": [4, 4, 0.5], "material": "cobble" },
+    { "name": "w4", "shape": "box", "position": [ 9, 2.1, -5], "size": [4, 4, 0.5], "material": "wood" },
+
+    { "name": "p1", "shape": "box", "position": [-6, 1.6, 2], "size": [1.6, 3.2, 1.6], "material": "metal" },
+    { "name": "p2", "shape": "box", "position": [ 0, 1.6, 2], "size": [1.6, 3.2, 1.6], "material": "brick" },
+    { "name": "p3", "shape": "box", "position": [ 6, 1.6, 2], "size": [1.6, 3.2, 1.6], "material": "tile" }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.4, 0.55, 0.5], "color": [1.0, 0.96, 0.88], "intensity": 5.5, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.6
+  }
+}
+{ "cameras": [
+  { "name": "Plaza", "position": [0, 4.2, 13], "forward": [0, -0.22, -1.0],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 14 } }
+] }
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.46, 0.64, 0.86],
+    "hdr": "../env/tree_lined_driveway_1k.hdr"
+  },
+  "terrain": {
+    "seed": 7,
+    "size": 40,
+    "resolution": 64,
+    "heightScale": 1.5,
+    "noiseScale": 0.05,
+    "octaves": 4,
+    "warp": 0.2,
+    "material": {
+      "albedo": [1.0, 1.0, 1.0],
+      "roughness": 1.0
+    }
+  },
+  "entities": [
+    {
+      "name": "hero_oak",
+      "shape": "tree",
+      "position": [0, 0, 0],
+      "tree": {
+        "seed": 7,
+        "iterations": 7,
+        "trunkLength": 2.8,
+        "lengthFalloff": 0.86,
+        "leaderFalloff": 0.93,
+        "branchAngle": 36,
+        "angleJitter": 18,
+        "radiusScale": 2.0,
+        "pipeExponent": 2.4,
+        "terminalForks": 0,
+        "leavesPerTip": 13,
+        "leafSize": 0.22,
+        "leafThickness": 0.08,
+        "leafClump": 1.1,
+        "droop": 0.26,
+        "wander": 0.07,
+        "barkStyle": "oak",
+        "barkColor": [0.32, 0.23, 0.15],
+        "leafColor": [0.20, 0.46, 0.14]
+      },
+      "physics": { "motion": "static", "friction": 0.8 }
+    }
+  ],
+  "player": {
+    "position": [0, 2, 9],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.5, 0.7, -0.4],
+      "color": [1.0, 0.93, 0.80],
+      "intensity": 9.5,
+      "castsShadow": true
+    },
+    "exposure": 0.45,
+    "ambientMultiplier": 0.5
+  },
+  "reflectionProbes": [
+    {
+      "position": [0, 4, 0],
+      "radius": 25,
+      "boxMin": [-20, -1, -20],
+      "boxMax": [20, 12, 20]
+    }
+  ]
+}
+{
+  "cameras": [
+    {
+      "name": "Hero",
+      "position": [12, 9, 28],
+      "forward": [-0.4, -0.13, -0.907],
+      "lens": {
+        "focalLength": 32,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 28
+      }
+    }
+  ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.52, 0.66, 0.86],
+    "fog": { "density": 0.0014, "color": [0.62, 0.71, 0.84] }
+  },
+  "terrain": {
+    "seed": 21,
+    "heightScale": 9,
+    "noiseScale": 0.004,
+    "octaves": 5,
+    "warp": 0.2,
+    "mountainHeight": 200,
+    "mountainScale": 0.0017,
+    "mountainMaskScale": 0.0009,
+    "mountainMaskLo": -0.05,
+    "mountainMaskHi": 0.38,
+    "rangeSpine": [[-700, -470], [-100, -540], [500, -500], [1100, -430]],
+    "rangeWidth": 420,
+    "rangeHeight": 260,
+    "rangeVariation": 0.6,
+    "cdlod": {
+      "worldHalf": 2048,
+      "numLods": 7,
+      "gridRes": 32,
+      "rangeFactor": 2.5
+    },
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  },
+  "entities": [
+    {
+      "name": "cities",
+      "shape": "script",
+      "file": "twin_cities.lua",
+      "onTerrain": true,
+      "seed": 5
+    }
+  ],
+  "player": {
+    "position": [-150, 40, -30],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.55, 0.42, -0.35],
+      "color": [1.0, 0.95, 0.82],
+      "intensity": 9.0,
+      "castsShadow": true
+    },
+    "shadow": { "distance": 700, "cascades": 4, "normalBias": 0.15 },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.5
+  }
+}
+{ "cameras": [
+  { "name": "Aerial", "position": [-50, 400, 430], "forward": [0.0, -0.73, -0.68],
+    "lens": { "focalLength": 20, "sensorHeight": 24, "fStop": 0, "focusDistance": 460 } },
+  { "name": "Radial", "position": [-285, 115, 200], "forward": [0.0, -0.55, -0.83],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 190 } },
+  { "name": "Tensor", "position": [185, 120, 270], "forward": [0.0, -0.52, -0.85],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 } }
+] }
+-- blockdemo.lua — a small city block composed entirely in Lua (ADR-0042): a
+-- ground slab, a row of buildings (building.grow), and instanced lamps. Returns a
+-- composable model the engine bakes the same way for both renderers — parts to
+-- geometry, the lamp group to a shared prototype placed by the path tracer's TLAS.
+
+local m = model.new()
+
+-- A ground slab, authored from a scope box.
+m:add(scope{ origin = {-30, -0.2, -20}, size = {60, 0.2, 40} }:box{0.42, 0.44, 0.40})
+
+-- A row of buildings of rising height along x (each a building.grow part).
+for i = 0, 3 do
+  local b = building.grow{
+    floors = 3 + i, width = 10, depth = 10,
+    ground_retail = true, walkable_ground = true, seed = i + 1,
+  }
+  m:add(mesh.translate(b, { -21 + i * 14, 0, -2 }))
+end
+
+-- Lamps along the front verge — one prototype, many placements (instanced).
+local lamp = streetfurniture.lamp{}
+local places = {}
+for i = 0, 6 do places[#places + 1] = { pos = { -24 + i * 8, 0, 13 } } end
+m:add_instances(lamp, places)
+
+return m
+-- brick.lua — a brick albedo texture composed from primitives (ADR-0043), not
+-- requested as a preset. A running-bond brick lattice is modulated by fbm grit,
+-- then two colours (mortar grey -> brick red) are mixed by the mask and baked.
+-- Tune any number and re-bake (--bake-texture) to iterate.
+
+local function brick(opts)
+  opts = opts or {}
+  local lattice = texture.brick{
+    cols = opts.cols or 6, rows = opts.rows or 14,
+    mortar = opts.mortar or 0.09, variation = opts.variation or 0.4,
+    seed = opts.seed or 7,
+  }
+  -- Fine grit breaks up the flat brick faces (kept near 1 so bricks stay bright).
+  local grit = texture.fbm{ seed = 9, scale = 40, octaves = 4 }:scale_bias(0.25, 0.78)
+  local mask = lattice:mul(grit)
+
+  return texture.bake_color(mask,
+    opts.mortar_color or {0.64, 0.62, 0.58},   -- mortar (mask = 0)
+    opts.brick_color  or {0.58, 0.20, 0.14},   -- brick  (mask = 1)
+    opts.size or 256)
+end
+
+return brick()
+-- brickhouse.lua — a building wearing a brick material, all composed in Lua
+-- (ADR-0043). The brick texture is built from primitives, bundled into a material
+-- (albedo + a normal map from the lattice height for mortar relief), and applied
+-- to a scope-box building by world-planar projection — no authored UVs.
+
+-- The brick texture, piece by piece. One tile spans `tile` world metres below,
+-- so 5 courses / 4 columns per tile keeps the bricks at a believable size.
+local lattice = texture.brick{ cols = 4, rows = 5, mortar = 0.07,
+                               variation = 0.5, seed = 7 }
+local grit    = texture.fbm{ seed = 9, scale = 18, octaves = 4 }:scale_bias(0.2, 0.85)
+local albedo  = texture.bake_color(lattice:mul(grit),
+                                   {0.58, 0.55, 0.50},   -- mortar (light grey)
+                                   {0.52, 0.16, 0.11},   -- brick (deep red)
+                                   256)
+-- Bricks proud, mortar recessed -> a normal map for relief (mild).
+local normal  = texture.bake_normal(lattice:scale_bias(0.5, 0.5), 1.2, 256)
+
+local brick = material.new{ albedo = albedo, normal = normal,
+                            roughness = 0.9, tile = 1.5 }
+
+local m = model.new()
+m:add(scope{ origin = {-6, 0, -5},   size = {12, 9, 10} }:box{1, 1, 1}, brick)
+-- A plain capping roof slab (untextured, vertex-coloured).
+m:add(scope{ origin = {-6.5, 9, -5.5}, size = {13, 0.5, 11} }:box{0.30, 0.30, 0.32})
+return m
+-- city.lua — author a whole procedural city in Lua, or any part of it (ADR-0042
+-- Phase 4). Tunable params drive terrain, roads, districts and props; the C++
+-- solvers/grammars do the heavy lifting and this composes them into one model.
+-- The same file is the per-building authoring surface (city.midrise / tower /
+-- house) and the whole-city composer (city.generate{...}). Edit the return at the
+-- bottom to preview a single building or a whole city.
+
+local M = {}
+
+-- ----- per-building archetypes (each returns one mesh) ------------------------
+function M.midrise(seed)
+  return building.grow{ floors = 4 + (seed or 0) % 4, width = 18, depth = 14,
+    ground_retail = true, walkable_ground = true, bay_width = 3.6, seed = seed or 1 }
+end
+function M.tower(seed)
+  return building.grow{ floors = 20 + (seed or 0) % 20, width = 26, depth = 22,
+    ground_retail = true, walkable_ground = true, bay_width = 4.2,
+    setback_floors = 8, setback_every = 3.0, seed = seed or 1 }
+end
+function M.house(seed)
+  return building.grow{ floors = 1 + (seed or 0) % 2, width = 12, depth = 10,
+    ground_retail = false, walkable_ground = true, bay_width = 3.0, seed = seed or 1 }
+end
+
+-- ----- helpers ----------------------------------------------------------------
+local function opt(o, k, v) if o[k] == nil then return v else return o[k] end end
+local function centroid(poly)
+  local cx, cz = 0, 0
+  for _, p in ipairs(poly) do cx = cx + p.x; cz = cz + p.z end
+  return cx / #poly, cz / #poly
+end
+
+-- ----- terrain: a composed heightfield (optionally eroded) --------------------
+function M.terrain(o)
+  o = o or {}
+  local seed = opt(o, "seed", 7)
+  local base = terrain.fbm{ seed = seed, freq = opt(o, "freq", 0.012),
+                            amp = opt(o, "amp", 18), octaves = 5 }
+  local land = terrain.warp(base, terrain.fbm{ seed = seed + 1, freq = 0.02, amp = 1 },
+                            opt(o, "warp", 28))
+  if o.eroded then
+    land = terrain.erode(land, { size = opt(o, "size", 460), resolution = 384,
+                                 droplets = opt(o, "droplets", 60000), seed = seed })
+  end
+  return land
+end
+
+-- ----- districts: storey count by distance from the centre --------------------
+local function floors_at(o, r)
+  if r < opt(o, "downtown_radius", 55) then
+    return opt(o, "downtown_floors", 9) + (math.floor(r) % 12)
+  elseif r < opt(o, "midtown_radius", 120) then
+    return opt(o, "midtown_floors", 4) + (math.floor(r) % 5)
+  end
+  return opt(o, "residential_floors", 2) + (math.floor(r) % 3)
+end
+
+-- A rotated rectangle footprint (4 corners) centred at (cx,cz), half-extents
+-- hw,hd, turned by `yaw` radians — the pad outline for an oriented lot. The sign
+-- matches Mat4::rotateY (what mesh.place uses) so the pad aligns with the part.
+local function rect(cx, cz, hw, hd, yaw)
+  local c, s = math.cos(yaw), math.sin(yaw)
+  local function pt(dx, dz)
+    return { x = cx + dx * c + dz * s, z = cz - dx * s + dz * c }
+  end
+  return { pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd) }
+end
+
+-- ----- blocks: partition each road-graph face into lots, level the developable
+-- ones, and seat a building sized to FIT each lot --------------------------------
+-- plan_blocks reads the NATURAL terrain (which faces are flat enough to develop,
+-- and the plot height), subdivides each into parcels (city.lots), and for every
+-- lot big enough for a building emits a pad (so terrain.conform cuts a level plot)
+-- + a placement. Lots too small are skipped (left as a gap); faces too hilly to
+-- level cheaply are left as natural green hillside.
+function M.plan_blocks(base, lay, o)
+  local flat_relief = opt(o, "flat_relief", 11)    -- max terrain rise to develop (m)
+  local min_lot     = opt(o, "min_lot", 12)        -- lot must hold a building + yards
+  local park_frac   = opt(o, "park_fraction", 0.10)
+  local center_r    = opt(o, "center_plaza", false) and opt(o, "ring_spacing", 60) * 0.6 or -1
+  local pads, plan  = {}, {}
+  for _, block in ipairs(lay.blocks) do
+    local cx, cz = centroid(block)
+    -- The island inside the roundabout: a plaza + monument (the Étoile centre),
+    -- not subdivided into lots.
+    if math.sqrt(cx * cx + cz * cz) < center_r then
+      local rad = 0
+      for _, p in ipairs(block) do
+        rad = math.max(rad, math.sqrt((p.x - cx) ^ 2 + (p.z - cz) ^ 2))
+      end
+      local y = base:at(cx, cz)
+      pads[#pads + 1] = { y = y, poly = block }     -- level the whole island
+      plan[#plan + 1] = { kind = "plaza", cx = cx, cz = cz, rad = rad, y = y }
+      goto next_block
+    end
+    do
+    local lo, hi = 1e9, -1e9
+    for _, p in ipairs(block) do
+      local y = base:at(p.x, p.z); lo = math.min(lo, y); hi = math.max(hi, y)
+    end
+    if (hi - lo) <= flat_relief then
+      local y = base:at(cx, cz)        -- the whole block levels to its centre height
+      -- `inset` pulls the parcels in off the road centrelines (carriageway +
+      -- sidewalk + a front setback) so lots sit inside the block, not the street.
+      for _, lot in ipairs(city.lots(block,
+          { inset = opt(o, "block_inset", 12), target_area = opt(o, "lot_area", 520),
+            min_area = opt(o, "lot_min_area", 150), seed = opt(o, "seed", 7) })) do
+        if lot.w >= min_lot and lot.d >= min_lot then     -- room for a plot
+          -- The pad levels the WHOLE lot (garden + building), so the parcel reads flat.
+          pads[#pads + 1] = { y = y,
+            poly = rect(lot.cx, lot.cz, lot.w * 0.5 + 0.5, lot.d * 0.5 + 0.5, lot.yaw) }
+          local park = (math.floor(lot.cx * 13 + lot.cz * 7) % 100) < (park_frac * 100)
+          plan[#plan + 1] = { kind = park and "park" or "build",
+            cx = lot.cx, cz = lot.cz, w = lot.w, d = lot.d, yaw = lot.yaw, y = y,
+            r = math.sqrt(lot.cx * lot.cx + lot.cz * lot.cz) }
+        end
+      end
+    end
+    end   -- the developable-block branch
+    ::next_block::
+  end
+  return pads, plan
+end
+
+-- ----- building variety: archetype by district + a per-plot hash -------------
+-- Downtown grows glass/metal towers (some round, set back as they climb);
+-- midtown concrete/stucco/brick mid-rises; the residential fringe brick & painted
+-- low-rises. So the skyline reads as a varied city, not a field of equal boxes.
+-- Returns variety params (style/floors/setbacks/shape); the placer adds the
+-- width/depth sized to the building's footprint within the lot.
+function M.building_args(o, b)
+  local h = math.floor(b.cx * 31 + b.cz * 17) % 997
+  local a = { floors = floors_at(o, b.r),
+              ground_retail = true, walkable_ground = true,
+              seed = math.floor(b.cx * 7 + b.cz) % 100000 }
+  if b.r < opt(o, "downtown_radius", 55) then
+    a.style = ({ "glass", "glass", "metal", "concrete" })[(h % 4) + 1]
+    a.bay_width = 3.6 + (h % 3) * 0.4
+    if a.floors >= 12 then a.setback_floors = 5; a.setback_every = 2.5 end
+    if h % 6 == 0 then a.shape = "cylinder"; a.sides = 40 end       -- round towers
+    if h % 47 == 0 then a.shape = "pagoda"; a.tiers = 5 end          -- a rare landmark
+  elseif b.r < opt(o, "midtown_radius", 120) then
+    a.style = ({ "concrete", "stucco", "painted", "brick" })[(h % 4) + 1]
+    a.bay_width = 3.2 + (h % 4) * 0.3
+    if h % 7 == 0 and a.floors >= 8 then a.setback_floors = 4; a.setback_every = 2.0 end
+  else
+    a.style = ({ "brick", "painted", "stucco" })[(h % 3) + 1]
+    a.ground_retail = false
+    a.bay_width = 3.0
+  end
+  return a
+end
+
+-- ----- lot dressing: how a parcel is filled, by district ----------------------
+-- coverage = building's share of the lot; front = forecourt depth toward the
+-- street; ground = the lot slab colour (paved downtown -> lawn outward); hedge =
+-- a low frame around garden lots. So a lot is a building PLUS its surrounds.
+local function lot_style(o, r)
+  if r < opt(o, "downtown_radius", 55) then
+    -- A paved concrete plaza, no garden — a dense downtown lot.
+    return { coverage = 0.85, front = 2.0,
+             ground = opt(o, "plaza_color", { 0.56, 0.56, 0.54 }), hedge = false }
+  elseif r < opt(o, "midtown_radius", 120) then
+    return { coverage = 0.70, front = 3.0, ground = { 0.26, 0.42, 0.18 }, hedge = true }
+  end
+  return { coverage = 0.55, front = 4.5, ground = { 0.28, 0.46, 0.20 }, hedge = true }
+end
+
+-- ----- place each planned lot on the conformed (level) terrain -----------------
+-- Everything is built centred at the origin (the building shifted to its local
+-- footprint) and mesh.place'd at the lot centre + yaw, so the parcel turns as a
+-- unit: a level ground slab, an optional open-front hedge, then the building set
+-- back behind its forecourt and squared to the street.
+function M.place_blocks(m, plan, land, o)
+  for _, b in ipairs(plan) do
+    -- The roundabout's central island: a round paved plaza + a monument (an
+    -- Arc/obelisk stand-in) the avenues radiate around.
+    if b.kind == "plaza" then
+      local pr = b.rad * 0.82
+      m:add_solid(mesh.translate(mesh.cylinder(pr, 0.2), { b.cx, b.y, b.cz }))
+      m:add_solid(mesh.translate(
+        scope{ origin = { -4, 0, -4 }, size = { 8, 2.5, 8 } }
+          :box(opt(o, "monument_color", { 0.60, 0.58, 0.55 })), { b.cx, b.y, b.cz }))
+      m:add_solid(mesh.translate(
+        scope{ origin = { -1.6, 2.5, -1.6 }, size = { 3.2, 16, 3.2 } }
+          :box(opt(o, "monument_color", { 0.62, 0.60, 0.57 })), { b.cx, b.y, b.cz }))
+      goto next_lot
+    end
+    do
+    local sty = lot_style(o, b.r)
+    local hw, hd = b.w * 0.5, b.d * 0.5
+    local function place(part) m:add_solid(mesh.place(part, { b.cx, b.y, b.cz }, b.yaw)) end
+
+    -- Level lot ground (lawn / paved forecourt), filling the parcel.
+    place(scope{ origin = { -hw, -0.05, -hd }, size = { b.w, 0.2, b.d } }:box(sty.ground))
+
+    -- Open-front hedge: a thin low frame on the sides + rear (garden lots only),
+    -- leaving the street side open onto the forecourt.
+    if sty.hedge then
+      local t, hh, col = 0.4, 0.7, opt(o, "hedge_color", { 0.17, 0.33, 0.13 })
+      for _, bar in ipairs({ { -hw, -hd, b.w, t }, { -hw, -hd, t, b.d },
+                             { hw - t, -hd, t, b.d } }) do
+        place(scope{ origin = { bar[1], 0, bar[2] }, size = { bar[3], hh, bar[4] } }:box(col))
+      end
+    end
+
+    if b.kind == "build" then
+      -- Building footprint within the lot, set back to leave a forecourt toward
+      -- the street (+Z). Sized from coverage; skip if it comes out too small.
+      local bw = b.w * sty.coverage
+      local bd = (b.d - sty.front) * sty.coverage
+      if bw >= 8 and bd >= 8 then
+        local yaw, zoff = b.yaw, b.d * 0.5 - sty.front - bd * 0.5
+        -- A deliberate diagonal: a small share of lots turn (and shrink to fit) —
+        -- intentional variety, not the accidental corner-lot skew of before.
+        local hsh = math.floor(b.cx * 7 + b.cz * 3) % 100
+        if hsh < opt(o, "diagonal_chance", 6) then
+          yaw = b.yaw + math.pi * 0.22 * ((hsh % 2 == 0) and 1 or -1)
+          bw, bd, zoff = bw * 0.72, bd * 0.72, 0
+        end
+        local args = M.building_args(o, b); args.width = bw; args.depth = bd
+        local hbw, hbd = bw * 0.5, bd * 0.5
+        m:add_solid(mesh.place(
+          scope{ origin = { -hbw, -1.0, zoff - hbd }, size = { bw, 1.0, bd } }
+            :box(opt(o, "foundation_color", { 0.32, 0.32, 0.34 })),
+          { b.cx, b.y, b.cz }, yaw))
+        m:add_solid(mesh.place(mesh.translate(building.grow(args), { 0, 0, zoff }),
+          { b.cx, b.y, b.cz }, yaw))
+      end
+    end
+    end   -- the normal lot branch
+    ::next_lot::
+  end
+end
+
+-- ----- instanced street lamps along both verges -------------------------------
+function M.lamps(m, lay, land, o)
+  local lamp = streetfurniture.lamp{}
+  local places = {}
+  for _, e in ipairs(lay.edges) do
+    local a, b = lay.nodes[e.a], lay.nodes[e.b]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 22 then
+      local nx, nz = -dz / len, dx / len
+      local off = e.width * 0.5 + 1.5
+      local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+      for _, s in ipairs({ 1, -1 }) do
+        local px, pz = mx + nx * off * s, mz + nz * off * s
+        places[#places + 1] = { pos = { px, land:at(px, pz), pz } }
+      end
+    end
+  end
+  -- Each lamp is solid: a thin vertical capsule around the pole (the correct
+  -- collider for a post — you walk into it, not a bounding box).
+  m:add_instances(lamp, places,
+    { collide = { shape = "capsule", radius = 0.3, height = 5 } })
+end
+
+-- ----- the whole city ---------------------------------------------------------
+-- opts (all optional): seed, pattern ("grid"|"radial"), extent, cell_size,
+--   ring_spacing, spokes, jitter; terrain_amp, terrain_freq, terrain_size,
+--   terrain_resolution, eroded, droplets, ground_color; downtown_radius,
+--   midtown_radius, *_floors, lot_fill, foundation_color.
+function M.generate(o)
+  o = o or {}
+  local seed = opt(o, "seed", 7)
+  local size = opt(o, "terrain_size", 460)
+
+  -- The natural landscape, before the city imposes itself on it.
+  local base = M.terrain{ seed = seed, freq = opt(o, "terrain_freq", 0.012),
+    amp = opt(o, "terrain_amp", 18), warp = opt(o, "terrain_warp", 28),
+    size = size, eroded = o.eroded, droplets = o.droplets }
+
+  -- Lay the road network, plan the blocks on the natural terrain (which faces to
+  -- develop, where the level plots are), then CONFORM the terrain to BOTH the
+  -- roads and those plots: streets become flat/constant-grade corridors and each
+  -- developed block a level plot, with the ground cut/filled to meet them instead
+  -- of bending over every bump. `land` is what everything downstream samples.
+  local lay = city.layout{ pattern = opt(o, "pattern", "grid"),
+    extent = opt(o, "extent", 180), cell_size = opt(o, "cell_size", 84),
+    ring_spacing = opt(o, "ring_spacing", 64), spokes = opt(o, "spokes", 12),
+    jitter = opt(o, "jitter", 0.10), seed = seed }
+  local pads, plan = M.plan_blocks(base, lay, o)
+  local land = terrain.conform(base, lay, { margin = opt(o, "road_margin", 3),
+    falloff = opt(o, "road_falloff", 10), pads = pads,
+    pad_falloff = opt(o, "pad_falloff", 8) })
+
+  local m = model.new()
+  -- The terrain is the ground you walk on: render it and collide with the exact
+  -- same surface (no approximation), so footing follows every contour.
+  local ground = terrain.mesh(land, { size = size,
+    resolution = opt(o, "terrain_resolution", 220),
+    color = opt(o, "ground_color", {0.33, 0.40, 0.26}) })
+  m:add(ground)
+  m:collide(ground, { friction = 0.95 })
+
+  -- Roads ride the conformed (flat) corridors, lifted just clear of the ground.
+  -- `roadbed = true` dresses the junction-aware road_mesh (trimmed ribbons + pads,
+  -- ADR-0044/0048) with raised sidewalks, lane markings that stop at the junctions,
+  -- crosswalks at the intersection mouths, and a baked asphalt grain material. The
+  -- ribbon only subdivides where the terrain bends, so it stays light + stable.
+  if opt(o, "roadbed", false) then
+    local grit  = texture.fbm{ seed = 7, scale = 40, octaves = 4 }:scale_bias(0.25, 0.82)
+    local grain = texture.bake_color(grit, { 0.70, 0.70, 0.72 }, { 1.0, 1.0, 1.0 }, 256)
+    local surf  = material.new{ albedo = grain, roughness = 0.93, tile = 7 }
+    m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
+      color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.6),
+      curb = opt(o, "curb", 0.16), markings = true,
+      mark_width = opt(o, "mark_width", 0.18),
+      crosswalks = opt(o, "crosswalks", true),
+      corner_radius = opt(o, "corner_radius", 3.0),
+      plaza = opt(o, "plaza", 0) }), surf)
+  else
+    m:add_solid(city.road_mesh(lay, { height = land, lift = 0.3,
+      color = {0.08, 0.08, 0.09}, sidewalk = opt(o, "sidewalk", 2.5),
+      curb = opt(o, "curb", 0.15), markings = opt(o, "markings", true),
+      plaza = opt(o, "plaza", 0) }))
+  end
+
+  M.place_blocks(m, plan, land, o)
+  M.lamps(m, lay, land, o)
+  return m
+end
+
+-- Entry point: the level's `opts` block arrives as the global `args` (see
+-- setRecipeArgs), so the SAME recipe drives a grid city or a radial one straight
+-- from the level. With no opts it falls back to a representative grid city. Edit
+-- to `return M.tower(3)` etc. to preview a single building instead.
+return M.generate(args or { pattern = "grid", seed = 7 })
+-- citylamps.lua — place a street lamp at every road-segment midpoint, offset to
+-- the verge, across the whole generated street network (ADR-0042 Phase 3). Pure
+-- Lua over the bound road solver (city.layout) + the composable model + the
+-- instanced lamp prototype — a worked example of authoring a city part in script.
+
+local function citylamps(opts)
+  opts = opts or {}
+  local layout = city.layout{
+    extent    = opts.extent or 200,
+    cell_size = opts.cell_size or 95,
+    seed      = opts.seed or 5,
+  }
+  local lamp = streetfurniture.lamp(opts.lamp)
+
+  local places = {}
+  for _, e in ipairs(layout.edges) do
+    local a, b = layout.nodes[e.a], layout.nodes[e.b]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 2 then
+      local nx, nz = -dz / len, dx / len          -- edge normal (to the verge)
+      local off = e.width * 0.5 + 1.3
+      local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+      places[#places + 1] = { pos = { mx + nx * off, 0, mz + nz * off } }
+    end
+  end
+
+  local m = model.new()
+  m:add_instances(lamp, places)        -- one prototype, many placements (instanced)
+  return m
+end
+
+return citylamps()
+-- Procedural flora library (ADR-0021/0023) — generators authored entirely in
+-- Lua over the procgen builders. Defines a global `flora` table:
+--
+--   flora.tree(seed, opts)    -> Mesh   tapered welded trunk + real leaf cards
+--   flora.rock(seed, opts)    -> Mesh   sphere + lumps - cuts (port of rock.cpp)
+--   flora.grass(seed, opts)   -> Mesh   a tuft of blades
+--   flora.flower(seed, opts)  -> Mesh   stem + petals + center
+--
+-- Hosts (the level loader, tests) load this once so `flora` is available, then
+-- run small chunks like `return flora.tree(seed, {species="pine"})`. Pure: no io,
+-- deterministic per seed. NOTE: geometry is validated headlessly (counts/taper/
+-- determinism); the look needs a macOS render to judge.
+
+flora = {}
+
+local function rand_unit()       -- uniform point on the unit sphere
+    local z = math.random() * 2 - 1
+    local r = math.sqrt(math.max(0.0, 1 - z * z))
+    local t = math.random() * 2 * math.pi
+    return { r * math.cos(t), r * math.sin(t), z }
+end
+
+local function add(v, w) return { v[1] + w[1], v[2] + w[2], v[3] + w[3] } end
+local function scale(v, s) return { v[1] * s, v[2] * s, v[3] * s } end
+
+-- A few tree "species" presets. `rules` are STOCHASTIC (several weighted
+-- productions for X), so the seed grows a genuinely different tree each time —
+-- that is what gives the forest variety across instances/variants.
+local SPECIES = {
+    oak  = { axiom = "X", iterations = 3, angle_deg = 32, length = 0.55,
+             radius = 0.18, taper = 0.90, leaf_size = 0.20,
+             trunk = { 0.34, 0.24, 0.13 }, leaf = { 0.20, 0.44, 0.15 },
+             rules = { "F[&+X][&-X]FX", "F[&+X][/&X][\\^X]FX", "FF[&-X][&/+X]X" } },
+    pine = { axiom = "X", iterations = 4, angle_deg = 22, length = 0.5,
+             radius = 0.16, taper = 0.86, leaf_size = 0.16,
+             trunk = { 0.30, 0.20, 0.12 }, leaf = { 0.12, 0.36, 0.18 },
+             rules = { "F[&X][^X]FX", "FF[/&X][\\&X]X", "F[&X][/X][\\X]FX" } },
+    birch = { axiom = "X", iterations = 4, angle_deg = 28, length = 0.6,
+              radius = 0.12, taper = 0.92, leaf_size = 0.18,
+              trunk = { 0.80, 0.80, 0.74 }, leaf = { 0.40, 0.55, 0.20 },
+              rules = { "F[+X][-X]FX", "FF[+X]X", "F[-X][/X]FX" } },
+}
+
+-- Parametric-grammar species (ADR-0030/0032): each defines a *parametric*
+-- L-system (successor params are expressions over the predecessor's) plus skin
+-- params, grown by flora.param_tree into the real curved generalized-cylinder
+-- tree (bark + alpha-cut leaves). Structurally distinct, not just retuned:
+-- oak is broad and drooping, pine a narrow whorled conifer, birch slender/weepy.
+local PARAM_SPECIES = {
+    oak = { iterations = 6, length = 2.2, width = 0.14, angle = 40,
+            falloff = 0.76, leader_falloff = 0.88, branches = 2,
+            terminal_fraction = 0.34, terminal_forks = 3,
+            droop = 0.26, wander = 0.08, angle_jitter = 20, ring_segments = 6,
+            tip_radius = 0.02, pipe_exponent = 2.4, radius_scale = 1.6,
+            leaves_per_tip = 5, leaf_size = 0.18, leaf_thickness = 0.05,
+            bark_color = { 0.32, 0.23, 0.15 }, leaf_color = { 0.20, 0.46, 0.13 } },
+    pine = { iterations = 7, length = 1.5, width = 0.13, angle = 68,
+             falloff = 0.62, leader_falloff = 0.92, branches = 3,
+             terminal_fraction = 0.3, terminal_forks = 3,
+             droop = 0.12, wander = 0.05, angle_jitter = 14, ring_segments = 6,
+             tip_radius = 0.018, pipe_exponent = 2.3, radius_scale = 1.4,
+             leaves_per_tip = 5, leaf_size = 0.12, leaf_thickness = 0.04,
+             bark_color = { 0.28, 0.19, 0.12 }, leaf_color = { 0.12, 0.34, 0.16 } },
+    birch = { iterations = 6, length = 2.0, width = 0.1, angle = 32,
+              falloff = 0.78, leader_falloff = 0.9, branches = 2,
+              terminal_fraction = 0.34, terminal_forks = 3,
+              droop = 0.36, wander = 0.11, angle_jitter = 22, ring_segments = 6,
+              tip_radius = 0.016, pipe_exponent = 2.3, radius_scale = 1.1,
+              leaves_per_tip = 5, leaf_size = 0.15, leaf_thickness = 0.045,
+              bark_color = { 0.78, 0.76, 0.70 }, leaf_color = { 0.42, 0.55, 0.18 } },
+}
+
+-- Grow a tree from a parametric grammar built out of the species params, and
+-- return it as a MODEL: a list of {mesh, material} parts (bark opaque + leaf
+-- alpha-cut), which the vegetation loader scatters as separate instance groups.
+function flora.param_tree(seed, opts)
+    opts = opts or {}
+    local s = PARAM_SPECIES[opts.species or "oak"] or PARAM_SPECIES.oak
+    local function pick(k) if opts[k] ~= nil then return opts[k] else return s[k] end end
+
+    local angle, fall, lead = pick("angle"), pick("falloff"), pick("leader_falloff")
+    local branches, roll = pick("branches"), 137.5
+    local sys = lsystem.parametric()
+
+    -- Structural growth while the internode is long: lay an internode, spawn
+    -- `branches` golden-angle side branches (pitched away + shrunk), continue a
+    -- central leader.
+    local struct = "F(l,w)"
+    for _ = 1, branches do
+        struct = struct .. string.format("/(%g)[&(%g)A(l*%g,w*0.6)]", roll, angle, fall)
+    end
+    struct = struct .. string.format("/(%g)A(l*%g,w*0.75)", roll, lead)
+
+    -- Terminal spray once short (guarded): more forks, wider pitch, faster shrink
+    -- => branch ends fork repeatedly into dense short tipped twigs.
+    local thresh = pick("length") * (pick("terminal_fraction") or 0.34)
+    local tforks = pick("terminal_forks") or 3
+    local term = "F(l,w)"
+    for _ = 1, tforks do
+        term = term .. string.format("/(%g)[&(%g)A(l*0.7,w*0.55)]", roll, angle * 1.3)
+    end
+    term = term .. string.format("/(%g)A(l*0.7,w*0.6)", roll)
+
+    sys:rule(string.format("A(l,w):l>%g", thresh), struct)
+    sys:rule(string.format("A(l,w):l<=%g", thresh), term)
+    local modules = sys:expand(
+        string.format("A(%g,%g)", pick("length"), pick("width")),
+        pick("iterations"), seed)
+
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = pick("tip_radius"), pipe_exponent = pick("pipe_exponent"),
+        radius_scale = pick("radius_scale"), ring_segments = pick("ring_segments"),
+        droop = pick("droop"), wander = pick("wander"),
+        angle_jitter = pick("angle_jitter"),
+        leaves_per_tip = pick("leaves_per_tip"), leaf_size = pick("leaf_size"),
+        leaf_thickness = pick("leaf_thickness"),
+        bark_color = pick("bark_color"), leaf_color = pick("leaf_color"),
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark_" .. (opts.species or "oak"),
+                      roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
+    end
+    return parts
+end
+
+-- A majestic THREE-PHASE tree, defined entirely in the grammar (no engine
+-- changes): one symbol A with three guarded productions selected by internode
+-- length l (ADR-0030 guards + && ranges). Demonstrates that N-phase structure is
+-- pure Lua.
+--   Phase 1  l > clear      : bare clear trunk (leader only, no branches)
+--   Phase 2  term < l <= clear : scaffold crown (limbs + leader)
+--   Phase 3  l <= term      : terminal twig sprays (thin => leaf-clad), so the
+--                             crown caps with foliage and nothing pokes out bare.
+-- Thresholds are fractions of trunk length; trunk vs crown use different falloffs
+-- (a tall dominant trunk, a faster-capping crown).
+function flora.phased_tree(seed, opts)
+    opts = opts or {}
+    local len   = opts.length or 2.6
+    local clr   = len * (opts.clear_fraction or 0.6)
+    local trm   = len * (opts.terminal_fraction or 0.2)
+    local trunkFall = opts.trunk_falloff or 0.84
+    local crownFall = opts.crown_falloff or 0.82
+    local sideFall  = opts.side_falloff or 0.62
+    local angle = opts.angle or 42
+    local branches = opts.branches or 2
+    local roll = 137.5
+
+    local sys = lsystem.parametric()
+    -- Phase 1: bare clear trunk.
+    sys:rule(string.format("A(l):l>%g", clr),
+             string.format("F(l)/(%g)A(l*%g)", roll, trunkFall))
+    -- Phase 2: scaffold crown (single-symbol range guard via &&).
+    local crown = "F(l)"
+    for _ = 1, branches do
+        crown = crown .. string.format("/(%g)[&(%g)A(l*%g)]", roll, angle, sideFall)
+    end
+    crown = crown .. string.format("/(%g)A(l*%g)", roll, crownFall)
+    sys:rule(string.format("A(l):l<=%g && l>%g", clr, trm), crown)
+    -- Phase 3: terminal sprays — fork into short thin twigs (leaf-clad by
+    -- leaf_thickness), capping every end including the leader's tip.
+    local ta = angle * 1.4
+    sys:rule(string.format("A(l):l<=%g", trm),
+             string.format("F(l)/(%g)[&(%g)A(l*0.6)]/(%g)[&(-%g)A(l*0.6)]/(%g)A(l*0.6)",
+                           roll, ta, roll, ta, roll))
+
+    local modules = sys:expand(string.format("A(%g)", len),
+                               opts.iterations or 12, seed)
+    local bark, leaves = tree.skin(modules, {
+        tip_radius = opts.tip_radius or 0.02,
+        pipe_exponent = opts.pipe_exponent or 2.4,
+        radius_scale = opts.radius_scale or 1.7,
+        ring_segments = opts.ring_segments or 6,
+        droop = opts.droop or 0.12, wander = opts.wander or 0.06,
+        leaves_per_tip = opts.leaves_per_tip or 4,
+        leaf_size = opts.leaf_size or 0.2,
+        leaf_thickness = opts.leaf_thickness or 0.06,
+        leaf_clump = opts.leaf_clump or 1.0,
+        bark_color = opts.bark_color or { 0.30, 0.22, 0.14 },
+        leaf_color = opts.leaf_color or { 0.20, 0.46, 0.13 },
+    }, seed)
+
+    local parts = { { mesh = bark, texture = "bark", roughness = 1.0 } }
+    if leaves then
+        parts[#parts + 1] = { mesh = leaves, texture = "leaf", alpha_test = true,
+                              wind = true, roughness = 0.6 }
+    end
+    return parts
+end
+
+-- A tapered, welded trunk/branches with real (oriented) leaf cards instead of
+-- blobs. `opts.species` picks a preset; individual fields override it.
+function flora.tree(seed, opts)
+    opts = opts or {}
+    local s = SPECIES[opts.species or "oak"] or SPECIES.oak
+    local function pick(k) if opts[k] ~= nil then return opts[k] else return s[k] end end
+
+    local sys = lsystem.create()
+    for _, prod in ipairs(opts.rules or s.rules) do sys:rule("X", prod, 1.0) end
+    sys:rule("F", "FF")
+    local symbols = sys:expand(pick("axiom"), pick("iterations"), seed)
+    -- Apices (leftover X) become leaf attachment points; L draws no blob since
+    -- leaf_radius = 0, but turtle leaves still report the points.
+    local leafy = (symbols:gsub("X", "L"))
+
+    local params = {
+        length       = pick("length"),
+        radius       = pick("radius"),
+        radius_taper = opts.radius_taper or 0.7,
+        taper        = pick("taper"),          -- continuous thinning up the trunk
+        angle_deg    = pick("angle_deg"),
+        leaf_radius  = 0,                       -- branches only (no blobs)
+    }
+
+    local branches = lsystem.turtle_mesh_sdf(leafy, params,
+                                             opts.smoothness or 0.07, opts.res or 56)
+    local trunk_lo = pick("trunk")
+    branches = mesh.bake_height_color(branches, trunk_lo, scale(trunk_lo, 1.25))
+
+    -- Real leaves: a small card at each apex, fanned along the branch heading.
+    local placements = lsystem.leaves(leafy, params)
+    local lsize = pick("leaf_size")
+    local leaf_color = pick("leaf")
+    local card = mesh.bake_height_color(
+        mesh.box({ lsize * 0.5, lsize * 1.6, lsize * 0.04 }), leaf_color, leaf_color)
+
+    local cards = {}
+    local step = opts.leaf_step or 1
+    for i, lf in ipairs(placements) do
+        if (i % step) == 0 then
+            local c = mesh.orient(card, lf.direction)   -- card +Y -> heading
+            cards[#cards + 1] = mesh.translate(c, lf.position)
+        end
+    end
+    if #cards == 0 then return branches end
+    return mesh.merge({ branches, mesh.merge(cards) })
+end
+
+-- A rock as an SDF graph: base sphere + smooth-unioned lumps - subtracted cuts,
+-- mottled grey. The Lua port of generateRockSdf (rock.cpp).
+function flora.rock(seed, opts)
+    opts = opts or {}
+    math.randomseed(seed)
+    local base = opts.radius or 1.0
+    local lump_scale = opts.lump_scale or 0.5
+    local smooth = opts.smoothness or 0.3
+    local res = opts.res or 40
+
+    local parts = { sdf.sphere({ 0, 0, 0 }, base) }
+    for _ = 1, (opts.lumps or 6) do
+        local d = rand_unit()
+        local dist = base * (0.7 + 0.3 * math.random())
+        local r = base * lump_scale * (0.4 + 0.6 * math.random())
+        parts[#parts + 1] = sdf.sphere(scale(d, dist), r)
+    end
+    local body = sdf.smooth_union_all(parts, smooth)
+    for _ = 1, (opts.cuts or 2) do
+        local d = rand_unit()
+        local r = base * (0.5 + 0.4 * math.random())
+        body = sdf.subtract(body, sdf.sphere(scale(d, base + r * 0.6), r))
+    end
+
+    local extent = base * (1.0 + lump_scale) + smooth
+    local pad = extent * 0.15 + 2.0 * extent / res
+    local m = extent + pad
+    local rock = polygonize(body, { min = { -m, -m, -m }, max = { m, m, m } }, res)
+    local g = opts.color or { 0.5, 0.5, 0.5 }
+    return mesh.bake_height_color(rock, scale(g, 0.8), scale(g, 1.12))
+end
+
+-- A clump of grass blades (thin cards), bent and rotated, dark at the base to
+-- light at the tip.
+-- A dense grass *patch* (not a lone tuft): many blades spread over a disc, so a
+-- handful of overlapping instances read as a continuous field. `radius` is the
+-- patch size; `blades` the count within it.
+function flora.grass(seed, opts)
+    opts = opts or {}
+    math.randomseed(seed)
+    local n = opts.blades or 45
+    local h = opts.height or 0.45
+    local radius = opts.radius or 1.5
+    local lo = opts.color_low or { 0.10, 0.28, 0.06 }
+    local hi = opts.color_high or { 0.32, 0.55, 0.16 }
+    local blades = {}
+    for _ = 1, n do
+        local bh = h * (0.6 + math.random() * 0.8)             -- varied height
+        local b = mesh.translate(mesh.box({ 0.022, bh, 0.006 }), { 0, bh * 0.5, 0 })
+        b = mesh.rotate_z(b, (math.random() - 0.5) * 0.8)      -- bend
+        b = mesh.rotate_y(b, math.random() * 2 * math.pi)      -- face anywhere
+        -- Uniform-area placement over the disc (sqrt keeps it from clumping center).
+        local rr = radius * math.sqrt(math.random())
+        local a = math.random() * 2 * math.pi
+        b = mesh.translate(b, { rr * math.cos(a), 0, rr * math.sin(a) })
+        blades[#blades + 1] = mesh.bake_height_color(b, lo, hi)
+    end
+    return mesh.merge(blades)
+end
+
+-- A small flower: a stem, a ring of petals, and a center.
+function flora.flower(seed, opts)
+    opts = opts or {}
+    math.randomseed(seed)
+    local h = opts.height or 0.3
+    local petals = opts.petals or 6
+    local pcol = opts.color or { 0.85, 0.22, 0.42 }
+
+    local parts = {}
+    local stem = mesh.translate(mesh.cylinder(0.012, h), { 0, h * 0.5, 0 })
+    parts[#parts + 1] = mesh.bake_height_color(stem, { 0.15, 0.35, 0.10 }, { 0.20, 0.45, 0.14 })
+    for i = 1, petals do
+        local petal = mesh.translate(mesh.box({ 0.05, 0.012, 0.12 }), { 0, 0, 0.08 })
+        petal = mesh.rotate_y(petal, (i / petals) * 2 * math.pi)
+        petal = mesh.translate(petal, { 0, h, 0 })
+        parts[#parts + 1] = mesh.bake_height_color(petal, pcol, scale(pcol, 1.1))
+    end
+    local center = mesh.translate(mesh.sphere(0.035), { 0, h, 0 })
+    parts[#parts + 1] = mesh.bake_height_color(center, { 0.9, 0.8, 0.1 }, { 0.97, 0.86, 0.2 })
+    return mesh.merge(parts)
+end
+
+return flora
+-- Physics-block shooting gun (ADR-0024) — a MonoBehaviour-style ECS script on
+-- the player. On "fire" it spawns a dynamic cube along the camera aim (the Lua
+-- port of the C++ ShootingSystem). On start it ALSO generates a gun viewmodel
+-- with the procgen builders and spawns it as its own camera-following entity.
+--
+-- `camera`/`input`/`spawn` are the gameplay surface; `mesh.*` are the procgen
+-- builders — both open in the ScriptSystem VM (ADR-0023/0024).
+
+local M = {}
+
+local SPEED = 50.0   -- launch speed (world units/sec)
+local SIZE  = 0.5    -- bullet cube edge
+local MAX   = 500    -- bullet cap, like the C++ shooter
+
+-- A little gun, kit-bashed from primitives. The barrel runs along local +Z (the
+-- "forward" the follow script aims down the camera direction).
+local function build_gun()
+    local receiver = mesh.box({ 0.09, 0.12, 0.34 })
+    local barrel = mesh.translate(
+        mesh.rotate_x(mesh.cylinder(0.028, 0.55), math.pi * 0.5),  -- Y-up -> +Z
+        { 0.0, 0.03, 0.34 })
+    local grip = mesh.translate(
+        mesh.rotate_x(mesh.box({ 0.07, 0.20, 0.09 }), 0.35),
+        { 0.0, -0.16, -0.10 })
+    local sight = mesh.translate(mesh.box({ 0.02, 0.04, 0.05 }), { 0.0, 0.10, 0.10 })
+    return mesh.recompute_normals(mesh.merge({ receiver, barrel, grip, sight }))
+end
+
+-- The viewmodel's own behaviour: glue itself to the camera every frame, barrel
+-- pointing where you look. Snap PrevTransform so it renders crisp (no smear).
+-- Slot 1 = bare hands (gun stowed out of sight), slot 2 = gun drawn. The viewmodel tracks the slot
+-- itself (it can't be hidden via the API, so it stows far below the world when holstered). The main
+-- script tracks the same slot keys independently to gate firing — both start on slot 1.
+local FOLLOW = [[
+local G = { equipped = false }
+function G:update(e, dt)
+    if input.pressed("slot_2") then self.equipped = true end
+    if input.pressed("slot_1") then self.equipped = false end
+    if not self.equipped then                       -- holstered: stow out of sight
+        entity.set_position(e, { 0.0, -100000.0, 0.0 })
+        entity.snap_prev(e)
+        return
+    end
+    local eye, fwd, right = camera.eye(), camera.forward(), camera.right()
+    entity.set_position(e, {
+        eye[1] + fwd[1] * 0.35 + right[1] * 0.18,
+        eye[2] + fwd[2] * 0.35 + right[2] * 0.18 - 0.18,
+        eye[3] + fwd[3] * 0.35 + right[3] * 0.18,
+    })
+    entity.look_along(e, fwd)
+    entity.snap_prev(e)
+end
+return G
+]]
+
+function M:start(e)
+    self.fired = 0
+    self.equipped = false        -- start with bare hands; press 2 to draw the gun, 1 to put it away
+    spawn.model{
+        mesh      = build_gun(),
+        position  = { 0.0, -100000.0, 0.0 },   -- spawn holstered (slot 1 = bare hands)
+        color     = { 0.14, 0.14, 0.16 },
+        metallic  = 0.9,
+        roughness = 0.25,
+        script    = FOLLOW,
+    }
+end
+
+function M:update(e, dt)
+    if input.pressed("slot_2") then self.equipped = true end
+    if input.pressed("slot_1") then self.equipped = false end
+    if not self.equipped then return end       -- bare hands: nothing to fire
+    if self.fired >= MAX then return end
+    if not input.pressed("fire") then return end
+
+    local eye   = camera.eye()
+    local fwd   = camera.forward()
+    local right = camera.right()
+
+    -- Muzzle: in front of the eye, nudged right and down (mirrors the C++ one).
+    local pos = {
+        eye[1] + fwd[1] * 0.5 + right[1] * 0.2,
+        eye[2] + fwd[2] * 0.5 + right[2] * 0.2 - 0.15,
+        eye[3] + fwd[3] * 0.5 + right[3] * 0.2,
+    }
+    local vel = { fwd[1] * SPEED, fwd[2] * SPEED, fwd[3] * SPEED }
+
+    spawn.block{
+        position    = pos,
+        velocity    = vel,
+        size        = SIZE,
+        restitution = 0.7,
+        friction    = 0.3,
+        color       = { 1.0, 0.85, 0.1 },
+        emission    = { 0.5, 0.3, 0.0 },
+    }
+    self.fired = self.fired + 1
+end
+
+return M
+-- lsystem_tree.lua — a deliberately SIMPLE L-system tree (ADR-0021/0044): a few
+-- production rules, expanded into a turtle string, skinned to tapered branch
+-- cylinders, with a leaf canopy of green blobs at the upper tips. Unlike the
+-- heavyweight parametric flora.* trees, this is the whole grammar in a dozen
+-- lines — small enough to read, rotate (mesh.rotate_y / place) and instance.
+--
+-- Returns one model (branches + canopy, baked vertex colour, collidable), so it
+-- previews on its own (shape:"script") and twin_cities.lua reuses make_tree to
+-- instance a forest. `args.seed` / `args.iterations` tune it.
+
+-- Build a tree MESH (branches + canopy), deterministic for `seed`.
+function make_tree(seed, iters)
+  seed = math.floor(seed or 1)
+  iters = iters or 2
+  -- Grammar: a branch sprouts three side shoots pitched and rolled out of plane,
+  -- so the crown fills in 3D (not a flat fan). Two iterations keep it stout and
+  -- cheap enough to instance a forest (a deeper recursion explodes the tri count).
+  -- A single leading shoot keeps the trunk short while every node throws four
+  -- side shoots, so iterating bushes it out instead of growing a tall stick.
+  local sys = lsystem.create()
+  sys:rule("F", "F[+&F][-^F][/&F][\\&F]")
+  local sym = sys:expand("FF", math.max(iters, 3), seed)
+
+  -- Low slice count: a tree read at distance + instanced many times, so keep the
+  -- branch cylinders coarse (the silhouette carries it, not the facets).
+  local tp = { length = 1.0, radius = 0.26, angle_deg = 38, taper = 0.7,
+               segment_slices = 5 }
+  local branches = lsystem.turtle_mesh(sym, tp)
+  -- Flat bark tint: bake the same colour at low and high so height doesn't matter.
+  branches = mesh.bake_height_color(branches, { 0.30, 0.21, 0.13 }, { 0.42, 0.31, 0.19 })
+
+  -- Canopy: a fat green blob at every branch tip in the upper crown — overlapping
+  -- spheres read as one leafy mass.
+  local segs = lsystem.segments(sym, tp)
+  local maxy = 0.001                       -- lsystem.segments returns vec3 arrays
+  for _, s in ipairs(segs) do if s.b[2] > maxy then maxy = s.b[2] end end
+  -- Upper-crown tips only (so the trunk shows), capped so overlapping spheres
+  -- stay cheap. Collect candidates, then keep an evenly-spaced subset.
+  local tips = {}
+  for _, s in ipairs(segs) do
+    if s.b[2] > maxy * 0.55 then tips[#tips + 1] = s.b end
+  end
+  local blobs = {}
+  local stride = math.max(1, math.floor(#tips / 14))
+  for i = 1, #tips, stride do
+    local r = 0.85 + 0.5 * ((seed + #blobs) % 4) / 4
+    blobs[#blobs + 1] = mesh.translate(mesh.sphere(r), tips[i])
+  end
+  if #blobs == 0 then return branches end
+  local crown = mesh.bake_height_color(mesh.merge(blobs),
+                                       { 0.16, 0.33, 0.15 }, { 0.27, 0.47, 0.21 })
+  return mesh.merge({ branches, crown })
+end
+
+-- Standalone preview: one collidable tree at the origin.
+local seed = (args and args.seed) or seed or 1
+local iters = (args and args.iterations) or 3
+return model.new():add_solid(make_tree(seed, iters))
+-- lua_city.lua — a whole (small) city composed in Lua (ADR-0042/0043): the road
+-- layout comes from the C++ solver (city.layout), then the recipe lays a building
+-- per block, asphalt road strips, a ground plane, and instanced street lamps —
+-- and returns one composable model the engine bakes for either renderer.
+
+local function centroid(poly)
+  local cx, cz = 0, 0
+  for _, p in ipairs(poly) do cx = cx + p.x; cz = cz + p.z end
+  return cx / #poly, cz / #poly
+end
+
+local function extent(poly, cx, cz)
+  local w, d = 0, 0
+  for _, p in ipairs(poly) do
+    w = math.max(w, math.abs(p.x - cx) * 2)
+    d = math.max(d, math.abs(p.z - cz) * 2)
+  end
+  return w, d
+end
+
+local function build()
+  local seed = 7
+  local lay = city.layout{ extent = 170, cell_size = 64, jitter = 0.12, seed = seed }
+  local m = model.new()
+
+  -- Ground plane.
+  m:add(scope{ origin = {-260, -0.3, -260}, size = {520, 0.3, 520} }:box{0.27, 0.30, 0.25})
+
+  -- Roads: a dark asphalt quad per edge, merged into one part.
+  local roads = {}
+  for _, e in ipairs(lay.edges) do
+    local a, b = lay.nodes[e.a], lay.nodes[e.b]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 1 then
+      local nx, nz = -dz / len * (e.width * 0.5), dx / len * (e.width * 0.5)
+      local y = 0.03
+      roads[#roads + 1] = mesh.quad(
+        { a.x - nx, y, a.z - nz }, { a.x + nx, y, a.z + nz },
+        { b.x + nx, y, b.z + nz }, { b.x - nx, y, b.z - nz },
+        { 0, 1, 0 }, { 0.08, 0.08, 0.09 })
+    end
+  end
+  if #roads > 0 then m:add(mesh.merge(roads)) end
+
+  -- A building per block: footprint inset from the streets, height by radial
+  -- falloff from the centre (downtown is taller). building.grow's own facade
+  -- colours read on a single material, so no texture needed here.
+  for _, block in ipairs(lay.blocks) do
+    local cx, cz = centroid(block)
+    local bw, bd = extent(block, cx, cz)
+    local fw = math.max(8, bw * 0.55)
+    local fd = math.max(8, bd * 0.55)
+    local r = math.sqrt(cx * cx + cz * cz)
+    local floors
+    if r < 55 then floors = 9 + (math.floor(r) % 12)
+    elseif r < 120 then floors = 4 + (math.floor(r) % 5)
+    else floors = 2 + (math.floor(r) % 3) end
+
+    local b = building.grow{
+      floors = floors, width = fw, depth = fd,
+      ground_retail = true, walkable_ground = true,
+      setback_floors = (floors >= 14) and 6 or 0,
+      setback_every = 2.5,
+      seed = math.floor(cx * 7 + cz) % 100000,
+    }
+    m:add(mesh.translate(b, { cx, 0, cz }))
+  end
+
+  -- Instanced street lamps along both verges of each road.
+  local lamp = streetfurniture.lamp{}
+  local places = {}
+  for _, e in ipairs(lay.edges) do
+    local a, b = lay.nodes[e.a], lay.nodes[e.b]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 22 then
+      local nx, nz = -dz / len, dx / len
+      local off = e.width * 0.5 + 1.5
+      local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+      places[#places + 1] = { pos = { mx + nx * off, 0, mz + nz * off } }
+      places[#places + 1] = { pos = { mx - nx * off, 0, mz - nz * off } }
+    end
+  end
+  m:add_instances(lamp, places)
+
+  return m
+end
+
+return build()
+-- lua_city_terrain.lua — a city draped on composed terrain (ADR-0042/0043). The
+-- terrain is a heightfield (gentle warped fbm hills); the recipe samples it with
+-- :at(x,z) to seat each building on the ground with a foundation that follows the
+-- slope, and to lay roads/lamps at terrain height. One model, one pipeline.
+
+local function centroid(poly)
+  local cx, cz = 0, 0
+  for _, p in ipairs(poly) do cx = cx + p.x; cz = cz + p.z end
+  return cx / #poly, cz / #poly
+end
+local function extent(poly, cx, cz)
+  local w, d = 0, 0
+  for _, p in ipairs(poly) do
+    w = math.max(w, math.abs(p.x - cx) * 2)
+    d = math.max(d, math.abs(p.z - cz) * 2)
+  end
+  return w, d
+end
+
+local function build()
+  local seed = 7
+
+  -- Rolling hills the city climbs — gentle enough that draped roads read clean,
+  -- steep enough that the buildings step up the slopes, warped for organic contours.
+  local hills = terrain.fbm{ seed = seed, freq = 0.012, amp = 18, octaves = 5 }
+  local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 28)
+
+  local m = model.new()
+  m:add(terrain.mesh(land, { size = 460, resolution = 220, color = {0.33, 0.40, 0.26} }))
+
+  local lay = city.layout{ extent = 170, cell_size = 64, jitter = 0.10, seed = seed }
+
+  -- Roads: a connected surface with junction geometry (ribbons trimmed back to
+  -- the curb corners, intersection pads filling the gaps), draped on the terrain.
+  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09},
+    sidewalk = 2.4, curb = 0.16, markings = true, mark_width = 0.18, crosswalks = true }))
+
+  -- A building per block, seated on the ground: sample the footprint corners,
+  -- floor the building on the HIGH corner and run a foundation plinth down to the
+  -- LOW corner so it sits on the slope instead of floating (ADR-0044 stairstep).
+  for _, block in ipairs(lay.blocks) do
+    local cx, cz = centroid(block)
+    local bw, bd = extent(block, cx, cz)
+    local fw = math.max(8, bw * 0.55)
+    local fd = math.max(8, bd * 0.55)
+    local hw, hd = fw * 0.5, fd * 0.5
+    local hi, lo = -1e9, 1e9
+    for _, c in ipairs({ {cx-hw,cz-hd}, {cx+hw,cz-hd}, {cx+hw,cz+hd}, {cx-hw,cz+hd}, {cx,cz} }) do
+      local y = land:at(c[1], c[2])
+      hi = math.max(hi, y); lo = math.min(lo, y)
+    end
+    local baseY = hi
+    -- Foundation plinth from below the low corner up to the building floor.
+    m:add(scope{ origin = { cx - hw, lo - 1.0, cz - hd },
+                 size = { fw, (baseY - lo) + 1.0, fd } }:box{0.32, 0.32, 0.34})
+
+    local r = math.sqrt(cx * cx + cz * cz)
+    local floors
+    if r < 55 then floors = 9 + (math.floor(r) % 12)
+    elseif r < 120 then floors = 4 + (math.floor(r) % 5)
+    else floors = 2 + (math.floor(r) % 3) end
+
+    local bld = building.grow{
+      floors = floors, width = fw, depth = fd,
+      ground_retail = true, walkable_ground = true,
+      seed = math.floor(cx * 7 + cz) % 100000,
+    }
+    m:add(mesh.translate(bld, { cx, baseY, cz }))
+  end
+
+  -- Lamps along the verges, each seated at its terrain height.
+  local lamp = streetfurniture.lamp{}
+  local places = {}
+  for _, e in ipairs(lay.edges) do
+    local a, b = lay.nodes[e.a], lay.nodes[e.b]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 22 then
+      local nx, nz = -dz / len, dx / len
+      local off = e.width * 0.5 + 1.5
+      local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+      for _, s in ipairs({ 1, -1 }) do
+        local px, pz = mx + nx * off * s, mz + nz * off * s
+        places[#places + 1] = { pos = { px, land:at(px, pz), pz } }
+      end
+    end
+  end
+  m:add_instances(lamp, places)
+
+  return m
+end
+
+return build()
+-- planter.lua — a street planter authored entirely from the scope op-vocabulary
+-- (ADR-0042 Phase 2). Shows split / inset / box composing a prop in pure Lua over
+-- the bound C++ grammar; the same mesh feeds the viewer and the path tracer.
+
+local function planter(opts)
+  opts = opts or {}
+  local w = opts.width  or 1.6
+  local h = opts.height or 0.6
+  local d = opts.depth  or 1.6
+  local stone = opts.stone or {0.55, 0.52, 0.48}
+  local soil  = opts.soil  or {0.18, 0.13, 0.09}
+
+  -- The stone body, then a soil slab inset from the rim and capping the top.
+  local s    = scope{ origin = {-w / 2, 0, -d / 2}, size = {w, h, d} }
+  local body = s:box(stone)
+  local top  = s:inset(0.14):split('y', { h - 0.1, 0.1 })[2]   -- top 0.1 m
+  return mesh.merge({ body, top:box(soil) })
+end
+
+-- Default recipe entry point.
+return planter()
+-- showcase.lua — the ONE unified road system (unified-road-plan). Every road here is a spline in
+-- one graph: the crossing RESOLVER (city.resolve) ties the loose centerlines into a connected net
+-- sharing nodes, and the weld engine (city.solid) turns them into ONE volumetric surface — real
+-- thickness, welded junctions, rounded curb returns, open block interiors — draped on gently
+-- smoothed terrain. Lane markings are a TEXTURE (the RoadMarkings surface reads the road-local UV),
+-- not geometry. A wide HIGHWAY connects to the city grid through on/off ramps that share its nodes,
+-- and a roundabout fuses its ring with four spokes. One mesh, one pipeline.
+
+local DARK  = { 0.085, 0.085, 0.095 }
+local PAINT = material.new{ surface = "roadmarkings", roughness = 0.9 }
+
+local function line(x0, z0, x1, z1) return { { x = x0, z = z0 }, { x = x1, z = z1 } } end
+local function sample(fn, n, t0, t1)
+  local p = {}
+  for i = 0, n do local t = t0 + (t1 - t0) * i / n; local x, z = fn(t); p[#p + 1] = { x = x, z = z } end
+  return p
+end
+
+local spines = {}
+local function road(points, width) spines[#spines + 1] = { points = points, width = width } end
+
+-- City grid (3x3 blocks), local streets.
+for i = 0, 3 do
+  road(line(-150, -60 + i * 40, -30, -60 + i * 40), 13)   -- east-west streets
+  road(line(-150 + i * 40, -60, -150 + i * 40, 60), 13)   -- north-south streets
+end
+
+-- A roundabout west of the grid: a closed ring + four approach spokes that fuse into it.
+local cx, cz, R = -215, 0, 28
+road(sample(function(t) return cx + R * math.cos(t), cz + R * math.sin(t) end, 48, 0, 2 * math.pi), 12)
+for k = 0, 3 do
+  local a = k * math.pi / 2 + math.pi / 4
+  road(line(cx + math.cos(a) * (R - 5), cz + math.sin(a) * (R - 5),
+            cx + math.cos(a) * (R + 55), cz + math.sin(a) * (R + 55)), 12)
+end
+
+-- A wide multilane HIGHWAY sweeping north-south to the east, an arterial reaching out of the grid
+-- to meet it, and two curved on/off RAMPS splicing the highway into the arterial — so the highway
+-- CONNECTS to the city instead of overlapping it (resolve shares the nodes, the weld fuses them).
+road(sample(function(t) return 130 + 22 * math.sin(t / 80), t end, 60, -130, 130), 30)
+road(line(-30, 0, 130, 0), 20)                                                   -- arterial T's into highway
+road(sample(function(t) return 100 + 30 * t,  44 * t * t end, 24, 0, 1), 12)     -- on-ramp merges north
+road(sample(function(t) return 100 + 30 * t, -44 * t * t end, 24, 0, 1), 12)     -- off-ramp merges south
+
+-- Gentle hills: the road follows them but irons out bumps (city.solid max_grade), so the deck reads
+-- clean rather than heaving. Resolve every crossing into a shared-node graph, then weld one solid.
+local land = terrain.warp(
+  terrain.fbm{ seed = 11, freq = 0.0025, amp = 4, octaves = 4 },
+  terrain.fbm{ seed = 3, freq = 0.02, amp = 1 }, 16)
+
+local resolved = city.resolve{ spines = spines }
+
+local m = model.new()
+m:add(terrain.mesh(land, { size = 640, resolution = 240, color = { 0.34, 0.41, 0.27 } }))
+-- y lifts the deck above the terrain; a higher max_grade hugs the gentle hills closely so the
+-- ground never poke through the ironed deck.
+m:add_solid(city.solid{
+  spines = resolved.spines, height = land, y = 1.2, thickness = 0.6, corner_radius = 0,
+  max_grade = 0.15, color = DARK, side_color = { 0.16, 0.16, 0.17 },
+  sidewalk = 2.2, curb = 0.18,
+}, PAINT)
+return m
+-- streetfurniture.lua — author street props with the street kit from Lua (ADR-0042).
+--
+-- Each helper wraps a C++ street-kit builder (streetfurniture.lamp /
+-- streetfurniture.traffic_signal). Lua only sets the tunable params and composes;
+-- the build loop stays hot in C++, exactly like city.lua / flora.lua. The same
+-- mesh feeds the realtime viewer and the offline path tracer — the renderer is
+-- the only divergent point (ADR-0042).
+
+local sf = {}
+
+-- A standard street lamp: a ~4.6 m pole with a warm head.
+function sf.lamp(opts)
+  opts = opts or {}
+  return streetfurniture.lamp{
+    height      = opts.height or 4.6,
+    pole_radius = opts.pole_radius or 0.07,
+    head_size   = opts.head_size or {0.5, 0.2, 0.32},
+    head_color  = opts.head_color or {1.0, 0.88, 0.55},
+  }
+end
+
+-- A taller boulevard lamp with a larger head, for wide avenues.
+function sf.boulevard_lamp(opts)
+  opts = opts or {}
+  return streetfurniture.lamp{
+    height      = opts.height or 6.2,
+    pole_radius = 0.09,
+    head_size   = {0.6, 0.24, 0.40},
+    head_color  = opts.head_color or {1.0, 0.9, 0.6},
+  }
+end
+
+-- A mast-arm traffic signal (built facing +Z; place with a yaw transform).
+function sf.signal(opts)
+  opts = opts or {}
+  return streetfurniture.traffic_signal{
+    pole_height = opts.pole_height or 5.6,
+    arm_length  = opts.arm_length or 4.2,
+    arm_height  = opts.arm_height or 5.3,
+  }
+end
+
+-- Default recipe entry point: a representative lamp (so runProcgenMesh on this
+-- file yields a mesh for preview / spawning).
+return sf.lamp()
+-- terrain_demo.lua — terrain composed from primitives (ADR-0043), not a preset:
+-- rolling fbm hills with ridged mountains lifted in, domain-warped so the
+-- ridgelines read organic instead of banded. Baked to a mesh and returned as a
+-- model — the same pipeline that renders buildings and props.
+
+local hills = terrain.fbm{ seed = 7,  freq = 0.012, amp = 14, octaves = 5 }
+local mtns  = terrain.ridged{ seed = 11, freq = 0.005, amp = 46, octaves = 6 }
+
+-- Hills everywhere, mountains added at half weight, then domain-warped.
+local land  = terrain.warp(hills:add(mtns:scale(0.5)),
+                           terrain.fbm{ seed = 3, freq = 0.02, amp = 1 }, 32)
+
+local mesh = terrain.mesh(land, { size = 400, resolution = 220,
+                                  color = {0.34, 0.42, 0.26} })
+
+local m = model.new()
+m:add(mesh)
+return m
+-- terrain_eroded.lua — the same composed terrain as terrain_demo, but run through
+-- hydraulic + thermal erosion as a bake pass (ADR-0043). Droplets carve drainage
+-- valleys and ridgelines; erode() returns a HeightField, so it still composes.
+
+local hills = terrain.fbm{ seed = 7,  freq = 0.012, amp = 14, octaves = 5 }
+local mtns  = terrain.ridged{ seed = 11, freq = 0.005, amp = 46, octaves = 6 }
+local land  = terrain.warp(hills:add(mtns:scale(0.5)),
+                           terrain.fbm{ seed = 3, freq = 0.02, amp = 1 }, 32)
+
+-- Erode at a grid resolution; the result is a field again.
+local carved = terrain.erode(land, { size = 400, resolution = 384,
+                                      droplets = 90000, talus = 1.0, seed = 5 })
+
+local m = model.new()
+m:add(terrain.mesh(carved, { size = 400, resolution = 256,
+                             color = {0.34, 0.42, 0.26} }))
+return m
+-- twin_cities.lua — two cities on the engine's CDLOD terrain, joined by a
+-- highway (ADR-0044). The recipe FINDS where the cities go: it flood-fills the
+-- injected `ground` for flat, low-slope valleys (terrain.flat_sites) and plants a
+-- city on each, sized to the flat disc — never on the mountains. Each city grades
+-- the terrain under its roads + lots (m:conform) and seats buildings on level
+-- pads with foundations, so nothing floats; the highway is routed through low
+-- ground between the two sites. One city is a radial Étoile, the other the new
+-- tensor field (radial core -> grid rim).
+--
+-- Placement (lot fit, foundations, district variety) mirrors city.lua; the
+-- sandbox has no require, so the essentials are ported here rather than shared.
+
+local land = ground or terrain.flat(0)
+local m = model.new()
+
+-- ===== helpers ===============================================================
+local function opt(o, k, v) if o[k] == nil then return v else return o[k] end end
+
+local function centroid(poly)
+  local x, z = 0, 0
+  for _, p in ipairs(poly) do x = x + p.x; z = z + p.z end
+  return x / #poly, z / #poly
+end
+
+-- A rotated rectangle footprint (4 corners), sign matching Mat4::rotateY so the
+-- pad lines up with the mesh.place'd part.
+local function rect(cx, cz, hw, hd, yaw)
+  local c, s = math.cos(yaw), math.sin(yaw)
+  local function pt(dx, dz)
+    return { x = cx + dx * c + dz * s, z = cz - dx * s + dz * c }
+  end
+  return { pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd) }
+end
+
+-- Drop near-collinear vertices: the tensor generator samples curved roads into
+-- many short segments, so its block faces carry 20-50 vertices. The parcel
+-- inset/subdivide wants a simple convex-ish polygon, so collapse each gentle
+-- curve to its corners (a few passes catches cascades) before subdividing.
+local function simplify_poly(poly, tol)
+  local cur = poly
+  for _ = 1, 3 do
+    local n = #cur
+    if n <= 4 then break end
+    local keep = {}
+    for i = 1, n do
+      local a, b, c = cur[(i - 2) % n + 1], cur[i], cur[i % n + 1]
+      local ex, ez = c.x - a.x, c.z - a.z
+      local len = math.sqrt(ex * ex + ez * ez)
+      local d = (len < 1e-6) and 0
+        or math.abs((b.x - a.x) * ez - (b.z - a.z) * ex) / len
+      if d >= tol then keep[#keep + 1] = b end
+    end
+    if #keep < 4 then break end
+    cur = keep
+  end
+  return cur
+end
+
+local function translate_layout(lay, dx, dz)
+  local out = { nodes = {}, edges = lay.edges, blocks = {} }
+  for i, n in ipairs(lay.nodes) do out.nodes[i] = { x = n.x + dx, z = n.z + dz } end
+  for i, b in ipairs(lay.blocks) do
+    local nb = {}
+    for j, p in ipairs(b) do nb[j] = { x = p.x + dx, z = p.z + dz } end
+    out.blocks[i] = nb
+  end
+  return out
+end
+
+-- ----- district profiles (storeys + building variety by distance from centre) -
+local function floors_at(r, kind)
+  if kind == "radial" then
+    if r < 55 then return 9 + math.floor(r) % 8
+    elseif r < 110 then return 4 + math.floor(r) % 4 else return 2 + math.floor(r) % 2 end
+  end
+  if r < 65 then return 8 + math.floor(r) % 6
+  elseif r < 130 then return 4 + math.floor(r) % 3 else return 2 + math.floor(r) % 2 end
+end
+
+local function building_args(r, cx, cz, kind)
+  local h = math.floor(cx * 31 + cz * 17) % 997
+  local a = { floors = floors_at(r, kind), ground_retail = true, walkable_ground = true,
+              seed = math.floor(cx * 7 + cz) % 100000 }
+  if r < 60 then
+    a.style = ({ "glass", "glass", "metal", "concrete" })[(h % 4) + 1]
+    a.bay_width = 3.6 + (h % 3) * 0.4
+    if a.floors >= 12 then a.setback_floors = 5; a.setback_every = 2.5 end
+    if h % 6 == 0 then a.shape = "cylinder"; a.sides = 40 end
+    if h % 53 == 0 then a.shape = "pagoda"; a.tiers = 5 end
+  elseif r < 125 then
+    a.style = ({ "concrete", "stucco", "painted", "brick" })[(h % 4) + 1]
+    a.bay_width = 3.2 + (h % 4) * 0.3
+  else
+    a.style = ({ "brick", "painted", "stucco" })[(h % 3) + 1]
+    a.ground_retail = false
+    a.bay_width = 3.0
+  end
+  return a
+end
+
+local function lot_style(r)
+  if r < 60 then return { coverage = 0.85, front = 2.0, ground = { 0.56, 0.56, 0.54 } }
+  elseif r < 125 then return { coverage = 0.70, front = 3.0, ground = { 0.26, 0.42, 0.18 } }
+  else return { coverage = 0.55, front = 4.5, ground = { 0.28, 0.46, 0.20 } } end
+end
+
+-- ===== one city ==============================================================
+-- Plan: classify each block by relief (skip the hilly ones), subdivide the flat
+-- ones into lots, and emit a level pad per lot so terrain.conform cuts a plot.
+local function plan_city(lay, cx, cz, kind)
+  -- The site is already flat-ish (flat_sites picked it); the relief gate just
+  -- skips the odd block that straddles a rise — the conform levels the rest.
+  local flat_relief, min_lot = 16, 10
+  local pads, plan = {}, {}
+  for _, block0 in ipairs(lay.blocks) do
+    local block = simplify_poly(block0, 2.5)
+    local lo, hi = 1e9, -1e9
+    for _, p in ipairs(block) do
+      local y = land:at(p.x, p.z); lo = math.min(lo, y); hi = math.max(hi, y)
+    end
+    if (hi - lo) <= flat_relief then
+      local bx, bz = centroid(block)
+      local y = land:at(bx, bz)
+      for _, lot in ipairs(city.lots(block, { inset = 7, target_area = 360,
+                                              min_area = 120, seed = 7 })) do
+        if lot.w >= min_lot and lot.d >= min_lot then
+          pads[#pads + 1] = { y = y,
+            poly = rect(lot.cx, lot.cz, lot.w * 0.5 + 0.5, lot.d * 0.5 + 0.5, lot.yaw) }
+          plan[#plan + 1] = { cx = lot.cx, cz = lot.cz, w = lot.w, d = lot.d,
+            yaw = lot.yaw, y = y, r = math.sqrt((lot.cx - cx) ^ 2 + (lot.cz - cz) ^ 2) }
+        end
+      end
+    end
+  end
+  return pads, plan
+end
+
+-- Place: a level lot slab, then a building sized to fit (coverage + forecourt
+-- setback toward the street), on a foundation so it meets the graded ground.
+local function place_city(plan, kind)
+  for _, b in ipairs(plan) do
+    local sty = lot_style(b.r)
+    local hw, hd = b.w * 0.5, b.d * 0.5
+    m:add_solid(mesh.place(
+      scope{ origin = { -hw, -0.05, -hd }, size = { b.w, 0.2, b.d } }:box(sty.ground),
+      { b.cx, b.y, b.cz }, b.yaw))
+
+    local bw, bd = b.w * sty.coverage, (b.d - sty.front) * sty.coverage
+    if bw >= 8 and bd >= 8 then
+      local zoff = b.d * 0.5 - sty.front - bd * 0.5
+      local hbw, hbd = bw * 0.5, bd * 0.5
+      m:add_solid(mesh.place(
+        scope{ origin = { -hbw, -1.2, zoff - hbd }, size = { bw, 1.2, bd } }
+          :box({ 0.32, 0.32, 0.34 }), { b.cx, b.y, b.cz }, b.yaw))
+      local args = building_args(b.r, b.cx, b.cz, kind)
+      args.width = bw; args.depth = bd
+      m:add_solid(mesh.place(mesh.translate(building.grow(args), { 0, 0, zoff }),
+        { b.cx, b.y, b.cz }, b.yaw))
+    end
+  end
+end
+
+-- Build a whole city centred at (cx,cz) with the given layout opts; returns the
+-- conformed field (for draping the highway / trees nearby).
+local function build_city(layout_opts, cx, cz, kind)
+  local lay = translate_layout(city.layout(layout_opts), cx, cz)
+  local pads, plan = plan_city(lay, cx, cz, kind)
+  local field, regions = terrain.conform(land, lay,
+    { margin = 3, falloff = 16, pads = pads, pad_falloff = 12 })
+  m:conform(regions)
+  -- City streets via the SDF roadbed (ADR-0048): the grid's overlapping ribbons merge
+  -- into one surface with rounded junctions for free, and the dense union drapes exactly
+  -- on the conformed terrain. (Markings/crosswalks/explicit corner_radius are analytic-
+  -- only; the SDF rounds corners uniformly and markings move to a shader later.)
+  m:add_solid(city.roadbed{ layout = lay, height = field, cell = 0.8, lift = 0.06,
+    sidewalk = 2.4, curb = 0.16, grain = 0.06 })
+  place_city(plan, kind)
+
+  -- street lamps along the longer edges
+  local lamp = streetfurniture.lamp{}
+  local places = {}
+  for _, e in ipairs(lay.edges) do
+    local a, b2 = lay.nodes[e.a], lay.nodes[e.b]
+    local dx, dz = b2.x - a.x, b2.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 26 then
+      local nx, nz = -dz / len, dx / len
+      local mx, mz = (a.x + b2.x) * 0.5, (a.z + b2.z) * 0.5
+      local off = e.width * 0.5 + 1.5
+      places[#places + 1] = { pos = { mx + nx * off, field:at(mx + nx * off, mz + nz * off), mz + nz * off } }
+      places[#places + 1] = { pos = { mx - nx * off, field:at(mx - nx * off, mz - nz * off), mz - nz * off } }
+    end
+  end
+  m:add_instances(lamp, places, { collide = { shape = "capsule", radius = 0.3, height = 5 } })
+  return field
+end
+
+-- ===== L-system tree (inlined; sandbox has no require) =======================
+local function make_tree(seed)
+  seed = math.floor(seed or 1)
+  local sys = lsystem.create()
+  sys:rule("F", "F[+&F][-^F][/&F][\\&F]")
+  local sym = sys:expand("FF", 3, seed)
+  local tp = { length = 1.0, radius = 0.26, angle_deg = 38, taper = 0.7, segment_slices = 5 }
+  local branches = mesh.bake_height_color(lsystem.turtle_mesh(sym, tp),
+                                          { 0.30, 0.21, 0.13 }, { 0.42, 0.31, 0.19 })
+  local segs = lsystem.segments(sym, tp)
+  local maxy = 0.001
+  for _, s in ipairs(segs) do if s.b[2] > maxy then maxy = s.b[2] end end
+  local tips = {}
+  for _, s in ipairs(segs) do if s.b[2] > maxy * 0.55 then tips[#tips + 1] = s.b end end
+  local blobs, stride = {}, math.max(1, math.floor(#tips / 14))
+  for i = 1, #tips, stride do
+    blobs[#blobs + 1] = mesh.translate(mesh.sphere(0.85 + 0.5 * ((seed + #blobs) % 4) / 4), tips[i])
+  end
+  if #blobs == 0 then return branches end
+  return mesh.merge({ branches,
+    mesh.bake_height_color(mesh.merge(blobs), { 0.16, 0.33, 0.15 }, { 0.27, 0.47, 0.21 }) })
+end
+
+-- ===== site selection: the flattest valley NEAR each target =================
+-- Search a box around each desired location and take its largest flat disc, so
+-- the cities land predictably (the cameras/player know roughly where) but always
+-- on buildable ground — shifted off a slope, never on the mountains.
+local function find_site(tx, tz, fallback_r)
+  local s = terrain.flat_sites(land, { region = 230, center = { x = tx, z = tz },
+    cell = 10, max_slope = 0.10, max_height = 42, min_radius = 60, count = 1 })
+  if s[1] then return s[1] end
+  return { cx = tx, cz = tz, radius = fallback_r }
+end
+local A = find_site(-230, -10, 140)
+local B = find_site(230, 30, 140)
+
+-- Size each city to its flat disc (extent a touch inside the radius).
+local exA = math.min(160, A.radius * 0.9)
+local exB = math.min(160, B.radius * 0.9)
+local fA = build_city({ pattern = "radial", extent = exA, ring_spacing = exA / 4.5,
+  spokes = 8, ring_subdiv = 6, jitter = 0.03, seed = 5 }, A.cx, A.cz, "radial")
+local fB = build_city({ pattern = "tensor", extent = exB, spacing = exB / 3.2, step = 8,
+  radial_decay = exB * 0.6, seed = 9 }, B.cx, B.cz, "tensor")
+
+-- ===== highway A -> B, routed to hold a walkable grade =======================
+-- A road can't run straight up a mountain any more than the character can walk it.
+-- Instead of a straight ramp that conforms into a cut/fill canyon over whatever
+-- lies between, route a path over the NATURAL ground that never climbs steeper than
+-- ~12% — so the highway bends around the peaks (switchbacking where it must) and
+-- the conform only has to smooth a road that already follows gentle ground.
+local function toward(from, to, dist)
+  local ddx, ddz = to.cx - from.cx, to.cz - from.cz
+  local l = math.max(1e-3, math.sqrt(ddx * ddx + ddz * ddz))
+  return from.cx + ddx / l * dist, from.cz + ddz / l * dist
+end
+local ax, az = toward(A, B, A.radius * 0.92)   -- meet each city's ring road
+local bx, bz = toward(B, A, B.radius * 0.92)
+local hw = terrain.route(land, {
+  from = { x = ax, z = az }, to = { x = bx, z = bz },
+  max_grade = 0.12, cell = 14, width = 14, turn_penalty = 12, climb_cost = 0.6 })
+local hwfield, hwregions = terrain.conform(land, hw, { margin = 4, falloff = 24 })
+m:conform(hwregions)
+m:add_solid(city.road_mesh(hw, { height = hwfield, lift = 0.05, sidewalk = 1.6,
+  curb = 0.14, markings = true }))
+
+-- ===== a simple L-system forest along the highway verges =====================
+-- Walk the routed polyline (now any number of legs) and plant a tree on alternate
+-- verges every ~16 m.
+local tree_proto = make_tree(7)
+local trees = {}
+local ti = 0
+for _, e in ipairs(hw.edges) do
+  local p0, p1 = hw.nodes[e.a], hw.nodes[e.b]
+  local ex, ez = p1.x - p0.x, p1.z - p0.z
+  local l = math.max(1e-3, math.sqrt(ex * ex + ez * ez))
+  local nx, nz = -ez / l, ex / l
+  local n = math.max(1, math.floor(l / 16))
+  for k = 0, n - 1 do
+    local t = (k + 0.5) / n
+    local x, z = p0.x + ex * t, p0.z + ez * t
+    local s = (ti % 2 == 0) and 1 or -1
+    local tx, tz = x + nx * 13 * s, z + nz * 13 * s
+    trees[#trees + 1] = { pos = { tx, hwfield:at(tx, tz), tz },
+                          yaw = (ti % 7) * 0.9, scale = 0.9 + (ti % 5) * 0.12 }
+    ti = ti + 1
+  end
+end
+m:add_instances(tree_proto, trees, { collide = { shape = "capsule", radius = 0.5, height = 4 } })
+
+return m
