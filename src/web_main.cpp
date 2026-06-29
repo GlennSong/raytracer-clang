@@ -51,6 +51,41 @@ std::string levelFromUrl() {
 
 }  // namespace
 
+// Debug-panel hooks called from the page (web/index.html). Renderer toggles map
+// to the same public flags the ImGui overlay drives on desktop; stats mirror the
+// HUD. Camera fly/orbit toggle goes through the gamepad Back button (window.cpp).
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE void rt_web_flag(int id, int val) {
+    Renderer& r = g_app.renderer();
+    switch (id) {
+        case 0: r.debugView = val; break;        // 0=normal..8=cascades
+        case 1: r.wireframe = val; break;        // 0=off,1=only,2=overlay
+        case 2: r.ssaoEnabled = val != 0; break;
+        case 3: r.ssrEnabled = val != 0; break;
+        case 4: r.bloomEnabled = val != 0; break;
+        case 5: r.lensEffectsEnabled = val != 0; break;
+        case 6: r.showHud = val != 0; break;
+        default: break;
+    }
+}
+
+// Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
+// 2=instances 3=triangles 4=entities.
+EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {
+    RenderStats s = g_app.renderer().getRenderStats();
+    switch (which) {
+        case 0: return static_cast<int>(s.drawCalls);
+        case 1: return static_cast<int>(s.instancedDrawCalls);
+        case 2: return static_cast<int>(s.totalInstances);
+        case 3: return static_cast<int>(s.trianglesDrawn);
+        case 4: return static_cast<int>(s.entitiesSubmitted);
+        default: return 0;
+    }
+}
+
+}  // extern "C"
+
 int main() {
     // Size the surface to the canvas's device-pixel size so the aspect ratio is
     // correct and the image isn't stretched (the WebGPU surface config drives the
@@ -83,9 +118,11 @@ int main() {
                                             levelPath, makeEditor);
     };
 
-    // Editor mode: views the level (no FPS gameplay, no pointer lock). Orbit
-    // camera so a single touch-drag rotates the view on a phone.
-    g_app.settings().setString("cameraMode", "orbit");
+    // Editor mode: views the level (no FPS gameplay, no pointer lock). Start in
+    // fly + free-look so the on-screen sticks give FPS move+look out of the box;
+    // the debug panel's camera toggle (gamepad Back / cam_toggle) flips to orbit.
+    g_app.settings().setString("cameraMode", "fly");
+    g_app.settings().setBool("cameraFreeLook", true);
     g_app.pushState(makeEditor());
 
     g_app.begin();

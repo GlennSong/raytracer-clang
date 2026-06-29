@@ -100,6 +100,9 @@ struct GlfwWindow::Impl {
     // pollEvents turns edges into the same KeyPressed/Released the keyboard emits.
     bool vkey[7] = {};
     bool vkeyPrev[7] = {};
+    // Virtual gamepad driven by the page's on-screen sticks (left = move, right
+    // = look) — fed to the engine as gamepad 0, the analog path the camera reads.
+    GamepadState virtualPad;
 #endif
 };
 
@@ -163,6 +166,28 @@ static EM_BOOL onTouchEnd(int, const EmscriptenTouchEvent*, void* user) {
 // keyboard events the InputMap already binds to the camera move/boost axes.
 extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_key(int idx, int down) {
     if (g_activeImpl && idx >= 0 && idx < 7) g_activeImpl->vkey[idx] = (down != 0);
+}
+
+// On-screen analog sticks. stick 0 = left (move) -> LeftX/LeftY; stick 1 = right
+// (look) -> RightX/RightY. Components in [-1, 1] (x right+, y down+).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_axis(int stick, float x, float y) {
+    if (!g_activeImpl) return;
+    auto& a = g_activeImpl->virtualPad.axes;
+    if (stick == 0) {
+        a[static_cast<size_t>(GamepadAxis::LeftX)] = x;
+        a[static_cast<size_t>(GamepadAxis::LeftY)] = y;
+    } else if (stick == 1) {
+        a[static_cast<size_t>(GamepadAxis::RightX)] = x;
+        a[static_cast<size_t>(GamepadAxis::RightY)] = y;
+    }
+}
+
+// On-screen gamepad buttons: idx 0 = boost (LeftBumper), 1 = camera toggle
+// (Back, flips fly/orbit via cam_toggle).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_button(int idx, int down) {
+    if (!g_activeImpl) return;
+    GamepadButton b = (idx == 1) ? GamepadButton::Back : GamepadButton::LeftBumper;
+    g_activeImpl->virtualPad.buttons[static_cast<size_t>(b)] = (down != 0);
 }
 #endif  // __EMSCRIPTEN__
 
@@ -380,6 +405,7 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
 
 #ifdef __EMSCRIPTEN__
     g_activeImpl = impl.get();
+    impl->virtualPad.connected = true;  // on-screen sticks act as gamepad 0
     // Touch input on the canvas (the web has no GLFW mouse). useCapture=true.
     emscripten_set_touchstart_callback("#canvas", impl.get(), EM_TRUE, onTouchStart);
     emscripten_set_touchmove_callback("#canvas", impl.get(), EM_TRUE, onTouchMove);
@@ -483,7 +509,7 @@ void GlfwWindow::pollEvents() {
             slot = GamepadState{};
         }
 #else
-        slot = GamepadState{};
+        slot = (jid == 0) ? impl->virtualPad : GamepadState{};  // on-screen sticks
 #endif
     }
 
