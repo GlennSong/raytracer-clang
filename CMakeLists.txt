@@ -283,8 +283,10 @@ add_executable(run_tests
     tests/test_perception.cpp
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp
+    tests/test_city_sim.cpp
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_sim.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
