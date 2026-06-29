@@ -78,7 +78,7 @@ helper) graduates from the app into `engine/`.
 - *Tests:* a car approaching a red stops before the line and resumes on green; a
   pedestrian waits for the signal then crosses; no car enters on red.
 
-**Phase 4 — Perception-driven avoidance + faults.**
+**Phase 4 — Perception-driven avoidance + faults.** ✅ done
 - Cars brake for cars/pedestrians in their vision cone (not just same-lane
   car-following). A per-agent *fault profile* (reaction delay, miss chance) makes
   behaviour imperfect.
@@ -86,11 +86,13 @@ helper) graduates from the app into `engine/`.
   occasionally reacts late (deterministic with seed); no pedestrian is struck in
   a soak test.
 
-**Phase 5 — Turn radius / smooth steering.**
+**Phase 5 — Turn radius / smooth steering.** ✅ done
 - Cars follow a curved arc through junction turns (bounded turn radius), not an
   instant heading snap; steering rate-limited.
 - *Tests:* a turning car's path curvature never exceeds 1/turnRadius; heading
-  changes are rate-limited.
+  changes are rate-limited (`tests/test_city_steering.cpp`): per-step yaw is
+  bounded by `speed / minRadius`, turns still complete (~60 deg at a Y junction),
+  and steering stays deterministic.
 
 **Phase 6 — Physics + render integration (device).**
 - Near/driven cars run Jolt wheeled physics fed by the agent brain; far cars

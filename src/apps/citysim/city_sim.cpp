@@ -22,12 +22,32 @@ constexpr Real kJunctionApproach = 9.0, kJunctionSpeed = 4.0;
 constexpr Real kSignalApproach = 14.0;          // start braking for a light this far out
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
+constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
+constexpr Real kCarRestYawRate = 1.2;   // rad/s a near-stopped car may still pivot
 
 // Speed a follower may travel given the centre-to-centre gap to its leader.
 Real followCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
     if (gap <= minGap) return 0.0;
     if (gap >= slowZone) return freeSpeed;
     return freeSpeed * (gap - minGap) / (slowZone - minGap);
+}
+
+// Rotate unit vector `from` toward unit vector `to` by at most `maxRad` radians.
+Vec2 rotateToward(Vec2 from, Vec2 to, Real maxRad) {
+    Real fl = std::sqrt(from.x * from.x + from.y * from.y);
+    Real tl = std::sqrt(to.x * to.x + to.y * to.y);
+    if (fl < 1e-9) return to;
+    if (tl < 1e-9) return from;
+    from = Vec2(from.x / fl, from.y / fl);
+    to = Vec2(to.x / tl, to.y / tl);
+    Real dot = from.x * to.x + from.y * to.y;
+    if (dot > 1) dot = 1; else if (dot < -1) dot = -1;
+    Real ang = std::acos(dot);
+    if (ang <= maxRad) return to;        // close enough: snap onto target
+    Real sign = (from.x * to.y - from.y * to.x) >= 0 ? 1.0 : -1.0;
+    Real a = maxRad * sign;
+    Real ca = std::cos(a), sa = std::sin(a);
+    return Vec2(from.x * ca - from.y * sa, from.x * sa + from.y * ca);
 }
 }  // namespace
 
@@ -118,6 +138,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal) {
                  : 0;
     a.moving = true;
     refreshPose(a);
+    a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
 }
 
 void CitySim::refreshPose(Agent& a) {
@@ -129,7 +150,18 @@ void CitySim::refreshPose(Agent& a) {
     a.pos = (a.mode == Agent::Mode::Driver) ? nav_->laneCenter(li, a.lane, t)
                                             : nav_->sidewalkPoint(li, t);
     a.elevation = nav_->links[li].layer * kLayerClearance;
-    a.heading = nav_->direction(li);
+}
+
+// Turn the heading toward the current leg's direction. A pedestrian pivots
+// freely; a car is rate-limited so its path curvature never tightens past
+// kCarMinTurnRadius — at speed v it may yaw at most v / radius rad/s, which is
+// what traces a smooth arc through a junction instead of an instant snap.
+void CitySim::steer(Agent& a, Real dt) {
+    if (a.leg >= static_cast<int>(a.route.links.size())) return;
+    Vec2 desired = nav_->direction(a.route.links[a.leg]);
+    if (a.mode != Agent::Mode::Driver) { a.heading = desired; return; }
+    Real rate = (a.speed > 0.2) ? a.speed / kCarMinTurnRadius : kCarRestYawRate;
+    a.heading = rotateToward(a.heading, desired, rate * dt);
 }
 
 void CitySim::advance(Agent& a, Real dt, Real gap) {
@@ -189,6 +221,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
             if (motion < a.speed * dt) a.speed = 0;   // held at the line
             a.distOnLeg += motion;
             refreshPose(a);
+            steer(a, dt);
             return;
         }
     }
@@ -213,6 +246,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
         a.route.links.clear();
     } else {
         refreshPose(a);
+        steer(a, dt);
     }
 }
 

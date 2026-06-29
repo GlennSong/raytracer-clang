@@ -95,6 +95,7 @@ private:
     void computeGaps();
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
     void refreshPose(Agent& a);
+    void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
     engine::Vec2 idlePose(int node, Agent::Mode mode) const;
     uint32_t rnd();
     Real rndUnit();

@@ -147,7 +147,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_traffic_rules.cpp \
 	$(TEST_DIR)/test_city_sim.cpp \
 	$(TEST_DIR)/test_city_signals.cpp \
-	$(TEST_DIR)/test_city_perception.cpp
+	$(TEST_DIR)/test_city_perception.cpp \
+	$(TEST_DIR)/test_city_steering.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
