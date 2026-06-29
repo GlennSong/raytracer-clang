@@ -71,7 +71,7 @@
   <div id="dbg">
     <button class="close" id="dbgClose">✕</button>
     <h3>Debug</h3>
-    <div class="row"><span>Camera</span><button id="camToggle">Fly / Orbit</button></div>
+    <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
     <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
     <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
     <div class="row"><span>SSAO</span><button id="ssao">on</button></div>
@@ -153,11 +153,10 @@
       $('gear').onclick = () => { $('dbg').style.display = 'block'; };
       $('dbgClose').onclick = () => { $('dbg').style.display = 'none'; };
 
-      // Camera fly/orbit: cam_toggle fires on the Back button's press edge.
-      const cam = $('camToggle');
-      cam.addEventListener('touchstart', (e) => { e.preventDefault(); button(1, 1); }, { passive: false });
-      cam.addEventListener('touchend', (e) => { e.preventDefault(); button(1, 0); }, { passive: false });
-      cam.addEventListener('click', () => { button(1, 1); setTimeout(() => button(1, 0), 30); }); // desktop
+      // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
+      let flyOn = false; const flyB = $('fly');
+      flyB.onclick = () => { flyOn = !flyOn; mod._rt_web_camera(flyOn ? 1 : 0);
+        flyB.classList.toggle('on', flyOn); flyB.textContent = flyOn ? 'on' : 'off'; };
 
       let dview = 0;
       const DV = ['normal', 'AO', 'SSR', 'depth', 'normals', 'shadow', 'albedo', 'facing', 'cascades'];
