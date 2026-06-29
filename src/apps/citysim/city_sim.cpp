@@ -1,5 +1,7 @@
 #include "city_sim.h"
 
+#include "traffic_rules.h"   // approachStop
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -17,6 +19,8 @@ constexpr Real kPedAccel = 1.0;
 constexpr Real kCarMinGap = 5.0, kCarSlowZone = 14.0;
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
 constexpr Real kJunctionApproach = 9.0, kJunctionSpeed = 4.0;
+constexpr Real kSignalApproach = 14.0;          // start braking for a light this far out
+constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 
 // Speed a follower may travel given the centre-to-centre gap to its leader.
@@ -125,14 +129,40 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
     bool car = a.mode == Agent::Mode::Driver;
     Real target = car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed;
     Real accel = car ? kCarAccel : kPedAccel;
-    if (car && nav_->isJunction(nav_->links[li].to)) {
+    if (nav_->isJunction(nav_->links[li].to)) {
         Real distToEnd = nav_->links[li].length - a.distOnLeg;
-        if (distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
+        if (car && distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
+        // Obey the stoplight: ease to a stop at the line unless this approach is
+        // green. A pedestrian on a green approach crosses the PERPENDICULAR road
+        // (which is then red), so the same condition is safe for cars and peds.
+        if (distToEnd < kSignalApproach && signals_.hasSignal(li) &&
+            signals_.stateForLink(li) != SignalState::Green) {
+            target = std::min(target, approachStop(distToEnd, car ? kCarDecel : kPedDecel,
+                                                   target));
+        }
     }
     Real minGap = car ? kCarMinGap : kPedMinGap;
     Real slowZone = car ? kCarSlowZone : kPedSlowZone;
     target = followCap(target, gap, minGap, slowZone);
     a.speed = std::min(target, a.speed + accel * dt);
+
+    // Hard stop line at a red light: the smooth cap above slows the agent but
+    // never to exactly zero, so without this the leftover motion would carry it
+    // THROUGH the light. Clamp advance so it cannot pass the line while its
+    // approach is not green; it waits here until the signal clears.
+    {
+        int toNode = nav_->links[li].to;
+        if (nav_->isJunction(toNode) && signals_.hasSignal(li) &&
+            signals_.stateForLink(li) != SignalState::Green) {
+            Real stopLine = nav_->links[li].length - 0.5;
+            Real room = std::max(Real(0), stopLine - a.distOnLeg);
+            Real motion = std::min(a.speed * dt, room);
+            if (motion < a.speed * dt) a.speed = 0;   // held at the line
+            a.distOnLeg += motion;
+            refreshPose(a);
+            return;
+        }
+    }
 
     Real motion = a.speed * dt;
     const int legCount = static_cast<int>(a.route.links.size());
