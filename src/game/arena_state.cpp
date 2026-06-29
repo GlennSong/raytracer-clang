@@ -19,9 +19,6 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
 #include "../engine/scripting/script_behaviour.h"
-#include "../engine/scripting/script_vm.h"
-#include "../engine/scripting/procgen_bindings.h"
-#include "../engine/scripting/vehicle_spec.h"
 #include "../renderer/event.h"
 #include <fstream>
 #include <sstream>
@@ -124,30 +121,8 @@ void ArenaState::onEnter(FrameContext& ctx) {
             }
         }
     }
-
-    // Demo car (ADR-0058): author the body in Lua (vehicles.lua), spawn it near
-    // the player; VehicleSystem creates the Jolt vehicle and the player can board
-    // it with G. A level-JSON "vehicles" block is the productionization of this
-    // hook. UNVERIFIED: needs the Lua + Jolt submodules to build/tune.
-    {
-        std::string lib = readTextFile("assets/scripts/vehicles.lua");
-        if (lib.empty()) {
-            LOG_WARN << "assets/scripts/vehicles.lua not found; no demo car";
-        } else {
-            ScriptVM vm;
-            openProcgenLibrary(vm);
-            std::string err;
-            if (!vm.doString(lib, &err)) {
-                LOG_WARN << "vehicles.lua: " << err;
-            } else {
-                VehicleSpec spec;
-                if (loadVehicleSpec(vm, "return vehicle.sedan(seed, {})", 1, spec, &err))
-                    spawnVehicle(ctx.world, ctx.assets, spec, Vec3(6, 1.0, 0), 0.0);
-                else
-                    LOG_WARN << "vehicle spec: " << err;
-            }
-        }
-    }
+    // Vehicles are spawned by the level loader from the level's "vehicles" block
+    // (ADR-0058), so they are data-driven rather than hardcoded here.
 #endif
 
     // Play From Here (one-shot flag): start the player at the editor's view

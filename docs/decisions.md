@@ -3846,15 +3846,17 @@ machine. What was added:
 - **Lua bodies** — `assets/scripts/vehicles.lua` (`vehicle.sedan/hatchback`,
   authored over the procgen `mesh.*` builders like `flora`), a `VehicleSpec`
   reader (`scripting/vehicle_spec.cpp`) that runs the recipe and reads the body
-  mesh + handling params, and `spawnVehicle` to build the entity. `ArenaState`
-  spawns a demo sedan near the player.
-The non-submodule-bound glue (VehicleSystem, the camera switch, the arena hook,
+  mesh + handling params, and `spawnVehicle` to build the entity.
+- **Data-driven placement** — the level loader reads a top-level `"vehicles"`
+  array (`loadVehicles`): each entry is a `recipe` name (or a full `script`) plus
+  a `position`, `yaw`, and `seed`, spawned in play mode via the reader above.
+  `assets/levels/arena.json` ships two (a sedan + a hatchback) near the player.
+The non-submodule-bound glue (VehicleSystem, the camera switch, the loader hook,
 components) was nonetheless syntax-checked (`clang -fsyntax-only`) against the
 real engine headers; only the Jolt body code and the Lua reader are uncompiled.
 
 *Later phases (planned):* the kinematic-far / physics-near handoff (promote AI
-traffic cars near the player to full Jolt vehicles, demote distant ones); a
-level-JSON `vehicles` block (the demo spawn in `ArenaState` is the placeholder).
+traffic cars near the player to full Jolt vehicles, demote distant ones).
 
 **Why this shape.** It is a *convergence* of shipped systems, not a new pillar:
 the nav graph falls out of the road graph; A* rides the existing curve/arc-length
