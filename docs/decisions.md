@@ -3880,6 +3880,44 @@ as the ScriptBehaviour note below).
 
 ---
 
+## ADR-0059 — Agent-based city simulation as an application (perception, signals, rules)
+
+**Context.** The traffic/crowd sim (ADR-0057/0058) had grown realistic enough to
+expose what "realistic" really needs: agents that perceive, obey signals, yield to
+pedestrians, turn with a radius, and drive their cars *as agents* — and which can
+make faults. That is a simulation *application*, not core engine: its policy
+(traffic rules, schedules, signal timing) is game-specific, while the substrate
+(NavGraph, A*, perception, wheeled-vehicle physics) is reusable.
+
+**Decision.** Build it under `src/apps/citysim/`, a deterministic agent sim over
+the core navigation substrate. Full plan + phases + test cases:
+`docs/agent-sim-plan.md`. Key choices:
+- **Agent = brain (data); a car is an inert `Vehicle` until an agent possesses it.**
+  A pedestrian is a brain-only agent. The *player is just an agent whose brain is
+  input* — same possession model, unifying player and crowd.
+- **Two layers:** a pure, deterministic decision core (perception → rules →
+  kinematic motion), headless/CI-tested; and a device-verified physics/render skin
+  (Jolt wheeled cars near/driven by the player; instanced models for
+  cars/peds/signs/lights).
+- **Core vs app split:** `NavGraph`/A*/`perception` (vision cone) and the
+  `PhysicsWorld` vehicle stay in `engine/`; traffic signals, rules, agent brains,
+  schedules, and the `CitySim` driver live in the app. Anything that proves
+  generally useful graduates back into `engine/` (perception already did).
+
+**Phase 1 (landed, headless):** core `engine/ai/perception.h` (a forward
+`VisionCone` + `sees`/`forwardDistance`); app `traffic_signal.{h,cpp}` (a
+deterministic `SignalController` over NavGraph junctions — opposing arms share a
+phase, phases cycle green→yellow→red, perpendicular arms never both green); app
+`traffic_rules.{h,cpp}` (pure `approachStop` / `signalSpeedCap` /
+`nearestObstacleAhead`). 12 tests; suite 566/566.
+
+**Owed.** Phases 2-6 (agent framework + possession, signals/crosswalks in the
+loop, perception-driven avoidance + faults, turn-radius steering, Jolt+render
+integration) — see the plan. The existing `engine/ai/agent_sim` + `TrafficSystem`
+behaviour migrates into `CitySim` in Phase 2.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

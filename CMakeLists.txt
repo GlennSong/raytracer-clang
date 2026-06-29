@@ -280,6 +280,11 @@ add_executable(run_tests
     tests/test_agent_sim.cpp
     tests/test_traffic_system.cpp
     tests/test_traffic_city.cpp
+    tests/test_perception.cpp
+    tests/test_traffic_signal.cpp
+    tests/test_traffic_rules.cpp
+    src/apps/citysim/traffic_signal.cpp
+    src/apps/citysim/traffic_rules.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
