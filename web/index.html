@@ -2,12 +2,10 @@
 <!--
   Web shell for the WebGPU/WASM viewer (ADR-0058).
 
-  The wasm module acquires the WebGPU device itself (the backend calls
-  RequestAdapter/RequestDevice, awaited via ASYNCIFY), so this page only has to
-  provide the canvas and instantiate the MODULARIZE'd module (createViewer).
-
-  An on-screen log overlay mirrors the engine's stdout/stderr + adapter/canvas
-  info, so the page is debuggable on devices with no dev console (tap to hide).
+  The wasm module acquires the WebGPU device itself (RequestAdapter/RequestDevice,
+  awaited via ASYNCIFY), so this page provides the canvas, an on-screen log
+  overlay (debuggable without a dev console — tap to hide), and on-screen movement
+  buttons that call the exported rt_web_key hook (same path as a real keyboard).
 
   Build (with an active emsdk):
     emcmake cmake -S . -B build-web
@@ -26,22 +24,46 @@
     #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
     #error {
       position: fixed; inset: 0; display: none; place-content: center;
-      color: #e66; font: 16px/1.5 system-ui, sans-serif; text-align: center;
-      padding: 2rem;
+      color: #e66; font: 16px/1.5 system-ui, sans-serif; text-align: center; padding: 2rem;
     }
     #log {
-      position: fixed; left: 0; top: 0; right: 0; max-height: 55vh; margin: 0;
+      position: fixed; left: 0; top: 0; right: 0; max-height: 40vh; margin: 0;
       overflow: auto; background: rgba(0,0,0,0.72); color: #9fe;
       font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace;
       white-space: pre-wrap; padding: 6px 8px; z-index: 10;
     }
     #log .e { color: #f88; }
+    .pad {
+      position: fixed; bottom: 20px; z-index: 20; display: grid; gap: 8px;
+      user-select: none; -webkit-user-select: none; touch-action: none;
+    }
+    #move { left: 20px; grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px); }
+    #vert { right: 20px; grid-template-rows: repeat(2, 58px); }
+    .pad button {
+      width: 58px; height: 58px; border-radius: 12px; border: 1px solid rgba(80,200,255,.5);
+      background: rgba(20,40,60,.5); color: #cfefff; font: 600 16px system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pad button:active { background: rgba(40,120,180,.8); }
+    .gx-w { grid-column: 2; grid-row: 1; } .gx-a { grid-column: 1; grid-row: 2; }
+    .gx-s { grid-column: 2; grid-row: 3; } .gx-d { grid-column: 3; grid-row: 2; }
   </style>
 </head>
 <body>
   <canvas id="canvas" tabindex="0"></canvas>
   <div id="error"></div>
   <pre id="log" title="tap to hide"></pre>
+
+  <div id="move" class="pad" style="display:none">
+    <button data-k="0" class="gx-w">▲</button>
+    <button data-k="2" class="gx-a">◀</button>
+    <button data-k="1" class="gx-s">▼</button>
+    <button data-k="3" class="gx-d">▶</button>
+  </div>
+  <div id="vert" class="pad" style="display:none">
+    <button data-k="4">↑</button>
+    <button data-k="5">↓</button>
+  </div>
 
   <!-- Emitted by the viewer_web target (MODULARIZE → global createViewer). -->
   <script src="viewer_web.js"></script>
@@ -53,17 +75,14 @@
         const line = document.createElement('span');
         if (cls) line.className = cls;
         line.textContent = text + '\n';
-        logEl.appendChild(line);
-        logEl.scrollTop = logEl.scrollHeight;
+        logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
       };
       window.addEventListener('error', (e) => log('JS error: ' + (e.message || e), 'e'));
-      window.addEventListener('unhandledrejection', (e) => log('promise rejection: ' + (e.reason), 'e'));
+      window.addEventListener('unhandledrejection', (e) => log('promise rejection: ' + e.reason, 'e'));
 
       const fail = (msg) => {
         const el = document.getElementById('error');
-        el.style.display = 'grid';
-        el.textContent = msg;
-        log(msg, 'e');
+        el.style.display = 'grid'; el.textContent = msg; log(msg, 'e');
       };
 
       if (!('gpu' in navigator)) {
@@ -71,7 +90,6 @@
                     'Chrome, Edge, Safari 18+, or Firefox with WebGPU enabled.');
       }
 
-      // Report the adapter (informational; the wasm requests its own device).
       try {
         const a = await navigator.gpu.requestAdapter();
         const info = a && (a.info || (a.requestAdapterInfo ? await a.requestAdapterInfo() : {}));
@@ -90,15 +108,32 @@
       window.addEventListener('resize', resize);
       log(`canvas css ${canvas.clientWidth}x${canvas.clientHeight}, backing ${canvas.width}x${canvas.height}, dpr ${dpr}`);
 
+      let mod;
       try {
-        await createViewer({
-          canvas,
-          print: (t) => log(t),
-          printErr: (t) => log(t, 'e'),
-        });
+        mod = await createViewer({ canvas, print: (t) => log(t), printErr: (t) => log(t, 'e') });
         log('module instantiated');
       } catch (e) {
-        fail('Failed to start the engine: ' + e);
+        return fail('Failed to start the engine: ' + e);
+      }
+
+      // Wire the on-screen movement buttons to the exported key hook (W,S,A,D,E,Q).
+      if (typeof mod._rt_web_key === 'function') {
+        const press = (idx, down) => { try { mod._rt_web_key(idx, down); } catch (e) { log('rt_web_key: ' + e, 'e'); } };
+        document.querySelectorAll('.pad button').forEach((b) => {
+          const k = parseInt(b.dataset.k, 10);
+          const dn = (e) => { e.preventDefault(); press(k, 1); };
+          const up = (e) => { e.preventDefault(); press(k, 0); };
+          b.addEventListener('touchstart', dn, { passive: false });
+          b.addEventListener('touchend', up, { passive: false });
+          b.addEventListener('touchcancel', up, { passive: false });
+          b.addEventListener('mousedown', dn);
+          b.addEventListener('mouseup', up);
+          b.addEventListener('mouseleave', up);
+        });
+        document.getElementById('move').style.display = 'grid';
+        document.getElementById('vert').style.display = 'grid';
+      } else {
+        log('rt_web_key not exported — movement buttons disabled', 'e');
       }
     })();
   </script>

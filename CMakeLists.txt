@@ -665,6 +665,8 @@ if(EMSCRIPTEN)
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=createViewer"
         "-sENVIRONMENT=web"
+        # rt_web_key is the on-screen-button hook the page calls (keep _main too).
+        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key"
         "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
     )
     # Emit viewer_web.js (+ .wasm + .data); web/index.html loads it.

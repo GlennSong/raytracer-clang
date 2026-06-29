@@ -13,6 +13,7 @@
 #include <sstream>
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 #include <cmath>
 #endif
@@ -95,8 +96,18 @@ struct GlfwWindow::Impl {
     double touchAccumDX = 0, touchAccumDY = 0, touchAccumScroll = 0;
     double lastTouchX = 0, lastTouchY = 0, lastPinchDist = 0;
     bool touchLeftDown = false, touchRightDown = false, touchPinch = false;
+    // On-screen movement buttons set these via rt_web_key (W,S,A,D,E,Q,Shift);
+    // pollEvents turns edges into the same KeyPressed/Released the keyboard emits.
+    bool vkey[7] = {};
+    bool vkeyPrev[7] = {};
 #endif
 };
+
+#ifdef __EMSCRIPTEN__
+// The live window's Impl, so the exported rt_web_key (called from the page's
+// on-screen D-pad) can reach the input state. One window per web app lifetime.
+static GlfwWindow::Impl* g_activeImpl = nullptr;
+#endif
 
 #ifdef __EMSCRIPTEN__
 // Touch -> mouse mapping for the web. iOS/Android have no GLFW mouse, so map
@@ -145,6 +156,13 @@ static EM_BOOL onTouchEnd(int, const EmscriptenTouchEvent*, void* user) {
     auto* impl = static_cast<GlfwWindow::Impl*>(user);
     impl->touchLeftDown = false; impl->touchRightDown = false; impl->touchPinch = false;
     return EM_TRUE;
+}
+
+// Called from the page's on-screen movement buttons. idx: 0=W 1=S 2=A 3=D 4=E
+// 5=Q 6=Shift; down = press/release. pollEvents converts the change into the
+// keyboard events the InputMap already binds to the camera move/boost axes.
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_key(int idx, int down) {
+    if (g_activeImpl && idx >= 0 && idx < 7) g_activeImpl->vkey[idx] = (down != 0);
 }
 #endif  // __EMSCRIPTEN__
 
@@ -361,6 +379,7 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     glfwSetWindowRefreshCallback(impl->window, onWindowRefresh);
 
 #ifdef __EMSCRIPTEN__
+    g_activeImpl = impl.get();
     // Touch input on the canvas (the web has no GLFW mouse). useCapture=true.
     emscripten_set_touchstart_callback("#canvas", impl.get(), EM_TRUE, onTouchStart);
     emscripten_set_touchmove_callback("#canvas", impl.get(), EM_TRUE, onTouchMove);
@@ -421,6 +440,17 @@ void GlfwWindow::pollEvents() {
     impl->input.scrollDelta = impl->touchAccumScroll; impl->touchAccumScroll = 0;
     impl->input.mouseLeftDown = impl->touchLeftDown;
     impl->input.mouseRightDown = impl->touchRightDown;
+    // Turn on-screen button state changes into keyboard events (same path as a
+    // real keyboard → InputMap → camera move/boost axes).
+    static const KeyCode kVKeys[7] = {KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D,
+                                      KeyCode::E, KeyCode::Q, KeyCode::LeftShift};
+    for (int i = 0; i < 7; ++i) {
+        if (impl->vkey[i] == impl->vkeyPrev[i]) continue;
+        Event ev(impl->vkey[i] ? EventType::KeyPressed : EventType::KeyReleased);
+        ev.key = kVKeys[i];
+        impl->events.push_back(ev);
+        impl->vkeyPrev[i] = impl->vkey[i];
+    }
 #else
     impl->input.mouseLeftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     impl->input.mouseRightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
