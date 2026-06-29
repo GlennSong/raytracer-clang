@@ -33,6 +33,7 @@ private:
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);
     void handleEnterExit(FrameContext& ctx);
+    void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
 
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
@@ -40,6 +41,7 @@ private:
     MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
     Real enterRadius = 4.0;          // how close the player must be to board (m)
+    int spawnCount_ = 0;             // debug-spawn seed counter
 };
 
 }  // namespace engine

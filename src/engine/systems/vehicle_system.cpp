@@ -5,8 +5,17 @@
 #include "../mesh_builder.h"
 #include "physics_system.h"
 #include "camera_system.h"
+#include "../../log.h"
 
 #include <vector>
+
+#ifdef RT_ENABLE_SCRIPTING
+#include "../scripting/script_vm.h"
+#include "../scripting/procgen_bindings.h"
+#include "../scripting/vehicle_spec.h"
+#include <fstream>
+#include <sstream>
+#endif
 
 namespace engine {
 
@@ -33,6 +42,50 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
     // Toggle the head/taillights.
     ctx.actions.bindButton("vehicle_lights", KeyCode::L);
+    // Debug: spawn a fresh car in front of the player (always on solid ground,
+    // since the player is standing on a collider).
+    ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
+}
+
+void VehicleSystem::spawnInFront(FrameContext& ctx) {
+#ifdef RT_ENABLE_SCRIPTING
+    // The player's stance + look direction.
+    Entity player;
+    Vec3 pos;
+    ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform& t, ControlledBy&) {
+        if (!player.valid()) { player = e; pos = t.position; }
+    });
+    if (!player.valid()) return;
+
+    Vec3 fwd = ctx.view.camera.target - ctx.view.camera.position;
+    fwd.y = 0;
+    Real fl = fwd.length();
+    fwd = fl > 1e-3 ? fwd * (1.0 / fl) : Vec3(0, 0, -1);
+    Vec3 spawn = pos + fwd * 6.0 + Vec3(0, 1.5, 0);   // a few metres ahead, dropped in
+    // Face the car the way the player looks (Y-rotation of its local +Z front).
+    Real yawDeg = radiansToDegrees(std::atan2(fwd.x, fwd.z));
+
+    // Read vehicles.lua and build a sedan (rare debug action — rebuild the VM each time).
+    std::string lib;
+    for (const char* path : {"assets/scripts/vehicles.lua", "../assets/scripts/vehicles.lua"}) {
+        std::ifstream f(path);
+        if (f) { std::stringstream ss; ss << f.rdbuf(); lib = ss.str(); break; }
+    }
+    if (lib.empty()) { LOG_WARN << "spawn_vehicle: vehicles.lua not found"; return; }
+
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
+    VehicleSpec spec;
+    if (loadVehicleSpec(vm, "return vehicle.sedan(seed, {})",
+                        static_cast<uint32_t>(++spawnCount_), spec, &err))
+        spawnVehicle(ctx.world, ctx.assets, spec, spawn, yawDeg);
+    else
+        LOG_WARN << "spawn_vehicle: " << err;
+#else
+    (void)ctx;
+#endif
 }
 
 void VehicleSystem::createVehicles(FrameContext& ctx) {
@@ -297,6 +350,9 @@ void VehicleSystem::update(FrameContext& ctx) {
                         !ctx.world.get<Vehicle>(iv.vehicle)->lightsOn;
             });
     }
+
+    // Debug: drop a fresh car in front of the player.
+    if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
 }
 
 void VehicleSystem::fixedUpdate(FrameContext& ctx) {
