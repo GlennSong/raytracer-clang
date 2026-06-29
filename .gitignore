@@ -1,6 +1,8 @@
 build/
 build-cmake/
 build-imgui/
+build-web/
+build-web-oz/
 raytracer
 viewer
 run_tests
