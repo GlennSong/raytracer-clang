@@ -12,6 +12,11 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#include <cmath>
+#endif
+
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -82,7 +87,66 @@ struct GlfwWindow::Impl {
     double lastFrameTime = 0;
     double deltaTime = 0;
     bool firstMouse = true;
+
+#ifdef __EMSCRIPTEN__
+    // Touch state (ADR-0058). Gestures map onto the mouse InputState the camera
+    // already reads. Deltas accumulate in the touch callbacks (which fire between
+    // frames) and are drained in pollEvents.
+    double touchAccumDX = 0, touchAccumDY = 0, touchAccumScroll = 0;
+    double lastTouchX = 0, lastTouchY = 0, lastPinchDist = 0;
+    bool touchLeftDown = false, touchRightDown = false, touchPinch = false;
+#endif
 };
+
+#ifdef __EMSCRIPTEN__
+// Touch -> mouse mapping for the web. iOS/Android have no GLFW mouse, so map
+// gestures onto the same InputState the camera reads: one-finger drag = left-drag
+// (orbit), two-finger drag = right-drag (pan) + pinch = scroll (zoom). Returns
+// EM_TRUE to consume the event (the canvas has touch-action: none).
+static double rtTouchDist(const EmscriptenTouchPoint& a, const EmscriptenTouchPoint& b) {
+    double dx = a.targetX - b.targetX, dy = a.targetY - b.targetY;
+    return std::sqrt(dx * dx + dy * dy);
+}
+static EM_BOOL onTouchStart(int, const EmscriptenTouchEvent* e, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    if (e->numTouches >= 2) {
+        impl->touchPinch = true; impl->touchLeftDown = false; impl->touchRightDown = true;
+        impl->lastPinchDist = rtTouchDist(e->touches[0], e->touches[1]);
+        impl->lastTouchX = (e->touches[0].targetX + e->touches[1].targetX) * 0.5;
+        impl->lastTouchY = (e->touches[0].targetY + e->touches[1].targetY) * 0.5;
+    } else if (e->numTouches == 1) {
+        impl->touchPinch = false; impl->touchLeftDown = true; impl->touchRightDown = false;
+        impl->lastTouchX = e->touches[0].targetX; impl->lastTouchY = e->touches[0].targetY;
+        impl->input.mouseX = e->touches[0].targetX; impl->input.mouseY = e->touches[0].targetY;
+    }
+    return EM_TRUE;
+}
+static EM_BOOL onTouchMove(int, const EmscriptenTouchEvent* e, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    if (e->numTouches >= 2) {
+        double d = rtTouchDist(e->touches[0], e->touches[1]);
+        impl->touchAccumScroll += (d - impl->lastPinchDist) * 0.01;  // px -> scroll units
+        impl->lastPinchDist = d;
+        double cx = (e->touches[0].targetX + e->touches[1].targetX) * 0.5;
+        double cy = (e->touches[0].targetY + e->touches[1].targetY) * 0.5;
+        impl->touchAccumDX += cx - impl->lastTouchX;
+        impl->touchAccumDY += cy - impl->lastTouchY;
+        impl->lastTouchX = cx; impl->lastTouchY = cy;
+    } else if (e->numTouches == 1) {
+        double x = e->touches[0].targetX, y = e->touches[0].targetY;
+        impl->touchAccumDX += x - impl->lastTouchX;
+        impl->touchAccumDY += y - impl->lastTouchY;
+        impl->lastTouchX = x; impl->lastTouchY = y;
+        impl->input.mouseX = x; impl->input.mouseY = y;
+    }
+    return EM_TRUE;
+}
+static EM_BOOL onTouchEnd(int, const EmscriptenTouchEvent*, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    impl->touchLeftDown = false; impl->touchRightDown = false; impl->touchPinch = false;
+    return EM_TRUE;
+}
+#endif  // __EMSCRIPTEN__
 
 // Maps backend (GLFW) key codes to the backend-independent KeyCode the rest of
 // the engine sees. This table is the only place that knows GLFW key values.
@@ -296,6 +360,14 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     glfwSetWindowCloseCallback(impl->window, onWindowClose);
     glfwSetWindowRefreshCallback(impl->window, onWindowRefresh);
 
+#ifdef __EMSCRIPTEN__
+    // Touch input on the canvas (the web has no GLFW mouse). useCapture=true.
+    emscripten_set_touchstart_callback("#canvas", impl.get(), EM_TRUE, onTouchStart);
+    emscripten_set_touchmove_callback("#canvas", impl.get(), EM_TRUE, onTouchMove);
+    emscripten_set_touchend_callback("#canvas", impl.get(), EM_TRUE, onTouchEnd);
+    emscripten_set_touchcancel_callback("#canvas", impl.get(), EM_TRUE, onTouchEnd);
+#endif
+
     impl->lastFrameTime = glfwGetTime();
     return true;
 }
@@ -341,8 +413,18 @@ void GlfwWindow::pollEvents() {
     glfwPollEvents();
 
     GLFWwindow* window = impl->window;
+#ifdef __EMSCRIPTEN__
+    // Touch drives the mouse state on the web (no GLFW mouse). Drain the deltas
+    // the touch callbacks accumulated between frames.
+    impl->input.mouseDeltaX = impl->touchAccumDX; impl->touchAccumDX = 0;
+    impl->input.mouseDeltaY = impl->touchAccumDY; impl->touchAccumDY = 0;
+    impl->input.scrollDelta = impl->touchAccumScroll; impl->touchAccumScroll = 0;
+    impl->input.mouseLeftDown = impl->touchLeftDown;
+    impl->input.mouseRightDown = impl->touchRightDown;
+#else
     impl->input.mouseLeftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     impl->input.mouseRightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+#endif
     impl->input.keyW = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
     impl->input.keyA = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
     impl->input.keyS = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
