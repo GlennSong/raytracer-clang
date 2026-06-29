@@ -56,6 +56,11 @@
     "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
     "friction": 0.5
   },
+  "vehicles": [
+    { "recipe": "sedan", "position": [6, 122, 200], "yaw": 0, "seed": 1 },
+    { "script": "return vehicle.hatchback(seed, {color={0.2,0.6,0.25}})",
+      "position": [-6, 122, 196], "yaw": 20, "seed": 2 }
+  ],
   "lighting": {
     "sun": {
       "direction": [0.62, 0.34, 0.4],
