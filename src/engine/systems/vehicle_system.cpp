@@ -48,12 +48,13 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
         if (v->vehicleId == PhysicsWorld::INVALID_VEHICLE) continue;
         if (!ctx.world.has<PrevTransform>(e)) ctx.world.add<PrevTransform>(e, {*t});
 
-        // Lazily build a shared wheel mesh: a cylinder rotated so its axis is the
-        // axle (local X), matching wheelTransform's right=X / up=Y convention.
-        if (!wheelMesh.valid() && !v->config.wheels.empty()) {
-            const PhysicsWorld::VehicleWheel& w0 = v->config.wheels[0];
-            RenderMesh wheel = MeshBuilder::cylinder(static_cast<float>(w0.radius),
-                                                     static_cast<float>(w0.width));
+        // Lazily build a shared UNIT wheel mesh: a unit cylinder (diameter 1 along
+        // Y, width 1) rotated so its axle is local X. The actual per-wheel size is
+        // applied as a Transform scale in writeBack — so the wheel is correct
+        // regardless of whether Jolt bakes wheel size into GetWheelWorldTransform
+        // (which scaled a pre-sized mesh down to a stub — the "tiny wheels" bug).
+        if (!wheelMesh.valid()) {
+            RenderMesh wheel = MeshBuilder::cylinder(0.5f, 1.0f);
             MeshBuilder::transform(
                 wheel, Mat4::trs(Vec3(0, 0, 0),
                                  Quat::fromAxisAngle(Vec3(0, 0, 1), PI * 0.5),
@@ -118,8 +119,16 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 if (!wt) continue;
                 if (PrevTransform* wp = ctx.world.get<PrevTransform>(we))
                     wp->value = *wt;
-                *wt = transformFromMatrix(
+                // Pose from Jolt (position + orientation, scale-normalized), then
+                // force the wheel's true size onto the unit mesh: axle (X) = width,
+                // the disc (Y,Z) = diameter. Ignoring the matrix's own scale is what
+                // fixes the tiny wheels.
+                Transform pose = transformFromMatrix(
                     pw.wheelTransform(v.vehicleId, static_cast<int>(i)));
+                Real radius = (i < v.config.wheels.size()) ? v.config.wheels[i].radius : 0.34;
+                Real width = (i < v.config.wheels.size()) ? v.config.wheels[i].width : 0.24;
+                pose.scale = Vec3(width, 2.0 * radius, 2.0 * radius);
+                *wt = pose;
             }
 
             // Keep the seated driver glued to the chassis so they ride along and
