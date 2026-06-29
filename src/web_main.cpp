@@ -56,6 +56,11 @@ std::string levelFromUrl() {
 // HUD. Camera fly/orbit toggle goes through the gamepad Back button (window.cpp).
 extern "C" {
 
+// Fly toggle: free != 0 → free 6-DOF flight; 0 → grounded FPS walk.
+EMSCRIPTEN_KEEPALIVE void rt_web_camera(int free) {
+    g_app.settings().setBool("cameraGrounded", free == 0);
+}
+
 EMSCRIPTEN_KEEPALIVE void rt_web_flag(int id, int val) {
     Renderer& r = g_app.renderer();
     switch (id) {
@@ -118,11 +123,12 @@ int main() {
                                             levelPath, makeEditor);
     };
 
-    // Editor mode: views the level (no FPS gameplay, no pointer lock). Start in
-    // fly + free-look so the on-screen sticks give FPS move+look out of the box;
-    // the debug panel's camera toggle (gamepad Back / cam_toggle) flips to orbit.
+    // Fly camera + free-look so the on-screen sticks give FPS move+look out of
+    // the box, but grounded (FPS walk: horizontal move, fixed height) by default.
+    // The debug panel's Fly toggle clears cameraGrounded for free 6-DOF flight.
     g_app.settings().setString("cameraMode", "fly");
     g_app.settings().setBool("cameraFreeLook", true);
+    g_app.settings().setBool("cameraGrounded", true);
     g_app.pushState(makeEditor());
 
     g_app.begin();
