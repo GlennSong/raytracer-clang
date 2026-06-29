@@ -31,6 +31,8 @@ void VehicleSystem::onStart(FrameContext& ctx) {
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
+    // Toggle the head/taillights.
+    ctx.actions.bindButton("vehicle_lights", KeyCode::L);
 }
 
 void VehicleSystem::createVehicles(FrameContext& ctx) {
@@ -77,6 +79,43 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
             r.material.opacity = 1.0f;
             ctx.world.add<Renderable>(we, r);
             v->wheelEntities.push_back(we);
+        }
+
+        // Head/taillight lens boxes (emission toggled in writeBack) + a driver
+        // capsule (stowed until someone's aboard). Shared meshes, built once.
+        if (!lensMesh.valid())
+            lensMesh = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(0.34, 0.18, 0.10)),
+                                              "vehicle:lens");
+        if (!driverMesh.valid())
+            driverMesh = ctx.assets.acquireMesh(MeshBuilder::capsule(0.28f, 0.7f),
+                                                "vehicle:driver");
+        auto makeLens = [&](Vec3 albedo) {
+            Entity le = ctx.world.create();
+            Transform lt;
+            ctx.world.add<Transform>(le, lt);
+            ctx.world.add<PrevTransform>(le, {lt});
+            Renderable r;
+            r.mesh = lensMesh;
+            r.material.albedo = albedo;     // always a coloured lens (front/back cue)
+            r.material.roughness = 0.4f;
+            r.material.opacity = 1.0f;
+            ctx.world.add<Renderable>(le, r);
+            return le;
+        };
+        v->headlights = { makeLens(Vec3(1.0, 0.97, 0.82)), makeLens(Vec3(1.0, 0.97, 0.82)) };
+        v->taillights = { makeLens(Vec3(0.85, 0.06, 0.05)), makeLens(Vec3(0.85, 0.06, 0.05)) };
+
+        v->driverModel = ctx.world.create();
+        {
+            Transform dt;
+            ctx.world.add<Transform>(v->driverModel, dt);
+            ctx.world.add<PrevTransform>(v->driverModel, {dt});
+            Renderable r;
+            r.mesh = driverMesh;
+            r.material.albedo = Vec3(0.30, 0.34, 0.48);
+            r.material.roughness = 0.7f;
+            r.material.opacity = 1.0f;
+            ctx.world.add<Renderable>(v->driverModel, r);
         }
     }
 }
@@ -132,6 +171,49 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 Real width = (i < v.config.wheels.size()) ? v.config.wheels[i].width : 0.24;
                 pose.scale = Vec3(width, 2.0 * radius, 2.0 * radius);
                 *wt = pose;
+            }
+
+            // Place a child entity at a chassis-local offset (rigidly attached).
+            const Vec3& hx = v.config.chassisHalfExtent;
+            auto place = [&](Entity child, const Vec3& local) {
+                if (!child.valid() || !ctx.world.alive(child)) return;
+                Transform* ct = ctx.world.get<Transform>(child);
+                if (!ct) return;
+                if (PrevTransform* cp = ctx.world.get<PrevTransform>(child))
+                    cp->value = *ct;
+                ct->position = t.position + t.orientation.rotate(local);
+                ct->orientation = t.orientation;
+            };
+            // Lenses sit at the front (+Z) / rear (-Z) corners, a hair proud.
+            Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
+            if (v.headlights.size() == 2) {
+                place(v.headlights[0], Vec3(lx, ly, hx.z + 0.05));
+                place(v.headlights[1], Vec3(-lx, ly, hx.z + 0.05));
+            }
+            if (v.taillights.size() == 2) {
+                place(v.taillights[0], Vec3(lx, ly, -hx.z - 0.05));
+                place(v.taillights[1], Vec3(-lx, ly, -hx.z - 0.05));
+            }
+            // Glow when on; dark lens when off (the albedo keeps the colour cue).
+            Vec3 head = v.lightsOn ? Vec3(3.0, 2.8, 2.2) : Vec3(0, 0, 0);
+            Vec3 tail = v.lightsOn ? Vec3(2.0, 0.15, 0.15) : Vec3(0, 0, 0);
+            for (Entity le : v.headlights)
+                if (Renderable* r = ctx.world.get<Renderable>(le)) r->material.emission = head;
+            for (Entity le : v.taillights)
+                if (Renderable* r = ctx.world.get<Renderable>(le)) r->material.emission = tail;
+
+            // Driver capsule: in the seat when occupied, stowed far below otherwise.
+            if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
+                if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
+                    if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
+                        dp->value = *dt;
+                    if (v.driver.valid())
+                        dt->position = t.position +
+                            t.orientation.rotate(Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05));
+                    else
+                        dt->position = Vec3(0, -100000, 0);
+                    dt->orientation = t.orientation;
+                }
             }
 
             // Keep the seated driver glued to the chassis so they ride along and
@@ -203,6 +285,16 @@ void VehicleSystem::update(FrameContext& ctx) {
                 Vehicle* v = ctx.world.get<Vehicle>(iv.vehicle);
                 if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE)
                     physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+            });
+    }
+
+    // Toggle the driven car's lights.
+    if (ctx.actions.pressed("vehicle_lights")) {
+        ctx.world.each<ControlledBy, InVehicle>(
+            [&](Entity, ControlledBy&, InVehicle& iv) {
+                if (iv.vehicle.valid() && ctx.world.has<Vehicle>(iv.vehicle))
+                    ctx.world.get<Vehicle>(iv.vehicle)->lightsOn =
+                        !ctx.world.get<Vehicle>(iv.vehicle)->lightsOn;
             });
     }
 }

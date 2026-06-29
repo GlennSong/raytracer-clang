@@ -210,6 +210,13 @@ struct Vehicle {
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
     Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
+    // Head/taillight glow toggle (ADR-0058) and the lens entities VehicleSystem
+    // positions + lights each frame; `driverModel` is a capsule shown in the seat
+    // while occupied.
+    bool lightsOn = false;
+    std::vector<Entity> headlights;      // front lenses (warm)
+    std::vector<Entity> taillights;      // rear lenses (red)
+    Entity driverModel;                  // driver capsule (stowed when unoccupied)
 };
 
 // Marks a player entity currently seated in a vehicle (ADR-0058). PlayerSystem

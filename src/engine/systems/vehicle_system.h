@@ -37,6 +37,8 @@ private:
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
+    MeshHandle lensMesh;             // shared head/taillight lens box
+    MeshHandle driverMesh;          // shared driver capsule
     Real enterRadius = 4.0;          // how close the player must be to board (m)
 };
 
