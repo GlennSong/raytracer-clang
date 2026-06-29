@@ -2,9 +2,12 @@
 
 The WebGPU backend (browser / WebAssembly), an implementation of the `Renderer`
 seam (`../AGENTS.md`) compiled under Emscripten. **Status: Phases 0–1 landed —
-compiles + links against emsdk 6.0.1** (the `viewer_web` target builds clean).
-In-browser behaviour is **unverified** (no GPU in CI — needs a real browser run).
-Decision: ADR-0058. Plan: `docs/webgpu-renderer-plan.md`. Parity reference:
+builds on emsdk 6.0.1 and runs in a browser.** Verified in headless Chromium
+(SwiftShader): device/surface/pipeline up, frame loop pumping, scene draws
+recorded against a live surface texture, no WebGPU validation errors (a device
+uncaptured-error callback logs them). Only visible pixel output is unconfirmed —
+headless SwiftShader doesn't composite a WebGPU canvas for screenshot. Decision:
+ADR-0058. Plan: `docs/webgpu-renderer-plan.md`. Parity reference:
 `../metal/AGENTS.md`.
 
 ### What exists after Phase 1

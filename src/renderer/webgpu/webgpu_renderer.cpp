@@ -218,11 +218,15 @@ public:
             return false;
         }
 
+        // Route WebGPU validation/uncaptured errors to the log — otherwise they
+        // are silently swallowed and a bad pipeline/draw just renders nothing.
+        WGPUDeviceDescriptor deviceDesc = {};
+        deviceDesc.uncapturedErrorCallbackInfo.callback = &WebGpuRenderer::onUncapturedError;
         WGPURequestDeviceCallbackInfo dci = {};
         dci.mode = WGPUCallbackMode_AllowSpontaneous;
         dci.callback = &WebGpuRenderer::onDevice;
         dci.userdata1 = this;
-        wgpuAdapterRequestDevice(adapter_, nullptr, dci);
+        wgpuAdapterRequestDevice(adapter_, &deviceDesc, dci);
         while (!deviceDone_) emscripten_sleep(1);
         if (!device_) {
             LOG_ERROR("WebGPU: failed to acquire a device");
@@ -497,6 +501,12 @@ private:
         auto* self = static_cast<WebGpuRenderer*>(userdata1);
         if (status == WGPURequestDeviceStatus_Success) self->device_ = device;
         self->deviceDone_ = true;
+    }
+    static void onUncapturedError(WGPUDevice const*, WGPUErrorType type,
+                                  WGPUStringView message, void*, void*) {
+        LOG_ERROR("WebGPU uncaptured error (type %d): %.*s",
+                  static_cast<int>(type),
+                  static_cast<int>(message.length), message.data ? message.data : "");
     }
 
     // ---- resource helpers --------------------------------------------------

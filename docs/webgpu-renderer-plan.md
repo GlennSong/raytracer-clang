@@ -6,10 +6,23 @@ Vulkan backend (`vulkan-renderer-plan.md`): each stage is independently
 verifiable, so the work lands in reviewable slices. Parity reference is the Metal
 backend (`src/renderer/metal/AGENTS.md`) and `docs/renderer-parity.md`.
 
-**Status: Phases 0+1 landed — compiles + links against emsdk 6.0.1.** The
+**Status: Phases 0+1 landed — builds on emsdk 6.0.1 and runs in a browser.** The
 `viewer_web` target builds clean (WebGPU backend + Jolt + engine_core all to
-wasm). In-browser behaviour is still unverified (no GPU in CI — needs a real
-browser run).
+wasm). Verified in headless Chromium (SwiftShader): device/surface/pipeline come
+up, the frame loop pumps, `endFrame` records the scene's draws against a
+successfully-acquired surface texture, and there are no WebGPU validation errors.
+The one unconfirmed thing is visible output — headless SwiftShader won't
+composite a WebGPU canvas for screenshot/readback, so eyeballing pixels needs a
+real-GPU browser run.
+
+### Known issues / web polish
+- **Pointer Lock needs a user gesture.** Play mode disables the cursor on start;
+  browsers reject pointer-lock without a click, so it throws a (non-fatal) console
+  error. Proper fix is app-level: capture the pointer on canvas click. Orbit
+  (drag) camera works regardless.
+- **Missing assets 404.** `arena.json` references `models/DamagedHelmet.glb` and an
+  HDR env map that aren't in the repo's `assets/`; non-fatal (the level still
+  loads). Pre-existing, not web-specific.
 
 ## Bundle size (verified, emsdk 6.0.1, with physics)
 

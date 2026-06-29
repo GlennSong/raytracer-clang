@@ -3818,8 +3818,14 @@ choices:
   long-term cost ADR-0057 flagged. A future shader-transpile step (Tint/Naga, or
   generating WGSL from the GLSL) could retire it; out of scope for the foundation.
 - **Compiles + links on emsdk 6.0.1** (`viewer_web`: WebGPU backend + Jolt +
-  engine_core, all to wasm); **in-browser behaviour unverified** (no GPU in CI).
-  The emdawnwebgpu Dawn-specific API is explicitly not stable, so a newer port may
+  engine_core, all to wasm) and **runs in a real browser** (headless Chromium /
+  SwiftShader): the device/surface/pipeline come up, the frame loop pumps,
+  `endFrame` records the scene's draws against a successfully-acquired surface
+  texture, and there are **no WebGPU validation errors** (a device uncaptured-error
+  callback is wired to the log). Visible pixel capture is the one thing still
+  unconfirmed — headless SwiftShader doesn't composite a WebGPU canvas for
+  screenshot/readback, so a real-GPU browser run is needed to eyeball output. The
+  emdawnwebgpu Dawn-specific API is explicitly not stable, so a newer port may
   need small edits — `src/renderer/webgpu/AGENTS.md` lists the current gotchas.
 - **Bundle size** (verified, with physics): ~1.6 MB gzipped over the wire at `-O2`
   (4.6 MB raw), ~1.3 MB gzipped at `-Oz` (wasm dominates; Jolt is a large share).
