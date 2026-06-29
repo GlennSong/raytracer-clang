@@ -2,17 +2,14 @@
 <!--
   Web shell for the WebGPU/WASM viewer (ADR-0058).
 
-  The wasm module acquires the WebGPU device itself (RequestAdapter/RequestDevice,
-  awaited via ASYNCIFY), so this page provides the canvas, an on-screen log
-  overlay (debuggable without a dev console — tap to hide), and on-screen movement
-  buttons that call the exported rt_web_key hook (same path as a real keyboard).
+  Provides the canvas, an on-screen log overlay (debuggable without a dev
+  console), FPS touch controls (dual virtual sticks: left = move, right = look;
+  a RUN/boost button), and a debug panel that drives the engine via exported
+  hooks (rt_web_axis/button = virtual gamepad; rt_web_flag/stat = renderer
+  flags + stats). The wasm acquires the WebGPU device itself (ASYNCIFY).
 
-  Build (with an active emsdk):
-    emcmake cmake -S . -B build-web
-    cmake --build build-web --target viewer_web
-  then serve build-web/ over HTTP (WebGPU needs a secure context — localhost
-  counts) and open index.html, e.g.:
-    python3 -m http.server --directory build-web
+  Build: emcmake cmake -S . -B build-web && cmake --build build-web --target viewer_web
+  then serve build-web/ over HTTP (WebGPU needs a secure context).
 -->
 <html lang="en">
 <head>
@@ -20,33 +17,42 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Raytracer Engine — WebGPU</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+    html, body { margin: 0; height: 100%; background: #111; overflow: hidden;
+      font-family: system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
     #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
-    #error {
-      position: fixed; inset: 0; display: none; place-content: center;
-      color: #e66; font: 16px/1.5 system-ui, sans-serif; text-align: center; padding: 2rem;
-    }
-    #log {
-      position: fixed; left: 0; top: 0; right: 0; max-height: 40vh; margin: 0;
-      overflow: auto; background: rgba(0,0,0,0.72); color: #9fe;
-      font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace;
-      white-space: pre-wrap; padding: 6px 8px; z-index: 10;
-    }
+    #error { position: fixed; inset: 0; display: none; place-content: center;
+      color: #e66; font-size: 16px; text-align: center; padding: 2rem; z-index: 30; }
+    #log { position: fixed; left: 0; top: 0; right: 0; max-height: 32vh; margin: 0;
+      overflow: auto; background: rgba(0,0,0,.72); color: #9fe;
+      font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; padding: 6px 8px; z-index: 10; }
     #log .e { color: #f88; }
-    .pad {
-      position: fixed; bottom: 20px; z-index: 20; display: grid; gap: 8px;
-      user-select: none; -webkit-user-select: none; touch-action: none;
-    }
-    #move { left: 20px; grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px); }
-    #vert { right: 20px; grid-template-rows: repeat(2, 58px); }
-    .pad button {
-      width: 58px; height: 58px; border-radius: 12px; border: 1px solid rgba(80,200,255,.5);
-      background: rgba(20,40,60,.5); color: #cfefff; font: 600 16px system-ui, sans-serif;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .pad button:active { background: rgba(40,120,180,.8); }
-    .gx-w { grid-column: 2; grid-row: 1; } .gx-a { grid-column: 1; grid-row: 2; }
-    .gx-s { grid-column: 2; grid-row: 3; } .gx-d { grid-column: 3; grid-row: 2; }
+
+    /* Touch sticks: floating base + thumb that appear where you press. */
+    .zone { position: fixed; bottom: 0; height: 42vh; width: 42vw; z-index: 15; touch-action: none; }
+    #zoneL { left: 0; } #zoneR { right: 0; }
+    .base, .thumb { position: fixed; border-radius: 50%; pointer-events: none;
+      display: none; transform: translate(-50%, -50%); z-index: 16; }
+    .base { width: 110px; height: 110px; background: rgba(120,160,200,.12); border: 2px solid rgba(120,200,255,.35); }
+    .thumb { width: 52px; height: 52px; background: rgba(80,160,220,.55); border: 1px solid rgba(180,230,255,.7); }
+
+    .btn { position: fixed; z-index: 20; border-radius: 12px; border: 1px solid rgba(80,200,255,.5);
+      background: rgba(20,40,60,.55); color: #cfefff; font: 600 14px system-ui; padding: 10px 12px;
+      -webkit-tap-highlight-color: transparent; }
+    .btn:active { background: rgba(40,120,180,.8); }
+    #run { bottom: 24px; left: 50%; transform: translateX(-50%); width: 90px; height: 48px; }
+    #gear { top: 8px; right: 8px; }
+
+    #dbg { position: fixed; top: 0; right: 0; bottom: 0; width: min(78vw, 320px);
+      background: rgba(10,16,24,.94); color: #dff; z-index: 25; padding: 14px; overflow: auto;
+      display: none; box-shadow: -4px 0 16px #0008; font-size: 14px; }
+    #dbg h3 { margin: 6px 0 10px; font-size: 15px; color: #8df; }
+    #dbg .row { display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 7px 0; border-bottom: 1px solid #ffffff14; }
+    #dbg button { border-radius: 8px; border: 1px solid #4cf6; background: #1b3346; color: #dff;
+      padding: 7px 10px; font: 600 13px system-ui; }
+    #dbg button.on { background: #2a7; border-color: #3fc; color: #021; }
+    #dbg #stats { font: 12px/1.5 ui-monospace, monospace; color: #9fe; white-space: pre; padding-top: 8px; }
+    #dbg .close { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #9cf; font-size: 22px; }
   </style>
 </head>
 <body>
@@ -54,87 +60,124 @@
   <div id="error"></div>
   <pre id="log" title="tap to hide"></pre>
 
-  <div id="move" class="pad" style="display:none">
-    <button data-k="0" class="gx-w">▲</button>
-    <button data-k="2" class="gx-a">◀</button>
-    <button data-k="1" class="gx-s">▼</button>
-    <button data-k="3" class="gx-d">▶</button>
-  </div>
-  <div id="vert" class="pad" style="display:none">
-    <button data-k="4">↑</button>
-    <button data-k="5">↓</button>
+  <div id="zoneL" class="zone"></div>
+  <div id="zoneR" class="zone"></div>
+  <div id="baseL" class="base"></div><div id="thumbL" class="thumb"></div>
+  <div id="baseR" class="base"></div><div id="thumbR" class="thumb"></div>
+
+  <button id="run" class="btn" style="display:none">RUN</button>
+  <button id="gear" class="btn" style="display:none">☰ Debug</button>
+
+  <div id="dbg">
+    <button class="close" id="dbgClose">✕</button>
+    <h3>Debug</h3>
+    <div class="row"><span>Camera</span><button id="camToggle">Fly / Orbit</button></div>
+    <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
+    <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
+    <div class="row"><span>SSAO</span><button id="ssao">on</button></div>
+    <div class="row"><span>SSR</span><button id="ssr">on</button></div>
+    <div class="row"><span>Bloom</span><button id="bloom">on</button></div>
+    <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
+    <h3 style="margin-top:14px">Stats</h3>
+    <div id="stats">—</div>
   </div>
 
-  <!-- Emitted by the viewer_web target (MODULARIZE → global createViewer). -->
   <script src="viewer_web.js"></script>
   <script>
     (async () => {
-      const logEl = document.getElementById('log');
+      const $ = (id) => document.getElementById(id);
+      const logEl = $('log');
       logEl.addEventListener('click', () => { logEl.style.display = 'none'; });
-      const log = (text, cls) => {
-        const line = document.createElement('span');
-        if (cls) line.className = cls;
-        line.textContent = text + '\n';
-        logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
-      };
+      const log = (t, cls) => { const s = document.createElement('span');
+        if (cls) s.className = cls; s.textContent = t + '\n'; logEl.appendChild(s);
+        logEl.scrollTop = logEl.scrollHeight; };
       window.addEventListener('error', (e) => log('JS error: ' + (e.message || e), 'e'));
-      window.addEventListener('unhandledrejection', (e) => log('promise rejection: ' + e.reason, 'e'));
+      window.addEventListener('unhandledrejection', (e) => log('rejection: ' + e.reason, 'e'));
+      const fail = (m) => { $('error').style.display = 'grid'; $('error').textContent = m; log(m, 'e'); };
 
-      const fail = (msg) => {
-        const el = document.getElementById('error');
-        el.style.display = 'grid'; el.textContent = msg; log(msg, 'e');
-      };
+      if (!('gpu' in navigator)) return fail('WebGPU not available. Use Chrome/Edge, Safari 18+, or Firefox.');
 
-      if (!('gpu' in navigator)) {
-        return fail('WebGPU is not available in this browser. Try a recent ' +
-                    'Chrome, Edge, Safari 18+, or Firefox with WebGPU enabled.');
-      }
-
-      try {
-        const a = await navigator.gpu.requestAdapter();
-        const info = a && (a.info || (a.requestAdapterInfo ? await a.requestAdapterInfo() : {}));
-        log('adapter: ' + (a ? `${info.vendor || '?'} / ${info.architecture || info.description || '?'}` : 'NONE'));
-      } catch (e) { log('requestAdapter threw: ' + e, 'e'); }
-
-      const canvas = document.getElementById('canvas');
+      const canvas = $('canvas');
       const dpr = window.devicePixelRatio || 1;
-      const resize = () => {
-        const w = canvas.clientWidth || window.innerWidth;
-        const h = canvas.clientHeight || window.innerHeight;
-        canvas.width = Math.max(1, Math.floor(w * dpr));
-        canvas.height = Math.max(1, Math.floor(h * dpr));
-      };
-      resize();
-      window.addEventListener('resize', resize);
-      log(`canvas css ${canvas.clientWidth}x${canvas.clientHeight}, backing ${canvas.width}x${canvas.height}, dpr ${dpr}`);
+      const resize = () => { canvas.width = Math.max(1, Math.floor((canvas.clientWidth || innerWidth) * dpr));
+        canvas.height = Math.max(1, Math.floor((canvas.clientHeight || innerHeight) * dpr)); };
+      resize(); window.addEventListener('resize', resize);
 
       let mod;
-      try {
-        mod = await createViewer({ canvas, print: (t) => log(t), printErr: (t) => log(t, 'e') });
-        log('module instantiated');
-      } catch (e) {
-        return fail('Failed to start the engine: ' + e);
-      }
+      try { mod = await createViewer({ canvas, print: (t) => log(t), printErr: (t) => log(t, 'e') }); }
+      catch (e) { return fail('Failed to start: ' + e); }
 
-      // Wire the on-screen movement buttons to the exported key hook (W,S,A,D,E,Q).
-      if (typeof mod._rt_web_key === 'function') {
-        const press = (idx, down) => { try { mod._rt_web_key(idx, down); } catch (e) { log('rt_web_key: ' + e, 'e'); } };
-        document.querySelectorAll('.pad button').forEach((b) => {
-          const k = parseInt(b.dataset.k, 10);
-          const dn = (e) => { e.preventDefault(); press(k, 1); };
-          const up = (e) => { e.preventDefault(); press(k, 0); };
-          b.addEventListener('touchstart', dn, { passive: false });
-          b.addEventListener('touchend', up, { passive: false });
-          b.addEventListener('touchcancel', up, { passive: false });
-          b.addEventListener('mousedown', dn);
-          b.addEventListener('mouseup', up);
-          b.addEventListener('mouseleave', up);
-        });
-        document.getElementById('move').style.display = 'grid';
-        document.getElementById('vert').style.display = 'grid';
-      } else {
-        log('rt_web_key not exported — movement buttons disabled', 'e');
+      const haveCtl = typeof mod._rt_web_axis === 'function';
+      if (!haveCtl) { log('control hooks missing', 'e'); return; }
+      const axis = (s, x, y) => mod._rt_web_axis(s, x, y);
+      const button = (i, d) => mod._rt_web_button(i, d);
+      const flag = (id, v) => mod._rt_web_flag(id, v);
+
+      // --- floating joystick (multitouch by identifier) ---
+      const R = 46;
+      function makeStick(zoneId, baseId, thumbId, idx) {
+        const zone = $(zoneId), base = $(baseId), thumb = $(thumbId);
+        let id = null, ox = 0, oy = 0;
+        const show = (x, y) => { for (const el of [base, thumb]) { el.style.display = 'block'; el.style.left = x + 'px'; el.style.top = y + 'px'; } };
+        zone.addEventListener('touchstart', (e) => {
+          e.preventDefault(); if (id !== null) return;
+          const t = e.changedTouches[0]; id = t.identifier; ox = t.clientX; oy = t.clientY;
+          base.style.left = ox + 'px'; base.style.top = oy + 'px'; base.style.display = 'block';
+          show(ox, oy);
+        }, { passive: false });
+        zone.addEventListener('touchmove', (e) => {
+          e.preventDefault();
+          for (const t of e.changedTouches) if (t.identifier === id) {
+            let dx = t.clientX - ox, dy = t.clientY - oy;
+            const len = Math.hypot(dx, dy) || 1; if (len > R) { dx *= R / len; dy *= R / len; }
+            thumb.style.left = (ox + dx) + 'px'; thumb.style.top = (oy + dy) + 'px';
+            axis(idx, dx / R, dy / R);
+          }
+        }, { passive: false });
+        const end = (e) => { for (const t of e.changedTouches) if (t.identifier === id) {
+          id = null; base.style.display = thumb.style.display = 'none'; axis(idx, 0, 0); } };
+        zone.addEventListener('touchend', end); zone.addEventListener('touchcancel', end);
       }
+      makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
+      makeStick('zoneR', 'baseR', 'thumbR', 1);   // look
+
+      // RUN / boost (hold)
+      const run = $('run');
+      run.addEventListener('touchstart', (e) => { e.preventDefault(); button(0, 1); run.classList.add('on'); }, { passive: false });
+      const runUp = (e) => { e.preventDefault(); button(0, 0); run.classList.remove('on'); };
+      run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
+      run.style.display = 'block';
+
+      // --- debug panel ---
+      $('gear').style.display = 'block';
+      $('gear').onclick = () => { $('dbg').style.display = 'block'; };
+      $('dbgClose').onclick = () => { $('dbg').style.display = 'none'; };
+
+      // Camera fly/orbit: cam_toggle fires on the Back button's press edge.
+      const cam = $('camToggle');
+      cam.addEventListener('touchstart', (e) => { e.preventDefault(); button(1, 1); }, { passive: false });
+      cam.addEventListener('touchend', (e) => { e.preventDefault(); button(1, 0); }, { passive: false });
+      cam.addEventListener('click', () => { button(1, 1); setTimeout(() => button(1, 0), 30); }); // desktop
+
+      let dview = 0;
+      const DV = ['normal', 'AO', 'SSR', 'depth', 'normals', 'shadow', 'albedo', 'facing', 'cascades'];
+      $('dview').onclick = () => { dview = (dview + 1) % DV.length; flag(0, dview); $('dview').textContent = dview + ': ' + DV[dview]; };
+      let wire = 0; const WM = ['off', 'only', 'overlay'];
+      $('wire').onclick = () => { wire = (wire + 1) % 3; flag(1, wire); $('wire').textContent = WM[wire]; };
+      const toggle = (id, flagId, def) => { let on = def; const b = $(id);
+        b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off';
+        b.onclick = () => { on = !on; flag(flagId, on ? 1 : 0); b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; }; };
+      toggle('ssao', 2, true); toggle('ssr', 3, true); toggle('bloom', 4, true); toggle('lens', 5, true);
+
+      // Stats poll
+      const stat = (w) => mod._rt_web_stat(w);
+      setInterval(() => {
+        if ($('dbg').style.display === 'none') return;
+        $('stats').textContent =
+          `draws      ${stat(0)}\ninstanced  ${stat(1)}\ninstances  ${stat(2)}\ntriangles  ${stat(3)}\nentities   ${stat(4)}`;
+      }, 300);
+
+      log('controls ready: L stick move, R stick look, RUN boost, ☰ debug');
     })();
   </script>
 </body>
