@@ -4,8 +4,10 @@
 
   The wasm module acquires the WebGPU device itself (the backend calls
   RequestAdapter/RequestDevice, awaited via ASYNCIFY), so this page only has to
-  provide the canvas and instantiate the MODULARIZE'd module (createViewer). The
-  navigator.gpu check below is just for a friendly error on unsupported browsers.
+  provide the canvas and instantiate the MODULARIZE'd module (createViewer).
+
+  An on-screen log overlay mirrors the engine's stdout/stderr + adapter/canvas
+  info, so the page is debuggable on devices with no dev console (tap to hide).
 
   Build (with an active emsdk):
     emcmake cmake -S . -B build-web
@@ -21,27 +23,47 @@
   <title>Raytracer Engine — WebGPU</title>
   <style>
     html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
-    #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
     #error {
       position: fixed; inset: 0; display: none; place-content: center;
       color: #e66; font: 16px/1.5 system-ui, sans-serif; text-align: center;
       padding: 2rem;
     }
+    #log {
+      position: fixed; left: 0; top: 0; right: 0; max-height: 55vh; margin: 0;
+      overflow: auto; background: rgba(0,0,0,0.72); color: #9fe;
+      font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace;
+      white-space: pre-wrap; padding: 6px 8px; z-index: 10;
+    }
+    #log .e { color: #f88; }
   </style>
 </head>
 <body>
   <canvas id="canvas" tabindex="0"></canvas>
   <div id="error"></div>
+  <pre id="log" title="tap to hide"></pre>
 
   <!-- Emitted by the viewer_web target (MODULARIZE → global createViewer). -->
   <script src="viewer_web.js"></script>
   <script>
     (async () => {
+      const logEl = document.getElementById('log');
+      logEl.addEventListener('click', () => { logEl.style.display = 'none'; });
+      const log = (text, cls) => {
+        const line = document.createElement('span');
+        if (cls) line.className = cls;
+        line.textContent = text + '\n';
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+      window.addEventListener('error', (e) => log('JS error: ' + (e.message || e), 'e'));
+      window.addEventListener('unhandledrejection', (e) => log('promise rejection: ' + (e.reason), 'e'));
+
       const fail = (msg) => {
         const el = document.getElementById('error');
         el.style.display = 'grid';
         el.textContent = msg;
-        console.error(msg);
+        log(msg, 'e');
       };
 
       if (!('gpu' in navigator)) {
@@ -49,22 +71,32 @@
                     'Chrome, Edge, Safari 18+, or Firefox with WebGPU enabled.');
       }
 
+      // Report the adapter (informational; the wasm requests its own device).
+      try {
+        const a = await navigator.gpu.requestAdapter();
+        const info = a && (a.info || (a.requestAdapterInfo ? await a.requestAdapterInfo() : {}));
+        log('adapter: ' + (a ? `${info.vendor || '?'} / ${info.architecture || info.description || '?'}` : 'NONE'));
+      } catch (e) { log('requestAdapter threw: ' + e, 'e'); }
+
       const canvas = document.getElementById('canvas');
-      // Back the canvas with device pixels so rendering is crisp on HiDPI.
       const dpr = window.devicePixelRatio || 1;
       const resize = () => {
-        canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-        canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+        const w = canvas.clientWidth || window.innerWidth;
+        const h = canvas.clientHeight || window.innerHeight;
+        canvas.width = Math.max(1, Math.floor(w * dpr));
+        canvas.height = Math.max(1, Math.floor(h * dpr));
       };
       resize();
       window.addEventListener('resize', resize);
+      log(`canvas css ${canvas.clientWidth}x${canvas.clientHeight}, backing ${canvas.width}x${canvas.height}, dpr ${dpr}`);
 
       try {
         await createViewer({
           canvas,
-          print: (text) => console.log(text),
-          printErr: (text) => console.warn(text),
+          print: (t) => log(t),
+          printErr: (t) => log(t, 'e'),
         });
+        log('module instantiated');
       } catch (e) {
         fail('Failed to start the engine: ' + e);
       }
