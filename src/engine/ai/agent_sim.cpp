@@ -24,6 +24,12 @@ constexpr Real kPedSlowZone = 2.5;
 // right-of-way arbitration is future work.
 constexpr Real kJunctionApproach = 9.0;   // m
 constexpr Real kJunctionSpeed    = 4.0;   // m/s (~14 km/h)
+
+// Approximate bridge-deck height per grade-separation layer (clearance 5.0 +
+// deck 0.8, matching DesignRules), so agents on an overpass ride the deck instead
+// of the ground. A flat lift — the ramp slope at the layer transition is not yet
+// modelled (ADR-0058 owed).
+constexpr Real kLayerClearance = 5.8;
 }  // namespace
 
 Real carFollowingCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
@@ -116,6 +122,7 @@ void AgentSim::refreshPose(Agent& a) {
     if (t < 0) t = 0; else if (t > 1) t = 1;
     a.pos = (a.kind == AgentKind::Car) ? nav->laneCenter(li, a.lane, t)
                                        : nav->sidewalkPoint(li, t);
+    a.elevation = nav->links[li].layer * kLayerClearance;   // ride the deck on a bridge
     a.heading = nav->direction(li);
 }
 
@@ -152,6 +159,7 @@ void AgentSim::advance(Agent& a, Real dt, Real gap) {
         int dest = nav->links[a.route.links.back()].to;
         a.moving = false;
         a.speed = 0;
+        a.elevation = 0;
         a.pos = idlePose(dest, a.kind);
         a.activity = (a.activity == AgentActivity::Commuting) ? AgentActivity::AtWork
                                                               : AgentActivity::AtHome;

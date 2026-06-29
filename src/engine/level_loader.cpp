@@ -297,6 +297,20 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     if (!mesh.vertices.empty())
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
     world.add<Renderable>(e, r);
+
+    // Static collision from the carriageway geometry (ADR-0058): without this a
+    // road has no collider of its own — ground roads borrow the terrain's, but an
+    // elevated bridge DECK has nothing under it, so cars fall through. Build a
+    // MeshCollider from the same triangles (deck + ramps + piers) so the player's
+    // car (and physics bodies) drive on roads, the overpass included.
+    if (!mesh.vertices.empty()) {
+        MeshCollider mc;
+        mc.vertices.reserve(mesh.vertices.size());
+        for (const Vertex& v : mesh.vertices) mc.vertices.push_back(v.position);
+        mc.indices = mesh.indices;
+        mc.friction = 0.85;
+        world.add<MeshCollider>(e, mc);
+    }
 }
 
 // A hero parametric tree (shape: "tree"): a real, collidable object you can

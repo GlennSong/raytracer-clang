@@ -43,6 +43,7 @@ struct Agent {
     Real speed = 0;                     // current speed (m/s)
 
     Vec2 pos;                           // cached world position (XZ)
+    Real elevation = 0;                 // height above ground (bridge deck while on an overpass)
     Vec2 heading{1, 0};                 // cached unit heading
     bool moving = false;
 };

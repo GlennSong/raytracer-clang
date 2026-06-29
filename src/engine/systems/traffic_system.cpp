@@ -96,7 +96,7 @@ Mat4 TrafficSystem::poseOf(const Agent& a) const {
     Real z = a.pos.y;                       // Vec2 maps to world XZ (.y = world z)
     Real ground = heightAt_ ? heightAt_(x, z) : 0.0;
     Real halfH = (a.kind == AgentKind::Car ? params_.carSize.y : params_.pedSize.y) * 0.5;
-    Real y = ground + roadLift_ + halfH;
+    Real y = ground + roadLift_ + a.elevation + halfH;   // a.elevation lifts bridge traffic
     // Yaw turns the box's local +Z (its length axis) to face the travel heading.
     Real yaw = std::atan2(a.heading.x, a.heading.y);
     Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);

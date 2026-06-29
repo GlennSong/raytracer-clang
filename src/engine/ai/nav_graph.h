@@ -25,6 +25,7 @@ struct NavLink {
     Real width = 8;                     // carriageway width of the source road (m)
     RoadClass klass = RoadClass::Local;
     int lanes = 1;                      // lanes available in THIS direction
+    int layer = 0;                      // grade-separation level (0 = ground, >0 = bridge)
 };
 
 struct NavGraph {

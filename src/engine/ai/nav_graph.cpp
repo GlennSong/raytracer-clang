@@ -83,6 +83,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         // Lanes per direction from carriageway width (both directions share it).
         int lanes = static_cast<int>(std::lround(e.width / (params.laneWidth * 2.0)));
         l.lanes = lanes < 1 ? 1 : lanes;
+        l.layer = e.layer;
         int idx = static_cast<int>(g.links.size());
         g.links.push_back(l);
         g.outLinks[a].push_back(idx);
