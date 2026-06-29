@@ -309,9 +309,17 @@ void GlfwWindow::shutdown() {
 }
 
 void GlfwWindow::setCursorMode(CursorMode mode) {
+#ifdef __EMSCRIPTEN__
+    // The web has no usable cursor-disable: iOS Safari lacks the Pointer Lock
+    // API entirely (requestPointerLock is undefined → throws) and other browsers
+    // require a user gesture. Keep the cursor normal so play mode doesn't abort.
+    (void)mode;
+    glfwSetInputMode(impl->window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+#else
     int glfwMode = (mode == CursorMode::Disabled) ? GLFW_CURSOR_DISABLED
                                                   : GLFW_CURSOR_NORMAL;
     glfwSetInputMode(impl->window, GLFW_CURSOR, glfwMode);
+#endif
 }
 
 void GlfwWindow::resetMouseDelta() {

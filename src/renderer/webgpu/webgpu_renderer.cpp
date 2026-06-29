@@ -420,6 +420,13 @@ public:
 
         WGPUSurfaceTexture surfaceTexture = {};
         wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
+        if (!frameDiagLogged_) {
+            frameDiagLogged_ = true;
+            LOG_INFO("WebGPU frame0: %zu draws, status=%d, tex=%p, %dx%d, clear(%.2f,%.2f,%.2f)",
+                     draws_.size(), static_cast<int>(surfaceTexture.status),
+                     static_cast<void*>(surfaceTexture.texture), width_, height_,
+                     clearColor_.r, clearColor_.g, clearColor_.b);
+        }
         if (!surfaceTexture.texture) {
             LOG_WARN("WebGPU: no current surface texture this frame");
             return;
@@ -754,6 +761,7 @@ private:
     uint32_t textureCounter_ = 0;
 
     std::vector<QueuedDraw> draws_;
+    bool frameDiagLogged_ = false;
     GpuGlobals globals_ = {};
     WGPUColor clearColor_ = {0.5, 0.7, 0.9, 1.0};
     RenderStats stats_;
