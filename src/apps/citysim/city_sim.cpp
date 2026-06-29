@@ -39,11 +39,19 @@ uint32_t CitySim::rnd() {
 }
 Real CitySim::rndUnit() { return (rnd() >> 8) * (1.0 / 16777216.0); }
 
+Real CitySim::brainUnit(Agent& a) {
+    a.brain ^= a.brain << 13;
+    a.brain ^= a.brain >> 17;
+    a.brain ^= a.brain << 5;
+    return (a.brain >> 8) * (1.0 / 16777216.0);
+}
+
 void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32_t seed) {
     nav_ = &graph;
     agents_.clear();
     vehicles_.clear();
     clockHours_ = 6.0;
+    faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
     signals_.build(graph);
 
@@ -63,6 +71,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.departWork = 7.5 + rndUnit() * 1.5;
         a.departHome = 16.5 + rndUnit() * 1.5;
         a.activity = Agent::Activity::AtHome;
+        a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         a.pos = idlePose(a.home, a.mode);
 
         // A driver possesses a freshly-created car (two-way possession link).
@@ -141,6 +150,26 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
                                                    target));
         }
     }
+
+    // Perception: brake for whatever the agent SEES ahead in its vision cone —
+    // cross traffic and pedestrians the same-lane car-following pass would miss.
+    // Imperfect: with probability (1 - reliability) the agent misses it this step
+    // (a fault), so it may not brake in time.
+    if (car) {
+        if (brainUnit(a) <= a.reliability) {
+            engine::VisionCone cone;
+            cone.origin = a.pos;
+            cone.forward = a.heading;
+            cone.range = 25.0;
+            cone.halfAngleRad = 0.9;     // ~51 deg, wide enough to catch a crosser
+            Real obstacle = nearestObstacleAhead(cone, positions_);
+            if (obstacle < 1e9)
+                target = std::min(target, approachStop(obstacle - 5.0, kCarDecel, target));
+        } else {
+            ++faultCount_;
+        }
+    }
+
     Real minGap = car ? kCarMinGap : kPedMinGap;
     Real slowZone = car ? kCarSlowZone : kPedSlowZone;
     target = followCap(target, gap, minGap, slowZone);
@@ -237,6 +266,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             default: break;
         }
     }
+
+    // Snapshot every agent's position so perception sees a consistent world.
+    positions_.resize(agents_.size());
+    for (std::size_t i = 0; i < agents_.size(); ++i) positions_[i] = agents_[i].pos;
 
     // Pass 2: leading gaps. Pass 3: advance.
     computeGaps();

@@ -285,6 +285,7 @@ add_executable(run_tests
     tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp
     tests/test_city_signals.cpp
+    tests/test_city_perception.cpp
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_sim.cpp

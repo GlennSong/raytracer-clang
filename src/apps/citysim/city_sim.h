@@ -38,6 +38,12 @@ struct Agent {
     Real distOnLeg = 0, speed = 0, elevation = 0;
     int lane = 0;
 
+    // Imperfect perception (ADR-0059): each step the agent perceives obstacles
+    // with probability `reliability`; otherwise it misses (a fault). `brain` is a
+    // per-agent deterministic RNG so faults reproduce from the sim seed.
+    Real reliability = 1.0;
+    uint32_t brain = 1;
+
     // Cached world pose (XZ + a height for bridges); what a renderer reads.
     engine::Vec2 pos;
     engine::Vec2 heading{1, 0};
@@ -77,10 +83,17 @@ public:
             agents_[agentIndex].playerControlled = on;
     }
 
+    // Set every agent's perception reliability (1 = perfect; <1 = makes faults).
+    void setPerceptionReliability(Real r) {
+        for (Agent& a : agents_) a.reliability = r;
+    }
+    long faults() const { return faultCount_; }   // perception misses so far
+
 private:
     void startTrip(Agent& a, int origin, int goal);
     void advance(Agent& a, Real dt, Real gap);
     void computeGaps();
+    Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
     void refreshPose(Agent& a);
     engine::Vec2 idlePose(int node, Agent::Mode mode) const;
     uint32_t rnd();
@@ -90,7 +103,9 @@ private:
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
+    std::vector<engine::Vec2> positions_;   // per-step snapshot of every agent's pos
     SignalController signals_;
+    long faultCount_ = 0;
     Real clockHours_ = 6.0;
     uint32_t rng_ = 1;
 };
