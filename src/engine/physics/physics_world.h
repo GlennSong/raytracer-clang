@@ -121,6 +121,8 @@ public:
         Real brakeTorque = 1500.0;
         Real handBrakeTorque = 4000.0;
         Real friction = 1.0;           // chassis material friction
+        Real comOffsetY = -0.4;        // centre-of-mass offset below the chassis centre (m);
+                                       // lower = harder to roll in corners (anti-tip)
         std::vector<VehicleWheel> wheels;
     };
 
@@ -135,6 +137,9 @@ public:
     // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,
                          Real handBrake = 0.0);
+    // Un-flip a rolled vehicle: keep its heading, level out pitch/roll, lift it a
+    // little, and zero its velocity. Drives a "recover" button.
+    void resetVehicleUpright(VehicleId id);
     Vec3 vehiclePosition(VehicleId id) const;
     Quat vehicleOrientation(VehicleId id) const;
     Vec3 vehicleVelocity(VehicleId id) const;

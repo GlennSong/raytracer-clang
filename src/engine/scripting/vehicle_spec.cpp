@@ -83,6 +83,7 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.maxSteerDegrees = numField(L, t, "max_steer_deg", c.maxSteerDegrees);
     c.brakeTorque = numField(L, t, "brake_torque", c.brakeTorque);
     c.handBrakeTorque = numField(L, t, "hand_brake_torque", c.handBrakeTorque);
+    c.comOffsetY = numField(L, t, "com_offset", c.comOffsetY);
 
     // chassis = { half = {x,y,z} }
     lua_getfield(L, t, "chassis");

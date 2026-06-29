@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -476,8 +477,14 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     JPH::BoxShapeSettings shapeSettings(toJolt(cfg.chassisHalfExtent));
     JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
     if (shapeRes.HasError()) return INVALID_VEHICLE;
+    // Lower the centre of mass below the chassis centre so the car resists rolling
+    // in corners (the classic anti-tip tweak).
+    JPH::OffsetCenterOfMassShapeSettings comSettings(
+        JPH::Vec3(0, static_cast<float>(cfg.comOffsetY), 0), shapeRes.Get());
+    JPH::ShapeSettings::ShapeResult bodyShapeRes = comSettings.Create();
+    if (bodyShapeRes.HasError()) return INVALID_VEHICLE;
 
-    JPH::BodyCreationSettings bodySettings(shapeRes.Get(), toJoltR(position),
+    JPH::BodyCreationSettings bodySettings(bodyShapeRes.Get(), toJoltR(position),
                                            toJolt(orientation),
                                            JPH::EMotionType::Dynamic, Layers::MOVING);
     bodySettings.mOverrideMassProperties =
@@ -576,6 +583,22 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
+}
+
+void PhysicsWorld::resetVehicleUpright(VehicleId id) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    JPH::BodyID b = impl->vehicles[id].body;
+    if (b.IsInvalid()) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    // Keep the heading (yaw about world Y), drop the pitch/roll that flipped it.
+    JPH::Vec3 fwd = bi.GetRotation(b).RotateAxisZ();      // local +Z (forward) in world
+    float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    JPH::Quat upright = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw);
+    JPH::RVec3 pos = bi.GetPosition(b);
+    bi.SetPositionAndRotation(b, pos + JPH::RVec3(0, 1.5f, 0), upright,
+                              JPH::EActivation::Activate);
+    bi.SetLinearVelocity(b, JPH::Vec3::sZero());
+    bi.SetAngularVelocity(b, JPH::Vec3::sZero());
 }
 
 Vec3 PhysicsWorld::vehiclePosition(VehicleId id) const {

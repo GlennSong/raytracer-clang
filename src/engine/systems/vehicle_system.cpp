@@ -28,6 +28,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
 
     ctx.actions.bindButton("enter_vehicle", KeyCode::G);
     ctx.actions.bindButton("enter_vehicle", GamepadButton::DpadUp);
+
+    // Recover a rolled car (keep heading, level it, lift it).
+    ctx.actions.bindButton("vehicle_flip", KeyCode::T);
 }
 
 void VehicleSystem::createVehicles(FrameContext& ctx) {
@@ -158,8 +161,14 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             ctx.world.get<Vehicle>(car)->driver = Entity{};
         if (car.valid() && ctx.world.has<Transform>(car)) {
             const Transform& ct = *ctx.world.get<Transform>(car);
-            Vec3 out = ct.position + ct.orientation.rotate(Vec3(1, 0, 0)) * 2.0 +
-                       Vec3(0, 0.5, 0);
+            // Step out well CLEAR of the car: up (world up, so a flipped car still
+            // ejects you upward, never trapping you under it) plus a flattened
+            // sideways nudge. You drop onto your feet beside the car.
+            Vec3 side = ct.orientation.rotate(Vec3(1, 0, 0));
+            side.y = 0;
+            Real sl = side.length();
+            side = sl > 1e-3 ? side * (1.0 / sl) : Vec3(1, 0, 0);
+            Vec3 out = ct.position + Vec3(0, 2.5, 0) + side * 2.0;
             if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = out;
             if (CharacterController* cc = ctx.world.get<CharacterController>(player))
                 physicsSys.physicsWorld().setCharacterPosition(cc->characterId, out);
@@ -185,6 +194,17 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
 
 void VehicleSystem::update(FrameContext& ctx) {
     handleEnterExit(ctx);
+
+    // Flip the car the player is currently driving back upright.
+    if (ctx.actions.pressed("vehicle_flip")) {
+        ctx.world.each<ControlledBy, InVehicle>(
+            [&](Entity, ControlledBy&, InVehicle& iv) {
+                if (!iv.vehicle.valid() || !ctx.world.has<Vehicle>(iv.vehicle)) return;
+                Vehicle* v = ctx.world.get<Vehicle>(iv.vehicle);
+                if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE)
+                    physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+            });
+    }
 }
 
 void VehicleSystem::fixedUpdate(FrameContext& ctx) {
