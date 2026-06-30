@@ -94,8 +94,9 @@ struct GpuGlobals {
     float    skyHorizon[4];
     float    skyGround[4];
     float    fog[4];              // rgb color, w density (0 = off)
-    int32_t  counts[4];           // x lightCount, y debugView, z shadowMapSize
-    float    lightViewProj[16];   // single-cascade sun shadow matrix
+    int32_t  counts[4];           // x lightCount, y debugView, z shadowMapSize, w cascadeCount
+    float    cascadeVP[4][16];    // per-cascade sun shadow matrices (CSM)
+    float    cascadeSplit[4];     // far view-space depth of cascades 0..3
     float    shadowParams[4];     // x enabled, y depthBias, z normalBias, w pcfTexels
     float    postParams[4];       // x exposure, y tonemapOp, z contrast, w saturation
     GpuLight lights[32];
@@ -145,8 +146,9 @@ struct Globals {
   skyHorizon     : vec4<f32>,
   skyGround      : vec4<f32>,
   fog            : vec4<f32>,      // rgb color, w density (0 = off)
-  counts         : vec4<i32>,      // x lightCount, y debugView, z shadowMapSize
-  lightViewProj  : mat4x4<f32>,    // single-cascade sun shadow matrix
+  counts         : vec4<i32>,      // x lightCount, y debugView, z shadowMapSize, w cascadeCount
+  cascadeVP      : array<mat4x4<f32>, 4>,  // per-cascade sun shadow matrices (CSM)
+  cascadeSplit   : vec4<f32>,      // far view-space depth of cascades 0..3
   shadowParams   : vec4<f32>,      // x enabled, y depthBias, z normalBias, w pcfTexels
   postParams     : vec4<f32>,      // x exposure, y tonemapOp, z contrast, w saturation
   lights         : array<Light, 32>,
@@ -160,9 +162,13 @@ struct DrawData {
 
 @group(0) @binding(0) var<uniform> g : Globals;
 @group(0) @binding(1) var<uniform> d : DrawData;
-// Sun shadow map (group 1, main pass only — the shadow pass writes it).
-@group(1) @binding(0) var shadowMap  : texture_depth_2d;
+// Sun cascaded shadow map (group 1, main pass only — the shadow pass writes it).
+@group(1) @binding(0) var shadowMap  : texture_depth_2d_array;
 @group(1) @binding(1) var shadowSamp : sampler_comparison;
+// Shadow pass only: which cascade layer this depth pass is rendering (group 1,
+// a separate binding so it doesn't collide with the main pass's shadow texture).
+struct ShadowIdx { idx : vec4<i32> };
+@group(1) @binding(2) var<uniform> scidx : ShadowIdx;
 
 struct VSOut {
   @builtin(position) clip : vec4<f32>,
@@ -192,10 +198,11 @@ fn vs_main(
   return out;
 }
 
-// Depth-only shadow pass: transform by the light's view-projection.
+// Depth-only shadow pass: transform by the current cascade's view-projection
+// (the cascade index rides scidx, set per cascade via a dynamic offset).
 @vertex
 fn vs_shadow(@location(0) position : vec3<f32>) -> @builtin(position) vec4<f32> {
-  return g.lightViewProj * d.model * vec4<f32>(position, 1.0);
+  return g.cascadeVP[scidx.idx.x] * d.model * vec4<f32>(position, 1.0);
 }
 
 const PI : f32 = 3.14159265359;
@@ -404,18 +411,32 @@ fn applyCheckerboard(albedo : vec3<f32>, worldPos : vec3<f32>) -> vec3<f32> {
   return albedo;
 }
 
-// Single-cascade sun shadow with hardware PCF (a comparison sampler does the
-// 2x2 filtering). Returns 1 = lit, 0 = shadowed. textureSampleCompare must be in
-// uniform control flow — the only branch above it is on the uniform shadowParams,
-// and the out-of-bounds test is applied via select() *after* the sample.
+// Pick the tightest cascade whose far split still contains this fragment's
+// view-space depth. Returns a uniform-per-fragment index; clamped to the active
+// cascade count. (counts.w = cascade count.)
+fn pickCascade(worldPos : vec3<f32>) -> i32 {
+  let viewZ = -(g.view * vec4<f32>(worldPos, 1.0)).z;
+  let cc = g.counts.w;
+  var ci = cc - 1;
+  for (var c = 0; c < cc; c = c + 1) {
+    if (viewZ <= g.cascadeSplit[c]) { ci = c; break; }
+  }
+  return clamp(ci, 0, cc - 1);
+}
+
+// Cascaded sun shadow with hardware PCF (a comparison sampler does the 2x2
+// filtering). Returns 1 = lit, 0 = shadowed. textureSampleCompare must be in
+// uniform control flow, so we gather the per-fragment cascade/coords first and
+// apply the out-of-bounds test via select() *after* the sample.
 fn computeShadow(worldPos : vec3<f32>, N : vec3<f32>) -> f32 {
   if (g.shadowParams.x < 0.5) { return 1.0; }
-  let lp = g.lightViewProj * vec4<f32>(worldPos + N * g.shadowParams.z, 1.0);
+  let ci = pickCascade(worldPos);
+  let lp = g.cascadeVP[ci] * vec4<f32>(worldPos + N * g.shadowParams.z, 1.0);
   let ndc = lp.xyz / lp.w;
   let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
   let inb = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0;
   let cuv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-  let s = textureSampleCompare(shadowMap, shadowSamp, cuv, ndc.z - g.shadowParams.y);
+  let s = textureSampleCompare(shadowMap, shadowSamp, cuv, ci, ndc.z - g.shadowParams.y);
   return select(1.0, s, inb);
 }
 
@@ -561,6 +582,15 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     let lin = clamp(1.0 - vd / 200.0, 0.0, 1.0);
     return vec4<f32>(vec3<f32>(lin), 1.0);
   }
+  if (dbg == 8) {                                  // shadow cascade tint
+    if (g.shadowParams.x < 0.5) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    let ci = pickCascade(in.worldPos);
+    var tint = vec3<f32>(1.0, 1.0, 0.4);
+    if (ci == 0) { tint = vec3<f32>(1.0, 0.4, 0.4); }
+    else if (ci == 1) { tint = vec3<f32>(0.4, 1.0, 0.4); }
+    else if (ci == 2) { tint = vec3<f32>(0.4, 0.4, 1.0); }
+    return vec4<f32>(tint * (direct + ambient), 1.0);
+  }
 
   var color = direct + ambient + emission;
   // Aerial-perspective fog (lerp toward fog color by 1-exp(-density*dist)).
@@ -677,10 +707,14 @@ public:
         if (skyLayout_) { wgpuBindGroupLayoutRelease(skyLayout_); skyLayout_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
+        if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
+        if (shadowIdxBuf_) { wgpuBufferRelease(shadowIdxBuf_); shadowIdxBuf_ = nullptr; }
         if (shadowSampler_) { wgpuSamplerRelease(shadowSampler_); shadowSampler_ = nullptr; }
-        if (shadowView_) { wgpuTextureViewRelease(shadowView_); shadowView_ = nullptr; }
+        if (shadowArrayView_) { wgpuTextureViewRelease(shadowArrayView_); shadowArrayView_ = nullptr; }
+        for (auto& v : shadowLayerViews_) { if (v) { wgpuTextureViewRelease(v); v = nullptr; } }
         if (shadowTexture_) { wgpuTextureRelease(shadowTexture_); shadowTexture_ = nullptr; }
         if (shadowSampleLayout_) { wgpuBindGroupLayoutRelease(shadowSampleLayout_); shadowSampleLayout_ = nullptr; }
+        if (shadowVsLayout_) { wgpuBindGroupLayoutRelease(shadowVsLayout_); shadowVsLayout_ = nullptr; }
         if (bindLayout_) { wgpuBindGroupLayoutRelease(bindLayout_); bindLayout_ = nullptr; }
         for (auto& m : meshes_) freeMesh(m);
         meshes_.clear();
@@ -783,6 +817,9 @@ public:
         packMat4(vp, globals_.viewProjection);
         packMat4(view, globals_.view);
         packMat4(vp.inverse(), globals_.invViewProjection);
+        camVP_ = vp;                       // for the cascade fit in endFrame
+        camNear_ = camera.nearPlane;
+        camFar_ = camera.farPlane;
         cameraEye_ = camera.position;
         g_webCamEye[0] = (float)camera.position.x;
         g_webCamEye[1] = (float)camera.position.y;
@@ -832,6 +869,8 @@ public:
         shadowDepthBias_ = shc.bias;
         shadowNormalBias_ = shc.normalBias;
         shadowPcf_ = shc.pcfRadius;
+        shadowCascadeCount_ = shc.cascadeCount > 0 ? shc.cascadeCount
+                            : (shadowParams.cascadeCount > 0 ? shadowParams.cascadeCount : 3);
 
         int n = 0;
         if (sun.intensity > 0.0f && n < 32) {
@@ -898,21 +937,66 @@ public:
     void endFrame() override {
         if (!device_ || !surface_) return;
 
-        // Single-cascade sun shadow: a camera-centered orthographic box fit along
-        // the sun direction (a simplified one-cascade version of the Metal/Vulkan
-        // cascade fit). Written into globals before the upload below.
+        // Cascaded sun shadow: split the view frustum into N depth slices and fit
+        // a texel-snapped, camera-centered orthographic box to each (port of the
+        // Vulkan/Metal cascade fit, adjusted for WebGPU standard-Z: NDC near z=0,
+        // far z=1). Written into globals before the upload below.
+        activeCascades_ = 0;
         if (shadowOn_) {
-            Real radius = shadowDistance_ * 0.5;
+            int cc = std::max(1, std::min(shadowCascadeCount_, 4));
+            Real lambda = shadowParams.splitLambda;
+            Real camNear = camNear_, camFar = camFar_;
+            Real shadowDist = std::max(std::min(static_cast<Real>(shadowDistance_), camFar), camNear * 2.0);
+
             Vec3 up = std::abs(sunDir_.y) > 0.99 ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
-            Real pullback = radius + 50.0;
-            Mat4 lightView = Mat4::lookAt(cameraEye_ + sunDir_ * pullback, cameraEye_, up);
-            Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1, pullback + radius);
-            packMat4(lightProj * lightView, globals_.lightViewProj);
+            Mat4 invVP = camVP_.inverse();
+            // WebGPU standard-Z: near plane at NDC z=0, far at z=1.
+            auto corner = [&](Real x, Real y, Real z) { return invVP.transformPoint(Vec3(x, y, z)); };
+            Vec3 nearC[4] = {corner(-1,-1,0), corner(1,-1,0), corner(1,1,0), corner(-1,1,0)};
+            Vec3 farC[4]  = {corner(-1,-1,1), corner(1,-1,1), corner(1,1,1), corner(-1,1,1)};
+
+            Real prevFar = camNear;
+            for (int c = 0; c < cc; ++c) {
+                Real f = Real(c + 1) / Real(cc);
+                Real uni = camNear + (shadowDist - camNear) * f;
+                Real lg = camNear * std::pow(shadowDist / camNear, f);
+                Real zFar = lambda * lg + (1.0 - lambda) * uni;
+                Real zNear = prevFar;
+                prevFar = zFar;
+
+                Real fN = (zNear - camNear) / (camFar - camNear);
+                Real fF = (zFar - camNear) / (camFar - camNear);
+                Vec3 corners[8];
+                for (int k = 0; k < 4; ++k) {
+                    corners[k]     = nearC[k] + (farC[k] - nearC[k]) * fN;
+                    corners[k + 4] = nearC[k] + (farC[k] - nearC[k]) * fF;
+                }
+                Vec3 center = cameraEye_;   // camera-centered fit: stable when turning
+                Real radius = 0.01;
+                for (const Vec3& p : corners) radius = std::max(radius, (p - center).length());
+                radius = std::ceil(radius * 16.0) / 16.0;
+
+                Real pullback = radius + 50.0;
+                Real texelWorld = (radius * 2.0) / static_cast<Real>(kShadowMapSize);
+                Mat4 lightView = Mat4::lookAt(center + sunDir_ * pullback, center, up);
+                Vec3 centerLS = lightView.transformPoint(center);
+                centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
+                centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
+                Vec3 snapped = lightView.inverse().transformPoint(centerLS);
+
+                lightView = Mat4::lookAt(snapped + sunDir_ * pullback, snapped, up);
+                Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1, pullback + radius);
+                packMat4(lightProj * lightView, globals_.cascadeVP[c]);
+                globals_.cascadeSplit[c] = static_cast<float>(zFar);
+            }
+            activeCascades_ = cc;
+            globals_.counts[3] = cc;
             globals_.shadowParams[0] = 1.0f;
             globals_.shadowParams[1] = shadowDepthBias_;
             globals_.shadowParams[2] = shadowNormalBias_;
             globals_.shadowParams[3] = shadowPcf_;
         } else {
+            globals_.counts[3] = 0;
             globals_.shadowParams[0] = 0.0f;
         }
 
@@ -947,29 +1031,35 @@ public:
 
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, nullptr);
 
-        // Shadow depth pass (sun) into the shadow map, before the main pass.
+        // Cascaded shadow depth passes (sun): one depth pass per cascade layer,
+        // before the main pass. The cascade index rides shadowIdxGroup_ via a
+        // dynamic offset; vs_shadow uses it to pick cascadeVP[c].
         if (shadowOn_ && !draws_.empty()) {
-            WGPURenderPassDepthStencilAttachment sdepth = {};
-            sdepth.view = shadowView_;
-            sdepth.depthLoadOp = WGPULoadOp_Clear;
-            sdepth.depthStoreOp = WGPUStoreOp_Store;
-            sdepth.depthClearValue = 1.0f;
-            WGPURenderPassDescriptor sPass = {};
-            sPass.colorAttachmentCount = 0;
-            sPass.depthStencilAttachment = &sdepth;
-            WGPURenderPassEncoder spass = wgpuCommandEncoderBeginRenderPass(encoder, &sPass);
-            wgpuRenderPassEncoderSetPipeline(spass, shadowPipeline_);
-            for (size_t i = 0; i < draws_.size(); ++i) {
-                const GpuMesh& m = meshes_[draws_[i].mesh];
-                uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
-                wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
-                wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
-                wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
-                                                    0, WGPU_WHOLE_SIZE);
-                wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
+            for (int c = 0; c < activeCascades_; ++c) {
+                WGPURenderPassDepthStencilAttachment sdepth = {};
+                sdepth.view = shadowLayerViews_[c];
+                sdepth.depthLoadOp = WGPULoadOp_Clear;
+                sdepth.depthStoreOp = WGPUStoreOp_Store;
+                sdepth.depthClearValue = 1.0f;
+                WGPURenderPassDescriptor sPass = {};
+                sPass.colorAttachmentCount = 0;
+                sPass.depthStencilAttachment = &sdepth;
+                WGPURenderPassEncoder spass = wgpuCommandEncoderBeginRenderPass(encoder, &sPass);
+                wgpuRenderPassEncoderSetPipeline(spass, shadowPipeline_);
+                uint32_t cascadeOff = static_cast<uint32_t>(c * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
+                for (size_t i = 0; i < draws_.size(); ++i) {
+                    const GpuMesh& m = meshes_[draws_[i].mesh];
+                    uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
+                    wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
+                    wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                    wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                        0, WGPU_WHOLE_SIZE);
+                    wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
+                }
+                wgpuRenderPassEncoderEnd(spass);
+                wgpuRenderPassEncoderRelease(spass);
             }
-            wgpuRenderPassEncoderEnd(spass);
-            wgpuRenderPassEncoderRelease(spass);
         }
 
         WGPURenderPassColorAttachment color = {};
@@ -1166,12 +1256,13 @@ private:
         blDesc.entries = entries;
         bindLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &blDesc);
 
-        // Group 1 (main pass only): the sun shadow map + a comparison sampler.
+        // Group 1 (main pass only): the cascaded sun shadow map (array) + a
+        // comparison sampler.
         WGPUBindGroupLayoutEntry shEntries[2] = {};
         shEntries[0].binding = 0;
         shEntries[0].visibility = WGPUShaderStage_Fragment;
         shEntries[0].texture.sampleType = WGPUTextureSampleType_Depth;
-        shEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        shEntries[0].texture.viewDimension = WGPUTextureViewDimension_2DArray;
         shEntries[1].binding = 1;
         shEntries[1].visibility = WGPUShaderStage_Fragment;
         shEntries[1].sampler.type = WGPUSamplerBindingType_Comparison;
@@ -1179,6 +1270,19 @@ private:
         shblDesc.entryCount = 2;
         shblDesc.entries = shEntries;
         shadowSampleLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &shblDesc);
+
+        // Group 1 (shadow pass only): the per-cascade index uniform (dynamic),
+        // binding 2 so it never collides with the lit pass's group-1 texture.
+        WGPUBindGroupLayoutEntry sviEntry = {};
+        sviEntry.binding = 2;
+        sviEntry.visibility = WGPUShaderStage_Vertex;
+        sviEntry.buffer.type = WGPUBufferBindingType_Uniform;
+        sviEntry.buffer.hasDynamicOffset = true;
+        sviEntry.buffer.minBindingSize = sizeof(int32_t) * 4;
+        WGPUBindGroupLayoutDescriptor sviblDesc = {};
+        sviblDesc.entryCount = 1;
+        sviblDesc.entries = &sviEntry;
+        shadowVsLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &sviblDesc);
 
         WGPUBindGroupLayout mainGroups[2] = {bindLayout_, shadowSampleLayout_};
         WGPUPipelineLayoutDescriptor plDesc = {};
@@ -1241,10 +1345,12 @@ private:
         pipeline_ = wgpuDeviceCreateRenderPipeline(device_, &desc);
         wgpuPipelineLayoutRelease(pipelineLayout);
 
-        // Shadow pipeline: depth-only (no fragment), vs_shadow, group 0 only.
+        // Shadow pipeline: depth-only (no fragment), vs_shadow. Group 0 = globals
+        // + per-draw model; group 1 = the per-cascade index (binding 2).
+        WGPUBindGroupLayout shadowGroups[2] = {bindLayout_, shadowVsLayout_};
         WGPUPipelineLayoutDescriptor splDesc = {};
-        splDesc.bindGroupLayoutCount = 1;
-        splDesc.bindGroupLayouts = &bindLayout_;
+        splDesc.bindGroupLayoutCount = 2;
+        splDesc.bindGroupLayouts = shadowGroups;
         WGPUPipelineLayout shadowLayout = wgpuDeviceCreatePipelineLayout(device_, &splDesc);
 
         WGPUDepthStencilState shadowDepth = {};
@@ -1334,15 +1440,35 @@ private:
     }
 
     void createShadowResources() {
+        // A depth array with one layer per cascade: per-layer views drive the
+        // shadow passes, the array view feeds the comparison sampler in the lit
+        // pass (texture_depth_2d_array).
         WGPUTextureDescriptor td = {};
         td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
         td.dimension = WGPUTextureDimension_2D;
-        td.size = {static_cast<uint32_t>(kShadowMapSize), static_cast<uint32_t>(kShadowMapSize), 1};
+        td.size = {static_cast<uint32_t>(kShadowMapSize), static_cast<uint32_t>(kShadowMapSize),
+                   static_cast<uint32_t>(kMaxCascades)};
         td.format = kShadowFormat;
         td.mipLevelCount = 1;
         td.sampleCount = 1;
         shadowTexture_ = wgpuDeviceCreateTexture(device_, &td);
-        shadowView_ = wgpuTextureCreateView(shadowTexture_, nullptr);
+
+        WGPUTextureViewDescriptor avd = {};
+        avd.format = kShadowFormat;
+        avd.dimension = WGPUTextureViewDimension_2DArray;
+        avd.baseArrayLayer = 0;
+        avd.arrayLayerCount = static_cast<uint32_t>(kMaxCascades);
+        avd.mipLevelCount = 1;
+        shadowArrayView_ = wgpuTextureCreateView(shadowTexture_, &avd);
+        for (int c = 0; c < kMaxCascades; ++c) {
+            WGPUTextureViewDescriptor lvd = {};
+            lvd.format = kShadowFormat;
+            lvd.dimension = WGPUTextureViewDimension_2D;
+            lvd.baseArrayLayer = static_cast<uint32_t>(c);
+            lvd.arrayLayerCount = 1;
+            lvd.mipLevelCount = 1;
+            shadowLayerViews_[c] = wgpuTextureCreateView(shadowTexture_, &lvd);
+        }
 
         WGPUSamplerDescriptor sd = {};
         sd.compare = WGPUCompareFunction_LessEqual;   // a comparison (depth) sampler
@@ -1356,7 +1482,7 @@ private:
 
         WGPUBindGroupEntry entries[2] = {};
         entries[0].binding = 0;
-        entries[0].textureView = shadowView_;
+        entries[0].textureView = shadowArrayView_;
         entries[1].binding = 1;
         entries[1].sampler = shadowSampler_;
         WGPUBindGroupDescriptor bgDesc = {};
@@ -1364,6 +1490,28 @@ private:
         bgDesc.entryCount = 2;
         bgDesc.entries = entries;
         shadowSampleGroup_ = wgpuDeviceCreateBindGroup(device_, &bgDesc);
+
+        // Per-cascade index buffer (one 256-byte dynamic slot per cascade), read
+        // by vs_shadow to pick its cascadeVP. Bound on group 1, binding 2.
+        WGPUBufferDescriptor sidesc = {};
+        sidesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        sidesc.size = static_cast<uint64_t>(kMaxCascades) * kDrawStride;
+        shadowIdxBuf_ = wgpuDeviceCreateBuffer(device_, &sidesc);
+        for (int c = 0; c < kMaxCascades; ++c) {
+            int32_t idx[4] = {c, 0, 0, 0};
+            wgpuQueueWriteBuffer(queue_, shadowIdxBuf_, static_cast<uint64_t>(c) * kDrawStride,
+                                 idx, sizeof(idx));
+        }
+        WGPUBindGroupEntry sie = {};
+        sie.binding = 2;
+        sie.buffer = shadowIdxBuf_;
+        sie.offset = 0;
+        sie.size = sizeof(int32_t) * 4;
+        WGPUBindGroupDescriptor sigDesc = {};
+        sigDesc.layout = shadowVsLayout_;
+        sigDesc.entryCount = 1;
+        sigDesc.entries = &sie;
+        shadowIdxGroup_ = wgpuDeviceCreateBindGroup(device_, &sigDesc);
     }
 
     void createUniformResources() {
@@ -1450,15 +1598,23 @@ private:
     // Sun shadow (single cascade): a depth map + its own pipeline; the main
     // pipeline samples it via group 1.
     static constexpr int kShadowMapSize = 2048;
+    static constexpr int kMaxCascades = 4;
     WGPUTexture shadowTexture_ = nullptr;
-    WGPUTextureView shadowView_ = nullptr;
+    WGPUTextureView shadowArrayView_ = nullptr;          // array view for sampling
+    WGPUTextureView shadowLayerViews_[kMaxCascades] = {};// per-cascade render targets
     WGPUSampler shadowSampler_ = nullptr;
-    WGPUBindGroupLayout shadowSampleLayout_ = nullptr;  // group 1 (tex + comparison sampler)
+    WGPUBindGroupLayout shadowSampleLayout_ = nullptr;  // group 1 (array tex + comparison sampler)
     WGPUBindGroup shadowSampleGroup_ = nullptr;
+    WGPUBindGroupLayout shadowVsLayout_ = nullptr;       // group 1 (shadow pass cascade index)
+    WGPUBuffer shadowIdxBuf_ = nullptr;
+    WGPUBindGroup shadowIdxGroup_ = nullptr;
     WGPURenderPipeline shadowPipeline_ = nullptr;
     Vec3 cameraEye_;
+    Mat4 camVP_;                            // camera view-projection (cascade fit)
+    Real camNear_ = 0.1, camFar_ = 1000.0;
     Vec3 sunDir_{0, 1, 0};
     bool shadowOn_ = false;
+    int shadowCascadeCount_ = 3, activeCascades_ = 0;
     float shadowDistance_ = 150.0f, shadowDepthBias_ = 0.0015f,
           shadowNormalBias_ = 0.04f, shadowPcf_ = 1.0f;
 
