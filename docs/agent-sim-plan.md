@@ -98,17 +98,30 @@ helper) graduates from the app into `engine/`.
 - *Render bridge (done, headless-tested).* `citysim::CityRenderSystem`
   (`src/apps/citysim/city_render.{h,cpp}`) builds the NavGraph from the level's
   RoadNets, runs the CitySim, and bakes poses into InstanceGroups: one for cars,
-  one for pedestrians, and one per signal state whose emissive lenses light up to
-  show each stoplight phase. `arena_state` now registers it in place of the old
-  AgentSim-backed `TrafficSystem`. Covered by `tests/test_city_render.cpp`
-  (build from RoadNet, agents move when stepped, signal lenses light up and
-  change state with the phase). The bridge is an APPLICATION layer that depends
-  on core; core never depends on it.
+  one for pedestrians, the city's `street_kit` traffic-signal assembly (pole + mast
+  arm + 3-lamp head) per signalled approach, and a lit emissive lens placed on the
+  matching head lamp to show each stoplight phase. `arena_state` now registers it
+  in place of the old AgentSim-backed `TrafficSystem`. Covered by
+  `tests/test_city_render.cpp` (build from RoadNet, agents move when stepped, one
+  head assembly per approach, lit lens changes state with the phase) and
+  `tests/test_city_flow.cpp` (a busy junction doesn't gridlock; cars pass oncoming
+  traffic). The bridge is an APPLICATION layer that depends on core; core never
+  depends on it.
+- *Reuses the city's stoplights.* The signal heads are the same `trafficSignalProto`
+  model the city generator places, positioned with the same near-right-corner
+  geometry facing oncoming traffic; the `SignalController` (which agents already
+  obey) drives which lamp is lit. The stoplights authored for the city now work as
+  live traffic lights that cars and pedestrians respond to.
+- *Anti-gridlock.* The perception cone yields only to pedestrians and the player,
+  not to other AI cars: car-vs-car conflict is handled by lanes, same-lane
+  car-following, and the signals. Braking for oncoming/cross cars in a wide cone
+  deadlocked traffic with no way to clear.
 - *Remaining (device).* Near/driven cars running Jolt wheeled physics fed by the
   agent brain (far cars stay kinematic — the hybrid model). The player car
   already uses Jolt via `VehicleSystem`; wiring AI cars onto Jolt near the camera
-  is the device-verified follow-up. Instanced car/ped/signal meshes are simple
-  boxes today; richer authored models are a later content pass.
+  is the device-verified follow-up. Instanced car/ped meshes are simple boxes
+  today (signals use the real street_kit head); richer authored vehicle/ped models
+  are a later content pass.
 
 ## Test strategy
 

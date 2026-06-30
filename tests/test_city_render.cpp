@@ -112,6 +112,9 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     std::size_t total0 = sigCount(SignalState::Green) + sigCount(SignalState::Yellow) +
                          sigCount(SignalState::Red);
     CHECK(total0 > 0);
+    // One static signal-head assembly per signalled approach; the lit lenses
+    // (across the three state groups) always sum to that same count.
+    CHECK(groupCount(world, city.signalPostGroup()) == total0);
 
     bool sawGreen = false, sawRed = false;
     bool totalStable = true;

@@ -30,8 +30,7 @@ struct CityRenderParams {
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0059)
     engine::Vec3 carSize{2.0, 1.4, 4.2};   // x = width, y = height, z = length (travel)
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
-    Real signalLensSize = 0.5;             // emissive cube edge (m)
-    Real signalHeight = 5.0;               // lens height above the road (m)
+    Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
 };
 
 class CityRenderSystem : public engine::System {
@@ -56,11 +55,15 @@ public:
     engine::Entity carGroup() const { return carGroup_; }
     engine::Entity pedGroup() const { return pedGroup_; }
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
+    engine::Entity signalPostGroup() const { return signalPostGroup_; }
 
 private:
     void syncGroups(engine::World& world);
     engine::Mat4 agentPose(const Agent& a) const;   // box sized by a.mode (car/ped)
-    engine::Mat4 signalLensPose(int link) const;    // emissive lens for a signalled approach
+    // Pose of the signal-head pole base for a signalled approach (matches the
+    // city's street_kit placement), and the lit lens at the active lamp slot.
+    engine::Mat4 signalPostPose(int link) const;
+    engine::Mat4 signalLensPose(int link, SignalState s) const;
     Real groundAt(Real x, Real z) const;
 
     CityRenderParams params_;
@@ -68,7 +71,9 @@ private:
     CitySim sim_;
     engine::Entity carGroup_;
     engine::Entity pedGroup_;
-    engine::Entity signalGroups_[3];   // indexed by SignalState (Green/Yellow/Red)
+    engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
+    engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
+    std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     bool built_ = false;
