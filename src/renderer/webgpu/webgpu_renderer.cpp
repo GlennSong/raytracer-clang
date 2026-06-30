@@ -111,6 +111,13 @@ struct GpuGlobals {
 struct GpuPost {
     float    postParams[4];   // x exposure, y tonemapOp, z contrast, w saturation
     int32_t  debugView[4];    // x = debug view (0 = normal)
+    float    effects[4];      // x = bloom intensity (0 = off)
+};
+
+// Bloom pass uniform (matches the WGSL `BloomU`).
+struct GpuBloom {
+    float params[4];          // x threshold, y knee, z intensity, w mode
+    float texel[4];           // xy = blur step in uv
 };
 
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
@@ -654,9 +661,12 @@ const char* kCompositeWgsl = R"WGSL(
 struct Post {
   postParams : vec4<f32>,   // x exposure, y tonemapOp, z contrast, w saturation
   debugView  : vec4<i32>,   // x = debug view (0 = normal)
+  effects    : vec4<f32>,   // x bloom intensity (0 = off)
 };
 @group(0) @binding(0) var hdrTex : texture_2d<f32>;
 @group(0) @binding(1) var<uniform> p : Post;
+@group(0) @binding(2) var bloomTex : texture_2d<f32>;
+@group(0) @binding(3) var bloomSamp : sampler;
 
 fn applyGrade(x0 : vec3<f32>, contrast : f32, saturation : f32) -> vec3<f32> {
   var x = x0;
@@ -714,11 +724,66 @@ fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f
   let px = vec2<i32>(fragCoord.xy);
   var color = textureLoad(hdrTex, px, 0).rgb;
   if (p.debugView.x != 0) { return vec4<f32>(color, 1.0); }   // debug view, as-is
+  if (p.effects.x > 0.0) {                                     // additive bloom
+    let dim = vec2<f32>(textureDimensions(hdrTex));
+    let uv = (fragCoord.xy) / dim;
+    color += textureSampleLevel(bloomTex, bloomSamp, uv, 0.0).rgb * p.effects.x;
+  }
   color = color * p.postParams.x;                             // exposure
   color = applyGrade(color, p.postParams.z, p.postParams.w);
   if (p.postParams.y > 0.5) { color = tonemapAgX(color); }
   else                      { color = tonemapACES(color); }
   return vec4<f32>(color, 1.0);
+}
+)WGSL";
+
+// Bloom: a half-res bright-pass (soft-knee threshold, ported from post.metal's
+// bloomDownsample) + a separable Gaussian blur, added back in the composite.
+// One bind-group layout { src texture, sampler, uniform } shared by both
+// fragment entry points; the blur direction rides the uniform.
+const char* kBloomWgsl = R"WGSL(
+struct BloomU {
+  params : vec4<f32>,   // x threshold, y knee, z intensity, w mode (0 bright, 1 blur)
+  texel  : vec4<f32>,   // xy = blur step in uv (texelSize * direction)
+};
+@group(0) @binding(0) var srcTex : texture_2d<f32>;
+@group(0) @binding(1) var srcSamp : sampler;
+@group(0) @binding(2) var<uniform> u : BloomU;
+
+@vertex
+fn vs_bloom(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(p[vid], 0.0, 1.0);
+}
+
+// Bright-pass: src is full-res, dst is half-res. Soft-knee threshold.
+@fragment
+fn fs_bright(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
+  let srcDim = vec2<f32>(textureDimensions(srcTex));
+  let uv = (fc.xy * 2.0) / srcDim;          // half-res frag -> full-res uv
+  let c = textureSampleLevel(srcTex, srcSamp, uv, 0.0).rgb;
+  let brightness = max(c.r, max(c.g, c.b));
+  let knee = max(u.params.y, 1e-4);
+  var soft = brightness - u.params.x + knee;
+  soft = clamp(soft, 0.0, 2.0 * knee);
+  soft = soft * soft / (4.0 * knee + 1e-5);
+  let contribution = max(soft, brightness - u.params.x) / max(brightness, 1e-5);
+  return vec4<f32>(c * contribution, 1.0);
+}
+
+// Separable 9-tap Gaussian along u.texel; src and dst are the same (half) size.
+@fragment
+fn fs_blur(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
+  let dim = vec2<f32>(textureDimensions(srcTex));
+  let uv = fc.xy / dim;
+  let w = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+  var sum = textureSampleLevel(srcTex, srcSamp, uv, 0.0).rgb * w[0];
+  for (var i = 1; i < 5; i = i + 1) {
+    let o = u.texel.xy * f32(i);
+    sum += textureSampleLevel(srcTex, srcSamp, uv + o, 0.0).rgb * w[i];
+    sum += textureSampleLevel(srcTex, srcSamp, uv - o, 0.0).rgb * w[i];
+  }
+  return vec4<f32>(sum, 1.0);
 }
 )WGSL";
 
@@ -789,6 +854,14 @@ public:
         if (compositePipeline_) { wgpuRenderPipelineRelease(compositePipeline_); compositePipeline_ = nullptr; }
         if (compositeLayout_) { wgpuBindGroupLayoutRelease(compositeLayout_); compositeLayout_ = nullptr; }
         if (postBuf_) { wgpuBufferRelease(postBuf_); postBuf_ = nullptr; }
+        for (WGPUBindGroup* g : {&bloomBrightGroup_, &bloomBlurHGroup_, &bloomBlurVGroup_})
+            if (*g) { wgpuBindGroupRelease(*g); *g = nullptr; }
+        for (WGPUBuffer* b : {&bloomUboBright_, &bloomUboH_, &bloomUboV_})
+            if (*b) { wgpuBufferRelease(*b); *b = nullptr; }
+        if (bloomBrightPipeline_) { wgpuRenderPipelineRelease(bloomBrightPipeline_); bloomBrightPipeline_ = nullptr; }
+        if (bloomBlurPipeline_) { wgpuRenderPipelineRelease(bloomBlurPipeline_); bloomBlurPipeline_ = nullptr; }
+        if (bloomLayout_) { wgpuBindGroupLayoutRelease(bloomLayout_); bloomLayout_ = nullptr; }
+        if (linearSampler_) { wgpuSamplerRelease(linearSampler_); linearSampler_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
@@ -817,7 +890,7 @@ public:
         configureSurface();
         releaseDepthTarget();
         createDepthTarget();
-        if (postBuf_) rebuildCompositeBindGroup();  // hdrView_ changed
+        if (postBuf_) { rebuildCompositeBindGroup(); rebuildBloomGroups(); }  // views changed
     }
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override {
@@ -1191,6 +1264,42 @@ public:
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
+        // Bloom: bright-pass (HDR -> bloomA) then a separable blur (A->B->A).
+        // Only when enabled and not in a debug view (debug bypasses post).
+        bool bloomOn = bloomEnabled && globals_.counts[1] == 0;
+        if (bloomOn) {
+            GpuBloom ub = {};
+            ub.params[0] = bloomParams.threshold;
+            ub.params[1] = bloomParams.knee;
+            ub.params[2] = bloomParams.intensity;
+            float tx = 1.0f / static_cast<float>(bloomW_);
+            float ty = 1.0f / static_cast<float>(bloomH_);
+            // Bright pass: no blur step. H/V passes carry their texel direction.
+            wgpuQueueWriteBuffer(queue_, bloomUboBright_, 0, &ub, sizeof(ub));
+            ub.texel[0] = tx; ub.texel[1] = 0.0f;
+            wgpuQueueWriteBuffer(queue_, bloomUboH_, 0, &ub, sizeof(ub));
+            ub.texel[0] = 0.0f; ub.texel[1] = ty;
+            wgpuQueueWriteBuffer(queue_, bloomUboV_, 0, &ub, sizeof(ub));
+
+            auto bloomPass = [&](WGPUTextureView dst, WGPURenderPipeline pipe, WGPUBindGroup grp) {
+                WGPURenderPassColorAttachment a = {};
+                a.view = dst; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+                a.loadOp = WGPULoadOp_Clear; a.storeOp = WGPUStoreOp_Store;
+                a.clearValue = {0.0, 0.0, 0.0, 1.0};
+                WGPURenderPassDescriptor pd = {};
+                pd.colorAttachmentCount = 1; pd.colorAttachments = &a;
+                WGPURenderPassEncoder e = wgpuCommandEncoderBeginRenderPass(encoder, &pd);
+                wgpuRenderPassEncoderSetPipeline(e, pipe);
+                wgpuRenderPassEncoderSetBindGroup(e, 0, grp, 0, nullptr);
+                wgpuRenderPassEncoderDraw(e, 3, 1, 0, 0);
+                wgpuRenderPassEncoderEnd(e);
+                wgpuRenderPassEncoderRelease(e);
+            };
+            bloomPass(bloomViewA_, bloomBrightPipeline_, bloomBrightGroup_);  // HDR -> A
+            bloomPass(bloomViewB_, bloomBlurPipeline_, bloomBlurHGroup_);     // A -> B (H)
+            bloomPass(bloomViewA_, bloomBlurPipeline_, bloomBlurVGroup_);     // B -> A (V)
+        }
+
         // Composite the HDR target to the swapchain (view transform / post).
         GpuPost post = {};
         post.postParams[0] = globals_.postParams[0];
@@ -1198,6 +1307,7 @@ public:
         post.postParams[2] = globals_.postParams[2];
         post.postParams[3] = globals_.postParams[3];
         post.debugView[0] = globals_.counts[1];
+        post.effects[0] = bloomOn ? bloomParams.intensity : 0.0f;
         wgpuQueueWriteBuffer(queue_, postBuf_, 0, &post, sizeof(post));
 
         WGPURenderPassColorAttachment ccolor = {};
@@ -1341,6 +1451,21 @@ private:
         hd.sampleCount = 1;
         hdrTexture_ = wgpuDeviceCreateTexture(device_, &hd);
         hdrView_ = wgpuTextureCreateView(hdrTexture_, nullptr);
+
+        // Half-res bloom ping-pong targets (sampled, render-to).
+        bloomW_ = std::max(1, width_ / 2);
+        bloomH_ = std::max(1, height_ / 2);
+        WGPUTextureDescriptor bd = {};
+        bd.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        bd.dimension = WGPUTextureDimension_2D;
+        bd.size = {static_cast<uint32_t>(bloomW_), static_cast<uint32_t>(bloomH_), 1};
+        bd.format = kHdrFormat;
+        bd.mipLevelCount = 1;
+        bd.sampleCount = 1;
+        bloomTexA_ = wgpuDeviceCreateTexture(device_, &bd);
+        bloomViewA_ = wgpuTextureCreateView(bloomTexA_, nullptr);
+        bloomTexB_ = wgpuDeviceCreateTexture(device_, &bd);
+        bloomViewB_ = wgpuTextureCreateView(bloomTexB_, nullptr);
     }
 
     void releaseDepthTarget() {
@@ -1348,6 +1473,10 @@ private:
         if (depthTexture_) { wgpuTextureRelease(depthTexture_); depthTexture_ = nullptr; }
         if (hdrView_) { wgpuTextureViewRelease(hdrView_); hdrView_ = nullptr; }
         if (hdrTexture_) { wgpuTextureRelease(hdrTexture_); hdrTexture_ = nullptr; }
+        if (bloomViewA_) { wgpuTextureViewRelease(bloomViewA_); bloomViewA_ = nullptr; }
+        if (bloomTexA_) { wgpuTextureRelease(bloomTexA_); bloomTexA_ = nullptr; }
+        if (bloomViewB_) { wgpuTextureViewRelease(bloomViewB_); bloomViewB_ = nullptr; }
+        if (bloomTexB_) { wgpuTextureRelease(bloomTexB_); bloomTexB_ = nullptr; }
     }
 
     bool createPipeline() {
@@ -1565,7 +1694,7 @@ private:
         cModDesc.nextInChain = &cWgsl.chain;
         WGPUShaderModule cModule = wgpuDeviceCreateShaderModule(device_, &cModDesc);
 
-        WGPUBindGroupLayoutEntry cEntries[2] = {};
+        WGPUBindGroupLayoutEntry cEntries[4] = {};
         cEntries[0].binding = 0;
         cEntries[0].visibility = WGPUShaderStage_Fragment;
         cEntries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;  // textureLoad
@@ -1574,10 +1703,27 @@ private:
         cEntries[1].visibility = WGPUShaderStage_Fragment;
         cEntries[1].buffer.type = WGPUBufferBindingType_Uniform;
         cEntries[1].buffer.minBindingSize = sizeof(GpuPost);
+        cEntries[2].binding = 2;                              // bloom (sampled, filterable)
+        cEntries[2].visibility = WGPUShaderStage_Fragment;
+        cEntries[2].texture.sampleType = WGPUTextureSampleType_Float;
+        cEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
+        cEntries[3].binding = 3;
+        cEntries[3].visibility = WGPUShaderStage_Fragment;
+        cEntries[3].sampler.type = WGPUSamplerBindingType_Filtering;
         WGPUBindGroupLayoutDescriptor cblDesc = {};
-        cblDesc.entryCount = 2;
+        cblDesc.entryCount = 4;
         cblDesc.entries = cEntries;
         compositeLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &cblDesc);
+
+        // A linear sampler shared by bloom + the composite's bloom upsample.
+        WGPUSamplerDescriptor lsd = {};
+        lsd.magFilter = WGPUFilterMode_Linear;
+        lsd.minFilter = WGPUFilterMode_Linear;
+        lsd.addressModeU = WGPUAddressMode_ClampToEdge;
+        lsd.addressModeV = WGPUAddressMode_ClampToEdge;
+        lsd.addressModeW = WGPUAddressMode_ClampToEdge;
+        lsd.maxAnisotropy = 1;
+        linearSampler_ = wgpuDeviceCreateSampler(device_, &lsd);
 
         WGPUPipelineLayoutDescriptor cplDesc = {};
         cplDesc.bindGroupLayoutCount = 1;
@@ -1609,7 +1755,63 @@ private:
         wgpuPipelineLayoutRelease(cPipeLayout);
         wgpuShaderModuleRelease(cModule);
 
-        if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_) {
+        // Bloom pipelines (its own module): bright-pass + separable blur. One
+        // layout { src tex, sampler, uniform }; both write the half-res HDR format.
+        WGPUShaderSourceWGSL bWgsl = {};
+        bWgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+        bWgsl.code = sv(kBloomWgsl);
+        WGPUShaderModuleDescriptor bModDesc = {};
+        bModDesc.nextInChain = &bWgsl.chain;
+        WGPUShaderModule bModule = wgpuDeviceCreateShaderModule(device_, &bModDesc);
+
+        WGPUBindGroupLayoutEntry bEntries[3] = {};
+        bEntries[0].binding = 0;
+        bEntries[0].visibility = WGPUShaderStage_Fragment;
+        bEntries[0].texture.sampleType = WGPUTextureSampleType_Float;
+        bEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        bEntries[1].binding = 1;
+        bEntries[1].visibility = WGPUShaderStage_Fragment;
+        bEntries[1].sampler.type = WGPUSamplerBindingType_Filtering;
+        bEntries[2].binding = 2;
+        bEntries[2].visibility = WGPUShaderStage_Fragment;
+        bEntries[2].buffer.type = WGPUBufferBindingType_Uniform;
+        bEntries[2].buffer.minBindingSize = sizeof(GpuBloom);
+        WGPUBindGroupLayoutDescriptor bblDesc = {};
+        bblDesc.entryCount = 3;
+        bblDesc.entries = bEntries;
+        bloomLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &bblDesc);
+
+        WGPUPipelineLayoutDescriptor bplDesc = {};
+        bplDesc.bindGroupLayoutCount = 1;
+        bplDesc.bindGroupLayouts = &bloomLayout_;
+        WGPUPipelineLayout bPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &bplDesc);
+
+        WGPUColorTargetState bColor = {};
+        bColor.format = kHdrFormat;
+        bColor.writeMask = WGPUColorWriteMask_All;
+        auto makeBloomPipe = [&](const char* fsName) {
+            WGPUFragmentState fs = {};
+            fs.module = bModule; fs.entryPoint = sv(fsName);
+            fs.targetCount = 1; fs.targets = &bColor;
+            WGPURenderPipelineDescriptor d = {};
+            d.layout = bPipeLayout;
+            d.vertex.module = bModule; d.vertex.entryPoint = sv("vs_bloom");
+            d.vertex.bufferCount = 0;
+            d.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+            d.primitive.frontFace = WGPUFrontFace_CCW;
+            d.primitive.cullMode = WGPUCullMode_None;
+            d.depthStencil = nullptr;
+            d.fragment = &fs;
+            d.multisample.count = 1; d.multisample.mask = 0xFFFFFFFF;
+            return wgpuDeviceCreateRenderPipeline(device_, &d);
+        };
+        bloomBrightPipeline_ = makeBloomPipe("fs_bright");
+        bloomBlurPipeline_ = makeBloomPipe("fs_blur");
+        wgpuPipelineLayoutRelease(bPipeLayout);
+        wgpuShaderModuleRelease(bModule);
+
+        if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
+            || !bloomBrightPipeline_ || !bloomBlurPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -1718,25 +1920,56 @@ private:
         pDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         pDesc.size = sizeof(GpuPost);
         postBuf_ = wgpuDeviceCreateBuffer(device_, &pDesc);
+
+        // Bloom uniforms: one per pass (bright + the two blur directions).
+        WGPUBufferDescriptor bDesc = {};
+        bDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        bDesc.size = sizeof(GpuBloom);
+        bloomUboBright_ = wgpuDeviceCreateBuffer(device_, &bDesc);
+        bloomUboH_ = wgpuDeviceCreateBuffer(device_, &bDesc);
+        bloomUboV_ = wgpuDeviceCreateBuffer(device_, &bDesc);
+
         rebuildCompositeBindGroup();
+        rebuildBloomGroups();
     }
 
-    // The composite bind group references hdrView_, which is recreated on resize,
-    // so it must be rebuilt whenever the HDR target changes.
+    // The composite bind group references hdrView_ + bloomViewA_, both recreated
+    // on resize, so it must be rebuilt whenever those targets change.
     void rebuildCompositeBindGroup() {
         if (compositeBindGroup_) { wgpuBindGroupRelease(compositeBindGroup_); compositeBindGroup_ = nullptr; }
-        WGPUBindGroupEntry ce[2] = {};
+        WGPUBindGroupEntry ce[4] = {};
         ce[0].binding = 0;
         ce[0].textureView = hdrView_;
         ce[1].binding = 1;
         ce[1].buffer = postBuf_;
         ce[1].offset = 0;
         ce[1].size = sizeof(GpuPost);
+        ce[2].binding = 2;
+        ce[2].textureView = bloomViewA_;       // final blurred bloom
+        ce[3].binding = 3;
+        ce[3].sampler = linearSampler_;
         WGPUBindGroupDescriptor cbgDesc = {};
         cbgDesc.layout = compositeLayout_;
-        cbgDesc.entryCount = 2;
+        cbgDesc.entryCount = 4;
         cbgDesc.entries = ce;
         compositeBindGroup_ = wgpuDeviceCreateBindGroup(device_, &cbgDesc);
+    }
+
+    // Bloom bind groups reference the HDR + bloom views (recreated on resize).
+    void rebuildBloomGroups() {
+        auto make = [&](WGPUBindGroup& g, WGPUTextureView src, WGPUBuffer ubo) {
+            if (g) { wgpuBindGroupRelease(g); g = nullptr; }
+            WGPUBindGroupEntry e[3] = {};
+            e[0].binding = 0; e[0].textureView = src;
+            e[1].binding = 1; e[1].sampler = linearSampler_;
+            e[2].binding = 2; e[2].buffer = ubo; e[2].offset = 0; e[2].size = sizeof(GpuBloom);
+            WGPUBindGroupDescriptor d = {};
+            d.layout = bloomLayout_; d.entryCount = 3; d.entries = e;
+            g = wgpuDeviceCreateBindGroup(device_, &d);
+        };
+        make(bloomBrightGroup_, hdrView_, bloomUboBright_);   // HDR -> bloomA
+        make(bloomBlurHGroup_, bloomViewA_, bloomUboH_);      // bloomA -> bloomB
+        make(bloomBlurVGroup_, bloomViewB_, bloomUboV_);      // bloomB -> bloomA
     }
 
     void allocDrawBuffer(size_t slots) {
@@ -1788,6 +2021,14 @@ private:
     WGPUTextureView depthView_ = nullptr;
     WGPUTexture hdrTexture_ = nullptr;            // linear HDR scene target
     WGPUTextureView hdrView_ = nullptr;
+    WGPUTexture bloomTexA_ = nullptr, bloomTexB_ = nullptr;     // half-res ping-pong
+    WGPUTextureView bloomViewA_ = nullptr, bloomViewB_ = nullptr;
+    int bloomW_ = 1, bloomH_ = 1;
+    WGPUSampler linearSampler_ = nullptr;
+    WGPUBindGroupLayout bloomLayout_ = nullptr;
+    WGPURenderPipeline bloomBrightPipeline_ = nullptr, bloomBlurPipeline_ = nullptr;
+    WGPUBuffer bloomUboBright_ = nullptr, bloomUboH_ = nullptr, bloomUboV_ = nullptr;
+    WGPUBindGroup bloomBrightGroup_ = nullptr, bloomBlurHGroup_ = nullptr, bloomBlurVGroup_ = nullptr;
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
