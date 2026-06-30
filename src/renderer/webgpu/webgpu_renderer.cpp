@@ -232,6 +232,38 @@ fn vs_shadow(@location(0) position : vec3<f32>) -> @builtin(position) vec4<f32> 
   return g.cascadeVP[scidx.idx.x] * d.model * vec4<f32>(position, 1.0);
 }
 
+// Instanced variants: the per-instance model rides a second vertex buffer
+// (locations 5-8 = the four columns), so one draw covers a whole InstanceGroup.
+@vertex
+fn vs_instanced(
+  @location(0) position : vec3<f32>,
+  @location(1) normal   : vec3<f32>,
+  @location(2) tangent  : vec3<f32>,
+  @location(3) texcoord : vec2<f32>,
+  @location(4) color    : vec3<f32>,
+  @location(5) m0 : vec4<f32>, @location(6) m1 : vec4<f32>,
+  @location(7) m2 : vec4<f32>, @location(8) m3 : vec4<f32>,
+) -> VSOut {
+  let model = mat4x4<f32>(m0, m1, m2, m3);
+  var out : VSOut;
+  let world = model * vec4<f32>(position, 1.0);
+  out.worldPos = world.xyz;
+  out.worldNormal = normalize((model * vec4<f32>(normal, 0.0)).xyz);
+  out.color = color;
+  out.uv = texcoord;
+  out.clip = g.viewProjection * world;
+  return out;
+}
+@vertex
+fn vs_shadow_instanced(
+  @location(0) position : vec3<f32>,
+  @location(5) m0 : vec4<f32>, @location(6) m1 : vec4<f32>,
+  @location(7) m2 : vec4<f32>, @location(8) m3 : vec4<f32>,
+) -> @builtin(position) vec4<f32> {
+  let model = mat4x4<f32>(m0, m1, m2, m3);
+  return g.cascadeVP[scidx.idx.x] * model * vec4<f32>(position, 1.0);
+}
+
 const PI : f32 = 3.14159265359;
 
 fn distributionGGX(NdotH : f32, a2 : f32) -> f32 {
@@ -947,6 +979,9 @@ public:
         if (globalBuf_) { wgpuBufferRelease(globalBuf_); globalBuf_ = nullptr; }
         if (drawBuf_)   { wgpuBufferRelease(drawBuf_);   drawBuf_ = nullptr; }
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
+        if (instancedPipeline_) { wgpuRenderPipelineRelease(instancedPipeline_); instancedPipeline_ = nullptr; }
+        if (instancedShadowPipeline_) { wgpuRenderPipelineRelease(instancedShadowPipeline_); instancedShadowPipeline_ = nullptr; }
+        if (instanceBuf_) { wgpuBufferRelease(instanceBuf_); instanceBuf_ = nullptr; }
         if (skyBindGroup_) { wgpuBindGroupRelease(skyBindGroup_); skyBindGroup_ = nullptr; }
         if (skyPipeline_) { wgpuRenderPipelineRelease(skyPipeline_); skyPipeline_ = nullptr; }
         if (skyLayout_) { wgpuBindGroupLayoutRelease(skyLayout_); skyLayout_ = nullptr; }
@@ -1065,6 +1100,8 @@ public:
 
     void beginFrame() override {
         draws_.clear();
+        instancedGroups_.clear();
+        instanceStaging_.clear();
         stats_ = RenderStats{};
     }
 
@@ -1196,6 +1233,39 @@ public:
         draws_.push_back(qd);
     }
 
+    // Fill a GpuDraw's material fields (model unused for instanced draws).
+    static void fillMaterial(GpuDraw& d, const RenderMaterial& material) {
+        d.albedoMetallic[0] = (float)material.albedo.x;
+        d.albedoMetallic[1] = (float)material.albedo.y;
+        d.albedoMetallic[2] = (float)material.albedo.z;
+        d.albedoMetallic[3] = material.metallic;
+        d.emissionRough[0] = (float)material.emission.x;
+        d.emissionRough[1] = (float)material.emission.y;
+        d.emissionRough[2] = (float)material.emission.z;
+        d.emissionRough[3] = material.roughness;
+        d.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
+        d.surfaceFlags[1] = material.flags;
+        d.surfaceFlags[2] = 0;
+        d.surfaceFlags[3] = 0;
+    }
+
+    // Real GPU instancing: one draw per group, per-instance models in a packed
+    // instance buffer (uploaded in endFrame). Overrides the drawMesh loop.
+    void drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
+                           const RenderMaterial& material) override {
+        const GpuMesh* m = resolve(handle);
+        if (!m || m->indexCount == 0 || transforms.empty()) return;
+        InstancedGroup g;
+        g.mesh = handle.index - 1;
+        g.instanceOffset = static_cast<uint32_t>(instanceStaging_.size() / 16);
+        g.instanceCount = static_cast<uint32_t>(transforms.size());
+        fillMaterial(g.data, material);
+        instanceStaging_.resize(instanceStaging_.size() + transforms.size() * 16);
+        float* dst = instanceStaging_.data() + g.instanceOffset * 16;
+        for (const Mat4& t : transforms) { packMat4(t, dst); dst += 16; }
+        instancedGroups_.push_back(g);
+    }
+
     void endFrame() override {
         if (!device_ || !surface_) return;
 
@@ -1266,15 +1336,35 @@ public:
         wgpuQueueWriteBuffer(queue_, globalBuf_, 0, &globals_, sizeof(GpuGlobals));
 
         // Grow the per-draw uniform buffer (and rebuild the bind group bound to
-        // it) if this frame needs more slots than the current capacity.
-        ensureDrawCapacity(draws_.size());
+        // it) if this frame needs more slots than the current capacity. Instanced
+        // groups ride the same dynamic buffer (their material) after the regular
+        // draws, at slots [draws_.size() .. draws_.size()+instancedGroups_.size()).
+        size_t totalSlots = draws_.size() + instancedGroups_.size();
+        ensureDrawCapacity(totalSlots);
 
-        // Pack each draw into its 256-byte slot and upload in one write.
-        if (!draws_.empty()) {
-            std::vector<uint8_t> staging(draws_.size() * kDrawStride, 0);
+        if (totalSlots > 0) {
+            std::vector<uint8_t> staging(totalSlots * kDrawStride, 0);
             for (size_t i = 0; i < draws_.size(); ++i)
                 std::memcpy(staging.data() + i * kDrawStride, &draws_[i].data, sizeof(GpuDraw));
+            for (size_t i = 0; i < instancedGroups_.size(); ++i)
+                std::memcpy(staging.data() + (draws_.size() + i) * kDrawStride,
+                            &instancedGroups_[i].data, sizeof(GpuDraw));
             wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging.data(), staging.size());
+        }
+
+        // Upload per-instance models (grow the instance buffer as needed).
+        size_t instanceCount = instanceStaging_.size() / 16;
+        if (instanceCount > 0) {
+            if (instanceCount > instanceCapacity_) {
+                if (instanceBuf_) wgpuBufferRelease(instanceBuf_);
+                instanceCapacity_ = std::max<size_t>(instanceCount, instanceCapacity_ * 2);
+                WGPUBufferDescriptor id = {};
+                id.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+                id.size = instanceCapacity_ * 64;
+                instanceBuf_ = wgpuDeviceCreateBuffer(device_, &id);
+            }
+            wgpuQueueWriteBuffer(queue_, instanceBuf_, 0, instanceStaging_.data(),
+                                 instanceStaging_.size() * sizeof(float));
         }
 
         WGPUSurfaceTexture surfaceTexture = {};
@@ -1296,7 +1386,7 @@ public:
         // Cascaded shadow depth passes (sun): one depth pass per cascade layer,
         // before the main pass. The cascade index rides shadowIdxGroup_ via a
         // dynamic offset; vs_shadow uses it to pick cascadeVP[c].
-        if (shadowOn_ && !draws_.empty()) {
+        if (shadowOn_ && (!draws_.empty() || !instancedGroups_.empty())) {
             for (int c = 0; c < activeCascades_; ++c) {
                 WGPURenderPassDepthStencilAttachment sdepth = {};
                 sdepth.view = shadowLayerViews_[c];
@@ -1318,6 +1408,23 @@ public:
                     wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
                                                         0, WGPU_WHOLE_SIZE);
                     wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
+                }
+                // Instanced groups cast shadows too.
+                if (!instancedGroups_.empty()) {
+                    wgpuRenderPassEncoderSetPipeline(spass, instancedShadowPipeline_);
+                    wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
+                    for (size_t i = 0; i < instancedGroups_.size(); ++i) {
+                        const InstancedGroup& g = instancedGroups_[i];
+                        const GpuMesh& m = meshes_[g.mesh];
+                        uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
+                        wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
+                        wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderSetVertexBuffer(spass, 1, instanceBuf_,
+                                                             static_cast<uint64_t>(g.instanceOffset) * 64, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                            0, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, g.instanceCount, 0, 0, 0);
+                    }
                 }
                 wgpuRenderPassEncoderEnd(spass);
                 wgpuRenderPassEncoderRelease(spass);
@@ -1363,6 +1470,27 @@ public:
             wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
             stats_.drawCalls++;
             stats_.trianglesDrawn += m.indexCount / 3;
+        }
+
+        // Instanced groups: one draw each (group 1 shadow sampler stays bound).
+        if (!instancedGroups_.empty()) {
+            wgpuRenderPassEncoderSetPipeline(pass, instancedPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
+            for (size_t i = 0; i < instancedGroups_.size(); ++i) {
+                const InstancedGroup& g = instancedGroups_[i];
+                const GpuMesh& m = meshes_[g.mesh];
+                uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 1, instanceBuf_,
+                                                     static_cast<uint64_t>(g.instanceOffset) * 64, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                    0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, g.instanceCount, 0, 0, 0);
+                stats_.instancedDrawCalls++;
+                stats_.totalInstances += g.instanceCount;
+                stats_.trianglesDrawn += (m.indexCount / 3) * g.instanceCount;
+            }
         }
 
         wgpuRenderPassEncoderEnd(pass);
@@ -1483,6 +1611,12 @@ private:
     struct QueuedDraw {
         uint32_t mesh;
         GpuDraw data;
+    };
+    struct InstancedGroup {
+        uint32_t mesh;
+        GpuDraw data;             // shared material (model unused)
+        uint32_t instanceOffset;  // first instance in instanceBuf_
+        uint32_t instanceCount;
     };
 
     // ---- async device acquisition callbacks --------------------------------
@@ -1780,6 +1914,49 @@ private:
         shadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &sdesc);
         wgpuPipelineLayoutRelease(shadowLayout);
 
+        // Instanced pipelines: a second vertex buffer carries the per-instance
+        // model (locations 5-8 = its four columns, stepMode Instance), so one
+        // draw covers a whole InstanceGroup. Same bind-group layouts as the
+        // non-instanced pipelines; the model comes from the attribute, not d.
+        WGPUVertexAttribute iattrs[4] = {};
+        for (int i = 0; i < 4; ++i) {
+            iattrs[i].format = WGPUVertexFormat_Float32x4;
+            iattrs[i].offset = static_cast<uint64_t>(i) * 16;
+            iattrs[i].shaderLocation = static_cast<uint32_t>(5 + i);
+        }
+        WGPUVertexBufferLayout iLayout = {};
+        iLayout.arrayStride = 64;          // 4 columns * 16 bytes
+        iLayout.stepMode = WGPUVertexStepMode_Instance;
+        iLayout.attributeCount = 4;
+        iLayout.attributes = iattrs;
+        WGPUVertexBufferLayout instMainBufs[2] = {vbLayout, iLayout};
+
+        WGPUBindGroupLayout mainGroups2[2] = {bindLayout_, shadowSampleLayout_};
+        WGPUPipelineLayoutDescriptor iplDesc = {};
+        iplDesc.bindGroupLayoutCount = 2;
+        iplDesc.bindGroupLayouts = mainGroups2;
+        WGPUPipelineLayout iPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &iplDesc);
+        WGPURenderPipelineDescriptor idesc = desc;   // reuse fragment/depth/primitive
+        idesc.layout = iPipeLayout;
+        idesc.vertex.entryPoint = sv("vs_instanced");
+        idesc.vertex.bufferCount = 2;
+        idesc.vertex.buffers = instMainBufs;
+        instancedPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &idesc);
+        wgpuPipelineLayoutRelease(iPipeLayout);
+
+        WGPUBindGroupLayout shadowGroups2[2] = {bindLayout_, shadowVsLayout_};
+        WGPUPipelineLayoutDescriptor isplDesc = {};
+        isplDesc.bindGroupLayoutCount = 2;
+        isplDesc.bindGroupLayouts = shadowGroups2;
+        WGPUPipelineLayout iShadowLayout = wgpuDeviceCreatePipelineLayout(device_, &isplDesc);
+        WGPURenderPipelineDescriptor isdesc = sdesc;
+        isdesc.layout = iShadowLayout;
+        isdesc.vertex.entryPoint = sv("vs_shadow_instanced");
+        isdesc.vertex.bufferCount = 2;
+        isdesc.vertex.buffers = instMainBufs;
+        instancedShadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &isdesc);
+        wgpuPipelineLayoutRelease(iShadowLayout);
+
         // Sky pipeline: fullscreen triangle, globals only (its own one-binding
         // layout so it doesn't depend on the per-draw dynamic buffer). No vertex
         // buffer; depth-compare Always + no write so meshes paint over it.
@@ -2012,7 +2189,8 @@ private:
         wgpuShaderModuleRelease(aModule);
 
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
-            || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_) {
+            || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_
+            || !instancedPipeline_ || !instancedShadowPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -2269,6 +2447,11 @@ private:
     WGPUBuffer drawBuf_ = nullptr;
     WGPUBindGroup bindGroup_ = nullptr;
     size_t drawCapacity_ = 0;
+    WGPURenderPipeline instancedPipeline_ = nullptr, instancedShadowPipeline_ = nullptr;
+    WGPUBuffer instanceBuf_ = nullptr;
+    size_t instanceCapacity_ = 0;   // in instances (64 bytes each)
+    std::vector<InstancedGroup> instancedGroups_;
+    std::vector<float> instanceStaging_;
 
     // Sun shadow (single cascade): a depth map + its own pipeline; the main
     // pipeline samples it via group 1.
