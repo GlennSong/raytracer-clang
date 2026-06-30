@@ -43,6 +43,7 @@ constexpr uint64_t kDrawStride = 256;
 // query surface capabilities and switch to a *-srgb view to drop the gamma.
 constexpr WGPUTextureFormat kSwapFormat = WGPUTextureFormat_BGRA8Unorm;
 constexpr WGPUTextureFormat kDepthFormat = WGPUTextureFormat_Depth24Plus;
+constexpr WGPUTextureFormat kShadowFormat = WGPUTextureFormat_Depth32Float;
 
 WGPUStringView sv(const char* s) {
     WGPUStringView v;
@@ -85,7 +86,9 @@ struct GpuGlobals {
     float    skyHorizon[4];
     float    skyGround[4];
     float    fog[4];              // rgb color, w density (0 = off)
-    int32_t  counts[4];           // x lightCount, y debugView
+    int32_t  counts[4];           // x lightCount, y debugView, z shadowMapSize
+    float    lightViewProj[16];   // single-cascade sun shadow matrix
+    float    shadowParams[4];     // x enabled, y depthBias, z normalBias, w pcfTexels
     GpuLight lights[32];
 };
 
@@ -132,7 +135,9 @@ struct Globals {
   skyHorizon     : vec4<f32>,
   skyGround      : vec4<f32>,
   fog            : vec4<f32>,      // rgb color, w density (0 = off)
-  counts         : vec4<i32>,      // x lightCount, y debugView
+  counts         : vec4<i32>,      // x lightCount, y debugView, z shadowMapSize
+  lightViewProj  : mat4x4<f32>,    // single-cascade sun shadow matrix
+  shadowParams   : vec4<f32>,      // x enabled, y depthBias, z normalBias, w pcfTexels
   lights         : array<Light, 32>,
 };
 struct DrawData {
@@ -144,6 +149,9 @@ struct DrawData {
 
 @group(0) @binding(0) var<uniform> g : Globals;
 @group(0) @binding(1) var<uniform> d : DrawData;
+// Sun shadow map (group 1, main pass only — the shadow pass writes it).
+@group(1) @binding(0) var shadowMap  : texture_depth_2d;
+@group(1) @binding(1) var shadowSamp : sampler_comparison;
 
 struct VSOut {
   @builtin(position) clip : vec4<f32>,
@@ -171,6 +179,12 @@ fn vs_main(
   out.uv = texcoord;
   out.clip = g.viewProjection * world;
   return out;
+}
+
+// Depth-only shadow pass: transform by the light's view-projection.
+@vertex
+fn vs_shadow(@location(0) position : vec3<f32>) -> @builtin(position) vec4<f32> {
+  return g.lightViewProj * d.model * vec4<f32>(position, 1.0);
 }
 
 const PI : f32 = 3.14159265359;
@@ -379,8 +393,24 @@ fn applyCheckerboard(albedo : vec3<f32>, worldPos : vec3<f32>) -> vec3<f32> {
   return albedo;
 }
 
+// Single-cascade sun shadow with hardware PCF (a comparison sampler does the
+// 2x2 filtering). Returns 1 = lit, 0 = shadowed. textureSampleCompare must be in
+// uniform control flow — the only branch above it is on the uniform shadowParams,
+// and the out-of-bounds test is applied via select() *after* the sample.
+fn computeShadow(worldPos : vec3<f32>, N : vec3<f32>) -> f32 {
+  if (g.shadowParams.x < 0.5) { return 1.0; }
+  let lp = g.lightViewProj * vec4<f32>(worldPos + N * g.shadowParams.z, 1.0);
+  let ndc = lp.xyz / lp.w;
+  let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+  let inb = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && ndc.z >= 0.0 && ndc.z <= 1.0;
+  let cuv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+  let s = textureSampleCompare(shadowMap, shadowSamp, cuv, ndc.z - g.shadowParams.y);
+  return select(1.0, s, inb);
+}
+
 fn evaluateLighting(worldPos : vec3<f32>, N : vec3<f32>, V : vec3<f32>,
-                    albedo : vec3<f32>, metallic : f32, roughness : f32, f0 : vec3<f32>) -> vec3<f32> {
+                    albedo : vec3<f32>, metallic : f32, roughness : f32,
+                    f0 : vec3<f32>, sunShadow : f32) -> vec3<f32> {
   var directLight = vec3<f32>(0.0);
   let a = max(roughness * roughness, 0.002);
   let a2 = a * a;
@@ -414,7 +444,9 @@ fn evaluateLighting(worldPos : vec3<f32>, N : vec3<f32>, V : vec3<f32>,
     let F = fresnelSchlick(VdotH, f0);
     let spec = D * Vis * F;
     let diff = (vec3<f32>(1.0) - F) * (1.0 - metallic) * albedo / PI;
-    directLight += (diff + spec) * light.colorOuter.rgb * (attenuation * NdotL);
+    var sh = 1.0;
+    if (ltype == 1) { sh = sunShadow; }   // only the sun casts shadows
+    directLight += (diff + spec) * light.colorOuter.rgb * (attenuation * NdotL * sh);
   }
   return directLight;
 }
@@ -437,7 +469,8 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   let f0 = mix(vec3<f32>(0.04), albedo, metallic);
   let NdotV = max(dot(N, V), 1e-4);
 
-  let direct = evaluateLighting(in.worldPos, N, V, albedo, metallic, roughness, f0);
+  let sunShadow = computeShadow(in.worldPos, N);
+  let direct = evaluateLighting(in.worldPos, N, V, albedo, metallic, roughness, f0, sunShadow);
 
   // IBL from the procedural sky (analytic split-sum).
   let R = reflect(-V, N);
@@ -451,6 +484,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
 
   // Debug views (Renderer::debugView via counts.y) write display-ready values.
   let dbg = g.counts.y;
+  if (dbg == 5) { return vec4<f32>(vec3<f32>(sunShadow), 1.0); }   // white=lit, black=shadowed
   if (dbg == 4) { return vec4<f32>(N * 0.5 + 0.5, 1.0); }
   if (dbg == 6) { return vec4<f32>(pow(albedo, vec3<f32>(1.0 / 2.2)), 1.0); }
   if (dbg == 7) {
@@ -525,6 +559,7 @@ public:
         createDepthTarget();
         if (!createPipeline()) return false;
         createUniformResources();
+        createShadowResources();
 
         LOG_INFO("WebGPU backend initialized (%dx%d)", width_, height_);
         return true;
@@ -536,6 +571,12 @@ public:
         if (globalBuf_) { wgpuBufferRelease(globalBuf_); globalBuf_ = nullptr; }
         if (drawBuf_)   { wgpuBufferRelease(drawBuf_);   drawBuf_ = nullptr; }
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
+        if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
+        if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
+        if (shadowSampler_) { wgpuSamplerRelease(shadowSampler_); shadowSampler_ = nullptr; }
+        if (shadowView_) { wgpuTextureViewRelease(shadowView_); shadowView_ = nullptr; }
+        if (shadowTexture_) { wgpuTextureRelease(shadowTexture_); shadowTexture_ = nullptr; }
+        if (shadowSampleLayout_) { wgpuBindGroupLayoutRelease(shadowSampleLayout_); shadowSampleLayout_ = nullptr; }
         if (bindLayout_) { wgpuBindGroupLayoutRelease(bindLayout_); bindLayout_ = nullptr; }
         for (auto& m : meshes_) freeMesh(m);
         meshes_.clear();
@@ -637,6 +678,7 @@ public:
         Mat4 vp = proj * view;
         packMat4(vp, globals_.viewProjection);
         packMat4(view, globals_.view);
+        cameraEye_ = camera.position;
         globals_.cameraPosition[0] = (float)camera.position.x;
         globals_.cameraPosition[1] = (float)camera.position.y;
         globals_.cameraPosition[2] = (float)camera.position.z;
@@ -666,8 +708,19 @@ public:
         set4(globals_.fog, (float)fog.color.x, (float)fog.color.y, (float)fog.color.z, density);
 
         // Lights: sun first (directional), then point, then spot, up to 32.
-        int n = 0;
+        // Sun shadow config (single cascade). Driven off the level's ShadowConfig
+        // + the live Renderer::shadowParams (debug overlay distance override).
         const DirectionalLight& sun = lighting.sun;
+        const ShadowConfig& shc = lighting.shadow;
+        sunDir_ = normalize(sun.direction);
+        shadowOn_ = shc.enabled && sun.castsShadow && sun.intensity > 0.0f;
+        shadowDistance_ = shc.distance > 0.0f ? shc.distance
+                        : (shadowParams.distance > 0.0f ? shadowParams.distance : 150.0f);
+        shadowDepthBias_ = shc.bias;
+        shadowNormalBias_ = shc.normalBias;
+        shadowPcf_ = shc.pcfRadius;
+
+        int n = 0;
         if (sun.intensity > 0.0f && n < 32) {
             Vec3 dir = normalize(sun.direction);
             GpuLight& L = globals_.lights[n++];
@@ -695,7 +748,7 @@ public:
         }
         globals_.counts[0] = n;
         globals_.counts[1] = debugView;   // Renderer::debugView (debug panel)
-        globals_.counts[2] = 0;
+        globals_.counts[2] = kShadowMapSize;
         globals_.counts[3] = 0;
 
         // Clear color: the procedural sky's horizon tint (gamma-encoded to match
@@ -732,6 +785,24 @@ public:
     void endFrame() override {
         if (!device_ || !surface_) return;
 
+        // Single-cascade sun shadow: a camera-centered orthographic box fit along
+        // the sun direction (a simplified one-cascade version of the Metal/Vulkan
+        // cascade fit). Written into globals before the upload below.
+        if (shadowOn_) {
+            Real radius = shadowDistance_ * 0.5;
+            Vec3 up = std::abs(sunDir_.y) > 0.99 ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+            Real pullback = radius + 50.0;
+            Mat4 lightView = Mat4::lookAt(cameraEye_ + sunDir_ * pullback, cameraEye_, up);
+            Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1, pullback + radius);
+            packMat4(lightProj * lightView, globals_.lightViewProj);
+            globals_.shadowParams[0] = 1.0f;
+            globals_.shadowParams[1] = shadowDepthBias_;
+            globals_.shadowParams[2] = shadowNormalBias_;
+            globals_.shadowParams[3] = shadowPcf_;
+        } else {
+            globals_.shadowParams[0] = 0.0f;
+        }
+
         // Upload scene globals.
         wgpuQueueWriteBuffer(queue_, globalBuf_, 0, &globals_, sizeof(GpuGlobals));
 
@@ -751,10 +822,9 @@ public:
         wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
         if (!frameDiagLogged_) {
             frameDiagLogged_ = true;
-            LOG_INFO("WebGPU frame0: %zu draws, status=%d, tex=%p, %dx%d, clear(%.2f,%.2f,%.2f)",
+            LOG_INFO("WebGPU frame0: %zu draws, status=%d, %dx%d, shadow=%d dist=%.0f, lights=%d",
                      draws_.size(), static_cast<int>(surfaceTexture.status),
-                     static_cast<void*>(surfaceTexture.texture), width_, height_,
-                     clearColor_.r, clearColor_.g, clearColor_.b);
+                     width_, height_, shadowOn_ ? 1 : 0, shadowDistance_, globals_.counts[0]);
         }
         if (!surfaceTexture.texture) {
             LOG_WARN("WebGPU: no current surface texture this frame");
@@ -763,6 +833,31 @@ public:
         WGPUTextureView backbuffer = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
 
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, nullptr);
+
+        // Shadow depth pass (sun) into the shadow map, before the main pass.
+        if (shadowOn_ && !draws_.empty()) {
+            WGPURenderPassDepthStencilAttachment sdepth = {};
+            sdepth.view = shadowView_;
+            sdepth.depthLoadOp = WGPULoadOp_Clear;
+            sdepth.depthStoreOp = WGPUStoreOp_Store;
+            sdepth.depthClearValue = 1.0f;
+            WGPURenderPassDescriptor sPass = {};
+            sPass.colorAttachmentCount = 0;
+            sPass.depthStencilAttachment = &sdepth;
+            WGPURenderPassEncoder spass = wgpuCommandEncoderBeginRenderPass(encoder, &sPass);
+            wgpuRenderPassEncoderSetPipeline(spass, shadowPipeline_);
+            for (size_t i = 0; i < draws_.size(); ++i) {
+                const GpuMesh& m = meshes_[draws_[i].mesh];
+                uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
+                wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                    0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
+            }
+            wgpuRenderPassEncoderEnd(spass);
+            wgpuRenderPassEncoderRelease(spass);
+        }
 
         WGPURenderPassColorAttachment color = {};
         color.view = backbuffer;
@@ -784,6 +879,7 @@ public:
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
         wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
 
         for (size_t i = 0; i < draws_.size(); ++i) {
             const GpuMesh& m = meshes_[draws_[i].mesh];
@@ -950,9 +1046,24 @@ private:
         blDesc.entries = entries;
         bindLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &blDesc);
 
+        // Group 1 (main pass only): the sun shadow map + a comparison sampler.
+        WGPUBindGroupLayoutEntry shEntries[2] = {};
+        shEntries[0].binding = 0;
+        shEntries[0].visibility = WGPUShaderStage_Fragment;
+        shEntries[0].texture.sampleType = WGPUTextureSampleType_Depth;
+        shEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        shEntries[1].binding = 1;
+        shEntries[1].visibility = WGPUShaderStage_Fragment;
+        shEntries[1].sampler.type = WGPUSamplerBindingType_Comparison;
+        WGPUBindGroupLayoutDescriptor shblDesc = {};
+        shblDesc.entryCount = 2;
+        shblDesc.entries = shEntries;
+        shadowSampleLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &shblDesc);
+
+        WGPUBindGroupLayout mainGroups[2] = {bindLayout_, shadowSampleLayout_};
         WGPUPipelineLayoutDescriptor plDesc = {};
-        plDesc.bindGroupLayoutCount = 1;
-        plDesc.bindGroupLayouts = &bindLayout_;
+        plDesc.bindGroupLayoutCount = 2;
+        plDesc.bindGroupLayouts = mainGroups;
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device_, &plDesc);
 
         // Vertex layout — must match GpuVertex / the WGSL @location inputs. Set
@@ -1008,14 +1119,79 @@ private:
         desc.multisample.mask = 0xFFFFFFFF;
 
         pipeline_ = wgpuDeviceCreateRenderPipeline(device_, &desc);
-
         wgpuPipelineLayoutRelease(pipelineLayout);
+
+        // Shadow pipeline: depth-only (no fragment), vs_shadow, group 0 only.
+        WGPUPipelineLayoutDescriptor splDesc = {};
+        splDesc.bindGroupLayoutCount = 1;
+        splDesc.bindGroupLayouts = &bindLayout_;
+        WGPUPipelineLayout shadowLayout = wgpuDeviceCreatePipelineLayout(device_, &splDesc);
+
+        WGPUDepthStencilState shadowDepth = {};
+        shadowDepth.format = kShadowFormat;
+        shadowDepth.depthWriteEnabled = WGPUOptionalBool_True;
+        shadowDepth.depthCompare = WGPUCompareFunction_LessEqual;
+        shadowDepth.stencilFront.compare = WGPUCompareFunction_Always;
+        shadowDepth.stencilFront.failOp = WGPUStencilOperation_Keep;
+        shadowDepth.stencilFront.depthFailOp = WGPUStencilOperation_Keep;
+        shadowDepth.stencilFront.passOp = WGPUStencilOperation_Keep;
+        shadowDepth.stencilBack = shadowDepth.stencilFront;
+
+        WGPURenderPipelineDescriptor sdesc = {};
+        sdesc.layout = shadowLayout;
+        sdesc.vertex.module = module;
+        sdesc.vertex.entryPoint = sv("vs_shadow");
+        sdesc.vertex.bufferCount = 1;
+        sdesc.vertex.buffers = &vbLayout;
+        sdesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        sdesc.primitive.frontFace = WGPUFrontFace_CCW;
+        sdesc.primitive.cullMode = WGPUCullMode_None;
+        sdesc.depthStencil = &shadowDepth;
+        sdesc.fragment = nullptr;   // depth-only
+        sdesc.multisample.count = 1;
+        sdesc.multisample.mask = 0xFFFFFFFF;
+        shadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &sdesc);
+        wgpuPipelineLayoutRelease(shadowLayout);
+
         wgpuShaderModuleRelease(module);
-        if (!pipeline_) {
+        if (!pipeline_ || !shadowPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
         return true;
+    }
+
+    void createShadowResources() {
+        WGPUTextureDescriptor td = {};
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        td.dimension = WGPUTextureDimension_2D;
+        td.size = {static_cast<uint32_t>(kShadowMapSize), static_cast<uint32_t>(kShadowMapSize), 1};
+        td.format = kShadowFormat;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        shadowTexture_ = wgpuDeviceCreateTexture(device_, &td);
+        shadowView_ = wgpuTextureCreateView(shadowTexture_, nullptr);
+
+        WGPUSamplerDescriptor sd = {};
+        sd.compare = WGPUCompareFunction_LessEqual;   // a comparison (depth) sampler
+        sd.magFilter = WGPUFilterMode_Linear;         // hardware 2x2 PCF
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.addressModeU = WGPUAddressMode_ClampToEdge;
+        sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.addressModeW = WGPUAddressMode_ClampToEdge;
+        sd.maxAnisotropy = 1;
+        shadowSampler_ = wgpuDeviceCreateSampler(device_, &sd);
+
+        WGPUBindGroupEntry entries[2] = {};
+        entries[0].binding = 0;
+        entries[0].textureView = shadowView_;
+        entries[1].binding = 1;
+        entries[1].sampler = shadowSampler_;
+        WGPUBindGroupDescriptor bgDesc = {};
+        bgDesc.layout = shadowSampleLayout_;
+        bgDesc.entryCount = 2;
+        bgDesc.entries = entries;
+        shadowSampleGroup_ = wgpuDeviceCreateBindGroup(device_, &bgDesc);
     }
 
     void createUniformResources() {
@@ -1083,6 +1259,21 @@ private:
     WGPUBuffer drawBuf_ = nullptr;
     WGPUBindGroup bindGroup_ = nullptr;
     size_t drawCapacity_ = 0;
+
+    // Sun shadow (single cascade): a depth map + its own pipeline; the main
+    // pipeline samples it via group 1.
+    static constexpr int kShadowMapSize = 2048;
+    WGPUTexture shadowTexture_ = nullptr;
+    WGPUTextureView shadowView_ = nullptr;
+    WGPUSampler shadowSampler_ = nullptr;
+    WGPUBindGroupLayout shadowSampleLayout_ = nullptr;  // group 1 (tex + comparison sampler)
+    WGPUBindGroup shadowSampleGroup_ = nullptr;
+    WGPURenderPipeline shadowPipeline_ = nullptr;
+    Vec3 cameraEye_;
+    Vec3 sunDir_{0, 1, 0};
+    bool shadowOn_ = false;
+    float shadowDistance_ = 150.0f, shadowDepthBias_ = 0.0015f,
+          shadowNormalBias_ = 0.04f, shadowPcf_ = 1.0f;
 
     std::vector<GpuMesh> meshes_;
     std::vector<uint32_t> freeSlots_;
