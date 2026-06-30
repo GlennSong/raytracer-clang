@@ -6,14 +6,38 @@ Vulkan backend (`vulkan-renderer-plan.md`): each stage is independently
 verifiable, so the work lands in reviewable slices. Parity reference is the Metal
 backend (`src/renderer/metal/AGENTS.md`) and `docs/renderer-parity.md`.
 
-**Status: Phases 0+1 landed — builds on emsdk 6.0.1 and runs in a browser.** The
-`viewer_web` target builds clean (WebGPU backend + Jolt + engine_core all to
-wasm). Verified in headless Chromium (SwiftShader): device/surface/pipeline come
-up, the frame loop pumps, `endFrame` records the scene's draws against a
-successfully-acquired surface texture, and there are no WebGPU validation errors.
-The one unconfirmed thing is visible output — headless SwiftShader won't
-composite a WebGPU canvas for screenshot/readback, so eyeballing pixels needs a
-real-GPU browser run.
+**Status: Phases 0–5 substantially landed + gameplay — runs in a browser with
+the FPS gun, day/night, and most of the post stack.** The `viewer_web` target
+builds clean (WebGPU backend + Jolt + engine_core to wasm). Beyond Phase 0/1
+bring-up, the backend now has: the analytic surface library, **cascaded** shadow
+maps with PCF, a procedural **sky** background (gradient + sun disc), an
+offscreen **HDR pipeline** with an ACES/AgX **tone-map + grade** composite,
+**bloom**, **SSAO** (depth-reconstructed), and real GPU **instancing** (verified
+8× draw-call reduction in the city). Gameplay runs too — play mode (Jolt physics
++ the Lua gun), day/night controls, and desktop+touch input — all wired through
+exported `rt_web_*` hooks and a `web/index.html` debug panel.
+
+**Verification caveat:** headless SwiftShader does **not** composite the WebGPU
+canvas (both `page.screenshot` and `getImageData` return the blank canvas), so
+pixels can't be eyeballed in CI. Everything here is verified *structurally* — no
+WGSL/device validation errors, the frame pumps, draws/instances/uniforms plumb,
+readback values (camera, sun direction, render stats) — plus the shaders are
+byte-for-byte ports of the proven Metal/Vulkan trees. Visual confirmation is
+on-device (a real GPU browser).
+
+### Still missing vs. Metal/Vulkan (todo)
+- **Texture/material maps** (`uploadTexture` still a stub): albedo/normal/MR/AO/
+  emissive + TBN normal mapping + alpha-test foliage. The procedural Surface
+  library covers the current scenes, so this is only visible with textured glTF
+  content.
+- **SSR** and the **material G-buffer** it needs (roughness/normal MRT). Low
+  payoff on the rough city/showcase content.
+- **Terrain CDLOD morph** + **wind sway** (vertex-shader features; the current
+  scenes have neither CDLOD terrain nor animated vegetation).
+- **HDR environment maps, IBL cubemaps, reflection probes** (an analytic
+  split-sum env stands in for baked IBL today).
+- Back-face culling is still off (the Phase-1 default); winding looks correct
+  on device, so it can be flipped on once double-checked.
 
 ### Known issues / web polish
 - **Pointer Lock needs a user gesture.** Play mode disables the cursor on start;
@@ -87,28 +111,33 @@ for the sun + a flat ambient stand-in, scene-linear with a manual sRGB encode
 (the swapchain is non-sRGB BGRA8). Back-face culling **off** until winding is
 confirmed on device (matches Vulkan Phase 1).
 
-### Phase 2 — textures + material maps (todo)
-Real `uploadTexture` (GPU textures + sampler bind group), albedo/MR/normal/AO/
-emissive maps, alpha-cut foliage (`FLAG_ALPHA_TEST`), the procedural surface
-library (port `applySurface` from `mesh.frag`/`common.metal` to WGSL). Turn on
-back-face culling.
+### Phase 2 — textures + material maps (🟡 partial)
+✅ The procedural surface library (`applySurface`) is ported. ❌ Real
+`uploadTexture` (GPU textures + per-material sampler bind group), albedo/MR/
+normal/AO/emissive maps, alpha-cut foliage (`FLAG_ALPHA_TEST`), and back-face
+culling are still todo.
 
-### Phase 3 — shadows (todo)
-Cascaded shadow maps: a depth-only shadow pass into a texture array, the cascade
-fit (shared engine-side), PCF sampling. Port `shadows.metal` / `mesh.frag`'s
-`computeShadow`.
+### Phase 3 — shadows ✅
+Cascaded shadow maps: a depth-only pass per cascade into a depth-2d array, the
+Vulkan cascade fit (frustum-slice split + texel-snapped ortho box, adjusted for
+WebGPU standard-Z), hardware-PCF sampling with view-depth cascade selection. The
+per-cascade index rides a dynamic-uniform (WebGPU has no push constants).
 
-### Phase 4 — IBL + sky (todo)
-Procedural sky pass, reflection-probe / cubemap bake, split-sum IBL + BRDF LUT,
-HDR equirect environment. Port `environment.metal`.
+### Phase 4 — IBL + sky (🟡 partial)
+✅ Procedural sky background pass (gradient + sun disc, world-ray from
+`invViewProjection`) + an analytic split-sum env for IBL. ❌ HDR equirect
+environment, cubemap bake, GGX-prefilter, BRDF LUT, reflection probes — todo.
 
-### Phase 5 — post stack (todo)
-SSAO, SSR, bloom, tone mapping (ACES/AgX) + color grade, lens effects, DoF,
-debug views. Port `post.metal`. Needs an offscreen HDR target + composite pass.
+### Phase 5 — post stack (🟡 mostly)
+✅ Offscreen HDR target + composite pass, ACES/AgX tone map + grade + exposure,
+bloom (half-res bright-pass + separable blur), SSAO (depth-reconstructed,
+hemisphere kernel), debug views (incl. AO-only + cascades). ❌ SSR (needs a
+material G-buffer), lens effects, DoF — todo.
 
-### Phase 6 — instancing + terrain (todo)
-`drawMeshInstanced` (instance buffer), CDLOD `drawTerrain` morph, wind sway
-(`FLAG_WIND`).
+### Phase 6 — instancing + terrain (🟡 partial)
+✅ `drawMeshInstanced` — real hardware instancing (per-instance model in a second
+vertex buffer; main + shadow passes), verified ~8× fewer draw calls in the city.
+❌ CDLOD `drawTerrain` morph, wind sway (`FLAG_WIND`) — todo.
 
 ## Known risks / unknowns (unverified in-browser)
 - **In-browser behaviour unverified.** It compiles + links on emsdk 6.0.1, but no
