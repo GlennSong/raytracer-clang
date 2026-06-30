@@ -23,6 +23,8 @@ constexpr Real kSignalApproach = 14.0;          // start braking for a light thi
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
+constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
+constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 
 // Lane spacing that fits THIS road: split the right half of the carriageway
 // evenly among the direction's lanes, so a car sits centred in its own lane and
@@ -211,6 +213,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
     // pedestrians + the player (see step()).
     // Imperfect: with probability (1 - reliability) the agent misses it this step
     // (a fault), so it may not brake in time.
+    Real seenAhead = std::numeric_limits<Real>::infinity();   // dist to a ped/player ahead
     if (car) {
         if (brainUnit(a) <= a.reliability) {
             engine::VisionCone cone;
@@ -219,9 +222,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
             cone.range = 18.0;
             cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
                                          // not someone standing on the far sidewalk
-            Real obstacle = nearestObstacleAhead(cone, positions_);
-            if (obstacle < 1e9)
-                target = std::min(target, approachStop(obstacle - 4.0, kCarDecel, target));
+            seenAhead = nearestObstacleAhead(cone, positions_);
+            if (seenAhead < 1e9)
+                target = std::min(target, approachStop(seenAhead - kPedClearance, kCarDecel,
+                                                       target));
         } else {
             ++faultCount_;
         }
@@ -252,6 +256,16 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
     }
 
     Real motion = a.speed * dt;
+
+    // Hard stop for a pedestrian/player ahead: the smooth approachStop above eases
+    // the car down but never to exactly zero, so on its own the car would still
+    // creep forward and run the person over. Refuse to advance within kPedHardStop
+    // of whatever it sees in its lane — the car holds until the path is clear.
+    if (seenAhead < 1e9) {
+        Real room = std::max(Real(0), seenAhead - kPedHardStop);
+        if (motion > room) { motion = room; a.speed = 0; }
+    }
+
     const int legCount = static_cast<int>(a.route.links.size());
     while (motion > 0 && a.leg < legCount) {
         Real L = nav_->links[a.route.links[a.leg]].length;
@@ -334,6 +348,8 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     for (const Agent& a : agents_)
         if (a.mode == Agent::Mode::Pedestrian || a.playerControlled)
             positions_.push_back(a.pos);
+    // The live player (host-injected) is an obstacle too — cars brake for it.
+    for (const Vec2& o : externalObstacles_) positions_.push_back(o);
 
     // Pass 2: leading gaps. Pass 3: advance.
     computeGaps();

@@ -60,10 +60,17 @@ public:
 private:
     void syncGroups(engine::World& world);
     engine::Mat4 agentPose(const Agent& a) const;   // box sized by a.mode (car/ped)
-    // Pose of the signal-head pole base for a signalled approach (matches the
-    // city's street_kit placement), and the lit lens at the active lamp slot.
-    engine::Mat4 signalPostPose(int link) const;
-    engine::Mat4 signalLensPose(int link, SignalState s) const;
+    // Where a signalled approach's pole stands and which way its head/arm point
+    // (matches the city's street_kit placement, scaled to road width).
+    struct SignalSite {
+        engine::Vec3 base;   // pole foot (world)
+        engine::Vec3 face;   // unit XZ: head facing (toward oncoming traffic)
+        engine::Vec3 side;   // unit XZ: arm reach (toward the road centre)
+        Real yaw;            // facing yaw for the assembly
+    };
+    SignalSite signalSite(int link) const;
+    engine::Mat4 signalPostPose(int link) const;            // the pole assembly
+    engine::Mat4 signalLensPose(int link, SignalState s) const;  // lit lens at active slot
     Real groundAt(Real x, Real z) const;
 
     CityRenderParams params_;

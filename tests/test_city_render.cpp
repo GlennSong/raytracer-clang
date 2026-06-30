@@ -130,3 +130,42 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     CHECK(sawRed);          // ...and red on a red phase (it changes state)
     CHECK(totalStable);     // and every approach is always represented exactly once
 }
+
+// Distance from point p to segment [a,b] (XZ).
+static double segDist(Vec2 p, Vec2 a, Vec2 b) {
+    Vec2 ab(b.x - a.x, b.y - a.y);
+    double L2 = ab.x * ab.x + ab.y * ab.y;
+    double t = L2 > 1e-9 ? ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2 : 0.0;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    double cx = a.x + ab.x * t, cy = a.y + ab.y * t;
+    double dx = p.x - cx, dy = p.y - cy;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+TEST_CASE(signal_poles_stand_outside_the_carriageway) {
+    // A WIDE cross: a fixed pole setback would land inside the carriageway ("in
+    // the middle of the road"). Each pole must sit beyond the kerb of every road.
+    RoadNet net;
+    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0), Vec2(0, 80), Vec2(0, -80) };
+    net.edges = { {0, 1}, {0, 2}, {0, 3}, {0, 4} };
+    net.width = 16.0;   // half-width 8 — a fixed ~6.6 m setback would be INSIDE
+    net.sidewalk = 2.5;
+
+    World world;
+    world.add<RoadNet>(world.create(), net);
+    CityRenderSystem city;
+    CHECK(city.build(world, nullptr));
+
+    const NavGraph& nav = city.nav();
+    Real halfW = 16.0 * 0.5;
+    InstanceGroup* posts = world.get<InstanceGroup>(city.signalPostGroup());
+    CHECK(posts != nullptr);
+    CHECK(!posts->transforms.empty());
+    for (const Mat4& t : posts->transforms) {
+        Vec2 p(t.m[0][3], t.m[2][3]);
+        double dmin = 1e9;
+        for (const auto& link : nav.links)
+            dmin = std::min(dmin, segDist(p, nav.nodes[link.from], nav.nodes[link.to]));
+        CHECK(dmin > halfW * 0.9);   // clear of every carriageway (not in the road)
+    }
+}

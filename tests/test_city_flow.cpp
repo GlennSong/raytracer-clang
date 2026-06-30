@@ -101,6 +101,36 @@ TEST_CASE(cars_keep_to_the_right_side_of_the_road) {
     CHECK(sawWest);   // ...each correctly on its own right-hand side
 }
 
+TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {
+    // A straight two-way street. The "player" stands in the eastbound lane; cars
+    // driving up behind must hold short, not drive through them.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(120, 0)} };
+    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
+    NavGraph nav = buildNavGraph(g);
+
+    CitySim sim;
+    sim.build(nav, 10, 0, 71);
+    const Vec2 player(60.0, -2.0);   // mid-road, in the eastbound (right-hand) lane
+
+    Real minDist = 1e9;
+    bool approached = false;
+    for (int i = 0; i < 4000; ++i) {
+        sim.setExternalObstacles({ player });   // host injects the live player each step
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            if (a.heading.x < 0.5) continue;     // only the lane heading toward the player
+            Real dx = a.pos.x - player.x, dz = a.pos.y - player.y;
+            Real d = std::sqrt(dx * dx + dz * dz);
+            minDist = std::min(minDist, d);
+            if (a.pos.x < player.x && d < 12.0) approached = true;
+        }
+    }
+    CHECK(approached);          // a car really did come up behind the player...
+    CHECK(minDist > 2.0);       // ...and never ran them over (held short)
+}
+
 TEST_CASE(cars_do_not_freeze_for_oncoming_traffic) {
     // A single two-way street: cars run both directions. The old wide cone made
     // every car brake for oncoming traffic 3.5 m to the side; here they must keep

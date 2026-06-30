@@ -89,6 +89,13 @@ public:
     }
     long faults() const { return faultCount_; }   // perception misses so far
 
+    // World-space (XZ) points that cars must yield to in addition to the sim's own
+    // pedestrians — chiefly the live player (on foot or in a car), injected by the
+    // host each step so AI cars brake for and hold short of the player.
+    void setExternalObstacles(std::vector<engine::Vec2> obstacles) {
+        externalObstacles_ = std::move(obstacles);
+    }
+
 private:
     void startTrip(Agent& a, int origin, int goal);
     void advance(Agent& a, Real dt, Real gap);
@@ -105,6 +112,7 @@ private:
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
     std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
+    std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;

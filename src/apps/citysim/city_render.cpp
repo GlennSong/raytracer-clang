@@ -31,9 +31,9 @@ namespace {
 
 RenderMaterial carMaterial() {
     RenderMaterial m;
-    m.albedo = Vec3(0.15, 0.35, 0.75);
-    m.metallic = 0.6f;
-    m.roughness = 0.35f;
+    m.albedo = Vec3(1, 1, 1);            // hue carried in the car mesh's vertex colour
+    m.metallic = 0.5f;
+    m.roughness = 0.4f;
     m.opacity = 1.0f;
     m.emission = Vec3(0, 0, 0);
     m.flags = 0;
@@ -64,6 +64,37 @@ RenderMaterial signalMaterial(SignalState s) {
         case SignalState::Yellow: m.albedo = Vec3(0.2, 0.18, 0.0); m.emission = Vec3(1.6, 1.3, 0.1); break;
         case SignalState::Red:    m.albedo = Vec3(0.2, 0.0, 0.0); m.emission = Vec3(1.6, 0.1, 0.1); break;
     }
+    return m;
+}
+
+// Append a coloured box (centred at `c`, dimensions `size`) into `out`.
+void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
+    engine::RenderMesh b = MeshBuilder::box(size);
+    uint32_t base = static_cast<uint32_t>(out.vertices.size());
+    for (engine::Vertex v : b.vertices) {
+        v.position = v.position + c;
+        v.color = color;
+        out.vertices.push_back(v);
+    }
+    for (uint32_t i : b.indices) out.indices.push_back(base + i);
+}
+
+// A simple car silhouette (vertex-coloured): lower body, a set-back greenhouse
+// cabin, and four dark wheels — enough to read as a car at city scale instead of
+// a plain box. `size` is x=width, y=height, z=length (the travel axis, +Z).
+engine::RenderMesh buildCarMesh(Vec3 size) {
+    const Real w = size.x, h = size.y, l = size.z;
+    const Vec3 body(0.16, 0.34, 0.72);     // painted body
+    const Vec3 cabin(0.20, 0.22, 0.26);    // dark glasshouse
+    const Vec3 tyre(0.05, 0.05, 0.06);     // near-black wheels
+    engine::RenderMesh m;
+    addBox(m, Vec3(w, h * 0.55, l), Vec3(0, -h * 0.05, 0), body);                 // lower body
+    addBox(m, Vec3(w * 0.86, h * 0.45, l * 0.5), Vec3(0, h * 0.34, -l * 0.04), cabin);  // cabin
+    Real wr = h * 0.30, wx = w * 0.5, wz = l * 0.32, wy = -h * 0.30;
+    addBox(m, Vec3(wr, wr, wr), Vec3(wx, wy, wz), tyre);
+    addBox(m, Vec3(wr, wr, wr), Vec3(-wx, wy, wz), tyre);
+    addBox(m, Vec3(wr, wr, wr), Vec3(wx, wy, -wz), tyre);
+    addBox(m, Vec3(wr, wr, wr), Vec3(-wx, wy, -wz), tyre);
     return m;
 }
 
@@ -129,7 +160,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     MeshHandle carMesh{}, pedMesh{}, lensMesh{};
     if (assets) {
-        carMesh = assets->acquireMesh(MeshBuilder::box(params_.carSize), "city:car");
+        carMesh = assets->acquireMesh(buildCarMesh(params_.carSize), "city:car");
         pedMesh = assets->acquireMesh(MeshBuilder::box(params_.pedSize), "city:ped");
         Real e = params_.signalLensSize;
         lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, e)), "city:signal");
@@ -185,40 +216,43 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
 }
 
 namespace {
-// Pole sits on the near-right corner of the junction the approach enters and the
-// head faces oncoming traffic — matching the city generator (city.cpp) + the
-// street_kit assembly, so the lit lens lands on the real signal head.
-constexpr Real kCorridorHalf = 6.0;   // = city.cpp apron setback
+constexpr Real kCurbGap = 0.8;   // pole stands this far beyond the kerb
 }  // namespace
 
-Mat4 CityRenderSystem::signalPostPose(int link) const {
-    Vec2 d = nav_.direction(link);
+// The signal pole stands at the near-right curb corner of the junction the
+// approach enters, scaled to THIS road's width so it never lands in the
+// carriageway (a fixed setback put poles in the middle of wide roads). The mast
+// arm then reaches sideways over the street toward the centre.
+CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
+    Vec2 d = nav_.direction(link);               // approach direction (toward junction)
     Vec2 node = nav_.nodes[nav_.links[link].to];
     Vec2 right(d.y, -d.x);
-    Vec2 corner = node - d * kCorridorHalf + right * (kCorridorHalf + 0.6);
-    Vec2 face(-d.x, -d.y);                 // head faces approaching traffic
+    Real setback = nav_.links[link].width * 0.5 + kCurbGap;
+    Vec2 corner = node - d * setback + right * setback;   // near-right curb corner
     Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
-    Real yaw = std::atan2(face.x, face.y);
-    return Mat4::trs(Vec3(corner.x, baseY, corner.y),
-                     Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1));
+    SignalSite s;
+    s.base = Vec3(corner.x, baseY, corner.y);
+    s.face = Vec3(-d.x, 0, -d.y);                 // head faces approaching traffic
+    s.side = Vec3(-d.y, 0, d.x);                  // = rightOf(face): toward road centre
+    s.yaw = std::atan2(s.face.x, s.face.z);
+    return s;
+}
+
+Mat4 CityRenderSystem::signalPostPose(int link) const {
+    SignalSite s = signalSite(link);
+    return Mat4::trs(s.base, Quat::fromAxisAngle(Vec3(0, 1, 0), s.yaw), Vec3(1, 1, 1));
 }
 
 Mat4 CityRenderSystem::signalLensPose(int link, SignalState s) const {
-    Vec2 d = nav_.direction(link);
-    Vec2 node = nav_.nodes[nav_.links[link].to];
-    Vec2 right(d.y, -d.x);
-    Vec2 corner = node - d * kCorridorHalf + right * (kCorridorHalf + 0.6);
-    Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
-    Vec3 fwd(-d.x, 0, -d.y);
-
+    SignalSite st = signalSite(link);
     // Lamp slot on the three-lamp head (mirror of street_kit::emitTrafficSignal):
-    // red on top, amber mid, green on the bottom; lenses on the faceDir side.
+    // the head hangs at the arm end (along `side`), red on top / amber / green on
+    // the bottom, lenses on the facing side.
     engine::SignalParams sp;
-    Vec3 base(corner.x, baseY, corner.y);
-    Vec3 headTop = base + Vec3(0, sp.armHeight - 0.1, 0) + fwd * (sp.armLength - 0.2);
+    Vec3 headTop = st.base + Vec3(0, sp.armHeight - 0.1, 0) + st.side * (sp.armLength - 0.2);
     Vec3 headCenter = headTop + Vec3(0, -0.55, 0);
     Real slotY = (s == SignalState::Red) ? 0.42 : (s == SignalState::Green) ? -0.42 : 0.0;
-    Vec3 p = headCenter + Vec3(0, slotY, 0) + fwd * 0.22;
+    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.22;
     return Mat4::trs(p, Quat(), Vec3(1, 1, 1));
 }
 
@@ -264,6 +298,17 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
         build(ctx.world, &ctx.assets);   // lazy: retry until the level's roads exist
         return;
     }
+    // Feed the live player to the sim so AI cars brake for (and hold short of) it,
+    // whether the player is on foot or driving. The player is the entity with a
+    // CharacterController under host control (PlayerSystem).
+    std::vector<Vec2> obstacles;
+    ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
+        [&](engine::Entity, engine::Transform& t, engine::CharacterController&,
+            engine::ControlledBy&) {
+            obstacles.push_back(Vec2(t.position.x, t.position.z));
+        });
+    sim_.setExternalObstacles(std::move(obstacles));
+
     step(ctx.world, ctx.clock.fixedStep());
 }
 
