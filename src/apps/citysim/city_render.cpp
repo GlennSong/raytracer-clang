@@ -79,6 +79,28 @@ void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
     for (uint32_t i : b.indices) out.indices.push_back(base + i);
 }
 
+// A flat coloured quad centred at `c`, spanning ±halfLen along `along` and
+// ±halfWid along `across` (both unit, in-plane), facing up. Used for road decals.
+void addStripe(engine::RenderMesh& out, Vec3 c, Vec3 along, Vec3 across,
+               Real halfLen, Real halfWid, Vec3 color) {
+    uint32_t base = static_cast<uint32_t>(out.vertices.size());
+    Vec3 corners[4] = {
+        c - along * halfLen - across * halfWid,
+        c + along * halfLen - across * halfWid,
+        c + along * halfLen + across * halfWid,
+        c - along * halfLen + across * halfWid,
+    };
+    for (const Vec3& p : corners) {
+        engine::Vertex v;
+        v.position = p;
+        v.normal = Vec3(0, 1, 0);
+        v.color = color;
+        out.vertices.push_back(v);
+    }
+    out.indices.push_back(base + 0); out.indices.push_back(base + 1); out.indices.push_back(base + 2);
+    out.indices.push_back(base + 0); out.indices.push_back(base + 2); out.indices.push_back(base + 3);
+}
+
 // A simple car silhouette (vertex-coloured): lower body, a set-back greenhouse
 // cabin, and four dark wheels — enough to read as a car at city scale instead of
 // a plain box. `size` is x=width, y=height, z=length (the travel axis, +Z).
@@ -105,6 +127,17 @@ RenderMaterial signalPostMaterial() {
     m.albedo = Vec3(1, 1, 1);
     m.metallic = 0.0f;
     m.roughness = 0.5f;
+    m.opacity = 1.0f;
+    m.emission = Vec3(0, 0, 0);
+    m.flags = 0;
+    return m;
+}
+
+RenderMaterial crosswalkMaterial() {
+    RenderMaterial m;
+    m.albedo = Vec3(1, 1, 1);            // bright paint; vertex colour carries the white
+    m.metallic = 0.0f;
+    m.roughness = 0.9f;
     m.opacity = 1.0f;
     m.emission = Vec3(0, 0, 0);
     m.flags = 0;
@@ -198,6 +231,40 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
+    }
+
+    // Zebra crosswalks: a band of white bars laid across the mouth of every
+    // junction approach, as a decal riding just above the asphalt. Opaque white,
+    // so it reads as a crossing and covers the painted centreline where it crosses
+    // (no need to shrink the road's lane lines). Baked once into one mesh.
+    crosswalkCenters_.clear();
+    engine::RenderMesh cw;
+    {
+        const Vec3 white(0.9, 0.9, 0.88);
+        const Real depth = 2.6, barW = 0.55, gap = 0.5, lift = 0.04;
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            const engine::NavLink& L = nav_.links[li];
+            if (!nav_.isJunction(L.to)) continue;
+            Vec2 d = nav_.direction(li);
+            Vec2 node = nav_.nodes[L.to];
+            Vec2 right(d.y, -d.x);
+            Real halfW = L.width * 0.5;
+            Vec2 center = node - d * (halfW + depth * 0.5 + 0.3);   // just outside the mouth
+            crosswalkCenters_.push_back(center);
+            Real y = groundAt(center.x, center.y) + L.layer * Real(5.8) + lift;
+            Vec3 c3(center.x, y, center.y);
+            Vec3 along(d.x, 0, d.y), across(right.x, 0, right.y);
+            for (Real lat = -halfW + barW * 0.5; lat <= halfW; lat += barW + gap)
+                addStripe(cw, c3 + across * lat, along, across, depth * 0.5, barW * 0.5, white);
+        }
+    }
+    crosswalkGroup_ = world.create();
+    {
+        InstanceGroup g;
+        if (assets && !cw.vertices.empty()) g.mesh = assets->acquireMesh(cw, "city:crosswalk");
+        g.material = crosswalkMaterial();
+        if (!cw.vertices.empty()) g.transforms.push_back(Mat4::trs(Vec3(0, 0, 0), Quat(), Vec3(1, 1, 1)));
+        world.add<InstanceGroup>(crosswalkGroup_, g);
     }
 
     built_ = true;

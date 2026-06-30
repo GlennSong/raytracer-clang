@@ -169,3 +169,29 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
         CHECK(dmin > halfW * 0.9);   // clear of every carriageway (not in the road)
     }
 }
+
+TEST_CASE(crosswalks_sit_at_junction_mouths) {
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());   // 4-arm cross, width 10
+    CityRenderSystem city;
+    CHECK(city.build(world, nullptr));
+
+    const NavGraph& nav = city.nav();
+    // One crosswalk band per approach into the junction (4 arms here).
+    const auto& centers = city.crosswalkCenters();
+    CHECK(centers.size() == 4u);
+
+    Real halfW = 10.0 * 0.5;
+    for (const Vec2& c : centers) {
+        // Each band sits just outside the junction node, across the road mouth —
+        // beyond the carriageway edge but not far down the arm.
+        double dNode = 1e9;
+        for (const Vec2& n : nav.nodes) {
+            double dx = c.x - n.x, dy = c.y - n.y;
+            dNode = std::min(dNode, std::sqrt(dx * dx + dy * dy));
+        }
+        CHECK(dNode > halfW * 0.8);    // outside the intersection box...
+        CHECK(dNode < halfW + 6.0);    // ...but right at the mouth, not mid-block
+    }
+    CHECK(world.get<InstanceGroup>(city.crosswalkGroup()) != nullptr);
+}

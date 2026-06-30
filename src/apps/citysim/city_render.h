@@ -56,6 +56,8 @@ public:
     engine::Entity pedGroup() const { return pedGroup_; }
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
+    engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
+    const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
 
 private:
     void syncGroups(engine::World& world);
@@ -80,7 +82,9 @@ private:
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
+    engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
+    std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     bool built_ = false;
