@@ -96,10 +96,10 @@ struct GlfwWindow::Impl {
     double touchAccumDX = 0, touchAccumDY = 0, touchAccumScroll = 0;
     double lastTouchX = 0, lastTouchY = 0, lastPinchDist = 0;
     bool touchLeftDown = false, touchRightDown = false, touchPinch = false;
-    // On-screen movement buttons set these via rt_web_key (W,S,A,D,E,Q,Shift);
+    // Keyboard fed from JS via rt_web_key (W,S,A,D,E,Q,Shift,Num1,Num2);
     // pollEvents turns edges into the same KeyPressed/Released the keyboard emits.
-    bool vkey[7] = {};
-    bool vkeyPrev[7] = {};
+    bool vkey[9] = {};
+    bool vkeyPrev[9] = {};
     // Virtual gamepad driven by the page's on-screen sticks (left = move, right
     // = look) — fed to the engine as gamepad 0, the analog path the camera reads.
     GamepadState virtualPad;
@@ -162,10 +162,11 @@ static EM_BOOL onTouchEnd(int, const EmscriptenTouchEvent*, void* user) {
 }
 
 // Called from the page's on-screen movement buttons. idx: 0=W 1=S 2=A 3=D 4=E
-// 5=Q 6=Shift; down = press/release. pollEvents converts the change into the
-// keyboard events the InputMap already binds to the camera move/boost axes.
+// 5=Q 6=Shift 7=Num1 8=Num2; down = press/release. pollEvents converts the
+// change into the keyboard events the InputMap binds to camera/gameplay actions
+// (Num1/Num2 are the weapon-slot keys play mode binds to slot_1/slot_2).
 extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_key(int idx, int down) {
-    if (g_activeImpl && idx >= 0 && idx < 7) g_activeImpl->vkey[idx] = (down != 0);
+    if (g_activeImpl && idx >= 0 && idx < 9) g_activeImpl->vkey[idx] = (down != 0);
 }
 
 // On-screen analog sticks. stick 0 = left (move) -> LeftX/LeftY; stick 1 = right
@@ -183,10 +184,16 @@ extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_axis(int stick, float x, float y) {
 }
 
 // On-screen gamepad buttons: idx 0 = boost (LeftBumper), 1 = camera toggle
-// (Back, flips fly/orbit via cam_toggle).
+// (Back, flips fly/orbit via cam_toggle), 2 = fire (RightBumper, the gameplay
+// fire binding play mode reads).
 extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_button(int idx, int down) {
     if (!g_activeImpl) return;
-    GamepadButton b = (idx == 1) ? GamepadButton::Back : GamepadButton::LeftBumper;
+    GamepadButton b;
+    switch (idx) {
+        case 1:  b = GamepadButton::Back; break;
+        case 2:  b = GamepadButton::RightBumper; break;
+        default: b = GamepadButton::LeftBumper; break;
+    }
     g_activeImpl->virtualPad.buttons[static_cast<size_t>(b)] = (down != 0);
 }
 
@@ -481,9 +488,10 @@ void GlfwWindow::pollEvents() {
         (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) || impl->touchRightDown;
     // Turn on-screen button state changes into keyboard events (same path as a
     // real keyboard → InputMap → camera move/boost axes).
-    static const KeyCode kVKeys[7] = {KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D,
-                                      KeyCode::E, KeyCode::Q, KeyCode::LeftShift};
-    for (int i = 0; i < 7; ++i) {
+    static const KeyCode kVKeys[9] = {KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D,
+                                      KeyCode::E, KeyCode::Q, KeyCode::LeftShift,
+                                      KeyCode::Num1, KeyCode::Num2};
+    for (int i = 0; i < 9; ++i) {
         if (impl->vkey[i] == impl->vkeyPrev[i]) continue;
         Event ev(impl->vkey[i] ? EventType::KeyPressed : EventType::KeyReleased);
         ev.key = kVKeys[i];

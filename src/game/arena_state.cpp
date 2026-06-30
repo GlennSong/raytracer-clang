@@ -123,8 +123,16 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // facing carries over for free — the play camera restores flyYaw/Pitch.
     if (ctx.settings.getBool("playFromHere", false)) {
         ctx.settings.setBool("playFromHere", false);
+        // Drop the capsule in from a little above the eye rather than placing its
+        // base exactly at the camera point: the eye sits in open (renderable)
+        // space, but the capsule extends downward from its origin, so origin-at-
+        // eye can bury the feet in the floor/ledge the camera hovers over —
+        // leaving the controller wedged (penetrating on all sides, unable to
+        // move). Starting a touch higher lets gravity settle it cleanly onto
+        // whatever is underneath.
+        constexpr Real kSpawnDropMargin = 1.5;
         Vec3 here(ctx.settings.getDouble("flyEyeX", 0.0),
-                  ctx.settings.getDouble("flyEyeY", 1.5),
+                  ctx.settings.getDouble("flyEyeY", 1.5) + kSpawnDropMargin,
                   ctx.settings.getDouble("flyEyeZ", 0.0));
         ctx.world.each<Transform, ControlledBy>(
             [&](Entity e, Transform& t, ControlledBy&) {

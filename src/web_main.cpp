@@ -32,6 +32,13 @@ namespace {
 // after main() has returned control to the event loop.
 Application g_app;
 
+// State factories, file-scope so the rt_web_play hook can swap the running state
+// long after main() has unwound. Editor = free look, no gameplay; Play =
+// ArenaState (Jolt physics, gun, shooting). Set up in main().
+std::function<std::unique_ptr<AppState>()> g_makePlay;
+std::function<std::unique_ptr<AppState>()> g_makeEditor;
+bool g_inPlay = false;
+
 void frame() {
     g_app.runFrame();
 }
@@ -75,6 +82,27 @@ EMSCRIPTEN_KEEPALIVE void rt_web_flag(int id, int val) {
     }
 }
 
+// Play/Edit toggle from the page. play != 0 → enter ArenaState (gameplay: the
+// gun, shooting, Jolt-driven player); 0 → back to the free-look editor. Swaps
+// the running state via the same deferred replace the editor toolbar uses.
+EMSCRIPTEN_KEEPALIVE void rt_web_play(int play) {
+    bool wantPlay = (play != 0);
+    if (wantPlay == g_inPlay) return;
+    g_inPlay = wantPlay;
+    if (wantPlay && g_makePlay) {
+        // Gameplay walks the player on the ground; force grounded FPS controls.
+        g_app.settings().setBool("cameraGrounded", true);
+        // Spawn the player at the editor's current view rather than the level's
+        // document spawn (undefined / far above the showcase scene). The editor's
+        // onStop persists flyEye* during this swap, just before ArenaState reads
+        // it — so the capsule drops in where the camera is looking.
+        g_app.settings().setBool("playFromHere", true);
+        g_app.requestState(g_makePlay());
+    } else if (g_makeEditor) {
+        g_app.requestState(g_makeEditor());
+    }
+}
+
 // Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
 // 2=instances 3=triangles 4=entities.
 EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {
@@ -112,15 +140,15 @@ int main() {
     const std::string levelPath = levelFromUrl();
     LOG_INFO << "Web level: " << levelPath;
 
-    std::function<std::unique_ptr<AppState>()> makePlay;
-    std::function<std::unique_ptr<AppState>()> makeEditor;
-    makeEditor = [levelPath, &makePlay]() -> std::unique_ptr<AppState> {
+    // File-scope factories (see rt_web_play). Each captures the other so the
+    // editor's "Play" and the arena's "Stop" both have a target to swap to.
+    g_makeEditor = [levelPath]() -> std::unique_ptr<AppState> {
         return std::make_unique<EditorState>(g_app.windowRef(), g_app.renderer(),
-                                             levelPath, makePlay);
+                                             levelPath, g_makePlay);
     };
-    makePlay = [levelPath, &makeEditor]() -> std::unique_ptr<AppState> {
+    g_makePlay = [levelPath]() -> std::unique_ptr<AppState> {
         return std::make_unique<ArenaState>(g_app.windowRef(), g_app.renderer(),
-                                            levelPath, makeEditor);
+                                            levelPath, g_makeEditor);
     };
 
     // Fly camera + free-look so the on-screen sticks give FPS move+look out of
@@ -129,7 +157,7 @@ int main() {
     g_app.settings().setString("cameraMode", "fly");
     g_app.settings().setBool("cameraFreeLook", true);
     g_app.settings().setBool("cameraGrounded", true);
-    g_app.pushState(makeEditor());
+    g_app.pushState(g_makeEditor());
 
     g_app.begin();
 

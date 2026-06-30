@@ -662,11 +662,16 @@ if(EMSCRIPTEN)
         "-sUSE_GLFW=3"
         "-sASYNCIFY=1"
         "-sALLOW_MEMORY_GROWTH=1"
+        # Jolt's collision narrow-phase recurses deeply; the 64 KB Emscripten
+        # default stack overflows the moment play mode steps physics (it
+        # surfaces in -O2 as a corrupt "table index is out of bounds"). Match the
+        # native 8 MB thread stack so gameplay has the headroom it expects.
+        "-sSTACK_SIZE=8388608"
         "-sMODULARIZE=1"
         "-sEXPORT_NAME=createViewer"
         "-sENVIRONMENT=web"
         # Hooks the page calls (on-screen sticks/buttons + debug panel; keep _main).
-        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam"
+        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play"
         "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
     )
     # Emit viewer_web.js (+ .wasm + .data); web/index.html loads it.
