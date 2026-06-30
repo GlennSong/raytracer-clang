@@ -120,6 +120,15 @@ struct GpuBloom {
     float texel[4];           // xy = blur step in uv
 };
 
+// SSAO pass uniform (matches the WGSL `SsaoU`).
+struct GpuSsao {
+    float invViewProjection[16];
+    float viewProjection[16];
+    float cameraPosition[4];
+    float params[4];          // x radius, y bias, z intensity, w aoFloor
+    float texel[4];           // xy = 1/resolution
+};
+
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
 struct GpuDraw {
     float    model[16];          // column-major
@@ -661,12 +670,13 @@ const char* kCompositeWgsl = R"WGSL(
 struct Post {
   postParams : vec4<f32>,   // x exposure, y tonemapOp, z contrast, w saturation
   debugView  : vec4<i32>,   // x = debug view (0 = normal)
-  effects    : vec4<f32>,   // x bloom intensity (0 = off)
+  effects    : vec4<f32>,   // x bloom intensity (0 = off), y ssao strength (0 = off)
 };
 @group(0) @binding(0) var hdrTex : texture_2d<f32>;
 @group(0) @binding(1) var<uniform> p : Post;
 @group(0) @binding(2) var bloomTex : texture_2d<f32>;
 @group(0) @binding(3) var bloomSamp : sampler;
+@group(0) @binding(4) var ssaoTex : texture_2d<f32>;
 
 fn applyGrade(x0 : vec3<f32>, contrast : f32, saturation : f32) -> vec3<f32> {
   var x = x0;
@@ -723,7 +733,15 @@ fn vs_composite(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32
 fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
   let px = vec2<i32>(fragCoord.xy);
   var color = textureLoad(hdrTex, px, 0).rgb;
-  if (p.debugView.x != 0) { return vec4<f32>(color, 1.0); }   // debug view, as-is
+  if (p.debugView.x == 1) {                                   // AO-only debug view
+    let ao = textureLoad(ssaoTex, px, 0).r;
+    return vec4<f32>(vec3<f32>(ao), 1.0);
+  }
+  if (p.debugView.x != 0) { return vec4<f32>(color, 1.0); }   // other debug views, as-is
+  if (p.effects.y > 0.0) {                                     // SSAO (darkens crevices)
+    let ao = textureLoad(ssaoTex, px, 0).r;
+    color = color * mix(1.0, ao, p.effects.y);
+  }
   if (p.effects.x > 0.0) {                                     // additive bloom
     let dim = vec2<f32>(textureDimensions(hdrTex));
     let uv = (fragCoord.xy) / dim;
@@ -784,6 +802,88 @@ fn fs_blur(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
     sum += textureSampleLevel(srcTex, srcSamp, uv - o, 0.0).rgb * w[i];
   }
   return vec4<f32>(sum, 1.0);
+}
+)WGSL";
+
+// SSAO: reconstruct world position + a geometric normal (from depth derivatives)
+// in a fullscreen pass, sample a hemisphere kernel oriented by the normal, and
+// accumulate occlusion against the scene depth. Output is a single-channel AO
+// the composite multiplies in. Depth-based (no G-buffer normal) for simplicity.
+const char* kSsaoWgsl = R"WGSL(
+struct SsaoU {
+  invVP : mat4x4<f32>,
+  viewProj : mat4x4<f32>,
+  camPos : vec4<f32>,
+  params : vec4<f32>,   // x radius, y bias, z intensity, w aoFloor
+  texel  : vec4<f32>,   // xy = 1/resolution
+};
+@group(0) @binding(0) var depthTex : texture_depth_2d;
+@group(0) @binding(1) var<uniform> s : SsaoU;
+
+@vertex
+fn vs_ssao(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(p[vid], 0.0, 1.0);
+}
+
+fn reconWorld(uv : vec2<f32>, depth : f32) -> vec3<f32> {
+  let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
+  let w = s.invVP * vec4<f32>(ndc, 1.0);
+  return w.xyz / w.w;
+}
+fn hash12(p : vec2<f32>) -> f32 {
+  var p3 = fract(vec3<f32>(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+// 12 fixed hemisphere directions (tangent space, z up), varying length.
+const KERNEL : array<vec3<f32>, 12> = array<vec3<f32>, 12>(
+  vec3<f32>( 0.21, 0.32, 0.92), vec3<f32>(-0.46, 0.11, 0.88), vec3<f32>( 0.33,-0.41, 0.85),
+  vec3<f32>(-0.25,-0.55, 0.80), vec3<f32>( 0.62, 0.22, 0.75), vec3<f32>(-0.58, 0.48, 0.66),
+  vec3<f32>( 0.10, 0.74, 0.66), vec3<f32>( 0.48,-0.62, 0.62), vec3<f32>(-0.71,-0.30, 0.64),
+  vec3<f32>( 0.80, 0.05, 0.60), vec3<f32>(-0.12, 0.88, 0.46), vec3<f32>( 0.35, 0.55, 0.76));
+
+@fragment
+fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
+  let uv = fc.xy * s.texel.xy;
+  let ipx = vec2<i32>(fc.xy);
+  let depth = textureLoad(depthTex, ipx, 0);
+  // Reconstruct position + geometric normal unconditionally (derivatives must be
+  // in uniform control flow — so before any depth-based early-out).
+  let P = reconWorld(uv, depth);
+  var N = normalize(cross(dpdx(P), dpdy(P)));
+  let toCam = normalize(s.camPos.xyz - P);
+  if (dot(N, toCam) < 0.0) { N = -N; }
+  if (depth >= 1.0) { return 1.0; }          // sky: no occlusion
+  // Random tangent basis (per-pixel rotation breaks up banding).
+  let rnd = hash12(fc.xy) * 6.2831853;
+  let randVec = normalize(vec3<f32>(cos(rnd), sin(rnd), 0.0));
+  let T = normalize(randVec - N * dot(randVec, N));
+  let B = cross(N, T);
+  let radius = s.params.x;
+  let bias = s.params.y;
+  var occ = 0.0;
+  for (var i = 0; i < 12; i = i + 1) {
+    let k = KERNEL[i];
+    let dir = T * k.x + B * k.y + N * k.z;     // tangent -> world, hemisphere around N
+    let Sp = P + dir * radius;
+    let clip = s.viewProj * vec4<f32>(Sp, 1.0);
+    if (clip.w <= 0.0) { continue; }
+    let sndc = clip.xyz / clip.w;
+    let suv = vec2<f32>(sndc.x * 0.5 + 0.5, 0.5 - sndc.y * 0.5);
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) { continue; }
+    let sd = textureLoad(depthTex, vec2<i32>(suv / s.texel.xy), 0);
+    let sceneP = reconWorld(suv, sd);
+    // Occluded if the scene surface is closer to the camera than the sample,
+    // and within the radius (range check kills halos at silhouettes).
+    let distScene = length(s.camPos.xyz - sceneP);
+    let distSample = length(s.camPos.xyz - Sp);
+    let rangeCheck = smoothstep(0.0, 1.0, radius / max(length(P - sceneP), 1e-3));
+    if (distScene < distSample - bias) { occ += rangeCheck; }
+  }
+  let ao = 1.0 - (occ / 12.0) * s.params.z;
+  return clamp(ao, s.params.w, 1.0);
 }
 )WGSL";
 
@@ -862,6 +962,10 @@ public:
         if (bloomBlurPipeline_) { wgpuRenderPipelineRelease(bloomBlurPipeline_); bloomBlurPipeline_ = nullptr; }
         if (bloomLayout_) { wgpuBindGroupLayoutRelease(bloomLayout_); bloomLayout_ = nullptr; }
         if (linearSampler_) { wgpuSamplerRelease(linearSampler_); linearSampler_ = nullptr; }
+        if (ssaoGroup_) { wgpuBindGroupRelease(ssaoGroup_); ssaoGroup_ = nullptr; }
+        if (ssaoUbo_) { wgpuBufferRelease(ssaoUbo_); ssaoUbo_ = nullptr; }
+        if (ssaoPipeline_) { wgpuRenderPipelineRelease(ssaoPipeline_); ssaoPipeline_ = nullptr; }
+        if (ssaoLayout_) { wgpuBindGroupLayoutRelease(ssaoLayout_); ssaoLayout_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
@@ -890,7 +994,7 @@ public:
         configureSurface();
         releaseDepthTarget();
         createDepthTarget();
-        if (postBuf_) { rebuildCompositeBindGroup(); rebuildBloomGroups(); }  // views changed
+        if (postBuf_) { rebuildCompositeBindGroup(); rebuildBloomGroups(); rebuildSsaoGroup(); }
     }
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override {
@@ -1264,6 +1368,36 @@ public:
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
+        // SSAO: reconstruct from the just-written depth into the AO target.
+        bool ssaoOn = ssaoEnabled && globals_.counts[1] == 0;
+        bool ssaoForDebug = ssaoEnabled && globals_.counts[1] == 1;  // AO-only debug view
+        if (ssaoOn || ssaoForDebug) {
+            GpuSsao us = {};
+            std::memcpy(us.invViewProjection, globals_.invViewProjection, sizeof(us.invViewProjection));
+            std::memcpy(us.viewProjection, globals_.viewProjection, sizeof(us.viewProjection));
+            std::memcpy(us.cameraPosition, globals_.cameraPosition, sizeof(us.cameraPosition));
+            us.params[0] = ssaoParams.radius;
+            us.params[1] = ssaoParams.bias;
+            us.params[2] = ssaoParams.intensity;
+            us.params[3] = ssaoParams.aoFloor;
+            us.texel[0] = 1.0f / static_cast<float>(width_);
+            us.texel[1] = 1.0f / static_cast<float>(height_);
+            wgpuQueueWriteBuffer(queue_, ssaoUbo_, 0, &us, sizeof(us));
+
+            WGPURenderPassColorAttachment a = {};
+            a.view = ssaoView_; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            a.loadOp = WGPULoadOp_Clear; a.storeOp = WGPUStoreOp_Store;
+            a.clearValue = {1.0, 1.0, 1.0, 1.0};   // 1 = no occlusion
+            WGPURenderPassDescriptor pd = {};
+            pd.colorAttachmentCount = 1; pd.colorAttachments = &a;
+            WGPURenderPassEncoder e = wgpuCommandEncoderBeginRenderPass(encoder, &pd);
+            wgpuRenderPassEncoderSetPipeline(e, ssaoPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(e, 0, ssaoGroup_, 0, nullptr);
+            wgpuRenderPassEncoderDraw(e, 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(e);
+            wgpuRenderPassEncoderRelease(e);
+        }
+
         // Bloom: bright-pass (HDR -> bloomA) then a separable blur (A->B->A).
         // Only when enabled and not in a debug view (debug bypasses post).
         bool bloomOn = bloomEnabled && globals_.counts[1] == 0;
@@ -1308,6 +1442,7 @@ public:
         post.postParams[3] = globals_.postParams[3];
         post.debugView[0] = globals_.counts[1];
         post.effects[0] = bloomOn ? bloomParams.intensity : 0.0f;
+        post.effects[1] = ssaoOn ? 1.0f : 0.0f;   // SSAO strength (0..1)
         wgpuQueueWriteBuffer(queue_, postBuf_, 0, &post, sizeof(post));
 
         WGPURenderPassColorAttachment ccolor = {};
@@ -1432,7 +1567,8 @@ private:
 
     void createDepthTarget() {
         WGPUTextureDescriptor desc = {};
-        desc.usage = WGPUTextureUsage_RenderAttachment;
+        // Sampled by the SSAO pass (texture_depth_2d) after the main pass writes it.
+        desc.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
         desc.dimension = WGPUTextureDimension_2D;
         desc.size = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};
         desc.format = kDepthFormat;
@@ -1466,6 +1602,17 @@ private:
         bloomViewA_ = wgpuTextureCreateView(bloomTexA_, nullptr);
         bloomTexB_ = wgpuDeviceCreateTexture(device_, &bd);
         bloomViewB_ = wgpuTextureCreateView(bloomTexB_, nullptr);
+
+        // SSAO target (single channel, full-res).
+        WGPUTextureDescriptor ad = {};
+        ad.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        ad.dimension = WGPUTextureDimension_2D;
+        ad.size = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};
+        ad.format = WGPUTextureFormat_R8Unorm;
+        ad.mipLevelCount = 1;
+        ad.sampleCount = 1;
+        ssaoTex_ = wgpuDeviceCreateTexture(device_, &ad);
+        ssaoView_ = wgpuTextureCreateView(ssaoTex_, nullptr);
     }
 
     void releaseDepthTarget() {
@@ -1477,6 +1624,8 @@ private:
         if (bloomTexA_) { wgpuTextureRelease(bloomTexA_); bloomTexA_ = nullptr; }
         if (bloomViewB_) { wgpuTextureViewRelease(bloomViewB_); bloomViewB_ = nullptr; }
         if (bloomTexB_) { wgpuTextureRelease(bloomTexB_); bloomTexB_ = nullptr; }
+        if (ssaoView_) { wgpuTextureViewRelease(ssaoView_); ssaoView_ = nullptr; }
+        if (ssaoTex_) { wgpuTextureRelease(ssaoTex_); ssaoTex_ = nullptr; }
     }
 
     bool createPipeline() {
@@ -1694,7 +1843,7 @@ private:
         cModDesc.nextInChain = &cWgsl.chain;
         WGPUShaderModule cModule = wgpuDeviceCreateShaderModule(device_, &cModDesc);
 
-        WGPUBindGroupLayoutEntry cEntries[4] = {};
+        WGPUBindGroupLayoutEntry cEntries[5] = {};
         cEntries[0].binding = 0;
         cEntries[0].visibility = WGPUShaderStage_Fragment;
         cEntries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;  // textureLoad
@@ -1710,8 +1859,12 @@ private:
         cEntries[3].binding = 3;
         cEntries[3].visibility = WGPUShaderStage_Fragment;
         cEntries[3].sampler.type = WGPUSamplerBindingType_Filtering;
+        cEntries[4].binding = 4;                              // SSAO (textureLoad)
+        cEntries[4].visibility = WGPUShaderStage_Fragment;
+        cEntries[4].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        cEntries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
         WGPUBindGroupLayoutDescriptor cblDesc = {};
-        cblDesc.entryCount = 4;
+        cblDesc.entryCount = 5;
         cblDesc.entries = cEntries;
         compositeLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &cblDesc);
 
@@ -1810,8 +1963,56 @@ private:
         wgpuPipelineLayoutRelease(bPipeLayout);
         wgpuShaderModuleRelease(bModule);
 
+        // SSAO pipeline (its own module): depth -> single-channel AO. Group 0 =
+        // { depth texture, uniform }.
+        WGPUShaderSourceWGSL aWgsl = {};
+        aWgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+        aWgsl.code = sv(kSsaoWgsl);
+        WGPUShaderModuleDescriptor aModDesc = {};
+        aModDesc.nextInChain = &aWgsl.chain;
+        WGPUShaderModule aModule = wgpuDeviceCreateShaderModule(device_, &aModDesc);
+
+        WGPUBindGroupLayoutEntry aEntries[2] = {};
+        aEntries[0].binding = 0;
+        aEntries[0].visibility = WGPUShaderStage_Fragment;
+        aEntries[0].texture.sampleType = WGPUTextureSampleType_Depth;
+        aEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        aEntries[1].binding = 1;
+        aEntries[1].visibility = WGPUShaderStage_Fragment;
+        aEntries[1].buffer.type = WGPUBufferBindingType_Uniform;
+        aEntries[1].buffer.minBindingSize = sizeof(GpuSsao);
+        WGPUBindGroupLayoutDescriptor ablDesc = {};
+        ablDesc.entryCount = 2;
+        ablDesc.entries = aEntries;
+        ssaoLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &ablDesc);
+
+        WGPUPipelineLayoutDescriptor aplDesc = {};
+        aplDesc.bindGroupLayoutCount = 1;
+        aplDesc.bindGroupLayouts = &ssaoLayout_;
+        WGPUPipelineLayout aPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &aplDesc);
+
+        WGPUColorTargetState aColor = {};
+        aColor.format = WGPUTextureFormat_R8Unorm;
+        aColor.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState aFrag = {};
+        aFrag.module = aModule; aFrag.entryPoint = sv("fs_ssao");
+        aFrag.targetCount = 1; aFrag.targets = &aColor;
+        WGPURenderPipelineDescriptor aDesc = {};
+        aDesc.layout = aPipeLayout;
+        aDesc.vertex.module = aModule; aDesc.vertex.entryPoint = sv("vs_ssao");
+        aDesc.vertex.bufferCount = 0;
+        aDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        aDesc.primitive.frontFace = WGPUFrontFace_CCW;
+        aDesc.primitive.cullMode = WGPUCullMode_None;
+        aDesc.depthStencil = nullptr;
+        aDesc.fragment = &aFrag;
+        aDesc.multisample.count = 1; aDesc.multisample.mask = 0xFFFFFFFF;
+        ssaoPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &aDesc);
+        wgpuPipelineLayoutRelease(aPipeLayout);
+        wgpuShaderModuleRelease(aModule);
+
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
-            || !bloomBrightPipeline_ || !bloomBlurPipeline_) {
+            || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -1929,15 +2130,32 @@ private:
         bloomUboH_ = wgpuDeviceCreateBuffer(device_, &bDesc);
         bloomUboV_ = wgpuDeviceCreateBuffer(device_, &bDesc);
 
+        WGPUBufferDescriptor aDesc = {};
+        aDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        aDesc.size = sizeof(GpuSsao);
+        ssaoUbo_ = wgpuDeviceCreateBuffer(device_, &aDesc);
+
         rebuildCompositeBindGroup();
         rebuildBloomGroups();
+        rebuildSsaoGroup();
+    }
+
+    // SSAO bind group references depthView_ (recreated on resize).
+    void rebuildSsaoGroup() {
+        if (ssaoGroup_) { wgpuBindGroupRelease(ssaoGroup_); ssaoGroup_ = nullptr; }
+        WGPUBindGroupEntry e[2] = {};
+        e[0].binding = 0; e[0].textureView = depthView_;
+        e[1].binding = 1; e[1].buffer = ssaoUbo_; e[1].offset = 0; e[1].size = sizeof(GpuSsao);
+        WGPUBindGroupDescriptor d = {};
+        d.layout = ssaoLayout_; d.entryCount = 2; d.entries = e;
+        ssaoGroup_ = wgpuDeviceCreateBindGroup(device_, &d);
     }
 
     // The composite bind group references hdrView_ + bloomViewA_, both recreated
     // on resize, so it must be rebuilt whenever those targets change.
     void rebuildCompositeBindGroup() {
         if (compositeBindGroup_) { wgpuBindGroupRelease(compositeBindGroup_); compositeBindGroup_ = nullptr; }
-        WGPUBindGroupEntry ce[4] = {};
+        WGPUBindGroupEntry ce[5] = {};
         ce[0].binding = 0;
         ce[0].textureView = hdrView_;
         ce[1].binding = 1;
@@ -1948,9 +2166,11 @@ private:
         ce[2].textureView = bloomViewA_;       // final blurred bloom
         ce[3].binding = 3;
         ce[3].sampler = linearSampler_;
+        ce[4].binding = 4;
+        ce[4].textureView = ssaoView_;
         WGPUBindGroupDescriptor cbgDesc = {};
         cbgDesc.layout = compositeLayout_;
-        cbgDesc.entryCount = 4;
+        cbgDesc.entryCount = 5;
         cbgDesc.entries = ce;
         compositeBindGroup_ = wgpuDeviceCreateBindGroup(device_, &cbgDesc);
     }
@@ -2029,6 +2249,12 @@ private:
     WGPURenderPipeline bloomBrightPipeline_ = nullptr, bloomBlurPipeline_ = nullptr;
     WGPUBuffer bloomUboBright_ = nullptr, bloomUboH_ = nullptr, bloomUboV_ = nullptr;
     WGPUBindGroup bloomBrightGroup_ = nullptr, bloomBlurHGroup_ = nullptr, bloomBlurVGroup_ = nullptr;
+    WGPUTexture ssaoTex_ = nullptr;
+    WGPUTextureView ssaoView_ = nullptr;
+    WGPUBindGroupLayout ssaoLayout_ = nullptr;
+    WGPURenderPipeline ssaoPipeline_ = nullptr;
+    WGPUBuffer ssaoUbo_ = nullptr;
+    WGPUBindGroup ssaoGroup_ = nullptr;
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
