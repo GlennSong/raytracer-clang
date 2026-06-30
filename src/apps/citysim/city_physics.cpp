@@ -25,12 +25,19 @@ void CityPhysicsSystem::releaseBodies() {
 void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!city_.built()) return;
     World& world = ctx.world;
-    InstanceGroup* cars = world.get<InstanceGroup>(city_.carGroup());
-    if (!cars) return;
+
+    // Cars are spread across several variant groups; gather every car transform
+    // into one stable list (group order is fixed, and each group is refilled in
+    // agent order each step, so index i tracks the same car across frames).
+    std::vector<const Mat4*> poses;
+    for (engine::Entity e : city_.carGroups()) {
+        InstanceGroup* g = world.get<InstanceGroup>(e);
+        if (!g) continue;
+        for (const Mat4& m : g->transforms) poses.push_back(&m);
+    }
+    const std::size_t n = poses.size();
 
     PhysicsWorld& pw = physics_.physicsWorld();
-    const std::size_t n = cars->transforms.size();
-
     // Match the body pool to the car count (cars are a fixed set, so this runs
     // once; rebuild defensively if the count ever changes, e.g. a level reload).
     if (bodies_.size() != n) {
@@ -38,7 +45,7 @@ void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
         Vec3 he = city_.carHalfExtent();
         bodies_.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            const Mat4& m = cars->transforms[i];
+            const Mat4& m = *poses[i];
             Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
             bodies_.push_back(pw.addBox(he, p, Quat(), BodyMotion::Kinematic,
                                         /*restitution*/ 0.0, /*friction*/ 0.6));
@@ -50,7 +57,7 @@ void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
     // travel regardless of the matrix's internal convention.
     Real dt = ctx.clock.fixedStep();
     for (std::size_t i = 0; i < n && i < bodies_.size(); ++i) {
-        const Mat4& m = cars->transforms[i];
+        const Mat4& m = *poses[i];
         Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
         Real yaw = std::atan2(m.m[0][2], m.m[2][2]);
         Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);

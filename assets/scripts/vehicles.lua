@@ -65,19 +65,20 @@ function vehicle.sedan(seed, opts)
         chassis = { half = { hw, H * 0.5, L * 0.5 } },
         mass = opts.mass or 1400,
         com_offset = opts.com_offset or -0.45,   -- low CoG so it doesn't tip in turns
-        engine_torque = opts.engine_torque or 500,
+        engine_torque = opts.engine_torque or 650,   -- enough grunt to climb a curb back onto the road
         max_rpm = opts.max_rpm or 6000,
         max_steer_deg = opts.max_steer_deg or 32,
         brake_torque = opts.brake_torque or 1600,
         hand_brake_torque = opts.hand_brake_torque or 4000,
         wheel = { radius = 0.34, width = 0.32 },  -- chunkier tyres
-        -- Front pair steers + drives (FWD, arcade-friendly); rear pair gets the
+        -- All four wheels DRIVEN (4WD) so the car can crawl back up off-road and
+        -- over kerbs; the front pair steers, the rear pair also takes the
         -- handbrake. x>0 is the car's right, z>0 its front, y the axle height.
         wheels = {
             { x =  hw - inset, y = axleY, z = frontZ, steered = true,  driven = true },
             { x = -hw + inset, y = axleY, z = frontZ, steered = true,  driven = true },
-            { x =  hw - inset, y = axleY, z = rearZ,  steered = false, driven = false, hand_brake = true },
-            { x = -hw + inset, y = axleY, z = rearZ,  steered = false, driven = false, hand_brake = true },
+            { x =  hw - inset, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
+            { x = -hw + inset, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
         },
     }
 end

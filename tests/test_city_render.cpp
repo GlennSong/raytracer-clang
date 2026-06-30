@@ -36,6 +36,13 @@ std::size_t groupCount(World& world, Entity e) {
     return g ? g->transforms.size() : 0;
 }
 
+// Total car instances across every variant group.
+std::size_t carTotal(World& world, const CityRenderSystem& city) {
+    std::size_t n = 0;
+    for (Entity e : city.carGroups()) n += groupCount(world, e);
+    return n;
+}
+
 }  // namespace
 
 TEST_CASE(city_render_builds_from_roadnet) {
@@ -51,8 +58,9 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CHECK(city.nav().linkCount() > 0);
     CHECK(city.sim().agents().size() == 14u);
 
-    CHECK(groupCount(world, city.carGroup()) == 8u);
+    CHECK(carTotal(world, city) == 8u);     // 8 cars, spread across variant groups
     CHECK(groupCount(world, city.pedGroup()) == 6u);
+    CHECK(city.carGroups().size() > 1u);    // there really are multiple variants
 }
 
 TEST_CASE(city_render_build_fails_without_roads) {
@@ -72,22 +80,28 @@ TEST_CASE(city_render_agents_move_when_stepped) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
 
-    InstanceGroup* cars = world.get<InstanceGroup>(city.carGroup());
-    CHECK(cars != nullptr);
-    std::vector<Vec3> start;
-    for (const Mat4& t : cars->transforms)
-        start.push_back(Vec3(t.m[0][3], t.m[1][3], t.m[2][3]));
+    // Gather every car's translation across all variant groups (group order +
+    // agent order are stable, so index k tracks the same car each step).
+    auto gather = [&]() {
+        std::vector<Vec3> v;
+        for (Entity e : city.carGroups()) {
+            InstanceGroup* g = world.get<InstanceGroup>(e);
+            if (!g) continue;
+            for (const Mat4& t : g->transforms)
+                v.push_back(Vec3(t.m[0][3], t.m[1][3], t.m[2][3]));
+        }
+        return v;
+    };
+    std::vector<Vec3> start = gather();
+    CHECK(start.size() == 12u);
 
     bool anyMoved = false;
     for (int i = 0; i < 3000; ++i) {
         city.step(world, 0.1);
-        cars = world.get<InstanceGroup>(city.carGroup());
-        CHECK(cars->transforms.size() == 12u);   // count stable across steps
-        for (std::size_t k = 0; k < cars->transforms.size(); ++k) {
-            Vec3 now(cars->transforms[k].m[0][3], cars->transforms[k].m[1][3],
-                     cars->transforms[k].m[2][3]);
-            if ((now - start[k]).length() > 1.0) anyMoved = true;
-        }
+        std::vector<Vec3> now = gather();
+        CHECK(now.size() == 12u);   // count stable across steps
+        for (std::size_t k = 0; k < now.size(); ++k)
+            if ((now[k] - start[k]).length() > 1.0) anyMoved = true;
     }
     CHECK(anyMoved);
 }

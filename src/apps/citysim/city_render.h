@@ -52,7 +52,10 @@ public:
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
     const engine::NavGraph& nav() const { return nav_; }
-    engine::Entity carGroup() const { return carGroup_; }
+    // Cars are split across several instance groups, one per body/colour variant
+    // (an InstanceGroup shares one mesh, so variety needs multiple groups).
+    const std::vector<engine::Entity>& carGroups() const { return carGroups_; }
+    engine::Entity carGroup() const { return carGroups_.empty() ? engine::Entity{} : carGroups_[0]; }
     engine::Entity pedGroup() const { return pedGroup_; }
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
@@ -83,7 +86,7 @@ private:
     CityRenderParams params_;
     engine::NavGraph nav_;
     CitySim sim_;
-    engine::Entity carGroup_;
+    std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
