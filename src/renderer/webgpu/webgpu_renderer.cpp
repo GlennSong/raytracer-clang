@@ -29,6 +29,13 @@
 #include <cstring>
 #include <vector>
 
+// Last camera eye position, exported for the page's debug readout (lets a headless
+// run confirm input actually moves the camera).
+static float g_webCamEye[3] = {0, 0, 0};
+extern "C" EMSCRIPTEN_KEEPALIVE float rt_web_cam(int i) {
+    return (i >= 0 && i < 3) ? g_webCamEye[i] : 0.0f;
+}
+
 namespace engine {
 
 namespace {
@@ -679,6 +686,9 @@ public:
         packMat4(vp, globals_.viewProjection);
         packMat4(view, globals_.view);
         cameraEye_ = camera.position;
+        g_webCamEye[0] = (float)camera.position.x;
+        g_webCamEye[1] = (float)camera.position.y;
+        g_webCamEye[2] = (float)camera.position.z;
         globals_.cameraPosition[0] = (float)camera.position.x;
         globals_.cameraPosition[1] = (float)camera.position.y;
         globals_.cameraPosition[2] = (float)camera.position.z;

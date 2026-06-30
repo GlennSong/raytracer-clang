@@ -189,6 +189,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_button(int idx, int down) {
     GamepadButton b = (idx == 1) ? GamepadButton::Back : GamepadButton::LeftBumper;
     g_activeImpl->virtualPad.buttons[static_cast<size_t>(b)] = (down != 0);
 }
+
+// Desktop mouse-look: feed a look delta (px) into the same accumulator touch uses,
+// which pollEvents drains into the camera's mouse delta. Bypasses Emscripten
+// GLFW's mouse path (which doesn't reliably deliver events in this build).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_look(float dx, float dy) {
+    if (!g_activeImpl) return;
+    g_activeImpl->touchAccumDX += dx;
+    g_activeImpl->touchAccumDY += dy;
+}
 #endif  // __EMSCRIPTEN__
 
 // Maps backend (GLFW) key codes to the backend-independent KeyCode the rest of
