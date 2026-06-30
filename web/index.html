@@ -83,6 +83,12 @@
     <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
     <div class="row"><span>Speed</span><input id="dnspeed" type="range" min="0" max="200" value="20" style="flex:1"></div>
 
+    <h3 style="margin-top:14px">View / Tone</h3>
+    <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
+    <div class="row"><span>Exposure</span><input id="exposure" type="range" min="10" max="400" value="100" style="flex:1"></div>
+    <div class="row"><span>Contrast</span><input id="contrast" type="range" min="50" max="200" value="100" style="flex:1"></div>
+    <div class="row"><span>Saturation</span><input id="saturation" type="range" min="0" max="200" value="100" style="flex:1"></div>
+
     <h3 style="margin-top:14px">Debug</h3>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
     <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
@@ -259,6 +265,17 @@
       dnPlayB.onclick = () => { dnPlayOn = !dnPlayOn; env(2, dnPlayOn ? 0 : 1); applySpeed();
         dnPlayB.classList.toggle('on', dnPlayOn); dnPlayB.textContent = dnPlayOn ? 'on' : 'off'; };
       dnspeed.addEventListener('input', applySpeed);
+
+      // --- View transform: tone map + exposure + grade (forward output stage) ---
+      const post = (id, v) => mod._rt_web_post(id, v);
+      let agx = false; const tmB = $('tonemap');
+      tmB.onclick = () => { agx = !agx; post(0, agx ? 1 : 0);
+        tmB.classList.toggle('on', agx); tmB.textContent = agx ? 'AgX' : 'ACES'; };
+      // Sliders push only on user input, so the level's authored values stand
+      // until the user actually grabs a control.
+      $('exposure').addEventListener('input', (e) => post(1, e.target.value / 100));
+      $('contrast').addEventListener('input', (e) => post(2, e.target.value / 100));
+      $('saturation').addEventListener('input', (e) => post(3, e.target.value / 100));
 
       // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
       let flyOn = false; const flyB = $('fly');

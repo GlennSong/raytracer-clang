@@ -124,6 +124,21 @@ EMSCRIPTEN_KEEPALIVE float rt_web_sun(int i) {
     return static_cast<float>(i == 0 ? d.x : i == 1 ? d.y : d.z);
 }
 
+// View-transform controls (the forward shader's output stage): tone mapping,
+// exposure, and color grade. id: 0=tonemap op (0 ACES, 1 AgX) 1=exposure
+// 2=contrast 3=saturation. Exposure lives on the view's lighting (the renderer
+// reads it each frame); the rest are live Renderer knobs.
+EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
+    Renderer& r = g_app.renderer();
+    switch (id) {
+        case 0: r.tonemapOperator = static_cast<int>(v); break;
+        case 1: g_app.renderView().lighting.exposure = v; break;
+        case 2: r.gradeParams.contrast = v; break;
+        case 3: r.gradeParams.saturation = v; break;
+        default: break;
+    }
+}
+
 // Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
 // 2=instances 3=triangles 4=entities.
 EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {
