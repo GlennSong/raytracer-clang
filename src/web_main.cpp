@@ -103,6 +103,27 @@ EMSCRIPTEN_KEEPALIVE void rt_web_play(int play) {
     }
 }
 
+// Day/night + world controls from the page (the web build has no ImGui). These
+// write settings keys that DayNightSystem re-reads each frame (editor + play).
+// id: 0=timeOfDay [0,1] 1=speed (days/sec) 2=paused(0/1) 3=cycle enabled(0/1).
+EMSCRIPTEN_KEEPALIVE void rt_web_env(int id, float v) {
+    Settings& s = g_app.settings();
+    switch (id) {
+        case 0: s.setDouble("daynight.timeOfDay", v); break;
+        case 1: s.setDouble("daynight.speed", v); break;
+        case 2: s.setBool("daynight.paused", v != 0.0f); break;
+        case 3: s.setBool("daynight.enabled", v != 0.0f); break;
+        default: break;
+    }
+}
+
+// Read back the live sun direction (0=x 1=y 2=z) so the page — and headless
+// checks — can confirm time-of-day actually moves the sun.
+EMSCRIPTEN_KEEPALIVE float rt_web_sun(int i) {
+    const Vec3& d = g_app.renderView().lighting.sun.direction;
+    return static_cast<float>(i == 0 ? d.x : i == 1 ? d.y : d.z);
+}
+
 // Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
 // 2=instances 3=triangles 4=entities.
 EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {

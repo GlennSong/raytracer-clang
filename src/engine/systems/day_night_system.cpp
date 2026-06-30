@@ -56,6 +56,20 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
+#ifdef __EMSCRIPTEN__
+    // The web build has no Dear ImGui, so the page's debug panel drives the
+    // cycle through settings instead (rt_web_env in web_main.cpp). Re-read them
+    // each frame so the sliders are live. Time-of-day is special: the page
+    // writes it only when the user drags the slider, so honour a *changed*
+    // value (jump there) but otherwise leave cycle.timeOfDay alone — that lets
+    // a non-zero Speed keep animating between drags instead of being pinned.
+    auto& ws = ctx.settings;
+    enabled      = ws.getBool("daynight.enabled", enabled);
+    cycle.speed  = ws.getDouble("daynight.speed", cycle.speed);
+    cycle.paused = ws.getBool("daynight.paused", cycle.paused);
+    double tod = ws.getDouble("daynight.timeOfDay", cycle.timeOfDay);
+    if (tod != webLastTimeOfDay_) { cycle.timeOfDay = tod; webLastTimeOfDay_ = tod; }
+#endif
     // Pushing current state into the view every frame (cheap) keeps panel
     // edits live even while the simulation is paused.
     if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
