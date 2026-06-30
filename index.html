@@ -40,6 +40,9 @@
       -webkit-tap-highlight-color: transparent; }
     .btn:active { background: rgba(40,120,180,.8); }
     #run { bottom: 24px; left: 50%; transform: translateX(-50%); width: 90px; height: 48px; }
+    #fire { right: 18px; bottom: 46vh; width: 84px; height: 84px; border-radius: 50%;
+      background: rgba(120,30,30,.5); border-color: rgba(255,90,90,.6); color: #ffdede; font-weight: 700; }
+    #fire:active { background: rgba(200,40,40,.85); }
     #gear { top: 8px; right: 8px; }
 
     #dbg { position: fixed; top: 0; right: 0; bottom: 0; width: min(78vw, 320px);
@@ -66,11 +69,15 @@
   <div id="baseR" class="base"></div><div id="thumbR" class="thumb"></div>
 
   <button id="run" class="btn" style="display:none">RUN</button>
+  <button id="fire" class="btn" style="display:none">FIRE</button>
   <button id="gear" class="btn" style="display:none">☰ Debug</button>
 
   <div id="dbg">
     <button class="close" id="dbgClose">✕</button>
-    <h3>Debug</h3>
+    <h3>Mode</h3>
+    <div class="row"><span>Play (gun + physics)</span><button id="play">off</button></div>
+    <div class="row"><span>Draw gun (slot 2)</span><button id="drawgun">equip</button></div>
+    <h3 style="margin-top:14px">Debug</h3>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
     <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
     <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
@@ -131,6 +138,10 @@
       const axis = (s, x, y) => mod._rt_web_axis(s, x, y);
       const button = (i, d) => mod._rt_web_button(i, d);
       const flag = (id, v) => mod._rt_web_flag(id, v);
+      const key = (i, d) => mod._rt_web_key(i, d);
+      // Tap a virtual key (press then release next frame) — for one-shot actions
+      // like the weapon-slot keys the engine reads as edge-triggered "pressed".
+      const tapKey = (i) => { key(i, 1); setTimeout(() => key(i, 0), 80); };
 
       // --- floating joystick (multitouch by identifier) ---
       const R = 46;
@@ -169,15 +180,21 @@
         const runUp = (e) => { e.preventDefault(); button(0, 0); run.classList.remove('on'); };
         run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
         run.style.display = 'block';
+        // FIRE button (gameplay): held = shooting (RightBumper, button 2). Shown
+        // only while in Play mode (toggled below).
+        const fire = $('fire');
+        fire.addEventListener('touchstart', (e) => { e.preventDefault(); button(2, 1); fire.classList.add('on'); }, { passive: false });
+        const fireUp = (e) => { e.preventDefault(); button(2, 0); fire.classList.remove('on'); };
+        fire.addEventListener('touchend', fireUp); fire.addEventListener('touchcancel', fireUp);
       } else {
         // Desktop: drive input through the hooks (Emscripten GLFW's keyboard/mouse
         // don't reliably reach this build). Hide the touch stick zones.
         $('zoneL').style.display = 'none';
         $('zoneR').style.display = 'none';
-        log('desktop: WASD/QE move, mouse-drag look, Shift run, ☰ debug');
+        log('desktop: WASD/QE move, mouse-drag look, Shift run, click fire, 1/2 weapon, ☰ debug');
 
         const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
-                         ShiftLeft: 6, ShiftRight: 6 };
+                         ShiftLeft: 6, ShiftRight: 6, Digit1: 7, Digit2: 8 };
         window.addEventListener('keydown', (e) => {
           const k = keyMap[e.code];
           if (k !== undefined) { mod._rt_web_key(k, 1); e.preventDefault(); }
@@ -187,10 +204,11 @@
           if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
         });
 
-        // Mouse drag-to-look.
+        // Mouse drag-to-look; left button also fires (RightBumper, button 2) so a
+        // click shoots in Play mode (harmless in editor — nothing reads it there).
         let dragging = false;
-        canvas.addEventListener('mousedown', () => { dragging = true; });
-        window.addEventListener('mouseup', () => { dragging = false; });
+        canvas.addEventListener('mousedown', (e) => { dragging = true; if (e.button === 0) button(2, 1); });
+        window.addEventListener('mouseup', (e) => { dragging = false; if (e.button === 0) button(2, 0); });
         window.addEventListener('mousemove', (e) => {
           if (dragging) mod._rt_web_look(e.movementX, e.movementY);
         });
@@ -203,6 +221,19 @@
       $('gear').style.display = 'block';
       $('gear').onclick = () => { $('dbg').style.display = 'block'; };
       $('dbgClose').onclick = () => { $('dbg').style.display = 'none'; };
+
+      // Play/Edit toggle: enter ArenaState (gun + Jolt physics) or back to the
+      // free-look editor. In Play, surface the FIRE button on touch devices.
+      let playOn = false; const playB = $('play');
+      playB.onclick = () => {
+        playOn = !playOn;
+        mod._rt_web_play(playOn ? 1 : 0);
+        playB.classList.toggle('on', playOn); playB.textContent = playOn ? 'on' : 'off';
+        if (hasTouch) $('fire').style.display = playOn ? 'block' : 'none';
+        log(playOn ? 'play: tap "Draw gun" then FIRE (or 2 then click on desktop)' : 'editor mode');
+      };
+      // Draw gun: taps the slot-2 weapon key the gun script equips on.
+      $('drawgun').onclick = () => tapKey(8);
 
       // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
       let flyOn = false; const flyB = $('fly');
