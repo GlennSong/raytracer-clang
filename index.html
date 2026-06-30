@@ -82,7 +82,6 @@
     <div id="stats">—</div>
   </div>
 
-  <script src="viewer_web.js"></script>
   <script>
     (async () => {
       const $ = (id) => document.getElementById(id);
@@ -103,9 +102,29 @@
         canvas.height = Math.max(1, Math.floor((canvas.clientHeight || innerHeight) * dpr)); };
       resize(); window.addEventListener('resize', resize);
 
+      // Cache-bust the engine binary: GitHub Pages caches viewer_web.js/.wasm
+      // aggressively and a ?v= on the page URL does NOT bust them. Load fresh with
+      // a per-visit token (dev convenience; switch to a fixed build hash later).
+      const V = Date.now();
+      try {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'viewer_web.js?v=' + V;
+          s.onload = res;
+          s.onerror = () => rej(new Error('failed to load viewer_web.js'));
+          document.head.appendChild(s);
+        });
+      } catch (e) { return fail('' + e); }
+
       let mod;
-      try { mod = await createViewer({ canvas, print: (t) => log(t), printErr: (t) => log(t, 'e') }); }
-      catch (e) { return fail('Failed to start: ' + e); }
+      try {
+        mod = await createViewer({
+          canvas,
+          locateFile: (p) => p + '?v=' + V,   // busts viewer_web.wasm / .data too
+          print: (t) => log(t), printErr: (t) => log(t, 'e'),
+        });
+      } catch (e) { return fail('Failed to start: ' + e); }
+      window.__mod = mod;   // for debugging/automated checks
 
       const haveCtl = typeof mod._rt_web_axis === 'function';
       if (!haveCtl) { log('control hooks missing', 'e'); return; }
@@ -151,12 +170,33 @@
         run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
         run.style.display = 'block';
       } else {
+        // Desktop: drive input through the hooks (Emscripten GLFW's keyboard/mouse
+        // don't reliably reach this build). Hide the touch stick zones.
         $('zoneL').style.display = 'none';
         $('zoneR').style.display = 'none';
         log('desktop: WASD/QE move, mouse-drag look, Shift run, ☰ debug');
-        // Keyboard needs canvas focus; grab it now and on click.
-        canvas.focus();
-        canvas.addEventListener('pointerdown', () => canvas.focus());
+
+        const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
+                         ShiftLeft: 6, ShiftRight: 6 };
+        window.addEventListener('keydown', (e) => {
+          const k = keyMap[e.code];
+          if (k !== undefined) { mod._rt_web_key(k, 1); e.preventDefault(); }
+        });
+        window.addEventListener('keyup', (e) => {
+          const k = keyMap[e.code];
+          if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
+        });
+
+        // Mouse drag-to-look.
+        let dragging = false;
+        canvas.addEventListener('mousedown', () => { dragging = true; });
+        window.addEventListener('mouseup', () => { dragging = false; });
+        window.addEventListener('mousemove', (e) => {
+          if (dragging) mod._rt_web_look(e.movementX, e.movementY);
+        });
+        // Scroll to zoom (right-stick-free dolly via the look accumulator is not
+        // zoom; feed the gamepad trigger-free path through a brief forward nudge).
+        canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
       }
 
       // --- debug panel ---
