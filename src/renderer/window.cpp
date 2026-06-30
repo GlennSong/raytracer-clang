@@ -459,13 +459,17 @@ void GlfwWindow::pollEvents() {
 
     GLFWwindow* window = impl->window;
 #ifdef __EMSCRIPTEN__
-    // Touch drives the mouse state on the web (no GLFW mouse). Drain the deltas
-    // the touch callbacks accumulated between frames.
-    impl->input.mouseDeltaX = impl->touchAccumDX; impl->touchAccumDX = 0;
-    impl->input.mouseDeltaY = impl->touchAccumDY; impl->touchAccumDY = 0;
-    impl->input.scrollDelta = impl->touchAccumScroll; impl->touchAccumScroll = 0;
-    impl->input.mouseLeftDown = impl->touchLeftDown;
-    impl->input.mouseRightDown = impl->touchRightDown;
+    // Desktop browser: real mouse comes through GLFW (onCursorPos/onScroll set the
+    // deltas during glfwPollEvents). Add the touch accumulators on top, and OR the
+    // touch button state with the real mouse buttons — so keyboard+mouse work on
+    // desktop and touch works on mobile, from the same build.
+    impl->input.mouseDeltaX += impl->touchAccumDX; impl->touchAccumDX = 0;
+    impl->input.mouseDeltaY += impl->touchAccumDY; impl->touchAccumDY = 0;
+    impl->input.scrollDelta += impl->touchAccumScroll; impl->touchAccumScroll = 0;
+    impl->input.mouseLeftDown =
+        (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) || impl->touchLeftDown;
+    impl->input.mouseRightDown =
+        (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) || impl->touchRightDown;
     // Turn on-screen button state changes into keyboard events (same path as a
     // real keyboard → InputMap → camera move/boost axes).
     static const KeyCode kVKeys[7] = {KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D,

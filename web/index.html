@@ -138,15 +138,26 @@
           id = null; base.style.display = thumb.style.display = 'none'; axis(idx, 0, 0); } };
         zone.addEventListener('touchend', end); zone.addEventListener('touchcancel', end);
       }
-      makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
-      makeStick('zoneR', 'baseR', 'thumbR', 1);   // look
-
-      // RUN / boost (hold)
-      const run = $('run');
-      run.addEventListener('touchstart', (e) => { e.preventDefault(); button(0, 1); run.classList.add('on'); }, { passive: false });
-      const runUp = (e) => { e.preventDefault(); button(0, 0); run.classList.remove('on'); };
-      run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
-      run.style.display = 'block';
+      // Touch devices get the on-screen sticks + RUN button; desktop uses
+      // keyboard + mouse (the stick zones are hidden so the mouse reaches the
+      // canvas, and WASD/QE + mouse-look + Shift-to-run work via GLFW).
+      const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+      if (hasTouch) {
+        makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
+        makeStick('zoneR', 'baseR', 'thumbR', 1);   // look
+        const run = $('run');
+        run.addEventListener('touchstart', (e) => { e.preventDefault(); button(0, 1); run.classList.add('on'); }, { passive: false });
+        const runUp = (e) => { e.preventDefault(); button(0, 0); run.classList.remove('on'); };
+        run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
+        run.style.display = 'block';
+      } else {
+        $('zoneL').style.display = 'none';
+        $('zoneR').style.display = 'none';
+        log('desktop: WASD/QE move, mouse-drag look, Shift run, ☰ debug');
+        // Keyboard needs canvas focus; grab it now and on click.
+        canvas.focus();
+        canvas.addEventListener('pointerdown', () => canvas.focus());
+      }
 
       // --- debug panel ---
       $('gear').style.display = 'block';
