@@ -429,6 +429,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
+        src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
     )
 endif()
 
@@ -556,6 +557,7 @@ if(Qt6_FOUND)
             src/engine/systems/player_system.cpp
             src/engine/systems/shooting_system.cpp
             src/engine/systems/vehicle_system.cpp
+            src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars
         )
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;

@@ -336,6 +336,13 @@ Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {
     return fromJolt(impl->bodies().GetLinearVelocity(JPH::BodyID(id)));
 }
 
+void PhysicsWorld::moveKinematic(PhysicsBodyId id, const Vec3& position,
+                                 const Quat& orientation, Real dt) {
+    if (!impl || id == INVALID_PHYSICS_BODY || dt <= 0) return;
+    impl->bodies().MoveKinematic(JPH::BodyID(id), toJoltR(position),
+                                 toJolt(orientation), static_cast<float>(dt));
+}
+
 Vec3 PhysicsWorld::bodyPosition(PhysicsBodyId id) const {
     if (!impl || id == INVALID_PHYSICS_BODY) return Vec3();
     return fromJolt(impl->bodies().GetPosition(JPH::BodyID(id)));

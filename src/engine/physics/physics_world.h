@@ -68,6 +68,13 @@ public:
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
     Vec3 getLinearVelocity(PhysicsBodyId id) const;
+
+    // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
+    // the body moves with the velocity needed to arrive, so it pushes dynamic
+    // bodies and blocks characters instead of tunnelling. For sim-owned movers
+    // (e.g. agent-driven cars) whose pose is decided outside the physics step.
+    void moveKinematic(PhysicsBodyId id, const Vec3& position,
+                       const Quat& orientation, Real dt);
     Vec3 bodyPosition(PhysicsBodyId id) const;
     Quat bodyOrientation(PhysicsBodyId id) const;
 

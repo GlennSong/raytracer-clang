@@ -9,6 +9,9 @@
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "../apps/citysim/city_physics.h"
+#endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
@@ -65,9 +68,13 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<MotionSystem>();
     // Agent-based city: drivers + pedestrians with acceleration, signals,
     // perception, and bounded-radius steering over the road network (ADR-0059).
-    addSystem<citysim::CityRenderSystem>();
+    auto& citySys = addSystem<citysim::CityRenderSystem>();
 #ifdef RT_ENABLE_PHYSICS
+    // Kinematic colliders so the player + physics gun bump into AI cars.
+    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0058)
+#else
+    (void)citySys;   // physics-off build: no collider system to consume it
 #endif
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
