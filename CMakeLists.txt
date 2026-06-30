@@ -295,6 +295,7 @@ add_executable(run_tests
     tests/test_city_perception.cpp
     tests/test_city_steering.cpp
     tests/test_city_render.cpp
+    tests/test_city_flow.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

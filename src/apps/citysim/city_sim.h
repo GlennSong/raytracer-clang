@@ -104,7 +104,7 @@ private:
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
-    std::vector<engine::Vec2> positions_;   // per-step snapshot of every agent's pos
+    std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;

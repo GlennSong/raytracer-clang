@@ -51,10 +51,9 @@ Real headingAngle(Vec2 a, Vec2 b) {
     return std::acos(d);
 }
 
-// Mirror of the sim's contract (city_sim.cpp): tightest arc radius and the
-// pivot rate a near-stopped car may still use.
+// Mirror of the sim's contract (city_sim.cpp): the tightest arc radius. Yaw rate
+// is purely speed-proportional (v / radius) — a stopped car does not turn.
 constexpr Real kMinTurnRadius = 6.0;
-constexpr Real kRestYawRate = 1.2;
 
 }  // namespace
 
@@ -66,7 +65,6 @@ TEST_CASE(car_heading_yaw_rate_is_bounded_by_turn_radius) {
     const Real dt = 0.1;
     std::vector<Vec2> prev(sim.agents().size());
     std::vector<bool> have(sim.agents().size(), false);
-    std::vector<Real> prevSpeed(sim.agents().size(), 0.0);
 
     bool sawMotion = false;
     for (int i = 0; i < 6000; ++i) {
@@ -78,14 +76,13 @@ TEST_CASE(car_heading_yaw_rate_is_bounded_by_turn_radius) {
             if (a.moving && have[k]) {
                 sawMotion = true;
                 Real ang = headingAngle(prev[k], a.heading);
-                // Bound uses the speed that produced this step's yaw. A small
-                // epsilon covers floating-point rounding in the rotation.
-                Real v = prevSpeed[k];
-                Real bound = ((v > 0.2 ? v / kMinTurnRadius : kRestYawRate) * dt) + 1e-3;
+                // The yaw applied this step used this step's (finalized) speed, so
+                // that is what bounds it: v / radius * dt. A small epsilon covers
+                // floating-point rounding in the rotation.
+                Real bound = (a.speed / kMinTurnRadius * dt) + 1e-3;
                 CHECK(ang <= bound);
             }
             prev[k] = a.heading;
-            prevSpeed[k] = a.speed;
             have[k] = a.moving;
         }
     }

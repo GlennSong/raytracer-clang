@@ -23,7 +23,6 @@ constexpr Real kSignalApproach = 14.0;          // start braking for a light thi
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
-constexpr Real kCarRestYawRate = 1.2;   // rad/s a near-stopped car may still pivot
 
 // Speed a follower may travel given the centre-to-centre gap to its leader.
 Real followCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
@@ -160,7 +159,12 @@ void CitySim::steer(Agent& a, Real dt) {
     if (a.leg >= static_cast<int>(a.route.links.size())) return;
     Vec2 desired = nav_->direction(a.route.links[a.leg]);
     if (a.mode != Agent::Mode::Driver) { a.heading = desired; return; }
-    Real rate = (a.speed > 0.2) ? a.speed / kCarMinTurnRadius : kCarRestYawRate;
+    // Yaw rate is proportional to speed: at v the tightest arc is kCarMinTurnRadius,
+    // so the car may turn at most v / radius rad/s. A stopped car cannot change
+    // heading at all (like a real car) — it holds until it rolls, which also means
+    // a car halted at a light never snaps its heading. Trip start seeds the initial
+    // heading directly (startTrip), so a just-launched car is already aligned.
+    Real rate = a.speed / kCarMinTurnRadius;
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
 
@@ -183,8 +187,14 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
         }
     }
 
-    // Perception: brake for whatever the agent SEES ahead in its vision cone —
-    // cross traffic and pedestrians the same-lane car-following pass would miss.
+    // Perception: brake for a PEDESTRIAN (or the player) the car sees crossing
+    // ahead in its vision cone — the safety case car-following can't cover. We do
+    // NOT brake for other AI cars here: car-vs-car conflicts are resolved by lanes
+    // (opposing traffic sits on the other side), same-lane car-following (the gap
+    // cap below), and the traffic signals. Braking for every car in a wide cone
+    // made oncoming traffic and cross traffic at junctions stop for each other and
+    // deadlock — a snarl with no way to clear. `positions_` therefore holds only
+    // pedestrians + the player (see step()).
     // Imperfect: with probability (1 - reliability) the agent misses it this step
     // (a fault), so it may not brake in time.
     if (car) {
@@ -192,11 +202,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
             engine::VisionCone cone;
             cone.origin = a.pos;
             cone.forward = a.heading;
-            cone.range = 25.0;
-            cone.halfAngleRad = 0.9;     // ~51 deg, wide enough to catch a crosser
+            cone.range = 18.0;
+            cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
+                                         // not someone standing on the far sidewalk
             Real obstacle = nearestObstacleAhead(cone, positions_);
             if (obstacle < 1e9)
-                target = std::min(target, approachStop(obstacle - 5.0, kCarDecel, target));
+                target = std::min(target, approachStop(obstacle - 4.0, kCarDecel, target));
         } else {
             ++faultCount_;
         }
@@ -301,9 +312,14 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         }
     }
 
-    // Snapshot every agent's position so perception sees a consistent world.
-    positions_.resize(agents_.size());
-    for (std::size_t i = 0; i < agents_.size(); ++i) positions_[i] = agents_[i].pos;
+    // Snapshot the positions cars must yield to — pedestrians and the player —
+    // so perception sees a consistent world this step. AI cars are deliberately
+    // excluded (see advance()): lanes + car-following + signals govern car-vs-car,
+    // and braking for cross/oncoming cars in the cone deadlocked traffic.
+    positions_.clear();
+    for (const Agent& a : agents_)
+        if (a.mode == Agent::Mode::Pedestrian || a.playerControlled)
+            positions_.push_back(a.pos);
 
     // Pass 2: leading gaps. Pass 3: advance.
     computeGaps();
