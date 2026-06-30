@@ -50,6 +50,9 @@ constexpr uint64_t kDrawStride = 256;
 // query surface capabilities and switch to a *-srgb view to drop the gamma.
 constexpr WGPUTextureFormat kSwapFormat = WGPUTextureFormat_BGRA8Unorm;
 constexpr WGPUTextureFormat kDepthFormat = WGPUTextureFormat_Depth24Plus;
+// Scene renders into a linear HDR target; a composite pass tone-maps it to the
+// swapchain. RGBA16Float is renderable + filterable everywhere WebGPU runs.
+constexpr WGPUTextureFormat kHdrFormat = WGPUTextureFormat_RGBA16Float;
 constexpr WGPUTextureFormat kShadowFormat = WGPUTextureFormat_Depth32Float;
 
 WGPUStringView sv(const char* s) {
@@ -100,6 +103,14 @@ struct GpuGlobals {
     float    shadowParams[4];     // x enabled, y depthBias, z normalBias, w pcfTexels
     float    postParams[4];       // x exposure, y tonemapOp, z contrast, w saturation
     GpuLight lights[32];
+};
+
+// Composite uniform (matches the WGSL `Post`): the view-transform knobs + the
+// debug-view selector. Separate from Globals so the composite pass binds a small
+// buffer instead of the whole scene block.
+struct GpuPost {
+    float    postParams[4];   // x exposure, y tonemapOp, z contrast, w saturation
+    int32_t  debugView[4];    // x = debug view (0 = normal)
 };
 
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
@@ -599,13 +610,8 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     let f = 1.0 - exp(-g.fog.w * dist);
     color = mix(color, g.fog.rgb, f);
   }
-  // View transform (Metal/Vulkan parity): scene-referred exposure, then the
-  // "Look" grade in linear, then ACES/AgX — both fold in the sRGB encode, so
-  // there's no separate gamma step (the swapchain is non-sRGB, kSwapFormat).
-  color = color * g.postParams.x;                       // exposure
-  color = applyGrade(color, g.postParams.z, g.postParams.w);
-  if (g.postParams.y > 0.5) { color = tonemapAgX(color); }
-  else                      { color = tonemapACES(color); }
+  // Scene-linear into the HDR target; the composite pass owns the view
+  // transform (exposure/grade/tonemap) so post effects operate on linear HDR.
   return vec4<f32>(color, 1.0);
 }
 
@@ -632,11 +638,85 @@ fn vs_sky(@builtin(vertex_index) vid : u32) -> SkyOut {
 @fragment
 fn fs_sky(in : SkyOut) -> @location(0) vec4<f32> {
   let dir = normalize(in.ray);
-  var color = sampleEnvironment(dir);
-  // Same view transform as the scene so the sky tone-matches.
-  color = color * g.postParams.x;
-  color = applyGrade(color, g.postParams.z, g.postParams.w);
-  if (g.postParams.y > 0.5) { color = tonemapAgX(color); }
+  // Scene-linear into the HDR target; the composite pass tone-maps it with the
+  // scene, so the sky tone-matches automatically.
+  return vec4<f32>(sampleEnvironment(dir), 1.0);
+}
+)WGSL";
+
+// Composite shader: HDR offscreen target -> swapchain. A fullscreen triangle
+// reads the linear HDR scene texel-for-texel, applies any screen-space post
+// (SSAO/SSR/bloom land here later), then the view transform (exposure -> grade
+// -> ACES/AgX). Debug views are already display-ready, so they bypass the tone
+// map (counts.y != 0). Its own module + group(0) layout, independent of the
+// mesh pipeline.
+const char* kCompositeWgsl = R"WGSL(
+struct Post {
+  postParams : vec4<f32>,   // x exposure, y tonemapOp, z contrast, w saturation
+  debugView  : vec4<i32>,   // x = debug view (0 = normal)
+};
+@group(0) @binding(0) var hdrTex : texture_2d<f32>;
+@group(0) @binding(1) var<uniform> p : Post;
+
+fn applyGrade(x0 : vec3<f32>, contrast : f32, saturation : f32) -> vec3<f32> {
+  var x = x0;
+  let luma = dot(x, vec3<f32>(0.2126, 0.7152, 0.0722));
+  x = max(vec3<f32>(luma) + saturation * (x - vec3<f32>(luma)), vec3<f32>(0.0));
+  let grey = 0.18;
+  let lg = log2(grey);
+  var lx = log2(max(x, vec3<f32>(1e-5)));
+  lx = (lx - vec3<f32>(lg)) * contrast + vec3<f32>(lg);
+  return exp2(lx);
+}
+fn tonemapACES(x : vec3<f32>) -> vec3<f32> {
+  let ci = vec3<f32>(dot(vec3<f32>(0.59719, 0.35458, 0.04823), x),
+                     dot(vec3<f32>(0.07600, 0.90834, 0.01566), x),
+                     dot(vec3<f32>(0.02840, 0.13383, 0.83777), x));
+  let cf = (ci * (ci + 0.0245786) - 0.000090537) /
+           (ci * (0.983729 * ci + 0.432951) + 0.238081);
+  let c = vec3<f32>(dot(vec3<f32>( 1.60475, -0.53108, -0.07367), cf),
+                    dot(vec3<f32>(-0.10208,  1.10813, -0.00605), cf),
+                    dot(vec3<f32>(-0.00327, -0.07276,  1.07602), cf));
+  return pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+}
+fn agxContrastApprox(x : vec3<f32>) -> vec3<f32> {
+  let x2 = x * x;
+  let x4 = x2 * x2;
+  return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4
+       - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - vec3<f32>(0.00232);
+}
+fn tonemapAgX(val0 : vec3<f32>) -> vec3<f32> {
+  let agxMat = mat3x3<f32>(
+    vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+    vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
+    vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+  let agxMatInv = mat3x3<f32>(
+    vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+    vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+    vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+  let minEv = -12.47393;
+  let maxEv = 4.026069;
+  var val = agxMat * val0;
+  val = clamp(log2(max(val, vec3<f32>(1e-10))), vec3<f32>(minEv), vec3<f32>(maxEv));
+  val = (val - vec3<f32>(minEv)) / (maxEv - minEv);
+  val = agxContrastApprox(val);
+  val = agxMatInv * clamp(val, vec3<f32>(0.0), vec3<f32>(1.0));
+  return clamp(val, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+@vertex
+fn vs_composite(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var pos = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(pos[vid], 0.0, 1.0);
+}
+@fragment
+fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
+  let px = vec2<i32>(fragCoord.xy);
+  var color = textureLoad(hdrTex, px, 0).rgb;
+  if (p.debugView.x != 0) { return vec4<f32>(color, 1.0); }   // debug view, as-is
+  color = color * p.postParams.x;                             // exposure
+  color = applyGrade(color, p.postParams.z, p.postParams.w);
+  if (p.postParams.y > 0.5) { color = tonemapAgX(color); }
   else                      { color = tonemapACES(color); }
   return vec4<f32>(color, 1.0);
 }
@@ -705,6 +785,10 @@ public:
         if (skyBindGroup_) { wgpuBindGroupRelease(skyBindGroup_); skyBindGroup_ = nullptr; }
         if (skyPipeline_) { wgpuRenderPipelineRelease(skyPipeline_); skyPipeline_ = nullptr; }
         if (skyLayout_) { wgpuBindGroupLayoutRelease(skyLayout_); skyLayout_ = nullptr; }
+        if (compositeBindGroup_) { wgpuBindGroupRelease(compositeBindGroup_); compositeBindGroup_ = nullptr; }
+        if (compositePipeline_) { wgpuRenderPipelineRelease(compositePipeline_); compositePipeline_ = nullptr; }
+        if (compositeLayout_) { wgpuBindGroupLayoutRelease(compositeLayout_); compositeLayout_ = nullptr; }
+        if (postBuf_) { wgpuBufferRelease(postBuf_); postBuf_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
@@ -733,6 +817,7 @@ public:
         configureSurface();
         releaseDepthTarget();
         createDepthTarget();
+        if (postBuf_) rebuildCompositeBindGroup();  // hdrView_ changed
     }
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override {
@@ -1063,7 +1148,7 @@ public:
         }
 
         WGPURenderPassColorAttachment color = {};
-        color.view = backbuffer;
+        color.view = hdrView_;        // scene -> HDR target; composite -> swapchain
         color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
         color.loadOp = WGPULoadOp_Clear;
         color.storeOp = WGPUStoreOp_Store;
@@ -1105,6 +1190,31 @@ public:
 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
+
+        // Composite the HDR target to the swapchain (view transform / post).
+        GpuPost post = {};
+        post.postParams[0] = globals_.postParams[0];
+        post.postParams[1] = globals_.postParams[1];
+        post.postParams[2] = globals_.postParams[2];
+        post.postParams[3] = globals_.postParams[3];
+        post.debugView[0] = globals_.counts[1];
+        wgpuQueueWriteBuffer(queue_, postBuf_, 0, &post, sizeof(post));
+
+        WGPURenderPassColorAttachment ccolor = {};
+        ccolor.view = backbuffer;
+        ccolor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        ccolor.loadOp = WGPULoadOp_Clear;
+        ccolor.storeOp = WGPUStoreOp_Store;
+        ccolor.clearValue = {0.0, 0.0, 0.0, 1.0};
+        WGPURenderPassDescriptor cpassDesc = {};
+        cpassDesc.colorAttachmentCount = 1;
+        cpassDesc.colorAttachments = &ccolor;
+        WGPURenderPassEncoder cpass = wgpuCommandEncoderBeginRenderPass(encoder, &cpassDesc);
+        wgpuRenderPassEncoderSetPipeline(cpass, compositePipeline_);
+        wgpuRenderPassEncoderSetBindGroup(cpass, 0, compositeBindGroup_, 0, nullptr);
+        wgpuRenderPassEncoderDraw(cpass, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(cpass);
+        wgpuRenderPassEncoderRelease(cpass);
 
         WGPUCommandBuffer commands = wgpuCommandEncoderFinish(encoder, nullptr);
         wgpuQueueSubmit(queue_, 1, &commands);
@@ -1220,11 +1330,24 @@ private:
         desc.sampleCount = 1;
         depthTexture_ = wgpuDeviceCreateTexture(device_, &desc);
         depthView_ = wgpuTextureCreateView(depthTexture_, nullptr);
+
+        // Linear HDR scene target (sampled by the composite pass).
+        WGPUTextureDescriptor hd = {};
+        hd.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        hd.dimension = WGPUTextureDimension_2D;
+        hd.size = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};
+        hd.format = kHdrFormat;
+        hd.mipLevelCount = 1;
+        hd.sampleCount = 1;
+        hdrTexture_ = wgpuDeviceCreateTexture(device_, &hd);
+        hdrView_ = wgpuTextureCreateView(hdrTexture_, nullptr);
     }
 
     void releaseDepthTarget() {
         if (depthView_) { wgpuTextureViewRelease(depthView_); depthView_ = nullptr; }
         if (depthTexture_) { wgpuTextureRelease(depthTexture_); depthTexture_ = nullptr; }
+        if (hdrView_) { wgpuTextureViewRelease(hdrView_); hdrView_ = nullptr; }
+        if (hdrTexture_) { wgpuTextureRelease(hdrTexture_); hdrTexture_ = nullptr; }
     }
 
     bool createPipeline() {
@@ -1305,7 +1428,7 @@ private:
         vbLayout.attributes = attrs;
 
         WGPUColorTargetState colorTarget = {};
-        colorTarget.format = kSwapFormat;
+        colorTarget.format = kHdrFormat;   // scene renders into the HDR target
         colorTarget.writeMask = WGPUColorWriteMask_All;
 
         WGPUFragmentState fragment = {};
@@ -1408,7 +1531,7 @@ private:
         skyDepth.stencilBack = skyDepth.stencilFront;
 
         WGPUColorTargetState skyColor = {};
-        skyColor.format = kSwapFormat;
+        skyColor.format = kHdrFormat;     // sky renders into the HDR target too
         skyColor.writeMask = WGPUColorWriteMask_All;
         WGPUFragmentState skyFrag = {};
         skyFrag.module = module;
@@ -1432,7 +1555,61 @@ private:
         wgpuPipelineLayoutRelease(skyPipeLayout);
 
         wgpuShaderModuleRelease(module);
-        if (!pipeline_ || !shadowPipeline_ || !skyPipeline_) {
+
+        // Composite pipeline (its own module): HDR target -> swapchain. Group 0 =
+        // { hdr texture, post uniform }. No vertex buffer, no depth.
+        WGPUShaderSourceWGSL cWgsl = {};
+        cWgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+        cWgsl.code = sv(kCompositeWgsl);
+        WGPUShaderModuleDescriptor cModDesc = {};
+        cModDesc.nextInChain = &cWgsl.chain;
+        WGPUShaderModule cModule = wgpuDeviceCreateShaderModule(device_, &cModDesc);
+
+        WGPUBindGroupLayoutEntry cEntries[2] = {};
+        cEntries[0].binding = 0;
+        cEntries[0].visibility = WGPUShaderStage_Fragment;
+        cEntries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;  // textureLoad
+        cEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        cEntries[1].binding = 1;
+        cEntries[1].visibility = WGPUShaderStage_Fragment;
+        cEntries[1].buffer.type = WGPUBufferBindingType_Uniform;
+        cEntries[1].buffer.minBindingSize = sizeof(GpuPost);
+        WGPUBindGroupLayoutDescriptor cblDesc = {};
+        cblDesc.entryCount = 2;
+        cblDesc.entries = cEntries;
+        compositeLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &cblDesc);
+
+        WGPUPipelineLayoutDescriptor cplDesc = {};
+        cplDesc.bindGroupLayoutCount = 1;
+        cplDesc.bindGroupLayouts = &compositeLayout_;
+        WGPUPipelineLayout cPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &cplDesc);
+
+        WGPUColorTargetState cColor = {};
+        cColor.format = kSwapFormat;       // composite writes the swapchain
+        cColor.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState cFrag = {};
+        cFrag.module = cModule;
+        cFrag.entryPoint = sv("fs_composite");
+        cFrag.targetCount = 1;
+        cFrag.targets = &cColor;
+
+        WGPURenderPipelineDescriptor cDesc = {};
+        cDesc.layout = cPipeLayout;
+        cDesc.vertex.module = cModule;
+        cDesc.vertex.entryPoint = sv("vs_composite");
+        cDesc.vertex.bufferCount = 0;
+        cDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        cDesc.primitive.frontFace = WGPUFrontFace_CCW;
+        cDesc.primitive.cullMode = WGPUCullMode_None;
+        cDesc.depthStencil = nullptr;      // composite ignores depth
+        cDesc.fragment = &cFrag;
+        cDesc.multisample.count = 1;
+        cDesc.multisample.mask = 0xFFFFFFFF;
+        compositePipeline_ = wgpuDeviceCreateRenderPipeline(device_, &cDesc);
+        wgpuPipelineLayoutRelease(cPipeLayout);
+        wgpuShaderModuleRelease(cModule);
+
+        if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -1535,6 +1712,31 @@ private:
         skyBgDesc.entryCount = 1;
         skyBgDesc.entries = &skyBg;
         skyBindGroup_ = wgpuDeviceCreateBindGroup(device_, &skyBgDesc);
+
+        // Composite: a small post-uniform buffer + a bind group over the HDR view.
+        WGPUBufferDescriptor pDesc = {};
+        pDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        pDesc.size = sizeof(GpuPost);
+        postBuf_ = wgpuDeviceCreateBuffer(device_, &pDesc);
+        rebuildCompositeBindGroup();
+    }
+
+    // The composite bind group references hdrView_, which is recreated on resize,
+    // so it must be rebuilt whenever the HDR target changes.
+    void rebuildCompositeBindGroup() {
+        if (compositeBindGroup_) { wgpuBindGroupRelease(compositeBindGroup_); compositeBindGroup_ = nullptr; }
+        WGPUBindGroupEntry ce[2] = {};
+        ce[0].binding = 0;
+        ce[0].textureView = hdrView_;
+        ce[1].binding = 1;
+        ce[1].buffer = postBuf_;
+        ce[1].offset = 0;
+        ce[1].size = sizeof(GpuPost);
+        WGPUBindGroupDescriptor cbgDesc = {};
+        cbgDesc.layout = compositeLayout_;
+        cbgDesc.entryCount = 2;
+        cbgDesc.entries = ce;
+        compositeBindGroup_ = wgpuDeviceCreateBindGroup(device_, &cbgDesc);
     }
 
     void allocDrawBuffer(size_t slots) {
@@ -1584,12 +1786,18 @@ private:
 
     WGPUTexture depthTexture_ = nullptr;
     WGPUTextureView depthView_ = nullptr;
+    WGPUTexture hdrTexture_ = nullptr;            // linear HDR scene target
+    WGPUTextureView hdrView_ = nullptr;
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
     WGPUBindGroupLayout skyLayout_ = nullptr;     // group 0 (globals only)
     WGPURenderPipeline skyPipeline_ = nullptr;    // fullscreen procedural sky
     WGPUBindGroup skyBindGroup_ = nullptr;
+    WGPUBindGroupLayout compositeLayout_ = nullptr;  // HDR -> swapchain
+    WGPURenderPipeline compositePipeline_ = nullptr;
+    WGPUBindGroup compositeBindGroup_ = nullptr;
+    WGPUBuffer postBuf_ = nullptr;
     WGPUBuffer globalBuf_ = nullptr;
     WGPUBuffer drawBuf_ = nullptr;
     WGPUBindGroup bindGroup_ = nullptr;
