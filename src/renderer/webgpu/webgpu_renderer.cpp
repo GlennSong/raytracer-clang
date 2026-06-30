@@ -85,6 +85,7 @@ struct GpuLight {
 struct GpuGlobals {
     float    viewProjection[16];  // column-major
     float    view[16];            // for view-space depth (debug view 3)
+    float    invViewProjection[16]; // reconstruct world rays (sky background)
     float    cameraPosition[4];
     float    ambient[4];          // rgb ambient term (tint * multiplier)
     float    skySunDir[4];        // xyz dir, w disc intensity
@@ -135,6 +136,7 @@ struct Light {
 struct Globals {
   viewProjection : mat4x4<f32>,
   view           : mat4x4<f32>,
+  invViewProjection : mat4x4<f32>, // reconstruct world rays (sky background)
   cameraPosition : vec4<f32>,
   ambient        : vec4<f32>,      // rgb = ambient tint * multiplier (IBL strength)
   skySunDir      : vec4<f32>,      // xyz dir, w disc intensity
@@ -576,6 +578,38 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   else                      { color = tonemapACES(color); }
   return vec4<f32>(color, 1.0);
 }
+
+// --- Procedural sky background -------------------------------------------
+// A fullscreen triangle whose fragments reconstruct a world-space view ray
+// (via invViewProjection) and shade the same procedural sky used for IBL, so
+// the background is a real gradient + sun disc instead of a flat clear color.
+// Drawn into the main pass with depth-compare Always + no depth write, so the
+// meshes (which write depth) paint over it.
+struct SkyOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) ray : vec3<f32>,
+};
+@vertex
+fn vs_sky(@builtin(vertex_index) vid : u32) -> SkyOut {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  var out : SkyOut;
+  let pos = p[vid];
+  out.clip = vec4<f32>(pos, 1.0, 1.0);                  // z = w -> far plane
+  let world = g.invViewProjection * vec4<f32>(pos, 1.0, 1.0);
+  out.ray = world.xyz / world.w - g.cameraPosition.xyz;
+  return out;
+}
+@fragment
+fn fs_sky(in : SkyOut) -> @location(0) vec4<f32> {
+  let dir = normalize(in.ray);
+  var color = sampleEnvironment(dir);
+  // Same view transform as the scene so the sky tone-matches.
+  color = color * g.postParams.x;
+  color = applyGrade(color, g.postParams.z, g.postParams.w);
+  if (g.postParams.y > 0.5) { color = tonemapAgX(color); }
+  else                      { color = tonemapACES(color); }
+  return vec4<f32>(color, 1.0);
+}
 )WGSL";
 
 class WebGpuRenderer final : public Renderer {
@@ -638,6 +672,9 @@ public:
         if (globalBuf_) { wgpuBufferRelease(globalBuf_); globalBuf_ = nullptr; }
         if (drawBuf_)   { wgpuBufferRelease(drawBuf_);   drawBuf_ = nullptr; }
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
+        if (skyBindGroup_) { wgpuBindGroupRelease(skyBindGroup_); skyBindGroup_ = nullptr; }
+        if (skyPipeline_) { wgpuRenderPipelineRelease(skyPipeline_); skyPipeline_ = nullptr; }
+        if (skyLayout_) { wgpuBindGroupLayoutRelease(skyLayout_); skyLayout_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowSampler_) { wgpuSamplerRelease(shadowSampler_); shadowSampler_ = nullptr; }
@@ -745,6 +782,7 @@ public:
         Mat4 vp = proj * view;
         packMat4(vp, globals_.viewProjection);
         packMat4(view, globals_.view);
+        packMat4(vp.inverse(), globals_.invViewProjection);
         cameraEye_ = camera.position;
         g_webCamEye[0] = (float)camera.position.x;
         g_webCamEye[1] = (float)camera.position.y;
@@ -953,6 +991,13 @@ public:
         passDesc.depthStencilAttachment = &depth;
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+
+        // Procedural sky background first (depth-compare Always, no write), so
+        // the meshes paint over it where they pass the depth test.
+        wgpuRenderPassEncoderSetPipeline(pass, skyPipeline_);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, skyBindGroup_, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+
         wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
         wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
 
@@ -1228,8 +1273,60 @@ private:
         shadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &sdesc);
         wgpuPipelineLayoutRelease(shadowLayout);
 
+        // Sky pipeline: fullscreen triangle, globals only (its own one-binding
+        // layout so it doesn't depend on the per-draw dynamic buffer). No vertex
+        // buffer; depth-compare Always + no write so meshes paint over it.
+        WGPUBindGroupLayoutEntry skyEntry = {};
+        skyEntry.binding = 0;
+        skyEntry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+        skyEntry.buffer.type = WGPUBufferBindingType_Uniform;
+        skyEntry.buffer.minBindingSize = sizeof(GpuGlobals);
+        WGPUBindGroupLayoutDescriptor skyblDesc = {};
+        skyblDesc.entryCount = 1;
+        skyblDesc.entries = &skyEntry;
+        skyLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &skyblDesc);
+
+        WGPUPipelineLayoutDescriptor skyplDesc = {};
+        skyplDesc.bindGroupLayoutCount = 1;
+        skyplDesc.bindGroupLayouts = &skyLayout_;
+        WGPUPipelineLayout skyPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &skyplDesc);
+
+        WGPUDepthStencilState skyDepth = {};
+        skyDepth.format = kDepthFormat;
+        skyDepth.depthWriteEnabled = WGPUOptionalBool_False;
+        skyDepth.depthCompare = WGPUCompareFunction_Always;
+        skyDepth.stencilFront.compare = WGPUCompareFunction_Always;
+        skyDepth.stencilFront.failOp = WGPUStencilOperation_Keep;
+        skyDepth.stencilFront.depthFailOp = WGPUStencilOperation_Keep;
+        skyDepth.stencilFront.passOp = WGPUStencilOperation_Keep;
+        skyDepth.stencilBack = skyDepth.stencilFront;
+
+        WGPUColorTargetState skyColor = {};
+        skyColor.format = kSwapFormat;
+        skyColor.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState skyFrag = {};
+        skyFrag.module = module;
+        skyFrag.entryPoint = sv("fs_sky");
+        skyFrag.targetCount = 1;
+        skyFrag.targets = &skyColor;
+
+        WGPURenderPipelineDescriptor skyPipeDesc = {};
+        skyPipeDesc.layout = skyPipeLayout;
+        skyPipeDesc.vertex.module = module;
+        skyPipeDesc.vertex.entryPoint = sv("vs_sky");
+        skyPipeDesc.vertex.bufferCount = 0;        // fullscreen triangle from vertex_index
+        skyPipeDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        skyPipeDesc.primitive.frontFace = WGPUFrontFace_CCW;
+        skyPipeDesc.primitive.cullMode = WGPUCullMode_None;
+        skyPipeDesc.depthStencil = &skyDepth;
+        skyPipeDesc.fragment = &skyFrag;
+        skyPipeDesc.multisample.count = 1;
+        skyPipeDesc.multisample.mask = 0xFFFFFFFF;
+        skyPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &skyPipeDesc);
+        wgpuPipelineLayoutRelease(skyPipeLayout);
+
         wgpuShaderModuleRelease(module);
-        if (!pipeline_ || !shadowPipeline_) {
+        if (!pipeline_ || !shadowPipeline_ || !skyPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -1278,6 +1375,18 @@ private:
         drawCapacity_ = 256;  // initial per-draw slot count; grows as needed
         allocDrawBuffer(drawCapacity_);
         rebuildBindGroup();
+
+        // Sky bind group: just the globals buffer (its own one-binding layout).
+        WGPUBindGroupEntry skyBg = {};
+        skyBg.binding = 0;
+        skyBg.buffer = globalBuf_;
+        skyBg.offset = 0;
+        skyBg.size = sizeof(GpuGlobals);
+        WGPUBindGroupDescriptor skyBgDesc = {};
+        skyBgDesc.layout = skyLayout_;
+        skyBgDesc.entryCount = 1;
+        skyBgDesc.entries = &skyBg;
+        skyBindGroup_ = wgpuDeviceCreateBindGroup(device_, &skyBgDesc);
     }
 
     void allocDrawBuffer(size_t slots) {
@@ -1330,6 +1439,9 @@ private:
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
+    WGPUBindGroupLayout skyLayout_ = nullptr;     // group 0 (globals only)
+    WGPURenderPipeline skyPipeline_ = nullptr;    // fullscreen procedural sky
+    WGPUBindGroup skyBindGroup_ = nullptr;
     WGPUBuffer globalBuf_ = nullptr;
     WGPUBuffer drawBuf_ = nullptr;
     WGPUBindGroup bindGroup_ = nullptr;
