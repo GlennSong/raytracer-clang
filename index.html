@@ -77,6 +77,12 @@
     <h3>Mode</h3>
     <div class="row"><span>Play (gun + physics)</span><button id="play">off</button></div>
     <div class="row"><span>Draw gun (slot 2)</span><button id="drawgun">equip</button></div>
+    <h3 style="margin-top:14px">World</h3>
+    <div class="row"><span>Day/night cycle</span><button id="dncycle">on</button></div>
+    <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" min="0" max="1000" value="350" style="flex:1"></div>
+    <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
+    <div class="row"><span>Speed</span><input id="dnspeed" type="range" min="0" max="200" value="20" style="flex:1"></div>
+
     <h3 style="margin-top:14px">Debug</h3>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
     <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
@@ -234,6 +240,25 @@
       };
       // Draw gun: taps the slot-2 weapon key the gun script equips on.
       $('drawgun').onclick = () => tapKey(8);
+
+      // --- World: day/night cycle (drives the sun + procedural sky) ---
+      const env = (id, v) => mod._rt_web_env(id, v);
+      const fmtClock = (tod) => { const m = Math.floor(tod * 24 * 60) % (24 * 60);
+        return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+      const dntime = $('dntime'), dnclock = $('dnclock');
+      const setTime = () => { const tod = dntime.value / 1000; env(0, tod); dnclock.textContent = fmtClock(tod); };
+      dntime.addEventListener('input', setTime);
+      setTime();                                  // push the initial time
+      env(1, 0); env(2, 1);                       // start paused (speed irrelevant)
+      let dnCycleOn = true; const dnCycleB = $('dncycle');
+      dnCycleB.onclick = () => { dnCycleOn = !dnCycleOn; env(3, dnCycleOn ? 1 : 0);
+        dnCycleB.classList.toggle('on', dnCycleOn); dnCycleB.textContent = dnCycleOn ? 'on' : 'off'; };
+      dnCycleB.classList.add('on');
+      let dnPlayOn = false; const dnPlayB = $('dnplay'), dnspeed = $('dnspeed');
+      const applySpeed = () => env(1, dnPlayOn ? dnspeed.value / 1000 : 0);
+      dnPlayB.onclick = () => { dnPlayOn = !dnPlayOn; env(2, dnPlayOn ? 0 : 1); applySpeed();
+        dnPlayB.classList.toggle('on', dnPlayOn); dnPlayB.textContent = dnPlayOn ? 'on' : 'off'; };
+      dnspeed.addEventListener('input', applySpeed);
 
       // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
       let flyOn = false; const flyB = $('fly');
