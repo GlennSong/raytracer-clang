@@ -60,6 +60,47 @@ TEST_CASE(busy_junction_does_not_gridlock) {
     CHECK(arrivals > 40);
 }
 
+TEST_CASE(cars_keep_to_the_right_side_of_the_road) {
+    // A wide two-way street: with a fixed lane offset a car would hug the
+    // centreline on a wide road (ambiguous side); the width-relative spacing keeps
+    // each car centred in its own half. Verify every moving car sits on the RIGHT
+    // of its travel direction and inside the carriageway, in both directions.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(140, 0)} };
+    g.edges = { RoadEdge{0, 1, 14, RoadClass::Arterial, 0} };   // 14 m -> 2 lanes/side
+    NavGraph nav = buildNavGraph(g);
+
+    CitySim sim;
+    sim.build(nav, 14, 0, 33);
+    const NavGraph& G = *sim.graph();
+
+    bool sawEast = false, sawWest = false;
+    int checks = 0;
+    for (int i = 0; i < 4000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            if (a.leg >= static_cast<int>(a.route.links.size())) continue;
+            int li = a.route.links[a.leg];
+            Real L = G.links[li].length;
+            Real t = L > 1e-9 ? a.distOnLeg / L : 0.0;
+            Vec2 dir = G.direction(li);
+            Vec2 right(dir.y, -dir.x);
+            Vec2 base = G.pointOnLink(li, t);
+            Real lateral = (a.pos.x - base.x) * right.x + (a.pos.y - base.y) * right.y;
+            Real halfWidth = G.links[li].width * 0.5;
+            CHECK(lateral > 0.0);                  // on the right of travel
+            CHECK(lateral <= halfWidth + 1e-6);    // and inside the carriageway
+            ++checks;
+            if (dir.x > 0.5) sawEast = true;
+            if (dir.x < -0.5) sawWest = true;
+        }
+    }
+    CHECK(checks > 0);
+    CHECK(sawEast);   // both travel directions present...
+    CHECK(sawWest);   // ...each correctly on its own right-hand side
+}
+
 TEST_CASE(cars_do_not_freeze_for_oncoming_traffic) {
     // A single two-way street: cars run both directions. The old wide cone made
     // every car brake for oncoming traffic 3.5 m to the side; here they must keep

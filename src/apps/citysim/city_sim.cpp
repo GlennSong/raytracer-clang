@@ -24,6 +24,16 @@ constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
 
+// Lane spacing that fits THIS road: split the right half of the carriageway
+// evenly among the direction's lanes, so a car sits centred in its own lane and
+// clearly on its (right-hand) side. A fixed lane width instead leaves a car
+// hugging the centreline on a wide road, which reads as driving on the wrong
+// side. laneCenter places lane i at (0.5 + i) * spacing off the centreline.
+Real laneSpacing(const engine::NavLink& l) {
+    int lanes = l.lanes < 1 ? 1 : l.lanes;
+    return (l.width * 0.5) / static_cast<Real>(lanes);
+}
+
 // Speed a follower may travel given the centre-to-centre gap to its leader.
 Real followCap(Real freeSpeed, Real gap, Real minGap, Real slowZone) {
     if (gap <= minGap) return 0.0;
@@ -113,7 +123,10 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode) const {
     Vec2 dir = nav_->direction(li);
     Vec2 right(dir.y, -dir.x);
     Real hw = nav_->links[li].width * 0.5;
-    Real off = (mode == Agent::Mode::Driver) ? hw - 1.2 : hw + 1.2;
+    // Driver idles where it would drive (lane 0 centre); a pedestrian waits just
+    // beyond the kerb on the same (right) side.
+    Real off = (mode == Agent::Mode::Driver) ? laneSpacing(nav_->links[li]) * 0.5
+                                             : hw + 1.2;
     if (off < 0.5) off = 0.5;
     return nav_->nodes[node] + right * off;
 }
@@ -146,8 +159,9 @@ void CitySim::refreshPose(Agent& a) {
     Real L = nav_->links[li].length;
     Real t = L > 1e-9 ? a.distOnLeg / L : 0.0;
     if (t < 0) t = 0; else if (t > 1) t = 1;
-    a.pos = (a.mode == Agent::Mode::Driver) ? nav_->laneCenter(li, a.lane, t)
-                                            : nav_->sidewalkPoint(li, t);
+    a.pos = (a.mode == Agent::Mode::Driver)
+                ? nav_->laneCenter(li, a.lane, t, laneSpacing(nav_->links[li]))
+                : nav_->sidewalkPoint(li, t);
     a.elevation = nav_->links[li].layer * kLayerClearance;
 }
 
