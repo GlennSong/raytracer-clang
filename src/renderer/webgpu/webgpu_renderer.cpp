@@ -158,13 +158,28 @@ void packMat4(const Mat4& m, float* out) {
             out[c * 4 + r] = static_cast<float>(m.m[r][c]);
 }
 
-// The forward mesh shader (Phase 2a). Ported from the Vulkan shaders/vulkan/
+// IEEE-754 float32 -> float16 (binary16), for RGBA16Float HDR env uploads.
+// Round-to-nearest-even; flushes subnormal results to zero, clamps overflow to
+// infinity. Enough for equirect environment maps (no NaN handling needed).
+uint16_t floatToHalf(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    uint32_t sign = (x >> 16) & 0x8000u;
+    int32_t exp = static_cast<int32_t>((x >> 23) & 0xFF) - 127 + 15;
+    uint32_t mant = x & 0x7FFFFFu;
+    if (exp <= 0) return static_cast<uint16_t>(sign);              // underflow -> 0
+    if (exp >= 0x1F) return static_cast<uint16_t>(sign | 0x7C00u); // overflow -> inf
+    uint32_t half = sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13);
+    if (mant & 0x1000u) ++half;                                   // round to nearest-even
+    return static_cast<uint16_t>(half);
+}
+
+// The forward mesh shader. Ported from the Vulkan shaders/vulkan/
 // mesh.{vert,frag} — multi-light Cook-Torrance, the analytic procedural surface
-// library (brick/concrete/asphalt/...), procedural-sky IBL, fog, checkerboard,
-// and debug views. Still missing vs. Vulkan (later phases): texture maps,
-// cascaded shadows, the split-sum BRDF LUT (an analytic env-BRDF stands in).
-// Embedded as a string (matches the Metal backend; the web has no offline
-// compile). Scene-linear with a manual sRGB encode at the end.
+// library (brick/concrete/asphalt/...), texture/material maps, cascaded shadows,
+// IBL (procedural-sky or a bound HDR equirect) with a baked split-sum BRDF LUT,
+// fog, checkerboard, and debug views. Embedded as a string (matches the Metal
+// backend; the web has no offline compile). Scene-linear with sRGB on store.
 const char* kMeshWgsl = R"WGSL(
 struct Light {
   positionIntensity : vec4<f32>,   // xyz pos (point/spot), w intensity
@@ -201,6 +216,13 @@ struct DrawData {
 
 @group(0) @binding(0) var<uniform> g : Globals;
 @group(0) @binding(1) var<uniform> d : DrawData;
+// Scene environment (group 0): an equirectangular HDR when one is bound
+// (envMode = skySunColor.w > 0.5), the split-sum BRDF integration LUT, and a
+// shared sampler. envMode 0 ignores envTex and uses the analytic procedural sky
+// (sampleEnvironment), matching the Vulkan backend's counts.z env-mode switch.
+@group(0) @binding(2) var envTex  : texture_2d<f32>;
+@group(0) @binding(3) var envSamp : sampler;
+@group(0) @binding(4) var brdfLut : texture_2d<f32>;
 // Sun cascaded shadow map (group 1, main pass only — the shadow pass writes it).
 @group(1) @binding(0) var shadowMap  : texture_depth_2d_array;
 @group(1) @binding(1) var shadowSamp : sampler_comparison;
@@ -387,6 +409,16 @@ fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
   col += sc * pow(sunDot, 32.0) * 1.0 * disc;
   col += sc * pow(sunDot, 4.0) * 0.15 * disc;
   return col;
+}
+
+// Equirectangular HDR environment lookup (matches shaders/vulkan/sky.frag's
+// sampleEquirect). Level-sampled (no mip chain), so it stays valid in the
+// non-uniform control flow of the debug-view branches.
+fn sampleEquirect(dir : vec3<f32>) -> vec3<f32> {
+  let PI = 3.14159265359;
+  let u = atan2(dir.z, dir.x) * (0.5 / PI) + 0.5;
+  let v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / PI);
+  return textureSampleLevel(envTex, envSamp, vec2<f32>(u, v), 0.0).rgb;
 }
 
 // ---- procedural surface library (ported from common.metal / mesh.frag) -----
@@ -715,14 +747,25 @@ fn fs_main(in : VSOut) -> FsOut {
   let sunShadow = computeShadow(in.worldPos, N);
   let direct = evaluateLighting(in.worldPos, N, V, albedo, metallic, roughness, f0, sunShadow);
 
-  // IBL from the procedural sky (analytic split-sum).
+  // Image-based lighting: an equirectangular HDR when bound (skySunColor.w =
+  // envMode), else the analytic procedural sky. Split-sum specular weights the
+  // prefiltered radiance by the baked BRDF LUT — parity with Vulkan/Metal
+  // (envSpecular = prefiltered * (F0 * scale + bias)).
   let R = reflect(-V, N);
-  let irradiance = sampleEnvironment(N);
-  let prefiltered = mix(sampleEnvironment(R), irradiance, roughness);
+  var irradiance : vec3<f32>;
+  var prefiltered : vec3<f32>;
+  if (g.skySunColor.w > 0.5) {
+    irradiance = sampleEquirect(N);
+    prefiltered = mix(sampleEquirect(R), irradiance, roughness);   // crude roughness blur
+  } else {
+    irradiance = sampleEnvironment(N);
+    prefiltered = mix(sampleEnvironment(R), irradiance, roughness);
+  }
   let Famb = fresnelRoughness(NdotV, f0, roughness);
   let kd = (vec3<f32>(1.0) - Famb) * (1.0 - metallic);
   let envDiffuse = kd * albedo * irradiance;
-  let envSpecular = prefiltered * envBRDFApprox(f0, roughness, NdotV);
+  let brdf = textureSampleLevel(brdfLut, envSamp, vec2<f32>(NdotV, roughness), 0.0).xy;
+  let envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
   let ambient = (envDiffuse + envSpecular) * g.ambient.rgb * aoSample;   // baked AO map
 
   // Debug views (Renderer::debugView via counts.y) write display-ready values.
@@ -787,8 +830,80 @@ fn fs_sky(in : SkyOut) -> FsOut {
   let dir = normalize(in.ray);
   // Scene-linear into the HDR target; the composite pass tone-maps it with the
   // scene, so the sky tone-matches automatically. The sky writes a sentinel
-  // G-buffer (SSAO/SSR skip it anyway — its depth is the far plane).
-  return FsOut(vec4<f32>(sampleEnvironment(dir), 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+  // G-buffer (SSAO/SSR skip it anyway — its depth is the far plane). The
+  // background follows the bound HDR equirect (envMode) or the procedural sky.
+  var col : vec3<f32>;
+  if (g.skySunColor.w > 0.5) { col = sampleEquirect(dir); }
+  else { col = sampleEnvironment(dir); }
+  return FsOut(vec4<f32>(col, 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+}
+)WGSL";
+
+// BRDF integration LUT bake (ADR-0057). Ports shaders/vulkan/brdf_lut.frag /
+// environment.metal integrateBRDF: for each (NdotV, roughness) texel, GGX
+// importance-sample the split-sum specular BRDF into (scale, bias). Rendered
+// once at init into an RG16Float texture; the mesh shader samples it for the
+// envSpecular term. No inputs — pure numeric integration.
+static const char* kBrdfWgsl = R"WGSL(
+@vertex
+fn vs(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(p[vid], 0.0, 1.0);
+}
+const PI = 3.14159265359;
+const RES = 256.0;
+fn radicalInverse(bitsIn : u32) -> f32 {
+  var bits = bitsIn;
+  bits = (bits << 16u) | (bits >> 16u);
+  bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+  bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+  bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+  bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+  return f32(bits) * 2.3283064365386963e-10;
+}
+fn hammersley(i : u32, n : u32) -> vec2<f32> {
+  return vec2<f32>(f32(i) / f32(n), radicalInverse(i));
+}
+fn importanceSampleGGX(xi : vec2<f32>, N : vec3<f32>, rough : f32) -> vec3<f32> {
+  let a = rough * rough;
+  let phi = 2.0 * PI * xi.x;
+  let cosT = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+  let sinT = sqrt(1.0 - cosT * cosT);
+  let H = vec3<f32>(cos(phi) * sinT, sin(phi) * sinT, cosT);
+  var up = vec3<f32>(0.0, 0.0, 1.0);
+  if (abs(N.z) >= 0.999) { up = vec3<f32>(1.0, 0.0, 0.0); }
+  let tangent = normalize(cross(up, N));
+  let bitangent = cross(N, tangent);
+  return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+@fragment
+fn fs(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec2<f32> {
+  let NdotV = max(fragCoord.x / RES, 0.001);   // texel x -> NdotV
+  let roughness = fragCoord.y / RES;           // texel y -> roughness
+  let V = vec3<f32>(sqrt(1.0 - NdotV * NdotV), 0.0, NdotV);
+  let N = vec3<f32>(0.0, 0.0, 1.0);
+  var A = 0.0;
+  var B = 0.0;
+  let SAMPLES = 1024u;
+  for (var i = 0u; i < SAMPLES; i = i + 1u) {
+    let xi = hammersley(i, SAMPLES);
+    let H = importanceSampleGGX(xi, N, roughness);
+    let L = normalize(2.0 * dot(V, H) * H - V);
+    let NdotL = max(L.z, 0.0);
+    let NdotH = max(H.z, 0.0);
+    let VdotH = max(dot(V, H), 0.0);
+    if (NdotL > 0.0) {
+      let a2 = roughness * roughness * roughness * roughness;
+      let G_V = NdotL * (NdotV * (1.0 - sqrt(a2)) + sqrt(a2));
+      let G_L = NdotV * (NdotL * (1.0 - sqrt(a2)) + sqrt(a2));
+      let G = 0.5 / max(G_V + G_L, 0.001);
+      let G_Vis = (G * VdotH * NdotL) / max(NdotH, 0.001);
+      let Fc = pow(1.0 - VdotH, 5.0);
+      A = A + (1.0 - Fc) * G_Vis;
+      B = B + Fc * G_Vis;
+    }
+  }
+  return vec2<f32>(A / f32(SAMPLES), B / f32(SAMPLES));
 }
 )WGSL";
 
@@ -1247,6 +1362,12 @@ public:
         if (flatNormalView_) { wgpuTextureViewRelease(flatNormalView_); flatNormalView_ = nullptr; }
         if (flatNormalTex_) { wgpuTextureRelease(flatNormalTex_); flatNormalTex_ = nullptr; }
         if (materialSampler_) { wgpuSamplerRelease(materialSampler_); materialSampler_ = nullptr; }
+        if (envSampler_) { wgpuSamplerRelease(envSampler_); envSampler_ = nullptr; }
+        if (envDefaultView_) { wgpuTextureViewRelease(envDefaultView_); envDefaultView_ = nullptr; }
+        if (envDefaultTex_) { wgpuTextureRelease(envDefaultTex_); envDefaultTex_ = nullptr; }
+        if (brdfLutView_) { wgpuTextureViewRelease(brdfLutView_); brdfLutView_ = nullptr; }
+        if (brdfLutTex_) { wgpuTextureRelease(brdfLutTex_); brdfLutTex_ = nullptr; }
+        envCurrentView_ = nullptr;
         if (materialLayout_) { wgpuBindGroupLayoutRelease(materialLayout_); materialLayout_ = nullptr; }
         if (blitPipeline_) { wgpuRenderPipelineRelease(blitPipeline_); blitPipeline_ = nullptr; }
         if (blitLayout_) { wgpuBindGroupLayoutRelease(blitLayout_); blitLayout_ = nullptr; }
@@ -1365,6 +1486,51 @@ public:
         freeTextures_.push_back(handle.index - 1);
     }
 
+    // HDR (float) texture upload — equirectangular environment maps decoded from
+    // Radiance .hdr. `data` is linear RGB(A); stored as RGBA16Float (half) so it
+    // stays filterable in core WebGPU. Mirrors uploadTexture's slot bookkeeping.
+    TextureHandle uploadTextureHDR(int width, int height, int channels,
+                                   const float* data) override {
+        if (width <= 0 || height <= 0 || !data) return TextureHandle{};
+        std::vector<uint16_t> half(static_cast<size_t>(width) * height * 4);
+        for (int i = 0; i < width * height; ++i) {
+            float r = data[i * channels + 0];
+            float g = channels >= 3 ? data[i * channels + 1] : r;
+            float b = channels >= 3 ? data[i * channels + 2] : r;
+            float a = channels >= 4 ? data[i * channels + 3] : 1.0f;
+            half[i * 4 + 0] = floatToHalf(r); half[i * 4 + 1] = floatToHalf(g);
+            half[i * 4 + 2] = floatToHalf(b); half[i * 4 + 3] = floatToHalf(a);
+        }
+        GpuTexture t;
+        t.texture = createTexture2D(width, height, WGPUTextureFormat_RGBA16Float,
+                                    half.data(), static_cast<size_t>(width) * 8);
+        t.view = wgpuTextureCreateView(t.texture, nullptr);
+        t.generation = ++textureCounter_;
+
+        uint32_t slot;
+        if (!freeTextures_.empty()) { slot = freeTextures_.back(); freeTextures_.pop_back(); textures_[slot] = t; }
+        else { slot = static_cast<uint32_t>(textures_.size()); textures_.push_back(t); }
+        TextureHandle h;
+        h.index = slot + 1;
+        h.generation = t.generation;
+        return h;
+    }
+
+    // Bind an equirectangular HDR as the scene environment (drives the sky
+    // background + IBL). An invalid handle restores the procedural sky. Sets the
+    // envMode flag (skySunColor.w) and rebuilds the group-0 / sky bind groups.
+    void setEnvironmentMap(TextureHandle equirect) override {
+        WGPUTextureView view = nullptr;
+        if (equirect.index != 0 && equirect.index <= textures_.size()) {
+            GpuTexture& t = textures_[equirect.index - 1];
+            if (t.generation == equirect.generation) view = t.view;
+        }
+        envMode_ = (view != nullptr);
+        envCurrentView_ = view ? view : envDefaultView_;
+        if (bindGroup_) rebuildBindGroup();
+        if (skyBindGroup_) rebuildSkyBindGroup();
+    }
+
     RenderStats getRenderStats() const override { return stats_; }
 
     void beginFrame() override {
@@ -1411,7 +1577,10 @@ public:
         const ProceduralSky& sky = lighting.sky;
         Vec3 sd = normalize(sky.sunDirection);
         set4(globals_.skySunDir, (float)sd.x, (float)sd.y, (float)sd.z, sky.sunDiscIntensity);
-        set4(globals_.skySunColor, (float)sky.sunColor.x, (float)sky.sunColor.y, (float)sky.sunColor.z, 0.0f);
+        // skySunColor.w doubles as the env mode: >0.5 = sample the bound HDR
+        // equirect for the sky + IBL, else the analytic procedural sky.
+        set4(globals_.skySunColor, (float)sky.sunColor.x, (float)sky.sunColor.y,
+             (float)sky.sunColor.z, envMode_ ? 1.0f : 0.0f);
         set4(globals_.skyZenith, (float)sky.zenithColor.x, (float)sky.zenithColor.y, (float)sky.zenithColor.z, 0.0f);
         set4(globals_.skyHorizon, (float)sky.horizonColor.x, (float)sky.horizonColor.y, (float)sky.horizonColor.z, 0.0f);
         set4(globals_.skyGround, (float)sky.groundColor.x, (float)sky.groundColor.y, (float)sky.groundColor.z, 0.0f);
@@ -2194,8 +2363,9 @@ private:
             return false;
         }
 
-        // Bind group layout: globals (uniform) + per-draw (dynamic uniform).
-        WGPUBindGroupLayoutEntry entries[2] = {};
+        // Bind group layout: globals (uniform) + per-draw (dynamic uniform) +
+        // the scene environment (equirect HDR + sampler) and the BRDF LUT.
+        WGPUBindGroupLayoutEntry entries[5] = {};
         entries[0].binding = 0;
         entries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
         entries[0].buffer.type = WGPUBufferBindingType_Uniform;
@@ -2205,9 +2375,20 @@ private:
         entries[1].buffer.type = WGPUBufferBindingType_Uniform;
         entries[1].buffer.hasDynamicOffset = true;
         entries[1].buffer.minBindingSize = sizeof(GpuDraw);
+        entries[2].binding = 2;   // env equirect (HDR when bound, else a 1x1 default)
+        entries[2].visibility = WGPUShaderStage_Fragment;
+        entries[2].texture.sampleType = WGPUTextureSampleType_Float;
+        entries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
+        entries[3].binding = 3;   // env + LUT sampler (linear, U-repeat/V-clamp)
+        entries[3].visibility = WGPUShaderStage_Fragment;
+        entries[3].sampler.type = WGPUSamplerBindingType_Filtering;
+        entries[4].binding = 4;   // split-sum BRDF LUT (RG16Float)
+        entries[4].visibility = WGPUShaderStage_Fragment;
+        entries[4].texture.sampleType = WGPUTextureSampleType_Float;
+        entries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
 
         WGPUBindGroupLayoutDescriptor blDesc = {};
-        blDesc.entryCount = 2;
+        blDesc.entryCount = 5;
         blDesc.entries = entries;
         bindLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &blDesc);
 
@@ -2427,14 +2608,21 @@ private:
         // Sky pipeline: fullscreen triangle, globals only (its own one-binding
         // layout so it doesn't depend on the per-draw dynamic buffer). No vertex
         // buffer; depth-compare Always + no write so meshes paint over it.
-        WGPUBindGroupLayoutEntry skyEntry = {};
-        skyEntry.binding = 0;
-        skyEntry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-        skyEntry.buffer.type = WGPUBufferBindingType_Uniform;
-        skyEntry.buffer.minBindingSize = sizeof(GpuGlobals);
+        WGPUBindGroupLayoutEntry skyEntry[3] = {};
+        skyEntry[0].binding = 0;
+        skyEntry[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+        skyEntry[0].buffer.type = WGPUBufferBindingType_Uniform;
+        skyEntry[0].buffer.minBindingSize = sizeof(GpuGlobals);
+        skyEntry[1].binding = 2;   // env equirect (fs_sky background)
+        skyEntry[1].visibility = WGPUShaderStage_Fragment;
+        skyEntry[1].texture.sampleType = WGPUTextureSampleType_Float;
+        skyEntry[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+        skyEntry[2].binding = 3;   // env sampler
+        skyEntry[2].visibility = WGPUShaderStage_Fragment;
+        skyEntry[2].sampler.type = WGPUSamplerBindingType_Filtering;
         WGPUBindGroupLayoutDescriptor skyblDesc = {};
-        skyblDesc.entryCount = 1;
-        skyblDesc.entries = &skyEntry;
+        skyblDesc.entryCount = 3;
+        skyblDesc.entries = skyEntry;
         skyLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &skyblDesc);
 
         WGPUPipelineLayoutDescriptor skyplDesc = {};
@@ -2931,21 +3119,12 @@ private:
         gDesc.size = sizeof(GpuGlobals);
         globalBuf_ = wgpuDeviceCreateBuffer(device_, &gDesc);
 
+        createEnvResources();   // env sampler + 1x1 default + baked BRDF LUT
+
         drawCapacity_ = 256;  // initial per-draw slot count; grows as needed
         allocDrawBuffer(drawCapacity_);
         rebuildBindGroup();
-
-        // Sky bind group: just the globals buffer (its own one-binding layout).
-        WGPUBindGroupEntry skyBg = {};
-        skyBg.binding = 0;
-        skyBg.buffer = globalBuf_;
-        skyBg.offset = 0;
-        skyBg.size = sizeof(GpuGlobals);
-        WGPUBindGroupDescriptor skyBgDesc = {};
-        skyBgDesc.layout = skyLayout_;
-        skyBgDesc.entryCount = 1;
-        skyBgDesc.entries = &skyBg;
-        skyBindGroup_ = wgpuDeviceCreateBindGroup(device_, &skyBgDesc);
+        rebuildSkyBindGroup();
 
         // Composite: a small post-uniform buffer + a bind group over the HDR view.
         WGPUBufferDescriptor pDesc = {};
@@ -3055,7 +3234,7 @@ private:
 
     void rebuildBindGroup() {
         if (bindGroup_) { wgpuBindGroupRelease(bindGroup_); bindGroup_ = nullptr; }
-        WGPUBindGroupEntry entries[2] = {};
+        WGPUBindGroupEntry entries[5] = {};
         entries[0].binding = 0;
         entries[0].buffer = globalBuf_;
         entries[0].offset = 0;
@@ -3064,11 +3243,116 @@ private:
         entries[1].buffer = drawBuf_;
         entries[1].offset = 0;
         entries[1].size = sizeof(GpuDraw);  // dynamic offset is applied per draw
+        entries[2].binding = 2;
+        entries[2].textureView = envCurrentView_;
+        entries[3].binding = 3;
+        entries[3].sampler = envSampler_;
+        entries[4].binding = 4;
+        entries[4].textureView = brdfLutView_;
         WGPUBindGroupDescriptor desc = {};
         desc.layout = bindLayout_;
-        desc.entryCount = 2;
+        desc.entryCount = 5;
         desc.entries = entries;
         bindGroup_ = wgpuDeviceCreateBindGroup(device_, &desc);
+    }
+
+    // Sky bind group: globals + the env equirect + its sampler (own layout).
+    void rebuildSkyBindGroup() {
+        if (skyBindGroup_) { wgpuBindGroupRelease(skyBindGroup_); skyBindGroup_ = nullptr; }
+        WGPUBindGroupEntry e[3] = {};
+        e[0].binding = 0;
+        e[0].buffer = globalBuf_;
+        e[0].offset = 0;
+        e[0].size = sizeof(GpuGlobals);
+        e[1].binding = 2;
+        e[1].textureView = envCurrentView_;
+        e[2].binding = 3;
+        e[2].sampler = envSampler_;
+        WGPUBindGroupDescriptor d = {};
+        d.layout = skyLayout_;
+        d.entryCount = 3;
+        d.entries = e;
+        skyBindGroup_ = wgpuDeviceCreateBindGroup(device_, &d);
+    }
+
+    // Env sampler, a 1x1 default equirect (used when no HDR is bound), and the
+    // baked split-sum BRDF LUT. Created before the group-0 bind groups.
+    void createEnvResources() {
+        WGPUSamplerDescriptor sd = {};
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+        sd.addressModeU = WGPUAddressMode_Repeat;       // equirect wraps in longitude
+        sd.addressModeV = WGPUAddressMode_ClampToEdge;  // ...clamps at the poles
+        sd.addressModeW = WGPUAddressMode_ClampToEdge;
+        sd.maxAnisotropy = 1;
+        envSampler_ = wgpuDeviceCreateSampler(device_, &sd);
+
+        const uint8_t gray[4] = {40, 44, 52, 255};   // dim neutral (never sampled at envMode 0)
+        envDefaultTex_ = createTexture2D(1, 1, WGPUTextureFormat_RGBA8Unorm, gray, 4);
+        envDefaultView_ = wgpuTextureCreateView(envDefaultTex_, nullptr);
+        envCurrentView_ = envDefaultView_;
+
+        bakeBrdfLut();
+    }
+
+    // Render the split-sum BRDF integration LUT once (RG16Float, 256x256).
+    void bakeBrdfLut() {
+        const int kRes = 256;
+        WGPUTextureDescriptor td = {};
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_RenderAttachment;
+        td.dimension = WGPUTextureDimension_2D;
+        td.size = {static_cast<uint32_t>(kRes), static_cast<uint32_t>(kRes), 1};
+        td.format = WGPUTextureFormat_RG16Float;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        brdfLutTex_ = wgpuDeviceCreateTexture(device_, &td);
+        brdfLutView_ = wgpuTextureCreateView(brdfLutTex_, nullptr);
+
+        WGPUShaderSourceWGSL src = {};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = sv(kBrdfWgsl);
+        WGPUShaderModuleDescriptor smd = {};
+        smd.nextInChain = &src.chain;
+        WGPUShaderModule mod = wgpuDeviceCreateShaderModule(device_, &smd);
+
+        WGPUPipelineLayoutDescriptor pld = {};   // no bindings — pure numeric bake
+        pld.bindGroupLayoutCount = 0;
+        WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(device_, &pld);
+        WGPUColorTargetState ct = {};
+        ct.format = WGPUTextureFormat_RG16Float;
+        ct.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState fs = {};
+        fs.module = mod; fs.entryPoint = sv("fs"); fs.targetCount = 1; fs.targets = &ct;
+        WGPURenderPipelineDescriptor pd = {};
+        pd.layout = pl;
+        pd.vertex.module = mod; pd.vertex.entryPoint = sv("vs");
+        pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        pd.primitive.frontFace = WGPUFrontFace_CCW;
+        pd.primitive.cullMode = WGPUCullMode_None;
+        pd.fragment = &fs;
+        pd.multisample.count = 1; pd.multisample.mask = 0xFFFFFFFF;
+        WGPURenderPipeline pipe = wgpuDeviceCreateRenderPipeline(device_, &pd);
+
+        WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
+        WGPURenderPassColorAttachment a = {};
+        a.view = brdfLutView_; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        a.loadOp = WGPULoadOp_Clear; a.storeOp = WGPUStoreOp_Store;
+        a.clearValue = {0.0, 0.0, 0.0, 1.0};
+        WGPURenderPassDescriptor rpd = {};
+        rpd.colorAttachmentCount = 1; rpd.colorAttachments = &a;
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(enc, &rpd);
+        wgpuRenderPassEncoderSetPipeline(rp, pipe);
+        wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(rp);
+        wgpuRenderPassEncoderRelease(rp);
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
+        wgpuQueueSubmit(queue_, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(enc);
+        wgpuRenderPipelineRelease(pipe);
+        wgpuPipelineLayoutRelease(pl);
+        wgpuShaderModuleRelease(mod);
     }
 
     void ensureDrawCapacity(size_t needed) {
@@ -3179,6 +3463,14 @@ private:
     WGPUTexture flatNormalTex_ = nullptr; WGPUTextureView flatNormalView_ = nullptr;
     WGPUBindGroupLayout blitLayout_ = nullptr;   // mipmap downsample
     WGPURenderPipeline blitPipeline_ = nullptr;
+
+    // Scene environment / IBL (group 0). envCurrentView_ is the bound HDR equirect
+    // or a 1x1 default; envMode_ mirrors it into skySunColor.w for the shaders.
+    WGPUSampler envSampler_ = nullptr;
+    WGPUTexture envDefaultTex_ = nullptr; WGPUTextureView envDefaultView_ = nullptr;
+    WGPUTextureView envCurrentView_ = nullptr;
+    WGPUTexture brdfLutTex_ = nullptr;    WGPUTextureView brdfLutView_ = nullptr;
+    bool envMode_ = false;
 
     std::vector<QueuedDraw> draws_;
     bool frameDiagLogged_ = false;
