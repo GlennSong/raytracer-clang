@@ -4061,15 +4061,45 @@ control seam. Whoever drives it, the player or an AI, speaks only in a
    player commandeers a car, the bridge sees the `AgentDriver` removed and calls
    `CitySim::releaseDriver` so the planner stops fighting the physical car.
 
-**What's verified vs owed.** The controller (1), the seam wiring (2, 3), the
-`releaseDriver`/`setCarsExternallyOwned` plumbing, and the fleet-body sizing are
-headless-tested or syntax-checked. The bridge (4) and the whole Jolt path are
-**UNVERIFIED on device** (no Jolt build here) — expect handling tuning
-(steer/speed gains, `configFromBody` mass/wheels) and a pass on the ghost-follow
-model. Known limitation: the car chases a kinematic ghost open-loop, so it can lag
-or cut the planned line under tight timing; a closed-loop feedback (plan from the
-car's real pose) is the refinement. This repositions ADR-0059's kinematic sim as
-the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
+**Refinement: the loop is CLOSED (same ADR, follow-up).** The first cut chased
+the ghost open-loop (heading blended toward the ghost's position, speed copied
+verbatim), which lags, cuts corners, and strands a car that falls behind its
+plan. Now:
+
+- **Heading — pure pursuit** (`engine/ai/lane_follow.h`): `LaneFollower` tracks
+  the car's real progress along the ghost's lane polyline (monotonic, windowed —
+  a path that doubles back can't snap progress onto the wrong leg) and aims at a
+  speed-proportional lookahead point. `CitySim::lanePath()` exports the route as
+  that polyline; the bridge rebuilds it per trip (`Agent::trips`).
+- **Speed — station control**: the bridge commands `planned + gain*(gapToGhost -
+  standoff)`, capped — a lagging car catches up, an overshooting car eases off,
+  a ghost held at a red parks the car at the line. `pursuitCommand` additionally
+  caps speed by the REMAINING path, so a car can never sail past its path end
+  and orbit the last point (the harness caught exactly that failure).
+- **Tether — the plan waits for the physics**: `CitySim::setAgentTether` holds a
+  ghost that leads its physical car by more than a leash, so a collision, hill,
+  or slow start can never permanently separate car from plan.
+- **Controller — slow into turns**: `computeDriverInput` sheds target speed as
+  the desired heading swings away from the car's (`DriverTuning::turnSlowdown`),
+  so a car brakes into a sharp turn and accelerates out instead of carrying
+  cruise speed through it.
+- **A closed-loop harness** (`tests/test_lane_follow.cpp`): a kinematic
+  bicycle-model car driven by the real controller stack — lane convergence from
+  an offset, a 90° corner, a hairpin with monotonic progress, parking at the
+  path end, determinism. Driving quality is now measured headless; the on-device
+  work is tuning, not debugging the control law.
+
+**What's verified vs owed.** The controller, seam wiring (enter/eject),
+`releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, and the whole
+closed control loop (against the bicycle model) are headless-tested. The Jolt
+path itself is **UNVERIFIED on device** (no Jolt build here) — expect gain tuning
+(`steerGain`/lookahead/`configFromBody`) against the real plant. Still owed
+beyond tuning: perception + car-following evaluated from the cars' REAL poses
+(today the planner still sees only ghosts, so two physical cars separated by
+physics lag aren't seen by each other's plans), and a stuck/flip recovery
+behaviour (`resetVehicleUpright` on a timer). This repositions ADR-0059's
+kinematic sim as the AI *planner*, not a second car mover, and subsumes ADR-0060
+Phase 5.
 
 ---
 
@@ -4111,7 +4141,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
 | Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
-| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/driver_agent.h`, `engine/systems/vehicle_system.cpp` (ADR-0061) | RESOLVED IN DESIGN, owed a device pass: NPC cars are now spawned as real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared `computeDriverInput` controller — one car system, and the player can enter/eject any of them. The CitySim is the planner; the real car chases its ghost open-loop. None of the Jolt path compiles here, so the bridge, `configFromBody` tuning, and the ghost-follow feel are UNVERIFIED — the controller + seam + `releaseDriver` plumbing are headless-tested/syntax-checked | A device build to compile + tune (steer/speed gains, mass/wheels), then a closed-loop feedback (plan from the car's real pose) to kill ghost lag |
+| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/{driver_agent,lane_follow}.h`, `engine/systems/vehicle_system.cpp` (ADR-0061) | RESOLVED IN DESIGN, owed a device pass: NPC cars are real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared controller — one car system, player can enter/eject any of them. The control loop is CLOSED over the car's real pose (pure-pursuit heading over the ghost's lane path, station-control speed, ghost tether) and exercised headless against a bicycle-model plant (`test_lane_follow.cpp`), so the on-device work is gain tuning against the real Jolt plant, not control-law debugging. Still open behind it: the PLANNER's perception/car-following runs on ghost poses, not the physical cars' — physics-lagged real cars aren't seen by each other's plans | Device tune (steerGain / lookahead / configFromBody); then move car-following + the vision cone onto real car poses; add stuck/flip recovery (resetVehicleUpright on a stall timer) |
 | City pedestrians render as boxes | `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | Pedestrians are `MeshBuilder::box` instances. Cars now come as a mixed FLEET of real-sized bodies (sedan/hatchback/SUV/pickup/van/box-truck) from a shared dimensions table (ADR-0060 Phase 4); signals reuse the `street_kit` head with a lit lens. Functional + instanced, but the ped (and the cars) are still primitive procedural meshes, not authored art. | Authored/instanced pedestrian + richer vehicle models (a content pass) |
 | NPC car bodies mirror the Lua recipe by hand | `apps/citysim/city_render.cpp` (`buildCarMesh`), `assets/scripts/vehicles.lua` (ADR-0060 Phase 4) | The fleet mesh styles reproduce the player's `vehicles.lua car_body` proportions in C++ (hull + set-back cabin + glass bands + corner lights), so NPC cars LOOK like the player's — but they aren't built from the actual Lua recipe, so the two can drift. True 1:1 unification (NPC cars generated by the same `car_body`/`vehicles.lua` surface the player uses) needs the Lua/viewer build, which can't run here. | Build NPC fleet meshes from the Lua `car_body` recipe (one body path for player + AI); verify in the viewer |
 | Wide vehicle bodies may cross the lane centreline | `apps/citysim/city_sim.cpp` (`laneCenter`/`laneSpacing`), `apps/citysim/city_render.cpp` | Following is length-aware, but lane placement still centres a car at a width-relative lane offset regardless of the body's WIDTH. A wide van/box-truck (2.0–2.4 m) on a narrow lane could visually overhang the centreline / clip an oncoming wide body. Unverified (no viewer here). | Lateral lane-fit (inset wide bodies, or widen the effective lane) + an oncoming-width check; verify on device |

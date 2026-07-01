@@ -44,6 +44,12 @@ struct DriverTuning {
     Real speedGain = 0.5;        // speed deficit (m/s) -> throttle, before clamp
     Real brakeGain = 0.35;       // overspeed (m/s)     -> brake, before clamp
     Real stopSpeed = 0.4;        // desiredSpeed at/under this -> brake to a halt
+    // Slow into a misaligned heading: the fraction of desiredSpeed shed as the
+    // desired heading swings away from the car's (0 = charge at full speed no
+    // matter what; 0.75 = a perpendicular target drops the target speed to 25%).
+    // A driver brakes for a turn they haven't made yet — and slower also means a
+    // shorter pursuit lookahead, which tightens the achievable turn radius.
+    Real turnSlowdown = 0.75;
 };
 
 // Pure controller: (what the car is) + (what the brain wants) -> pedal/wheel. No
@@ -59,11 +65,13 @@ inline DriverInput computeDriverInput(const DriverState& s, const DriverCommand&
     Real fl = std::sqrt(s.forward.x * s.forward.x + s.forward.y * s.forward.y);
     Real dl = std::sqrt(c.desiredHeading.x * c.desiredHeading.x +
                         c.desiredHeading.y * c.desiredHeading.y);
+    Real align = 1.0;   // cos(heading error); 1 = pointed where it wants to go
     if (fl > 1e-6 && dl > 1e-6) {
         Vec2 f(s.forward.x / fl, s.forward.y / fl);
         Vec2 d(c.desiredHeading.x / dl, c.desiredHeading.y / dl);
         Real dot = f.x * d.x + f.y * d.y;
         if (dot > 1) dot = 1; else if (dot < -1) dot = -1;
+        align = dot;
         Real ang = std::acos(dot);                       // unsigned error [0, pi]
         // cross = f x d: > 0 means the desired heading is to the car's LEFT (the
         // right vector of (fx,fy) is (fy,-fx), so dot(d,right) = -cross), so we
@@ -75,11 +83,16 @@ inline DriverInput computeDriverInput(const DriverState& s, const DriverCommand&
     }
 
     // --- speed: throttle up to the target, brake if over it or told to stop ---
-    if (c.desiredSpeed <= t.stopSpeed) {
+    // Shed target speed while misaligned (turnSlowdown): the car brakes INTO a
+    // sharp turn and accelerates out of it, instead of carrying cruise speed
+    // through a heading it hasn't matched yet.
+    Real desiredSpeed = c.desiredSpeed *
+        (1.0 - t.turnSlowdown * (1.0 - std::max(Real(0), align)));
+    if (desiredSpeed <= t.stopSpeed) {
         in.throttle = 0;
         in.brake = 1.0;                                  // ease to a full stop
     } else {
-        Real err = c.desiredSpeed - s.speed;             // + -> need more speed
+        Real err = desiredSpeed - s.speed;               // + -> need more speed
         if (err >= 0) {
             Real thr = err * t.speedGain;
             in.throttle = thr > 1 ? 1 : thr;

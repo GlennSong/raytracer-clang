@@ -149,9 +149,11 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_signals.cpp \
 	$(TEST_DIR)/test_city_perception.cpp \
 	$(TEST_DIR)/test_driver_agent.cpp \
+	$(TEST_DIR)/test_lane_follow.cpp \
 	$(TEST_DIR)/test_city_steering.cpp \
 	$(TEST_DIR)/test_city_driver_fsm.cpp \
 	$(TEST_DIR)/test_city_fleet.cpp \
+	$(TEST_DIR)/test_city_drive.cpp \
 	$(TEST_DIR)/test_city_render.cpp \
 	$(TEST_DIR)/test_city_flow.cpp
 TEST_ENGINE_SRCS = \

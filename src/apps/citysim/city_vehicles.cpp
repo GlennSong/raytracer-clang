@@ -118,6 +118,13 @@ void CityVehicleSystem::spawnCars(engine::FrameContext& ctx) {
     spawned_ = true;
 }
 
+namespace {
+constexpr Real kStandoff = 1.5;      // park this short of the ghost's spot (m)
+constexpr Real kCatchupGain = 0.5;   // station error (m) -> extra speed (m/s)
+constexpr Real kCatchupMax = 4.0;    // max speed over the plan while catching up
+constexpr Real kTetherLead = 12.0;   // ghost may lead its car by at most this (m)
+}  // namespace
+
 void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
@@ -135,14 +142,44 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         Transform* t = world.get<Transform>(car.entity);
         if (!t) continue;
 
-        // Chase the ghost: aim the heading along the planned direction, blended with
-        // a pull back toward the planned position so a lagging car catches its lane;
-        // seek the planned speed (0 when the ghost is stopped at a light / arrived).
         Vec2 carXZ(t->position.x, t->position.z);
-        Vec2 toGhost(g.pos.x - carXZ.x, g.pos.y - carXZ.y);
-        Vec2 blended(g.heading.x + toGhost.x * 0.5, g.heading.y + toGhost.y * 0.5);
-        ad->command.desiredHeading = normalized(blended, g.heading);
-        ad->command.desiredSpeed = g.moving ? g.speed : 0.0;
+        Vec3 f3 = t->orientation.rotate(Vec3(0, 0, 1));
+        Vec2 carFwd = normalized(Vec2(f3.x, f3.z), g.heading);
+
+        // A new trip = a new route: rebuild the pursuit path from the ghost's lane.
+        if (car.trip != g.trips) {
+            car.follower.setPath(sim.lanePath(car.agentId));
+            car.trip = g.trips;
+        }
+
+        // SPEED: proportional station control toward the ghost. `aheadGap` is how
+        // far the ghost sits ahead of the car (along the car's own forward): drive
+        // a little faster than the plan to close it, ease off (to a stop) when at
+        // or past it. A ghost held at a red (speed 0) parks the car at the line;
+        // an arrived ghost (moving false) parks the car at the kerb.
+        Real aheadGap = (g.pos.x - carXZ.x) * carFwd.x + (g.pos.y - carXZ.y) * carFwd.y;
+        Real planned = g.moving ? g.speed : 0.0;
+        Real target = planned + kCatchupGain * (aheadGap - kStandoff);
+        Real cap = planned + kCatchupMax;
+        if (target < 0) target = 0;
+        if (target > cap) target = cap;
+
+        // HEADING: pure pursuit over the lane path from the car's REAL position
+        // (with the built-in ease-to-a-stop at the path end). No path (parked /
+        // fresh spawn): hold the ghost's heading.
+        if (car.follower.valid()) {
+            car.follower.update(carXZ);
+            ad->command = engine::pursuitCommand(
+                car.follower, carXZ, target,
+                engine::pursuitLookahead(std::max(planned, Real(3.0))));
+        } else {
+            ad->command.desiredHeading = g.heading;
+            ad->command.desiredSpeed = target;
+        }
+
+        // TETHER: feed the sim the car's real position so the ghost waits rather
+        // than outrunning the physics (collision, hill, slow start).
+        city_.simMutable().setAgentTether(car.agentId, carXZ, kTetherLead);
     }
     for (int id : toRelease) city_.simMutable().releaseDriver(id);
 }

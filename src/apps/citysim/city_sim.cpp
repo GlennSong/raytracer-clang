@@ -113,6 +113,27 @@ Real CitySim::pairMinGap(int follower, int leader) const {
     return 0.5 * vehicleLength(follower) + 0.5 * vehicleLength(leader) + kCarBumperGap;
 }
 
+std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
+    std::vector<Vec2> out;
+    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+        return out;
+    const Agent& a = agents_[agentIndex];
+    if (step < 0.5) step = 0.5;
+    for (int li : a.route.links) {
+        const engine::NavLink& L = nav_->links[li];
+        Real spacing = laneSpacing(L);
+        int n = std::max(1, static_cast<int>(std::ceil(L.length / step)));
+        for (int k = 0; k <= n; ++k) {
+            Real t = static_cast<Real>(k) / n;
+            Vec2 p = (a.mode == Agent::Mode::Driver)
+                         ? nav_->laneCenter(li, a.lane, t, spacing)
+                         : nav_->sidewalkPoint(li, t);
+            if (out.empty() || (p - out.back()).length() > 1e-6) out.push_back(p);
+        }
+    }
+    return out;
+}
+
 uint32_t CitySim::rnd() {
     rng_ ^= rng_ << 13;
     rng_ ^= rng_ >> 17;
@@ -221,6 +242,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal) {
     a.lane = (a.mode == Agent::Mode::Driver && lanes > 1)
                  ? static_cast<int>(rnd() % static_cast<uint32_t>(lanes))
                  : 0;
+    ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
@@ -488,6 +510,17 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (a.playerControlled || a.released) continue;
+        // Tethered ghost too far from its physical car: WAIT for it. The plan can
+        // never outrun the physics — a car knocked back, climbing, or slow off the
+        // line finds its ghost holding just ahead instead of gone (ADR-0061).
+        if (a.moving && a.tethered) {
+            Real dx = a.pos.x - a.tetherAnchor.x, dy = a.pos.y - a.tetherAnchor.y;
+            if (std::sqrt(dx * dx + dy * dy) > a.tetherLead) {
+                a.speed = 0;
+                a.state = Agent::State::Waiting;
+                continue;
+            }
+        }
         if (a.moving) advance(a, dt, gaps_[i], minGaps_[i]);
     }
 

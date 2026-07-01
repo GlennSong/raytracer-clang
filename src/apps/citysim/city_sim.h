@@ -49,8 +49,17 @@ struct Agent {
     // Current trip along the lane graph.
     engine::Route route;
     int leg = 0;
+    int trips = 0;   // trips started so far — the ADR-0061 bridge rebuilds its
+                     // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
     int lane = 0;
+    // Tether (ADR-0061): while set, this planner ghost may not LEAD `tetherAnchor`
+    // (its physical car) by more than `tetherLead` metres — it waits instead. The
+    // host feeds the car's real position each step, so the plan can never outrun
+    // the physics (a collision, a hill, a slow start no longer strands the car).
+    bool tethered = false;
+    engine::Vec2 tetherAnchor;
+    Real tetherLead = 10.0;
     // Continuous sideways lean off the path (ADR-0060), rate-limited, so a walker
     // steers smoothly around what it sees instead of popping. Decays back to 0.
     Real lateralOffset = 0;
@@ -127,9 +136,32 @@ public:
         if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
         Agent& a = agents_[agentIndex];
         a.released = true;
+        a.tethered = false;
         a.moving = false;
         a.speed = 0;
     }
+
+    // Tether a planner ghost to its physical car (ADR-0061): the ghost holds
+    // whenever it is more than `maxLead` metres from `anchor` (the car's real
+    // position, re-fed each step). Determinism holds for an identical call
+    // sequence — the host owns whatever nondeterminism it feeds in.
+    void setAgentTether(int agentIndex, engine::Vec2 anchor, Real maxLead) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+        Agent& a = agents_[agentIndex];
+        a.tethered = true;
+        a.tetherAnchor = anchor;
+        a.tetherLead = maxLead;
+    }
+    void clearAgentTether(int agentIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+        agents_[agentIndex].tethered = false;
+    }
+
+    // Sample agent `agentIndex`'s current route as a polyline of lane-centre
+    // (driver) / sidewalk (pedestrian) points, ~`step` metres apart — the pursuit
+    // path the ADR-0061 bridge follows from the car's real pose. Empty when the
+    // agent has no active route.
+    std::vector<engine::Vec2> lanePath(int agentIndex, Real step = 3.0) const;
 
     // Set every agent's perception reliability (1 = perfect; <1 = makes faults).
     void setPerceptionReliability(Real r) {
