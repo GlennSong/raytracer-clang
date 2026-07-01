@@ -22,10 +22,34 @@
     #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
     #error { position: fixed; inset: 0; display: none; place-content: center;
       color: #e66; font-size: 16px; text-align: center; padding: 2rem; z-index: 30; }
+    /* Console log overlay — hidden by default; toggled from the debug panel so
+       the user lands on the scene, not a wall of text. */
     #log { position: fixed; left: 0; top: 0; right: 0; max-height: 32vh; margin: 0;
       overflow: auto; background: rgba(0,0,0,.72); color: #9fe;
-      font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; padding: 6px 8px; z-index: 10; }
+      font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; padding: 6px 8px;
+      z-index: 10; display: none; }
     #log .e { color: #f88; }
+
+    /* Top-left icon toolbar: play/stop + menu. */
+    #toolbar { position: fixed; top: 10px; left: 10px; display: flex; gap: 8px; z-index: 22; }
+    .iconbtn { width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer;
+      border-radius: 11px; border: 1px solid rgba(90,200,255,.45); background: rgba(16,28,40,.72);
+      color: #cfefff; -webkit-tap-highlight-color: transparent; padding: 0; }
+    .iconbtn:hover { background: rgba(30,60,90,.82); }
+    .iconbtn.play { border-color: rgba(80,220,140,.6); }
+    .iconbtn.play.on { background: rgba(180,50,50,.75); border-color: rgba(255,120,120,.7); }
+    .iconbtn svg { width: 20px; height: 20px; fill: currentColor; }
+
+    /* On-canvas stats HUD (FPS + key counters), toggled from the panel. */
+    #hud { position: fixed; top: 62px; left: 12px; z-index: 18; display: none;
+      background: rgba(6,12,18,.72); border: 1px solid #ffffff1f; border-radius: 8px;
+      padding: 7px 10px; color: #9fe; font: 12px/1.5 ui-monospace, monospace;
+      white-space: pre; pointer-events: none; }
+
+    /* Pointer-lock hint (desktop play). */
+    #hint { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 21;
+      display: none; background: rgba(6,12,18,.82); border: 1px solid #ffffff24; border-radius: 999px;
+      padding: 8px 16px; color: #cfe6f5; font: 500 13px system-ui; pointer-events: none; }
 
     /* Touch sticks: floating base + thumb that appear where you press. */
     .zone { position: fixed; bottom: 0; height: 42vh; width: 42vw; z-index: 15; touch-action: none; }
@@ -43,8 +67,6 @@
     #fire { right: 18px; bottom: 46vh; width: 84px; height: 84px; border-radius: 50%;
       background: rgba(120,30,30,.5); border-color: rgba(255,90,90,.6); color: #ffdede; font-weight: 700; }
     #fire:active { background: rgba(200,40,40,.85); }
-    #gear { top: 8px; right: 8px; }
-
     #dbg { position: fixed; top: 0; right: 0; bottom: 0; width: min(78vw, 320px);
       background: rgba(10,16,24,.94); color: #dff; z-index: 25; padding: 14px; overflow: auto;
       display: none; box-shadow: -4px 0 16px #0008; font-size: 14px; }
@@ -59,7 +81,11 @@
     #dbg a { color: #8df; text-decoration: none; }
     #dbg a:hover { text-decoration: underline; }
     #dbg #stats { font: 12px/1.5 ui-monospace, monospace; color: #9fe; white-space: pre; padding-top: 8px; }
-    #dbg .close { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #9cf; font-size: 22px; }
+    /* Panel header bar: back-link on the left, close on the right — no overlap. */
+    #dbg .hdr { display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; }
+    #dbg .hdr .close { background: none; border: none; color: #9cf; font-size: 22px; cursor: pointer; padding: 0 2px; }
+    #dbg .val { color: #9fe; font: 600 12px ui-monospace, monospace; min-width: 42px; text-align: right; }
   </style>
 </head>
 <body>
@@ -74,11 +100,24 @@
 
   <button id="run" class="btn" style="display:none">RUN</button>
   <button id="fire" class="btn" style="display:none">FIRE</button>
-  <button id="gear" class="btn" style="display:none">☰ Debug</button>
+
+  <div id="toolbar" style="display:none">
+    <button id="playBtn" class="iconbtn play" title="Play / Stop" aria-label="Play">
+      <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <button id="menuBtn" class="iconbtn" title="Debug panel" aria-label="Menu">
+      <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/></svg>
+    </button>
+  </div>
+  <div id="hud"></div>
+  <div id="hint"></div>
 
   <div id="dbg">
-    <button class="close" id="dbgClose">✕</button>
-    <h3>Quality <a href="index.html" style="font-size:12px;font-weight:400;float:right">← all scenes</a></h3>
+    <div class="hdr">
+      <a href="index.html">← all scenes</a>
+      <button class="close" id="dbgClose" aria-label="Close">✕</button>
+    </div>
+    <h3>Quality</h3>
     <div class="row"><span>Preset</span>
       <select id="quality">
         <option value="mobile">Mobile</option>
@@ -98,9 +137,9 @@
 
     <h3 style="margin-top:14px">View / Tone</h3>
     <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
-    <div class="row"><span>Exposure</span><input id="exposure" type="range" min="10" max="400" value="100" style="flex:1"></div>
-    <div class="row"><span>Contrast</span><input id="contrast" type="range" min="50" max="200" value="100" style="flex:1"></div>
-    <div class="row"><span>Saturation</span><input id="saturation" type="range" min="0" max="200" value="100" style="flex:1"></div>
+    <div class="row"><span>Exposure</span><input id="exposure" type="range" min="10" max="400" value="100" style="flex:1"><span class="val" id="exposureVal">100%</span></div>
+    <div class="row"><span>Contrast</span><input id="contrast" type="range" min="50" max="200" value="100" style="flex:1"><span class="val" id="contrastVal">100%</span></div>
+    <div class="row"><span>Saturation</span><input id="saturation" type="range" min="0" max="200" value="100" style="flex:1"><span class="val" id="saturationVal">100%</span></div>
 
     <h3 style="margin-top:14px">Debug</h3>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
@@ -111,6 +150,8 @@
     <div class="row"><span>FX res <span id="fxreslbl">50%</span></span><input id="fxres" type="range" min="25" max="100" value="50" style="flex:1"></div>
     <div class="row"><span>Bloom</span><button id="bloom">on</button></div>
     <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
+    <div class="row"><span>Stats overlay (FPS)</span><button id="hudToggle">off</button></div>
+    <div class="row"><span>Console log</span><button id="logToggle">off</button></div>
     <h3 style="margin-top:14px">Stats</h3>
     <div id="stats">—</div>
   </div>
@@ -119,7 +160,8 @@
     (async () => {
       const $ = (id) => document.getElementById(id);
       const logEl = $('log');
-      logEl.addEventListener('click', () => { logEl.style.display = 'none'; });
+      logEl.addEventListener('click', () => { logEl.style.display = 'none';
+        const t = $('logToggle'); if (t) { t.classList.remove('on'); t.textContent = 'off'; } });
       const log = (t, cls) => { const s = document.createElement('span');
         if (cls) s.className = cls; s.textContent = t + '\n'; logEl.appendChild(s);
         logEl.scrollTop = logEl.scrollHeight; };
@@ -198,6 +240,13 @@
       // keyboard + mouse (the stick zones are hidden so the mouse reaches the
       // canvas, and WASD/QE + mouse-look + Shift-to-run work via GLFW).
       const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+      // Shared play + pointer-lock state (used by the toolbar, the panel, and the
+      // desktop mouse handlers below).
+      let playing = false, locked = false;
+      const hint = $('hint');
+      const showHint = (t) => { hint.textContent = t || ''; hint.style.display = t ? 'block' : 'none'; };
+
       if (hasTouch) {
         makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
         makeStick('zoneR', 'baseR', 'thumbR', 1);   // look
@@ -217,7 +266,7 @@
         // don't reliably reach this build). Hide the touch stick zones.
         $('zoneL').style.display = 'none';
         $('zoneR').style.display = 'none';
-        log('desktop: WASD/QE move, mouse-drag look, Shift run, click fire, 1/2 weapon, ☰ debug');
+        log('desktop: WASD/QE move, Shift run, 1/2 weapon. Editor: drag to look. Play: mouse captured (Esc releases).');
 
         const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
                          ShiftLeft: 6, ShiftRight: 6, Digit1: 7, Digit2: 8 };
@@ -230,34 +279,64 @@
           if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
         });
 
-        // Mouse drag-to-look; left button also fires (RightBumper, button 2) so a
-        // click shoots in Play mode (harmless in editor — nothing reads it there).
+        // Look control differs by mode:
+        //  - Editor: hold-drag to look (nothing is captured; the cursor stays).
+        //  - Play: the pointer is locked to the canvas, so moving the mouse looks
+        //    without holding a button (standard FPS); Esc releases it. A first
+        //    click while unlocked re-captures instead of firing.
         let dragging = false;
-        canvas.addEventListener('mousedown', (e) => { dragging = true; if (e.button === 0) button(2, 1); });
+        document.addEventListener('pointerlockchange', () => {
+          locked = (document.pointerLockElement === canvas);
+          if (playing) showHint(locked ? 'Mouse captured — press Esc to release'
+                                        : 'Click the view to look around');
+          if (!locked) button(2, 0);   // don't leave fire stuck held on release
+        });
+        canvas.addEventListener('mousedown', (e) => {
+          if (playing) {
+            if (!locked) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
+            if (e.button === 0) button(2, 1);            // captured: click fires
+          } else {
+            dragging = true; if (e.button === 0) button(2, 1);   // editor: drag look
+          }
+        });
         window.addEventListener('mouseup', (e) => { dragging = false; if (e.button === 0) button(2, 0); });
         window.addEventListener('mousemove', (e) => {
-          if (dragging) mod._rt_web_look(e.movementX, e.movementY);
+          if (locked || dragging) mod._rt_web_look(e.movementX, e.movementY);
         });
         // Scroll to zoom (right-stick-free dolly via the look accumulator is not
         // zoom; feed the gamepad trigger-free path through a brief forward nudge).
         canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
       }
 
-      // --- debug panel ---
-      $('gear').style.display = 'block';
-      $('gear').onclick = () => { $('dbg').style.display = 'block'; };
+      // --- toolbar (play/stop + menu) + debug panel ---
+      $('toolbar').style.display = 'flex';
+      $('menuBtn').onclick = () => { $('dbg').style.display = 'block'; };
       $('dbgClose').onclick = () => { $('dbg').style.display = 'none'; };
 
       // Play/Edit toggle: enter ArenaState (gun + Jolt physics) or back to the
-      // free-look editor. In Play, surface the FIRE button on touch devices.
-      let playOn = false; const playB = $('play');
-      playB.onclick = () => {
-        playOn = !playOn;
-        mod._rt_web_play(playOn ? 1 : 0);
-        playB.classList.toggle('on', playOn); playB.textContent = playOn ? 'on' : 'off';
-        if (hasTouch) $('fire').style.display = playOn ? 'block' : 'none';
-        log(playOn ? 'play: tap "Draw gun" then FIRE (or 2 then click on desktop)' : 'editor mode');
+      // free-look editor. Shared by the toolbar icon and the panel row; on desktop
+      // it captures the mouse (pointer lock) for FPS look, on touch it shows FIRE.
+      const PLAY_PATH = 'M8 5v14l11-7z', STOP_PATH = 'M6 6h12v12H6z';
+      const playIconPath = document.querySelector('#playIcon path');
+      const playBtn = $('playBtn'), panelPlay = $('play');
+      const setPlay = (on) => {
+        if (on === playing) return;
+        playing = on;
+        mod._rt_web_play(on ? 1 : 0);
+        playBtn.classList.toggle('on', on);
+        playIconPath.setAttribute('d', on ? STOP_PATH : PLAY_PATH);
+        playBtn.setAttribute('aria-label', on ? 'Stop' : 'Play');
+        panelPlay.classList.toggle('on', on); panelPlay.textContent = on ? 'on' : 'off';
+        if (hasTouch) $('fire').style.display = on ? 'block' : 'none';
+        if (!hasTouch) {
+          if (on) { canvas.requestPointerLock && canvas.requestPointerLock();
+                    showHint('Click the view to look · Esc releases the mouse'); }
+          else { document.exitPointerLock && document.exitPointerLock(); showHint(''); }
+        }
+        log(on ? 'play mode' : 'editor mode');
       };
+      playBtn.onclick = () => setPlay(!playing);
+      panelPlay.onclick = () => setPlay(!playing);
       // Draw gun: taps the slot-2 weapon key the gun script equips on.
       $('drawgun').onclick = () => tapKey(8);
 
@@ -283,13 +362,17 @@
       // --- View transform: tone map + exposure + grade (forward output stage) ---
       const post = (id, v) => mod._rt_web_post(id, v);
       let agx = false; const tmB = $('tonemap');
-      tmB.onclick = () => { agx = !agx; post(0, agx ? 1 : 0);
-        tmB.classList.toggle('on', agx); tmB.textContent = agx ? 'AgX' : 'ACES'; };
-      // Sliders push only on user input, so the level's authored values stand
-      // until the user actually grabs a control.
-      $('exposure').addEventListener('input', (e) => post(1, e.target.value / 100));
-      $('contrast').addEventListener('input', (e) => post(2, e.target.value / 100));
-      $('saturation').addEventListener('input', (e) => post(3, e.target.value / 100));
+      const setTone = (on) => { agx = on; post(0, on ? 1 : 0);
+        tmB.classList.toggle('on', on); tmB.textContent = on ? 'AgX' : 'ACES'; };
+      tmB.onclick = () => setTone(!agx);
+      // Grade sliders: push on input and show a live percentage.
+      const gradeSlider = (id, postId) => { const el = $(id), lab = $(id + 'Val');
+        el.addEventListener('input', () => { lab.textContent = el.value + '%'; post(postId, el.value / 100); }); };
+      gradeSlider('exposure', 1); gradeSlider('contrast', 2); gradeSlider('saturation', 3);
+
+      // Defaults: AgX tone map (gentler than ACES) + a little more exposure.
+      setTone(true);
+      $('exposure').value = 130; $('exposureVal').textContent = '130%'; post(1, 1.3);
 
       // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
       let flyOn = false; const flyB = $('fly');
@@ -335,15 +418,31 @@
                        (navigator.maxTouchPoints || 0) > 0 || innerWidth < 820;
       applyPreset(isMobile ? 'mobile' : 'high');
 
-      // Stats poll
+      // FPS meter (rAF-timed) + on-canvas stats HUD + console-log toggles.
+      let frames = 0, fpsT = performance.now(), fps = 0;
+      const fpsTick = (now) => { frames++;
+        if (now - fpsT >= 500) { fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
+        requestAnimationFrame(fpsTick); };
+      requestAnimationFrame(fpsTick);
+
+      let hudOn = false;
+      $('hudToggle').onclick = () => { hudOn = !hudOn; $('hud').style.display = hudOn ? 'block' : 'none';
+        $('hudToggle').classList.toggle('on', hudOn); $('hudToggle').textContent = hudOn ? 'on' : 'off'; };
+      $('logToggle').onclick = () => { const show = logEl.style.display === 'none';
+        logEl.style.display = show ? 'block' : 'none';
+        $('logToggle').classList.toggle('on', show); $('logToggle').textContent = show ? 'on' : 'off'; };
+
+      // Stats poll — feeds the panel readout and the HUD box (only when visible).
       const stat = (w) => mod._rt_web_stat(w);
       setInterval(() => {
-        if ($('dbg').style.display === 'none') return;
-        $('stats').textContent =
-          `draws      ${stat(0)}\ninstanced  ${stat(1)}\ninstances  ${stat(2)}\ntriangles  ${stat(3)}\nentities   ${stat(4)}`;
+        const panelOpen = $('dbg').style.display !== 'none';
+        if (!panelOpen && !hudOn) return;
+        if (hudOn) $('hud').textContent = `fps ${fps}   draws ${stat(0)}   tris ${stat(3)}   ents ${stat(4)}`;
+        if (panelOpen) $('stats').textContent =
+          `fps        ${fps}\ndraws      ${stat(0)}\ninstanced  ${stat(1)}\ninstances  ${stat(2)}\ntriangles  ${stat(3)}\nentities   ${stat(4)}`;
       }, 300);
 
-      log('controls ready: L stick move, R stick look, RUN boost, ☰ debug');
+      log('controls ready — press ▶ to play');
     })();
   </script>
 </body>
