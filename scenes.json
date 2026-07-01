@@ -1,0 +1,172 @@
+{
+  "scenes": [
+    {
+      "id": "city_arena",
+      "title": "City Arena",
+      "tag": "City",
+      "blurb": "A play arena carved into a full procedural city.",
+      "thumb": "thumbs/city_arena.png"
+    },
+    {
+      "id": "city",
+      "title": "City Skyline",
+      "tag": "City",
+      "blurb": "Dense procedural downtown \u2014 100+ buildings, blocks, trees.",
+      "thumb": "thumbs/city.png"
+    },
+    {
+      "id": "city_lua",
+      "title": "Lua City",
+      "tag": "City",
+      "blurb": "City generated from the Lua scripting layer.",
+      "thumb": "thumbs/city_lua.png"
+    },
+    {
+      "id": "lua_city",
+      "title": "Lua City (Scripted)",
+      "tag": "City",
+      "blurb": "Scripted city layout driven by procgen bindings.",
+      "thumb": "thumbs/lua_city.png"
+    },
+    {
+      "id": "lua_city_terrain",
+      "title": "Lua City + Terrain",
+      "tag": "City",
+      "blurb": "Scripted city dropped onto sculpted terrain.",
+      "thumb": "thumbs/lua_city_terrain.png"
+    },
+    {
+      "id": "city_radial",
+      "title": "Radial City",
+      "tag": "City",
+      "blurb": "Ring-and-spoke street plan radiating from a core.",
+      "thumb": "thumbs/city_radial.png"
+    },
+    {
+      "id": "twin_cities",
+      "title": "Twin Cities",
+      "tag": "City",
+      "blurb": "Two procedural cityscapes bridged across the terrain.",
+      "thumb": "thumbs/twin_cities.png"
+    },
+    {
+      "id": "road_overpass",
+      "title": "Overpass",
+      "tag": "Roads",
+      "blurb": "Multi-level road overpass junction.",
+      "thumb": "thumbs/road_overpass.png"
+    },
+    {
+      "id": "road_terrain",
+      "title": "Road + Terrain",
+      "tag": "Roads",
+      "blurb": "Roads laid across generated terrain.",
+      "thumb": "thumbs/road_terrain.png"
+    },
+    {
+      "id": "road_edit",
+      "title": "Road Editor",
+      "tag": "Roads",
+      "blurb": "Editable road-network authoring scene.",
+      "thumb": "thumbs/road_edit.png"
+    },
+    {
+      "id": "road_roundabout",
+      "title": "Roundabout",
+      "tag": "Roads",
+      "blurb": "Roundabout intersection with merging lanes.",
+      "thumb": "thumbs/road_roundabout.png"
+    },
+    {
+      "id": "showcase",
+      "title": "Showcase",
+      "tag": "Roads",
+      "blurb": "Procedural road network with intersections and lanes.",
+      "thumb": "thumbs/showcase.png"
+    },
+    {
+      "id": "chunked",
+      "title": "Chunked Terrain",
+      "tag": "Terrain",
+      "blurb": "Streaming chunked terrain tiles.",
+      "thumb": "thumbs/chunked.png"
+    },
+    {
+      "id": "script_terrain_eroded",
+      "title": "Eroded Scripted Terrain",
+      "tag": "Terrain",
+      "blurb": "Scripted terrain after an erosion pass.",
+      "thumb": "thumbs/script_terrain_eroded.png"
+    },
+    {
+      "id": "erosion",
+      "title": "Eroded Terrain",
+      "tag": "Terrain",
+      "blurb": "Hydraulic-erosion sculpted heightfield.",
+      "thumb": "thumbs/erosion.png"
+    },
+    {
+      "id": "mountains",
+      "title": "Mountains",
+      "tag": "Terrain",
+      "blurb": "Large-scale procedural mountain terrain.",
+      "thumb": "thumbs/mountains.png"
+    },
+    {
+      "id": "script_terrain",
+      "title": "Scripted Terrain",
+      "tag": "Terrain",
+      "blurb": "Terrain authored through the scripting layer.",
+      "thumb": "thumbs/script_terrain.png"
+    },
+    {
+      "id": "script_brickhouse",
+      "title": "Brick House",
+      "tag": "Procedural",
+      "blurb": "Scripted brick house with material maps.",
+      "thumb": "thumbs/script_brickhouse.png"
+    },
+    {
+      "id": "lsystem_tree",
+      "title": "L-System Tree",
+      "tag": "Procedural",
+      "blurb": "Tree grown from an L-system grammar.",
+      "thumb": "thumbs/lsystem_tree.png"
+    },
+    {
+      "id": "script_block",
+      "title": "Scripted Block",
+      "tag": "Procedural",
+      "blurb": "Minimal scripted geometry block.",
+      "thumb": "thumbs/script_block.png"
+    },
+    {
+      "id": "tree",
+      "title": "Tree",
+      "tag": "Procedural",
+      "blurb": "A single procedurally grown tree.",
+      "thumb": "thumbs/tree.png"
+    },
+    {
+      "id": "arena",
+      "title": "Arena",
+      "tag": "Scene",
+      "blurb": "Combat arena \u2014 the default play space.",
+      "thumb": "thumbs/arena.png"
+    },
+    {
+      "id": "range",
+      "title": "Shooting Range",
+      "tag": "Scene",
+      "blurb": "Target range for the gun and ballistics.",
+      "thumb": "thumbs/range.png"
+    },
+    {
+      "id": "textured_arena",
+      "title": "Textured Arena",
+      "tag": "Scene",
+      "blurb": "Arena showcasing the texture/material map pipeline.",
+      "thumb": "thumbs/textured_arena.png"
+    }
+  ]
+}
