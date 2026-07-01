@@ -1129,7 +1129,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                     double sgn = cross(ab, d) >= 0 ? 1.0 : -1.0;        // side of the centerline
                     double latN = std::sqrt(d2) / std::max(1e-6, pr.hw);
                     omu = 2.0 + sgn * std::min(1.0, latN);
-                    omv = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t;
+                    omv = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t;         // arc-length (height sampler only)
                     oSpine = static_cast<int>(pi);
                 }
             }
@@ -1308,10 +1308,21 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 if (junction) continue;
                 Vec3 mL0 = P(c0, o0, h0 + markLift, +1), mR0 = P(c0, o0, h0 + markLift, -1),
                      mL1 = P(c1, o1, h1 + markLift, +1), mR1 = P(c1, o1, h1 + markLift, -1);
+                // The v coordinate (mv) carries CROSSWALK placement (ADR-0061):
+                // metres PAST the junction mouth, so the RoadMarkings shader stripes
+                // a set-back band on each approach (not in the intersection). = the
+                // distance to the nearest chain end minus the road half-width (the
+                // mouth). Off, or on a closed ring, a large sentinel = no band.
+                double chainLen = pr.s.back();
+                auto cwV = [&](double s) -> float {
+                    if (!p.crosswalks || pr.closed) return 1e4f;
+                    return static_cast<float>(std::min(s, chainLen - s) - hw);
+                };
+                float v0 = cwV(s0), v1 = cwV(s1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR0, mR1, Vec3(0, 1, 0), p.topColor,
-                                       1.0f, (float)s0, 3.0f, (float)s0, 3.0f, (float)s1);
+                                       1.0f, v0, 3.0f, v0, 3.0f, v1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR1, mL1, Vec3(0, 1, 0), p.topColor,
-                                       1.0f, (float)s0, 3.0f, (float)s1, 1.0f, (float)s1);
+                                       1.0f, v0, 3.0f, v1, 1.0f, v1);
             }
         }
     }

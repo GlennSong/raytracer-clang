@@ -261,5 +261,9 @@ TEST_CASE(crosswalks_sit_at_junction_mouths) {
         CHECK(dNode > halfW * 0.8);    // outside the intersection box...
         CHECK(dNode < halfW + 6.0);    // ...but right at the mouth, not mid-block
     }
-    CHECK(world.get<InstanceGroup>(city.crosswalkGroup()) != nullptr);
+    // The bars are painted into the ROAD TEXTURE now (ADR-0061), not a decal group:
+    // the group still exists (a stable anchor) but carries no overlay instances.
+    InstanceGroup* g = world.get<InstanceGroup>(city.crosswalkGroup());
+    CHECK(g != nullptr);
+    CHECK(g->transforms.empty());
 }

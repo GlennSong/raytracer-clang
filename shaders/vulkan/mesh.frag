@@ -248,6 +248,15 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv) {
     float w  = max(wL, wR);
     vec3 c = mix(base, vec3(0.82, 0.68, 0.13), y);
     c = mix(c, vec3(0.86, 0.86, 0.83), w);
+    // Zebra crosswalk painted into the road texture (ADR-0061): mv = metres PAST
+    // the junction mouth (baked by the road mesher), so the band sits set back on
+    // the approach, not in the intersection. Bars run across the carriageway (mu).
+    // Mirror of the Metal path (shaders/metal/common.metal) for backend parity.
+    // Only the carriageway (mu in [~1,3]) — the raised sidewalk/curb shares this
+    // surface but carries a 0..1 UV, so gate on mu > 1.05 to keep paint off the curb.
+    float cwEdge = smoothstep(0.5, 0.8, mv) * (1.0 - smoothstep(3.3, 3.6, mv));
+    float bars = step(0.5, fract((mu - 1.0) * 4.0));
+    c = mix(c, vec3(0.90, 0.90, 0.88), cwEdge * bars * step(1.05, mu));
     return c;
 }
 vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV) {

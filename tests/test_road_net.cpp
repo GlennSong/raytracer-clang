@@ -1,4 +1,6 @@
 #include "test_framework.h"
+#include <cstdio>
+#include <algorithm>
 
 #include "../src/engine/procgen/city/road_net.h"
 #include <nlohmann/json.hpp>
@@ -46,6 +48,33 @@ TEST_CASE(road_net_builds_a_surface) {
     CHECK(!m.vertices.empty());
     CHECK(!m.indices.empty());
     CHECK(m.indices.size() % 3 == 0);
+}
+
+TEST_CASE(crosswalks_bake_a_setback_band_into_the_road_uv) {
+    // Crosswalks are painted into the road TEXTURE (ADR-0061): the mesher bakes the
+    // carriageway UV `v` (mv) as metres past the junction mouth, so the RoadMarkings
+    // shader stripes a set-back band. Verify the baking is gated and lands near a
+    // junction. (carriageway vertices carry u = mu >= ~1; sidewalks stay at u = 0.)
+    RoadNet n = sampleNet();     // node 1 is a degree-3 junction
+    n.markings = true;
+
+    // The shader paints where mv is in the set-back window (~0.5..3.6 m past the
+    // mouth). Filter to the carriageway RIGHT rail (u == 3) — unambiguously road
+    // (the raised sidewalk shares this surface but its 0..1 UV never reaches u = 3,
+    // which is exactly why the shader also gates crosswalk paint on mu > 1.05).
+    auto hasBand = [](const RenderMesh& m) {
+        for (const Vertex& vtx : m.vertices)
+            if (vtx.u >= 2.5 && vtx.v > 0.5 && vtx.v < 3.6) return true;
+        return false;
+    };
+    // OFF: carriageway UV is the large sentinel, so nothing lands in the window.
+    n.crosswalks = false;
+    CHECK(!hasBand(buildRoadNetMesh(n)));
+
+    // ON: some carriageway vertex lands in the painted window, proving the band is
+    // baked where the shader will stripe it.
+    n.crosswalks = true;
+    CHECK(hasBand(buildRoadNetMesh(n)));
 }
 
 TEST_CASE(road_net_widen_grows_the_carriageway) {

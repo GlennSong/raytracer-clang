@@ -81,26 +81,6 @@ void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
     for (uint32_t i : b.indices) out.indices.push_back(base + i);
 }
 
-// A unit quad in the XZ plane (1x1, centred, facing +Y), white. Instanced per
-// crosswalk bar with a translate+yaw+scale transform, so the standard
-// InstanceGroup bounds/culling apply (a single baked world mesh would need
-// hand-set bounds or it gets frustum-culled to nothing).
-engine::RenderMesh unitQuadXZ() {
-    engine::RenderMesh m;
-    const Vec3 white(0.9, 0.9, 0.88);
-    Vec3 corners[4] = { Vec3(-0.5, 0, -0.5), Vec3(0.5, 0, -0.5),
-                        Vec3(0.5, 0, 0.5), Vec3(-0.5, 0, 0.5) };
-    for (const Vec3& p : corners) {
-        engine::Vertex v;
-        v.position = p;
-        v.normal = Vec3(0, 1, 0);
-        v.color = white;
-        m.vertices.push_back(v);
-    }
-    m.indices = { 0, 1, 2, 0, 2, 3 };
-    return m;
-}
-
 // A flat ring (annulus) of unit outer radius in the XZ plane, facing +Y — the
 // debug footprint, a thin wireframe-like outline. Instanced with a scale = the
 // agent's radius.
@@ -286,17 +266,6 @@ RenderMaterial signalPostMaterial() {
     return m;
 }
 
-RenderMaterial crosswalkMaterial() {
-    RenderMaterial m;
-    m.albedo = Vec3(1, 1, 1);            // bright paint; vertex colour carries the white
-    m.metallic = 0.0f;
-    m.roughness = 0.9f;
-    m.opacity = 1.0f;
-    m.emission = Vec3(0, 0, 0);
-    m.flags = 0;
-    return m;
-}
-
 Vec3 translationOf(const Mat4& t) { return Vec3(t.m[0][3], t.m[1][3], t.m[2][3]); }
 
 void refreshBounds(InstanceGroup* g) {
@@ -430,40 +399,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         sim_.setStaticObstacles(std::move(poles));
     }
 
-    // Zebra crosswalks: a band of white bars across the mouth of every junction
-    // approach, each bar an instance of the unit quad riding ~4 cm above the
-    // asphalt. Opaque white, so it reads as a crossing and covers the painted
-    // centreline where it crosses (no need to shrink the road's lane lines). Bars
-    // run ALONG travel (depth), repeated ACROSS the carriageway.
+    // Crosswalks are painted into the ROAD TEXTURE now (ADR-0061): the road mesher
+    // bakes a set-back "metres past the junction mouth" coordinate into the
+    // carriageway UV, and the RoadMarkings shader stripes the zebra band there — so
+    // it's part of the road surface, set back on the approach, and never a floating
+    // decal overlapping the centreline. We keep only the crosswalk CENTRES here (a
+    // handy anchor for future ped-crossing logic); the decal group stays empty.
     crosswalkCenters_.clear();
-    MeshHandle quadMesh{};
-    if (assets) quadMesh = assets->acquireMesh(unitQuadXZ(), "city:crosswalk");
     crosswalkGroup_ = world.create();
     {
-        InstanceGroup g;
-        g.mesh = quadMesh;
-        g.material = crosswalkMaterial();
-        const Real depth = 2.6, barW = 0.55, gap = 0.5, lift = 0.04;
+        const Real depth = 2.6;
         for (int li = 0; li < nav_.linkCount(); ++li) {
             const engine::NavLink& L = nav_.links[li];
             if (!nav_.isJunction(L.to)) continue;
             Vec2 d = nav_.direction(li);
             Vec2 node = nav_.nodes[L.to];
-            Vec2 right(d.y, -d.x);
             Real halfW = L.width * 0.5;
-            Vec2 center = node - d * (halfW + depth * 0.5 + 0.3);   // just outside the mouth
-            crosswalkCenters_.push_back(center);
-            Real y = groundAt(center.x, center.y) + L.layer * Real(5.8) + lift;
-            Real yaw = std::atan2(d.x, d.y);   // unit quad local +Z -> travel direction
-            Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-            for (Real lat = -halfW + barW * 0.5; lat <= halfW; lat += barW + gap) {
-                Vec2 c = center + right * lat;
-                // scale: local X (lateral) = bar width, local Z (travel) = band depth.
-                g.transforms.push_back(Mat4::trs(Vec3(c.x, y, c.y), rot, Vec3(barW, 1, depth)));
-            }
+            crosswalkCenters_.push_back(node - d * (halfW + depth * 0.5 + 0.3));
         }
-        refreshBounds(&g);
-        world.add<InstanceGroup>(crosswalkGroup_, g);
+        world.add<InstanceGroup>(crosswalkGroup_, InstanceGroup{});   // empty: road paints the bars
     }
 
     // Debug widgets (ADR-0060): per-agent footprint ring (one group per behaviour

@@ -253,6 +253,11 @@ struct WeldSolidParams {
     Vec3   sidewalkColor{0.55, 0.55, 0.52};      // concrete slab top
     Vec3   curbColor{0.42, 0.42, 0.40};          // curb riser faces
     std::function<double(double, double)> heightAt;  // terrain (world XZ -> height); null = flat
+    // Zebra crosswalks painted into the road TEXTURE (not overlaid geometry): when
+    // true, the carriageway UV `mv` is baked as metres PAST the junction mouth, so
+    // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
+    // When false, mv is a large sentinel so no band is painted (ADR-0061).
+    bool   crosswalks = false;
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
 

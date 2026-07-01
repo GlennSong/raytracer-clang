@@ -248,13 +248,22 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
     const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
     double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow centre
     double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
-    // Multilane: broken white lane dividers half-way out each side (a 4-lane road), dashed along
-    // the arc-length mv — 3 m of paint every 6 m. Markings are pure texture, so any lane count
-    // reads from the same UV with no extra geometry.
-    if (std::fmod(std::fabs(mv), 6.0) < 3.0)
-        w = std::max(w, std::max(band(lat, 0.5, 0.013), band(lat, -0.5, 0.013)));
     Vec3 c = base * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
+    // Zebra crosswalk painted into the road texture (ADR-0061): mv = metres PAST the
+    // junction mouth (baked by the road mesher), so the band sits set back on the
+    // approach, not in the intersection. Bars run across the carriageway (mu). This
+    // mirrors the Metal/Vulkan RoadMarkings shader for realtime<->offline parity.
+    auto sstep = [](double a, double b, double x) {
+        double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    };
+    // Only the carriageway (mu in [~1,3]) — the raised sidewalk/curb shares this
+    // surface but carries a 0..1 UV, so gate on mu > 1.05 to keep paint off the curb.
+    double cwEdge = sstep(0.5, 0.8, mv) * (1.0 - sstep(3.3, 3.6, mv));
+    double barPhase = (mu - 1.0) * 4.0; barPhase -= std::floor(barPhase);
+    double cw = cwEdge * (barPhase < 0.5 ? 1.0 : 0.0) * (mu > 1.05 ? 1.0 : 0.0);
+    c = c * (1.0 - cw) + white * cw;
     return c;
 }
 

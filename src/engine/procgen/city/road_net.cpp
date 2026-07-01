@@ -366,6 +366,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.curbHeight = net.curb;
     wp.topColor = net.color;
     wp.heightAt = net.heightAt;
+    wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
     return weldSolid(weldChainSpines(g), wp);
 }
 
