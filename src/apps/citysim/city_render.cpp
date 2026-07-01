@@ -5,6 +5,7 @@
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
+#include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
 
 #include <algorithm>
 #include <cmath>
@@ -98,6 +99,68 @@ engine::RenderMesh unitQuadXZ() {
     }
     m.indices = { 0, 1, 2, 0, 2, 3 };
     return m;
+}
+
+// A flat ring (annulus) of unit outer radius in the XZ plane, facing +Y — the
+// debug footprint. Instanced with a scale = the agent's radius.
+engine::RenderMesh ringXZ(Real innerFrac = 0.78, int segs = 28) {
+    engine::RenderMesh m;
+    const Vec3 white(1, 1, 1);
+    for (int i = 0; i < segs; ++i) {
+        Real t0 = (Real(i) / segs) * 6.28318530718;
+        Real t1 = (Real(i + 1) / segs) * 6.28318530718;
+        Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
+        Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
+        uint32_t b = static_cast<uint32_t>(m.vertices.size());
+        for (const Vec3& p : { o0, o1, i1, i0 }) {
+            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
+            m.vertices.push_back(v);
+        }
+        m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+        m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
+    }
+    return m;
+}
+
+// A flat arrow along +Z from the origin to z=1 (a shaft + a head), facing +Y —
+// the debug trajectory vector. Instanced with scale (width, 1, length) + yaw.
+engine::RenderMesh arrowXZ() {
+    engine::RenderMesh m;
+    const Vec3 white(1, 1, 1);
+    auto quad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+        uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        for (const Vec3& p : { a, b, c, d }) {
+            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
+            m.vertices.push_back(v);
+        }
+        m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
+        m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
+    };
+    quad(Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 0.7), Vec3(-0.5, 0, 0.7));   // shaft
+    // Arrow head (triangle) from z=0.6 to z=1.0.
+    uint32_t b = static_cast<uint32_t>(m.vertices.size());
+    for (const Vec3& p : { Vec3(-1.1, 0, 0.6), Vec3(1.1, 0, 0.6), Vec3(0, 0, 1.0) }) {
+        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
+        m.vertices.push_back(v);
+    }
+    m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+    return m;
+}
+
+// Debug colour for a behaviour state (emissive so it reads over any surface).
+RenderMaterial widgetMaterial(Vec3 color) {
+    RenderMaterial m;
+    m.albedo = color; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
+    m.emission = color * 0.7; m.flags = 0;
+    return m;
+}
+Vec3 stateColor(Agent::State s) {
+    switch (s) {
+        case Agent::State::Walking:  return Vec3(0.20, 0.80, 0.30);   // green: moving freely
+        case Agent::State::Avoiding: return Vec3(0.95, 0.60, 0.10);   // orange: steering around
+        case Agent::State::Waiting:  return Vec3(0.20, 0.45, 0.95);   // blue: held (signal)
+        default:                     return Vec3(0.55, 0.55, 0.58);   // grey: resting
+    }
 }
 
 // A vertex-coloured car in one of a few body STYLES (sedan / hatchback / SUV /
@@ -342,6 +405,29 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.add<InstanceGroup>(crosswalkGroup_, g);
     }
 
+    // Debug widgets (ADR-0060): per-agent footprint ring (one group per behaviour
+    // state, coloured) + a forward trajectory arrow. The groups always exist so a
+    // key can toggle them at runtime; they stay empty unless debugWidgets_ is on.
+    {
+        MeshHandle ringMesh{}, arrowMesh{};
+        if (assets) {
+            ringMesh = assets->acquireMesh(ringXZ(), "city:dbgring");
+            arrowMesh = assets->acquireMesh(arrowXZ(), "city:dbgarrow");
+        }
+        for (int s = 0; s < 4; ++s) {
+            footprintGroups_[s] = world.create();
+            InstanceGroup g;
+            g.mesh = ringMesh;
+            g.material = widgetMaterial(stateColor(static_cast<Agent::State>(s)));
+            world.add<InstanceGroup>(footprintGroups_[s], g);
+        }
+        forwardGroup_ = world.create();
+        InstanceGroup g;
+        g.mesh = arrowMesh;
+        g.material = widgetMaterial(Vec3(0.15, 0.85, 0.95));   // cyan trajectory
+        world.add<InstanceGroup>(forwardGroup_, g);
+    }
+
     built_ = true;
     syncGroups(world);
     return true;
@@ -443,6 +529,38 @@ void CityRenderSystem::syncGroups(World& world) {
     for (InstanceGroup* c : cars) refreshBounds(c);
     refreshBounds(ped);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
+
+    // Debug widgets: a ground footprint (coloured by state) + a forward arrow per
+    // agent, scaled to the agent's speed so it reads as the present trajectory.
+    {
+        InstanceGroup* foot[4];
+        for (int s = 0; s < 4; ++s) {
+            foot[s] = world.get<InstanceGroup>(footprintGroups_[s]);
+            if (foot[s]) foot[s]->transforms.clear();
+        }
+        InstanceGroup* fwd = world.get<InstanceGroup>(forwardGroup_);
+        if (fwd) fwd->transforms.clear();
+        for (const Agent& a : sim_.agents()) {
+            if (!debugWidgets_) break;   // groups exist but stay empty when toggled off
+            bool car = a.mode == Agent::Mode::Driver;
+            Real x = a.pos.x, z = a.pos.y;
+            Real y = groundAt(x, z) + a.elevation + 0.05;   // just above the ground
+            Real radius = car ? std::max(params_.carSize.x, params_.carSize.z) * 0.5
+                              : params_.pedSize.x * 0.9;
+            InstanceGroup* fg = foot[static_cast<int>(a.state)];
+            if (fg) fg->transforms.push_back(
+                Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
+            if (fwd && a.moving) {
+                Real len = std::max(Real(0.6), std::min(Real(4.0), a.speed * 0.4));
+                Real yaw = std::atan2(a.heading.x, a.heading.y);
+                fwd->transforms.push_back(Mat4::trs(
+                    Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                    Vec3(0.12, 1, len)));
+            }
+        }
+        for (int s = 0; s < 4; ++s) refreshBounds(foot[s]);
+        refreshBounds(fwd);
+    }
 }
 
 void CityRenderSystem::step(World& world, Real dt) {
@@ -451,7 +569,12 @@ void CityRenderSystem::step(World& world, Real dt) {
     syncGroups(world);
 }
 
+void CityRenderSystem::onStart(engine::FrameContext& ctx) {
+    ctx.actions.bindButton("agent_widgets", engine::KeyCode::J);   // toggle debug widgets
+}
+
 void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
+    if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     if (!built_) {
         build(ctx.world, &ctx.assets);   // lazy: retry until the level's roads exist
         return;

@@ -31,12 +31,15 @@ struct CityRenderParams {
     engine::Vec3 carSize{2.0, 1.4, 4.2};   // x = width, y = height, z = length (travel)
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    bool debugWidgets = false;             // draw each agent's footprint + trajectory
 };
 
 class CityRenderSystem : public engine::System {
 public:
-    explicit CityRenderSystem(const CityRenderParams& params = {}) : params_(params) {}
+    explicit CityRenderSystem(const CityRenderParams& params = {})
+        : params_(params), debugWidgets_(params.debugWidgets) {}
 
+    void onStart(engine::FrameContext& ctx) override;
     void fixedUpdate(engine::FrameContext& ctx) override;
 
     // --- testable core (no FrameContext) -----------------------------------
@@ -61,6 +64,10 @@ public:
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
+    // Debug widgets (ADR-0060): per-agent ground footprint coloured by behaviour
+    // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
+    engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
+    engine::Entity forwardGroup() const { return forwardGroup_; }
     // Half-extents of a car / pedestrian box, for a physics collider that tracks
     // the drawn instance.
     engine::Vec3 carHalfExtent() const {
@@ -96,11 +103,14 @@ private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
+    engine::Entity footprintGroups_[4]{};   // debug ground rings, indexed by Agent::State
+    engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     bool built_ = false;
+    bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
 };
 
 }  // namespace citysim

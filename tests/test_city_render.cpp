@@ -63,6 +63,34 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CHECK(city.carGroups().size() > 1u);    // there really are multiple variants
 }
 
+TEST_CASE(city_render_debug_widgets) {
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+
+    CityRenderParams p;
+    p.cars = 5;
+    p.pedestrians = 5;
+    p.debugWidgets = true;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+
+    // Step so agents move (footprints + forward arrows populate). Track the arrow
+    // count over time — arrows exist only while an agent is actually moving.
+    std::size_t maxArrows = 0;
+    for (int i = 0; i < 3000; ++i) {
+        city.step(world, 0.1);
+        std::size_t arrows = groupCount(world, city.forwardGroup());
+        maxArrows = std::max(maxArrows, arrows);
+        CHECK(arrows <= 10u);   // never more than the agent count
+    }
+    // One footprint per agent, spread across the four state groups.
+    std::size_t foot = 0;
+    for (int s = 0; s < 4; ++s)
+        foot += groupCount(world, city.footprintGroup(static_cast<Agent::State>(s)));
+    CHECK(foot == 10u);
+    CHECK(maxArrows >= 1u);     // agents did move at some point, drawing a trajectory
+}
+
 TEST_CASE(city_render_build_fails_without_roads) {
     World world;
     CityRenderSystem city;
