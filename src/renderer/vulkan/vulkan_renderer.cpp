@@ -466,6 +466,7 @@ struct VulkanRenderer::Impl {
     VkPipeline meshPipeline = VK_NULL_HANDLE;
     VkPipeline wirePipeline = VK_NULL_HANDLE;          // VK_POLYGON_MODE_LINE debug view
     VkPipeline transparentPipeline = VK_NULL_HANDLE;   // alpha blend, no depth write
+    VkPipeline overlayPipeline = VK_NULL_HANDLE;       // FLAG_OVERLAY: no depth test/write, on top
     VkPipeline terrainPipeline = VK_NULL_HANDLE;       // CDLOD morph (terrain.vert)
 
     // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
@@ -2921,6 +2922,28 @@ bool VulkanRenderer::Impl::createPipeline() {
         LOG_ERROR("[vulkan] terrain pipeline creation failed");
         return false;
     }
+
+    // Overlay variant (RenderMaterial::FLAG_OVERLAY — debug gizmos, ADR-0060): the
+    // same opaque mesh shaders, but depth test AND write are off so the geometry
+    // always draws over everything already in the frame (parity with the Metal
+    // depthStateOverlay: Always-compare, no write). Drawn last, after opaque /
+    // terrain / transparent. The terrain block above already reset color/blend to
+    // the clean opaque state, so we only flip the depth flags here.
+    VkShaderModule overt = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.vert.spv");
+    VkShaderModule ofrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh.frag.spv");
+    if (!overt || !ofrag) return false;
+    stages[0].module = overt;
+    stages[1].module = ofrag;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    VkResult oresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                 &overlayPipeline);
+    vkDestroyShaderModule(device, overt, nullptr);
+    vkDestroyShaderModule(device, ofrag, nullptr);
+    if (oresult != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] overlay pipeline creation failed");
+        return false;
+    }
     return true;
 }
 
@@ -3760,11 +3783,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // flat color from the push (mesh_wire.frag) and skip the material set.
     // Split opaque (depth write, no blend) from transparent (alpha blend, no depth
     // write, sorted back-to-front). Wireframe modes draw everything as lines.
-    std::vector<const DrawItem*> opaque, terrainItems, transparent;
+    std::vector<const DrawItem*> opaque, terrainItems, transparent, overlay;
     for (const DrawItem& item : drawQueue) {
         GpuMesh* m = meshes.get(item.mesh);
         if (!m || m->indexCount == 0) continue;
-        if (item.terrain) terrainItems.push_back(&item);
+        // FLAG_OVERLAY draws last with depth off, regardless of opacity/terrain.
+        if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) overlay.push_back(&item);
+        else if (item.terrain) terrainItems.push_back(&item);
         else if (item.opacity < 1.0f) transparent.push_back(&item);
         else opaque.push_back(&item);
     }
@@ -3780,6 +3805,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     std::vector<const DrawItem*> allItems = opaque;
     allItems.insert(allItems.end(), terrainItems.begin(), terrainItems.end());
     allItems.insert(allItems.end(), transparent.begin(), transparent.end());
+    allItems.insert(allItems.end(), overlay.begin(), overlay.end());
 
     auto recordGeometry = [&](const std::vector<const DrawItem*>& items, VkPipeline pipe,
                               bool wire, bool countStats) {
@@ -3849,6 +3875,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         recordGeometry(opaque, meshPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(terrainItems, terrainPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
+        // Debug gizmos on top, after everything, with depth off (ADR-0060).
+        recordGeometry(overlay, overlayPipeline, /*wire=*/false, /*countStats=*/true);
         if (wireframeFrame == 2)
             recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/false);
     }
@@ -4087,6 +4115,8 @@ void VulkanRenderer::shutdown() {
     impl->wirePipeline = VK_NULL_HANDLE;
     if (impl->transparentPipeline) vkDestroyPipeline(impl->device, impl->transparentPipeline, nullptr);
     impl->transparentPipeline = VK_NULL_HANDLE;
+    if (impl->overlayPipeline) vkDestroyPipeline(impl->device, impl->overlayPipeline, nullptr);
+    impl->overlayPipeline = VK_NULL_HANDLE;
     if (impl->terrainPipeline) vkDestroyPipeline(impl->device, impl->terrainPipeline, nullptr);
     impl->terrainPipeline = VK_NULL_HANDLE;
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);

@@ -3995,6 +3995,17 @@ it sees. (4) Unify the vehicle body (NPC cars from `vehicles.lua`). (5) The
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
 to be replaced; listed here so they stay visible.
 
+**Cross-platform parity discipline.** The realtime viewer targets two backends —
+Metal (macOS) and Vulkan (Linux/Windows) — and they must stay at feature parity
+(ADR-0044/0057). A render feature is not "done" when it works on one backend: it
+is done when it is wired on **both**, or when the gap is recorded here as a
+parity debt with the file + the backend that still owes it. Land a feature on
+one backend and forget the other and the two drift apart fast. So: when you add
+anything to one renderer (`metal_renderer.mm`) mirror it in the other
+(`vulkan_renderer.cpp`) in the same change if you can, and if you can't (e.g. one
+side needs a device you can't build here), add a register row naming the owed
+backend and mark it UNVERIFIED so a device pass closes it.
+
 | Item | Where | Why interim | Replace with |
 |---|---|---|---|
 | `RenderView` shared resource | `engine/system.h` | Minimal stand-in for engine resources | A real ECS resource/blackboard (ADR-0006) |
@@ -4033,6 +4044,7 @@ to be replaced; listed here so they stay visible.
 | ~~`ParametricLSystem` not exposed to Lua~~ | ~~`engine/scripting/procgen_bindings.cpp`~~ | *Resolved (ADR-0030): `lsystem.parametric()` (rule/expand with expression successors) + `tree.skin(modules, params, seed) -> bark, leaves` are bound; `growTree` was split into a grammar half and a reusable `skinTree`, so Lua authors the grammar and skins the real curved-cylinder tree. Covered by `procgen_script_skins_a_parametric_tree`.* | — |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
+| Debug-gizmo overlay draw is UNVERIFIED on device | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0060) | The per-agent debug widgets (footprint ring + forward arrow) mark their material `FLAG_OVERLAY` so they draw on top of everything with depth test/write OFF. Wired on **both** backends for parity: Metal selects an Always-compare no-write `depthStateOverlay` per batch; Vulkan routes `FLAG_OVERLAY` items to a dedicated `overlayPipeline` (depth test+write off) drawn last. Neither was compiled/rendered here (no macOS / no Vulkan SDK in this env), so both are UNVERIFIED — the headless `make test` covers the widget *geometry*, not the GPU draw. | A viewer pass on each backend to confirm the gizmos render over the scene and read correctly |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 | City generates whole, not streamed | `engine/procgen/city/city.cpp` (`generateCity`) | Phase 3 (ADR-0038) builds a bounded city in one pass (Forest-Arena style); the road graph is city-global, not tile-local | Per-tile generation with the global graph clipped per tile + boundary stitching (ADR-0027 §5 streaming) |
