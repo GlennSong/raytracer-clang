@@ -981,13 +981,16 @@ fn vs_composite(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32
 fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
   let px = vec2<i32>(fragCoord.xy);
   var color = textureLoad(hdrTex, px, 0).rgb;
+  // The AO target is half-res; linear-sample it (reusing bloomSamp) for a smooth
+  // upscale instead of a blocky nearest textureLoad.
+  let aoUv = fragCoord.xy / vec2<f32>(textureDimensions(hdrTex));
   if (p.debugView.x == 1) {                                   // AO-only debug view
-    let ao = textureLoad(ssaoTex, px, 0).r;
+    let ao = textureSampleLevel(ssaoTex, bloomSamp, aoUv, 0.0).r;
     return vec4<f32>(vec3<f32>(ao), 1.0);
   }
   if (p.debugView.x != 0) { return vec4<f32>(color, 1.0); }   // other debug views, as-is
   if (p.effects.y > 0.0) {                                     // SSAO (darkens crevices)
-    let ao = textureLoad(ssaoTex, px, 0).r;
+    let ao = textureSampleLevel(ssaoTex, bloomSamp, aoUv, 0.0).r;
     color = color * mix(1.0, ao, p.effects.y);
   }
   if (p.effects.z > 0.0) {                                     // SSR (add reflection)
@@ -1067,7 +1070,7 @@ struct SsaoU {
   viewProj : mat4x4<f32>,
   camPos : vec4<f32>,
   params : vec4<f32>,   // x radius, y bias, z intensity, w aoFloor
-  texel  : vec4<f32>,   // xy = 1/resolution
+  texel  : vec4<f32>,   // xy = 1/halfRes (AO target), zw = full resolution
 };
 @group(0) @binding(0) var depthTex : texture_depth_2d;
 @group(0) @binding(1) var<uniform> s : SsaoU;
@@ -1099,8 +1102,10 @@ const KERNEL : array<vec3<f32>, 12> = array<vec3<f32>, 12>(
 
 @fragment
 fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
+  // fc is in half-res AO space; texel.xy = 1/halfRes -> uv, texel.zw = full res
+  // to index the full-res depth/G-buffer at this AO texel.
   let uv = fc.xy * s.texel.xy;
-  let ipx = vec2<i32>(fc.xy);
+  let ipx = vec2<i32>(uv * s.texel.zw);
   let depth = textureLoad(depthTex, ipx, 0);
   if (depth >= 1.0) { return 1.0; }          // sky: no occlusion
   let P = reconWorld(uv, depth);
@@ -1123,7 +1128,7 @@ fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
     let sndc = clip.xyz / clip.w;
     let suv = vec2<f32>(sndc.x * 0.5 + 0.5, 0.5 - sndc.y * 0.5);
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) { continue; }
-    let sd = textureLoad(depthTex, vec2<i32>(suv / s.texel.xy), 0);
+    let sd = textureLoad(depthTex, vec2<i32>(suv * s.texel.zw), 0);
     let sceneP = reconWorld(suv, sd);
     // Occluded if the scene surface is closer to the camera than the sample,
     // and within the radius (range check kills halos at silhouettes).
@@ -2026,8 +2031,12 @@ public:
             us.params[1] = ssaoParams.bias;
             us.params[2] = ssaoParams.intensity;
             us.params[3] = ssaoParams.aoFloor;
-            us.texel[0] = 1.0f / static_cast<float>(width_);
-            us.texel[1] = 1.0f / static_cast<float>(height_);
+            // xy = 1/halfRes (uv from the half-res AO frag coords);
+            // zw = full resolution (to index the full-res depth/G-buffer).
+            us.texel[0] = 1.0f / static_cast<float>((width_ + 1) / 2);
+            us.texel[1] = 1.0f / static_cast<float>((height_ + 1) / 2);
+            us.texel[2] = static_cast<float>(width_);
+            us.texel[3] = static_cast<float>(height_);
             wgpuQueueWriteBuffer(queue_, ssaoUbo_, 0, &us, sizeof(us));
 
             WGPURenderPassColorAttachment a = {};
@@ -2318,11 +2327,15 @@ private:
         bloomTexB_ = wgpuDeviceCreateTexture(device_, &bd);
         bloomViewB_ = wgpuTextureCreateView(bloomTexB_, nullptr);
 
-        // SSAO target (single channel, full-res).
+        // SSAO target (single channel, HALF-res). AO is low-frequency, so a
+        // quarter of the pixels looks near-identical while the composite
+        // linear-samples it back (a free upscale-blur) — a big win on the heavy
+        // 12-tap pass. Full-res depth/G-buffer are still sampled per AO texel.
         WGPUTextureDescriptor ad = {};
         ad.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
         ad.dimension = WGPUTextureDimension_2D;
-        ad.size = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};
+        ad.size = {static_cast<uint32_t>((width_ + 1) / 2),
+                   static_cast<uint32_t>((height_ + 1) / 2), 1};
         ad.format = WGPUTextureFormat_R8Unorm;
         ad.mipLevelCount = 1;
         ad.sampleCount = 1;
@@ -2693,9 +2706,9 @@ private:
         cEntries[3].binding = 3;
         cEntries[3].visibility = WGPUShaderStage_Fragment;
         cEntries[3].sampler.type = WGPUSamplerBindingType_Filtering;
-        cEntries[4].binding = 4;                              // SSAO (textureLoad)
+        cEntries[4].binding = 4;                              // SSAO (half-res, filtered upscale)
         cEntries[4].visibility = WGPUShaderStage_Fragment;
-        cEntries[4].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        cEntries[4].texture.sampleType = WGPUTextureSampleType_Float;   // R8Unorm, filterable
         cEntries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
         cEntries[5].binding = 5;                              // SSR (textureLoad)
         cEntries[5].visibility = WGPUShaderStage_Fragment;
