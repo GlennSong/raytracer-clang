@@ -75,6 +75,10 @@ public:
         return engine::Vec3(params_.carSize.x * 0.5, params_.carSize.y * 0.5,
                             params_.carSize.z * 0.5);
     }
+    // Per-group collider half-extents, one entry per carGroups() entry (a group is
+    // one fleet slot, so all its cars share a size). A van/box-truck collider is
+    // bigger than a sedan's; the physics system sizes each group's boxes from this.
+    std::vector<engine::Vec3> carGroupHalfExtents() const;
     engine::Vec3 pedHalfExtent() const {
         return engine::Vec3(params_.pedSize.x * 0.5, params_.pedSize.y * 0.5,
                             params_.pedSize.z * 0.5);

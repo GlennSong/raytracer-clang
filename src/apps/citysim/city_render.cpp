@@ -204,6 +204,18 @@ engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
             addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.40, l * 0.38), glass);
             addBox(m, Vec3(w * 0.92, h * 0.20, l * 0.42), Vec3(0, h * 0.10, -l * 0.26), color); // bed walls
             break;
+        case 4:  // van: one tall slab body, raked windshield, low nose
+            addBox(m, Vec3(w, h * 0.72, l * 0.86), Vec3(0, h * 0.06, -l * 0.06), color);
+            addBox(m, Vec3(w, h * 0.34, l * 0.20), Vec3(0, -h * 0.10, l * 0.40), color);       // nose
+            addBox(m, Vec3(w * 0.86, h * 0.30, l * 0.05), Vec3(0, h * 0.22, l * 0.30), glass);  // windshield
+            addBox(m, Vec3(w * 0.86, h * 0.24, l * 0.05), Vec3(0, h * 0.24, -l * 0.48), glass); // rear glass
+            break;
+        case 5:  // box truck: a small cab up front + a tall square cargo box
+            addBox(m, Vec3(w, h * 0.44, l * 0.30), Vec3(0, -h * 0.04, l * 0.33), color);        // cab lower
+            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.24), Vec3(0, h * 0.30, l * 0.35), color);  // cab roof
+            addBox(m, Vec3(w * 0.84, h * 0.30, l * 0.05), Vec3(0, h * 0.30, l * 0.47), glass);  // windshield
+            addBox(m, Vec3(w, h * 0.86, l * 0.62), Vec3(0, h * 0.12, -l * 0.17), color);        // cargo box
+            break;
         default: // sedan — matches the player's car_body proportions exactly
             addBox(m, Vec3(w, h * 0.46, l), Vec3(0, 0, 0), color);
             addBox(m, Vec3(w * 0.84, h * 0.42, l * 0.46), Vec3(0, h * 0.40, -l * 0.04), color);
@@ -227,25 +239,39 @@ engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
     return m;
 }
 
-// The car fleet: a curated set of (body style, paint colour) variants. Each is
-// its own instance group (an InstanceGroup shares one mesh + material, so colour
-// + shape variety means several groups). Drivers are spread across these.
-struct CarVariant { int style; Vec3 color; };
-const CarVariant kCarVariants[] = {
-    {0, Vec3(0.72, 0.10, 0.10)},   // red sedan
-    {0, Vec3(0.10, 0.18, 0.52)},   // blue sedan
-    {0, Vec3(0.90, 0.90, 0.90)},   // white sedan
-    {1, Vec3(0.85, 0.78, 0.10)},   // yellow hatchback
-    {1, Vec3(0.10, 0.45, 0.30)},   // green hatchback
-    {1, Vec3(0.80, 0.40, 0.08)},   // orange hatchback
-    {2, Vec3(0.09, 0.09, 0.11)},   // black SUV
-    {2, Vec3(0.52, 0.53, 0.56)},   // silver SUV
-    {2, Vec3(0.30, 0.22, 0.14)},   // brown SUV
-    {3, Vec3(0.14, 0.30, 0.20)},   // forest-green pickup
-    {3, Vec3(0.62, 0.60, 0.42)},   // tan pickup
-    {3, Vec3(0.20, 0.42, 0.55)},   // teal pickup
+// The mesh style that draws each body TYPE (matches buildCarMesh's switch).
+int styleForType(VehicleType t) {
+    switch (t) {
+        case VehicleType::Hatchback: return 1;
+        case VehicleType::SUV:       return 2;
+        case VehicleType::Pickup:    return 3;
+        case VehicleType::Van:       return 4;
+        case VehicleType::BoxTruck:  return 5;
+        default:                     return 0;   // Sedan
+    }
+}
+
+// A body slot's mesh size (x=width, y=height, z=length), from the shared fleet
+// table (city_sim kFleet) — so the drawn car is exactly the size the sim follows
+// and collides at.
+Vec3 fleetBodySize(int slot) {
+    const VehicleBody& b = vehicleFleetBody(slot);
+    return Vec3(b.width, b.height, b.length);
+}
+
+// The car fleet's PAINT, one colour per fleet slot (mirrors city_sim kFleet slot
+// for slot; body style + size come from the fleet body). Each slot is its own
+// instance group (a group shares one mesh + material). Drivers spread across them
+// by vehicle index, so a given car keeps its shape, size, and colour.
+const Vec3 kCarColors[] = {
+    Vec3(0.72, 0.10, 0.10), Vec3(0.10, 0.18, 0.52), Vec3(0.90, 0.90, 0.90),  // sedans
+    Vec3(0.85, 0.78, 0.10), Vec3(0.10, 0.45, 0.30), Vec3(0.80, 0.40, 0.08),  // hatchbacks
+    Vec3(0.09, 0.09, 0.11), Vec3(0.52, 0.53, 0.56), Vec3(0.30, 0.22, 0.14),  // SUVs
+    Vec3(0.14, 0.30, 0.20),                                                  // pickup
+    Vec3(0.62, 0.60, 0.42),                                                  // van (tan)
+    Vec3(0.20, 0.42, 0.55),                                                  // box truck (teal)
 };
-constexpr int kNumCarVariants = static_cast<int>(sizeof(kCarVariants) / sizeof(kCarVariants[0]));
+constexpr int kNumCarVariants = static_cast<int>(sizeof(kCarColors) / sizeof(kCarColors[0]));
 
 // The static signal assembly (pole/arm/head housing) carries its hue in vertex
 // colour, like the rest of the city's street furniture.
@@ -328,14 +354,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, e)), "city:signal");
     }
 
-    // One instance group per car variant (body style + paint); drivers are spread
-    // across them so the traffic isn't all identical sedans.
+    // One instance group per fleet slot; each is a body TYPE + SIZE (from the sim's
+    // shared fleet table) painted its slot colour, so the traffic is a mixed fleet
+    // of sedans, hatchbacks, SUVs, pickups, a van, and a box truck — every NPC car
+    // built the same way as (and to scale with) the player's. Drivers spread across
+    // the slots by vehicle index.
     carGroups_.clear();
     for (int v = 0; v < kNumCarVariants; ++v) {
         MeshHandle mh{};
         if (assets)
             mh = assets->acquireMesh(
-                buildCarMesh(kCarVariants[v].style, kCarVariants[v].color, params_.carSize),
+                buildCarMesh(styleForType(vehicleFleetBody(v).type), kCarColors[v],
+                             fleetBodySize(v)),
                 "city:car" + std::to_string(v));
         Entity e = world.create();
         InstanceGroup g;
@@ -444,11 +474,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 Mat4 CityRenderSystem::agentPose(const Agent& a) const {
     bool car = a.mode == Agent::Mode::Driver;
     Real x = a.pos.x, z = a.pos.y;          // Vec2 maps to world XZ (.y = world z)
-    Real halfH = (car ? params_.carSize.y : params_.pedSize.y) * 0.5;
+    // Lift the box so it rests on the ground: half its OWN body height (a tall van
+    // or box truck sits higher than a sedan). Read the height from the possessed
+    // SimVehicle (authoritative), falling back to the default car/ped size.
+    Real bodyH = car ? params_.carSize.y : params_.pedSize.y;
+    if (car && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()))
+        bodyH = sim_.vehicles()[a.vehicle].height;
+    Real halfH = bodyH * 0.5;
     Real y = groundAt(x, z) + a.elevation + halfH;   // a.elevation lifts bridge traffic
     Real yaw = std::atan2(a.heading.x, a.heading.y); // box local +Z -> travel heading
     Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
     return Mat4::trs(Vec3(x, y, z), rot, Vec3(1, 1, 1));
+}
+
+std::vector<Vec3> CityRenderSystem::carGroupHalfExtents() const {
+    std::vector<Vec3> out;
+    out.reserve(carGroups_.size());
+    for (std::size_t v = 0; v < carGroups_.size(); ++v) {
+        Vec3 s = fleetBodySize(static_cast<int>(v));   // (width, height, length)
+        out.push_back(Vec3(s.x * 0.5, s.y * 0.5, s.z * 0.5));
+    }
+    return out;
 }
 
 namespace {
@@ -557,8 +603,17 @@ void CityRenderSystem::syncGroups(World& world) {
             // isn't buried under a raised sidewalk; the overlay flag also lets it
             // draw through world geometry.
             Real y = groundAt(x, z) + a.elevation + (car ? 0.3 : 0.35);
-            Real radius = car ? std::max(params_.carSize.x, params_.carSize.z) * 0.5
-                              : params_.pedSize.x * 0.9;
+            // Ring sized to THIS body (a box truck's footprint is bigger than a
+            // sedan's), read from the possessed vehicle's dimensions.
+            Real radius = params_.pedSize.x * 0.9;
+            if (car) {
+                Real cw = params_.carSize.x, cl = params_.carSize.z;
+                if (a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size())) {
+                    cw = sim_.vehicles()[a.vehicle].width;
+                    cl = sim_.vehicles()[a.vehicle].length;
+                }
+                radius = std::max(cw, cl) * 0.5;
+            }
             InstanceGroup* fg = foot[static_cast<int>(a.state)];
             if (fg) fg->transforms.push_back(
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));

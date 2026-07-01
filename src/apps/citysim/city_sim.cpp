@@ -18,6 +18,28 @@ constexpr Real kCarAccel = 6.0;
 constexpr Real kPedAccel = 1.0;
 constexpr Real kCarMinGap = 5.0, kCarSlowZone = 14.0;
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
+constexpr Real kCarBumperGap = 0.8;   // clear space kept between two cars' bumpers
+
+// The fleet of body slots (ADR-0060 Phase 4). A sedan is the player's body
+// exactly (4.2 long) and its follow gap works out to the historical 5.0 m; larger
+// bodies keep proportionally more room. Lengths are all >= the sedan, so adding
+// them never lets cars pack tighter than before. Order is mirrored by the render
+// fleet (city_render.cpp kCarVariants), slot for slot.
+const VehicleBody kFleet[] = {
+    {4.2, 1.80, 1.30, VehicleType::Sedan},
+    {4.2, 1.80, 1.30, VehicleType::Sedan},
+    {4.2, 1.80, 1.30, VehicleType::Sedan},
+    {4.2, 1.82, 1.45, VehicleType::Hatchback},
+    {4.2, 1.82, 1.45, VehicleType::Hatchback},
+    {4.2, 1.82, 1.45, VehicleType::Hatchback},
+    {4.6, 1.95, 1.70, VehicleType::SUV},
+    {4.6, 1.95, 1.70, VehicleType::SUV},
+    {4.6, 1.95, 1.70, VehicleType::SUV},
+    {5.2, 1.95, 1.60, VehicleType::Pickup},
+    {5.4, 2.00, 2.10, VehicleType::Van},
+    {6.6, 2.40, 2.80, VehicleType::BoxTruck},
+};
+constexpr int kFleetSize = static_cast<int>(sizeof(kFleet) / sizeof(kFleet[0]));
 constexpr Real kJunctionApproach = 9.0, kJunctionSpeed = 4.0;
 constexpr Real kSignalApproach = 14.0;          // start braking for a light this far out
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
@@ -66,6 +88,29 @@ Vec2 rotateToward(Vec2 from, Vec2 to, Real maxRad) {
     return Vec2(from.x * ca - from.y * sa, from.x * sa + from.y * ca);
 }
 }  // namespace
+
+int vehicleFleetSize() { return kFleetSize; }
+
+const VehicleBody& vehicleFleetBody(int slot) {
+    int s = ((slot % kFleetSize) + kFleetSize) % kFleetSize;   // wrap, handle negatives
+    return kFleet[s];
+}
+
+Real CitySim::vehicleLength(int agentIndex) const {
+    const Agent& a = agents_[agentIndex];
+    if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&
+        a.vehicle < static_cast<int>(vehicles_.size()))
+        return vehicles_[a.vehicle].length;
+    return kPedBodyMin;   // a walker's footprint along its path
+}
+
+Real CitySim::pairMinGap(int follower, int leader) const {
+    if (agents_[follower].mode == Agent::Mode::Pedestrian) return kPedMinGap;
+    // Bumper-to-bumper: half of each body plus a clear buffer. Sedan-to-sedan =
+    // 2.1 + 2.1 + 0.8 = 5.0, the historical constant, so all-sedan traffic is
+    // unchanged; a longer body simply demands (and is granted) more room.
+    return 0.5 * vehicleLength(follower) + 0.5 * vehicleLength(leader) + kCarBumperGap;
+}
 
 uint32_t CitySim::rnd() {
     rng_ ^= rng_ << 13;
@@ -120,9 +165,16 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         a.pos = idlePose(a.home, a.mode);
 
-        // A driver possesses a freshly-created car (two-way possession link).
+        // A driver possesses a freshly-created car (two-way possession link). Its
+        // body comes from the fleet slot matching its index, so the renderer (which
+        // maps the same index to a body) draws exactly this shape + size.
         if (a.mode == Agent::Mode::Driver) {
             SimVehicle v;
+            const VehicleBody& body = vehicleFleetBody(static_cast<int>(vehicles_.size()));
+            v.length = body.length;
+            v.width = body.width;
+            v.height = body.height;
+            v.type = body.type;
             v.driver = static_cast<int>(agents_.size());
             v.pos = a.pos;
             a.vehicle = static_cast<int>(vehicles_.size());
@@ -202,7 +254,7 @@ void CitySim::steer(Agent& a, Real dt) {
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
 
-void CitySim::advance(Agent& a, Real dt, Real gap) {
+void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
     int li = a.route.links[a.leg];
     bool car = a.mode == Agent::Mode::Driver;
@@ -249,7 +301,9 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
         }
     }
 
-    Real minGap = car ? kCarMinGap : kPedMinGap;
+    // minGap is length-aware (computeGaps → pairMinGap): sedan traffic reproduces
+    // the old 5.0 m, and a longer body keeps a bigger bumper gap so nothing packs
+    // tighter than before. Peds fall back to the fixed footprint gap.
     Real slowZone = car ? kCarSlowZone : kPedSlowZone;
     target = followCap(target, gap, minGap, slowZone);
     a.speed = std::min(target, a.speed + accel * dt);
@@ -336,6 +390,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
 void CitySim::computeGaps() {
     const Real INF = std::numeric_limits<Real>::infinity();
     gaps_.assign(agents_.size(), INF);
+    minGaps_.assign(agents_.size(), kCarMinGap);   // overwritten where a leader exists
     auto laneKeyOf = [](const Agent& a, int li) {
         int laneKey = (a.mode == Agent::Mode::Driver) ? a.lane : 1024;
         return static_cast<long long>(li) * 4096 + laneKey;
@@ -346,16 +401,21 @@ void CitySim::computeGaps() {
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
         lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
     }
-    std::unordered_map<long long, Real> minDist;   // (link,lane) -> nearest-to-entry car
+    // (link,lane) -> the car nearest the entry {distOnLeg, agentIndex}, so a
+    // follower crossing a node can pick up the leader on its next link AND that
+    // leader's length (for a length-aware gap).
+    std::unordered_map<long long, std::pair<Real, int>> minEntry;
     for (auto& kv : lanes) {
         std::vector<std::pair<Real, int>>& v = kv.second;
         std::sort(v.begin(), v.end(), [](const std::pair<Real, int>& a,
                                           const std::pair<Real, int>& b) {
             return a.first != b.first ? a.first < b.first : a.second < b.second;
         });
-        minDist[kv.first] = v.front().first;       // smallest distOnLeg = just entered the link
-        for (std::size_t k = 0; k + 1 < v.size(); ++k)
+        minEntry[kv.first] = { v.front().first, v.front().second };
+        for (std::size_t k = 0; k + 1 < v.size(); ++k) {
             gaps_[v[k].second] = v[k + 1].first - v[k].first;
+            minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
+        }
     }
     // Car-following ACROSS a node: the front car on a link (no leader ahead on its
     // own link) keeps its gap to the car just ahead on its NEXT link — the one it's
@@ -371,8 +431,12 @@ void CitySim::computeGaps() {
         Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
         for (int step = 1; step <= 2 && a.leg + step < legN; ++step) {
             int nextLi = a.route.links[a.leg + step];
-            auto it = minDist.find(laneKeyOf(a, nextLi));
-            if (it != minDist.end()) { gaps_[i] = ahead + it->second; break; }
+            auto it = minEntry.find(laneKeyOf(a, nextLi));
+            if (it != minEntry.end()) {
+                gaps_[i] = ahead + it->second.first;
+                minGaps_[i] = pairMinGap(i, it->second.second);
+                break;
+            }
             ahead += nav_->links[nextLi].length;       // no car on this link; look one further
         }
     }
@@ -423,7 +487,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (a.playerControlled) continue;
-        if (a.moving) advance(a, dt, gaps_[i]);
+        if (a.moving) advance(a, dt, gaps_[i], minGaps_[i]);
     }
 
     // Reactive pedestrian behaviour (ADR-0060): each walker acts on what it SEES

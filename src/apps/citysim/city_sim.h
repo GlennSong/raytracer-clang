@@ -64,11 +64,31 @@ struct Agent {
     bool moving = false;
 };
 
+// The kind of body a vehicle wears (ADR-0060 Phase 4: one composable vehicle,
+// varied by a Body component). Dimensions come from the shared fleet table below,
+// so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
+enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck };
+
+// A body's physical dimensions (metres) + its type. `length` is the travel axis;
+// car-following keeps cars a bumper apart from THIS, so a longer truck naturally
+// holds (and is held at) a larger gap.
+struct VehicleBody {
+    Real length = 4.2, width = 1.8, height = 1.3;
+    VehicleType type = VehicleType::Sedan;
+};
+
+// The fleet: a fixed, deterministic set of body slots. A driver takes slot
+// (vehicleIndex % size), so its body is stable and the renderer can mirror it.
+int vehicleFleetSize();
+const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
+
 // A drivable car. Kinematic in the sim core; its pose tracks its driver. Inert
-// when `driver < 0`.
+// when `driver < 0`. Its body (type + dimensions) comes from the fleet table.
 struct SimVehicle {
     Real length = 4.2;
     Real width = 1.8;
+    Real height = 1.3;
+    VehicleType type = VehicleType::Sedan;
     int driver = -1;             // agent index, or -1 when parked/unpossessed
     engine::Vec2 pos;            // cached pose (mirrors the driver while possessed)
     engine::Vec2 heading{1, 0};
@@ -112,8 +132,10 @@ public:
 
 private:
     void startTrip(Agent& a, int origin, int goal);
-    void advance(Agent& a, Real dt, Real gap);
+    void advance(Agent& a, Real dt, Real gap, Real minGap);
     void computeGaps();
+    Real vehicleLength(int agentIndex) const;      // body length, or a ped's footprint
+    Real pairMinGap(int follower, int leader) const;   // bumper-to-bumper follow gap
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
@@ -125,6 +147,7 @@ private:
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
+    std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     SignalController signals_;

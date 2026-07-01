@@ -33,22 +33,27 @@ void CityPhysicsSystem::releaseBodies() {
 // body to its instance's drawn pose. Group + agent order are stable, so pool
 // index i tracks the same instance across frames.
 void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& groups,
-                                      const Vec3& halfExtent,
+                                      const std::vector<Vec3>& groupExtents,
                                       std::vector<PhysicsBodyId>& pool, Real dt) {
+    // Gather every group's poses AND the matching per-body half-extent (each group
+    // is one body size), so a rebuild boxes each car at its own fleet dimensions.
     std::vector<const Mat4*> poses;
-    for (Entity e : groups) {
-        InstanceGroup* g = world.get<InstanceGroup>(e);
+    std::vector<Vec3> extents;
+    for (std::size_t gi = 0; gi < groups.size(); ++gi) {
+        InstanceGroup* g = world.get<InstanceGroup>(groups[gi]);
         if (!g) continue;
-        for (const Mat4& m : g->transforms) poses.push_back(&m);
+        const Vec3& he = groupExtents[gi < groupExtents.size() ? gi : groupExtents.size() - 1];
+        for (const Mat4& m : g->transforms) { poses.push_back(&m); extents.push_back(he); }
     }
     PhysicsWorld& pw = physics_.physicsWorld();
     if (pool.size() != poses.size()) {
         for (PhysicsBodyId id : pool) pw.removeBody(id);
         pool.clear();
         pool.reserve(poses.size());
-        for (const Mat4* m : poses) {
+        for (std::size_t i = 0; i < poses.size(); ++i) {
+            const Mat4* m = poses[i];
             Vec3 p(m->m[0][3], m->m[1][3], m->m[2][3]);
-            pool.push_back(pw.addBox(halfExtent, p, Quat(), BodyMotion::Kinematic,
+            pool.push_back(pw.addBox(extents[i], p, Quat(), BodyMotion::Kinematic,
                                      /*restitution*/ 0.0, /*friction*/ 0.6));
         }
     }
@@ -67,9 +72,10 @@ void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
 
     // Cars + pedestrians: kinematic bodies that track the drawn poses so the
     // player and the physics gun collide with them.
-    syncKinematic(world, city_.carGroups(), city_.carHalfExtent(), carBodies_, dt);
+    syncKinematic(world, city_.carGroups(), city_.carGroupHalfExtents(), carBodies_, dt);
     { std::vector<Entity> peds{ city_.pedGroup() };
-      syncKinematic(world, peds, city_.pedHalfExtent(), pedBodies_, dt); }
+      std::vector<Vec3> pedExtents{ city_.pedHalfExtent() };
+      syncKinematic(world, peds, pedExtents, pedBodies_, dt); }
 
     // Signal poles are static: one thin tall box per pole, built once (they never
     // move). The pole foot is the instance translation; the mast rises +Y.

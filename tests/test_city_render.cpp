@@ -5,6 +5,10 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/world.h"
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
 using namespace engine;
 using namespace citysim;
 
@@ -90,6 +94,27 @@ TEST_CASE(city_render_debug_widgets) {
         foot += groupCount(world, city.footprintGroup(static_cast<Agent::State>(s)));
     CHECK(foot == 10u);
     CHECK(maxArrows >= 1u);     // agents did move at some point, drawing a trajectory
+}
+
+TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderSystem city;
+    CHECK(city.build(world, nullptr));
+
+    // One collider extent per car group, and they follow the shared fleet: a group
+    // is a body slot, so a box-truck slot's box is bigger than a sedan slot's.
+    std::vector<Vec3> ext = city.carGroupHalfExtents();
+    CHECK(ext.size() == city.carGroups().size());
+    Real sedanZ = 0, maxZ = 0;
+    for (std::size_t v = 0; v < ext.size(); ++v) {
+        CHECK(ext[v].x > 0 && ext[v].y > 0 && ext[v].z > 0);
+        // Half-extent mirrors the fleet body's half-length.
+        CHECK(std::fabs(ext[v].z - vehicleFleetBody(static_cast<int>(v)).length * 0.5) < 1e-6);
+        if (vehicleFleetBody(static_cast<int>(v)).type == VehicleType::Sedan) sedanZ = ext[v].z;
+        maxZ = std::max(maxZ, ext[v].z);
+    }
+    CHECK(maxZ > sedanZ);   // a bigger body has a bigger collider
 }
 
 TEST_CASE(city_render_build_fails_without_roads) {

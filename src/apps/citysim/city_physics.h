@@ -28,10 +28,12 @@ public:
 
 private:
     void releaseBodies();
-    // Keep a kinematic-box pool tracking the transforms of an instance group
-    // (cars or pedestrians); rebuilds if the count changes.
+    // Keep a kinematic-box pool tracking the transforms of instance groups (cars or
+    // pedestrians); rebuilds if the count changes. `groupExtents` gives the collider
+    // half-extent for each group (so a van's box is bigger than a sedan's); it must
+    // be the same length as `groups`.
     void syncKinematic(engine::World& world, const std::vector<engine::Entity>& groups,
-                       const engine::Vec3& halfExtent,
+                       const std::vector<engine::Vec3>& groupExtents,
                        std::vector<engine::PhysicsBodyId>& pool, engine::Real dt);
 
     CityRenderSystem& city_;
