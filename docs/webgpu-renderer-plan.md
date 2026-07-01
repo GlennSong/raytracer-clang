@@ -6,19 +6,21 @@ Vulkan backend (`vulkan-renderer-plan.md`): each stage is independently
 verifiable, so the work lands in reviewable slices. Parity reference is the Metal
 backend (`src/renderer/metal/AGENTS.md`) and `docs/renderer-parity.md`.
 
-**Status: Phases 0–6 substantially landed + gameplay — near-parity with
-Metal/Vulkan.** The `viewer_web` target builds clean (WebGPU backend + Jolt +
-engine_core to wasm). The backend now has: the analytic surface library +
-**texture/material maps** (albedo/normal/MR/emissive/AO, TBN normal mapping,
-alpha-test, **mipmaps**), **cascaded** shadow maps with PCF, a procedural **sky**
-(gradient + sun disc), an offscreen **HDR pipeline** with ACES/AgX **tone-map +
-grade**, **bloom**, a material **G-buffer**, **SSAO** + **SSR**, real GPU
-**instancing** (verified 8× draw-call reduction), **CDLOD terrain morph**, and
-**wind** sway. Gameplay runs too — play mode (Jolt physics + the Lua gun),
-day/night controls, and desktop+touch input — all wired through exported
-`rt_web_*` hooks and a `web/index.html` debug panel. The one remaining gap is
-baked IBL (HDR env maps / cubemap prefilter / reflection probes); an analytic
-split-sum env stands in.
+**Status: Phases 0–6 landed + gameplay — parity with the Vulkan backend.** The
+`viewer_web` target builds clean (WebGPU backend + Jolt + engine_core to wasm).
+The backend now has: the analytic surface library + **texture/material maps**
+(albedo/normal/MR/emissive/AO, TBN normal mapping, alpha-test, **mipmaps**),
+**cascaded** shadow maps with PCF, a procedural **sky** (gradient + sun disc)
+**and a bound HDR equirect environment**, an offscreen **HDR pipeline** with
+ACES/AgX **tone-map + grade**, **bloom**, a material **G-buffer**, **SSAO** +
+**SSR**, **IBL** (procedural-sky or HDR equirect irradiance/prefilter + a **baked
+split-sum BRDF LUT**), real GPU **instancing** (verified 8× draw-call reduction),
+**CDLOD terrain morph**, and **wind** sway. Gameplay runs too — play mode (Jolt
+physics + the Lua gun), day/night controls, and desktop+touch input — all wired
+through exported `rt_web_*` hooks and a `web/index.html` debug panel. The IBL
+matches Vulkan's approach (per-fragment equirect sampling + baked BRDF LUT); the
+only thing beyond it is Metal's offline **cubemap prefilter / irradiance
+convolution / reflection probes**, which the Vulkan backend also omits.
 
 **Verification caveat:** headless SwiftShader does **not** composite the WebGPU
 canvas (both `page.screenshot` and `getImageData` return the blank canvas), so
@@ -28,11 +30,13 @@ readback values (camera, sun direction, render stats) — plus the shaders are
 byte-for-byte ports of the proven Metal/Vulkan trees. Visual confirmation is
 on-device (a real GPU browser).
 
-### Still missing vs. Metal/Vulkan (todo)
-- **HDR environment maps, IBL cubemaps, reflection probes** — the single large
-  remaining gap. Needs equirect→cubemap bake + GGX-prefilter + BRDF LUT + per-
-  probe cubemap render. The analytic split-sum env stands in today, and the
-  scenes carry no HDR content, so this is the lowest-priority item.
+### Still missing vs. Metal (todo)
+- **Metal-only IBL luxuries: cubemap prefilter, irradiance convolution, and
+  parallax-corrected reflection probes.** The Vulkan backend does *not* have
+  these either — it (like the web backend now) samples the equirect per-fragment
+  and weights specular by a baked BRDF LUT. Adding them would be a strict Metal
+  match, but there is no HDR content in the shipping scenes to benefit, so this
+  stays the lowest-priority item.
 - **Lens distortion / DoF** and **per-material two-sided/back-face culling** —
   minor polish.
 
@@ -123,11 +127,15 @@ Vulkan cascade fit (frustum-slice split + texel-snapped ortho box, adjusted for
 WebGPU standard-Z), hardware-PCF sampling with view-depth cascade selection. The
 per-cascade index rides a dynamic-uniform (WebGPU has no push constants).
 
-### Phase 4 — IBL + sky (🟡 partial)
+### Phase 4 — IBL + sky ✅
 ✅ Procedural sky background pass (gradient + sun disc, world-ray from
-`invViewProjection`) + an analytic split-sum env for IBL. ❌ HDR equirect
-environment, cubemap bake, GGX-prefilter, BRDF LUT, reflection probes — todo
-(the analytic env stands in; low payoff without HDR content in-scene).
+`invViewProjection`), a **bound HDR equirect environment** (`uploadTextureHDR` →
+RGBA16Float, `setEnvironmentMap` → envMode on `skySunColor.w`; the sky + IBL
+sample the equirect when set, else the procedural sky), and a **baked split-sum
+BRDF LUT** (RG16Float, GGX importance sampling, a port of
+`shaders/vulkan/brdf_lut.frag`). This matches the Vulkan backend. ❌ Metal's
+offline cubemap prefilter / irradiance convolution / reflection probes — todo
+(Vulkan omits them too; no HDR content in-scene to benefit).
 
 ### Phase 5 — post stack ✅
 ✅ Offscreen HDR target + composite, ACES/AgX tone map + grade + exposure, bloom,
