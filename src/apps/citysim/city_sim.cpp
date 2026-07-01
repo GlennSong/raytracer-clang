@@ -97,8 +97,18 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.mode = (i < driverCount) ? Agent::Mode::Driver : Agent::Mode::Pedestrian;
         a.home = static_cast<int>(rnd() % n);
         a.work = static_cast<int>(rnd() % n);
-        for (int tries = 0; tries < 4 && a.work == a.home && n > 1; ++tries)
-            a.work = static_cast<int>(rnd() % n);
+        // Pick a work node the home can actually REACH. An unroutable pair used to
+        // teleport the agent to its goal on departure (it "disappeared" and
+        // reappeared); instead insist on a routable pair, and if none turns up
+        // just keep the agent home (work == home -> it never commutes).
+        {
+            bool ok = a.work != a.home && engine::findRoute(graph, a.home, a.work).valid();
+            for (int tries = 0; tries < 8 && !ok && n > 1; ++tries) {
+                a.work = static_cast<int>(rnd() % n);
+                ok = a.work != a.home && engine::findRoute(graph, a.home, a.work).valid();
+            }
+            if (!ok) a.work = a.home;   // stranded: stay put, never depart
+        }
         a.departWork = 7.5 + rndUnit() * 1.5;
         a.departHome = 16.5 + rndUnit() * 1.5;
         a.activity = Agent::Activity::AtHome;
@@ -139,11 +149,14 @@ void CitySim::startTrip(Agent& a, int origin, int goal) {
     a.distOnLeg = 0;
     a.speed = 0;
     if (!a.route.valid()) {
+        // No path: do NOT teleport to the goal (that was the "disappear/reappear"
+        // bug). Stay parked at the ORIGIN and fall back to the origin's resting
+        // state, so the agent simply doesn't take this trip.
         a.moving = false;
         a.elevation = 0;
-        a.pos = idlePose(goal, a.mode);
-        a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
-                                                               : Agent::Activity::AtHome;
+        a.pos = idlePose(origin, a.mode);
+        a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtHome
+                                                               : Agent::Activity::AtWork;
         return;
     }
     int lanes = nav_->links[a.route.links.front()].lanes;
@@ -275,11 +288,16 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
     }
 
     if (a.leg >= legCount) {
-        int dest = nav_->links[a.route.links.back()].to;
         a.moving = false;
         a.speed = 0;
         a.elevation = 0;
-        a.pos = idlePose(dest, a.mode);
+        // Rest at the very end of the last link (continuous with the final motion),
+        // NOT snapped to an idle pose on some other side of the node — that snap
+        // was the visible jump.
+        int lastLink = a.route.links.back();
+        a.pos = (a.mode == Agent::Mode::Driver)
+                    ? nav_->laneCenter(lastLink, a.lane, 1.0, laneSpacing(nav_->links[lastLink]))
+                    : nav_->sidewalkPoint(lastLink, 1.0);
         a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
                                                                : Agent::Activity::AtHome;
         a.route.links.clear();
@@ -321,8 +339,9 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     signals_.update(dt);
 
     // Pass 1: schedule transitions (AI agents only — the host drives players).
+    // A stranded agent (work == home: no route was found at build) never departs.
     for (Agent& a : agents_) {
-        if (a.playerControlled) continue;
+        if (a.playerControlled || a.home == a.work) continue;
         switch (a.activity) {
             case Agent::Activity::AtHome:
                 if (clockHours_ >= a.departWork && clockHours_ < a.departHome) {

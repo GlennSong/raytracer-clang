@@ -101,6 +101,47 @@ TEST_CASE(cars_keep_to_the_right_side_of_the_road) {
     CHECK(sawWest);   // ...each correctly on its own right-hand side
 }
 
+TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
+    // Two road components with NO edge between them, ~200 m apart. An agent whose
+    // home and work land in different components has no route; the old code
+    // teleported it to the goal (it "disappeared and reappeared"). Now it must
+    // never jump: every step's displacement stays within normal travel.
+    RoadGraph g;
+    g.nodes = {
+        {Vec2(0, 0)}, {Vec2(40, 0)}, {Vec2(40, 40)}, {Vec2(0, 40)},        // A
+        {Vec2(400, 0)}, {Vec2(440, 0)}, {Vec2(440, 40)}, {Vec2(400, 40)},  // B (far)
+    };
+    g.edges = {
+        RoadEdge{0, 1, 8, RoadClass::Local, 0}, RoadEdge{1, 2, 8, RoadClass::Local, 0},
+        RoadEdge{2, 3, 8, RoadClass::Local, 0}, RoadEdge{3, 0, 8, RoadClass::Local, 0},
+        RoadEdge{4, 5, 8, RoadClass::Local, 0}, RoadEdge{5, 6, 8, RoadClass::Local, 0},
+        RoadEdge{6, 7, 8, RoadClass::Local, 0}, RoadEdge{7, 4, 8, RoadClass::Local, 0},
+    };
+    NavGraph nav = buildNavGraph(g);
+
+    CitySim sim;
+    sim.build(nav, 16, 16, 99);
+    std::vector<Vec2> prev;
+    for (const Agent& a : sim.agents()) prev.push_back(a.pos);
+
+    Real maxStep = 0;
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.6);
+        const auto& ag = sim.agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            Real dx = ag[k].pos.x - prev[k].x, dy = ag[k].pos.y - prev[k].y;
+            maxStep = std::max(maxStep, std::sqrt(dx * dx + dy * dy));
+            prev[k] = ag[k].pos;
+        }
+    }
+    // A component-to-component teleport (the old disappear/reappear bug) would be
+    // hundreds of metres; real motion is a couple of metres per 0.1 s step. (A
+    // small lateral hop of up to ~one road-width can still happen at a trip
+    // boundary where an agent changes which side it rests on — separate polish,
+    // well under this bound.)
+    CHECK(maxStep < 20.0);
+}
+
 TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {
     // A straight two-way street. The "player" stands in the eastbound lane; cars
     // driving up behind must hold short, not drive through them.
