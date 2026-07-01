@@ -1090,6 +1090,26 @@ fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
 }
 )WGSL";
 
+// Mipmap downsample: a fullscreen triangle that linearly samples the previous
+// (larger) mip level; run once per level to fill a texture's mip chain.
+static const char* kBlitWgsl = R"WGSL(
+@group(0) @binding(0) var srcTex : texture_2d<f32>;
+@group(0) @binding(1) var srcSamp : sampler;
+struct VOut { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
+@vertex
+fn vs_blit(@builtin(vertex_index) vid : u32) -> VOut {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  var o : VOut;
+  o.pos = vec4<f32>(p[vid], 0.0, 1.0);
+  o.uv = vec2<f32>(p[vid].x * 0.5 + 0.5, 0.5 - p[vid].y * 0.5);
+  return o;
+}
+@fragment
+fn fs_blit(in : VOut) -> @location(0) vec4<f32> {
+  return textureSampleLevel(srcTex, srcSamp, in.uv, 0.0);
+}
+)WGSL";
+
 class WebGpuRenderer final : public Renderer {
 public:
     struct GpuTexture {
@@ -1228,6 +1248,8 @@ public:
         if (flatNormalTex_) { wgpuTextureRelease(flatNormalTex_); flatNormalTex_ = nullptr; }
         if (materialSampler_) { wgpuSamplerRelease(materialSampler_); materialSampler_ = nullptr; }
         if (materialLayout_) { wgpuBindGroupLayoutRelease(materialLayout_); materialLayout_ = nullptr; }
+        if (blitPipeline_) { wgpuRenderPipelineRelease(blitPipeline_); blitPipeline_ = nullptr; }
+        if (blitLayout_) { wgpuBindGroupLayoutRelease(blitLayout_); blitLayout_ = nullptr; }
         if (surface_) { wgpuSurfaceRelease(surface_); surface_ = nullptr; }
         if (queue_)   { wgpuQueueRelease(queue_); queue_ = nullptr; }
         if (device_)  { wgpuDeviceRelease(device_); device_ = nullptr; }
@@ -1314,9 +1336,13 @@ public:
             uint8_t a = channels >= 4 ? data[i * channels + 3] : 255;
             rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = a;
         }
+        int levels = 1;
+        while ((std::max(width, height) >> levels) > 0) ++levels;   // full mip chain
         GpuTexture t;
         t.texture = createTexture2D(width, height, WGPUTextureFormat_RGBA8Unorm, rgba.data(),
-                                    static_cast<size_t>(width) * 4);
+                                    static_cast<size_t>(width) * 4, levels,
+                                    WGPUTextureUsage_RenderAttachment);
+        generateMips(t.texture, width, height, levels);
         t.view = wgpuTextureCreateView(t.texture, nullptr);
         t.generation = ++textureCounter_;
 
@@ -2008,15 +2034,16 @@ private:
         return buf;
     }
 
-    // Create a sampled 2D texture and upload one mip level of RGBA8 data.
+    // Create a sampled 2D texture and upload the base RGBA8 mip level.
     WGPUTexture createTexture2D(int w, int h, WGPUTextureFormat fmt,
-                                const void* data, size_t bytesPerRow) {
+                                const void* data, size_t bytesPerRow,
+                                int mipLevels = 1, WGPUTextureUsage extraUsage = WGPUTextureUsage_None) {
         WGPUTextureDescriptor td = {};
-        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | extraUsage;
         td.dimension = WGPUTextureDimension_2D;
         td.size = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
         td.format = fmt;
-        td.mipLevelCount = 1;
+        td.mipLevelCount = static_cast<uint32_t>(mipLevels);
         td.sampleCount = 1;
         WGPUTexture tex = wgpuDeviceCreateTexture(device_, &td);
         if (data) {
@@ -2794,6 +2821,84 @@ private:
         const uint8_t flat[4] = {128, 128, 255, 255};   // tangent-space (0,0,1)
         flatNormalTex_ = createTexture2D(1, 1, WGPUTextureFormat_RGBA8Unorm, flat, 4);
         flatNormalView_ = wgpuTextureCreateView(flatNormalTex_, nullptr);
+
+        // Mipmap-downsample pipeline (core WebGPU has no generateMipmap).
+        WGPUShaderSourceWGSL bw = {};
+        bw.chain.sType = WGPUSType_ShaderSourceWGSL;
+        bw.code = sv(kBlitWgsl);
+        WGPUShaderModuleDescriptor bmd = {};
+        bmd.nextInChain = &bw.chain;
+        WGPUShaderModule bmod = wgpuDeviceCreateShaderModule(device_, &bmd);
+        WGPUBindGroupLayoutEntry be[2] = {};
+        be[0].binding = 0; be[0].visibility = WGPUShaderStage_Fragment;
+        be[0].texture.sampleType = WGPUTextureSampleType_Float;
+        be[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        be[1].binding = 1; be[1].visibility = WGPUShaderStage_Fragment;
+        be[1].sampler.type = WGPUSamplerBindingType_Filtering;
+        WGPUBindGroupLayoutDescriptor bld = {};
+        bld.entryCount = 2; bld.entries = be;
+        blitLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &bld);
+        WGPUPipelineLayoutDescriptor bpl = {};
+        bpl.bindGroupLayoutCount = 1; bpl.bindGroupLayouts = &blitLayout_;
+        WGPUPipelineLayout blitPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &bpl);
+        WGPUColorTargetState bct = {};
+        bct.format = WGPUTextureFormat_RGBA8Unorm; bct.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState bfs = {};
+        bfs.module = bmod; bfs.entryPoint = sv("fs_blit"); bfs.targetCount = 1; bfs.targets = &bct;
+        WGPURenderPipelineDescriptor bpd = {};
+        bpd.layout = blitPipeLayout;
+        bpd.vertex.module = bmod; bpd.vertex.entryPoint = sv("vs_blit");
+        bpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        bpd.primitive.frontFace = WGPUFrontFace_CCW;
+        bpd.primitive.cullMode = WGPUCullMode_None;
+        bpd.fragment = &bfs;
+        bpd.multisample.count = 1; bpd.multisample.mask = 0xFFFFFFFF;
+        blitPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &bpd);
+        wgpuPipelineLayoutRelease(blitPipeLayout);
+        wgpuShaderModuleRelease(bmod);
+    }
+
+    // Fill a texture's mip chain by successive downsample blits (base already up).
+    void generateMips(WGPUTexture tex, int w, int h, int levels) {
+        WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
+        for (int i = 1; i < levels; ++i) {
+            WGPUTextureViewDescriptor svd = {};
+            svd.format = WGPUTextureFormat_RGBA8Unorm;
+            svd.dimension = WGPUTextureViewDimension_2D;
+            svd.baseMipLevel = static_cast<uint32_t>(i - 1); svd.mipLevelCount = 1;
+            svd.baseArrayLayer = 0; svd.arrayLayerCount = 1;
+            WGPUTextureView src = wgpuTextureCreateView(tex, &svd);
+            WGPUTextureViewDescriptor dvd = svd;
+            dvd.baseMipLevel = static_cast<uint32_t>(i);
+            WGPUTextureView dst = wgpuTextureCreateView(tex, &dvd);
+
+            WGPUBindGroupEntry e[2] = {};
+            e[0].binding = 0; e[0].textureView = src;
+            e[1].binding = 1; e[1].sampler = materialSampler_;
+            WGPUBindGroupDescriptor bgd = {};
+            bgd.layout = blitLayout_; bgd.entryCount = 2; bgd.entries = e;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device_, &bgd);
+
+            WGPURenderPassColorAttachment a = {};
+            a.view = dst; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            a.loadOp = WGPULoadOp_Clear; a.storeOp = WGPUStoreOp_Store;
+            a.clearValue = {0.0, 0.0, 0.0, 1.0};
+            WGPURenderPassDescriptor pd = {};
+            pd.colorAttachmentCount = 1; pd.colorAttachments = &a;
+            WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(enc, &pd);
+            wgpuRenderPassEncoderSetPipeline(rp, blitPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(rp, 0, bg, 0, nullptr);
+            wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(rp);
+            wgpuRenderPassEncoderRelease(rp);
+            wgpuBindGroupRelease(bg);
+            wgpuTextureViewRelease(src);
+            wgpuTextureViewRelease(dst);
+        }
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
+        wgpuQueueSubmit(queue_, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(enc);
     }
 
     WGPUTextureView texViewOr(uint32_t index, WGPUTextureView def) {
@@ -3072,6 +3177,8 @@ private:
     WGPUSampler materialSampler_ = nullptr;
     WGPUTexture whiteTex_ = nullptr;      WGPUTextureView whiteView_ = nullptr;
     WGPUTexture flatNormalTex_ = nullptr; WGPUTextureView flatNormalView_ = nullptr;
+    WGPUBindGroupLayout blitLayout_ = nullptr;   // mipmap downsample
+    WGPURenderPipeline blitPipeline_ = nullptr;
 
     std::vector<QueuedDraw> draws_;
     bool frameDiagLogged_ = false;
