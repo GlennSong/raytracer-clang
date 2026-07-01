@@ -26,18 +26,14 @@ byte-for-byte ports of the proven Metal/Vulkan trees. Visual confirmation is
 on-device (a real GPU browser).
 
 ### Still missing vs. Metal/Vulkan (todo)
-- **Texture/material maps** (`uploadTexture` still a stub): albedo/normal/MR/AO/
-  emissive + TBN normal mapping + alpha-test foliage. The procedural Surface
-  library covers the current scenes, so this is only visible with textured glTF
-  content.
 - **SSR** and the **material G-buffer** it needs (roughness/normal MRT). Low
   payoff on the rough city/showcase content.
-- **Terrain CDLOD morph** + **wind sway** (vertex-shader features; the current
-  scenes have neither CDLOD terrain nor animated vegetation).
+- **Terrain CDLOD morph** (`drawTerrain` still falls back to a plain draw; the
+  current scenes have no CDLOD terrain to exercise it).
 - **HDR environment maps, IBL cubemaps, reflection probes** (an analytic
   split-sum env stands in for baked IBL today).
-- Back-face culling is still off (the Phase-1 default); winding looks correct
-  on device, so it can be flipped on once double-checked.
+- **Texture mipmaps** (no `generateMipmap` in core WebGPU) and **back-face
+  culling** (still the Phase-1 default; winding looks correct on device).
 
 ### Known issues / web polish
 - **Pointer Lock needs a user gesture.** Play mode disables the cursor on start;
@@ -111,11 +107,13 @@ for the sun + a flat ambient stand-in, scene-linear with a manual sRGB encode
 (the swapchain is non-sRGB BGRA8). Back-face culling **off** until winding is
 confirmed on device (matches Vulkan Phase 1).
 
-### Phase 2 — textures + material maps (🟡 partial)
-✅ The procedural surface library (`applySurface`) is ported. ❌ Real
-`uploadTexture` (GPU textures + per-material sampler bind group), albedo/MR/
-normal/AO/emissive maps, alpha-cut foliage (`FLAG_ALPHA_TEST`), and back-face
-culling are still todo.
+### Phase 2 — textures + material maps ✅ (mips todo)
+✅ The procedural surface library (`applySurface`), real `uploadTexture` (RGBA8
+GPU textures), a per-material group-2 bind group (albedo/normal/MR/emissive/AO +
+sampler, cached by map set, 1×1 defaults for missing maps), tangent-space normal
+mapping (TBN), and alpha-cut foliage (`FLAG_ALPHA_TEST`). ❌ Mipmaps (no
+`generateMipmap` in core WebGPU — needs manual blit passes) and back-face culling
+(still the Phase-1 default) are todo.
 
 ### Phase 3 — shadows ✅
 Cascaded shadow maps: a depth-only pass per cascade into a depth-2d array, the
@@ -134,10 +132,12 @@ bloom (half-res bright-pass + separable blur), SSAO (depth-reconstructed,
 hemisphere kernel), debug views (incl. AO-only + cascades). ❌ SSR (needs a
 material G-buffer), lens effects, DoF — todo.
 
-### Phase 6 — instancing + terrain (🟡 partial)
+### Phase 6 — instancing + terrain (🟡 mostly)
 ✅ `drawMeshInstanced` — real hardware instancing (per-instance model in a second
 vertex buffer; main + shadow passes), verified ~8× fewer draw calls in the city.
-❌ CDLOD `drawTerrain` morph, wind sway (`FLAG_WIND`) — todo.
+✅ Wind sway (`FLAG_WIND`) — height-weighted vertex displacement on both draw
+paths. ❌ CDLOD `drawTerrain` morph — todo (the current scenes have no CDLOD
+terrain to exercise it).
 
 ## Known risks / unknowns (unverified in-browser)
 - **In-browser behaviour unverified.** It compiles + links on emsdk 6.0.1, but no
