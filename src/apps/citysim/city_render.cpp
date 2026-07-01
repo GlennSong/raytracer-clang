@@ -102,8 +102,9 @@ engine::RenderMesh unitQuadXZ() {
 }
 
 // A flat ring (annulus) of unit outer radius in the XZ plane, facing +Y — the
-// debug footprint. Instanced with a scale = the agent's radius.
-engine::RenderMesh ringXZ(Real innerFrac = 0.78, int segs = 28) {
+// debug footprint, a thin wireframe-like outline. Instanced with a scale = the
+// agent's radius.
+engine::RenderMesh ringXZ(Real innerFrac = 0.88, int segs = 32) {
     engine::RenderMesh m;
     const Vec3 white(1, 1, 1);
     for (int i = 0; i < segs; ++i) {
@@ -147,11 +148,12 @@ engine::RenderMesh arrowXZ() {
     return m;
 }
 
-// Debug colour for a behaviour state (emissive so it reads over any surface).
+// Debug colour for a behaviour state — unlit/emissive and marked as an OVERLAY so
+// the backend draws it on top of world geometry (no depth occlusion).
 RenderMaterial widgetMaterial(Vec3 color) {
     RenderMaterial m;
     m.albedo = color; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
-    m.emission = color * 0.7; m.flags = 0;
+    m.emission = color; m.flags = RenderMaterial::FLAG_OVERLAY;
     return m;
 }
 Vec3 stateColor(Agent::State s) {
@@ -543,7 +545,10 @@ void CityRenderSystem::syncGroups(World& world) {
             if (!debugWidgets_) break;   // groups exist but stay empty when toggled off
             bool car = a.mode == Agent::Mode::Driver;
             Real x = a.pos.x, z = a.pos.y;
-            Real y = groundAt(x, z) + a.elevation + 0.05;   // just above the ground
+            // Float the gizmo up around the agent (not flat on the ground) so it
+            // isn't buried under a raised sidewalk; the overlay flag also lets it
+            // draw through world geometry.
+            Real y = groundAt(x, z) + a.elevation + (car ? 0.3 : 0.35);
             Real radius = car ? std::max(params_.carSize.x, params_.carSize.z) * 0.5
                               : params_.pedSize.x * 0.9;
             InstanceGroup* fg = foot[static_cast<int>(a.state)];
