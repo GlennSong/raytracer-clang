@@ -215,6 +215,18 @@ struct VSOut {
   @location(4) worldTangent : vec3<f32>,
 };
 
+// Wind sway (FLAG_WIND): displace the tips of a mesh by a height-weighted
+// oscillation (base planted). g.ambient.w carries the wind time.
+fn applyWind(world : vec4<f32>, localHeight : f32, flags : u32) -> vec4<f32> {
+  if ((flags & 4u) == 0u) { return world; }
+  let t = g.ambient.w;
+  let h = max(localHeight, 0.0);
+  var w = world;
+  w.x += sin(t * 1.5 + world.z * 0.5) * 0.12 * h;
+  w.z += cos(t * 1.1 + world.x * 0.4) * 0.10 * h;
+  return w;
+}
+
 @vertex
 fn vs_main(
   @location(0) position : vec3<f32>,
@@ -224,7 +236,8 @@ fn vs_main(
   @location(4) color    : vec3<f32>,
 ) -> VSOut {
   var out : VSOut;
-  let world = d.model * vec4<f32>(position, 1.0);
+  var world = d.model * vec4<f32>(position, 1.0);
+  world = applyWind(world, position.y, d.surfaceFlags.y);
   out.worldPos = world.xyz;
   // Upper 3x3 (correct for rigid / uniform scale); inverse-transpose arrives
   // with the texture/normal-map phase.
@@ -257,7 +270,8 @@ fn vs_instanced(
 ) -> VSOut {
   let model = mat4x4<f32>(m0, m1, m2, m3);
   var out : VSOut;
-  let world = model * vec4<f32>(position, 1.0);
+  var world = model * vec4<f32>(position, 1.0);
+  world = applyWind(world, position.y, d.surfaceFlags.y);
   out.worldPos = world.xyz;
   out.worldNormal = normalize((model * vec4<f32>(normal, 0.0)).xyz);
   out.worldTangent = (model * vec4<f32>(tangent, 0.0)).xyz;
@@ -1439,6 +1453,10 @@ public:
             globals_.counts[3] = 0;
             globals_.shadowParams[0] = 0.0f;
         }
+
+        // Wind clock (ambient.w): a monotonic time for FLAG_WIND vertex sway.
+        windTime_ += 1.0f / 60.0f;
+        globals_.ambient[3] = windTime_;
 
         // Upload scene globals.
         wgpuQueueWriteBuffer(queue_, globalBuf_, 0, &globals_, sizeof(GpuGlobals));
@@ -2670,6 +2688,7 @@ private:
     Vec3 sunDir_{0, 1, 0};
     bool shadowOn_ = false;
     int shadowCascadeCount_ = 3, activeCascades_ = 0;
+    float windTime_ = 0.0f;
     float shadowDistance_ = 150.0f, shadowDepthBias_ = 0.0015f,
           shadowNormalBias_ = 0.04f, shadowPcf_ = 1.0f;
 
