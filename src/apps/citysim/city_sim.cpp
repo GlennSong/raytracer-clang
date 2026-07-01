@@ -454,7 +454,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // Pass 1: schedule transitions (AI agents only — the host drives players).
     // A stranded agent (work == home: no route was found at build) never departs.
     for (Agent& a : agents_) {
-        if (a.playerControlled || a.home == a.work) continue;
+        if (a.playerControlled || a.released || a.home == a.work) continue;
         switch (a.activity) {
             case Agent::Activity::AtHome:
                 if (clockHours_ >= a.departWork && clockHours_ < a.departHome) {
@@ -487,7 +487,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     computeGaps();
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
-        if (a.playerControlled) continue;
+        if (a.playerControlled || a.released) continue;
         if (a.moving) advance(a, dt, gaps_[i], minGaps_[i]);
     }
 

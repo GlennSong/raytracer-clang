@@ -1,0 +1,163 @@
+#include "city_vehicles.h"
+
+#include "../../engine/components.h"       // Transform, Vehicle, AgentDriver, Renderable
+#include "../../engine/asset_manager.h"
+#include "../../engine/world.h"
+#include "city_sim.h"                       // VehicleBody, vehicleFleetBody
+
+#include <cmath>
+
+namespace citysim {
+
+using engine::Vec2;
+using engine::Vec3;
+using engine::Quat;
+using engine::Real;
+using engine::Entity;
+using engine::World;
+using engine::Transform;
+using engine::PrevTransform;
+using engine::Renderable;
+using engine::Vehicle;
+using engine::AgentDriver;
+using engine::PhysicsWorld;
+
+namespace {
+
+// A Jolt vehicle config sized to a fleet body — a 4WD arcade car like the player's
+// sedan, scaled up for a van/box-truck. Front wheels steer; all four are driven
+// (so heavy bodies still pull away), rear wheels take the handbrake.
+PhysicsWorld::VehicleConfig configFromBody(const VehicleBody& b) {
+    PhysicsWorld::VehicleConfig c;
+    c.chassisHalfExtent = Vec3(b.width * 0.5, b.height * 0.5, b.length * 0.5);
+    c.mass = 900.0 + b.length * b.width * 180.0;   // ~1500 kg sedan, more for a truck
+    c.maxSteerDegrees = 32.0;
+    c.engineTorque = 650.0;
+    c.maxRPM = 6000.0;
+    c.brakeTorque = 1600.0;
+    c.handBrakeTorque = 4200.0;
+    c.friction = 1.0;
+    c.comOffsetY = -0.4;                            // low CoM: resist tipping
+    Real hw = b.width * 0.5 - 0.10;
+    Real hl = b.length * 0.34;
+    Real wr = std::max(Real(0.30), b.height * 0.28);
+    auto wheel = [&](Real x, Real z, bool front) {
+        PhysicsWorld::VehicleWheel w;
+        w.position = Vec3(x, -b.height * 0.5 + wr, z);
+        w.radius = wr;
+        w.width = 0.24;
+        w.steered = front;
+        w.driven = true;
+        w.handBrake = !front;
+        return w;
+    };
+    c.wheels = { wheel(hw, hl, true), wheel(-hw, hl, true),
+                 wheel(hw, -hl, false), wheel(-hw, -hl, false) };
+    return c;
+}
+
+Vec2 normalized(Vec2 v, Vec2 fallback) {
+    Real l = std::sqrt(v.x * v.x + v.y * v.y);
+    return l > 1e-6 ? Vec2(v.x / l, v.y / l) : fallback;
+}
+
+}  // namespace
+
+void CityVehicleSystem::spawnCars(engine::FrameContext& ctx) {
+    if (spawned_ || !city_.built()) return;
+    World& world = ctx.world;
+    const CitySim& sim = city_.sim();
+    int slots = vehicleFleetSize();
+    bodyMesh_.assign(slots, engine::MeshHandle{});
+
+    const auto& agents = sim.agents();
+    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
+        const Agent& a = agents[i];
+        if (a.mode != Agent::Mode::Driver || a.vehicle < 0) continue;
+        int slot = a.vehicle % slots;
+        const VehicleBody& body = vehicleFleetBody(a.vehicle);
+
+        // Shared body mesh per fleet slot (same as the instanced renderer used).
+        if (!bodyMesh_[slot].valid())
+            bodyMesh_[slot] = ctx.assets.acquireMesh(fleetCarMesh(a.vehicle),
+                                                     "cityveh:" + std::to_string(slot));
+
+        Entity e = world.create();
+        // Start at the ghost's pose, a little above ground so it drops onto its
+        // wheels; physics settles it. Heading yaw matches the render convention
+        // (atan2(heading.x, heading.y) about +Y).
+        Vec3 pos(a.pos.x, body.height * 0.5 + 0.35, a.pos.y);
+        Real yaw = std::atan2(a.heading.x, a.heading.y);
+        Transform t;
+        t.position = pos;
+        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        t.scale = Vec3(1, 1, 1);
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+
+        Renderable r;
+        r.mesh = bodyMesh_[slot];
+        r.material.albedo = Vec3(1, 1, 1);   // hue baked into the mesh vertex colour
+        r.material.metallic = 0.0f;
+        r.material.roughness = 0.55f;
+        r.material.opacity = 1.0f;
+        world.add<Renderable>(e, r);
+
+        Vehicle v;
+        v.config = configFromBody(body);
+        world.add<Vehicle>(e, v);
+
+        AgentDriver ad;
+        ad.agentId = i;
+        ad.command.desiredHeading = a.heading;
+        ad.command.desiredSpeed = 0;
+        world.add<AgentDriver>(e, ad);
+
+        cars_.push_back(NpcCar{e, i, false});
+    }
+    spawned_ = true;
+}
+
+void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
+    World& world = ctx.world;
+    const CitySim& sim = city_.sim();
+    // Cannot mutate the sim (release) inside a loop that also reads it — collect.
+    std::vector<int> toRelease;
+    for (NpcCar& car : cars_) {
+        if (car.released) continue;
+        if (!world.alive(car.entity)) { car.released = true; continue; }
+        // The player commandeered it: VehicleSystem removed the AgentDriver on
+        // entry. Free the ghost so the planner stops fighting the physical car.
+        AgentDriver* ad = world.get<AgentDriver>(car.entity);
+        if (!ad) { car.released = true; toRelease.push_back(car.agentId); continue; }
+        if (car.agentId < 0 || car.agentId >= static_cast<int>(sim.agents().size())) continue;
+        const Agent& g = sim.agents()[car.agentId];
+        Transform* t = world.get<Transform>(car.entity);
+        if (!t) continue;
+
+        // Chase the ghost: aim the heading along the planned direction, blended with
+        // a pull back toward the planned position so a lagging car catches its lane;
+        // seek the planned speed (0 when the ghost is stopped at a light / arrived).
+        Vec2 carXZ(t->position.x, t->position.z);
+        Vec2 toGhost(g.pos.x - carXZ.x, g.pos.y - carXZ.y);
+        Vec2 blended(g.heading.x + toGhost.x * 0.5, g.heading.y + toGhost.y * 0.5);
+        ad->command.desiredHeading = normalized(blended, g.heading);
+        ad->command.desiredSpeed = g.moving ? g.speed : 0.0;
+    }
+    for (int id : toRelease) city_.simMutable().releaseDriver(id);
+}
+
+void CityVehicleSystem::fixedUpdate(engine::FrameContext& ctx) {
+    spawnCars(ctx);
+    driveCars(ctx);
+}
+
+void CityVehicleSystem::onStop(engine::FrameContext&) {
+    // Just drop our tracking; the world/physics teardown reclaims the entities and
+    // Jolt vehicles (VehicleSystem has no per-entity removal hook yet — the same
+    // documented vehicle-destroy leak, harmless at level teardown).
+    cars_.clear();
+    spawned_ = false;
+}
+
+}  // namespace citysim

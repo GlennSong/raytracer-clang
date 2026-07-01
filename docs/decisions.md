@@ -4016,6 +4016,63 @@ the camera) remains — it needs a device build (Jolt/Lua/viewer) to verify.
 
 ---
 
+## ADR-0061 — One car system: every car is a physics Vehicle driven by a Controller
+
+**Context.** The engine had TWO car systems that shared nothing (ADR-0059/0060).
+The player drove a real Jolt wheeled `Vehicle` (`VehicleSystem`), read from host
+input. NPC city cars were KINEMATIC `SimVehicle` pose-holders moved along the
+NavGraph by `CitySim` and mirrored into kinematic collider boxes — they could not
+be driven, could not be entered, did not obey physics, and did not handle like the
+player's car. This split is exactly what an "agent" is supposed to dissolve: if an
+agent's car isn't the same object the player drives, the agent idea is hollow. The
+user's standing requirement: **one car system** — the player can walk up to ANY
+car and drive it, ejecting whatever agent was inside, and every car drives the
+same because every car IS the same object.
+
+**Decision.** There is one kind of car — an engine `Vehicle` (Jolt) — and one
+control seam. Whoever drives it, the player or an AI, speaks only in a
+`DriverInput {throttle, steer, brake, handBrake}`, fed to the one physics path
+(`PhysicsWorld::setVehicleInput`).
+
+1. **The controller seam (`engine/ai/driver_agent.h`).** `computeDriverInput` is a
+   pure function: given what the car IS (`DriverState`: forward heading + forward
+   speed) and what the brain WANTS (`DriverCommand`: desired heading + speed), it
+   returns the pedal/wheel positions — steering aims the heading, throttle/brake
+   close the speed gap. Unit-tested headless (`test_driver_agent.cpp`).
+2. **`AgentDriver` component.** Marks a `Vehicle` as AI-driven: it carries the
+   brain's current `DriverCommand` + tuning + an `agentId` back to the brain.
+   `VehicleSystem::driveVehicles` is now one path: a seated player writes input
+   from host axes; an `AgentDriver` car computes input from its command via the
+   shared controller; an empty car holds the brake. Same input → same physics for
+   every car.
+3. **Enter any car / eject the agent.** `handleEnterExit` lets the player take the
+   nearest car whether or not an AI drives it; entering removes the car's
+   `AgentDriver` (the agent is kicked out) and seats the player — one car, one
+   driver.
+4. **The city bridge (`apps/citysim/city_vehicles.cpp`, viewer/device).**
+   `CityVehicleSystem` spawns each CitySim driver a real `Vehicle` from its fleet
+   body (a `VehicleConfig` sized from the body + the same fleet mesh), tagged
+   `AgentDriver{agentId}`. The `CitySim` keeps running as the **planner**: each
+   step its ghost agent produces a heading + speed, which the bridge writes into
+   the car's command; the real car chases its ghost (heading blended with a pull
+   back toward the planned lane). The render bridge cedes car ownership
+   (`setCarsExternallyOwned`) so cars aren't drawn twice, and the kinematic car
+   colliders are gone — `CityPhysicsSystem` now only does peds + poles. When the
+   player commandeers a car, the bridge sees the `AgentDriver` removed and calls
+   `CitySim::releaseDriver` so the planner stops fighting the physical car.
+
+**What's verified vs owed.** The controller (1), the seam wiring (2, 3), the
+`releaseDriver`/`setCarsExternallyOwned` plumbing, and the fleet-body sizing are
+headless-tested or syntax-checked. The bridge (4) and the whole Jolt path are
+**UNVERIFIED on device** (no Jolt build here) — expect handling tuning
+(steer/speed gains, `configFromBody` mass/wheels) and a pass on the ghost-follow
+model. Known limitation: the car chases a kinematic ghost open-loop, so it can lag
+or cut the planned line under tight timing; a closed-loop feedback (plan from the
+car's real pose) is the refinement. This repositions ADR-0059's kinematic sim as
+the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
@@ -4054,7 +4111,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
 | Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
-| AI city cars are kinematic, not Jolt | `apps/citysim/city_sim.cpp`, `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | The CitySim moves driver/ped agents kinematically along the NavGraph (deterministic, headless-tested); only the player's car runs Jolt wheeled physics (`VehicleSystem`). The "hybrid" model (near/driven cars on Jolt, far cars kinematic) isn't wired — AI cars never collide physically | A near-camera handoff that spawns/possesses a Jolt vehicle for AI cars within range and feeds it the agent brain; device-verified tuning |
+| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/driver_agent.h`, `engine/systems/vehicle_system.cpp` (ADR-0061) | RESOLVED IN DESIGN, owed a device pass: NPC cars are now spawned as real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared `computeDriverInput` controller — one car system, and the player can enter/eject any of them. The CitySim is the planner; the real car chases its ghost open-loop. None of the Jolt path compiles here, so the bridge, `configFromBody` tuning, and the ghost-follow feel are UNVERIFIED — the controller + seam + `releaseDriver` plumbing are headless-tested/syntax-checked | A device build to compile + tune (steer/speed gains, mass/wheels), then a closed-loop feedback (plan from the car's real pose) to kill ghost lag |
 | City pedestrians render as boxes | `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | Pedestrians are `MeshBuilder::box` instances. Cars now come as a mixed FLEET of real-sized bodies (sedan/hatchback/SUV/pickup/van/box-truck) from a shared dimensions table (ADR-0060 Phase 4); signals reuse the `street_kit` head with a lit lens. Functional + instanced, but the ped (and the cars) are still primitive procedural meshes, not authored art. | Authored/instanced pedestrian + richer vehicle models (a content pass) |
 | NPC car bodies mirror the Lua recipe by hand | `apps/citysim/city_render.cpp` (`buildCarMesh`), `assets/scripts/vehicles.lua` (ADR-0060 Phase 4) | The fleet mesh styles reproduce the player's `vehicles.lua car_body` proportions in C++ (hull + set-back cabin + glass bands + corner lights), so NPC cars LOOK like the player's — but they aren't built from the actual Lua recipe, so the two can drift. True 1:1 unification (NPC cars generated by the same `car_body`/`vehicles.lua` surface the player uses) needs the Lua/viewer build, which can't run here. | Build NPC fleet meshes from the Lua `car_body` recipe (one body path for player + AI); verify in the viewer |
 | Wide vehicle bodies may cross the lane centreline | `apps/citysim/city_sim.cpp` (`laneCenter`/`laneSpacing`), `apps/citysim/city_render.cpp` | Following is length-aware, but lane placement still centres a car at a width-relative lane offset regardless of the body's WIDTH. A wide van/box-truck (2.0–2.4 m) on a narrow lane could visually overhang the centreline / clip an oncoming wide body. Unverified (no viewer here). | Lateral lane-fit (inset wide bodies, or widen the effective lane) + an oncoming-width check; verify on device |
@@ -4062,7 +4119,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | AI city cars use kinematic collider proxies (UNVERIFIED) | `apps/citysim/city_physics.cpp`, `engine/physics/physics_world.cpp` (`moveKinematic`) (ADR-0059) | `CityPhysicsSystem` (viewer/editor only — needs Jolt) gives each AI car a KINEMATIC Jolt box that tracks the drawn car pose via `PhysicsWorld::moveKinematic` (Jolt `MoveKinematic`), so the player + physics gun collide with cars and a moving car pushes what it hits. The cars are NOT dynamically simulated (the sim owns their motion) — no suspension/wheel response, and a car can shove a body through a wall since its motion is scripted. The Jolt `moveKinematic` impl is written against the documented API but UNVERIFIED here (Jolt can't build in this env), like the vehicle code. | Full hybrid: near the camera promote AI cars to real Jolt wheeled vehicles fed by the agent brain; verify on a device build |
 | Destroyed AI-car colliders leak on count change | `apps/citysim/city_physics.cpp` | `onStop` releases the kinematic bodies, but there is no per-car removal hook mid-session (the pool is rebuilt wholesale if the car count changes) — fine for a fixed car set, same class as the vehicle-destroy leak | Per-car body lifecycle if cars ever spawn/despawn at runtime |
 | AI cars can still briefly overlap at merges/turns | `apps/citysim/city_sim.cpp` (ADR-0059) | Car-following now spans NODES (a car keeps its gap to the leader on its continuing route across a junction/bend, chaining over short links), which removed the constant same-direction pile-through. Signals separate perpendicular traffic. What remains is a one-step touch when two cars from different approaches merge/turn onto the same point the same tick (all cars advance from the start-of-step snapshot) — genuine body overlap in only ~2-3% of steps on a single-junction stress test, far less on a real grid. A single-owner junction RESERVATION was tried and REMOVED: it clustered cars at the stop line and made overlap worse. | Sequential (index-ordered) advance or sub-stepping so a follower sees the leader's move within the tick; or a proper turn/merge conflict matrix with yielding |
-| AI cars don't react to being shot | `apps/citysim/city_physics.cpp` (ADR-0059) | AI cars are kinematic, so bullets bounce off but the car doesn't move/shake — the sim owns its pose. Desired: a heavy grounded car that wiggles when hit but doesn't flip. | Promote a hit/near car to a heavy low-CoM DYNAMIC body briefly (impulse from the bullet), then hand back to kinematic when it settles — part of the hybrid handoff |
+| AI cars don't react to being shot | `apps/citysim/city_vehicles.cpp` (ADR-0059/0061) | Superseded by ADR-0061: NPC cars are now real dynamic Jolt `Vehicle`s, so a bullet impulse SHOULD shove/rock them like the player's car (low CoM resists flipping). Unverified until the device build runs — confirm the response reads right and doesn't fling cars. | Verify on device; add a small settle/brace so a hit car recovers its lane instead of drifting off |
 | Pedestrian avoidance misses knock-down + queueing | `apps/citysim/city_sim.cpp` (ADR-0059/0060) | Peds push apart each step (they step around, not through, each other + the player), steer around their vision-cone neighbours, AND now avoid signal POLES: the render bridge feeds pole foot positions to the sim as static obstacles, which peds lean around and are radially pushed out of so they never stand inside one (`setStaticObstacles`, `kPoleClearance`; covered by `test_city_perception.cpp`). Still missing: longitudinal following (peds queue close at a shared destination) and a knock-down-then-recover state when struck. | Simple ped following, and a ragdoll/knock-down physics state |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |

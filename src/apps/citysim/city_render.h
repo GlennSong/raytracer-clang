@@ -8,6 +8,12 @@
 
 namespace citysim {
 
+// Build the fleet body mesh for slot `slot` (wraps into the fleet) — the same
+// vertex-coloured car the instanced renderer uses, so an NPC Vehicle spawned by
+// the ADR-0061 bridge looks identical to the kinematic car it replaces. x=width,
+// y=height, z=length (travel +Z).
+engine::RenderMesh fleetCarMesh(int slot);
+
 // The ECS render bridge for the agent-based city simulation (ADR-0059 Phase 6).
 // It builds a NavGraph from the level's RoadNet entities, runs a deterministic
 // CitySim of driver+pedestrian agents over it, and bakes their poses into
@@ -43,6 +49,14 @@ public:
     void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
 
+    // When a CityVehicleSystem owns the NPC cars as real physics Vehicles (ADR-0061),
+    // this render bridge must NOT also draw them as instanced kinematic boxes (that
+    // would double every car). Call before build(): it skips creating/baking the car
+    // instance groups; peds, signals, and crosswalks stay owned here. The CitySim
+    // still runs as the PLANNER (its ghosts drive the AgentDriver commands).
+    void setCarsExternallyOwned(bool on) { carsExternallyOwned_ = on; }
+    bool carsExternallyOwned() const { return carsExternallyOwned_; }
+
     // --- testable core (no FrameContext) -----------------------------------
     // Build the NavGraph from every RoadNet in `world`, seed the CitySim, and
     // create the instance-group entities. `assets` may be null (tests): then the
@@ -55,6 +69,7 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
+    CitySim& simMutable() { return sim_; }   // ADR-0061 bridge: release ejected drivers
     const engine::NavGraph& nav() const { return nav_; }
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
@@ -117,6 +132,7 @@ private:
     Real roadLift_ = 0.0;
     bool built_ = false;
     bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
+    bool carsExternallyOwned_ = false;   // ADR-0061: a CityVehicleSystem owns the cars
 };
 
 }  // namespace citysim

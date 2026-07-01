@@ -314,6 +314,14 @@ void refreshBounds(InstanceGroup* g) {
 
 }  // namespace
 
+engine::RenderMesh fleetCarMesh(int slot) {
+    int n = vehicleFleetSize();
+    int s = ((slot % n) + n) % n;
+    const VehicleBody& b = vehicleFleetBody(s);
+    return buildCarMesh(styleForType(b.type), kCarColors[s % kNumCarVariants],
+                        Vec3(b.width, b.height, b.length));
+}
+
 Real CityRenderSystem::groundAt(Real x, Real z) const {
     return (heightAt_ ? heightAt_(x, z) : 0.0) + roadLift_;
 }
@@ -359,21 +367,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // of sedans, hatchbacks, SUVs, pickups, a van, and a box truck — every NPC car
     // built the same way as (and to scale with) the player's. Drivers spread across
     // the slots by vehicle index.
+    // When a CityVehicleSystem owns the cars as real physics Vehicles (ADR-0061),
+    // skip the instanced kinematic car bodies entirely — otherwise every car draws
+    // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
-    for (int v = 0; v < kNumCarVariants; ++v) {
-        MeshHandle mh{};
-        if (assets)
-            mh = assets->acquireMesh(
-                buildCarMesh(styleForType(vehicleFleetBody(v).type), kCarColors[v],
-                             fleetBodySize(v)),
-                "city:car" + std::to_string(v));
-        Entity e = world.create();
-        InstanceGroup g;
-        g.mesh = mh;
-        g.material = carMaterial();
-        world.add<InstanceGroup>(e, g);
-        carGroups_.push_back(e);
-    }
+    if (!carsExternallyOwned_)
+        for (int v = 0; v < kNumCarVariants; ++v) {
+            MeshHandle mh{};
+            if (assets)
+                mh = assets->acquireMesh(
+                    buildCarMesh(styleForType(vehicleFleetBody(v).type), kCarColors[v],
+                                 fleetBodySize(v)),
+                    "city:car" + std::to_string(v));
+            Entity e = world.create();
+            InstanceGroup g;
+            g.mesh = mh;
+            g.material = carMaterial();
+            world.add<InstanceGroup>(e, g);
+            carGroups_.push_back(e);
+        }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial(); world.add<InstanceGroup>(pedGroup_, g); }
     for (int s = 0; s < 3; ++s) {
@@ -572,6 +584,7 @@ void CityRenderSystem::syncGroups(World& world) {
 
     for (const Agent& a : sim_.agents()) {
         if (a.mode == Agent::Mode::Driver) {
+            if (cars.empty()) continue;   // cars owned externally (ADR-0061 bridge)
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
             int v = (a.vehicle >= 0 ? a.vehicle : 0) % kNumCarVariants;

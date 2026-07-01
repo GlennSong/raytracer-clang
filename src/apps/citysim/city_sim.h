@@ -36,6 +36,9 @@ struct Agent {
     Mode mode = Mode::Driver;
     State state = State::Resting;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
+    bool released = false;           // ejected by the player (ADR-0061): the sim stops
+                                     // driving this agent's ghost so it can't fight the
+                                     // now player-driven physical car
     int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
 
     // Daily schedule (hours, 0..24), per-agent jittered.
@@ -115,6 +118,17 @@ public:
     void setPlayerControlled(int agentIndex, bool on) {
         if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
             agents_[agentIndex].playerControlled = on;
+    }
+
+    // Release an agent whose car the player commandeered (ADR-0061): the sim parks
+    // its ghost and stops advancing it, so the brain no longer fights the physical
+    // car the player now drives. Idempotent; -1/out-of-range is a no-op.
+    void releaseDriver(int agentIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+        Agent& a = agents_[agentIndex];
+        a.released = true;
+        a.moving = false;
+        a.speed = 0;
     }
 
     // Set every agent's perception reliability (1 = perfect; <1 = makes faults).

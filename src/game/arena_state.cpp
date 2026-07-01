@@ -11,6 +11,7 @@
 #include "../apps/citysim/city_render.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
+#include "../apps/citysim/city_vehicles.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
@@ -70,9 +71,15 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // perception, and bounded-radius steering over the road network (ADR-0059).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
 #ifdef RT_ENABLE_PHYSICS
-    // Kinematic colliders so the player + physics gun bump into AI cars.
-    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);
-    addSystem<VehicleSystem>(physSys, camSys);   // drivable physics cars (ADR-0058)
+    // ONE car system (ADR-0061): the NPC cars are real engine Vehicles (Jolt),
+    // driven by an AgentDriver from the CitySim planner's ghost — identical physics
+    // to the player's car, and the player can commandeer any of them. So the render
+    // bridge cedes car ownership (peds/signals/crosswalks stay with it), and the
+    // kinematic car colliders are gone — CityPhysicsSystem now only does peds+poles.
+    citySys.setCarsExternallyOwned(true);
+    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // peds + signal poles
+    addSystem<citysim::CityVehicleSystem>(citySys);            // spawn + drive NPC cars
+    addSystem<VehicleSystem>(physSys, camSys);   // drives ALL cars: player + AI (ADR-0058/0061)
 #else
     (void)citySys;   // physics-off build: no collider system to consume it
 #endif

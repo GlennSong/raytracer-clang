@@ -157,6 +157,34 @@ TEST_CASE(mixed_fleet_cars_keep_length_aware_gaps) {
     CHECK(worstPenetration < 1.0);
 }
 
+TEST_CASE(released_driver_stops_being_driven) {
+    // When the player commandeers a car (ADR-0061), the sim releases that agent so
+    // its ghost no longer moves and can't fight the now player-driven physical car.
+    NavGraph nav = straightRoad(300.0);
+    CitySim sim;
+    sim.build(nav, 8, 0, 3);
+    // Run until some driver is actually moving, then release it.
+    int target = -1;
+    for (int i = 0; i < 4000 && target < 0; ++i) {
+        sim.step(0.1, 0.5);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k)
+            if (sim.agents()[k].mode == Agent::Mode::Driver && sim.agents()[k].moving) {
+                target = static_cast<int>(k);
+                break;
+            }
+    }
+    CHECK(target >= 0);
+    sim.releaseDriver(target);
+    Vec2 frozen = sim.agents()[target].pos;
+    CHECK(!sim.agents()[target].moving);
+    // Its pose never changes again, however long the sim runs.
+    for (int i = 0; i < 500; ++i) {
+        sim.step(0.1, 0.5);
+        CHECK(sim.agents()[target].pos.x == frozen.x);
+        CHECK(sim.agents()[target].pos.y == frozen.y);
+    }
+}
+
 TEST_CASE(fleet_assignment_is_deterministic) {
     NavGraph nav = cross4(50.0);
     CitySim a, b;
