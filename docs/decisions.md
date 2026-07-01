@@ -4089,17 +4089,35 @@ plan. Now:
   path end, determinism. Driving quality is now measured headless; the on-device
   work is tuning, not debugging the control law.
 
+**Refinement 2: real-pose perception, recovery, personality.**
+
+- **Eyes on real poses** (`engine/ai/traffic_sense.h`): each physical car senses
+  the other PHYSICAL road users from a forward cone — NPC cars where physics
+  actually put them, the player's car, the on-foot player, pedestrians — and
+  `followSpeed` caps its commanded speed off the nearest one ahead in its lane
+  (length-aware ramp to zero at the bumper, floored at a moving leader's pace so
+  convoys flow). Moving cross/oncoming traffic is deliberately not a leader (the
+  planner's anti-deadlock lesson); anything STOPPED in the lane is an obstacle
+  whichever way it faces. Closed-loop tested: a two-car bicycle-model convoy
+  never touches and still keeps up (`tests/test_traffic_sense.cpp`).
+- **Stuck/flip recovery**: a `StuckDetector` (wants speed, gets none, for 4 s)
+  or a >2 s roll triggers `PhysicsWorld::resetVehicleUpright` — a beached,
+  wedged, or flipped NPC car self-recovers instead of blocking a lane forever.
+- **Personality**: each agent carries a `speedFactor` in [0.85, 1.15] (derived
+  from its brain seed's bits — no rng draw, so seeded scenarios are unchanged)
+  applied to its nominal driving/walking pace, and each car's controller gains +
+  following buffer vary deterministically per agent — the fleet stops moving in
+  lockstep. Junction/signal caps stay shared (road rules, not temperament).
+
 **What's verified vs owed.** The controller, seam wiring (enter/eject),
-`releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, and the whole
-closed control loop (against the bicycle model) are headless-tested. The Jolt
-path itself is **UNVERIFIED on device** (no Jolt build here) — expect gain tuning
-(`steerGain`/lookahead/`configFromBody`) against the real plant. Still owed
-beyond tuning: perception + car-following evaluated from the cars' REAL poses
-(today the planner still sees only ghosts, so two physical cars separated by
-physics lag aren't seen by each other's plans), and a stuck/flip recovery
-behaviour (`resetVehicleUpright` on a timer). This repositions ADR-0059's
-kinematic sim as the AI *planner*, not a second car mover, and subsumes ADR-0060
-Phase 5.
+`releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, the closed control
+loop, real-pose following, and the stall watchdog are headless-tested (bicycle
+harness + sim tests). The Jolt path itself is **UNVERIFIED on device** (no Jolt
+build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`) against
+the real plant, and a check that `resetVehicleUpright` reads well in play. Owed
+next: lane changes / overtaking on the sensed-neighbour model, and junction
+yielding evaluated from real poses. This repositions ADR-0059's kinematic sim as
+the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
 
 ---
 
@@ -4141,7 +4159,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0058) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
 | Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0058) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
 | Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
-| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/{driver_agent,lane_follow}.h`, `engine/systems/vehicle_system.cpp` (ADR-0061) | RESOLVED IN DESIGN, owed a device pass: NPC cars are real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared controller — one car system, player can enter/eject any of them. The control loop is CLOSED over the car's real pose (pure-pursuit heading over the ghost's lane path, station-control speed, ghost tether) and exercised headless against a bicycle-model plant (`test_lane_follow.cpp`), so the on-device work is gain tuning against the real Jolt plant, not control-law debugging. Still open behind it: the PLANNER's perception/car-following runs on ghost poses, not the physical cars' — physics-lagged real cars aren't seen by each other's plans | Device tune (steerGain / lookahead / configFromBody); then move car-following + the vision cone onto real car poses; add stuck/flip recovery (resetVehicleUpright on a stall timer) |
+| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/{driver_agent,lane_follow,traffic_sense}.h`, `engine/systems/vehicle_system.cpp` (ADR-0061) | RESOLVED IN DESIGN, owed a device pass: NPC cars are real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared controller — one car system, player can enter/eject any of them. The control loop is CLOSED over the car's real pose (pure-pursuit heading, station-control speed, ghost tether), each car SENSES the other physical road users and follows them length-aware (`traffic_sense.h`), stalls/flips self-recover via `resetVehicleUpright`, and per-agent personality varies pace/gains/gaps. All of that is exercised headless against a bicycle-model plant (`test_lane_follow.cpp`, `test_traffic_sense.cpp`), so the on-device work is gain tuning against the real Jolt plant, not control-law debugging | Device tune (steerGain / lookahead / configFromBody / sense cone); then lane changes + junction yielding on the sensed-neighbour model |
 | City pedestrians render as boxes | `apps/citysim/city_render.cpp` (ADR-0059 Phase 6) | Pedestrians are `MeshBuilder::box` instances. Cars now come as a mixed FLEET of real-sized bodies (sedan/hatchback/SUV/pickup/van/box-truck) from a shared dimensions table (ADR-0060 Phase 4); signals reuse the `street_kit` head with a lit lens. Functional + instanced, but the ped (and the cars) are still primitive procedural meshes, not authored art. | Authored/instanced pedestrian + richer vehicle models (a content pass) |
 | NPC car bodies mirror the Lua recipe by hand | `apps/citysim/city_render.cpp` (`buildCarMesh`), `assets/scripts/vehicles.lua` (ADR-0060 Phase 4) | The fleet mesh styles reproduce the player's `vehicles.lua car_body` proportions in C++ (hull + set-back cabin + glass bands + corner lights), so NPC cars LOOK like the player's — but they aren't built from the actual Lua recipe, so the two can drift. True 1:1 unification (NPC cars generated by the same `car_body`/`vehicles.lua` surface the player uses) needs the Lua/viewer build, which can't run here. | Build NPC fleet meshes from the Lua `car_body` recipe (one body path for player + AI); verify in the viewer |
 | Wide vehicle bodies may cross the lane centreline | `apps/citysim/city_sim.cpp` (`laneCenter`/`laneSpacing`), `apps/citysim/city_render.cpp` | Following is length-aware, but lane placement still centres a car at a width-relative lane offset regardless of the body's WIDTH. A wide van/box-truck (2.0–2.4 m) on a narrow lane could visually overhang the centreline / clip an oncoming wide body. Unverified (no viewer here). | Lateral lane-fit (inset wide bodies, or widen the effective lane) + an oncoming-width check; verify on device |

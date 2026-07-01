@@ -103,6 +103,27 @@ TEST_CASE(tethered_ghost_waits_for_its_car) {
     CHECK(after > before + 3.0);   // moved well beyond the old leash
 }
 
+TEST_CASE(agents_have_distinct_personal_paces) {
+    // Personality (ADR-0061): each agent holds its own fraction of the nominal
+    // speed, derived from its brain seed — varied, bounded, and reproducible.
+    NavGraph nav = straightRoad(200.0);
+    CitySim a, b;
+    a.build(nav, 12, 6, 42);
+    b.build(nav, 12, 6, 42);
+
+    std::vector<Real> factors;
+    for (std::size_t k = 0; k < a.agents().size(); ++k) {
+        Real f = a.agents()[k].speedFactor;
+        CHECK(f >= 0.85 && f <= 1.15);                    // bounded around nominal
+        CHECK(f == b.agents()[k].speedFactor);            // same seed -> same driver
+        bool fresh = true;
+        for (Real g : factors)
+            if (std::fabs(f - g) < 1e-6) fresh = false;
+        if (fresh) factors.push_back(f);
+    }
+    CHECK(factors.size() >= 6u);   // a genuinely mixed crowd, not lockstep
+}
+
 TEST_CASE(tether_preserves_determinism) {
     NavGraph nav = straightRoad(300.0);
     CitySim a, b;

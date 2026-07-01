@@ -111,9 +111,23 @@ void CityVehicleSystem::spawnCars(engine::FrameContext& ctx) {
         ad.agentId = i;
         ad.command.desiredHeading = a.heading;
         ad.command.desiredSpeed = 0;
+        // Personality (ADR-0061): deterministic per-agent hash varies the
+        // controller gains and following buffer, so no two drivers handle their
+        // (identical) car identically — the fleet stops moving in lockstep.
+        uint32_t h = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
+        auto unit = [&h]() {
+            h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+            return (h >> 8) * (1.0 / 16777216.0);
+        };
+        ad.tuning.steerGain = 1.45 + 0.35 * unit();      // wheel eagerness
+        ad.tuning.turnSlowdown = 0.65 + 0.20 * unit();   // corner caution
         world.add<AgentDriver>(e, ad);
 
-        cars_.push_back(NpcCar{e, i, false});
+        NpcCar car;
+        car.entity = e;
+        car.agentId = i;
+        car.bumperGap = 0.6 + 0.7 * unit();              // tailgater .. cautious
+        cars_.push_back(car);
     }
     spawned_ = true;
 }
@@ -123,11 +137,57 @@ constexpr Real kStandoff = 1.5;      // park this short of the ghost's spot (m)
 constexpr Real kCatchupGain = 0.5;   // station error (m) -> extra speed (m/s)
 constexpr Real kCatchupMax = 4.0;    // max speed over the plan while catching up
 constexpr Real kTetherLead = 12.0;   // ghost may lead its car by at most this (m)
+constexpr Real kSenseRange = 22.0;   // forward traffic cone (m)
+constexpr Real kSenseHalfAngle = 0.5;
+constexpr Real kFlipRecover = 2.0;   // rolled this long -> right the car (s)
 }  // namespace
 
 void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
+    PhysicsWorld& pw = physics_.physicsWorld();
+    Real dt = ctx.clock.fixedStep();
+
+    // Everything on the road at its REAL pose, sensed once for all cars: every
+    // physics vehicle (NPC and the player's alike, driven or parked), the on-foot
+    // player, and the sim's pedestrians. Pedestrians report speed 0 so they are
+    // ALWAYS an obstacle in the lane — a car yields to a walker whichever way the
+    // walker faces (the planner's ped rule, applied to real poses).
+    std::vector<engine::SensedBody> bodies;
+    std::vector<Entity> bodyOwner;
+    world.each<Transform, engine::Vehicle>([&](Entity e, Transform& t, engine::Vehicle& v) {
+        engine::SensedBody b;
+        b.pos = Vec2(t.position.x, t.position.z);
+        Vec3 f3 = t.orientation.rotate(Vec3(0, 0, 1));
+        b.heading = normalized(Vec2(f3.x, f3.z), Vec2(1, 0));
+        if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) {
+            Vec3 vel = pw.vehicleVelocity(v.vehicleId);
+            b.speed = std::fabs(vel.x * f3.x + vel.y * f3.y + vel.z * f3.z);
+        }
+        b.halfLength = v.config.chassisHalfExtent.z;
+        bodies.push_back(b);
+        bodyOwner.push_back(e);
+    });
+    world.each<Transform, engine::CharacterController, engine::ControlledBy>(
+        [&](Entity e, Transform& t, engine::CharacterController&, engine::ControlledBy&) {
+            engine::SensedBody b;
+            b.pos = Vec2(t.position.x, t.position.z);
+            b.speed = 0;
+            b.halfLength = 0.4;
+            bodies.push_back(b);
+            bodyOwner.push_back(e);
+        });
+    for (const Agent& a : sim.agents()) {
+        if (a.mode != Agent::Mode::Pedestrian) continue;
+        engine::SensedBody b;
+        b.pos = a.pos;
+        b.heading = a.heading;
+        b.speed = 0;              // a walker is an obstacle regardless of direction
+        b.halfLength = 0.3;
+        bodies.push_back(b);
+        bodyOwner.push_back(Entity{});
+    }
+
     // Cannot mutate the sim (release) inside a loop that also reads it — collect.
     std::vector<int> toRelease;
     for (NpcCar& car : cars_) {
@@ -140,11 +200,18 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         if (car.agentId < 0 || car.agentId >= static_cast<int>(sim.agents().size())) continue;
         const Agent& g = sim.agents()[car.agentId];
         Transform* t = world.get<Transform>(car.entity);
-        if (!t) continue;
+        engine::Vehicle* v = world.get<engine::Vehicle>(car.entity);
+        if (!t || !v) continue;
 
         Vec2 carXZ(t->position.x, t->position.z);
         Vec3 f3 = t->orientation.rotate(Vec3(0, 0, 1));
         Vec2 carFwd = normalized(Vec2(f3.x, f3.z), g.heading);
+        Real realSpeed = 0, speedMag = 0;
+        if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE) {
+            Vec3 vel = pw.vehicleVelocity(v->vehicleId);
+            realSpeed = vel.x * f3.x + vel.y * f3.y + vel.z * f3.z;
+            speedMag = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+        }
 
         // A new trip = a new route: rebuild the pursuit path from the ghost's lane.
         if (car.trip != g.trips) {
@@ -152,17 +219,34 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
             car.trip = g.trips;
         }
 
-        // SPEED: proportional station control toward the ghost. `aheadGap` is how
-        // far the ghost sits ahead of the car (along the car's own forward): drive
-        // a little faster than the plan to close it, ease off (to a stop) when at
-        // or past it. A ghost held at a red (speed 0) parks the car at the line;
-        // an arrived ghost (moving false) parks the car at the kerb.
+        // SPEED, layer 1 — the PLAN: proportional station control toward the
+        // ghost. `aheadGap` is how far the ghost sits ahead of the car (along the
+        // car's own forward): drive a little faster than the plan to close it,
+        // ease off (to a stop) when at or past it. A ghost held at a red (speed 0)
+        // parks the car at the line; an arrived ghost parks it at the kerb.
         Real aheadGap = (g.pos.x - carXZ.x) * carFwd.x + (g.pos.y - carXZ.y) * carFwd.y;
         Real planned = g.moving ? g.speed : 0.0;
         Real target = planned + kCatchupGain * (aheadGap - kStandoff);
         Real cap = planned + kCatchupMax;
         if (target < 0) target = 0;
         if (target > cap) target = cap;
+
+        // SPEED, layer 2 — the EYES: cap off the nearest real body ahead in the
+        // lane (another physics car, the player, a pedestrian). Plans can't keep
+        // physics-driven cars apart; sensing real poses can.
+        int selfIdx = -1;
+        for (std::size_t k = 0; k < bodyOwner.size(); ++k)
+            if (bodyOwner[k] == car.entity) { selfIdx = static_cast<int>(k); break; }
+        engine::VisionCone cone;
+        cone.origin = carXZ;
+        cone.forward = carFwd;
+        cone.range = kSenseRange;
+        cone.halfAngleRad = kSenseHalfAngle;
+        engine::LeaderSense lead = engine::senseLeader(cone, bodies,
+                                                       /*lateralMax=*/2.2,
+                                                       /*stationarySpeed=*/1.0, selfIdx);
+        target = engine::followSpeed(target, lead, v->config.chassisHalfExtent.z,
+                                     car.bumperGap);
 
         // HEADING: pure pursuit over the lane path from the car's REAL position
         // (with the built-in ease-to-a-stop at the path end). No path (parked /
@@ -171,10 +255,21 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
             car.follower.update(carXZ);
             ad->command = engine::pursuitCommand(
                 car.follower, carXZ, target,
-                engine::pursuitLookahead(std::max(planned, Real(3.0))));
+                engine::pursuitLookahead(std::max(realSpeed, Real(3.0))));
         } else {
             ad->command.desiredHeading = g.heading;
             ad->command.desiredSpeed = target;
+        }
+
+        // RECOVERY: rolled past ~60 degrees for a while, or wanting speed but
+        // getting none (beached, wedged) -> right/unstick the car in place.
+        Real upY = t->orientation.rotate(Vec3(0, 1, 0)).y;
+        car.flipTimer = (upY < 0.5) ? car.flipTimer + dt : 0.0;
+        bool recover = car.stuck.update(ad->command.desiredSpeed, speedMag, dt) ||
+                       car.flipTimer > kFlipRecover;
+        if (recover && v->vehicleId != PhysicsWorld::INVALID_VEHICLE) {
+            pw.resetVehicleUpright(v->vehicleId);
+            car.flipTimer = 0;
         }
 
         // TETHER: feed the sim the car's real position so the ghost waits rather

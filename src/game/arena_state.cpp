@@ -78,7 +78,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // kinematic car colliders are gone — CityPhysicsSystem now only does peds+poles.
     citySys.setCarsExternallyOwned(true);
     addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // peds + signal poles
-    addSystem<citysim::CityVehicleSystem>(citySys);            // spawn + drive NPC cars
+    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // spawn + drive NPC cars
     addSystem<VehicleSystem>(physSys, camSys);   // drives ALL cars: player + AI (ADR-0058/0061)
 #else
     (void)citySys;   // physics-off build: no collider system to consume it

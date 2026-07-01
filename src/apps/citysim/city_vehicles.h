@@ -2,8 +2,10 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_VEHICLES_H
 
 #include "../../engine/system.h"
-#include "../../engine/ai/lane_follow.h"   // LaneFollower (closed-loop pursuit)
-#include "../../renderer/renderer.h"       // engine::MeshHandle
+#include "../../engine/ai/lane_follow.h"     // LaneFollower (closed-loop pursuit)
+#include "../../engine/ai/traffic_sense.h"   // senseLeader / followSpeed / StuckDetector
+#include "../../engine/systems/physics_system.h"
+#include "../../renderer/renderer.h"         // engine::MeshHandle
 #include "city_render.h"
 
 #include <vector>
@@ -26,16 +28,27 @@ namespace citysim {
 //   - TETHER: the ghost may never LEAD the car by more than a leash — a car
 //     knocked back or climbing finds its plan waiting just ahead, never gone.
 //
+// On top of the plan, each car drives by what it SEES (ADR-0060/0061): a forward
+// cone senses the other PHYSICAL road users — NPC cars where physics actually put
+// them, the player's car, the on-foot player, pedestrians — and caps the speed
+// off the nearest one ahead in its lane (traffic_sense.h). Plans alone can't keep
+// physics-driven cars apart; eyes on real poses can. A stall watchdog + flip
+// timer trigger resetVehicleUpright, so a beached or rolled car self-recovers.
+// Per-car PERSONALITY (deterministic from the agent id) varies the controller
+// gains and following distance, so the fleet doesn't drive in lockstep.
+//
 // Because the cars are real Vehicles, the player can commandeer one (VehicleSystem
 // ejects its AgentDriver on entry); this bridge notices the ejection and releases
 // that ghost from the sim so the planner stops fighting the physical car.
 //
 // Viewer/editor only (needs Jolt via the engine VehicleSystem), not engine_core —
 // like CityPhysicsSystem. UNVERIFIED on device (no Jolt build here); the control
-// loop itself is exercised headless by tests/test_lane_follow.cpp's bicycle model.
+// loop itself is exercised headless by the bicycle-model harnesses
+// (tests/test_lane_follow.cpp, tests/test_traffic_sense.cpp).
 class CityVehicleSystem : public engine::System {
 public:
-    explicit CityVehicleSystem(CityRenderSystem& city) : city_(city) {}
+    CityVehicleSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
+        : city_(city), physics_(physics) {}
 
     void fixedUpdate(engine::FrameContext& ctx) override;
     void onStop(engine::FrameContext& ctx) override;
@@ -49,10 +62,14 @@ private:
         int agentId = -1;        // the CitySim ghost that plans for it
         int trip = -1;           // ghost trip counter; a new trip rebuilds the path
         engine::LaneFollower follower;   // pursuit progress along the lane path
+        engine::StuckDetector stuck;     // stall watchdog -> upright/unstick reset
+        engine::Real flipTimer = 0;      // time spent rolled past recovery
+        engine::Real bumperGap = 0.8;    // personal following buffer (m)
         bool released = false;   // player commandeered it -> ghost freed
     };
 
     CityRenderSystem& city_;
+    engine::PhysicsSystem& physics_;
     std::vector<NpcCar> cars_;
     std::vector<engine::MeshHandle> bodyMesh_;   // one per fleet slot (shared)
     bool spawned_ = false;

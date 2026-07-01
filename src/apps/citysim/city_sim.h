@@ -69,6 +69,11 @@ struct Agent {
     // per-agent deterministic RNG so faults reproduce from the sim seed.
     Real reliability = 1.0;
     uint32_t brain = 1;
+    // Personality (ADR-0061): this agent's personal pace as a fraction of the
+    // nominal speed — a timid driver holds ~0.85x the limit, a pushy one ~1.15x,
+    // and walkers stroll or stride. Derived from `brain`'s bits at build (no rng
+    // draw, so seeded scenarios are unchanged); traffic stops moving in lockstep.
+    Real speedFactor = 1.0;
 
     // Cached world pose (XZ + a height for bridges); what a renderer reads.
     engine::Vec2 pos;

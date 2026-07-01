@@ -185,6 +185,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.departHome = 16.5 + rndUnit() * 1.5;
         a.activity = Agent::Activity::AtHome;
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
+        // Personality from the brain's own bits (NOT an rnd() draw, so the build
+        // stream — and every seeded test scenario — is unchanged): pace in
+        // [0.85, 1.15] of nominal.
+        a.speedFactor = 0.85 + 0.30 * (((a.brain >> 9) & 0x7FFF) / Real(0x7FFF));
         a.pos = idlePose(a.home, a.mode);
 
         // A driver possesses a freshly-created car (two-way possession link). Its
@@ -281,7 +285,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
     int li = a.route.links[a.leg];
     bool car = a.mode == Agent::Mode::Driver;
-    Real target = car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed;
+    // Nominal pace scaled by personality (ADR-0061): drivers and walkers each
+    // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
+    // Junction/signal caps below are shared road rules and stay unscaled.
+    Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
+                  a.speedFactor;
     Real accel = car ? kCarAccel : kPedAccel;
     if (nav_->isJunction(nav_->links[li].to)) {
         Real distToEnd = nav_->links[li].length - a.distOnLeg;
@@ -574,9 +582,11 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         a.pos.x += rightv.x * a.lateralOffset;
         a.pos.y += rightv.y * a.lateralOffset;
         // Turn to face where it's actually moving (forward walk + the sideways
-        // drift), so the body visibly rotates as it steers away.
-        Vec2 vel(travel.x * kWalkSpeed + rightv.x * (delta / dt),
-                 travel.y * kWalkSpeed + rightv.y * (delta / dt));
+        // drift), so the body visibly rotates as it steers away. Uses the ped's
+        // OWN speed (personality-scaled), not the nominal walk speed.
+        Real walk = a.speed > 0.1 ? a.speed : kWalkSpeed * a.speedFactor;
+        Vec2 vel(travel.x * walk + rightv.x * (delta / dt),
+                 travel.y * walk + rightv.y * (delta / dt));
         Real vl = std::sqrt(vel.x * vel.x + vel.y * vel.y);
         if (vl > 1e-6) a.heading = Vec2(vel.x / vl, vel.y / vl);
     }
