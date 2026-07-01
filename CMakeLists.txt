@@ -654,7 +654,7 @@ if(EMSCRIPTEN)
     target_link_libraries(viewer_web PRIVATE engine_core)
 
     # The GLFW shim, a growable heap, and MODULARIZE so the page instantiates the
-    # module by name (web/index.html). ASYNCIFY lets the backend await the async
+    # module by name (web/viewer.html). ASYNCIFY lets the backend await the async
     # WebGPU adapter/device request inside the synchronous Renderer::initialize().
     # The assets are baked into the virtual FS so the level/scripts load via FS.
     target_link_options(viewer_web PRIVATE
@@ -674,15 +674,26 @@ if(EMSCRIPTEN)
         "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post"
         "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
     )
-    # Emit viewer_web.js (+ .wasm + .data); web/index.html loads it.
+    # Emit viewer_web.js (+ .wasm + .data); web/viewer.html loads it.
     set_target_properties(viewer_web PROPERTIES OUTPUT_NAME "viewer_web")
 
-    # Copy the hand-written shell next to the build output so the directory is
-    # servable as-is (the MODULARIZE build has no auto-generated HTML).
+    # Copy the hand-written shell + gallery next to the build output so the
+    # directory is servable as-is (the MODULARIZE build has no auto-generated
+    # HTML). index.html = scene gallery (landing), viewer.html = the renderer,
+    # scenes.json = the gallery manifest, thumbs/ = baked scene thumbnails.
     add_custom_command(TARGET viewer_web POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/index.html
                 $<TARGET_FILE_DIR:viewer_web>/index.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/viewer.html
+                $<TARGET_FILE_DIR:viewer_web>/viewer.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/scenes.json
+                $<TARGET_FILE_DIR:viewer_web>/scenes.json
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_SOURCE_DIR}/web/thumbs
+                $<TARGET_FILE_DIR:viewer_web>/thumbs
         VERBATIM)
 
     message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")

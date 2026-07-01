@@ -17,7 +17,9 @@ ACES/AgX **tone-map + grade**, **bloom**, a material **G-buffer**, **SSAO** +
 split-sum BRDF LUT**), real GPU **instancing** (verified 8× draw-call reduction),
 **CDLOD terrain morph**, and **wind** sway. Gameplay runs too — play mode (Jolt
 physics + the Lua gun), day/night controls, and desktop+touch input — all wired
-through exported `rt_web_*` hooks and a `web/index.html` debug panel. The IBL
+through exported `rt_web_*` hooks and a `web/viewer.html` debug panel (with
+quality presets — Mobile/Balanced/High); `web/index.html` is a scene-gallery
+landing page that deep-links each level into the viewer. The IBL
 matches Vulkan's approach (per-fragment equirect sampling + baked BRDF LUT); the
 only thing beyond it is Metal's offline **cubemap prefilter / irradiance
 convolution / reflection probes**, which the Vulkan backend also omits.
@@ -76,7 +78,10 @@ default), auto-downloaded by emcc. For an offline build, fetch the
 `emdawnwebgpu_pkg-*.zip` from Dawn's GitHub releases, extract it, and pass
 `-DRT_EMDAWN_PORT=<path>/emdawnwebgpu.port.py`.
 
-Outputs `viewer_web.{js,wasm,data}` plus a copy of `web/index.html`. The backend
+Outputs `viewer_web.{js,wasm,data}` plus `web/{index,viewer}.html`, `scenes.json`,
+and the baked `thumbs/`. `index.html` is the gallery; `viewer.html` loads the
+module (`?level=<id>` selects the scene). Thumbnails are path-traced offline by
+`./raytracer --level <f> --out thumbs/<id>.png`. The backend
 acquires the WebGPU device itself (`RequestAdapter`/`RequestDevice`, awaited via
 `-sASYNCIFY`), so the MODULARIZE'd module just needs the canvas — no JS-side
 device handoff.

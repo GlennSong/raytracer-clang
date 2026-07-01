@@ -9,6 +9,8 @@ run_tests
 *.dSYM/
 *.ppm
 *.png
+# baked scene-gallery thumbnails are committed assets
+!web/thumbs/*.png
 settings.json
 assets/models/*.glb
 assets/models/*.gltf
