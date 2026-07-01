@@ -994,7 +994,7 @@ fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f
     color = color * mix(1.0, ao, p.effects.y);
   }
   if (p.effects.z > 0.0) {                                     // SSR (add reflection)
-    let ssr = textureLoad(ssrTex, px, 0);
+    let ssr = textureSampleLevel(ssrTex, bloomSamp, aoUv, 0.0);  // half-res, filtered upscale
     color += ssr.rgb * p.effects.z;                           // rgb premultiplied by confidence
   }
   if (p.effects.x > 0.0) {                                     // additive bloom
@@ -1152,7 +1152,7 @@ struct SsrU {
   viewProj : mat4x4<f32>,
   camPos : vec4<f32>,
   params : vec4<f32>,   // x maxDist, y thickness, z steps, w maxRoughness
-  texel  : vec4<f32>,
+  texel  : vec4<f32>,   // xy = 1/effectRes (SSR target), zw = full resolution
 };
 @group(0) @binding(0) var hdrTex   : texture_2d<f32>;
 @group(0) @binding(1) var depthTex : texture_depth_2d;
@@ -1171,8 +1171,10 @@ fn vs_ssr(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
 }
 @fragment
 fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
-  let ipx = vec2<i32>(fc.xy);
+  // fc is in the scaled SSR space; texel.xy = 1/effectRes -> uv, texel.zw =
+  // full res to index the full-res depth/G-buffer/HDR at this SSR texel.
   let uv = fc.xy * s.texel.xy;
+  let ipx = vec2<i32>(uv * s.texel.zw);
   let depth = textureLoad(depthTex, ipx, 0);
   if (depth >= 1.0) { return vec4<f32>(0.0); }
   let gb = textureLoad(gbufTex, ipx, 0);
@@ -1194,7 +1196,7 @@ fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
     let ndc = clip.xyz / clip.w;
     let suv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) { break; }
-    let sd = textureLoad(depthTex, vec2<i32>(suv / s.texel.xy), 0);
+    let sd = textureLoad(depthTex, vec2<i32>(suv * s.texel.zw), 0);
     if (sd >= 1.0) { continue; }
     let sP = reconW(suv, sd);
     let rayDist = length(s.camPos.xyz - pos);
@@ -1202,7 +1204,7 @@ fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
     if (rayDist > sceneDist && (rayDist - sceneDist) < s.params.y) { hit = true; hitUV = suv; break; }
   }
   if (!hit) { return vec4<f32>(0.0); }
-  let refl = textureLoad(hdrTex, vec2<i32>(hitUV / s.texel.xy), 0).rgb;
+  let refl = textureLoad(hdrTex, vec2<i32>(hitUV * s.texel.zw), 0).rgb;
   let fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
   let edge = smoothstep(0.0, 0.15, min(min(hitUV.x, 1.0 - hitUV.x), min(hitUV.y, 1.0 - hitUV.y)));
   let conf = (1.0 - roughness / max(s.params.w, 1e-3)) * (0.2 + 0.8 * fres) * edge;
@@ -1539,6 +1541,15 @@ public:
     RenderStats getRenderStats() const override { return stats_; }
 
     void beginFrame() override {
+        // Apply a live postEffectScale change (debug slider) before any pass by
+        // rebuilding the SSAO/SSR buffers. Cheap targets, and only on change.
+        float want = std::min(std::max(postEffectScale, 0.25f), 1.0f);
+        if (want != appliedFxScale_ && postBuf_) {
+            releaseDepthTarget();
+            createDepthTarget();   // recomputes fxW_/fxH_, sets appliedFxScale_
+            rebuildCompositeBindGroup(); rebuildBloomGroups();
+            rebuildSsaoGroup(); rebuildSsrGroup();
+        }
         draws_.clear();
         instancedGroups_.clear();
         instanceStaging_.clear();
@@ -2031,10 +2042,10 @@ public:
             us.params[1] = ssaoParams.bias;
             us.params[2] = ssaoParams.intensity;
             us.params[3] = ssaoParams.aoFloor;
-            // xy = 1/halfRes (uv from the half-res AO frag coords);
+            // xy = 1/effectRes (uv from the scaled AO frag coords);
             // zw = full resolution (to index the full-res depth/G-buffer).
-            us.texel[0] = 1.0f / static_cast<float>((width_ + 1) / 2);
-            us.texel[1] = 1.0f / static_cast<float>((height_ + 1) / 2);
+            us.texel[0] = 1.0f / static_cast<float>(fxW_);
+            us.texel[1] = 1.0f / static_cast<float>(fxH_);
             us.texel[2] = static_cast<float>(width_);
             us.texel[3] = static_cast<float>(height_);
             wgpuQueueWriteBuffer(queue_, ssaoUbo_, 0, &us, sizeof(us));
@@ -2064,8 +2075,12 @@ public:
             ur.params[1] = ssrParams.thickness;
             ur.params[2] = 32.0f;                    // march steps
             ur.params[3] = ssrParams.maxRoughness;
-            ur.texel[0] = 1.0f / static_cast<float>(width_);
-            ur.texel[1] = 1.0f / static_cast<float>(height_);
+            // xy = 1/effectRes (uv from the scaled SSR frag coords);
+            // zw = full resolution (to index the full-res depth/G-buffer/HDR).
+            ur.texel[0] = 1.0f / static_cast<float>(fxW_);
+            ur.texel[1] = 1.0f / static_cast<float>(fxH_);
+            ur.texel[2] = static_cast<float>(width_);
+            ur.texel[3] = static_cast<float>(height_);
             wgpuQueueWriteBuffer(queue_, ssrUbo_, 0, &ur, sizeof(ur));
 
             WGPURenderPassColorAttachment a = {};
@@ -2327,15 +2342,21 @@ private:
         bloomTexB_ = wgpuDeviceCreateTexture(device_, &bd);
         bloomViewB_ = wgpuTextureCreateView(bloomTexB_, nullptr);
 
-        // SSAO target (single channel, HALF-res). AO is low-frequency, so a
-        // quarter of the pixels looks near-identical while the composite
-        // linear-samples it back (a free upscale-blur) — a big win on the heavy
-        // 12-tap pass. Full-res depth/G-buffer are still sampled per AO texel.
+        // Screen-space effect buffers (SSAO + SSR) at a fraction of the
+        // framebuffer (postEffectScale). These passes are the heaviest per-pixel
+        // work (SSAO: 12 taps × 2 matrix-mults; SSR: a 32-step march), and AO /
+        // reflections are low/medium frequency — so render them small and let the
+        // composite linear-sample them back up (a free upscale-blur). Full-res
+        // depth/G-buffer are still read per effect texel, so quality holds.
+        appliedFxScale_ = std::min(std::max(postEffectScale, 0.25f), 1.0f);
+        fxW_ = std::max(1, static_cast<int>(std::lround(width_ * appliedFxScale_)));
+        fxH_ = std::max(1, static_cast<int>(std::lround(height_ * appliedFxScale_)));
+
+        // SSAO target (single channel).
         WGPUTextureDescriptor ad = {};
         ad.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
         ad.dimension = WGPUTextureDimension_2D;
-        ad.size = {static_cast<uint32_t>((width_ + 1) / 2),
-                   static_cast<uint32_t>((height_ + 1) / 2), 1};
+        ad.size = {static_cast<uint32_t>(fxW_), static_cast<uint32_t>(fxH_), 1};
         ad.format = WGPUTextureFormat_R8Unorm;
         ad.mipLevelCount = 1;
         ad.sampleCount = 1;
@@ -2343,7 +2364,9 @@ private:
         ssaoView_ = wgpuTextureCreateView(ssaoTex_, nullptr);
 
         // SSR target (RGBA16F: reflected color premultiplied by confidence, in a).
-        ssrTexture_ = wgpuDeviceCreateTexture(device_, &hd);   // same RGBA16F descriptor
+        WGPUTextureDescriptor rd = hd;   // RGBA16F, but at the effect resolution
+        rd.size = {static_cast<uint32_t>(fxW_), static_cast<uint32_t>(fxH_), 1};
+        ssrTexture_ = wgpuDeviceCreateTexture(device_, &rd);
         ssrView_ = wgpuTextureCreateView(ssrTexture_, nullptr);
     }
 
@@ -2710,9 +2733,9 @@ private:
         cEntries[4].visibility = WGPUShaderStage_Fragment;
         cEntries[4].texture.sampleType = WGPUTextureSampleType_Float;   // R8Unorm, filterable
         cEntries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
-        cEntries[5].binding = 5;                              // SSR (textureLoad)
+        cEntries[5].binding = 5;                              // SSR (scaled, filtered upscale)
         cEntries[5].visibility = WGPUShaderStage_Fragment;
-        cEntries[5].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        cEntries[5].texture.sampleType = WGPUTextureSampleType_Float;   // RGBA16F, filterable
         cEntries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
         WGPUBindGroupLayoutDescriptor cblDesc = {};
         cblDesc.entryCount = 6;
@@ -3396,6 +3419,8 @@ private:
     WGPUTexture bloomTexA_ = nullptr, bloomTexB_ = nullptr;     // half-res ping-pong
     WGPUTextureView bloomViewA_ = nullptr, bloomViewB_ = nullptr;
     int bloomW_ = 1, bloomH_ = 1;
+    int fxW_ = 1, fxH_ = 1;           // SSAO/SSR buffer size (postEffectScale)
+    float appliedFxScale_ = 0.0f;     // last-applied scale; 0 forces first build
     WGPUSampler linearSampler_ = nullptr;
     WGPUBindGroupLayout bloomLayout_ = nullptr;
     WGPURenderPipeline bloomBrightPipeline_ = nullptr, bloomBlurPipeline_ = nullptr;

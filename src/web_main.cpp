@@ -124,10 +124,11 @@ EMSCRIPTEN_KEEPALIVE float rt_web_sun(int i) {
     return static_cast<float>(i == 0 ? d.x : i == 1 ? d.y : d.z);
 }
 
-// View-transform controls (the forward shader's output stage): tone mapping,
-// exposure, and color grade. id: 0=tonemap op (0 ACES, 1 AgX) 1=exposure
-// 2=contrast 3=saturation. Exposure lives on the view's lighting (the renderer
-// reads it each frame); the rest are live Renderer knobs.
+// View-transform controls (the forward shader's output stage) + effect tuning.
+// id: 0=tonemap op (0 ACES, 1 AgX) 1=exposure 2=contrast 3=saturation
+// 4=postEffectScale (SSAO/SSR buffer resolution, 0.25–1.0). Exposure lives on
+// the view's lighting (the renderer reads it each frame); the rest are live
+// Renderer knobs.
 EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
     Renderer& r = g_app.renderer();
     switch (id) {
@@ -135,6 +136,7 @@ EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
         case 1: g_app.renderView().lighting.exposure = v; break;
         case 2: r.gradeParams.contrast = v; break;
         case 3: r.gradeParams.saturation = v; break;
+        case 4: r.postEffectScale = v; break;
         default: break;
     }
 }
