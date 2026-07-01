@@ -61,10 +61,15 @@ public:
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
-    // Half-extents of a car box, for a physics collider that tracks each car.
+    // Half-extents of a car / pedestrian box, for a physics collider that tracks
+    // the drawn instance.
     engine::Vec3 carHalfExtent() const {
         return engine::Vec3(params_.carSize.x * 0.5, params_.carSize.y * 0.5,
                             params_.carSize.z * 0.5);
+    }
+    engine::Vec3 pedHalfExtent() const {
+        return engine::Vec3(params_.pedSize.x * 0.5, params_.pedSize.y * 0.5,
+                            params_.pedSize.z * 0.5);
     }
 
 private:

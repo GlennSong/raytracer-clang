@@ -100,38 +100,63 @@ engine::RenderMesh unitQuadXZ() {
     return m;
 }
 
-// A vertex-coloured car silhouette in one of a few body STYLES (sedan /
-// hatchback / SUV / pickup), so a city has visible variety rather than a fleet of
-// identical sedans. `size` is x=width, y=height, z=length (travel axis, +Z).
+// A vertex-coloured car in one of a few body STYLES (sedan / hatchback / SUV /
+// pickup) with shared detailing — bumpers, head/tail lights, glass, and disc-ish
+// wheels — so the traffic reads as a varied fleet rather than boxes on wheels.
+// `size` is x=width, y=height, z=length (travel axis, +Z).
 engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
     const Real w = size.x, h = size.y, l = size.z;
-    const Vec3 cabin(0.20, 0.22, 0.26);    // dark glasshouse
-    const Vec3 tyre(0.05, 0.05, 0.06);     // near-black wheels
+    const Vec3 glass(0.12, 0.14, 0.18);    // dark windows
+    const Vec3 trim(0.08, 0.08, 0.09);     // bumpers / dark trim
+    const Vec3 tyre(0.04, 0.04, 0.05);     // near-black tyres
+    const Vec3 hub(0.55, 0.56, 0.58);      // wheel hub
+    const Vec3 head(0.95, 0.94, 0.80);     // headlight
+    const Vec3 tail(0.75, 0.06, 0.05);     // taillight
     engine::RenderMesh m;
+
+    // Style-specific body + greenhouse.
     switch (style) {
         case 1:  // hatchback: shorter, cabin carried back to the tail
-            addBox(m, Vec3(w, h * 0.55, l * 0.92), Vec3(0, -h * 0.05, 0), color);
-            addBox(m, Vec3(w * 0.86, h * 0.50, l * 0.5), Vec3(0, h * 0.32, -l * 0.10), cabin);
+            addBox(m, Vec3(w, h * 0.52, l * 0.92), Vec3(0, -h * 0.06, 0), color);
+            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.56), Vec3(0, h * 0.24, -l * 0.06), color);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.48), Vec3(0, h * 0.34, -l * 0.08), glass);
             break;
-        case 2:  // SUV: taller body, big greenhouse
-            addBox(m, Vec3(w, h * 0.64, l), Vec3(0, h * 0.02, 0), color);
-            addBox(m, Vec3(w * 0.92, h * 0.50, l * 0.62), Vec3(0, h * 0.44, -l * 0.02), cabin);
+        case 2:  // SUV: tall boxy body, big greenhouse
+            addBox(m, Vec3(w, h * 0.60, l), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.96, h * 0.44, l * 0.66), Vec3(0, h * 0.40, -l * 0.02), color);
+            addBox(m, Vec3(w * 0.82, h * 0.32, l * 0.58), Vec3(0, h * 0.46, -l * 0.02), glass);
             break;
-        case 3:  // pickup: forward cab + a low open bed
-            addBox(m, Vec3(w, h * 0.46, l), Vec3(0, -h * 0.10, 0), color);
-            addBox(m, Vec3(w * 0.9, h * 0.46, l * 0.34), Vec3(0, h * 0.26, l * 0.24), cabin);
-            addBox(m, Vec3(w * 0.92, h * 0.20, l * 0.46), Vec3(0, h * 0.06, -l * 0.26), color);
+        case 3:  // pickup: forward cab, low open bed behind
+            addBox(m, Vec3(w, h * 0.44, l), Vec3(0, -h * 0.12, 0), color);
+            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.34), Vec3(0, h * 0.22, l * 0.22), color);
+            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.28), Vec3(0, h * 0.30, l * 0.22), glass);
+            addBox(m, Vec3(w * 0.94, h * 0.22, l * 0.44), Vec3(0, h * 0.02, -l * 0.26), color); // bed walls
             break;
-        default: // sedan: low body, set-back cabin
-            addBox(m, Vec3(w, h * 0.55, l), Vec3(0, -h * 0.05, 0), color);
-            addBox(m, Vec3(w * 0.86, h * 0.45, l * 0.5), Vec3(0, h * 0.34, -l * 0.04), cabin);
+        default: // sedan: low body, hood + boot, set-back cabin
+            addBox(m, Vec3(w, h * 0.50, l), Vec3(0, -h * 0.06, 0), color);
+            addBox(m, Vec3(w * 0.94, h * 0.38, l * 0.46), Vec3(0, h * 0.22, -l * 0.02), color);
+            addBox(m, Vec3(w * 0.80, h * 0.28, l * 0.40), Vec3(0, h * 0.32, -l * 0.03), glass);
             break;
     }
+
+    // Shared detailing (all styles). Front is +Z.
+    addBox(m, Vec3(w * 0.98, h * 0.16, l * 0.05), Vec3(0, -h * 0.24, l * 0.49), trim);   // front bumper
+    addBox(m, Vec3(w * 0.98, h * 0.16, l * 0.05), Vec3(0, -h * 0.24, -l * 0.49), trim);  // rear bumper
+    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(w * 0.36, -h * 0.02, l * 0.50), head);
+    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(-w * 0.36, -h * 0.02, l * 0.50), head);
+    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(w * 0.36, -h * 0.02, -l * 0.50), tail);
+    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(-w * 0.36, -h * 0.02, -l * 0.50), tail);
+
+    // Wheels: a dark tyre disc (thin along X) with a lighter hub.
     Real wr = h * 0.30, wx = w * 0.5, wz = l * 0.32, wy = -h * 0.30;
-    addBox(m, Vec3(wr, wr, wr), Vec3(wx, wy, wz), tyre);
-    addBox(m, Vec3(wr, wr, wr), Vec3(-wx, wy, wz), tyre);
-    addBox(m, Vec3(wr, wr, wr), Vec3(wx, wy, -wz), tyre);
-    addBox(m, Vec3(wr, wr, wr), Vec3(-wx, wy, -wz), tyre);
+    Real tw = w * 0.10;                    // tyre thickness
+    const Vec3 wheelCtr[4] = { Vec3(wx, wy, wz), Vec3(-wx, wy, wz),
+                               Vec3(wx, wy, -wz), Vec3(-wx, wy, -wz) };
+    for (const Vec3& c : wheelCtr) {
+        addBox(m, Vec3(tw, wr * 2, wr * 2), c, tyre);
+        Real hx = (c.x > 0 ? -1 : 1) * tw * 0.35;   // hub set slightly inboard
+        addBox(m, Vec3(tw * 0.6, wr * 0.9, wr * 0.9), Vec3(c.x + hx, c.y, c.z), hub);
+    }
     return m;
 }
 
@@ -140,14 +165,18 @@ engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
 // + shape variety means several groups). Drivers are spread across these.
 struct CarVariant { int style; Vec3 color; };
 const CarVariant kCarVariants[] = {
-    {0, Vec3(0.70, 0.12, 0.12)},   // red sedan
-    {0, Vec3(0.12, 0.20, 0.55)},   // blue sedan
-    {1, Vec3(0.85, 0.85, 0.85)},   // white hatchback
+    {0, Vec3(0.72, 0.10, 0.10)},   // red sedan
+    {0, Vec3(0.10, 0.18, 0.52)},   // blue sedan
+    {0, Vec3(0.90, 0.90, 0.90)},   // white sedan
+    {1, Vec3(0.85, 0.78, 0.10)},   // yellow hatchback
     {1, Vec3(0.10, 0.45, 0.30)},   // green hatchback
+    {1, Vec3(0.80, 0.40, 0.08)},   // orange hatchback
     {2, Vec3(0.09, 0.09, 0.11)},   // black SUV
-    {2, Vec3(0.55, 0.56, 0.58)},   // silver SUV
-    {3, Vec3(0.82, 0.55, 0.10)},   // orange pickup
+    {2, Vec3(0.52, 0.53, 0.56)},   // silver SUV
+    {2, Vec3(0.30, 0.22, 0.14)},   // brown SUV
+    {3, Vec3(0.14, 0.30, 0.20)},   // forest-green pickup
     {3, Vec3(0.62, 0.60, 0.42)},   // tan pickup
+    {3, Vec3(0.20, 0.42, 0.55)},   // teal pickup
 };
 constexpr int kNumCarVariants = static_cast<int>(sizeof(kCarVariants) / sizeof(kCarVariants[0]));
 

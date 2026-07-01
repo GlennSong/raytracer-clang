@@ -28,10 +28,18 @@ public:
 
 private:
     void releaseBodies();
+    // Keep a kinematic-box pool tracking the transforms of an instance group
+    // (cars or pedestrians); rebuilds if the count changes.
+    void syncKinematic(engine::World& world, const std::vector<engine::Entity>& groups,
+                       const engine::Vec3& halfExtent,
+                       std::vector<engine::PhysicsBodyId>& pool, engine::Real dt);
 
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
-    std::vector<engine::PhysicsBodyId> bodies_;   // one kinematic box per car
+    std::vector<engine::PhysicsBodyId> carBodies_;    // kinematic, one per car
+    std::vector<engine::PhysicsBodyId> pedBodies_;    // kinematic, one per pedestrian
+    std::vector<engine::PhysicsBodyId> poleBodies_;   // static, one per signal pole
+    bool polesBuilt_ = false;
 };
 
 }  // namespace citysim
