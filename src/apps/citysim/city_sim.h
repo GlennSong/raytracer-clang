@@ -41,6 +41,9 @@ struct Agent {
     int leg = 0;
     Real distOnLeg = 0, speed = 0, elevation = 0;
     int lane = 0;
+    // Continuous sideways lean off the path (ADR-0060), rate-limited, so a walker
+    // steers smoothly around what it sees instead of popping. Decays back to 0.
+    Real lateralOffset = 0;
 
     // Imperfect perception (ADR-0059): each step the agent perceives obstacles
     // with probability `reliability`; otherwise it misses (a fault). `brain` is a

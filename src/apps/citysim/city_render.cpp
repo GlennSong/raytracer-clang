@@ -163,63 +163,59 @@ Vec3 stateColor(Agent::State s) {
     }
 }
 
-// A vertex-coloured car in one of a few body STYLES (sedan / hatchback / SUV /
-// pickup) with shared detailing — bumpers, head/tail lights, glass, and disc-ish
-// wheels — so the traffic reads as a varied fleet rather than boxes on wheels.
-// `size` is x=width, y=height, z=length (travel axis, +Z).
+// A vertex-coloured car that mirrors the PLAYER's car body (vehicles.lua
+// `car_body`): a low hull, a set-back greenhouse cabin, dark windshield + rear
+// glass, and pale front / red rear corner lights — so NPC cars share the player's
+// look. Wheels are part of the instanced mesh here (the player renders them as
+// physics-driven entities). Body STYLE varies the hull/cabin for a mixed fleet.
+// `size` is x=width, y=height, z=length (travel axis, +Z); faces +Z.
 engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
     const Real w = size.x, h = size.y, l = size.z;
-    const Vec3 glass(0.12, 0.14, 0.18);    // dark windows
-    const Vec3 trim(0.08, 0.08, 0.09);     // bumpers / dark trim
-    const Vec3 tyre(0.04, 0.04, 0.05);     // near-black tyres
-    const Vec3 hub(0.55, 0.56, 0.58);      // wheel hub
-    const Vec3 head(0.95, 0.94, 0.80);     // headlight
-    const Vec3 tail(0.75, 0.06, 0.05);     // taillight
+    const Real hw = w * 0.5, hl = l * 0.5;
+    const Vec3 glass(0.05, 0.06, 0.09);    // dark glass (matches car_body)
+    const Vec3 tyre(0.04, 0.04, 0.05);
+    const Vec3 head(1.0, 0.97, 0.82), tail(0.85, 0.06, 0.05);
     engine::RenderMesh m;
 
-    // Style-specific body + greenhouse.
     switch (style) {
-        case 1:  // hatchback: shorter, cabin carried back to the tail
-            addBox(m, Vec3(w, h * 0.52, l * 0.92), Vec3(0, -h * 0.06, 0), color);
-            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.56), Vec3(0, h * 0.24, -l * 0.06), color);
-            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.48), Vec3(0, h * 0.34, -l * 0.08), glass);
+        case 1:  // hatchback: hull + cabin carried back to the tail, glass fore & aft
+            addBox(m, Vec3(w, h * 0.46, l * 0.92), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.86, h * 0.44, l * 0.56), Vec3(0, h * 0.40, -l * 0.06), color);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, l * 0.12), glass);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, -l * 0.34), glass);
             break;
-        case 2:  // SUV: tall boxy body, big greenhouse
-            addBox(m, Vec3(w, h * 0.60, l), Vec3(0, 0, 0), color);
-            addBox(m, Vec3(w * 0.96, h * 0.44, l * 0.66), Vec3(0, h * 0.40, -l * 0.02), color);
-            addBox(m, Vec3(w * 0.82, h * 0.32, l * 0.58), Vec3(0, h * 0.46, -l * 0.02), glass);
+        case 2:  // SUV: tall hull, big greenhouse
+            addBox(m, Vec3(w, h * 0.58, l), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.90, h * 0.46, l * 0.62), Vec3(0, h * 0.44, -l * 0.02), color);
+            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, l * 0.20), glass);
+            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, -l * 0.26), glass);
             break;
-        case 3:  // pickup: forward cab, low open bed behind
-            addBox(m, Vec3(w, h * 0.44, l), Vec3(0, -h * 0.12, 0), color);
-            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.34), Vec3(0, h * 0.22, l * 0.22), color);
-            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.28), Vec3(0, h * 0.30, l * 0.22), glass);
-            addBox(m, Vec3(w * 0.94, h * 0.22, l * 0.44), Vec3(0, h * 0.02, -l * 0.26), color); // bed walls
+        case 3:  // pickup: forward cab + open bed
+            addBox(m, Vec3(w, h * 0.42, l), Vec3(0, -h * 0.04, 0), color);
+            addBox(m, Vec3(w * 0.90, h * 0.40, l * 0.34), Vec3(0, h * 0.34, l * 0.22), color);
+            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.40, l * 0.38), glass);
+            addBox(m, Vec3(w * 0.92, h * 0.20, l * 0.42), Vec3(0, h * 0.10, -l * 0.26), color); // bed walls
             break;
-        default: // sedan: low body, hood + boot, set-back cabin
-            addBox(m, Vec3(w, h * 0.50, l), Vec3(0, -h * 0.06, 0), color);
-            addBox(m, Vec3(w * 0.94, h * 0.38, l * 0.46), Vec3(0, h * 0.22, -l * 0.02), color);
-            addBox(m, Vec3(w * 0.80, h * 0.28, l * 0.40), Vec3(0, h * 0.32, -l * 0.03), glass);
+        default: // sedan — matches the player's car_body proportions exactly
+            addBox(m, Vec3(w, h * 0.46, l), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.84, h * 0.42, l * 0.46), Vec3(0, h * 0.40, -l * 0.04), color);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.42, l * 0.15), glass);
+            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.42, -l * 0.23), glass);
             break;
     }
 
-    // Shared detailing (all styles). Front is +Z.
-    addBox(m, Vec3(w * 0.98, h * 0.16, l * 0.05), Vec3(0, -h * 0.24, l * 0.49), trim);   // front bumper
-    addBox(m, Vec3(w * 0.98, h * 0.16, l * 0.05), Vec3(0, -h * 0.24, -l * 0.49), trim);  // rear bumper
-    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(w * 0.36, -h * 0.02, l * 0.50), head);
-    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(-w * 0.36, -h * 0.02, l * 0.50), head);
-    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(w * 0.36, -h * 0.02, -l * 0.50), tail);
-    addBox(m, Vec3(w * 0.16, h * 0.10, l * 0.03), Vec3(-w * 0.36, -h * 0.02, -l * 0.50), tail);
-
-    // Wheels: a dark tyre disc (thin along X) with a lighter hub.
-    Real wr = h * 0.30, wx = w * 0.5, wz = l * 0.32, wy = -h * 0.30;
-    Real tw = w * 0.10;                    // tyre thickness
-    const Vec3 wheelCtr[4] = { Vec3(wx, wy, wz), Vec3(-wx, wy, wz),
-                               Vec3(wx, wy, -wz), Vec3(-wx, wy, -wz) };
-    for (const Vec3& c : wheelCtr) {
-        addBox(m, Vec3(tw, wr * 2, wr * 2), c, tyre);
-        Real hx = (c.x > 0 ? -1 : 1) * tw * 0.35;   // hub set slightly inboard
-        addBox(m, Vec3(tw * 0.6, wr * 0.9, wr * 0.9), Vec3(c.x + hx, c.y, c.z), hub);
+    // Head/taillights at the corners (front +Z pale, rear -Z red) — like car_body.
+    Real ly = -h * 0.08, lx = hw - 0.30;
+    for (Real sx : { Real(1), Real(-1) }) {
+        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, hl - 0.05), head);
+        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, -hl + 0.05), tail);
     }
+
+    // Four wheels (dark discs, thin along X), sat at the hull's lower edge.
+    Real wr = h * 0.26, axleY = -h * 0.5 + wr, fz = l * 0.32, wxo = hw - 0.03;
+    for (Real wx : { wxo, -wxo })
+        for (Real wz : { fz, -fz })
+            addBox(m, Vec3(0.12, wr * 2, wr * 2), Vec3(wx, axleY, wz), tyre);
     return m;
 }
 
@@ -313,6 +309,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
+    // Warm up so the city is already ALIVE when the level appears — agents depart
+    // and spread onto the roads instead of standing still for the first minute.
+    for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);
 
     MeshHandle pedMesh{}, lensMesh{};
     if (assets) {
@@ -573,8 +572,12 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("agent_widgets", engine::KeyCode::J);   // toggle debug widgets
 }
 
-void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
+void CityRenderSystem::update(engine::FrameContext& ctx) {
+    // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
+}
+
+void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!built_) {
         build(ctx.world, &ctx.assets);   // lazy: retry until the level's roads exist
         return;

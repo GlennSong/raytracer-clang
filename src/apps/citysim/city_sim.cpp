@@ -23,9 +23,10 @@ constexpr Real kSignalApproach = 14.0;          // start braking for a light thi
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
-constexpr Real kPedVisionRange = 4.0;      // how far ahead a walker perceives (m)
+constexpr Real kPedVisionRange = 4.5;      // how far ahead a walker perceives (m)
 constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide peripheral)
-constexpr Real kPedSideStep = 0.7;         // max sidestep to go around someone (m)
+constexpr Real kPedMaxLateral = 1.6;       // furthest a walker leans off its path (m)
+constexpr Real kPedLateralRate = 1.6;      // how fast that lean changes (m/s) — smooth, not a pop
 constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
@@ -85,7 +86,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     nav_ = &graph;
     agents_.clear();
     vehicles_.clear();
-    clockHours_ = 6.0;
+    clockHours_ = 8.5;   // start mid morning-rush so agents commute right away
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
     signals_.build(graph);
@@ -411,16 +412,18 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // the same spot. Deterministic (index order); resets to the sidewalk each
     // step, so the sidestep is a transient lean while someone is in view.
     for (Agent& a : agents_)
-        if (!a.moving) a.state = Agent::State::Resting;
+        if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; }
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (!a.moving) continue;
         if (a.mode == Agent::Mode::Driver) { a.state = Agent::State::Walking; continue; }
-        a.state = Agent::State::Walking;
+        // `travel` is the walker's path direction this step (set by steer()); it
+        // leans to `right` of that to go around what it SEES ahead.
+        Vec2 travel = a.heading;
+        Vec2 rightv(travel.y, -travel.x);
         engine::VisionCone cone;
-        cone.origin = a.pos; cone.forward = a.heading;
+        cone.origin = a.pos; cone.forward = travel;
         cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
-        Vec2 rightv(a.heading.y, -a.heading.x);   // the walker's right hand
         Real bias = 0; bool saw = false;
         auto consider = [&](const Vec2& p) {
             if (!engine::sees(cone, p)) return;
@@ -428,8 +431,8 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             if (fd <= 0.1 || fd >= kPedVisionRange) return;
             saw = true;
             Real side = (a.pos.x - p.x) * rightv.x + (a.pos.y - p.y) * rightv.y;
-            Real w = (kPedVisionRange - fd) / kPedVisionRange;     // nearer -> stronger
-            bias += (side >= 0 ? 1.0 : -1.0) * w;                  // pass on the side I'm already on
+            Real w = (kPedVisionRange - fd) / kPedVisionRange;   // nearer -> stronger
+            bias += (side >= 0 ? 1.0 : -1.0) * w;                // pass on the side I'm already on
         };
         for (std::size_t j = 0; j < agents_.size(); ++j) {
             if (j == i) continue;
@@ -437,12 +440,25 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 consider(agents_[j].pos);
         }
         for (const Vec2& o : externalObstacles_) consider(o);
-        if (saw) {
-            a.state = Agent::State::Avoiding;
-            Real step = std::max(Real(-1), std::min(Real(1), bias)) * kPedSideStep;
-            a.pos.x += rightv.x * step;
-            a.pos.y += rightv.y * step;
-        }
+
+        // Move the lean toward its target at a bounded RATE (continuous, not a
+        // pop): grows while something is in view, decays back to the path when
+        // clear. This is what lets you herd a walker like a boid.
+        Real target = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
+        Real prev = a.lateralOffset;
+        Real maxDelta = kPedLateralRate * dt;
+        Real delta = std::max(-maxDelta, std::min(maxDelta, target - prev));
+        a.lateralOffset = prev + delta;
+        a.state = saw ? Agent::State::Avoiding : Agent::State::Walking;
+
+        a.pos.x += rightv.x * a.lateralOffset;
+        a.pos.y += rightv.y * a.lateralOffset;
+        // Turn to face where it's actually moving (forward walk + the sideways
+        // drift), so the body visibly rotates as it steers away.
+        Vec2 vel(travel.x * kWalkSpeed + rightv.x * (delta / dt),
+                 travel.y * kWalkSpeed + rightv.y * (delta / dt));
+        Real vl = std::sqrt(vel.x * vel.x + vel.y * vel.y);
+        if (vl > 1e-6) a.heading = Vec2(vel.x / vl, vel.y / vl);
     }
     // Hard body-overlap floor: several symmetric relaxation passes so two people
     // (whether or not they saw each other) never interpenetrate.

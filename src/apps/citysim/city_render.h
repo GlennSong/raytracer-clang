@@ -28,7 +28,7 @@ struct CityRenderParams {
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0059)
-    engine::Vec3 carSize{2.0, 1.4, 4.2};   // x = width, y = height, z = length (travel)
+    engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
@@ -40,6 +40,7 @@ public:
         : params_(params), debugWidgets_(params.debugWidgets) {}
 
     void onStart(engine::FrameContext& ctx) override;
+    void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
 
     // --- testable core (no FrameContext) -----------------------------------

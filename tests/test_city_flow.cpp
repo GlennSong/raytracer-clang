@@ -152,8 +152,10 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     a.build(nav, 0, 30, 55);   // pedestrians only
     b.build(nav, 0, 30, 55);
 
-    Real minPedDist = 1e9;
+    Real minPedDist = 1e9, maxLeanJump = 0;
     bool anyArrived = false, anyAvoided = false;
+    std::vector<Real> prevLean(a.agents().size(), 0.0);
+    std::vector<bool> wasMoving(a.agents().size(), false);
     for (int i = 0; i < 8000; ++i) {
         a.step(0.1, 0.5);
         b.step(0.1, 0.5);
@@ -162,6 +164,12 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
             if (ag[p].mode != Agent::Mode::Pedestrian) continue;
             if (ag[p].activity == Agent::Activity::AtWork) anyArrived = true;
             if (ag[p].state == Agent::State::Avoiding) anyAvoided = true;
+            // The sideways lean only ever changes by a bounded amount per step
+            // (continuous steer, never a discrete pop) while the ped keeps walking.
+            if (ag[p].moving && wasMoving[p])
+                maxLeanJump = std::max(maxLeanJump, std::fabs(ag[p].lateralOffset - prevLean[p]));
+            prevLean[p] = ag[p].lateralOffset;
+            wasMoving[p] = ag[p].moving;
             if (!ag[p].moving || ag[p].speed < 0.3) continue;   // actually walking
             for (std::size_t q = p + 1; q < ag.size(); ++q) {
                 if (ag[q].mode != Agent::Mode::Pedestrian || !ag[q].moving || ag[q].speed < 0.3)
@@ -175,6 +183,7 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     CHECK(minPedDist > 0.45);
     CHECK(anyAvoided);          // walkers really did react to someone they saw
     CHECK(anyArrived);          // and still reached their destinations
+    CHECK(maxLeanJump < 0.17);  // ~kPedLateralRate * dt: continuous, never a pop
     bool same = true;           // deterministic
     for (std::size_t i = 0; i < a.agents().size(); ++i)
         if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
