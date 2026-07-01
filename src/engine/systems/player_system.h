@@ -26,6 +26,8 @@ private:
     Real eyeHeight = 0.7;
     Vec3 spawnPos{0, 0, 0};       // captured authored spawn; "respawn" returns the player here
     bool spawnCaptured = false;
+    Real lastSafeY = 0;           // Y of the last time the character was on the ground
+    bool hasGrounded = false;     // has the character touched ground since the last (re)spawn?
 };
 
 }  // namespace engine
