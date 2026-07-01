@@ -27,6 +27,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 // Last camera eye position, exported for the page's debug readout (lets a headless
@@ -196,13 +197,22 @@ struct DrawData {
 // a separate binding so it doesn't collide with the main pass's shadow texture).
 struct ShadowIdx { idx : vec4<i32> };
 @group(1) @binding(2) var<uniform> scidx : ShadowIdx;
+// Material maps (group 2). Missing maps bind a 1x1 default (white, or flat
+// normal), so sampling is always valid; d.surfaceFlags.z says which are real.
+@group(2) @binding(0) var albedoTex   : texture_2d<f32>;
+@group(2) @binding(1) var normalTex   : texture_2d<f32>;
+@group(2) @binding(2) var mrTex       : texture_2d<f32>;
+@group(2) @binding(3) var emissiveTex : texture_2d<f32>;
+@group(2) @binding(4) var aoTex       : texture_2d<f32>;
+@group(2) @binding(5) var matSamp     : sampler;
 
 struct VSOut {
   @builtin(position) clip : vec4<f32>,
-  @location(0) worldPos    : vec3<f32>,
-  @location(1) worldNormal : vec3<f32>,
-  @location(2) color       : vec3<f32>,
-  @location(3) uv          : vec2<f32>,
+  @location(0) worldPos     : vec3<f32>,
+  @location(1) worldNormal  : vec3<f32>,
+  @location(2) color        : vec3<f32>,
+  @location(3) uv           : vec2<f32>,
+  @location(4) worldTangent : vec3<f32>,
 };
 
 @vertex
@@ -219,6 +229,7 @@ fn vs_main(
   // Upper 3x3 (correct for rigid / uniform scale); inverse-transpose arrives
   // with the texture/normal-map phase.
   out.worldNormal = normalize((d.model * vec4<f32>(normal, 0.0)).xyz);
+  out.worldTangent = (d.model * vec4<f32>(tangent, 0.0)).xyz;
   out.color = color;
   out.uv = texcoord;
   out.clip = g.viewProjection * world;
@@ -249,6 +260,7 @@ fn vs_instanced(
   let world = model * vec4<f32>(position, 1.0);
   out.worldPos = world.xyz;
   out.worldNormal = normalize((model * vec4<f32>(normal, 0.0)).xyz);
+  out.worldTangent = (model * vec4<f32>(tangent, 0.0)).xyz;
   out.color = color;
   out.uv = texcoord;
   out.clip = g.viewProjection * world;
@@ -597,15 +609,33 @@ fn tonemapAgX(val0 : vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
-  var albedo    = d.albedoMetallic.rgb * in.color;
-  let metallic  = clamp(d.albedoMetallic.a, 0.0, 1.0);
-  let roughness = clamp(d.emissionRough.a, 0.04, 1.0);
-  let emission  = d.emissionRough.rgb;
-
-  let N = normalize(in.worldNormal);
-  let V = normalize(g.cameraPosition.xyz - in.worldPos);
+  // Sample every material map up front (uniform control flow for textureSample);
+  // missing maps read a neutral 1x1 default. d.surfaceFlags.z = which are real.
+  let albedoSample = textureSample(albedoTex, matSamp, in.uv);
+  let mrSample     = textureSample(mrTex, matSamp, in.uv);
+  let emSample     = textureSample(emissiveTex, matSamp, in.uv).rgb;
+  let aoSample     = textureSample(aoTex, matSamp, in.uv).r;
+  let nmap         = textureSample(normalTex, matSamp, in.uv).xyz * 2.0 - 1.0;
 
   let rawFlags = d.surfaceFlags.y;
+  let maps     = d.surfaceFlags.z;
+  // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fully-transparent texels.
+  if ((rawFlags & 2u) != 0u && albedoSample.a < 0.5) { discard; }
+
+  var albedo    = d.albedoMetallic.rgb * in.color * albedoSample.rgb;
+  let metallic  = clamp(d.albedoMetallic.a * mrSample.b, 0.0, 1.0);   // glTF: B=metal
+  let roughness = clamp(d.emissionRough.a * mrSample.g, 0.04, 1.0);   //       G=rough
+  let emission  = d.emissionRough.rgb * emSample;
+
+  var N = normalize(in.worldNormal);
+  // Normal map (tangent-space -> world via TBN), only with a map + a real tangent.
+  if ((maps & 2u) != 0u && length(in.worldTangent) > 0.001) {
+    let T = normalize(in.worldTangent - N * dot(in.worldTangent, N));
+    let B = cross(N, T);
+    N = normalize(T * nmap.x + B * nmap.y + N * nmap.z);
+  }
+  let V = normalize(g.cameraPosition.xyz - in.worldPos);
+
   if ((rawFlags & 1u) != 0u) { albedo = applyCheckerboard(albedo, in.worldPos); }
   let surfaceId = d.surfaceFlags.x;
   if (surfaceId != 0u) { albedo = applySurface(surfaceId, albedo, in.worldPos, N, in.uv); }
@@ -624,7 +654,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   let kd = (vec3<f32>(1.0) - Famb) * (1.0 - metallic);
   let envDiffuse = kd * albedo * irradiance;
   let envSpecular = prefiltered * envBRDFApprox(f0, roughness, NdotV);
-  let ambient = (envDiffuse + envSpecular) * g.ambient.rgb;
+  let ambient = (envDiffuse + envSpecular) * g.ambient.rgb * aoSample;   // baked AO map
 
   // Debug views (Renderer::debugView via counts.y) write display-ready values.
   let dbg = g.counts.y;
@@ -921,6 +951,29 @@ fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
 
 class WebGpuRenderer final : public Renderer {
 public:
+    struct GpuTexture {
+        WGPUTexture texture = nullptr;
+        WGPUTextureView view = nullptr;
+        uint32_t generation = 0;
+    };
+    // The five material maps as a hashable key (0 = none -> a default texture).
+    struct MaterialKey {
+        uint32_t albedo, normal, mr, emissive, ao;
+        bool operator==(const MaterialKey& o) const {
+            return albedo == o.albedo && normal == o.normal && mr == o.mr
+                && emissive == o.emissive && ao == o.ao;
+        }
+    };
+    struct MaterialKeyHash {
+        size_t operator()(const MaterialKey& k) const {
+            uint64_t h = 1469598103934665603ull;
+            for (uint32_t v : {k.albedo, k.normal, k.mr, k.emissive, k.ao}) {
+                h ^= v; h *= 1099511628211ull;
+            }
+            return static_cast<size_t>(h);
+        }
+    };
+
     bool initialize(void* /*windowHandle*/, int width, int height) override {
         width_ = width > 0 ? width : 1;
         height_ = height > 0 ? height : 1;
@@ -968,6 +1021,7 @@ public:
         if (!createPipeline()) return false;
         createUniformResources();
         createShadowResources();
+        createMaterialDefaults();
 
         LOG_INFO("WebGPU backend initialized (%dx%d)", width_, height_);
         return true;
@@ -1014,6 +1068,19 @@ public:
         if (bindLayout_) { wgpuBindGroupLayoutRelease(bindLayout_); bindLayout_ = nullptr; }
         for (auto& m : meshes_) freeMesh(m);
         meshes_.clear();
+        for (auto& kv : materialGroups_) if (kv.second) wgpuBindGroupRelease(kv.second);
+        materialGroups_.clear();
+        for (auto& t : textures_) {
+            if (t.view) wgpuTextureViewRelease(t.view);
+            if (t.texture) wgpuTextureRelease(t.texture);
+        }
+        textures_.clear();
+        if (whiteView_) { wgpuTextureViewRelease(whiteView_); whiteView_ = nullptr; }
+        if (whiteTex_) { wgpuTextureRelease(whiteTex_); whiteTex_ = nullptr; }
+        if (flatNormalView_) { wgpuTextureViewRelease(flatNormalView_); flatNormalView_ = nullptr; }
+        if (flatNormalTex_) { wgpuTextureRelease(flatNormalTex_); flatNormalTex_ = nullptr; }
+        if (materialSampler_) { wgpuSamplerRelease(materialSampler_); materialSampler_ = nullptr; }
+        if (materialLayout_) { wgpuBindGroupLayoutRelease(materialLayout_); materialLayout_ = nullptr; }
         if (surface_) { wgpuSurfaceRelease(surface_); surface_ = nullptr; }
         if (queue_)   { wgpuQueueRelease(queue_); queue_ = nullptr; }
         if (device_)  { wgpuDeviceRelease(device_); device_ = nullptr; }
@@ -1085,16 +1152,42 @@ public:
         return m ? m->bounds : BoundingSphere{};
     }
 
-    TextureHandle uploadTexture(int, int, int, const uint8_t*) override {
-        // Phase 2: real GPU textures. Return a valid-looking handle so material
-        // setup that stores a texture handle doesn't trip; sampling is a no-op
-        // until the texture path lands.
+    TextureHandle uploadTexture(int width, int height, int channels,
+                                const uint8_t* data) override {
+        if (width <= 0 || height <= 0 || !data) return TextureHandle{};
+        // WebGPU sampled textures are RGBA8; expand 1/3-channel source to RGBA.
+        std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
+        for (int i = 0; i < width * height; ++i) {
+            uint8_t r = data[i * channels + 0];
+            uint8_t g = channels >= 3 ? data[i * channels + 1] : r;
+            uint8_t b = channels >= 3 ? data[i * channels + 2] : r;
+            uint8_t a = channels >= 4 ? data[i * channels + 3] : 255;
+            rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = a;
+        }
+        GpuTexture t;
+        t.texture = createTexture2D(width, height, WGPUTextureFormat_RGBA8Unorm, rgba.data(),
+                                    static_cast<size_t>(width) * 4);
+        t.view = wgpuTextureCreateView(t.texture, nullptr);
+        t.generation = ++textureCounter_;
+
+        uint32_t slot;
+        if (!freeTextures_.empty()) { slot = freeTextures_.back(); freeTextures_.pop_back(); textures_[slot] = t; }
+        else { slot = static_cast<uint32_t>(textures_.size()); textures_.push_back(t); }
         TextureHandle h;
-        h.index = ++textureCounter_;
-        h.generation = 1;
+        h.index = slot + 1;
+        h.generation = t.generation;
         return h;
     }
-    void removeTexture(TextureHandle) override {}
+    void removeTexture(TextureHandle handle) override {
+        if (handle.index == 0 || handle.index > textures_.size()) return;
+        GpuTexture& t = textures_[handle.index - 1];
+        if (t.generation != handle.generation) return;
+        if (t.view) { wgpuTextureViewRelease(t.view); t.view = nullptr; }
+        if (t.texture) { wgpuTextureRelease(t.texture); t.texture = nullptr; }
+        t.generation = 0;
+        materialGroups_.clear();   // any cached bind group may reference it
+        freeTextures_.push_back(handle.index - 1);
+    }
 
     RenderStats getRenderStats() const override { return stats_; }
 
@@ -1228,9 +1321,23 @@ public:
         qd.data.emissionRough[3] = material.roughness;
         qd.data.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
         qd.data.surfaceFlags[1] = material.flags;
-        qd.data.surfaceFlags[2] = 0;
+        qd.data.surfaceFlags[2] = mapBits(material);
         qd.data.surfaceFlags[3] = 0;
+        qd.mat = matKeyOf(material);
         draws_.push_back(qd);
+    }
+
+    // The five map handles as a cache key (0 = none).
+    static MaterialKey matKeyOf(const RenderMaterial& m) {
+        return {m.albedoMap.index, m.normalMap.index, m.metallicRoughnessMap.index,
+                m.emissiveMap.index, m.aoMap.index};
+    }
+    // Which maps are present (bit0 albedo, 1 normal, 2 MR, 3 emissive, 4 AO), so
+    // the shader multiplies by a sampled map only when there is one.
+    static uint32_t mapBits(const RenderMaterial& m) {
+        return (m.albedoMap.index ? 1u : 0u) | (m.normalMap.index ? 2u : 0u)
+             | (m.metallicRoughnessMap.index ? 4u : 0u) | (m.emissiveMap.index ? 8u : 0u)
+             | (m.aoMap.index ? 16u : 0u);
     }
 
     // Fill a GpuDraw's material fields (model unused for instanced draws).
@@ -1245,7 +1352,7 @@ public:
         d.emissionRough[3] = material.roughness;
         d.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
         d.surfaceFlags[1] = material.flags;
-        d.surfaceFlags[2] = 0;
+        d.surfaceFlags[2] = mapBits(material);
         d.surfaceFlags[3] = 0;
     }
 
@@ -1260,6 +1367,7 @@ public:
         g.instanceOffset = static_cast<uint32_t>(instanceStaging_.size() / 16);
         g.instanceCount = static_cast<uint32_t>(transforms.size());
         fillMaterial(g.data, material);
+        g.mat = matKeyOf(material);
         instanceStaging_.resize(instanceStaging_.size() + transforms.size() * 16);
         float* dst = instanceStaging_.data() + g.instanceOffset * 16;
         for (const Mat4& t : transforms) { packMat4(t, dst); dst += 16; }
@@ -1464,6 +1572,7 @@ public:
             const GpuMesh& m = meshes_[draws_[i].mesh];
             uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
             wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+            wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(draws_[i].mat), 0, nullptr);
             wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
             wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
                                                 0, WGPU_WHOLE_SIZE);
@@ -1481,6 +1590,7 @@ public:
                 const GpuMesh& m = meshes_[g.mesh];
                 uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
                 wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+                wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(g.mat), 0, nullptr);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 1, instanceBuf_,
                                                      static_cast<uint64_t>(g.instanceOffset) * 64, WGPU_WHOLE_SIZE);
@@ -1611,12 +1721,14 @@ private:
     struct QueuedDraw {
         uint32_t mesh;
         GpuDraw data;
+        MaterialKey mat;
     };
     struct InstancedGroup {
         uint32_t mesh;
         GpuDraw data;             // shared material (model unused)
         uint32_t instanceOffset;  // first instance in instanceBuf_
         uint32_t instanceCount;
+        MaterialKey mat;
     };
 
     // ---- async device acquisition callbacks --------------------------------
@@ -1651,6 +1763,32 @@ private:
         WGPUBuffer buf = wgpuDeviceCreateBuffer(device_, &desc);
         if (data && size > 0) wgpuQueueWriteBuffer(queue_, buf, 0, data, size);
         return buf;
+    }
+
+    // Create a sampled 2D texture and upload one mip level of RGBA8 data.
+    WGPUTexture createTexture2D(int w, int h, WGPUTextureFormat fmt,
+                                const void* data, size_t bytesPerRow) {
+        WGPUTextureDescriptor td = {};
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+        td.dimension = WGPUTextureDimension_2D;
+        td.size = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+        td.format = fmt;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        WGPUTexture tex = wgpuDeviceCreateTexture(device_, &td);
+        if (data) {
+            WGPUTexelCopyTextureInfo dst = {};
+            dst.texture = tex;
+            dst.mipLevel = 0;
+            dst.aspect = WGPUTextureAspect_All;
+            WGPUTexelCopyBufferLayout layout = {};
+            layout.offset = 0;
+            layout.bytesPerRow = static_cast<uint32_t>(bytesPerRow);
+            layout.rowsPerImage = static_cast<uint32_t>(h);
+            WGPUExtent3D ext = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+            wgpuQueueWriteTexture(queue_, &dst, data, bytesPerRow * h, &layout, &ext);
+        }
+        return tex;
     }
 
     void freeMesh(GpuMesh& m) {
@@ -1819,9 +1957,25 @@ private:
         sviblDesc.entries = &sviEntry;
         shadowVsLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &sviblDesc);
 
-        WGPUBindGroupLayout mainGroups[2] = {bindLayout_, shadowSampleLayout_};
+        // Group 2 (main + instanced pass): material maps + a sampler.
+        WGPUBindGroupLayoutEntry matEntries[6] = {};
+        for (int i = 0; i < 5; ++i) {
+            matEntries[i].binding = static_cast<uint32_t>(i);
+            matEntries[i].visibility = WGPUShaderStage_Fragment;
+            matEntries[i].texture.sampleType = WGPUTextureSampleType_Float;
+            matEntries[i].texture.viewDimension = WGPUTextureViewDimension_2D;
+        }
+        matEntries[5].binding = 5;
+        matEntries[5].visibility = WGPUShaderStage_Fragment;
+        matEntries[5].sampler.type = WGPUSamplerBindingType_Filtering;
+        WGPUBindGroupLayoutDescriptor matblDesc = {};
+        matblDesc.entryCount = 6;
+        matblDesc.entries = matEntries;
+        materialLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &matblDesc);
+
+        WGPUBindGroupLayout mainGroups[3] = {bindLayout_, shadowSampleLayout_, materialLayout_};
         WGPUPipelineLayoutDescriptor plDesc = {};
-        plDesc.bindGroupLayoutCount = 2;
+        plDesc.bindGroupLayoutCount = 3;
         plDesc.bindGroupLayouts = mainGroups;
         WGPUPipelineLayout pipelineLayout = wgpuDeviceCreatePipelineLayout(device_, &plDesc);
 
@@ -1931,9 +2085,9 @@ private:
         iLayout.attributes = iattrs;
         WGPUVertexBufferLayout instMainBufs[2] = {vbLayout, iLayout};
 
-        WGPUBindGroupLayout mainGroups2[2] = {bindLayout_, shadowSampleLayout_};
+        WGPUBindGroupLayout mainGroups2[3] = {bindLayout_, shadowSampleLayout_, materialLayout_};
         WGPUPipelineLayoutDescriptor iplDesc = {};
-        iplDesc.bindGroupLayoutCount = 2;
+        iplDesc.bindGroupLayoutCount = 3;
         iplDesc.bindGroupLayouts = mainGroups2;
         WGPUPipelineLayout iPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &iplDesc);
         WGPURenderPipelineDescriptor idesc = desc;   // reuse fragment/depth/primitive
@@ -2272,6 +2426,49 @@ private:
         shadowIdxGroup_ = wgpuDeviceCreateBindGroup(device_, &sigDesc);
     }
 
+    void createMaterialDefaults() {
+        WGPUSamplerDescriptor sd = {};
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+        sd.addressModeU = WGPUAddressMode_Repeat;   // textures tile
+        sd.addressModeV = WGPUAddressMode_Repeat;
+        sd.addressModeW = WGPUAddressMode_Repeat;
+        sd.maxAnisotropy = 1;
+        materialSampler_ = wgpuDeviceCreateSampler(device_, &sd);
+
+        const uint8_t white[4] = {255, 255, 255, 255};
+        whiteTex_ = createTexture2D(1, 1, WGPUTextureFormat_RGBA8Unorm, white, 4);
+        whiteView_ = wgpuTextureCreateView(whiteTex_, nullptr);
+        const uint8_t flat[4] = {128, 128, 255, 255};   // tangent-space (0,0,1)
+        flatNormalTex_ = createTexture2D(1, 1, WGPUTextureFormat_RGBA8Unorm, flat, 4);
+        flatNormalView_ = wgpuTextureCreateView(flatNormalTex_, nullptr);
+    }
+
+    WGPUTextureView texViewOr(uint32_t index, WGPUTextureView def) {
+        if (index == 0 || index > textures_.size()) return def;
+        WGPUTextureView v = textures_[index - 1].view;
+        return v ? v : def;
+    }
+
+    // Get-or-build the group-2 bind group for a material's map set (cached).
+    WGPUBindGroup materialGroupFor(const MaterialKey& k) {
+        auto it = materialGroups_.find(k);
+        if (it != materialGroups_.end()) return it->second;
+        WGPUBindGroupEntry e[6] = {};
+        e[0].binding = 0; e[0].textureView = texViewOr(k.albedo, whiteView_);
+        e[1].binding = 1; e[1].textureView = texViewOr(k.normal, flatNormalView_);
+        e[2].binding = 2; e[2].textureView = texViewOr(k.mr, whiteView_);
+        e[3].binding = 3; e[3].textureView = texViewOr(k.emissive, whiteView_);
+        e[4].binding = 4; e[4].textureView = texViewOr(k.ao, whiteView_);
+        e[5].binding = 5; e[5].sampler = materialSampler_;
+        WGPUBindGroupDescriptor d = {};
+        d.layout = materialLayout_; d.entryCount = 6; d.entries = e;
+        WGPUBindGroup g = wgpuDeviceCreateBindGroup(device_, &d);
+        materialGroups_.emplace(k, g);
+        return g;
+    }
+
     void createUniformResources() {
         WGPUBufferDescriptor gDesc = {};
         gDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
@@ -2480,6 +2677,16 @@ private:
     std::vector<uint32_t> freeSlots_;
     uint32_t generationCounter_ = 0;
     uint32_t textureCounter_ = 0;
+
+    // Material textures (group 2): a slab of GpuTextures + a bind-group cache
+    // keyed by the 5-map set, plus 1x1 defaults for missing maps.
+    std::vector<GpuTexture> textures_;
+    std::vector<uint32_t> freeTextures_;
+    std::unordered_map<MaterialKey, WGPUBindGroup, MaterialKeyHash> materialGroups_;
+    WGPUBindGroupLayout materialLayout_ = nullptr;
+    WGPUSampler materialSampler_ = nullptr;
+    WGPUTexture whiteTex_ = nullptr;      WGPUTextureView whiteView_ = nullptr;
+    WGPUTexture flatNormalTex_ = nullptr; WGPUTextureView flatNormalView_ = nullptr;
 
     std::vector<QueuedDraw> draws_;
     bool frameDiagLogged_ = false;
