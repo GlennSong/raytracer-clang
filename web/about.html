@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!--
+  About page for the scene gallery. Explains what the engine is and how the
+  WebGPU/WASM build fits together. Self-contained: no external scripts or fonts
+  (the inline SVG diagram keeps it dependency-free).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About — Raytracer Engine</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    a { color: #8ec5ff; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h2 { font-size: 19px; margin: 34px 0 10px; color: #bcd; }
+    .lede { color: #9fb4c9; font-size: 15px; margin: 0; }
+    .nav { margin-bottom: 8px; font-size: 14px; }
+    p, li { color: #c6d4e2; font-size: 15px; }
+    code { background: #131c27; border: 1px solid #22303f; border-radius: 5px;
+      padding: 1px 5px; font: 13px ui-monospace, monospace; color: #b9e0ff; }
+    .diagram { margin: 20px 0 8px; background: #0a0e14; border: 1px solid #1f2a37;
+      border-radius: 12px; padding: 12px; overflow-x: auto; }
+    .cap { color: #7f93a8; font-size: 13px; margin: 0 0 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 14px; }
+    .grid .b { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px; padding: 13px 15px; }
+    .grid .b h3 { margin: 0 0 6px; font-size: 15px; color: #cfe4ff; }
+    .grid .b p { margin: 0; font-size: 13.5px; color: #93a6ba; }
+    footer { margin-top: 40px; color: #64768a; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="index.html">← all scenes</a></div>
+    <h1>Raytracer / Realtime Engine</h1>
+    <p class="lede">A from-scratch C++17 renderer and game engine — running here
+      live in your browser via WebGPU and WebAssembly.</p>
+
+    <h2>What you're looking at</h2>
+    <p>Everything in the gallery is a procedurally generated scene rendered in
+      real time by a custom engine written from scratch in C++ (standard library
+      only, no game-engine framework). The <em>same</em> engine also runs natively
+      on desktop and as an offline path tracer — the thumbnails on the gallery
+      were path-traced by that offline renderer. In the browser it's compiled to
+      WebAssembly and draws through WebGPU, the modern low-level GPU API.</p>
+
+    <h2>How it's organized</h2>
+    <p class="cap">The engine talks to one abstract renderer interface; each
+      platform plugs in behind it.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 780 430" width="100%" role="img" aria-label="Engine architecture diagram" font-family="system-ui, sans-serif">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#3b6ea5"/>
+          </marker>
+          <style>
+            .box{rx:9;stroke-width:1.5}
+            .lbl{fill:#dfe9f3;font-size:13px;font-weight:600;text-anchor:middle}
+            .sub{fill:#8fa6bd;font-size:11px;text-anchor:middle}
+            .edge{stroke:#3b6ea5;stroke-width:1.6;fill:none;marker-end:url(#ar)}
+          </style>
+        </defs>
+
+        <!-- entry points -->
+        <rect class="box" x="40"  y="20" width="200" height="46" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="140" y="40">raytracer</text><text class="sub" x="140" y="56">offline path tracer</text>
+        <rect class="box" x="290" y="20" width="200" height="46" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="390" y="40">viewer</text><text class="sub" x="390" y="56">native desktop</text>
+        <rect class="box" x="540" y="20" width="200" height="46" fill="#153042" stroke="#2f6a86"/>
+        <text class="lbl" x="640" y="40">viewer_web</text><text class="sub" x="640" y="56">browser · WASM ← you are here</text>
+
+        <!-- engine core -->
+        <rect class="box" x="150" y="120" width="480" height="56" fill="#141c26" stroke="#26384a"/>
+        <text class="lbl" x="390" y="143">Engine core</text>
+        <text class="sub" x="390" y="161">ECS · systems · physics (Jolt) · procgen · Lua scripting</text>
+
+        <!-- shared core -->
+        <rect class="box" x="40" y="120" width="90" height="56" fill="#141c26" stroke="#26384a"/>
+        <text class="sub" x="85" y="144">shared</text><text class="sub" x="85" y="159">math/util</text>
+
+        <!-- renderer seam -->
+        <rect class="box" x="230" y="230" width="320" height="46" fill="#1a2a1f" stroke="#356b45"/>
+        <text class="lbl" x="390" y="250">Renderer seam</text><text class="sub" x="390" y="266">renderer.h — one abstract interface</text>
+
+        <!-- backends -->
+        <rect class="box" x="70"  y="340" width="180" height="56" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="160" y="363">Metal</text><text class="sub" x="160" y="381">macOS · MSL shaders</text>
+        <rect class="box" x="300" y="340" width="180" height="56" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="390" y="363">Vulkan</text><text class="sub" x="390" y="381">Linux/Win · GLSL→SPIR-V</text>
+        <rect class="box" x="530" y="340" width="180" height="56" fill="#153042" stroke="#2f6a86"/>
+        <text class="lbl" x="620" y="363">WebGPU</text><text class="sub" x="620" y="381">browser · WGSL shaders</text>
+
+        <!-- edges -->
+        <path class="edge" d="M140 66 L140 118"/>
+        <path class="edge" d="M390 66 L390 118"/>
+        <path class="edge" d="M640 66 L640 118"/>
+        <path class="edge" d="M140 66 C 120 95, 100 100, 88 118"/>
+        <path class="edge" d="M390 176 L390 228"/>
+        <path class="edge" d="M360 276 C 300 305, 230 315, 175 338"/>
+        <path class="edge" d="M390 276 L390 338"/>
+        <path class="edge" d="M420 276 C 490 305, 560 315, 610 338"/>
+      </svg>
+    </div>
+    <p>The key idea: engine code never names a graphics API. It calls one
+      <code>Renderer</code> interface, and each platform supplies one
+      implementation, chosen when the program is built. Adding a platform means
+      writing a new implementation — not editing the engine. That's why the exact
+      same ECS, physics, procedural generation, and gameplay run unchanged whether
+      the pixels come from Metal, Vulkan, or WebGPU.</p>
+
+    <h2>The three renderers</h2>
+    <div class="grid">
+      <div class="b"><h3>Metal</h3><p>The macOS/iOS backend and the feature
+        reference the others are matched against.</p></div>
+      <div class="b"><h3>Vulkan</h3><p>The Linux/Windows backend. Shaders are GLSL
+        compiled to SPIR-V bytecode.</p></div>
+      <div class="b"><h3>WebGPU</h3><p>The browser backend running this page —
+        compiled to WebAssembly, shaders written in WGSL.</p></div>
+    </div>
+    <p style="margin-top:14px">Each GPU API speaks a different shading language, so
+      the shaders are three hand-written trees kept behaviorally identical. Every
+      frame runs the same pipeline: shadow maps → lit scene into a high-dynamic-range
+      buffer → screen-space ambient occlusion, reflections, and bloom → a final
+      tone-mapping pass to the screen.</p>
+
+    <h2>Running in the browser</h2>
+    <p>The C++ is compiled to WebAssembly with Emscripten; WebGPU (<code>navigator.gpu</code>)
+      is the GPU API. A single-threaded design keeps it simple — no special
+      server headers needed. The whole thing is a static site: no backend, no
+      accounts, nothing stored. Use the <b>Quality</b> preset in the viewer's
+      panel (⚙) to trade fidelity for frame rate — it auto-picks a lighter tier on
+      phones.</p>
+
+    <footer>
+      Source and full docs:
+      <a href="https://github.com/glennsong/raytracer-clang">glennsong/raytracer-clang</a>
+      — see <code>docs/rendering.md</code> and <code>docs/web-build.md</code>.
+    </footer>
+  </div>
+</body>
+</html>

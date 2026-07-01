@@ -689,6 +689,9 @@ if(EMSCRIPTEN)
                 ${CMAKE_SOURCE_DIR}/web/viewer.html
                 $<TARGET_FILE_DIR:viewer_web>/viewer.html
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/about.html
+                $<TARGET_FILE_DIR:viewer_web>/about.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/scenes.json
                 $<TARGET_FILE_DIR:viewer_web>/scenes.json
         COMMAND ${CMAKE_COMMAND} -E copy_directory
