@@ -130,6 +130,15 @@ struct GpuSsao {
     float texel[4];           // xy = 1/resolution
 };
 
+// SSR pass uniform (matches the WGSL `SsrU`).
+struct GpuSsr {
+    float invViewProjection[16];
+    float viewProjection[16];
+    float cameraPosition[4];
+    float params[4];          // x maxDist, y thickness, z steps, w maxRoughness
+    float texel[4];           // xy = 1/resolution
+};
+
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
 struct GpuDraw {
     float    model[16];          // column-major
@@ -660,8 +669,14 @@ fn tonemapAgX(val0 : vec3<f32>) -> vec3<f32> {
   return clamp(val, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// Main pass writes two targets: linear HDR color + a material G-buffer
+// (world normal in xyz, roughness in w) that SSAO and SSR read.
+struct FsOut {
+  @location(0) color : vec4<f32>,
+  @location(1) gbuf  : vec4<f32>,
+};
 @fragment
-fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in : VSOut) -> FsOut {
   // Sample every material map up front (uniform control flow for textureSample);
   // missing maps read a neutral 1x1 default. d.surfaceFlags.z = which are real.
   let albedoSample = textureSample(albedoTex, matSamp, in.uv);
@@ -688,6 +703,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     N = normalize(T * nmap.x + B * nmap.y + N * nmap.z);
   }
   let V = normalize(g.cameraPosition.xyz - in.worldPos);
+  let gbufOut = vec4<f32>(N, roughness);   // material G-buffer (SSAO / SSR)
 
   if ((rawFlags & 1u) != 0u) { albedo = applyCheckerboard(albedo, in.worldPos); }
   let surfaceId = d.surfaceFlags.x;
@@ -711,27 +727,27 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
 
   // Debug views (Renderer::debugView via counts.y) write display-ready values.
   let dbg = g.counts.y;
-  if (dbg == 5) { return vec4<f32>(vec3<f32>(sunShadow), 1.0); }   // white=lit, black=shadowed
-  if (dbg == 4) { return vec4<f32>(N * 0.5 + 0.5, 1.0); }
-  if (dbg == 6) { return vec4<f32>(pow(albedo, vec3<f32>(1.0 / 2.2)), 1.0); }
+  if (dbg == 5) { return FsOut(vec4<f32>(vec3<f32>(sunShadow), 1.0), gbufOut); }
+  if (dbg == 4) { return FsOut(vec4<f32>(N * 0.5 + 0.5, 1.0), gbufOut); }
+  if (dbg == 6) { return FsOut(vec4<f32>(pow(albedo, vec3<f32>(1.0 / 2.2)), 1.0), gbufOut); }
   if (dbg == 7) {
     let ndv = dot(N, V);
-    if (ndv >= 0.0) { return vec4<f32>(0.0, ndv, 0.0, 1.0); }
-    return vec4<f32>(-ndv, 0.0, 0.0, 1.0);
+    if (ndv >= 0.0) { return FsOut(vec4<f32>(0.0, ndv, 0.0, 1.0), gbufOut); }
+    return FsOut(vec4<f32>(-ndv, 0.0, 0.0, 1.0), gbufOut);
   }
   if (dbg == 3) {
     let vd = -(g.view * vec4<f32>(in.worldPos, 1.0)).z;
     let lin = clamp(1.0 - vd / 200.0, 0.0, 1.0);
-    return vec4<f32>(vec3<f32>(lin), 1.0);
+    return FsOut(vec4<f32>(vec3<f32>(lin), 1.0), gbufOut);
   }
   if (dbg == 8) {                                  // shadow cascade tint
-    if (g.shadowParams.x < 0.5) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    if (g.shadowParams.x < 0.5) { return FsOut(vec4<f32>(0.0, 0.0, 0.0, 1.0), gbufOut); }
     let ci = pickCascade(in.worldPos);
     var tint = vec3<f32>(1.0, 1.0, 0.4);
     if (ci == 0) { tint = vec3<f32>(1.0, 0.4, 0.4); }
     else if (ci == 1) { tint = vec3<f32>(0.4, 1.0, 0.4); }
     else if (ci == 2) { tint = vec3<f32>(0.4, 0.4, 1.0); }
-    return vec4<f32>(tint * (direct + ambient), 1.0);
+    return FsOut(vec4<f32>(tint * (direct + ambient), 1.0), gbufOut);
   }
 
   var color = direct + ambient + emission;
@@ -743,7 +759,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   }
   // Scene-linear into the HDR target; the composite pass owns the view
   // transform (exposure/grade/tonemap) so post effects operate on linear HDR.
-  return vec4<f32>(color, 1.0);
+  return FsOut(vec4<f32>(color, 1.0), gbufOut);
 }
 
 // --- Procedural sky background -------------------------------------------
@@ -767,11 +783,12 @@ fn vs_sky(@builtin(vertex_index) vid : u32) -> SkyOut {
   return out;
 }
 @fragment
-fn fs_sky(in : SkyOut) -> @location(0) vec4<f32> {
+fn fs_sky(in : SkyOut) -> FsOut {
   let dir = normalize(in.ray);
   // Scene-linear into the HDR target; the composite pass tone-maps it with the
-  // scene, so the sky tone-matches automatically.
-  return vec4<f32>(sampleEnvironment(dir), 1.0);
+  // scene, so the sky tone-matches automatically. The sky writes a sentinel
+  // G-buffer (SSAO/SSR skip it anyway — its depth is the far plane).
+  return FsOut(vec4<f32>(sampleEnvironment(dir), 1.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
 }
 )WGSL";
 
@@ -785,13 +802,14 @@ const char* kCompositeWgsl = R"WGSL(
 struct Post {
   postParams : vec4<f32>,   // x exposure, y tonemapOp, z contrast, w saturation
   debugView  : vec4<i32>,   // x = debug view (0 = normal)
-  effects    : vec4<f32>,   // x bloom intensity (0 = off), y ssao strength (0 = off)
+  effects    : vec4<f32>,   // x bloom, y ssao, z ssr (0 = off)
 };
 @group(0) @binding(0) var hdrTex : texture_2d<f32>;
 @group(0) @binding(1) var<uniform> p : Post;
 @group(0) @binding(2) var bloomTex : texture_2d<f32>;
 @group(0) @binding(3) var bloomSamp : sampler;
 @group(0) @binding(4) var ssaoTex : texture_2d<f32>;
+@group(0) @binding(5) var ssrTex : texture_2d<f32>;
 
 fn applyGrade(x0 : vec3<f32>, contrast : f32, saturation : f32) -> vec3<f32> {
   var x = x0;
@@ -856,6 +874,10 @@ fn fs_composite(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f
   if (p.effects.y > 0.0) {                                     // SSAO (darkens crevices)
     let ao = textureLoad(ssaoTex, px, 0).r;
     color = color * mix(1.0, ao, p.effects.y);
+  }
+  if (p.effects.z > 0.0) {                                     // SSR (add reflection)
+    let ssr = textureLoad(ssrTex, px, 0);
+    color += ssr.rgb * p.effects.z;                           // rgb premultiplied by confidence
   }
   if (p.effects.x > 0.0) {                                     // additive bloom
     let dim = vec2<f32>(textureDimensions(hdrTex));
@@ -934,6 +956,7 @@ struct SsaoU {
 };
 @group(0) @binding(0) var depthTex : texture_depth_2d;
 @group(0) @binding(1) var<uniform> s : SsaoU;
+@group(0) @binding(2) var gbufTex : texture_2d<f32>;   // world normal (xyz), roughness (w)
 
 @vertex
 fn vs_ssao(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
@@ -964,13 +987,10 @@ fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
   let uv = fc.xy * s.texel.xy;
   let ipx = vec2<i32>(fc.xy);
   let depth = textureLoad(depthTex, ipx, 0);
-  // Reconstruct position + geometric normal unconditionally (derivatives must be
-  // in uniform control flow — so before any depth-based early-out).
-  let P = reconWorld(uv, depth);
-  var N = normalize(cross(dpdx(P), dpdy(P)));
-  let toCam = normalize(s.camPos.xyz - P);
-  if (dot(N, toCam) < 0.0) { N = -N; }
   if (depth >= 1.0) { return 1.0; }          // sky: no occlusion
+  let P = reconWorld(uv, depth);
+  // Shading normal straight from the G-buffer (cleaner than depth derivatives).
+  let N = normalize(textureLoad(gbufTex, ipx, 0).xyz);
   // Random tangent basis (per-pixel rotation breaks up banding).
   let rnd = hash12(fc.xy) * 6.2831853;
   let randVec = normalize(vec3<f32>(cos(rnd), sin(rnd), 0.0));
@@ -999,6 +1019,74 @@ fn fs_ssao(@builtin(position) fc : vec4<f32>) -> @location(0) f32 {
   }
   let ao = 1.0 - (occ / 12.0) * s.params.z;
   return clamp(ao, s.params.w, 1.0);
+}
+)WGSL";
+
+// SSR: screen-space reflections. Reconstruct position/normal/roughness from
+// depth + G-buffer, march the reflection ray, and on a depth hit sample the HDR
+// color. Confidence folds in fresnel, roughness, and a screen-edge fade. The
+// composite adds it. All textureLoad (no uniform-control-flow constraint).
+const char* kSsrWgsl = R"WGSL(
+struct SsrU {
+  invVP : mat4x4<f32>,
+  viewProj : mat4x4<f32>,
+  camPos : vec4<f32>,
+  params : vec4<f32>,   // x maxDist, y thickness, z steps, w maxRoughness
+  texel  : vec4<f32>,
+};
+@group(0) @binding(0) var hdrTex   : texture_2d<f32>;
+@group(0) @binding(1) var depthTex : texture_depth_2d;
+@group(0) @binding(2) var gbufTex  : texture_2d<f32>;
+@group(0) @binding(3) var<uniform> s : SsrU;
+
+fn reconW(uv : vec2<f32>, depth : f32) -> vec3<f32> {
+  let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
+  let w = s.invVP * vec4<f32>(ndc, 1.0);
+  return w.xyz / w.w;
+}
+@vertex
+fn vs_ssr(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(p[vid], 0.0, 1.0);
+}
+@fragment
+fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
+  let ipx = vec2<i32>(fc.xy);
+  let uv = fc.xy * s.texel.xy;
+  let depth = textureLoad(depthTex, ipx, 0);
+  if (depth >= 1.0) { return vec4<f32>(0.0); }
+  let gb = textureLoad(gbufTex, ipx, 0);
+  let roughness = gb.w;
+  if (roughness > s.params.w) { return vec4<f32>(0.0); }   // too rough to reflect
+  let N = normalize(gb.xyz);
+  let P = reconW(uv, depth);
+  let V = normalize(s.camPos.xyz - P);
+  let R = reflect(-V, N);
+  let steps = i32(s.params.z);
+  let stepLen = s.params.x / max(f32(steps), 1.0);
+  var pos = P + N * 0.05;
+  var hitUV = vec2<f32>(0.0);
+  var hit = false;
+  for (var i = 0; i < steps; i = i + 1) {
+    pos = pos + R * stepLen;
+    let clip = s.viewProj * vec4<f32>(pos, 1.0);
+    if (clip.w <= 0.0) { break; }
+    let ndc = clip.xyz / clip.w;
+    let suv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) { break; }
+    let sd = textureLoad(depthTex, vec2<i32>(suv / s.texel.xy), 0);
+    if (sd >= 1.0) { continue; }
+    let sP = reconW(suv, sd);
+    let rayDist = length(s.camPos.xyz - pos);
+    let sceneDist = length(s.camPos.xyz - sP);
+    if (rayDist > sceneDist && (rayDist - sceneDist) < s.params.y) { hit = true; hitUV = suv; break; }
+  }
+  if (!hit) { return vec4<f32>(0.0); }
+  let refl = textureLoad(hdrTex, vec2<i32>(hitUV / s.texel.xy), 0).rgb;
+  let fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
+  let edge = smoothstep(0.0, 0.15, min(min(hitUV.x, 1.0 - hitUV.x), min(hitUV.y, 1.0 - hitUV.y)));
+  let conf = (1.0 - roughness / max(s.params.w, 1e-3)) * (0.2 + 0.8 * fres) * edge;
+  return vec4<f32>(refl * conf, conf);
 }
 )WGSL";
 
@@ -1110,6 +1198,10 @@ public:
         if (ssaoUbo_) { wgpuBufferRelease(ssaoUbo_); ssaoUbo_ = nullptr; }
         if (ssaoPipeline_) { wgpuRenderPipelineRelease(ssaoPipeline_); ssaoPipeline_ = nullptr; }
         if (ssaoLayout_) { wgpuBindGroupLayoutRelease(ssaoLayout_); ssaoLayout_ = nullptr; }
+        if (ssrGroup_) { wgpuBindGroupRelease(ssrGroup_); ssrGroup_ = nullptr; }
+        if (ssrUbo_) { wgpuBufferRelease(ssrUbo_); ssrUbo_ = nullptr; }
+        if (ssrPipeline_) { wgpuRenderPipelineRelease(ssrPipeline_); ssrPipeline_ = nullptr; }
+        if (ssrLayout_) { wgpuBindGroupLayoutRelease(ssrLayout_); ssrLayout_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
@@ -1151,7 +1243,10 @@ public:
         configureSurface();
         releaseDepthTarget();
         createDepthTarget();
-        if (postBuf_) { rebuildCompositeBindGroup(); rebuildBloomGroups(); rebuildSsaoGroup(); }
+        if (postBuf_) {
+            rebuildCompositeBindGroup(); rebuildBloomGroups();
+            rebuildSsaoGroup(); rebuildSsrGroup();
+        }
     }
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override {
@@ -1634,12 +1729,17 @@ public:
             }
         }
 
-        WGPURenderPassColorAttachment color = {};
-        color.view = hdrView_;        // scene -> HDR target; composite -> swapchain
-        color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-        color.loadOp = WGPULoadOp_Clear;
-        color.storeOp = WGPUStoreOp_Store;
-        color.clearValue = clearColor_;
+        WGPURenderPassColorAttachment colorAtt[2] = {};
+        colorAtt[0].view = hdrView_;   // scene -> HDR target; composite -> swapchain
+        colorAtt[0].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        colorAtt[0].loadOp = WGPULoadOp_Clear;
+        colorAtt[0].storeOp = WGPUStoreOp_Store;
+        colorAtt[0].clearValue = clearColor_;
+        colorAtt[1].view = gbufView_;  // material G-buffer (normal, roughness)
+        colorAtt[1].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        colorAtt[1].loadOp = WGPULoadOp_Clear;
+        colorAtt[1].storeOp = WGPUStoreOp_Store;
+        colorAtt[1].clearValue = {0.0, 0.0, 0.0, 1.0};
 
         WGPURenderPassDepthStencilAttachment depth = {};
         depth.view = depthView_;
@@ -1648,8 +1748,8 @@ public:
         depth.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor passDesc = {};
-        passDesc.colorAttachmentCount = 1;
-        passDesc.colorAttachments = &color;
+        passDesc.colorAttachmentCount = 2;
+        passDesc.colorAttachments = colorAtt;
         passDesc.depthStencilAttachment = &depth;
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
@@ -1749,6 +1849,35 @@ public:
             wgpuRenderPassEncoderRelease(e);
         }
 
+        // SSR: reflect the HDR color off the G-buffer into the SSR target.
+        bool ssrOn = ssrEnabled && globals_.counts[1] == 0;
+        if (ssrOn) {
+            GpuSsr ur = {};
+            std::memcpy(ur.invViewProjection, globals_.invViewProjection, sizeof(ur.invViewProjection));
+            std::memcpy(ur.viewProjection, globals_.viewProjection, sizeof(ur.viewProjection));
+            std::memcpy(ur.cameraPosition, globals_.cameraPosition, sizeof(ur.cameraPosition));
+            ur.params[0] = ssrParams.maxRayDist;
+            ur.params[1] = ssrParams.thickness;
+            ur.params[2] = 32.0f;                    // march steps
+            ur.params[3] = ssrParams.maxRoughness;
+            ur.texel[0] = 1.0f / static_cast<float>(width_);
+            ur.texel[1] = 1.0f / static_cast<float>(height_);
+            wgpuQueueWriteBuffer(queue_, ssrUbo_, 0, &ur, sizeof(ur));
+
+            WGPURenderPassColorAttachment a = {};
+            a.view = ssrView_; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            a.loadOp = WGPULoadOp_Clear; a.storeOp = WGPUStoreOp_Store;
+            a.clearValue = {0.0, 0.0, 0.0, 0.0};
+            WGPURenderPassDescriptor pd = {};
+            pd.colorAttachmentCount = 1; pd.colorAttachments = &a;
+            WGPURenderPassEncoder e = wgpuCommandEncoderBeginRenderPass(encoder, &pd);
+            wgpuRenderPassEncoderSetPipeline(e, ssrPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(e, 0, ssrGroup_, 0, nullptr);
+            wgpuRenderPassEncoderDraw(e, 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(e);
+            wgpuRenderPassEncoderRelease(e);
+        }
+
         // Bloom: bright-pass (HDR -> bloomA) then a separable blur (A->B->A).
         // Only when enabled and not in a debug view (debug bypasses post).
         bool bloomOn = bloomEnabled && globals_.counts[1] == 0;
@@ -1794,6 +1923,7 @@ public:
         post.debugView[0] = globals_.counts[1];
         post.effects[0] = bloomOn ? bloomParams.intensity : 0.0f;
         post.effects[1] = ssaoOn ? 1.0f : 0.0f;   // SSAO strength (0..1)
+        post.effects[2] = ssrOn ? ssrParams.blendStrength : 0.0f;
         wgpuQueueWriteBuffer(queue_, postBuf_, 0, &post, sizeof(post));
 
         WGPURenderPassColorAttachment ccolor = {};
@@ -1973,6 +2103,10 @@ private:
         hdrTexture_ = wgpuDeviceCreateTexture(device_, &hd);
         hdrView_ = wgpuTextureCreateView(hdrTexture_, nullptr);
 
+        // Material G-buffer (world normal in xyz, roughness in w) for SSAO + SSR.
+        gbufTexture_ = wgpuDeviceCreateTexture(device_, &hd);   // same descriptor (RGBA16F)
+        gbufView_ = wgpuTextureCreateView(gbufTexture_, nullptr);
+
         // Half-res bloom ping-pong targets (sampled, render-to).
         bloomW_ = std::max(1, width_ / 2);
         bloomH_ = std::max(1, height_ / 2);
@@ -1998,6 +2132,10 @@ private:
         ad.sampleCount = 1;
         ssaoTex_ = wgpuDeviceCreateTexture(device_, &ad);
         ssaoView_ = wgpuTextureCreateView(ssaoTex_, nullptr);
+
+        // SSR target (RGBA16F: reflected color premultiplied by confidence, in a).
+        ssrTexture_ = wgpuDeviceCreateTexture(device_, &hd);   // same RGBA16F descriptor
+        ssrView_ = wgpuTextureCreateView(ssrTexture_, nullptr);
     }
 
     void releaseDepthTarget() {
@@ -2005,12 +2143,16 @@ private:
         if (depthTexture_) { wgpuTextureRelease(depthTexture_); depthTexture_ = nullptr; }
         if (hdrView_) { wgpuTextureViewRelease(hdrView_); hdrView_ = nullptr; }
         if (hdrTexture_) { wgpuTextureRelease(hdrTexture_); hdrTexture_ = nullptr; }
+        if (gbufView_) { wgpuTextureViewRelease(gbufView_); gbufView_ = nullptr; }
+        if (gbufTexture_) { wgpuTextureRelease(gbufTexture_); gbufTexture_ = nullptr; }
         if (bloomViewA_) { wgpuTextureViewRelease(bloomViewA_); bloomViewA_ = nullptr; }
         if (bloomTexA_) { wgpuTextureRelease(bloomTexA_); bloomTexA_ = nullptr; }
         if (bloomViewB_) { wgpuTextureViewRelease(bloomViewB_); bloomViewB_ = nullptr; }
         if (bloomTexB_) { wgpuTextureRelease(bloomTexB_); bloomTexB_ = nullptr; }
         if (ssaoView_) { wgpuTextureViewRelease(ssaoView_); ssaoView_ = nullptr; }
         if (ssaoTex_) { wgpuTextureRelease(ssaoTex_); ssaoTex_ = nullptr; }
+        if (ssrView_) { wgpuTextureViewRelease(ssrView_); ssrView_ = nullptr; }
+        if (ssrTexture_) { wgpuTextureRelease(ssrTexture_); ssrTexture_ = nullptr; }
     }
 
     bool createPipeline() {
@@ -2106,15 +2248,18 @@ private:
         vbLayout.attributeCount = 5;
         vbLayout.attributes = attrs;
 
-        WGPUColorTargetState colorTarget = {};
-        colorTarget.format = kHdrFormat;   // scene renders into the HDR target
-        colorTarget.writeMask = WGPUColorWriteMask_All;
+        // Two targets: HDR color + the material G-buffer (both RGBA16F).
+        WGPUColorTargetState colorTargets[2] = {};
+        colorTargets[0].format = kHdrFormat;
+        colorTargets[0].writeMask = WGPUColorWriteMask_All;
+        colorTargets[1].format = kHdrFormat;
+        colorTargets[1].writeMask = WGPUColorWriteMask_All;
 
         WGPUFragmentState fragment = {};
         fragment.module = module;
         fragment.entryPoint = sv("fs_main");
-        fragment.targetCount = 1;
-        fragment.targets = &colorTarget;
+        fragment.targetCount = 2;
+        fragment.targets = colorTargets;
 
         WGPUDepthStencilState depthState = {};
         depthState.format = kDepthFormat;
@@ -2280,14 +2425,16 @@ private:
         skyDepth.stencilFront.passOp = WGPUStencilOperation_Keep;
         skyDepth.stencilBack = skyDepth.stencilFront;
 
-        WGPUColorTargetState skyColor = {};
-        skyColor.format = kHdrFormat;     // sky renders into the HDR target too
-        skyColor.writeMask = WGPUColorWriteMask_All;
+        WGPUColorTargetState skyColors[2] = {};
+        skyColors[0].format = kHdrFormat;     // sky renders into the HDR target too
+        skyColors[0].writeMask = WGPUColorWriteMask_All;
+        skyColors[1].format = kHdrFormat;     // + the G-buffer (sentinel)
+        skyColors[1].writeMask = WGPUColorWriteMask_All;
         WGPUFragmentState skyFrag = {};
         skyFrag.module = module;
         skyFrag.entryPoint = sv("fs_sky");
-        skyFrag.targetCount = 1;
-        skyFrag.targets = &skyColor;
+        skyFrag.targetCount = 2;
+        skyFrag.targets = skyColors;
 
         WGPURenderPipelineDescriptor skyPipeDesc = {};
         skyPipeDesc.layout = skyPipeLayout;
@@ -2315,7 +2462,7 @@ private:
         cModDesc.nextInChain = &cWgsl.chain;
         WGPUShaderModule cModule = wgpuDeviceCreateShaderModule(device_, &cModDesc);
 
-        WGPUBindGroupLayoutEntry cEntries[5] = {};
+        WGPUBindGroupLayoutEntry cEntries[6] = {};
         cEntries[0].binding = 0;
         cEntries[0].visibility = WGPUShaderStage_Fragment;
         cEntries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;  // textureLoad
@@ -2335,8 +2482,12 @@ private:
         cEntries[4].visibility = WGPUShaderStage_Fragment;
         cEntries[4].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
         cEntries[4].texture.viewDimension = WGPUTextureViewDimension_2D;
+        cEntries[5].binding = 5;                              // SSR (textureLoad)
+        cEntries[5].visibility = WGPUShaderStage_Fragment;
+        cEntries[5].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        cEntries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
         WGPUBindGroupLayoutDescriptor cblDesc = {};
-        cblDesc.entryCount = 5;
+        cblDesc.entryCount = 6;
         cblDesc.entries = cEntries;
         compositeLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &cblDesc);
 
@@ -2444,7 +2595,7 @@ private:
         aModDesc.nextInChain = &aWgsl.chain;
         WGPUShaderModule aModule = wgpuDeviceCreateShaderModule(device_, &aModDesc);
 
-        WGPUBindGroupLayoutEntry aEntries[2] = {};
+        WGPUBindGroupLayoutEntry aEntries[3] = {};
         aEntries[0].binding = 0;
         aEntries[0].visibility = WGPUShaderStage_Fragment;
         aEntries[0].texture.sampleType = WGPUTextureSampleType_Depth;
@@ -2453,8 +2604,12 @@ private:
         aEntries[1].visibility = WGPUShaderStage_Fragment;
         aEntries[1].buffer.type = WGPUBufferBindingType_Uniform;
         aEntries[1].buffer.minBindingSize = sizeof(GpuSsao);
+        aEntries[2].binding = 2;                              // G-buffer normal
+        aEntries[2].visibility = WGPUShaderStage_Fragment;
+        aEntries[2].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        aEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
         WGPUBindGroupLayoutDescriptor ablDesc = {};
-        ablDesc.entryCount = 2;
+        ablDesc.entryCount = 3;
         ablDesc.entries = aEntries;
         ssaoLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &ablDesc);
 
@@ -2483,10 +2638,64 @@ private:
         wgpuPipelineLayoutRelease(aPipeLayout);
         wgpuShaderModuleRelease(aModule);
 
+        // SSR pipeline: { hdr, depth, gbuffer, uniform } -> RGBA16F reflection.
+        WGPUShaderSourceWGSL rWgsl = {};
+        rWgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+        rWgsl.code = sv(kSsrWgsl);
+        WGPUShaderModuleDescriptor rModDesc = {};
+        rModDesc.nextInChain = &rWgsl.chain;
+        WGPUShaderModule rModule = wgpuDeviceCreateShaderModule(device_, &rModDesc);
+
+        WGPUBindGroupLayoutEntry rEntries[4] = {};
+        rEntries[0].binding = 0;
+        rEntries[0].visibility = WGPUShaderStage_Fragment;
+        rEntries[0].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        rEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        rEntries[1].binding = 1;
+        rEntries[1].visibility = WGPUShaderStage_Fragment;
+        rEntries[1].texture.sampleType = WGPUTextureSampleType_Depth;
+        rEntries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+        rEntries[2].binding = 2;
+        rEntries[2].visibility = WGPUShaderStage_Fragment;
+        rEntries[2].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        rEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
+        rEntries[3].binding = 3;
+        rEntries[3].visibility = WGPUShaderStage_Fragment;
+        rEntries[3].buffer.type = WGPUBufferBindingType_Uniform;
+        rEntries[3].buffer.minBindingSize = sizeof(GpuSsr);
+        WGPUBindGroupLayoutDescriptor rblDesc = {};
+        rblDesc.entryCount = 4;
+        rblDesc.entries = rEntries;
+        ssrLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &rblDesc);
+
+        WGPUPipelineLayoutDescriptor rplDesc = {};
+        rplDesc.bindGroupLayoutCount = 1;
+        rplDesc.bindGroupLayouts = &ssrLayout_;
+        WGPUPipelineLayout rPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &rplDesc);
+        WGPUColorTargetState rColor = {};
+        rColor.format = kHdrFormat;
+        rColor.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState rFrag = {};
+        rFrag.module = rModule; rFrag.entryPoint = sv("fs_ssr");
+        rFrag.targetCount = 1; rFrag.targets = &rColor;
+        WGPURenderPipelineDescriptor rDesc = {};
+        rDesc.layout = rPipeLayout;
+        rDesc.vertex.module = rModule; rDesc.vertex.entryPoint = sv("vs_ssr");
+        rDesc.vertex.bufferCount = 0;
+        rDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        rDesc.primitive.frontFace = WGPUFrontFace_CCW;
+        rDesc.primitive.cullMode = WGPUCullMode_None;
+        rDesc.depthStencil = nullptr;
+        rDesc.fragment = &rFrag;
+        rDesc.multisample.count = 1; rDesc.multisample.mask = 0xFFFFFFFF;
+        ssrPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rDesc);
+        wgpuPipelineLayoutRelease(rPipeLayout);
+        wgpuShaderModuleRelease(rModule);
+
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
             || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_
             || !instancedPipeline_ || !instancedShadowPipeline_
-            || !terrainPipeline_ || !terrainShadowPipeline_) {
+            || !terrainPipeline_ || !terrainShadowPipeline_ || !ssrPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -2652,19 +2861,39 @@ private:
         aDesc.size = sizeof(GpuSsao);
         ssaoUbo_ = wgpuDeviceCreateBuffer(device_, &aDesc);
 
+        WGPUBufferDescriptor rDesc = {};
+        rDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        rDesc.size = sizeof(GpuSsr);
+        ssrUbo_ = wgpuDeviceCreateBuffer(device_, &rDesc);
+
         rebuildCompositeBindGroup();
         rebuildBloomGroups();
         rebuildSsaoGroup();
+        rebuildSsrGroup();
+    }
+
+    // SSR bind group references hdr/depth/gbuffer views (recreated on resize).
+    void rebuildSsrGroup() {
+        if (ssrGroup_) { wgpuBindGroupRelease(ssrGroup_); ssrGroup_ = nullptr; }
+        WGPUBindGroupEntry e[4] = {};
+        e[0].binding = 0; e[0].textureView = hdrView_;
+        e[1].binding = 1; e[1].textureView = depthView_;
+        e[2].binding = 2; e[2].textureView = gbufView_;
+        e[3].binding = 3; e[3].buffer = ssrUbo_; e[3].offset = 0; e[3].size = sizeof(GpuSsr);
+        WGPUBindGroupDescriptor d = {};
+        d.layout = ssrLayout_; d.entryCount = 4; d.entries = e;
+        ssrGroup_ = wgpuDeviceCreateBindGroup(device_, &d);
     }
 
     // SSAO bind group references depthView_ (recreated on resize).
     void rebuildSsaoGroup() {
         if (ssaoGroup_) { wgpuBindGroupRelease(ssaoGroup_); ssaoGroup_ = nullptr; }
-        WGPUBindGroupEntry e[2] = {};
+        WGPUBindGroupEntry e[3] = {};
         e[0].binding = 0; e[0].textureView = depthView_;
         e[1].binding = 1; e[1].buffer = ssaoUbo_; e[1].offset = 0; e[1].size = sizeof(GpuSsao);
+        e[2].binding = 2; e[2].textureView = gbufView_;
         WGPUBindGroupDescriptor d = {};
-        d.layout = ssaoLayout_; d.entryCount = 2; d.entries = e;
+        d.layout = ssaoLayout_; d.entryCount = 3; d.entries = e;
         ssaoGroup_ = wgpuDeviceCreateBindGroup(device_, &d);
     }
 
@@ -2672,7 +2901,7 @@ private:
     // on resize, so it must be rebuilt whenever those targets change.
     void rebuildCompositeBindGroup() {
         if (compositeBindGroup_) { wgpuBindGroupRelease(compositeBindGroup_); compositeBindGroup_ = nullptr; }
-        WGPUBindGroupEntry ce[5] = {};
+        WGPUBindGroupEntry ce[6] = {};
         ce[0].binding = 0;
         ce[0].textureView = hdrView_;
         ce[1].binding = 1;
@@ -2685,9 +2914,11 @@ private:
         ce[3].sampler = linearSampler_;
         ce[4].binding = 4;
         ce[4].textureView = ssaoView_;
+        ce[5].binding = 5;
+        ce[5].textureView = ssrView_;
         WGPUBindGroupDescriptor cbgDesc = {};
         cbgDesc.layout = compositeLayout_;
-        cbgDesc.entryCount = 5;
+        cbgDesc.entryCount = 6;
         cbgDesc.entries = ce;
         compositeBindGroup_ = wgpuDeviceCreateBindGroup(device_, &cbgDesc);
     }
@@ -2758,6 +2989,8 @@ private:
     WGPUTextureView depthView_ = nullptr;
     WGPUTexture hdrTexture_ = nullptr;            // linear HDR scene target
     WGPUTextureView hdrView_ = nullptr;
+    WGPUTexture gbufTexture_ = nullptr;           // material G-buffer (normal, roughness)
+    WGPUTextureView gbufView_ = nullptr;
     WGPUTexture bloomTexA_ = nullptr, bloomTexB_ = nullptr;     // half-res ping-pong
     WGPUTextureView bloomViewA_ = nullptr, bloomViewB_ = nullptr;
     int bloomW_ = 1, bloomH_ = 1;
@@ -2772,6 +3005,12 @@ private:
     WGPURenderPipeline ssaoPipeline_ = nullptr;
     WGPUBuffer ssaoUbo_ = nullptr;
     WGPUBindGroup ssaoGroup_ = nullptr;
+    WGPUTexture ssrTexture_ = nullptr;
+    WGPUTextureView ssrView_ = nullptr;
+    WGPUBindGroupLayout ssrLayout_ = nullptr;
+    WGPURenderPipeline ssrPipeline_ = nullptr;
+    WGPUBuffer ssrUbo_ = nullptr;
+    WGPUBindGroup ssrGroup_ = nullptr;
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
