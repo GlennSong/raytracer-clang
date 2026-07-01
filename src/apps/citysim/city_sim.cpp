@@ -310,23 +310,45 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
 void CitySim::computeGaps() {
     const Real INF = std::numeric_limits<Real>::infinity();
     gaps_.assign(agents_.size(), INF);
+    auto laneKeyOf = [](const Agent& a, int li) {
+        int laneKey = (a.mode == Agent::Mode::Driver) ? a.lane : 1024;
+        return static_cast<long long>(li) * 4096 + laneKey;
+    };
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[i];
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        int li = a.route.links[a.leg];
-        int laneKey = (a.mode == Agent::Mode::Driver) ? a.lane : 1024;
-        long long key = static_cast<long long>(li) * 4096 + laneKey;
-        lanes[key].push_back({a.distOnLeg, i});
+        lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
     }
+    std::unordered_map<long long, Real> minDist;   // (link,lane) -> nearest-to-entry car
     for (auto& kv : lanes) {
         std::vector<std::pair<Real, int>>& v = kv.second;
         std::sort(v.begin(), v.end(), [](const std::pair<Real, int>& a,
                                           const std::pair<Real, int>& b) {
             return a.first != b.first ? a.first < b.first : a.second < b.second;
         });
+        minDist[kv.first] = v.front().first;       // smallest distOnLeg = just entered the link
         for (std::size_t k = 0; k + 1 < v.size(); ++k)
             gaps_[v[k].second] = v[k + 1].first - v[k].first;
+    }
+    // Car-following ACROSS a node: the front car on a link (no leader ahead on its
+    // own link) keeps its gap to the car just ahead on its NEXT link — the one it's
+    // chasing through the intersection or around the bend. Without this, followers
+    // overlap the leader as they cross a node (same-lane keys don't span it). We
+    // chain across up to a couple of short links so a leader that has already moved
+    // onto the link-after-next is still seen.
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+        const Agent& a = agents_[i];
+        if (gaps_[i] != INF) continue;                 // has a same-link leader already
+        if (!a.moving) continue;
+        int legN = static_cast<int>(a.route.links.size());
+        Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
+        for (int step = 1; step <= 2 && a.leg + step < legN; ++step) {
+            int nextLi = a.route.links[a.leg + step];
+            auto it = minDist.find(laneKeyOf(a, nextLi));
+            if (it != minDist.end()) { gaps_[i] = ahead + it->second; break; }
+            ahead += nav_->links[nextLi].length;       // no car on this link; look one further
+        }
     }
 }
 

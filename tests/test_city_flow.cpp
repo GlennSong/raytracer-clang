@@ -172,6 +172,62 @@ TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {
     CHECK(minDist > 2.0);       // ...and never ran them over (held short)
 }
 
+TEST_CASE(cross_node_following_keeps_cars_off_each_other) {
+    // Car-following now spans nodes: a car crossing a junction/bend keeps its
+    // distance to the car ahead on its continuing route, so followers rarely pile
+    // through their leader. On this single-junction stress test (all traffic funnels
+    // through one node) genuine body overlap is rare; a real grid spreads far
+    // thinner. We assert it's rare (not zero — a brief one-step touch can still
+    // happen at a merge, a known discrete-step limitation), traffic flows, and the
+    // sim is deterministic.
+    NavGraph nav = cross4(50.0);
+    CitySim a, b;
+    a.build(nav, 24, 0, 17);
+    b.build(nav, 24, 0, 17);
+
+    long overlapSteps = 0, sampled = 0;
+    int arrivals = 0;
+    std::vector<Agent::Activity> prev;
+    for (const Agent& ag : a.agents()) prev.push_back(ag.activity);
+
+    for (int i = 0; i < 12000; ++i) {
+        a.step(0.1, 0.5);
+        b.step(0.1, 0.5);
+        const auto& ag = a.agents();
+        // Arrivals (count over ALL drivers — an arrived car has moving == false).
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            if (ag[k].mode != Agent::Mode::Driver) continue;
+            bool arrived = ag[k].activity == Agent::Activity::AtWork ||
+                           ag[k].activity == Agent::Activity::AtHome;
+            bool wasMoving = prev[k] == Agent::Activity::Commuting ||
+                             prev[k] == Agent::Activity::Returning;
+            if (wasMoving && arrived) ++arrivals;
+            prev[k] = ag[k].activity;
+        }
+        // Overlap among actively-driving cars.
+        bool overlap = false, anyMoving = false;
+        for (std::size_t p = 0; p < ag.size(); ++p) {
+            if (ag[p].mode != Agent::Mode::Driver || !ag[p].moving || ag[p].speed < 0.5) continue;
+            anyMoving = true;
+            for (std::size_t q = p + 1; q < ag.size(); ++q) {
+                if (ag[q].mode != Agent::Mode::Driver || !ag[q].moving || ag[q].speed < 0.5) continue;
+                Real dx = ag[p].pos.x - ag[q].pos.x, dy = ag[p].pos.y - ag[q].pos.y;
+                if (std::sqrt(dx * dx + dy * dy) < 1.5) overlap = true;   // bodies overlapping
+            }
+        }
+        if (anyMoving) { ++sampled; if (overlap) ++overlapSteps; }
+    }
+    CHECK(sampled > 0);
+    CHECK(arrivals > 40);                          // traffic keeps flowing (no gridlock)
+    CHECK(overlapSteps < sampled / 10);            // genuine overlap in well under 10% of steps
+    bool same = true;                              // and the sim stays deterministic
+    for (std::size_t i = 0; i < a.agents().size(); ++i)
+        if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
+            a.agents()[i].pos.y != b.agents()[i].pos.y)
+            same = false;
+    CHECK(same);
+}
+
 TEST_CASE(cars_do_not_freeze_for_oncoming_traffic) {
     // A single two-way street: cars run both directions. The old wide cone made
     // every car brake for oncoming traffic 3.5 m to the side; here they must keep
