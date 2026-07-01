@@ -337,11 +337,19 @@ constexpr Real kCurbGap = 0.8;   // pole stands this far beyond the kerb
 // carriageway (a fixed setback put poles in the middle of wide roads). The mast
 // arm then reaches sideways over the street toward the centre.
 CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
+    int toNode = nav_.links[link].to;
     Vec2 d = nav_.direction(link);               // approach direction (toward junction)
-    Vec2 node = nav_.nodes[nav_.links[link].to];
+    Vec2 node = nav_.nodes[toNode];
     Vec2 right(d.y, -d.x);
-    Real setback = nav_.links[link].width * 0.5 + kCurbGap;
-    Vec2 corner = node - d * setback + right * setback;   // near-right curb corner
+    // Clear the pole from EVERY road at this junction, not just the approach: back
+    // off along the approach by the widest crossing road's half-width (so it sits
+    // beyond the perpendicular carriageway) and out to the side by this road's own
+    // half-width. A fixed setback left poles in the middle of wider cross streets.
+    Real thisHalf = nav_.links[link].width * 0.5;
+    Real crossHalf = thisHalf;
+    for (int ol : nav_.outLinks[toNode])
+        crossHalf = std::max(crossHalf, nav_.links[ol].width * 0.5);
+    Vec2 corner = node - d * (crossHalf + kCurbGap) + right * (thisHalf + kCurbGap);
     Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
     SignalSite s;
     s.base = Vec3(corner.x, baseY, corner.y);
