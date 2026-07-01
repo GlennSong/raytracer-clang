@@ -180,21 +180,37 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
     Real hand = ctx.actions.held("drive_handbrake") ? 1.0 : 0.0;
 
     PhysicsWorld& pw = physicsSys.physicsWorld();
-    ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
+    // One control path for EVERY car (ADR-0061). Whoever drives — the seated player
+    // or an AI brain — produces the same DriverInput, fed to the same Jolt vehicle.
+    ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
         if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+        DriverInput in;
         if (v.driver.valid()) {
-            v.throttle = throttle;
-            v.steer = steer;
-            v.brake = brake;
-            v.handBrake = hand;
+            // The player is seated: host input drives it.
+            in.throttle = throttle;
+            in.steer = steer;
+            in.brake = brake;
+            in.handBrake = hand;
+        } else if (AgentDriver* ad = ctx.world.get<AgentDriver>(e)) {
+            // An AI brain drives it: turn what the brain WANTS (heading + speed)
+            // into the same pedal/wheel values through the shared controller, so
+            // this NPC car obeys identical physics to the player's.
+            DriverState s;
+            Quat q = pw.vehicleOrientation(v.vehicleId);
+            Vec3 fwd = q.rotate(Vec3(0, 0, 1));       // chassis forward in world
+            s.forward = Vec2(fwd.x, fwd.z);
+            Vec3 vel = pw.vehicleVelocity(v.vehicleId);
+            s.speed = vel.x * fwd.x + vel.y * fwd.y + vel.z * fwd.z;   // forward m/s
+            in = computeDriverInput(s, ad->command, ad->tuning);
         } else {
-            // Parked: hold the brake so it doesn't creep on a slope.
-            v.throttle = 0;
-            v.steer = 0;
-            v.brake = 1.0;
-            v.handBrake = 0;
+            // Nobody at the wheel: hold the brake so it doesn't creep on a slope.
+            in.brake = 1.0;
         }
-        pw.setVehicleInput(v.vehicleId, v.throttle, v.steer, v.brake, v.handBrake);
+        v.throttle = in.throttle;
+        v.steer = in.steer;
+        v.brake = in.brake;
+        v.handBrake = in.handBrake;
+        pw.setVehicleInput(v.vehicleId, in.throttle, in.steer, in.brake, in.handBrake);
     });
 }
 
@@ -311,15 +327,21 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
         cameras.clearFollowTarget();
         ctx.world.remove<InVehicle>(player);   // structural — after the each() above
     } else {
-        // --- get in: nearest unoccupied car within reach ---
+        // --- get in: the nearest car within reach, occupied by an AI or not ---
+        // The player can commandeer ANY car. An AI-driven car counts (we eject its
+        // agent below); only a car already holding another *player* is skipped.
         Entity best;
         Real bestD2 = enterRadius * enterRadius;
         ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
-            if (v.driver.valid()) return;
+            if (v.driver.valid()) return;   // a (player) driver already has it
             Real d2 = (t.position - playerPos).lengthSquared();
             if (d2 <= bestD2) { bestD2 = d2; best = e; }
         });
         if (best.valid()) {
+            // Kick out the AI: removing AgentDriver stops the brain controlling the
+            // car (the CitySim bridge sees the component gone and frees the agent),
+            // so there's ever only ONE driver — now the player.
+            if (ctx.world.has<AgentDriver>(best)) ctx.world.remove<AgentDriver>(best);
             ctx.world.get<Vehicle>(best)->driver = player;
             cameras.setFollowTarget(best);
             ctx.world.add<InVehicle>(player, InVehicle{best});   // structural

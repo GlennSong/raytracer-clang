@@ -3,6 +3,7 @@
 
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
+#include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "physics/physics_world.h"
 #include "procgen/terrain.h"
 #include "world.h"
@@ -225,6 +226,20 @@ struct Vehicle {
 // the car entity being driven.
 struct InVehicle {
     Entity vehicle;
+};
+
+// Marks a Vehicle as driven by an AI brain rather than the player (ADR-0061): the
+// SAME physics Vehicle, but its {throttle, steer, brake} come from
+// computeDriverInput(command) instead of host input, so an NPC car and the
+// player's car share one physics path. A brain (e.g. the CitySim bridge) writes
+// `command` each step; VehicleSystem consumes it. `agentId` links back to that
+// brain (e.g. a CitySim agent index) so the player can EJECT the agent on entry
+// (remove this component) and the brain can free the agent. When the player takes
+// the wheel this component is removed; on exit it may be restored.
+struct AgentDriver {
+    DriverCommand command;      // heading + speed the brain currently wants
+    DriverTuning tuning;        // controller gains
+    int agentId = -1;           // brain handle (CitySim agent index); -1 = none
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------
