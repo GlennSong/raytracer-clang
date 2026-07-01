@@ -23,6 +23,7 @@ constexpr Real kSignalApproach = 14.0;          // start braking for a light thi
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
+constexpr Real kPedSeparation = 1.1;    // pedestrians keep at least this far apart
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 
@@ -398,6 +399,44 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         Agent& a = agents_[i];
         if (a.playerControlled) continue;
         if (a.moving) advance(a, dt, gaps_[i]);
+    }
+
+    // Pedestrian separation: nudge overlapping walkers apart so they step AROUND
+    // each other (and the player) instead of through. A few symmetric relaxation
+    // iterations resolve dense clusters (peds funnelling to a node); deterministic
+    // (index order), and small so it doesn't fling anyone off the sidewalk. (Signal
+    // poles are render-side, not sim agents, so ped-vs-pole avoidance is a later
+    // addition.)
+    for (int iter = 0; iter < 4; ++iter) {
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            Agent& a = agents_[i];
+            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+            for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+                Agent& b = agents_[j];
+                if (b.mode != Agent::Mode::Pedestrian || !b.moving) continue;
+                Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
+                Real d = std::sqrt(dx * dx + dy * dy);
+                if (d < kPedSeparation && d > 1e-4) {
+                    Real push = (kPedSeparation - d) * 0.5;
+                    Real nx = dx / d, ny = dy / d;
+                    a.pos.x += nx * push; a.pos.y += ny * push;
+                    b.pos.x -= nx * push; b.pos.y -= ny * push;
+                } else if (d <= 1e-4) {
+                    // Exactly coincident (e.g. same spawn point): split along index.
+                    a.pos.x += kPedSeparation * 0.5;
+                    b.pos.x -= kPedSeparation * 0.5;
+                }
+            }
+            // Step around the live player (an external obstacle; it doesn't move).
+            for (const Vec2& o : externalObstacles_) {
+                Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
+                Real d = std::sqrt(dx * dx + dy * dy);
+                if (d < kPedSeparation && d > 1e-4) {
+                    Real push = (kPedSeparation - d);
+                    a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                }
+            }
+        }
     }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.

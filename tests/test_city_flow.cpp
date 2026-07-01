@@ -142,6 +142,38 @@ TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
     CHECK(maxStep < 20.0);
 }
 
+TEST_CASE(pedestrians_walk_around_each_other) {
+    // Pedestrians should step around one another, not overlap. On a busy little
+    // grid, no two walking peds should ever end a step on top of each other, and
+    // they still reach their destinations.
+    NavGraph nav = cross4(40.0);
+    CitySim sim;
+    sim.build(nav, 0, 30, 55);   // pedestrians only
+
+    Real minPedDist = 1e9;
+    bool anyArrived = false;
+    for (int i = 0; i < 8000; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& ag = sim.agents();
+        for (std::size_t p = 0; p < ag.size(); ++p) {
+            if (ag[p].mode != Agent::Mode::Pedestrian) continue;
+            if (ag[p].activity == Agent::Activity::AtWork) anyArrived = true;
+            if (!ag[p].moving) continue;
+            for (std::size_t q = p + 1; q < ag.size(); ++q) {
+                if (ag[q].mode != Agent::Mode::Pedestrian || !ag[q].moving) continue;
+                Real dx = ag[p].pos.x - ag[q].pos.x, dy = ag[p].pos.y - ag[q].pos.y;
+                minPedDist = std::min(minPedDist, std::sqrt(dx * dx + dy * dy));
+            }
+        }
+    }
+    // Pedestrians are 0.5 m wide, so centre-to-centre > 0.5 m means their bodies
+    // never overlap — they step around each other rather than through. (They can
+    // still queue close near a shared destination; peds have no longitudinal
+    // following yet, noted as tech-debt.)
+    CHECK(minPedDist > 0.55);
+    CHECK(anyArrived);          // and they still get where they're going
+}
+
 TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {
     // A straight two-way street. The "player" stands in the eastbound lane; cars
     // driving up behind must hold short, not drive through them.
