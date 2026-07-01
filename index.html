@@ -71,14 +71,16 @@
       const filtersEl = document.getElementById('filters');
       let scenes = [];
       try {
-        const r = await fetch('scenes.json?v=' + Date.now());
+        // no-cache = revalidate with the server (a cheap 304 when unchanged)
+        // instead of a unique-URL full re-download every visit.
+        const r = await fetch('scenes.json', { cache: 'no-cache' });
         scenes = (await r.json()).scenes || [];
       } catch (e) {
         grid.innerHTML = '<p style="color:#e88">Could not load scenes.json.</p>';
         return;
       }
 
-      const card = (s) => {
+      const card = (s, i) => {
         const a = document.createElement('a');
         a.className = 'card';
         a.href = 'viewer.html?level=' + encodeURIComponent(s.id);
@@ -87,7 +89,11 @@
         thumb.className = 'thumb';
         if (s.thumb) {
           const img = new Image();
-          img.loading = 'lazy';
+          // Above-the-fold row loads eagerly (lazy-loading it hurts LCP);
+          // the rest defer. Decode off the main thread either way.
+          img.loading = i < 6 ? 'eager' : 'lazy';
+          img.decoding = 'async';
+          img.width = 400; img.height = 400;
           img.alt = s.title;
           img.src = s.thumb;
           img.onerror = () => { thumb.textContent = 'no preview'; };
@@ -104,7 +110,7 @@
         return a;
       };
 
-      scenes.forEach((s) => grid.appendChild(card(s)));
+      scenes.forEach((s, i) => grid.appendChild(card(s, i)));
 
       // Tag filter chips.
       const tags = ['All', ...[...new Set(scenes.map((s) => s.tag || 'Scene'))]];

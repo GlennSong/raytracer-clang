@@ -120,7 +120,7 @@
     </div>
     <h3>Quality</h3>
     <div class="row"><span>Preset</span>
-      <select id="quality">
+      <select id="quality" aria-label="Quality preset">
         <option value="mobile">Mobile</option>
         <option value="balanced">Balanced</option>
         <option value="high">High</option>
@@ -132,15 +132,15 @@
     <div class="row"><span>Draw gun (slot 2)</span><button id="drawgun">equip</button></div>
     <h3 style="margin-top:14px">World</h3>
     <div class="row"><span>Day/night cycle</span><button id="dncycle">on</button></div>
-    <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" min="0" max="1000" value="350" style="flex:1"></div>
+    <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" aria-label="Time of day" min="0" max="1000" value="350" style="flex:1"></div>
     <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
-    <div class="row"><span>Speed</span><input id="dnspeed" type="range" min="0" max="200" value="20" style="flex:1"></div>
+    <div class="row"><span>Speed</span><input id="dnspeed" type="range" aria-label="Day/night speed" min="0" max="200" value="20" style="flex:1"></div>
 
     <h3 style="margin-top:14px">View / Tone</h3>
     <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
-    <div class="row"><span>Exposure</span><input id="exposure" type="range" min="10" max="400" value="100" style="flex:1"><span class="val" id="exposureVal">100%</span></div>
-    <div class="row"><span>Contrast</span><input id="contrast" type="range" min="50" max="200" value="100" style="flex:1"><span class="val" id="contrastVal">100%</span></div>
-    <div class="row"><span>Saturation</span><input id="saturation" type="range" min="0" max="200" value="100" style="flex:1"><span class="val" id="saturationVal">100%</span></div>
+    <div class="row"><span>Exposure</span><input id="exposure" type="range" aria-label="Exposure" min="10" max="400" value="100" style="flex:1"><span class="val" id="exposureVal">100%</span></div>
+    <div class="row"><span>Contrast</span><input id="contrast" type="range" aria-label="Contrast" min="50" max="200" value="100" style="flex:1"><span class="val" id="contrastVal">100%</span></div>
+    <div class="row"><span>Saturation</span><input id="saturation" type="range" aria-label="Saturation" min="0" max="200" value="100" style="flex:1"><span class="val" id="saturationVal">100%</span></div>
 
     <h3 style="margin-top:14px">Debug</h3>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
@@ -148,7 +148,7 @@
     <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
     <div class="row"><span>SSAO</span><button id="ssao">on</button></div>
     <div class="row"><span>SSR</span><button id="ssr">on</button></div>
-    <div class="row"><span>FX res <span id="fxreslbl">50%</span></span><input id="fxres" type="range" min="25" max="100" value="50" style="flex:1"></div>
+    <div class="row"><span>FX res <span id="fxreslbl">50%</span></span><input id="fxres" type="range" aria-label="SSAO/SSR resolution scale" min="25" max="100" value="50" style="flex:1"></div>
     <div class="row"><span>Bloom</span><button id="bloom">on</button></div>
     <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
     <div class="row"><span>Stats overlay (FPS)</span><button id="hudToggle">off</button></div>
@@ -173,15 +173,21 @@
       if (!('gpu' in navigator)) return fail('WebGPU not available. Use Chrome/Edge, Safari 18+, or Firefox.');
 
       const canvas = $('canvas');
-      const dpr = window.devicePixelRatio || 1;
-      const resize = () => { canvas.width = Math.max(1, Math.floor((canvas.clientWidth || innerWidth) * dpr));
+      // Read devicePixelRatio per resize (not once): dragging the window to a
+      // different-DPI monitor changes it.
+      const resize = () => { const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor((canvas.clientWidth || innerWidth) * dpr));
         canvas.height = Math.max(1, Math.floor((canvas.clientHeight || innerHeight) * dpr)); };
       resize(); window.addEventListener('resize', resize);
 
-      // Cache-bust the engine binary: GitHub Pages caches viewer_web.js/.wasm
-      // aggressively and a ?v= on the page URL does NOT bust them. Load fresh with
-      // a per-visit token (dev convenience; switch to a fixed build hash later).
-      const V = Date.now();
+      // Cache-bust the engine binary with a BUILD token, not a per-visit one:
+      // the ?v= changes only when the wasm bytes change, so repeat visits hit the
+      // browser/CDN cache (~1.6 MB saved per load) while a deploy still busts.
+      // 7b035d8dd649 is replaced with the wasm content hash by the CMake copy
+      // step (cmake/inject_build_id.cmake). Serving the raw source (placeholder
+      // intact, e.g. python3 -m http.server from web/) falls back to Date.now().
+      const BUILD = '7b035d8dd649';
+      const V = BUILD.indexOf('RT_BUILD') >= 0 ? Date.now() : BUILD;
       try {
         await new Promise((res, rej) => {
           const s = document.createElement('script');
@@ -237,9 +243,9 @@
           id = null; base.style.display = thumb.style.display = 'none'; axis(idx, 0, 0); } };
         zone.addEventListener('touchend', end); zone.addEventListener('touchcancel', end);
       }
-      // Touch devices get the on-screen sticks + RUN button; desktop uses
-      // keyboard + mouse (the stick zones are hidden so the mouse reaches the
-      // canvas, and WASD/QE + mouse-look + Shift-to-run work via GLFW).
+      // Touch surfaces get the on-screen sticks + RUN/FIRE; keyboard + mouse are
+      // registered UNCONDITIONALLY so touchscreen laptops keep both (only the
+      // touch UI's visibility is gated on hasTouch, not the input paths).
       const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
       // Shared play + pointer-lock state (used by the toolbar, the panel, and the
@@ -247,6 +253,26 @@
       let playing = false, locked = false;
       const hint = $('hint');
       const showHint = (t) => { hint.textContent = t || ''; hint.style.display = t ? 'block' : 'none'; };
+      // requestPointerLock can throw, and in Chromium returns a Promise that
+      // rejects on rapid toggles — swallow both so a lock hiccup never aborts
+      // the caller (the rejection otherwise lands in the on-page log as noise).
+      const lockPointer = () => {
+        try { const p = canvas.requestPointerLock && canvas.requestPointerLock();
+              if (p && p.catch) p.catch(() => {}); } catch (e) { /* non-fatal */ }
+      };
+
+      // Reset every engine-side input (keys, sticks, buttons). Called when focus
+      // or visibility is lost and when leaving play mode — a keyup/touchend that
+      // never arrives would otherwise leave the character walking or firing
+      // forever (physics keeps stepping in play).
+      const resetInput = () => {
+        for (let i = 0; i < 9; i++) key(i, 0);
+        button(0, 0); button(2, 0);
+        axis(0, 0, 0); axis(1, 0, 0);
+        $('run').classList.remove('on'); $('fire').classList.remove('on');
+      };
+      window.addEventListener('blur', resetInput);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) resetInput(); });
 
       if (hasTouch) {
         makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
@@ -263,51 +289,52 @@
         const fireUp = (e) => { e.preventDefault(); button(2, 0); fire.classList.remove('on'); };
         fire.addEventListener('touchend', fireUp); fire.addEventListener('touchcancel', fireUp);
       } else {
-        // Desktop: drive input through the hooks (Emscripten GLFW's keyboard/mouse
-        // don't reliably reach this build). Hide the touch stick zones.
+        // No touch surface: hide the stick zones so the mouse reaches the canvas.
         $('zoneL').style.display = 'none';
         $('zoneR').style.display = 'none';
         log('desktop: WASD/QE move, Shift run, 1/2 weapon. Editor: drag to look. Play: mouse captured (Esc releases).');
-
-        const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
-                         ShiftLeft: 6, ShiftRight: 6, Digit1: 7, Digit2: 8 };
-        window.addEventListener('keydown', (e) => {
-          const k = keyMap[e.code];
-          if (k !== undefined) { mod._rt_web_key(k, 1); e.preventDefault(); }
-        });
-        window.addEventListener('keyup', (e) => {
-          const k = keyMap[e.code];
-          if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
-        });
-
-        // Look control differs by mode:
-        //  - Editor: hold-drag to look (nothing is captured; the cursor stays).
-        //  - Play: the pointer is locked to the canvas, so moving the mouse looks
-        //    without holding a button (standard FPS); Esc releases it. A first
-        //    click while unlocked re-captures instead of firing.
-        let dragging = false;
-        document.addEventListener('pointerlockchange', () => {
-          locked = (document.pointerLockElement === canvas);
-          if (playing) showHint(locked ? 'Mouse captured — press Esc to release'
-                                        : 'Click the view to look around');
-          if (!locked) button(2, 0);   // don't leave fire stuck held on release
-        });
-        canvas.addEventListener('mousedown', (e) => {
-          if (playing) {
-            if (!locked) { canvas.requestPointerLock && canvas.requestPointerLock(); return; }
-            if (e.button === 0) button(2, 1);            // captured: click fires
-          } else {
-            dragging = true; if (e.button === 0) button(2, 1);   // editor: drag look
-          }
-        });
-        window.addEventListener('mouseup', (e) => { dragging = false; if (e.button === 0) button(2, 0); });
-        window.addEventListener('mousemove', (e) => {
-          if (locked || dragging) mod._rt_web_look(e.movementX, e.movementY);
-        });
-        // Scroll to zoom (right-stick-free dolly via the look accumulator is not
-        // zoom; feed the gamepad trigger-free path through a brief forward nudge).
-        canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
       }
+
+      // Keyboard (always registered; Emscripten GLFW's keyboard doesn't reliably
+      // reach this build, so the page drives the virtual-key hooks).
+      const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
+                       ShiftLeft: 6, ShiftRight: 6, Digit1: 7, Digit2: 8 };
+      window.addEventListener('keydown', (e) => {
+        const k = keyMap[e.code];
+        if (k !== undefined) { mod._rt_web_key(k, 1); e.preventDefault(); }
+      });
+      window.addEventListener('keyup', (e) => {
+        const k = keyMap[e.code];
+        if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
+      });
+
+      // Mouse look (always registered), differing by mode:
+      //  - Editor: hold-drag to look (nothing is captured; the cursor stays).
+      //  - Play: the pointer is locked to the canvas, so moving the mouse looks
+      //    without holding a button (standard FPS); Esc releases it. A first
+      //    click while unlocked re-captures instead of firing — and if the debug
+      //    panel is open, the click closes it instead of locking underneath it.
+      let dragging = false;
+      document.addEventListener('pointerlockchange', () => {
+        locked = (document.pointerLockElement === canvas);
+        if (playing) showHint(locked ? 'Mouse captured — press Esc to release'
+                                      : 'Click the view to look around');
+        if (!locked) resetInput();   // don't leave fire/keys stuck held on release
+      });
+      canvas.addEventListener('mousedown', (e) => {
+        if (playing) {
+          if (panelOpen()) { closePanel(); return; }     // never lock under the panel
+          if (!locked) { lockPointer(); return; }
+          if (e.button === 0) button(2, 1);              // captured: click fires
+        } else {
+          dragging = true; if (e.button === 0) button(2, 1);   // editor: drag look
+        }
+      });
+      window.addEventListener('mouseup', (e) => { dragging = false; if (e.button === 0) button(2, 0); });
+      window.addEventListener('mousemove', (e) => {
+        if (locked || dragging) mod._rt_web_look(e.movementX, e.movementY);
+      });
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
 
       // --- toolbar (play/stop + menu) + debug panel ---
       // Pause the sim while the panel is open or the player isn't actively in FPS
@@ -343,17 +370,20 @@
         playBtn.classList.toggle('on', on);
         playIconPath.setAttribute('d', on ? STOP_PATH : PLAY_PATH);
         playBtn.setAttribute('aria-label', on ? 'Stop' : 'Play');
+        playBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         panelPlay.classList.toggle('on', on); panelPlay.textContent = on ? 'on' : 'off';
         if (hasTouch) $('fire').style.display = on ? 'block' : 'none';
+        if (!on) resetInput();   // never carry a held FIRE/keys out of a session
+        // Entering play from the panel row would otherwise capture the mouse with
+        // the panel still open (locked cursor over unclickable, sim-pausing UI).
+        if (on && panelOpen()) closePanel();
         if (!hasTouch) {
-          // Guard the pointer-lock call: it can throw/reject on some browsers, and
-          // it must never abort the rest of setPlay (esp. the updatePause below).
-          try {
-            if (on) { canvas.requestPointerLock && canvas.requestPointerLock();
-                      showHint('Click the view to look · Esc releases the mouse'); }
-            else { document.exitPointerLock && document.exitPointerLock(); showHint(''); }
-          } catch (e) { /* non-fatal */ }
+          if (on) { lockPointer(); showHint('Click the view to look · Esc releases the mouse'); }
+          else { try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} showHint(''); }
         }
+        // Play forces grounded FPS controls (rt_web_play); restore the panel's
+        // Fly choice on the way back so the toggle doesn't desync from reality.
+        if (!on) mod._rt_web_camera(flyOn ? 1 : 0);
         log(on ? 'play mode' : 'editor mode');
         updatePause();
       };
@@ -412,7 +442,8 @@
       const toggles = {};
       const mkToggle = (id, flagId, def) => {
         const b = $(id);
-        const paint = (on) => { toggles[id] = on; b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; };
+        const paint = (on) => { toggles[id] = on; b.classList.toggle('on', on);
+          b.textContent = on ? 'on' : 'off'; b.setAttribute('aria-pressed', on ? 'true' : 'false'); };
         paint(def);
         b.onclick = () => { paint(!toggles[id]); flag(flagId, toggles[id] ? 1 : 0); $('quality').value = 'custom'; };
         return { set: (on) => { paint(on); flag(flagId, on ? 1 : 0); } };
@@ -447,11 +478,17 @@
         if (now - fpsT >= 500) { fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
         requestAnimationFrame(fpsTick); };
       requestAnimationFrame(fpsTick);
+      // A hidden->visible transition leaves a huge gap in fpsT (rAF pauses while
+      // hidden); reset so the first visible reading isn't ~0 fps.
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) { frames = 0; fpsT = performance.now(); } });
 
       let hudOn = false;
       $('hudToggle').onclick = () => { hudOn = !hudOn; $('hud').style.display = hudOn ? 'block' : 'none';
         $('hudToggle').classList.toggle('on', hudOn); $('hudToggle').textContent = hudOn ? 'on' : 'off'; };
-      $('logToggle').onclick = () => { const show = logEl.style.display === 'none';
+      // Computed style, not inline: #log starts hidden via the stylesheet, so the
+      // inline display is '' until first toggled (same bug class as panelOpen).
+      $('logToggle').onclick = () => { const show = getComputedStyle(logEl).display === 'none';
         logEl.style.display = show ? 'block' : 'none';
         $('logToggle').classList.toggle('on', show); $('logToggle').textContent = show ? 'on' : 'off'; };
 
