@@ -50,6 +50,7 @@ constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide periphe
 constexpr Real kPedMaxLateral = 1.6;       // furthest a walker leans off its path (m)
 constexpr Real kPedLateralRate = 1.6;      // how fast that lean changes (m/s) — smooth, not a pop
 constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
+constexpr Real kPoleClearance = 0.7;       // a walker keeps its centre this far from a pole
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 
@@ -525,6 +526,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 consider(agents_[j].pos);
         }
         for (const Vec2& o : externalObstacles_) consider(o);
+        for (const Vec2& o : staticObstacles_) consider(o);   // steer around signal poles
 
         // Move the lean toward its target at a bounded RATE (continuous, not a
         // pop): grows while something is in view, decays back to the path when
@@ -566,6 +568,25 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 }
             }
         }
+
+    // Hard radial push-out from static obstacles (signal poles): a walker never
+    // ends up standing inside a pole — if a step would leave it within the pole's
+    // clearance, shove it back out along the pole→ped direction. The cone bias
+    // above makes it lean away in advance; this is the physical backstop.
+    for (Agent& a : agents_) {
+        if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+        for (const Vec2& o : staticObstacles_) {
+            Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
+            Real d = std::sqrt(dx * dx + dy * dy);
+            if (d > 1e-4 && d < kPoleClearance) {
+                Real push = kPoleClearance - d;
+                a.pos.x += dx / d * push;
+                a.pos.y += dy / d * push;
+            } else if (d <= 1e-4) {
+                a.pos.x += kPoleClearance;   // dead-centre: pick a direction
+            }
+        }
+    }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.
     for (Agent& a : agents_) {

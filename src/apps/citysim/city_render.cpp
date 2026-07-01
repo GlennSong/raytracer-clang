@@ -406,6 +406,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.add<InstanceGroup>(signalPostGroup_, g);
     }
 
+    // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
+    // on the sidewalk steer around the signal poles and never stand inside one.
+    {
+        std::vector<engine::Vec2> poles;
+        poles.reserve(signalLinks_.size());
+        for (int li : signalLinks_) {
+            engine::Vec3 base = signalSite(li).base;
+            poles.push_back(engine::Vec2(base.x, base.z));
+        }
+        sim_.setStaticObstacles(std::move(poles));
+    }
+
     // Zebra crosswalks: a band of white bars across the mouth of every junction
     // approach, each bar an instance of the unit quad riding ~4 cm above the
     // asphalt. Opaque white, so it reads as a crossing and covers the painted

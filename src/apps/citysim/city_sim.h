@@ -130,6 +130,13 @@ public:
         externalObstacles_ = std::move(obstacles);
     }
 
+    // World-space (XZ) static obstacles pedestrians steer around and never stand
+    // inside — chiefly the signal poles on the sidewalks (injected once by the host
+    // from the render bridge). Cars ignore these (poles sit off the carriageway).
+    void setStaticObstacles(std::vector<engine::Vec2> obstacles) {
+        staticObstacles_ = std::move(obstacles);
+    }
+
 private:
     void startTrip(Agent& a, int origin, int goal);
     void advance(Agent& a, Real dt, Real gap, Real minGap);
@@ -150,6 +157,7 @@ private:
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
+    std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
