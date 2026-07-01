@@ -3988,6 +3988,19 @@ it sees. (4) Unify the vehicle body (NPC cars from `vehicles.lua`). (5) The
 `DriverAgent` controller drives a real Jolt vehicle near the camera (device). See
 `docs/vehicle-agent-plan.md`.
 
+**Status.** Phases 1–3 have landed (headless-tested). (1) Pedestrians steer
+continuously around what they see (`city_sim.cpp` reactive pass) + a hard body
+floor. (2) Per-agent debug widgets — footprint ring coloured by state + forward
+arrow — draw on top via `FLAG_OVERLAY` on both backends. (3) The driver reactive
+layer was already in `advance()` (bounded-turn-radius steering, cone braking for
+people, car-following, signal stops); Phase 3 adds the **explicit driver FSM** on
+top of it: each step a car labels itself Cruising / Following / Yielding / Turning
+/ Waiting from what governs it, surfaced through the debug widgets and covered by
+`tests/test_city_driver_fsm.cpp`. The `Agent::State` enum now spans both the
+pedestrian and driver states (`Count` sizes the render arrays). Phases 4–5 (one
+composable vehicle body shared with the player; `DriverAgent` on a real Jolt
+vehicle) remain — they need a device build (Jolt/Lua/viewer) to verify.
+
 ---
 
 ## Interim seams & tech-debt register

@@ -158,10 +158,16 @@ RenderMaterial widgetMaterial(Vec3 color) {
 }
 Vec3 stateColor(Agent::State s) {
     switch (s) {
-        case Agent::State::Walking:  return Vec3(0.20, 0.80, 0.30);   // green: moving freely
-        case Agent::State::Avoiding: return Vec3(0.95, 0.60, 0.10);   // orange: steering around
-        case Agent::State::Waiting:  return Vec3(0.20, 0.45, 0.95);   // blue: held (signal)
-        default:                     return Vec3(0.55, 0.55, 0.58);   // grey: resting
+        // Pedestrian / shared
+        case Agent::State::Walking:   return Vec3(0.20, 0.80, 0.30);   // green: moving freely
+        case Agent::State::Avoiding:  return Vec3(0.95, 0.60, 0.10);   // orange: steering around
+        case Agent::State::Waiting:   return Vec3(0.20, 0.45, 0.95);   // blue: held (signal)
+        // Driver FSM
+        case Agent::State::Cruising:  return Vec3(0.15, 0.75, 0.85);   // cyan: free flow
+        case Agent::State::Following: return Vec3(0.95, 0.85, 0.15);   // yellow: behind a leader
+        case Agent::State::Yielding:  return Vec3(0.95, 0.35, 0.10);   // red-orange: braking for a person
+        case Agent::State::Turning:   return Vec3(0.70, 0.35, 0.90);   // purple: arcing through a node
+        default:                      return Vec3(0.55, 0.55, 0.58);   // grey: resting
     }
 }
 
@@ -415,7 +421,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             ringMesh = assets->acquireMesh(ringXZ(), "city:dbgring");
             arrowMesh = assets->acquireMesh(arrowXZ(), "city:dbgarrow");
         }
-        for (int s = 0; s < 4; ++s) {
+        const int stateCount = static_cast<int>(Agent::State::Count);
+        for (int s = 0; s < stateCount; ++s) {
             footprintGroups_[s] = world.create();
             InstanceGroup g;
             g.mesh = ringMesh;
@@ -534,8 +541,9 @@ void CityRenderSystem::syncGroups(World& world) {
     // Debug widgets: a ground footprint (coloured by state) + a forward arrow per
     // agent, scaled to the agent's speed so it reads as the present trajectory.
     {
-        InstanceGroup* foot[4];
-        for (int s = 0; s < 4; ++s) {
+        constexpr int kStateCount = static_cast<int>(Agent::State::Count);
+        InstanceGroup* foot[kStateCount];
+        for (int s = 0; s < kStateCount; ++s) {
             foot[s] = world.get<InstanceGroup>(footprintGroups_[s]);
             if (foot[s]) foot[s]->transforms.clear();
         }
@@ -562,7 +570,7 @@ void CityRenderSystem::syncGroups(World& world) {
                     Vec3(0.12, 1, len)));
             }
         }
-        for (int s = 0; s < 4; ++s) refreshBounds(foot[s]);
+        for (int s = 0; s < kStateCount; ++s) refreshBounds(foot[s]);
         refreshBounds(fwd);
     }
 }

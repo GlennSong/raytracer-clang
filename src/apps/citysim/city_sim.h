@@ -23,8 +23,15 @@ struct Agent {
     enum class Mode : uint8_t { Pedestrian, Driver };
     enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning };
     // Reactive behaviour state (ADR-0060): what the agent is doing right now,
-    // decided from what it can SEE this step. Rendered by the debug widgets.
-    enum class State : uint8_t { Resting, Walking, Avoiding, Waiting };
+    // decided from what it can SEE this step. Rendered by the debug widgets. The
+    // first four are shared / pedestrian; the rest are the driver FSM (Cruising →
+    // Following → Yielding → Turning, with Waiting for a held red). `Count` sizes
+    // the render-side per-state arrays — keep it last.
+    enum class State : uint8_t {
+        Resting, Walking, Avoiding, Waiting,   // ped + shared
+        Cruising, Following, Yielding, Turning, // driver FSM
+        Count
+    };
 
     Mode mode = Mode::Driver;
     State state = State::Resting;

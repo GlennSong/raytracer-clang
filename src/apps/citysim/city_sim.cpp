@@ -267,6 +267,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
             Real motion = std::min(a.speed * dt, room);
             if (motion < a.speed * dt) a.speed = 0;   // held at the line
             a.distOnLeg += motion;
+            if (car) a.state = Agent::State::Waiting;   // FSM: stopped for a red
             refreshPose(a);
             steer(a, dt);
             return;
@@ -309,6 +310,26 @@ void CitySim::advance(Agent& a, Real dt, Real gap) {
     } else {
         refreshPose(a);
         steer(a, dt);
+        // Driver FSM (ADR-0060): label what's governing the car this step, from
+        // what it sees, so the behaviour is legible (debug widgets read a.state).
+        // Precedence mirrors how the speed was actually capped above: a ped/player
+        // in the cone (Yielding) dominates a same-lane leader (Following), which
+        // dominates a heading change at the coming node (Turning); otherwise the
+        // car runs free (Cruising). The Waiting-at-a-red case returned earlier.
+        if (car) {
+            bool bendAhead = false;
+            if (a.leg + 1 < legCount) {
+                Vec2 d0 = nav_->direction(a.route.links[a.leg]);
+                Vec2 d1 = nav_->direction(a.route.links[a.leg + 1]);
+                Real align = d0.x * d1.x + d0.y * d1.y;   // 1 = straight through
+                Real distToEnd = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
+                if (align < 0.98 && distToEnd < kJunctionApproach) bendAhead = true;
+            }
+            if (seenAhead < 1e9)          a.state = Agent::State::Yielding;
+            else if (gap < kCarSlowZone)  a.state = Agent::State::Following;
+            else if (bendAhead)           a.state = Agent::State::Turning;
+            else                          a.state = Agent::State::Cruising;
+        }
     }
 }
 
@@ -416,7 +437,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (!a.moving) continue;
-        if (a.mode == Agent::Mode::Driver) { a.state = Agent::State::Walking; continue; }
+        if (a.mode == Agent::Mode::Driver) continue;   // driver FSM is set in advance()
         // `travel` is the walker's path direction this step (set by steer()); it
         // leans to `right` of that to go around what it SEES ahead.
         Vec2 travel = a.heading;

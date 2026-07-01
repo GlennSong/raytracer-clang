@@ -104,7 +104,8 @@ private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
-    engine::Entity footprintGroups_[4]{};   // debug ground rings, indexed by Agent::State
+    // debug ground rings, one per Agent::State (indexed by it)
+    engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)

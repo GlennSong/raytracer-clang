@@ -83,9 +83,10 @@ TEST_CASE(city_render_debug_widgets) {
         maxArrows = std::max(maxArrows, arrows);
         CHECK(arrows <= 10u);   // never more than the agent count
     }
-    // One footprint per agent, spread across the four state groups.
+    // One footprint per agent, spread across the behaviour-state groups (peds use
+    // the first four; drivers use the FSM states after them).
     std::size_t foot = 0;
-    for (int s = 0; s < 4; ++s)
+    for (int s = 0; s < static_cast<int>(Agent::State::Count); ++s)
         foot += groupCount(world, city.footprintGroup(static_cast<Agent::State>(s)));
     CHECK(foot == 10u);
     CHECK(maxArrows >= 1u);     // agents did move at some point, drawing a trajectory

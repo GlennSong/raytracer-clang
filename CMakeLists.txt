@@ -294,6 +294,7 @@ add_executable(run_tests
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_city_steering.cpp
+    tests/test_city_driver_fsm.cpp
     tests/test_city_render.cpp
     tests/test_city_flow.cpp
     ${CORE_SOURCES}
