@@ -10,12 +10,15 @@
       "file": "brickhouse.lua"
     },
     {
+      "name": "ground",
       "shape": "box",
       "size": [40, 0.2, 40],
       "position": [0, -0.1, 0],
-      "material": { "albedo": [0.42, 0.44, 0.40], "roughness": 1.0 }
+      "material": { "albedo": [0.42, 0.44, 0.40], "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.8 }
     }
   ],
+  "player": { "position": [0, 2, 8] },
   "lighting": {
     "sun": {
       "direction": [0.42, 0.52, -0.5],

@@ -68,6 +68,13 @@ EMSCRIPTEN_KEEPALIVE void rt_web_camera(int free) {
     g_app.settings().setBool("cameraGrounded", free == 0);
 }
 
+// Pause/resume the simulation clock. The page pauses while the debug panel is
+// open or the mouse isn't captured (not actively playing), so physics/gameplay
+// freeze instead of running unattended. Rendering continues either way.
+EMSCRIPTEN_KEEPALIVE void rt_web_pause(int paused) {
+    g_app.simClock().setPaused(paused != 0);
+}
+
 EMSCRIPTEN_KEEPALIVE void rt_web_flag(int id, int val) {
     Renderer& r = g_app.renderer();
     switch (id) {
