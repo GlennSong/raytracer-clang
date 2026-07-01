@@ -1,10 +1,11 @@
 // WebGPU renderer backend (ADR-0058) — the web target's implementation of the
 // `Renderer` seam (../../renderer/renderer.h), compiled under Emscripten and
-// driving the browser's WebGPU device. Phases 0+1: device/surface bring-up,
-// a cleared swapchain with a depth buffer, and a forward, single-directional-
-// light Cook-Torrance pass over uploaded meshes (no shadows, textures, post,
-// instancing, or terrain morph yet — those are later phases, mirroring the
-// Vulkan backend's phasing in docs/webgpu-renderer-plan.md).
+// driving the browser's WebGPU device. Feature parity with the Vulkan backend:
+// multi-light Cook-Torrance + texture/material maps (with mipmaps), cascaded
+// shadow maps (PCF), procedural sky or HDR equirect environment with a baked
+// split-sum BRDF LUT, an offscreen HDR pipeline (tone map/grade, bloom, SSAO,
+// SSR over a material G-buffer), hardware instancing, CDLOD terrain morph, and
+// wind. See docs/webgpu-renderer-plan.md and this directory's AGENTS.md.
 //
 // Structure mirrors src/renderer/vulkan/vulkan_renderer.cpp: pack the engine's
 // (double) Vertex to a float GpuVertex, queue draws during the frame, and record
@@ -25,6 +26,7 @@
 #include <webgpu/webgpu.h>
 #include <emscripten/emscripten.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -231,7 +233,8 @@ struct DrawData {
 struct ShadowIdx { idx : vec4<i32> };
 @group(1) @binding(2) var<uniform> scidx : ShadowIdx;
 // Material maps (group 2). Missing maps bind a 1x1 default (white, or flat
-// normal), so sampling is always valid; d.surfaceFlags.z says which are real.
+// normal), so sampling is always valid. d.surfaceFlags.z (mapBits) is only
+// consulted for the normal map (bit 1); the rest rely on the neutral defaults.
 @group(2) @binding(0) var albedoTex   : texture_2d<f32>;
 @group(2) @binding(1) var normalTex   : texture_2d<f32>;
 @group(2) @binding(2) var mrTex       : texture_2d<f32>;
@@ -383,17 +386,6 @@ fn distanceAttenuation(dist : f32, range : f32) -> f32 {
   let window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
   return window * window / max(dist * dist, 1e-4);
 }
-// Analytic split-sum env BRDF (Karis mobile approximation) — stands in for the
-// baked BRDF LUT the Vulkan/Metal backends sample.
-fn envBRDFApprox(f0 : vec3<f32>, rough : f32, NoV : f32) -> vec3<f32> {
-  let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
-  let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-  let r = rough * c0 + c1;
-  let a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-  let ab = vec2<f32>(-1.04, 1.04) * a004 + r.zw;
-  return f0 * ab.x + ab.y;
-}
-
 // Procedural-sky environment (no clouds — never baked into IBL). Ported from
 // environment.metal sampleEnvironment; an analytic stand-in for baked irradiance.
 fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
@@ -415,7 +407,6 @@ fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
 // sampleEquirect). Level-sampled (no mip chain), so it stays valid in the
 // non-uniform control flow of the debug-view branches.
 fn sampleEquirect(dir : vec3<f32>) -> vec3<f32> {
-  let PI = 3.14159265359;
   let u = atan2(dir.z, dir.x) * (0.5 / PI) + 0.5;
   let v = acos(clamp(dir.y, -1.0, 1.0)) * (1.0 / PI);
   return textureSampleLevel(envTex, envSamp, vec2<f32>(u, v), 0.0).rgb;
@@ -648,58 +639,8 @@ fn evaluateLighting(worldPos : vec3<f32>, N : vec3<f32>, V : vec3<f32>,
   return directLight;
 }
 
-// --- View transform (ported from shaders/metal/post.metal) ---------------
-// Color grade in scene-linear, BEFORE the tone map (the "Look" stage). Identity
-// at the neutral defaults (contrast=1, saturation=1).
-fn applyGrade(x0 : vec3<f32>, contrast : f32, saturation : f32) -> vec3<f32> {
-  var x = x0;
-  let luma = dot(x, vec3<f32>(0.2126, 0.7152, 0.0722));
-  x = max(vec3<f32>(luma) + saturation * (x - vec3<f32>(luma)), vec3<f32>(0.0));
-  let grey = 0.18;
-  let lg = log2(grey);
-  var lx = log2(max(x, vec3<f32>(1e-5)));
-  lx = (lx - vec3<f32>(lg)) * contrast + vec3<f32>(lg);
-  return exp2(lx);
-}
-
-// ACES filmic (Stephen Hill fit). Returns a final sRGB-encoded color.
-fn tonemapACES(x : vec3<f32>) -> vec3<f32> {
-  let ci = vec3<f32>(dot(vec3<f32>(0.59719, 0.35458, 0.04823), x),
-                     dot(vec3<f32>(0.07600, 0.90834, 0.01566), x),
-                     dot(vec3<f32>(0.02840, 0.13383, 0.83777), x));
-  let cf = (ci * (ci + 0.0245786) - 0.000090537) /
-           (ci * (0.983729 * ci + 0.432951) + 0.238081);
-  let c = vec3<f32>(dot(vec3<f32>( 1.60475, -0.53108, -0.07367), cf),
-                    dot(vec3<f32>(-0.10208,  1.10813, -0.00605), cf),
-                    dot(vec3<f32>(-0.00327, -0.07276,  1.07602), cf));
-  return pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
-}
-
-// AgX (minimal fit, Wrensch / Sobotka). Log+sigmoid bakes in the ~2.2 encode.
-fn agxContrastApprox(x : vec3<f32>) -> vec3<f32> {
-  let x2 = x * x;
-  let x4 = x2 * x2;
-  return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4
-       - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - vec3<f32>(0.00232);
-}
-fn tonemapAgX(val0 : vec3<f32>) -> vec3<f32> {
-  let agxMat = mat3x3<f32>(
-    vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
-    vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
-    vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
-  let agxMatInv = mat3x3<f32>(
-    vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
-    vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
-    vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
-  let minEv = -12.47393;
-  let maxEv = 4.026069;
-  var val = agxMat * val0;
-  val = clamp(log2(max(val, vec3<f32>(1e-10))), vec3<f32>(minEv), vec3<f32>(maxEv));
-  val = (val - vec3<f32>(minEv)) / (maxEv - minEv);
-  val = agxContrastApprox(val);
-  val = agxMatInv * clamp(val, vec3<f32>(0.0), vec3<f32>(1.0));
-  return clamp(val, vec3<f32>(0.0), vec3<f32>(1.0));
-}
+// (The view transform — grade + ACES/AgX — lives in kCompositeWgsl only; the
+// mesh pass writes scene-linear HDR and never tone-maps.)
 
 // Main pass writes two targets: linear HDR color + a material G-buffer
 // (world normal in xyz, roughness in w) that SSAO and SSR read.
@@ -1455,22 +1396,27 @@ public:
     TextureHandle uploadTexture(int width, int height, int channels,
                                 const uint8_t* data) override {
         if (width <= 0 || height <= 0 || !data) return TextureHandle{};
-        // WebGPU sampled textures are RGBA8; expand 1/3-channel source to RGBA.
+        // WebGPU sampled textures are RGBA8; expand 1/3-channel source to RGBA
+        // (4-channel input is already the GPU layout — copy it straight through).
         std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
-        for (int i = 0; i < width * height; ++i) {
-            uint8_t r = data[i * channels + 0];
-            uint8_t g = channels >= 3 ? data[i * channels + 1] : r;
-            uint8_t b = channels >= 3 ? data[i * channels + 2] : r;
-            uint8_t a = channels >= 4 ? data[i * channels + 3] : 255;
-            rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = a;
+        if (channels == 4) {
+            std::memcpy(rgba.data(), data, rgba.size());
+        } else {
+            for (int i = 0; i < width * height; ++i) {
+                uint8_t r = data[i * channels + 0];
+                uint8_t g = channels >= 3 ? data[i * channels + 1] : r;
+                uint8_t b = channels >= 3 ? data[i * channels + 2] : r;
+                rgba[i * 4 + 0] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 255;
+            }
         }
         int levels = 1;
         while ((std::max(width, height) >> levels) > 0) ++levels;   // full mip chain
         GpuTexture t;
         t.texture = createTexture2D(width, height, WGPUTextureFormat_RGBA8Unorm, rgba.data(),
                                     static_cast<size_t>(width) * 4, levels,
-                                    WGPUTextureUsage_RenderAttachment);
-        generateMips(t.texture, width, height, levels);
+                                    levels > 1 ? WGPUTextureUsage_RenderAttachment
+                                               : WGPUTextureUsage_None);
+        if (levels > 1) generateMips(t.texture, levels);
         t.view = wgpuTextureCreateView(t.texture, nullptr);
         t.generation = ++textureCounter_;
 
@@ -1486,10 +1432,24 @@ public:
         if (handle.index == 0 || handle.index > textures_.size()) return;
         GpuTexture& t = textures_[handle.index - 1];
         if (t.generation != handle.generation) return;
+        // If this texture is the bound environment, fall back to the procedural
+        // sky BEFORE releasing the view — envCurrentView_ would otherwise dangle
+        // and the next group-0/sky bind-group rebuild would use a dead view.
+        if (t.view && t.view == envCurrentView_) {
+            envMode_ = false;
+            envCurrentView_ = envDefaultView_;
+            if (bindGroup_) rebuildBindGroup();
+            if (skyBindGroup_) rebuildSkyBindGroup();
+        }
         if (t.view) { wgpuTextureViewRelease(t.view); t.view = nullptr; }
         if (t.texture) { wgpuTextureRelease(t.texture); t.texture = nullptr; }
         t.generation = 0;
-        materialGroups_.clear();   // any cached bind group may reference it
+        // Any cached material bind group may reference the removed texture. The
+        // groups must be RELEASED, not just dropped from the map — each holds a
+        // ref to its texture views, so leaking them pins the texture's VRAM.
+        for (auto& kv : materialGroups_)
+            if (kv.second) wgpuBindGroupRelease(kv.second);
+        materialGroups_.clear();
         freeTextures_.push_back(handle.index - 1);
     }
 
@@ -1612,7 +1572,7 @@ public:
              gradeParams.contrast, gradeParams.saturation);
 
         // Lights: sun first (directional), then point, then spot, up to 32.
-        // Sun shadow config (single cascade). Driven off the level's ShadowConfig
+        // Sun shadow config (cascaded). Driven off the level's ShadowConfig
         // + the live Renderer::shadowParams (debug overlay distance override).
         const DirectionalLight& sun = lighting.sun;
         const ShadowConfig& shc = lighting.shadow;
@@ -1818,7 +1778,12 @@ public:
         }
 
         // Wind clock (ambient.w): a monotonic time for FLAG_WIND vertex sway.
-        windTime_ += 1.0f / 60.0f;
+        // Advance by real elapsed time — rAF runs at the display rate (60/120/144
+        // Hz, or throttled), so a fixed 1/60 step would tie sway speed to fps.
+        double nowMs = emscripten_get_now();
+        if (windLastMs_ > 0.0)
+            windTime_ += static_cast<float>(std::min((nowMs - windLastMs_) / 1000.0, 0.1));
+        windLastMs_ = nowMs;
         globals_.ambient[3] = windTime_;
 
         // Upload scene globals.
@@ -1830,21 +1795,27 @@ public:
         // draws, at slots [draws_.size() .. draws_.size()+instancedGroups_.size()).
         // Slot layout in the dynamic draw buffer: regular draws, then instanced
         // group materials, then terrain draws.
-        terrainBase_ = draws_.size() + instancedGroups_.size();
-        size_t totalSlots = terrainBase_ + terrainDraws_.size();
+        const size_t terrainBase = draws_.size() + instancedGroups_.size();
+        size_t totalSlots = terrainBase + terrainDraws_.size();
         ensureDrawCapacity(totalSlots);
 
         if (totalSlots > 0) {
-            std::vector<uint8_t> staging(totalSlots * kDrawStride, 0);
+            // Reused member scratch (grows monotonically): a fresh
+            // vector<uint8_t>(N, 0) here would heap-allocate and zero-fill
+            // 256 B x draws every frame. Only the GpuDraw prefix of each slot is
+            // ever read by the shader, so the stride padding can stay stale.
+            if (drawStaging_.size() < totalSlots * kDrawStride)
+                drawStaging_.resize(totalSlots * kDrawStride);
+            uint8_t* staging = drawStaging_.data();
             for (size_t i = 0; i < draws_.size(); ++i)
-                std::memcpy(staging.data() + i * kDrawStride, &draws_[i].data, sizeof(GpuDraw));
+                std::memcpy(staging + i * kDrawStride, &draws_[i].data, sizeof(GpuDraw));
             for (size_t i = 0; i < instancedGroups_.size(); ++i)
-                std::memcpy(staging.data() + (draws_.size() + i) * kDrawStride,
+                std::memcpy(staging + (draws_.size() + i) * kDrawStride,
                             &instancedGroups_[i].data, sizeof(GpuDraw));
             for (size_t i = 0; i < terrainDraws_.size(); ++i)
-                std::memcpy(staging.data() + (terrainBase_ + i) * kDrawStride,
+                std::memcpy(staging + (terrainBase + i) * kDrawStride,
                             &terrainDraws_[i].data, sizeof(GpuDraw));
-            wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging.data(), staging.size());
+            wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging, totalSlots * kDrawStride);
         }
 
         // Upload per-instance models (grow the instance buffer as needed).
@@ -1897,6 +1868,8 @@ public:
                 wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
                 for (size_t i = 0; i < draws_.size(); ++i) {
                     const GpuMesh& m = meshes_[draws_[i].mesh];
+            if (!m.vertexBuffer) continue;   // removed mid-frame
+                    if (!m.vertexBuffer) continue;   // removed mid-frame
                     uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
                     wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                     wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
@@ -1911,6 +1884,8 @@ public:
                     for (size_t i = 0; i < instancedGroups_.size(); ++i) {
                         const InstancedGroup& g = instancedGroups_[i];
                         const GpuMesh& m = meshes_[g.mesh];
+                if (!m.vertexBuffer) continue;   // removed mid-frame
+                        if (!m.vertexBuffer) continue;   // removed mid-frame
                         uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                         wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
@@ -1927,7 +1902,9 @@ public:
                     wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
                     for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                         const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
-                        uint32_t dynOffset = static_cast<uint32_t>((terrainBase_ + i) * kDrawStride);
+                if (!m.vertexBuffer) continue;   // removed mid-frame
+                        if (!m.vertexBuffer) continue;   // removed mid-frame
+                        uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                         wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                         wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
@@ -1940,6 +1917,18 @@ public:
             }
         }
 
+        // Which post passes actually run this frame — decided up front so the
+        // main pass can skip storing attachments nothing will read. Zero-strength
+        // effects are treated as off (their passes would render into targets the
+        // composite multiplies by 0).
+        bool ssaoOn = ssaoEnabled && globals_.counts[1] == 0 && ssaoParams.intensity > 0.0f;
+        bool ssaoForDebug = globals_.counts[1] == 1;   // AO debug view shows AO even if disabled
+        bool ssrOn = ssrEnabled && globals_.counts[1] == 0 && ssrParams.blendStrength > 0.0f;
+        bool bloomOn = bloomEnabled && globals_.counts[1] == 0 && bloomParams.intensity > 0.0f;
+        // Depth + G-buffer are only ever sampled by SSAO/SSR; when neither runs,
+        // Discard skips the attachment writeback (a real win on tiler GPUs).
+        bool needGbuf = ssaoOn || ssaoForDebug || ssrOn;
+
         WGPURenderPassColorAttachment colorAtt[2] = {};
         colorAtt[0].view = hdrView_;   // scene -> HDR target; composite -> swapchain
         colorAtt[0].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
@@ -1949,13 +1938,13 @@ public:
         colorAtt[1].view = gbufView_;  // material G-buffer (normal, roughness)
         colorAtt[1].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
         colorAtt[1].loadOp = WGPULoadOp_Clear;
-        colorAtt[1].storeOp = WGPUStoreOp_Store;
+        colorAtt[1].storeOp = needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
         colorAtt[1].clearValue = {0.0, 0.0, 0.0, 1.0};
 
         WGPURenderPassDepthStencilAttachment depth = {};
         depth.view = depthView_;
         depth.depthLoadOp = WGPULoadOp_Clear;
-        depth.depthStoreOp = WGPUStoreOp_Store;
+        depth.depthStoreOp = needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
         depth.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor passDesc = {};
@@ -2015,7 +2004,7 @@ public:
             wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
             for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                 const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
-                uint32_t dynOffset = static_cast<uint32_t>((terrainBase_ + i) * kDrawStride);
+                uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
                 wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
                 wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(terrainDraws_[i].mat), 0, nullptr);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
@@ -2031,8 +2020,6 @@ public:
         wgpuRenderPassEncoderRelease(pass);
 
         // SSAO: reconstruct from the just-written depth into the AO target.
-        bool ssaoOn = ssaoEnabled && globals_.counts[1] == 0;
-        bool ssaoForDebug = ssaoEnabled && globals_.counts[1] == 1;  // AO-only debug view
         if (ssaoOn || ssaoForDebug) {
             GpuSsao us = {};
             std::memcpy(us.invViewProjection, globals_.invViewProjection, sizeof(us.invViewProjection));
@@ -2065,7 +2052,6 @@ public:
         }
 
         // SSR: reflect the HDR color off the G-buffer into the SSR target.
-        bool ssrOn = ssrEnabled && globals_.counts[1] == 0;
         if (ssrOn) {
             GpuSsr ur = {};
             std::memcpy(ur.invViewProjection, globals_.invViewProjection, sizeof(ur.invViewProjection));
@@ -2099,7 +2085,6 @@ public:
 
         // Bloom: bright-pass (HDR -> bloomA) then a separable blur (A->B->A).
         // Only when enabled and not in a debug view (debug bypasses post).
-        bool bloomOn = bloomEnabled && globals_.counts[1] == 0;
         if (bloomOn) {
             GpuBloom ub = {};
             ub.params[0] = bloomParams.threshold;
@@ -2525,7 +2510,9 @@ private:
         desc.vertex.buffers = &vbLayout;
         desc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
         desc.primitive.frontFace = WGPUFrontFace_CCW;
-        // Phase 1: no back-face culling until winding is confirmed on device
+        // Culling stays OFF permanently: alpha-test foliage cards are
+        // single-sided, so global back-face culling would drop leaves (a
+        // per-material two-sided flag is the eventual fix; matches Vulkan).
         // (matches the Vulkan Phase-1 choice); a later phase turns it on.
         desc.primitive.cullMode = WGPUCullMode_None;
         desc.depthStencil = &depthState;
@@ -3083,7 +3070,7 @@ private:
     }
 
     // Fill a texture's mip chain by successive downsample blits (base already up).
-    void generateMips(WGPUTexture tex, int w, int h, int levels) {
+    void generateMips(WGPUTexture tex, int levels) {
         WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, nullptr);
         for (int i = 1; i < levels; ++i) {
             WGPUTextureViewDescriptor svd = {};
@@ -3098,7 +3085,9 @@ private:
 
             WGPUBindGroupEntry e[2] = {};
             e[0].binding = 0; e[0].textureView = src;
-            e[1].binding = 1; e[1].sampler = materialSampler_;
+            // Clamp-to-edge for the downsample: the tiling material sampler
+            // (Repeat) would bleed opposite edges into every mip.
+            e[1].binding = 1; e[1].sampler = linearSampler_;
             WGPUBindGroupDescriptor bgd = {};
             bgd.layout = blitLayout_; bgd.entryCount = 2; bgd.entries = e;
             WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device_, &bgd);
@@ -3459,9 +3448,8 @@ private:
     std::vector<InstancedGroup> instancedGroups_;
     std::vector<float> instanceStaging_;
     std::vector<QueuedDraw> terrainDraws_;
-    size_t terrainBase_ = 0;        // first terrain slot in the dynamic draw buffer
 
-    // Sun shadow (single cascade): a depth map + its own pipeline; the main
+    // Sun shadow (cascaded, up to 4 layers): a depth array + its own pipeline; the main
     // pipeline samples it via group 1.
     static constexpr int kShadowMapSize = 2048;
     static constexpr int kMaxCascades = 4;
@@ -3482,6 +3470,8 @@ private:
     bool shadowOn_ = false;
     int shadowCascadeCount_ = 3, activeCascades_ = 0;
     float windTime_ = 0.0f;
+    double windLastMs_ = 0.0;             // wall clock of the last wind tick
+    std::vector<uint8_t> drawStaging_;    // reused per-frame draw-uniform scratch
     float shadowDistance_ = 150.0f, shadowDepthBias_ = 0.0015f,
           shadowNormalBias_ = 0.04f, shadowPcf_ = 1.0f;
 
