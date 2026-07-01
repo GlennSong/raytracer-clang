@@ -672,6 +672,9 @@ if(EMSCRIPTEN)
         "-sENVIRONMENT=web"
         # Hooks the page calls (on-screen sticks/buttons + debug panel; keep _main).
         "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause"
+        # web_main's EM_ASM uses stringToNewUTF8; Emscripten doesn't dependency-
+        # scan EM_ASM bodies, so pin it explicitly or a toolchain bump can DCE it.
+        "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8"
         "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
     )
     # Emit viewer_web.js (+ .wasm + .data); web/viewer.html loads it.
@@ -685,9 +688,13 @@ if(EMSCRIPTEN)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/index.html
                 $<TARGET_FILE_DIR:viewer_web>/index.html
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${CMAKE_SOURCE_DIR}/web/viewer.html
-                $<TARGET_FILE_DIR:viewer_web>/viewer.html
+        # viewer.html gets __RT_BUILD__ replaced with the wasm content hash so
+        # its cache-busting ?v= changes exactly when the engine bytes do.
+        COMMAND ${CMAKE_COMMAND}
+                -DSRC=${CMAKE_SOURCE_DIR}/web/viewer.html
+                -DDST=$<TARGET_FILE_DIR:viewer_web>/viewer.html
+                -DWASM=$<TARGET_FILE_DIR:viewer_web>/viewer_web.wasm
+                -P ${CMAKE_SOURCE_DIR}/cmake/inject_build_id.cmake
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/about.html
                 $<TARGET_FILE_DIR:viewer_web>/about.html

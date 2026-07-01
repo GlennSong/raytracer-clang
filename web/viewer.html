@@ -180,10 +180,14 @@
         canvas.height = Math.max(1, Math.floor((canvas.clientHeight || innerHeight) * dpr)); };
       resize(); window.addEventListener('resize', resize);
 
-      // Cache-bust the engine binary: GitHub Pages caches viewer_web.js/.wasm
-      // aggressively and a ?v= on the page URL does NOT bust them. Load fresh with
-      // a per-visit token (dev convenience; switch to a fixed build hash later).
-      const V = Date.now();
+      // Cache-bust the engine binary with a BUILD token, not a per-visit one:
+      // the ?v= changes only when the wasm bytes change, so repeat visits hit the
+      // browser/CDN cache (~1.6 MB saved per load) while a deploy still busts.
+      // __RT_BUILD__ is replaced with the wasm content hash by the CMake copy
+      // step (cmake/inject_build_id.cmake). Serving the raw source (placeholder
+      // intact, e.g. python3 -m http.server from web/) falls back to Date.now().
+      const BUILD = '__RT_BUILD__';
+      const V = BUILD.indexOf('RT_BUILD') >= 0 ? Date.now() : BUILD;
       try {
         await new Promise((res, rej) => {
           const s = document.createElement('script');
