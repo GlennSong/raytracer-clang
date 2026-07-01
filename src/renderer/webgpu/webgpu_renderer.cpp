@@ -135,7 +135,8 @@ struct GpuDraw {
     float    model[16];          // column-major
     float    albedoMetallic[4];  // rgb albedo, a metallic
     float    emissionRough[4];   // rgb emission, a roughness
-    uint32_t surfaceFlags[4];    // x surfaceId, y rawFlags (checkerboard/alpha/wind)
+    uint32_t surfaceFlags[4];    // x surfaceId, y rawFlags, z mapBits, w unused
+    float    terrainMorph[4];    // x morphStart, y morphEnd (CDLOD terrain path)
 };
 
 // Engine Mat4 is row-major (m[row][col]); WGSL/WebGPU matrices are column-major,
@@ -185,7 +186,8 @@ struct DrawData {
   model          : mat4x4<f32>,
   albedoMetallic : vec4<f32>,      // rgb albedo, a metallic
   emissionRough  : vec4<f32>,      // rgb emission, a roughness
-  surfaceFlags   : vec4<u32>,      // x surfaceId, y rawFlags
+  surfaceFlags   : vec4<u32>,      // x surfaceId, y rawFlags, z mapBits
+  terrainMorph   : vec4<f32>,      // x morphStart, y morphEnd
 };
 
 @group(0) @binding(0) var<uniform> g : Globals;
@@ -288,6 +290,43 @@ fn vs_shadow_instanced(
 ) -> @builtin(position) vec4<f32> {
   let model = mat4x4<f32>(m0, m1, m2, m3);
   return g.cascadeVP[scidx.idx.x] * model * vec4<f32>(position, 1.0);
+}
+
+// CDLOD terrain (ADR-0036): identity model, world-space verts. `tangent` holds
+// the morph-target position (where this vertex collapses on the next-coarser
+// grid); mix toward it by camera distance so the node matches the neighbour LOD
+// before it switches, killing the popping seam. (Ported from lighting.metal.)
+fn terrainMorphPos(position : vec3<f32>, morphTarget : vec3<f32>) -> vec3<f32> {
+  let dist = distance(position, g.cameraPosition.xyz);
+  let k = clamp((dist - d.terrainMorph.x) / max(d.terrainMorph.y - d.terrainMorph.x, 1e-3),
+                0.0, 1.0);
+  return mix(position, morphTarget, k);
+}
+@vertex
+fn vs_terrain(
+  @location(0) position : vec3<f32>,
+  @location(1) normal   : vec3<f32>,
+  @location(2) tangent  : vec3<f32>,
+  @location(3) texcoord : vec2<f32>,
+  @location(4) color    : vec3<f32>,
+) -> VSOut {
+  var out : VSOut;
+  let world = vec4<f32>(terrainMorphPos(position, tangent), 1.0);
+  out.worldPos = world.xyz;
+  out.worldNormal = normalize(normal);
+  out.worldTangent = vec3<f32>(0.0);   // terrain never normal-maps (tangent is morph)
+  out.color = color;
+  out.uv = texcoord;
+  out.clip = g.viewProjection * world;
+  return out;
+}
+@vertex
+fn vs_shadow_terrain(
+  @location(0) position : vec3<f32>,
+  @location(2) tangent  : vec3<f32>,
+) -> @builtin(position) vec4<f32> {
+  // Same morph as the receiver so the caster matches (no peter-panning seam).
+  return g.cascadeVP[scidx.idx.x] * vec4<f32>(terrainMorphPos(position, tangent), 1.0);
 }
 
 const PI : f32 = 3.14159265359;
@@ -1049,6 +1088,8 @@ public:
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
         if (instancedPipeline_) { wgpuRenderPipelineRelease(instancedPipeline_); instancedPipeline_ = nullptr; }
         if (instancedShadowPipeline_) { wgpuRenderPipelineRelease(instancedShadowPipeline_); instancedShadowPipeline_ = nullptr; }
+        if (terrainPipeline_) { wgpuRenderPipelineRelease(terrainPipeline_); terrainPipeline_ = nullptr; }
+        if (terrainShadowPipeline_) { wgpuRenderPipelineRelease(terrainShadowPipeline_); terrainShadowPipeline_ = nullptr; }
         if (instanceBuf_) { wgpuBufferRelease(instanceBuf_); instanceBuf_ = nullptr; }
         if (skyBindGroup_) { wgpuBindGroupRelease(skyBindGroup_); skyBindGroup_ = nullptr; }
         if (skyPipeline_) { wgpuRenderPipelineRelease(skyPipeline_); skyPipeline_ = nullptr; }
@@ -1209,6 +1250,7 @@ public:
         draws_.clear();
         instancedGroups_.clear();
         instanceStaging_.clear();
+        terrainDraws_.clear();
         stats_ = RenderStats{};
     }
 
@@ -1388,6 +1430,21 @@ public:
         instancedGroups_.push_back(g);
     }
 
+    // CDLOD terrain node (identity transform; morph target baked in tangent).
+    void drawTerrain(MeshHandle handle, const RenderMaterial& material,
+                     float morphStart, float morphEnd) override {
+        const GpuMesh* m = resolve(handle);
+        if (!m || m->indexCount == 0) return;
+        QueuedDraw qd;
+        qd.mesh = handle.index - 1;
+        packMat4(Mat4(), qd.data.model);       // identity: verts are world-space
+        fillMaterial(qd.data, material);
+        qd.data.terrainMorph[0] = morphStart;
+        qd.data.terrainMorph[1] = morphEnd;
+        qd.mat = matKeyOf(material);
+        terrainDraws_.push_back(qd);
+    }
+
     void endFrame() override {
         if (!device_ || !surface_) return;
 
@@ -1465,7 +1522,10 @@ public:
         // it) if this frame needs more slots than the current capacity. Instanced
         // groups ride the same dynamic buffer (their material) after the regular
         // draws, at slots [draws_.size() .. draws_.size()+instancedGroups_.size()).
-        size_t totalSlots = draws_.size() + instancedGroups_.size();
+        // Slot layout in the dynamic draw buffer: regular draws, then instanced
+        // group materials, then terrain draws.
+        terrainBase_ = draws_.size() + instancedGroups_.size();
+        size_t totalSlots = terrainBase_ + terrainDraws_.size();
         ensureDrawCapacity(totalSlots);
 
         if (totalSlots > 0) {
@@ -1475,6 +1535,9 @@ public:
             for (size_t i = 0; i < instancedGroups_.size(); ++i)
                 std::memcpy(staging.data() + (draws_.size() + i) * kDrawStride,
                             &instancedGroups_[i].data, sizeof(GpuDraw));
+            for (size_t i = 0; i < terrainDraws_.size(); ++i)
+                std::memcpy(staging.data() + (terrainBase_ + i) * kDrawStride,
+                            &terrainDraws_[i].data, sizeof(GpuDraw));
             wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging.data(), staging.size());
         }
 
@@ -1512,7 +1575,7 @@ public:
         // Cascaded shadow depth passes (sun): one depth pass per cascade layer,
         // before the main pass. The cascade index rides shadowIdxGroup_ via a
         // dynamic offset; vs_shadow uses it to pick cascadeVP[c].
-        if (shadowOn_ && (!draws_.empty() || !instancedGroups_.empty())) {
+        if (shadowOn_ && (!draws_.empty() || !instancedGroups_.empty() || !terrainDraws_.empty())) {
             for (int c = 0; c < activeCascades_; ++c) {
                 WGPURenderPassDepthStencilAttachment sdepth = {};
                 sdepth.view = shadowLayerViews_[c];
@@ -1550,6 +1613,20 @@ public:
                         wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
                                                             0, WGPU_WHOLE_SIZE);
                         wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, g.instanceCount, 0, 0, 0);
+                    }
+                }
+                // Terrain nodes cast morphed shadows (matching the receiver).
+                if (!terrainDraws_.empty()) {
+                    wgpuRenderPassEncoderSetPipeline(spass, terrainShadowPipeline_);
+                    wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
+                    for (size_t i = 0; i < terrainDraws_.size(); ++i) {
+                        const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
+                        uint32_t dynOffset = static_cast<uint32_t>((terrainBase_ + i) * kDrawStride);
+                        wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
+                        wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                            0, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
                     }
                 }
                 wgpuRenderPassEncoderEnd(spass);
@@ -1618,6 +1695,24 @@ public:
                 stats_.instancedDrawCalls++;
                 stats_.totalInstances += g.instanceCount;
                 stats_.trianglesDrawn += (m.indexCount / 3) * g.instanceCount;
+            }
+        }
+
+        // Terrain nodes (CDLOD morph).
+        if (!terrainDraws_.empty()) {
+            wgpuRenderPassEncoderSetPipeline(pass, terrainPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
+            for (size_t i = 0; i < terrainDraws_.size(); ++i) {
+                const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
+                uint32_t dynOffset = static_cast<uint32_t>((terrainBase_ + i) * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+                wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(terrainDraws_[i].mat), 0, nullptr);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                    0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
+                stats_.drawCalls++;
+                stats_.trianglesDrawn += m.indexCount / 3;
             }
         }
 
@@ -2129,6 +2224,34 @@ private:
         instancedShadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &isdesc);
         wgpuPipelineLayoutRelease(iShadowLayout);
 
+        // Terrain pipelines: single vertex buffer (like the non-instanced path),
+        // but vs_terrain / vs_shadow_terrain apply the CDLOD morph. Same layouts.
+        WGPUBindGroupLayout tGroups[3] = {bindLayout_, shadowSampleLayout_, materialLayout_};
+        WGPUPipelineLayoutDescriptor tplDesc = {};
+        tplDesc.bindGroupLayoutCount = 3;
+        tplDesc.bindGroupLayouts = tGroups;
+        WGPUPipelineLayout tPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &tplDesc);
+        WGPURenderPipelineDescriptor tdesc = desc;
+        tdesc.layout = tPipeLayout;
+        tdesc.vertex.entryPoint = sv("vs_terrain");
+        tdesc.vertex.bufferCount = 1;
+        tdesc.vertex.buffers = &vbLayout;
+        terrainPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &tdesc);
+        wgpuPipelineLayoutRelease(tPipeLayout);
+
+        WGPUBindGroupLayout tsGroups[2] = {bindLayout_, shadowVsLayout_};
+        WGPUPipelineLayoutDescriptor tsplDesc = {};
+        tsplDesc.bindGroupLayoutCount = 2;
+        tsplDesc.bindGroupLayouts = tsGroups;
+        WGPUPipelineLayout tShadowLayout = wgpuDeviceCreatePipelineLayout(device_, &tsplDesc);
+        WGPURenderPipelineDescriptor tsdesc = sdesc;
+        tsdesc.layout = tShadowLayout;
+        tsdesc.vertex.entryPoint = sv("vs_shadow_terrain");
+        tsdesc.vertex.bufferCount = 1;
+        tsdesc.vertex.buffers = &vbLayout;
+        terrainShadowPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &tsdesc);
+        wgpuPipelineLayoutRelease(tShadowLayout);
+
         // Sky pipeline: fullscreen triangle, globals only (its own one-binding
         // layout so it doesn't depend on the per-draw dynamic buffer). No vertex
         // buffer; depth-compare Always + no write so meshes paint over it.
@@ -2362,7 +2485,8 @@ private:
 
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
             || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_
-            || !instancedPipeline_ || !instancedShadowPipeline_) {
+            || !instancedPipeline_ || !instancedShadowPipeline_
+            || !terrainPipeline_ || !terrainShadowPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -2663,10 +2787,13 @@ private:
     WGPUBindGroup bindGroup_ = nullptr;
     size_t drawCapacity_ = 0;
     WGPURenderPipeline instancedPipeline_ = nullptr, instancedShadowPipeline_ = nullptr;
+    WGPURenderPipeline terrainPipeline_ = nullptr, terrainShadowPipeline_ = nullptr;
     WGPUBuffer instanceBuf_ = nullptr;
     size_t instanceCapacity_ = 0;   // in instances (64 bytes each)
     std::vector<InstancedGroup> instancedGroups_;
     std::vector<float> instanceStaging_;
+    std::vector<QueuedDraw> terrainDraws_;
+    size_t terrainBase_ = 0;        // first terrain slot in the dynamic draw buffer
 
     // Sun shadow (single cascade): a depth map + its own pipeline; the main
     // pipeline samples it via group 1.
