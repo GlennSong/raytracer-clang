@@ -1,5 +1,12 @@
 # Raytracer / Realtime Engine
 
+> **100% AI-written.** Every line of this project was written by AI (Anthropic's
+> Claude — Opus and Fable), prompted from start to finish; the author has not
+> written a single line of code by hand. It's a personal experiment in how far
+> you can get building a modern rendering and game engine purely by prompting —
+> and then using it as a personal toolchain to explore procedural generation and
+> simulation.
+
 A from-scratch C++17 renderer and game engine, built with only the standard
 library and a handful of vendored single-header/submodule dependencies. It ships
 three programs from a shared core:

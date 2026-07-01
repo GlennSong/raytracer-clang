@@ -31,6 +31,15 @@
     .grid .b h3 { margin: 0 0 6px; font-size: 15px; color: #cfe4ff; }
     .grid .b p { margin: 0; font-size: 13.5px; color: #93a6ba; }
     footer { margin-top: 40px; color: #64768a; font-size: 13px; }
+    .callout { margin: 22px 0 6px; padding: 16px 18px; border-radius: 12px;
+      background: linear-gradient(135deg, #10233a, #14182a);
+      border: 1px solid #2f6a86; }
+    .callout .k { display: inline-block; font-size: 11px; font-weight: 800;
+      letter-spacing: .8px; text-transform: uppercase; color: #8ec5ff;
+      background: #0c2036; border: 1px solid #235a7a; border-radius: 6px;
+      padding: 3px 9px; margin-bottom: 9px; }
+    .callout p { margin: 0; color: #d8e6f5; font-size: 15px; }
+    .callout p + p { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -39,6 +48,19 @@
     <h1>Raytracer / Realtime Engine</h1>
     <p class="lede">A from-scratch C++17 renderer and game engine — running here
       live in your browser via WebGPU and WebAssembly.</p>
+
+    <div class="callout">
+      <span class="k">100% AI-written</span>
+      <p><b>Every line of this engine was written by AI. I haven't written a
+        single line of code myself.</b> It is prompted from start to finish using
+        Anthropic's Claude models (Opus and Fable) — the architecture, the three
+        render backends, the physics and procedural-generation systems, the
+        shaders, and this page.</p>
+      <p>It's a personal experiment: how far can you get building a modern
+        rendering and game engine purely by prompting an AI — and then use that
+        engine as a personal toolchain to explore procedural generation and
+        simulation? This site is the running result.</p>
+    </div>
 
     <h2>What you're looking at</h2>
     <p>Everything in the gallery is a procedurally generated scene rendered in
