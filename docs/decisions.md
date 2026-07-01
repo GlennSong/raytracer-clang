@@ -3933,6 +3933,63 @@ player car already uses Jolt via `VehicleSystem`.
 
 ---
 
+## ADR-0060 — Reactive, perception-driven agents (state machines + local steering) and one composable vehicle
+
+**Context.** The city sim (ADR-0059) moves agents by GLOBAL plans: an A* route is
+computed up front and each agent snaps along lanes leg by leg. That produces
+discontinuities (lane-side snaps at nodes, arrival teleports, one-step merge
+overlaps), agents that can drive/​walk *through* each other (no real reaction),
+and NPC cars that share nothing with the player's car (separate mesh + separate
+kinematic mover). The desired feel is more emergent: an agent should act on what
+it can SEE in front of it and decide locally — closer to boids than to a solved
+path — and every vehicle should be the same kind of object the player drives.
+
+**Decision (direction; phased).**
+
+1. **An agent is a reactive brain with a cone of vision and a state machine.**
+   Each step an agent perceives only what falls in its `VisionCone` (neighbours,
+   the car/person ahead, a signal, the player), runs a small finite state machine
+   (e.g. pedestrian: `Resting → Walking → Avoiding → WaitingToCross → Crossing`;
+   driver: `Cruising → Following → Yielding → Stopping → Turning`), and outputs a
+   **steering intent**, not a teleport. Decisions use only visible/local
+   information — an agent can be surprised (it does not know what is behind it or
+   what is coming next). Optional agent MEMORY (recently-seen obstacles) is a
+   later pass.
+2. **Movement is continuous local steering (boids-style), integrated over time.**
+   Behaviours combine as weighted steering: SEEK the current goal/waypoint,
+   SEPARATE from visible neighbours (evade — but only ones in the cone), align/
+   follow to form lanes, and avoid obstacles. This replaces the leg-by-leg lane
+   snap, so motion is continuous and agents part around each other instead of
+   overlapping. The NavGraph still supplies the road/sidewalk geometry and a goal
+   to seek; it stops being a rigid rail. A* (if kept) only picks a coarse goal
+   sequence — the moment-to-moment behaviour is reactive.
+3. **One composable vehicle for player and AI.** A vehicle is an entity composed
+   of components — Body (Lua-authored mesh + dimensions + type: car/truck/tractor-
+   trailer), Chassis (Jolt physics + drivetrain), Handling (input→forces), Seats
+   (occupancy: an agent or the player), Lights (toggle), and a **Controller** that
+   is the sole source of `{throttle, steer, brake}`. `PlayerController` reads
+   input; `DriverAgent` is the reactive brain above producing the same three
+   numbers. The vehicle does not know who drives it — so NPC cars look and move
+   like the player's, just with an AI at the wheel, and discontinuities vanish
+   because physics integrates position.
+4. **Debug widgets.** Each agent can render a footprint (bounding circle/rect) and
+   a forward trajectory vector on the ground, to make the perception/steering
+   legible while tuning.
+
+**Why this over the A* rail.** It is *less* optimal for routing but far more
+dynamic and robust: reactive agents don't teleport, resolve their own conflicts
+by steering, and degrade gracefully. It also unifies the two vehicle code paths
+onto the player's.
+
+**Phasing (each shippable).** (1) Pedestrians go reactive first — perception-
+gated local avoidance + a walking FSM (headless-testable). (2) Debug widgets.
+(3) Drivers go reactive — FSM + steering that follows the lane and reacts to what
+it sees. (4) Unify the vehicle body (NPC cars from `vehicles.lua`). (5) The
+`DriverAgent` controller drives a real Jolt vehicle near the camera (device). See
+`docs/vehicle-agent-plan.md`.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

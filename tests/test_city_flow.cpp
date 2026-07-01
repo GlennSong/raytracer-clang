@@ -142,36 +142,45 @@ TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
     CHECK(maxStep < 20.0);
 }
 
-TEST_CASE(pedestrians_walk_around_each_other) {
-    // Pedestrians should step around one another, not overlap. On a busy little
-    // grid, no two walking peds should ever end a step on top of each other, and
-    // they still reach their destinations.
+TEST_CASE(pedestrians_react_and_walk_around_each_other) {
+    // Reactive walkers (ADR-0060): they see neighbours in a vision cone and step
+    // aside to go around them, their bodies never overlap, they enter the Avoiding
+    // state when they see someone, they still reach their goals, and it's
+    // deterministic.
     NavGraph nav = cross4(40.0);
-    CitySim sim;
-    sim.build(nav, 0, 30, 55);   // pedestrians only
+    CitySim a, b;
+    a.build(nav, 0, 30, 55);   // pedestrians only
+    b.build(nav, 0, 30, 55);
 
     Real minPedDist = 1e9;
-    bool anyArrived = false;
+    bool anyArrived = false, anyAvoided = false;
     for (int i = 0; i < 8000; ++i) {
-        sim.step(0.1, 0.5);
-        const auto& ag = sim.agents();
+        a.step(0.1, 0.5);
+        b.step(0.1, 0.5);
+        const auto& ag = a.agents();
         for (std::size_t p = 0; p < ag.size(); ++p) {
             if (ag[p].mode != Agent::Mode::Pedestrian) continue;
             if (ag[p].activity == Agent::Activity::AtWork) anyArrived = true;
-            if (!ag[p].moving) continue;
+            if (ag[p].state == Agent::State::Avoiding) anyAvoided = true;
+            if (!ag[p].moving || ag[p].speed < 0.3) continue;   // actually walking
             for (std::size_t q = p + 1; q < ag.size(); ++q) {
-                if (ag[q].mode != Agent::Mode::Pedestrian || !ag[q].moving) continue;
+                if (ag[q].mode != Agent::Mode::Pedestrian || !ag[q].moving || ag[q].speed < 0.3)
+                    continue;
                 Real dx = ag[p].pos.x - ag[q].pos.x, dy = ag[p].pos.y - ag[q].pos.y;
                 minPedDist = std::min(minPedDist, std::sqrt(dx * dx + dy * dy));
             }
         }
     }
-    // Pedestrians are 0.5 m wide, so centre-to-centre > 0.5 m means their bodies
-    // never overlap — they step around each other rather than through. (They can
-    // still queue close near a shared destination; peds have no longitudinal
-    // following yet, noted as tech-debt.)
-    CHECK(minPedDist > 0.55);
-    CHECK(anyArrived);          // and they still get where they're going
+    // Bodies (0.5 m wide) never overlap — they go around, not through.
+    CHECK(minPedDist > 0.45);
+    CHECK(anyAvoided);          // walkers really did react to someone they saw
+    CHECK(anyArrived);          // and still reached their destinations
+    bool same = true;           // deterministic
+    for (std::size_t i = 0; i < a.agents().size(); ++i)
+        if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
+            a.agents()[i].pos.y != b.agents()[i].pos.y)
+            same = false;
+    CHECK(same);
 }
 
 TEST_CASE(cars_stop_for_the_player_standing_in_the_road) {

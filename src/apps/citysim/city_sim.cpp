@@ -23,7 +23,10 @@ constexpr Real kSignalApproach = 14.0;          // start braking for a light thi
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
 constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
-constexpr Real kPedSeparation = 1.1;    // pedestrians keep at least this far apart
+constexpr Real kPedVisionRange = 4.0;      // how far ahead a walker perceives (m)
+constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide peripheral)
+constexpr Real kPedSideStep = 0.7;         // max sidestep to go around someone (m)
+constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 
@@ -401,13 +404,49 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         if (a.moving) advance(a, dt, gaps_[i]);
     }
 
-    // Pedestrian separation: nudge overlapping walkers apart so they step AROUND
-    // each other (and the player) instead of through. A few symmetric relaxation
-    // iterations resolve dense clusters (peds funnelling to a node); deterministic
-    // (index order), and small so it doesn't fling anyone off the sidewalk. (Signal
-    // poles are render-side, not sim agents, so ped-vs-pole avoidance is a later
-    // addition.)
-    for (int iter = 0; iter < 4; ++iter) {
+    // Reactive pedestrian behaviour (ADR-0060): each walker acts on what it SEES
+    // in its vision cone. It steers to one side to go AROUND the neighbours (and
+    // the player) it sees ahead — and never reacts to what's behind it. A hard
+    // body-overlap floor below is the physical backstop so two people can't occupy
+    // the same spot. Deterministic (index order); resets to the sidewalk each
+    // step, so the sidestep is a transient lean while someone is in view.
+    for (Agent& a : agents_)
+        if (!a.moving) a.state = Agent::State::Resting;
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        Agent& a = agents_[i];
+        if (!a.moving) continue;
+        if (a.mode == Agent::Mode::Driver) { a.state = Agent::State::Walking; continue; }
+        a.state = Agent::State::Walking;
+        engine::VisionCone cone;
+        cone.origin = a.pos; cone.forward = a.heading;
+        cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
+        Vec2 rightv(a.heading.y, -a.heading.x);   // the walker's right hand
+        Real bias = 0; bool saw = false;
+        auto consider = [&](const Vec2& p) {
+            if (!engine::sees(cone, p)) return;
+            Real fd = engine::forwardDistance(cone, p);
+            if (fd <= 0.1 || fd >= kPedVisionRange) return;
+            saw = true;
+            Real side = (a.pos.x - p.x) * rightv.x + (a.pos.y - p.y) * rightv.y;
+            Real w = (kPedVisionRange - fd) / kPedVisionRange;     // nearer -> stronger
+            bias += (side >= 0 ? 1.0 : -1.0) * w;                  // pass on the side I'm already on
+        };
+        for (std::size_t j = 0; j < agents_.size(); ++j) {
+            if (j == i) continue;
+            if (agents_[j].mode == Agent::Mode::Pedestrian && agents_[j].moving)
+                consider(agents_[j].pos);
+        }
+        for (const Vec2& o : externalObstacles_) consider(o);
+        if (saw) {
+            a.state = Agent::State::Avoiding;
+            Real step = std::max(Real(-1), std::min(Real(1), bias)) * kPedSideStep;
+            a.pos.x += rightv.x * step;
+            a.pos.y += rightv.y * step;
+        }
+    }
+    // Hard body-overlap floor: several symmetric relaxation passes so two people
+    // (whether or not they saw each other) never interpenetrate.
+    for (int iter = 0; iter < 6; ++iter)
         for (std::size_t i = 0; i < agents_.size(); ++i) {
             Agent& a = agents_[i];
             if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
@@ -416,28 +455,16 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 if (b.mode != Agent::Mode::Pedestrian || !b.moving) continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
-                if (d < kPedSeparation && d > 1e-4) {
-                    Real push = (kPedSeparation - d) * 0.5;
-                    Real nx = dx / d, ny = dy / d;
-                    a.pos.x += nx * push; a.pos.y += ny * push;
-                    b.pos.x -= nx * push; b.pos.y -= ny * push;
-                } else if (d <= 1e-4) {
-                    // Exactly coincident (e.g. same spawn point): split along index.
-                    a.pos.x += kPedSeparation * 0.5;
-                    b.pos.x -= kPedSeparation * 0.5;
-                }
-            }
-            // Step around the live player (an external obstacle; it doesn't move).
-            for (const Vec2& o : externalObstacles_) {
-                Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
-                Real d = std::sqrt(dx * dx + dy * dy);
-                if (d < kPedSeparation && d > 1e-4) {
-                    Real push = (kPedSeparation - d);
+                if (d > 1e-4 && d < kPedBodyMin) {
+                    Real push = (kPedBodyMin - d) * 0.5;
                     a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                    b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
+                } else if (d <= 1e-4) {
+                    a.pos.x += kPedBodyMin * 0.5;
+                    b.pos.x -= kPedBodyMin * 0.5;
                 }
             }
         }
-    }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.
     for (Agent& a : agents_) {

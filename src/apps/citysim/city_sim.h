@@ -22,8 +22,12 @@ using engine::Real;   // the engine's scalar (double); used throughout the sim
 struct Agent {
     enum class Mode : uint8_t { Pedestrian, Driver };
     enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning };
+    // Reactive behaviour state (ADR-0060): what the agent is doing right now,
+    // decided from what it can SEE this step. Rendered by the debug widgets.
+    enum class State : uint8_t { Resting, Walking, Avoiding, Waiting };
 
     Mode mode = Mode::Driver;
+    State state = State::Resting;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
     int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
 
