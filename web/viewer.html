@@ -291,7 +291,6 @@
           if (playing) showHint(locked ? 'Mouse captured — press Esc to release'
                                         : 'Click the view to look around');
           if (!locked) button(2, 0);   // don't leave fire stuck held on release
-          updatePause();               // releasing the mouse pauses; capturing resumes
         });
         canvas.addEventListener('mousedown', (e) => {
           if (playing) {
@@ -314,9 +313,16 @@
       // Pause the sim while the panel is open or the player isn't actively in FPS
       // mode (mouse captured on desktop / playing on touch). Rendering + the
       // free-look camera keep running; only fixed-step gameplay/physics freezes.
-      const panelOpen = () => $('dbg').style.display !== 'none';
-      const inFps = () => playing && (hasTouch || locked);
-      const updatePause = () => { mod._rt_web_pause && mod._rt_web_pause((panelOpen() || !inFps()) ? 1 : 0); };
+      // Pause only for the menu or the (non-playing) editor — NOT on mouse
+      // capture. Gameplay physics runs in fixed steps while scripts (the gun) run
+      // every frame, so pausing a live play session would spawn bullets that never
+      // simulate (they'd hang at the muzzle). A play session stays live whether or
+      // not the pointer is currently locked; releasing the mouse doesn't pause it.
+      // Use the COMPUTED display, not the inline style: #dbg starts hidden via
+      // the stylesheet (inline style is ''), so an inline-only check would read
+      // "open" before the panel is ever toggled and wrongly pause a play session.
+      const panelOpen = () => getComputedStyle($('dbg')).display !== 'none';
+      const updatePause = () => { mod._rt_web_pause && mod._rt_web_pause((panelOpen() || !playing) ? 1 : 0); };
       const openPanel = () => { $('dbg').style.display = 'block'; $('toolbar').style.display = 'none'; updatePause(); };
       const closePanel = () => { $('dbg').style.display = 'none'; $('toolbar').style.display = 'flex'; updatePause(); };
 
@@ -340,9 +346,13 @@
         panelPlay.classList.toggle('on', on); panelPlay.textContent = on ? 'on' : 'off';
         if (hasTouch) $('fire').style.display = on ? 'block' : 'none';
         if (!hasTouch) {
-          if (on) { canvas.requestPointerLock && canvas.requestPointerLock();
-                    showHint('Click the view to look · Esc releases the mouse'); }
-          else { document.exitPointerLock && document.exitPointerLock(); showHint(''); }
+          // Guard the pointer-lock call: it can throw/reject on some browsers, and
+          // it must never abort the rest of setPlay (esp. the updatePause below).
+          try {
+            if (on) { canvas.requestPointerLock && canvas.requestPointerLock();
+                      showHint('Click the view to look · Esc releases the mouse'); }
+            else { document.exitPointerLock && document.exitPointerLock(); showHint(''); }
+          } catch (e) { /* non-fatal */ }
         }
         log(on ? 'play mode' : 'editor mode');
         updatePause();
@@ -448,10 +458,10 @@
       // Stats poll — feeds the panel readout and the HUD box (only when visible).
       const stat = (w) => mod._rt_web_stat(w);
       setInterval(() => {
-        const panelOpen = $('dbg').style.display !== 'none';
-        if (!panelOpen && !hudOn) return;
+        const dbgOpen = panelOpen();
+        if (!dbgOpen && !hudOn) return;
         if (hudOn) $('hud').textContent = `fps ${fps}   draws ${stat(0)}   tris ${stat(3)}   ents ${stat(4)}`;
-        if (panelOpen) $('stats').textContent =
+        if (dbgOpen) $('stats').textContent =
           `fps        ${fps}\ndraws      ${stat(0)}\ninstanced  ${stat(1)}\ninstances  ${stat(2)}\ntriangles  ${stat(3)}\nentities   ${stat(4)}`;
       }, 300);
 
