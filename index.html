@@ -95,6 +95,7 @@
     <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
     <div class="row"><span>SSAO</span><button id="ssao">on</button></div>
     <div class="row"><span>SSR</span><button id="ssr">on</button></div>
+    <div class="row"><span>FX res <span id="fxreslbl">50%</span></span><input id="fxres" type="range" min="25" max="100" value="50" style="flex:1"></div>
     <div class="row"><span>Bloom</span><button id="bloom">on</button></div>
     <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
     <h3 style="margin-top:14px">Stats</h3>
@@ -291,6 +292,12 @@
         b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off';
         b.onclick = () => { on = !on; flag(flagId, on ? 1 : 0); b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; }; };
       toggle('ssao', 2, true); toggle('ssr', 3, true); toggle('bloom', 4, true); toggle('lens', 5, true);
+
+      // SSAO/SSR buffer resolution scale (perf). Lower = faster, softer effects.
+      $('fxres').addEventListener('input', (e) => {
+        const pct = e.target.value; $('fxreslbl').textContent = pct + '%';
+        post(4, pct / 100);
+      });
 
       // Stats poll
       const stat = (w) => mod._rt_web_stat(w);
