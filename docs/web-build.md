@@ -141,6 +141,26 @@ python3 -m http.server --directory build-web 8000  # serve (leave running)
 
 ---
 
+## Deploying to GitHub Pages
+
+The live site (https://glennsong.github.io/raytracer-clang/) is served from the
+`gh-pages` branch, which holds only built artifacts — never edit it by hand.
+After building (Steps 4–5):
+
+```bash
+tools/deploy-pages.sh "Pages: <what changed>"
+```
+
+The script copies `viewer_web.{js,wasm,data}`, the front-end pages
+(`index.html`, `viewer.html`, `about.html`, `scenes.json`), and `thumbs/` from
+`build-web/` onto `gh-pages` via a temporary worktree, commits, and pushes.
+Pages picks the commit up within a minute or two. Cache-busting is automatic:
+the build injected a wasm content hash into `viewer.html` (see
+`cmake/inject_build_id.cmake`), so browsers cache the engine between visits and
+re-fetch exactly when the bytes change.
+
+---
+
 ## Offline / air-gapped builds
 
 By default the `emdawnwebgpu` port is fetched from the network on first configure.

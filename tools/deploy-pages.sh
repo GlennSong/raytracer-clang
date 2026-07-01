@@ -1,0 +1,36 @@
+#!/bin/bash
+# Deploy the web build to GitHub Pages (the gh-pages branch).
+#
+# Usage:   tools/deploy-pages.sh ["commit message"]
+# Expects: a completed web build in build-web/ (see docs/web-build.md), i.e.
+#          viewer_web.{js,wasm,data} + the copied front-end. Publishes them to
+#          the gh-pages branch via a temporary worktree and pushes.
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+MSG="${1:-Pages: update}"
+WT="$(mktemp -d)/ghp"
+
+cd "$REPO"
+for f in index.html viewer.html about.html scenes.json \
+         viewer_web.js viewer_web.wasm viewer_web.data; do
+    [ -f "build-web/$f" ] || { echo "missing build-web/$f — build first (docs/web-build.md)"; exit 1; }
+done
+
+git fetch origin gh-pages -q
+git worktree add "$WT" gh-pages -q
+trap 'cd "$REPO"; git worktree remove "$WT" --force 2>/dev/null || true; git worktree prune' EXIT
+
+cp build-web/index.html build-web/viewer.html build-web/about.html build-web/scenes.json \
+   build-web/viewer_web.js build-web/viewer_web.wasm build-web/viewer_web.data "$WT"/
+mkdir -p "$WT/thumbs"
+cp build-web/thumbs/*.png "$WT/thumbs/" 2>/dev/null || true
+touch "$WT/.nojekyll"
+
+git -C "$WT" add -A
+if git -C "$WT" diff --cached --quiet; then
+    echo "nothing changed — not deploying."
+    exit 0
+fi
+git -C "$WT" commit -q -m "$MSG"
+git -C "$WT" push origin gh-pages
+echo "deployed."

@@ -43,10 +43,11 @@ on-device (a real GPU browser).
   minor polish.
 
 ### Known issues / web polish
-- **Pointer Lock needs a user gesture.** Play mode disables the cursor on start;
-  browsers reject pointer-lock without a click, so it throws a (non-fatal) console
-  error. Proper fix is app-level: capture the pointer on canvas click. Orbit
-  (drag) camera works regardless.
+- ~~Pointer Lock needs a user gesture.~~ Fixed: Play (a click) captures the
+  pointer for FPS look; a canvas click re-captures after Esc; the editor keeps
+  drag-to-look. The viewer defaults to AgX tone mapping at 130% exposure, and
+  the simulation pauses while the debug panel is open or no play session is
+  active (rendering + free-look keep running).
 - **Missing assets 404.** `arena.json` references `models/DamagedHelmet.glb` and an
   HDR env map that aren't in the repo's `assets/`; non-fatal (the level still
   loads). Pre-existing, not web-specific.
@@ -149,12 +150,13 @@ normal + roughness via MRT), and **SSR** (screen-space raymarch off the
 G-buffer, fresnel/roughness/edge-weighted). Debug views incl. AO-only + cascades.
 ❌ Lens distortion + DoF — todo (minor).
 
-### Phase 6 — instancing + terrain (🟡 mostly)
+### Phase 6 — instancing + terrain ✅
 ✅ `drawMeshInstanced` — real hardware instancing (per-instance model in a second
 vertex buffer; main + shadow passes), verified ~8× fewer draw calls in the city.
 ✅ Wind sway (`FLAG_WIND`) — height-weighted vertex displacement on both draw
-paths. ❌ CDLOD `drawTerrain` morph — todo (the current scenes have no CDLOD
-terrain to exercise it).
+paths (wall-clock driven, frame-rate independent). ✅ CDLOD `drawTerrain` morph —
+`vs_terrain`/`vs_shadow_terrain` blend toward the baked coarser target over the
+morphStart..morphEnd camera-distance band (verified with the `cdlod` level).
 
 ## Known risks / unknowns (unverified in-browser)
 - **In-browser behaviour unverified.** It compiles + links on emsdk 6.0.1, but no

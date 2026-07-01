@@ -7,6 +7,7 @@ build-web-oz/
 raytracer
 viewer
 run_tests
+run_tests.d
 *.dSYM/
 *.ppm
 *.png
