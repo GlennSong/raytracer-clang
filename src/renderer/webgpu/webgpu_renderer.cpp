@@ -1789,6 +1789,24 @@ public:
         // Upload scene globals.
         wgpuQueueWriteBuffer(queue_, globalBuf_, 0, &globals_, sizeof(GpuGlobals));
 
+        // Sort draws by (material, mesh) so consecutive draws share bindings and
+        // the loops below can skip redundant setBindGroup/setVertex/setIndex
+        // calls. Under Emscripten every encoder call crosses the WASM->JS
+        // boundary — the dominant per-draw CPU cost — so batching identical
+        // state adjacently is the cheapest big win. Safe to reorder: the main
+        // pass is opaque-only (alpha-test discards, no blending), so draw order
+        // does not affect the image. Must happen BEFORE the uniform staging
+        // below (slot i in the dynamic buffer = draws_[i] after the sort).
+        std::sort(draws_.begin(), draws_.end(),
+                  [](const QueuedDraw& a, const QueuedDraw& b) {
+                      if (a.mat.albedo != b.mat.albedo) return a.mat.albedo < b.mat.albedo;
+                      if (a.mat.normal != b.mat.normal) return a.mat.normal < b.mat.normal;
+                      if (a.mat.mr != b.mat.mr) return a.mat.mr < b.mat.mr;
+                      if (a.mat.emissive != b.mat.emissive) return a.mat.emissive < b.mat.emissive;
+                      if (a.mat.ao != b.mat.ao) return a.mat.ao < b.mat.ao;
+                      return a.mesh < b.mesh;
+                  });
+
         // Grow the per-draw uniform buffer (and rebuild the bind group bound to
         // it) if this frame needs more slots than the current capacity. Instanced
         // groups ride the same dynamic buffer (their material) after the regular
@@ -1865,26 +1883,32 @@ public:
                 WGPURenderPassEncoder spass = wgpuCommandEncoderBeginRenderPass(encoder, &sPass);
                 wgpuRenderPassEncoderSetPipeline(spass, shadowPipeline_);
                 uint32_t cascadeOff = static_cast<uint32_t>(c * kDrawStride);
+                // Group 1 (cascade index) persists across the pipeline switches
+                // below — the shadow pipelines share one layout. Bind it once.
                 wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
+                // Draws are material/mesh-sorted; skip re-binding a mesh the
+                // previous shadow draw already bound (materials don't exist in
+                // the depth-only pass).
+                uint32_t sLastMesh = UINT32_MAX;
                 for (size_t i = 0; i < draws_.size(); ++i) {
                     const GpuMesh& m = meshes_[draws_[i].mesh];
-            if (!m.vertexBuffer) continue;   // removed mid-frame
                     if (!m.vertexBuffer) continue;   // removed mid-frame
                     uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
                     wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
-                    wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
-                    wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
-                                                        0, WGPU_WHOLE_SIZE);
+                    if (draws_[i].mesh != sLastMesh) {
+                        wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                        wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                            0, WGPU_WHOLE_SIZE);
+                        sLastMesh = draws_[i].mesh;
+                    }
                     wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
                 }
                 // Instanced groups cast shadows too.
                 if (!instancedGroups_.empty()) {
                     wgpuRenderPassEncoderSetPipeline(spass, instancedShadowPipeline_);
-                    wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
                     for (size_t i = 0; i < instancedGroups_.size(); ++i) {
                         const InstancedGroup& g = instancedGroups_[i];
                         const GpuMesh& m = meshes_[g.mesh];
-                if (!m.vertexBuffer) continue;   // removed mid-frame
                         if (!m.vertexBuffer) continue;   // removed mid-frame
                         uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
@@ -1899,10 +1923,8 @@ public:
                 // Terrain nodes cast morphed shadows (matching the receiver).
                 if (!terrainDraws_.empty()) {
                     wgpuRenderPassEncoderSetPipeline(spass, terrainShadowPipeline_);
-                    wgpuRenderPassEncoderSetBindGroup(spass, 1, shadowIdxGroup_, 1, &cascadeOff);
                     for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                         const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
-                if (!m.vertexBuffer) continue;   // removed mid-frame
                         if (!m.vertexBuffer) continue;   // removed mid-frame
                         uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
@@ -1963,29 +1985,55 @@ public:
         wgpuRenderPassEncoderSetPipeline(pass, pipeline_);
         wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
 
+        // Draws are sorted by (material, mesh) — skip re-binding state a
+        // consecutive draw shares. The per-draw dynamic offset (group 0) always
+        // changes; everything else is elided when unchanged. Group 2 bindings
+        // persist across the pipeline switches below (identical pipeline
+        // layouts), so the material cache carries through all three loops.
+        // lastMat also short-circuits the per-draw hash lookup in
+        // materialGroupFor. Bind counters feed a one-shot diagnostic.
+        const MaterialKey* lastMat = nullptr;
+        uint32_t lastMesh = UINT32_MAX;
+        size_t matBinds = 0, meshBinds = 0;
+        auto bindMaterial = [&](const MaterialKey& k) {
+            if (lastMat && k == *lastMat) return;
+            wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(k), 0, nullptr);
+            lastMat = &k;
+            ++matBinds;
+        };
+
         for (size_t i = 0; i < draws_.size(); ++i) {
             const GpuMesh& m = meshes_[draws_[i].mesh];
+            if (!m.vertexBuffer) continue;   // removed mid-frame
             uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
             wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
-            wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(draws_[i].mat), 0, nullptr);
-            wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
-            wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
-                                                0, WGPU_WHOLE_SIZE);
+            bindMaterial(draws_[i].mat);
+            if (draws_[i].mesh != lastMesh) {
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                    0, WGPU_WHOLE_SIZE);
+                lastMesh = draws_[i].mesh;
+                ++meshBinds;
+            }
             wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
             stats_.drawCalls++;
             stats_.trianglesDrawn += m.indexCount / 3;
         }
 
-        // Instanced groups: one draw each (group 1 shadow sampler stays bound).
+        // Instanced groups: one draw each. Group 1 (shadow sampler) persists
+        // across the pipeline switch (identical layouts) — no re-bind needed.
+        // The instance vertex buffer (slot 1) invalidates nothing in slot 0, but
+        // each group binds its own slot-0 mesh, so reset the mesh cache.
         if (!instancedGroups_.empty()) {
             wgpuRenderPassEncoderSetPipeline(pass, instancedPipeline_);
-            wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
+            lastMesh = UINT32_MAX;
             for (size_t i = 0; i < instancedGroups_.size(); ++i) {
                 const InstancedGroup& g = instancedGroups_[i];
                 const GpuMesh& m = meshes_[g.mesh];
+                if (!m.vertexBuffer) continue;   // removed mid-frame
                 uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
                 wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
-                wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(g.mat), 0, nullptr);
+                bindMaterial(g.mat);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 1, instanceBuf_,
                                                      static_cast<uint64_t>(g.instanceOffset) * 64, WGPU_WHOLE_SIZE);
@@ -1998,15 +2046,15 @@ public:
             }
         }
 
-        // Terrain nodes (CDLOD morph).
+        // Terrain nodes (CDLOD morph). Group 1 persists here too.
         if (!terrainDraws_.empty()) {
             wgpuRenderPassEncoderSetPipeline(pass, terrainPipeline_);
-            wgpuRenderPassEncoderSetBindGroup(pass, 1, shadowSampleGroup_, 0, nullptr);
             for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                 const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
+                if (!m.vertexBuffer) continue;   // removed mid-frame
                 uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
                 wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
-                wgpuRenderPassEncoderSetBindGroup(pass, 2, materialGroupFor(terrainDraws_[i].mat), 0, nullptr);
+                bindMaterial(terrainDraws_[i].mat);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
                                                     0, WGPU_WHOLE_SIZE);
@@ -2018,6 +2066,12 @@ public:
 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
+
+        if (!bindDiagLogged_ && !draws_.empty()) {
+            bindDiagLogged_ = true;
+            LOG_INFO("WebGPU binds: %zu draws -> %zu material binds, %zu mesh binds",
+                     draws_.size(), matBinds, meshBinds);
+        }
 
         // SSAO: reconstruct from the just-written depth into the AO target.
         if (ssaoOn || ssaoForDebug) {
@@ -3502,6 +3556,7 @@ private:
 
     std::vector<QueuedDraw> draws_;
     bool frameDiagLogged_ = false;
+    bool bindDiagLogged_ = false;   // one-shot draw/bind-count diagnostic
     GpuGlobals globals_ = {};
     WGPUColor clearColor_ = {0.5, 0.7, 0.9, 1.0};
     RenderStats stats_;
