@@ -12,6 +12,7 @@
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
+#include "../apps/citysim/city_walkers.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
@@ -77,8 +78,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // bridge cedes car ownership (peds/signals/crosswalks stay with it), and the
     // kinematic car colliders are gone — CityPhysicsSystem now only does peds+poles.
     citySys.setCarsExternallyOwned(true);
-    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // peds + signal poles
+    citySys.setPedsExternallyOwned(true);   // walkers are physics characters too
+    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // signal poles (static)
     addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // spawn + drive NPC cars
+    addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
     addSystem<VehicleSystem>(physSys, camSys);   // drives ALL cars: player + AI (ADR-0058/0061)
 #else
     (void)citySys;   // physics-off build: no collider system to consume it

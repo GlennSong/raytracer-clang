@@ -133,6 +133,45 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
     CHECK(ringAtReal);       // and the car's ring sits at the REAL pose
 }
 
+TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
+    // ADR-0061 walkers: with peds owned by CityWalkerSystem, the render bridge
+    // must not bake instanced ped boxes (they'd draw twice), and a ped's debug
+    // ring follows the bridge-reported REAL body — unreported walkers draw none.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 2;
+    p.pedestrians = 3;
+    p.debugWidgets = true;
+    CityRenderSystem city(p);
+    city.setCarsExternallyOwned(true);
+    city.setPedsExternallyOwned(true);
+    CHECK(city.build(world, nullptr));
+
+    const Vec2 realPed(321.0, 654.0);
+    // Ped agents follow the drivers in the agent array: ids 2..4 here.
+    city.setExternalPedPoses({ CityRenderSystem::ExternalAgentPose{2, realPed, Vec2(1, 0), realPed} });
+    city.step(world, 0.1);
+
+    CHECK(groupCount(world, city.pedGroup()) == 0u);   // no instanced ghost peds
+
+    std::size_t rings = 0;
+    bool ringAtReal = false;
+    for (int s = 0; s < static_cast<int>(Agent::State::Count); ++s) {
+        InstanceGroup* g = world.get<InstanceGroup>(
+            city.footprintGroup(static_cast<Agent::State>(s)));
+        if (!g) continue;
+        for (const Mat4& m : g->transforms) {
+            ++rings;
+            if (std::fabs(m.m[0][3] - realPed.x) < 1e-6 &&
+                std::fabs(m.m[2][3] - realPed.y) < 1e-6)
+                ringAtReal = true;
+        }
+    }
+    CHECK(rings == 1u);   // ONLY the reported walker (no cars/peds reported besides it)
+    CHECK(ringAtReal);
+}
+
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());

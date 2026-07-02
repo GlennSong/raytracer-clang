@@ -437,6 +437,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/vehicle_system.cpp
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0061)
+        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0061)
     )
 endif()
 
@@ -566,6 +567,7 @@ if(Qt6_FOUND)
             src/engine/systems/vehicle_system.cpp
             src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars
             src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0061)
+            src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0061)
         )
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;

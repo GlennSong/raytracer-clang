@@ -4127,18 +4127,49 @@ directions — and an **anti-gridlock valve** noses a car slowly past a STOPPED
 cross car (never a pedestrian/player) after a few blocked seconds, so mutual
 junction blocks self-resolve.
 
+**Refinement 4: physical walkers, think cadence, honest debug HUD.**
+
+- **Pedestrians get bodies** (`apps/citysim/city_walkers.cpp`): each ped agent
+  spawns an entity with a kinematic character capsule (the player's own
+  `CharacterController` + `moveCharacter` mechanism), driven each step toward
+  its planner ghost (walker-simple station control) — walkers now collide with
+  parked cars, poles, kerbs, the player; the ghost tether applies to them too.
+  Knockdown-and-recover: a fast vehicle passing through a walker's body floors
+  it (`KnockdownTimer`, a proximity+speed trigger) — it lies flat, gets up,
+  walks on. The render bridge cedes ped ownership (`setPedsExternallyOwned`).
+  The v1 down pose tilts the render box; the capsule stays upright (ragdoll is
+  future work).
+- **Think cadence** (`Agent::thinkTimer`/`leanTarget`, `setThinkPeriod`): agents
+  DECIDE on a slow, per-agent-staggered clock (default 0.35 s) and COMMIT — the
+  reactive scan runs only on think ticks; between them the committed decision
+  holds while every tick still integrates smoothly toward it. Per-tick
+  re-deciding was the walker oscillation ("wigging out"); a held decision reads
+  as intent. Controllers stay per-tick (stability); decisions go slow
+  (commitment).
+- **Near-field cross braking** (`senseAlongPath` `crossNearRange`): far-field
+  moving cross traffic is still ignored (flow control belongs to the signals),
+  but a crosser within ~8 m ON MY PATH is an imminent T-bone — brake. Two
+  mutual stoppers resolve via the creep valve. This is what physical junction
+  bodies needed that ghost junctions never did.
+- **Debug HUD that answers "what is it thinking?"**: the footprint is now a
+  bright emissive WIRE HOOP at body height (never a flat "shadow ring"),
+  coloured by the FSM state with traffic-light semantics — green = going, RED =
+  held, amber = braking/avoiding, violet = turning, teal = following — and the
+  arrow points from the agent to its CURRENT GOAL (the pursuit lookahead /
+  planned spot), reported by the bridges alongside the real poses.
+
 **What's verified vs owed.** The controller, seam wiring (enter/eject),
 `releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, the closed control
-loop, corridor + cone sensing, the gridlock valve inputs, off-road parking, the
-widget real-pose path, and the stall watchdog are headless-tested (bicycle
-harness + sim/render tests). The Jolt path itself is **UNVERIFIED on device** (no
-Jolt build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`)
-against the real plant, and a check that `resetVehicleUpright` reads well in
-play. Owed next: lane changes / overtaking on the sensed-neighbour model,
-junction yielding evaluated from real poses, and peds don't yet avoid parked
-cars (they can walk through a car parked on the verge). This repositions
-ADR-0059's kinematic sim as the AI *planner*, not a second car mover, and
-subsumes ADR-0060 Phase 5.
+loop, corridor + cone sensing (incl. near-field cross braking), the gridlock
+valve inputs, off-road parking, think-cadence commitment, the knockdown timer,
+and the widget real-pose/goal plumbing are headless-tested (bicycle harness +
+sim/render tests). The Jolt path itself is **UNVERIFIED on device** (no Jolt
+build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`/sense
+cone) against the real plant, plus a feel pass on knockdown and the creep valve.
+Owed next: lane changes / overtaking on the sensed-neighbour model, ragdoll
+knockdown, and a real GPU line-primitive path for debug draw (the wire hoop is
+thin emissive geometry, not true lines). This repositions ADR-0059's kinematic
+sim as the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
 
 ---
 

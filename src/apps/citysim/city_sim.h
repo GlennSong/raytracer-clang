@@ -46,6 +46,15 @@ struct Agent {
     Real departWork = 8.0, departHome = 17.0;
     Activity activity = Activity::AtHome;
 
+    // Think cadence (ADR-0061): agents DECIDE on a slow clock and COMMIT — the
+    // reactive scan (what do I see, which way do I lean) runs only when
+    // thinkTimer expires (staggered per agent), and the committed decision
+    // (`leanTarget`, the FSM state) holds between thinks while every tick still
+    // INTEGRATES toward it. Per-tick re-deciding is what made walkers oscillate:
+    // a new answer every 100 ms reads as wigging out, a held answer as intent.
+    Real thinkTimer = 0;
+    Real leanTarget = 0;   // committed sideways lean (m); lateralOffset chases it
+
     // Current trip along the lane graph.
     engine::Route route;
     int leg = 0;
@@ -172,6 +181,11 @@ public:
     void setPerceptionReliability(Real r) {
         for (Agent& a : agents_) a.reliability = r;
     }
+
+    // How often an agent re-DECIDES its reactive behaviour (seconds). Between
+    // thinks it commits to the last decision and just acts on it. Default 0.35 s.
+    void setThinkPeriod(Real seconds) { thinkPeriod_ = seconds > 0.05 ? seconds : 0.05; }
+    Real thinkPeriod() const { return thinkPeriod_; }
     long faults() const { return faultCount_; }   // perception misses so far
 
     // World-space (XZ) points that cars must yield to in addition to the sim's own
@@ -212,6 +226,7 @@ private:
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
+    Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     uint32_t rng_ = 1;
 };
 

@@ -124,6 +124,47 @@ TEST_CASE(agents_have_distinct_personal_paces) {
     CHECK(factors.size() >= 6u);   // a genuinely mixed crowd, not lockstep
 }
 
+TEST_CASE(agents_commit_to_decisions_between_thinks) {
+    // Think cadence (ADR-0061): the reactive decision (leanTarget) may only
+    // change on the agent's slow think clock — between thinks it is COMMITTED,
+    // however often the sim ticks. Re-deciding every tick is the "wigging out".
+    NavGraph nav = straightRoad(200.0);
+    CitySim sim;
+    sim.setThinkPeriod(0.4);
+    sim.build(nav, 0, 20, 11);   // a crowd of walkers (plenty to react to)
+
+    // Warm up until several peds are moving.
+    for (int i = 0; i < 2000; ++i) sim.step(0.05, 0.5);
+
+    std::vector<Real> lastTarget(sim.agents().size(), 0.0);
+    std::vector<int> changes(sim.agents().size(), 0);
+    std::vector<int> movingTicks(sim.agents().size(), 0);
+    for (std::size_t k = 0; k < sim.agents().size(); ++k)
+        lastTarget[k] = sim.agents()[k].leanTarget;
+
+    const int ticks = 200;                       // 10 s at dt 0.05
+    for (int i = 0; i < ticks; ++i) {
+        sim.step(0.05, 0.5);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+            ++movingTicks[k];
+            if (a.leanTarget != lastTarget[k]) ++changes[k];
+            lastTarget[k] = a.leanTarget;
+        }
+    }
+    bool anyMoved = false;
+    for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+        if (movingTicks[k] < 50) continue;
+        anyMoved = true;
+        // At dt 0.05 and a 0.4 s think period, thinks land every 8 ticks: the
+        // committed target may change at most ~once per 8 ticks (+ slack), never
+        // per-tick.
+        CHECK(changes[k] <= movingTicks[k] / 4);
+    }
+    CHECK(anyMoved);
+}
+
 TEST_CASE(tether_preserves_determinism) {
     NavGraph nav = straightRoad(300.0);
     CitySim a, b;

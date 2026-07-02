@@ -196,9 +196,28 @@ TEST_CASE(corridor_sense_flags_cross_bodies_and_yielders) {
     LeaderSense p = senseAlongPath(lf, 25.0, 1.6, walker);
     CHECK(p.found);
     CHECK(p.yieldAlways);
-    // Moving cross traffic still passes through unhindered (no deadlock).
-    std::vector<SensedBody> crossing = { body(Vec2(0, 10), Vec2(1, 0), 6.0) };
-    CHECK(!senseAlongPath(lf, 25.0, 1.6, crossing).found);
+    // Moving cross traffic: far-field still passes unhindered (no deadlock)...
+    std::vector<SensedBody> crossingFar = { body(Vec2(0, 10), Vec2(1, 0), 6.0) };
+    CHECK(!senseAlongPath(lf, 25.0, 1.6, crossingFar).found);
+    // ...but a crosser about to occupy my path IS braked for (no T-bone).
+    std::vector<SensedBody> crossingNear = { body(Vec2(0, 6), Vec2(1, 0), 6.0) };
+    CHECK(senseAlongPath(lf, 25.0, 1.6, crossingNear).found);
+}
+
+TEST_CASE(knockdown_timer_floors_then_recovers) {
+    KnockdownTimer k;
+    CHECK(!k.down());
+    k.knock();
+    CHECK(k.down());
+    // Down for its window (dt 0.25 is exactly representable)...
+    for (int i = 0; i < 9; ++i) CHECK(k.update(0.25));    // 2.25 s: still down
+    CHECK(!k.update(0.25));                               // 2.5 s: back up
+    CHECK(!k.down());
+    // A second hit while recovering re-floors it from the top.
+    k.knock();
+    k.update(0.25);
+    k.knock();
+    CHECK(k.timer > 2.0);
 }
 
 TEST_CASE(convoy_follower_never_rear_ends_its_leader) {

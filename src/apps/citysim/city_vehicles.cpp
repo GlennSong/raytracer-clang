@@ -171,27 +171,31 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         bodies.push_back(b);
         bodyOwner.push_back(e);
     });
-    world.each<Transform, engine::CharacterController, engine::ControlledBy>(
-        [&](Entity e, Transform& t, engine::CharacterController&, engine::ControlledBy&) {
+    // Every character capsule is a yield-always body: the on-foot player AND the
+    // physical walkers (ADR-0061 CityWalkerSystem) — sensed where physics put
+    // them. Ghost pedestrians are only sensed when walkers have no real bodies.
+    world.each<Transform, engine::CharacterController>(
+        [&](Entity e, Transform& t, engine::CharacterController&) {
             engine::SensedBody b;
             b.pos = Vec2(t.position.x, t.position.z);
             b.speed = 0;
-            b.halfLength = 0.4;
-            b.yieldAlways = true;     // never creep through the player
+            b.halfLength = 0.35;
+            b.yieldAlways = true;     // never creep through a person
             bodies.push_back(b);
             bodyOwner.push_back(e);
         });
-    for (const Agent& a : sim.agents()) {
-        if (a.mode != Agent::Mode::Pedestrian) continue;
-        engine::SensedBody b;
-        b.pos = a.pos;
-        b.heading = a.heading;
-        b.speed = 0;              // a walker is an obstacle regardless of direction
-        b.halfLength = 0.3;
-        b.yieldAlways = true;     // never creep through a pedestrian
-        bodies.push_back(b);
-        bodyOwner.push_back(Entity{});
-    }
+    if (!city_.pedsExternallyOwned())
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Pedestrian) continue;
+            engine::SensedBody b;
+            b.pos = a.pos;
+            b.heading = a.heading;
+            b.speed = 0;          // a walker is an obstacle regardless of direction
+            b.halfLength = 0.3;
+            b.yieldAlways = true;
+            bodies.push_back(b);
+            bodyOwner.push_back(Entity{});
+        }
 
     // Cannot mutate the sim (release) inside a loop that also reads it — collect.
     std::vector<int> toRelease;
@@ -282,10 +286,11 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         // (arrived / between trips), creep to the ghost's PARKING spot on the
         // verge — the station-control target above eases to a stop there — so a
         // finished car pulls over instead of resting where its path ended.
+        Vec2 goal = g.pos;   // where this car is trying to go (debug intent arrow)
         if (onTrip) {
-            ad->command = engine::pursuitCommand(
-                car.follower, carXZ, target,
-                engine::pursuitLookahead(std::max(realSpeed, Real(3.0))));
+            Real look = engine::pursuitLookahead(std::max(realSpeed, Real(3.0)));
+            goal = car.follower.lookahead(look);
+            ad->command = engine::pursuitCommand(car.follower, carXZ, target, look);
         } else {
             Vec2 toGhost(g.pos.x - carXZ.x, g.pos.y - carXZ.y);
             Real d = std::sqrt(toGhost.x * toGhost.x + toGhost.y * toGhost.y);
@@ -310,7 +315,7 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         city_.simMutable().setAgentTether(car.agentId, carXZ, kTetherLead);
 
         widgetPoses.push_back(CityRenderSystem::ExternalAgentPose{
-            car.agentId, carXZ, carFwd});
+            car.agentId, carXZ, carFwd, goal});
     }
     for (int id : toRelease) city_.simMutable().releaseDriver(id);
     city_.setExternalCarPoses(std::move(widgetPoses));

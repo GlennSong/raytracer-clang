@@ -81,24 +81,35 @@ void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
     for (uint32_t i : b.indices) out.indices.push_back(base + i);
 }
 
-// A flat ring (annulus) of unit outer radius in the XZ plane, facing +Y — the
-// debug footprint, a thin wireframe-like outline. Instanced with a scale = the
-// agent's radius.
-engine::RenderMesh ringXZ(Real innerFrac = 0.88, int segs = 32) {
+// A WIRE hoop of unit radius: a thin glowing band standing on edge (a short
+// cylinder shell, double-sided), so from any angle it reads as a bright LINE
+// circling the agent — not a flat polygon lying on the ground like a shadow.
+// Instanced with scale (radius, 1, radius); the band height stays constant.
+engine::RenderMesh ringXZ(int segs = 40, Real bandH = 0.10) {
     engine::RenderMesh m;
     const Vec3 white(1, 1, 1);
     for (int i = 0; i < segs; ++i) {
         Real t0 = (Real(i) / segs) * 6.28318530718;
         Real t1 = (Real(i + 1) / segs) * 6.28318530718;
-        Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
-        Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
-        uint32_t b = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3& p : { o0, o1, i1, i0 }) {
-            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-            m.vertices.push_back(v);
+        Vec3 lo0(std::cos(t0), 0, std::sin(t0)), lo1(std::cos(t1), 0, std::sin(t1));
+        Vec3 hi0 = lo0 + Vec3(0, bandH, 0), hi1 = lo1 + Vec3(0, bandH, 0);
+        Vec3 n(std::cos((t0 + t1) * 0.5), 0, std::sin((t0 + t1) * 0.5));
+        // Both windings so the band shows whichever side faces the camera.
+        for (int side = 0; side < 2; ++side) {
+            uint32_t b = static_cast<uint32_t>(m.vertices.size());
+            Vec3 nn = side ? n * -1.0 : n;
+            for (const Vec3& p : { lo0, lo1, hi1, hi0 }) {
+                engine::Vertex v; v.position = p; v.normal = nn; v.color = white;
+                m.vertices.push_back(v);
+            }
+            if (side == 0) {
+                m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+                m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
+            } else {
+                m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 1);
+                m.indices.push_back(b + 0); m.indices.push_back(b + 3); m.indices.push_back(b + 2);
+            }
         }
-        m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
-        m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
     }
     return m;
 }
@@ -132,22 +143,26 @@ engine::RenderMesh arrowXZ() {
 // the backend draws it on top of world geometry (no depth occlusion).
 RenderMaterial widgetMaterial(Vec3 color) {
     RenderMaterial m;
-    m.albedo = color; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
-    m.emission = color; m.flags = RenderMaterial::FLAG_OVERLAY;
+    // Bright HOLOGRAM look: strong emission (pops through bloom/tonemap), dark
+    // base so lighting can't wash it toward a grey "shadow ring".
+    m.albedo = color * 0.15; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
+    m.emission = color * 4.0; m.flags = RenderMaterial::FLAG_OVERLAY;
     return m;
 }
+// Traffic-light semantics (user-requested): GREEN = going, RED = stopped,
+// AMBER = braking/avoiding, violet = turning, teal = following a leader.
 Vec3 stateColor(Agent::State s) {
     switch (s) {
         // Pedestrian / shared
-        case Agent::State::Walking:   return Vec3(0.20, 0.80, 0.30);   // green: moving freely
-        case Agent::State::Avoiding:  return Vec3(0.95, 0.60, 0.10);   // orange: steering around
-        case Agent::State::Waiting:   return Vec3(0.20, 0.45, 0.95);   // blue: held (signal)
+        case Agent::State::Walking:   return Vec3(0.15, 0.90, 0.25);   // green: go
+        case Agent::State::Avoiding:  return Vec3(1.00, 0.55, 0.08);   // amber: stepping around
+        case Agent::State::Waiting:   return Vec3(1.00, 0.10, 0.08);   // RED: held (signal/tether)
         // Driver FSM
-        case Agent::State::Cruising:  return Vec3(0.15, 0.75, 0.85);   // cyan: free flow
-        case Agent::State::Following: return Vec3(0.95, 0.85, 0.15);   // yellow: behind a leader
-        case Agent::State::Yielding:  return Vec3(0.95, 0.35, 0.10);   // red-orange: braking for a person
-        case Agent::State::Turning:   return Vec3(0.70, 0.35, 0.90);   // purple: arcing through a node
-        default:                      return Vec3(0.55, 0.55, 0.58);   // grey: resting
+        case Agent::State::Cruising:  return Vec3(0.15, 0.90, 0.25);   // green: go
+        case Agent::State::Following: return Vec3(0.10, 0.65, 0.70);   // teal: pacing a leader
+        case Agent::State::Yielding:  return Vec3(1.00, 0.55, 0.08);   // amber: braking for someone
+        case Agent::State::Turning:   return Vec3(0.70, 0.35, 0.95);   // violet: arcing a node
+        default:                      return Vec3(0.45, 0.45, 0.48);   // grey: resting/parked
     }
 }
 
@@ -543,7 +558,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // given car is always the same model + colour.
             int v = (a.vehicle >= 0 ? a.vehicle : 0) % kNumCarVariants;
             if (cars[v]) cars[v]->transforms.push_back(agentPose(a));
-        } else if (ped) {
+        } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             ped->transforms.push_back(agentPose(a));
         }
     }
@@ -580,27 +595,35 @@ void CityRenderSystem::syncGroups(World& world) {
             bool car = a.mode == Agent::Mode::Driver;
             Real x = a.pos.x, z = a.pos.y;
             Vec2 heading = a.heading;
-            // Externally-owned cars (ADR-0061): the widget must ring the PHYSICAL
-            // car, not the planner ghost — the ghost legitimately runs ahead or
-            // behind, and a ring around it is an empty circle on the ground. Use
-            // the bridge-reported real pose; a driver with no reported car
-            // (released to the player, not yet spawned) draws no widget.
-            if (car && carsExternallyOwned_) {
+            // Where this agent is TRYING to go (the arrow's tip): the ghost's
+            // short-horizon intent by default; the bridge's pursuit target when
+            // the body is external.
+            Vec2 goal = a.pos + a.heading * (2.0 + a.speed);
+            // Externally-owned agents (ADR-0061): the widget must ring the
+            // PHYSICAL body, not the planner ghost — the ghost legitimately runs
+            // ahead or behind, and a ring around it is an empty circle on the
+            // ground. Use the bridge-reported real pose; an agent with no
+            // reported body (released to the player, not yet spawned) draws none.
+            bool external = car ? carsExternallyOwned_ : pedsExternallyOwned_;
+            if (external) {
+                const std::vector<ExternalAgentPose>& poses =
+                    car ? externalCarPoses_ : externalPedPoses_;
                 bool reported = false;
-                for (const ExternalAgentPose& p : externalCarPoses_)
+                for (const ExternalAgentPose& p : poses)
                     if (p.agentId == static_cast<int>(ai)) {
                         x = p.pos.x;
                         z = p.pos.y;
                         heading = p.heading;
+                        goal = p.target;
                         reported = true;
                         break;
                     }
                 if (!reported) continue;
             }
-            // Float the gizmo up around the agent (not flat on the ground) so it
-            // isn't buried under a raised sidewalk; the overlay flag also lets it
-            // draw through world geometry.
-            Real y = groundAt(x, z) + a.elevation + (car ? 0.3 : 0.35);
+            // A hologram HOOP at body height (waist for a walker, roof-line-ish
+            // for a car) — clearly a debug marker circling the agent, never a
+            // shadow lying on the pavement; the overlay flag draws it on top.
+            Real y = groundAt(x, z) + a.elevation + (car ? 0.8 : 1.0);
             // Ring sized to THIS body (a box truck's footprint is bigger than a
             // sedan's), read from the possessed vehicle's dimensions.
             Real radius = params_.pedSize.x * 0.9;
@@ -616,8 +639,14 @@ void CityRenderSystem::syncGroups(World& world) {
             if (fg) fg->transforms.push_back(
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
             if (fwd && a.moving) {
-                Real len = std::max(Real(0.6), std::min(Real(4.0), a.speed * 0.4));
-                Real yaw = std::atan2(heading.x, heading.y);   // real pose when external
+                // The INTENT arrow: from the agent to where it's trying to go —
+                // the pursuit target for external bodies, the ghost's short-
+                // horizon aim otherwise. Reads as "this is my plan".
+                Vec2 toGoal(goal.x - x, goal.y - z);
+                Real dist = std::sqrt(toGoal.x * toGoal.x + toGoal.y * toGoal.y);
+                Real len = std::max(Real(0.8), std::min(Real(8.0), dist));
+                Real yaw = dist > 1e-4 ? std::atan2(toGoal.x, toGoal.y)
+                                       : std::atan2(heading.x, heading.y);
                 fwd->transforms.push_back(Mat4::trs(
                     Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
                     Vec3(0.12, 1, len)));

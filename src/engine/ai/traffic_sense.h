@@ -80,11 +80,18 @@ inline LeaderSense senseLeader(const VisionCone& cone, const std::vector<SensedB
 // stopped queue in the ONCOMING lane of a curve never reads as "ahead of me"
 // (with a straight cone it does, and two such queues freeze each other), and a
 // body only blocks me if it actually sits on MY lane's path. `gap` comes back as
-// along-path distance. Same cross-traffic rule as the cone, evaluated against
-// the path tangent where the body sits.
+// along-path distance.
+//
+// Cross-traffic rule, refined for PHYSICAL cars: far-field moving cross traffic
+// is still ignored (braking 20 m early for every crosser is the junction
+// deadlock), but within `crossNearRange` a moving crosser ON MY PATH is a
+// collision about to happen — brake for it. Two crossers who both stop resolve
+// via the caller's creep valve. Evaluated against the path tangent where the
+// body sits.
 inline LeaderSense senseAlongPath(const LaneFollower& lf, Real range, Real corridorHalf,
                                   const std::vector<SensedBody>& bodies,
-                                  int skip = -1, Real stationarySpeed = 1.0) {
+                                  int skip = -1, Real stationarySpeed = 1.0,
+                                  Real crossNearRange = 8.0) {
     LeaderSense out;
     if (!lf.valid()) return out;
     const std::vector<Vec2>& P = lf.points();
@@ -112,7 +119,9 @@ inline LeaderSense senseAlongPath(const LaneFollower& lf, Real range, Real corri
             align = dot(Vec2(ab.x / L, ab.y / L), b.heading);
         }
         if (gap > range) continue;
-        if (b.speed > stationarySpeed && align < 0.5) continue;   // crossing through
+        // Moving cross traffic: ignore far-field (flow control belongs to the
+        // signals), brake near-field (imminent collision on my path).
+        if (b.speed > stationarySpeed && align < 0.5 && gap > crossNearRange) continue;
         if (gap < bestGap) {
             bestGap = gap;
             out.found = true;
@@ -140,6 +149,23 @@ inline Real followSpeed(Real desired, const LeaderSense& l, Real ownHalfLength,
     if (l.speed > cap) cap = l.speed;      // match a moving leader
     return cap < desired ? cap : desired;
 }
+
+// Knockdown-and-recover for walkers (ADR-0061): a hit — a car shoving through, a
+// blast — puts a walker DOWN for a spell; it then gets up and walks on. Pure
+// timer logic so the trigger policy (contact, proximity, impulse) stays with the
+// caller and the behaviour is headless-testable.
+struct KnockdownTimer {
+    Real downSeconds = 2.5;   // how long a hit keeps the walker down
+    Real timer = 0;           // > 0 -> currently down
+
+    bool down() const { return timer > 0; }
+    void knock() { timer = downSeconds; }        // (re-)floor the walker
+    bool update(Real dt) {                        // advance; true while still down
+        if (timer > 0) timer -= dt;
+        if (timer < 0) timer = 0;
+        return down();
+    }
+};
 
 // Stall watchdog: the brain wants motion but the car isn't moving (wedged on a
 // pole, beached, flipped). Fires once after `stallSeconds` of continuous stall,

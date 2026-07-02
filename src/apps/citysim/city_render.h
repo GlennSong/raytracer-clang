@@ -57,6 +57,12 @@ public:
     void setCarsExternallyOwned(bool on) { carsExternallyOwned_ = on; }
     bool carsExternallyOwned() const { return carsExternallyOwned_; }
 
+    // Same handoff for PEDESTRIANS (ADR-0061): when a CityWalkerSystem owns them
+    // as physics characters, this bridge stops baking the instanced ped boxes
+    // (they'd draw twice) — the CitySim keeps planning; walkers follow bodies.
+    void setPedsExternallyOwned(bool on) { pedsExternallyOwned_ = on; }
+    bool pedsExternallyOwned() const { return pedsExternallyOwned_; }
+
     // The physical car poses (ADR-0061), fed each step by the vehicle bridge so
     // the per-agent DEBUG WIDGETS ring the REAL car — not the planner ghost, which
     // legitimately runs ahead/behind (an empty ring on the ground is the ghost).
@@ -66,9 +72,15 @@ public:
         int agentId = -1;
         engine::Vec2 pos;
         engine::Vec2 heading{1, 0};
+        // Where the agent is TRYING to go right now (pursuit lookahead point /
+        // planner ghost) — the debug arrow points here, visualising intent.
+        engine::Vec2 target;
     };
     void setExternalCarPoses(std::vector<ExternalAgentPose> poses) {
         externalCarPoses_ = std::move(poses);
+    }
+    void setExternalPedPoses(std::vector<ExternalAgentPose> poses) {
+        externalPedPoses_ = std::move(poses);
     }
 
     // --- testable core (no FrameContext) -----------------------------------
@@ -147,7 +159,9 @@ private:
     bool built_ = false;
     bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
     bool carsExternallyOwned_ = false;   // ADR-0061: a CityVehicleSystem owns the cars
+    bool pedsExternallyOwned_ = false;   // ADR-0061: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets
+    std::vector<ExternalAgentPose> externalPedPoses_;   // real walker poses for widgets
 };
 
 }  // namespace citysim

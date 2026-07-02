@@ -189,6 +189,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // stream — and every seeded test scenario — is unchanged): pace in
         // [0.85, 1.15] of nominal.
         a.speedFactor = 0.85 + 0.30 * (((a.brain >> 9) & 0x7FFF) / Real(0x7FFF));
+        // Stagger the think clocks so the crowd doesn't re-decide in lockstep.
+        a.thinkTimer = thinkPeriod_ * (((a.brain >> 17) & 0xFF) / Real(0xFF));
         a.pos = idlePose(a.home, a.mode);
 
         // A driver possesses a freshly-created car (two-way possession link). Its
@@ -562,36 +564,48 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         // leans to `right` of that to go around what it SEES ahead.
         Vec2 travel = a.heading;
         Vec2 rightv(travel.y, -travel.x);
-        engine::VisionCone cone;
-        cone.origin = a.pos; cone.forward = travel;
-        cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
-        Real bias = 0; bool saw = false;
-        auto consider = [&](const Vec2& p) {
-            if (!engine::sees(cone, p)) return;
-            Real fd = engine::forwardDistance(cone, p);
-            if (fd <= 0.1 || fd >= kPedVisionRange) return;
-            saw = true;
-            Real side = (a.pos.x - p.x) * rightv.x + (a.pos.y - p.y) * rightv.y;
-            Real w = (kPedVisionRange - fd) / kPedVisionRange;   // nearer -> stronger
-            bias += (side >= 0 ? 1.0 : -1.0) * w;                // pass on the side I'm already on
-        };
-        for (std::size_t j = 0; j < agents_.size(); ++j) {
-            if (j == i) continue;
-            if (agents_[j].mode == Agent::Mode::Pedestrian && agents_[j].moving)
-                consider(agents_[j].pos);
-        }
-        for (const Vec2& o : externalObstacles_) consider(o);
-        for (const Vec2& o : staticObstacles_) consider(o);   // steer around signal poles
 
-        // Move the lean toward its target at a bounded RATE (continuous, not a
-        // pop): grows while something is in view, decays back to the path when
-        // clear. This is what lets you herd a walker like a boid.
-        Real target = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
+        // THINK on the slow clock, ACT every tick (ADR-0061). The reactive scan
+        // (who's ahead, which side do I pass) runs only when this agent's think
+        // timer expires — staggered per agent — and its answer is COMMITTED to
+        // `leanTarget` + the FSM state until the next think. Re-deciding every
+        // tick made walkers flip-flop ("wigging out"); a held decision reads as
+        // intent, and the integration below still moves smoothly every tick.
+        a.thinkTimer -= dt;
+        if (a.thinkTimer <= 0) {
+            a.thinkTimer += thinkPeriod_;
+            engine::VisionCone cone;
+            cone.origin = a.pos; cone.forward = travel;
+            cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
+            Real bias = 0; bool saw = false;
+            auto consider = [&](const Vec2& p) {
+                if (!engine::sees(cone, p)) return;
+                Real fd = engine::forwardDistance(cone, p);
+                if (fd <= 0.1 || fd >= kPedVisionRange) return;
+                saw = true;
+                Real side = (a.pos.x - p.x) * rightv.x + (a.pos.y - p.y) * rightv.y;
+                Real w = (kPedVisionRange - fd) / kPedVisionRange;   // nearer -> stronger
+                bias += (side >= 0 ? 1.0 : -1.0) * w;                // pass on the side I'm on
+            };
+            for (std::size_t j = 0; j < agents_.size(); ++j) {
+                if (j == i) continue;
+                if (agents_[j].mode == Agent::Mode::Pedestrian && agents_[j].moving)
+                    consider(agents_[j].pos);
+            }
+            for (const Vec2& o : externalObstacles_) consider(o);
+            for (const Vec2& o : staticObstacles_) consider(o);   // signal poles
+            a.leanTarget = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
+            a.state = saw ? Agent::State::Avoiding : Agent::State::Walking;
+        }
+
+        // ACT: move the lean toward the COMMITTED target at a bounded RATE
+        // (continuous, not a pop): grows while the decision says "step aside",
+        // decays back to the path once a think says clear. This is what lets you
+        // herd a walker like a boid.
         Real prev = a.lateralOffset;
         Real maxDelta = kPedLateralRate * dt;
-        Real delta = std::max(-maxDelta, std::min(maxDelta, target - prev));
+        Real delta = std::max(-maxDelta, std::min(maxDelta, a.leanTarget - prev));
         a.lateralOffset = prev + delta;
-        a.state = saw ? Agent::State::Avoiding : Agent::State::Walking;
 
         a.pos.x += rightv.x * a.lateralOffset;
         a.pos.y += rightv.y * a.lateralOffset;
