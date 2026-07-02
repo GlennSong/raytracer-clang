@@ -1,11 +1,12 @@
 #include "city_vehicles.h"
 
-#include "../../engine/components.h"       // Transform, Vehicle, AgentDriver, Renderable
 #include "../../engine/asset_manager.h"
+#include "../../engine/components.h"       // Transform, Vehicle, Renderable, InVehicle
 #include "../../engine/world.h"
 #include "city_sim.h"                       // VehicleBody, vehicleFleetBody
 
 #include <cmath>
+#include <string>
 
 namespace citysim {
 
@@ -19,14 +20,14 @@ using engine::Transform;
 using engine::PrevTransform;
 using engine::Renderable;
 using engine::Vehicle;
-using engine::AgentDriver;
 using engine::PhysicsWorld;
 
 namespace {
+constexpr Real kCommandeerRadius = 4.0;   // same reach as VehicleSystem's enter
 
-// A Jolt vehicle config sized to a fleet body — a 4WD arcade car like the player's
-// sedan, scaled up for a van/box-truck. Front wheels steer; all four are driven
-// (so heavy bodies still pull away), rear wheels take the handbrake.
+// A Jolt vehicle config sized to a fleet body — a 4WD arcade car like the
+// player's sedan, scaled up for a van/box-truck. Front wheels steer; all four
+// are driven (heavy bodies still pull away), rear wheels take the handbrake.
 PhysicsWorld::VehicleConfig configFromBody(const VehicleBody& b) {
     PhysicsWorld::VehicleConfig c;
     c.chassisHalfExtent = Vec3(b.width * 0.5, b.height * 0.5, b.length * 0.5);
@@ -55,306 +56,87 @@ PhysicsWorld::VehicleConfig configFromBody(const VehicleBody& b) {
                  wheel(hw, -hl, false), wheel(-hw, -hl, false) };
     return c;
 }
-
-Vec2 normalized(Vec2 v, Vec2 fallback) {
-    Real l = std::sqrt(v.x * v.x + v.y * v.y);
-    return l > 1e-6 ? Vec2(v.x / l, v.y / l) : fallback;
-}
-
 }  // namespace
 
-void CityVehicleSystem::spawnCars(engine::FrameContext& ctx) {
-    if (spawned_ || !city_.built()) return;
+void CityVehicleSystem::update(engine::FrameContext& ctx) {
+    // Commandeering: the same button as VehicleSystem's enter. This system is
+    // registered FIRST, so on the frame the player presses enter next to an
+    // AMBIENT car, we promote it here and VehicleSystem (later this frame) finds
+    // a real, unoccupied Vehicle within reach and seats the player as usual.
+    if (!ctx.actions.pressed("enter_vehicle")) return;
+    if (!city_.built()) return;
     World& world = ctx.world;
-    const CitySim& sim = city_.sim();
-    int slots = vehicleFleetSize();
-    bodyMesh_.assign(slots, engine::MeshHandle{});
 
+    // The (first) player entity, on foot.
+    Entity player;
+    Vec3 playerPos;
+    world.each<Transform, engine::ControlledBy>(
+        [&](Entity e, Transform& t, engine::ControlledBy&) {
+            if (!player.valid()) { player = e; playerPos = t.position; }
+        });
+    if (!player.valid() || world.has<engine::InVehicle>(player)) return;
+    Vec2 pXZ(playerPos.x, playerPos.z);
+
+    // If a REAL vehicle (the player's own, or an earlier promotion) is already
+    // within reach, let VehicleSystem take it — don't promote a second car.
+    Real bestRealD2 = kCommandeerRadius * kCommandeerRadius;
+    bool realNearby = false;
+    world.each<Transform, Vehicle>([&](Entity, Transform& t, Vehicle&) {
+        Real dx = t.position.x - playerPos.x, dz = t.position.z - playerPos.z;
+        if (dx * dx + dz * dz <= bestRealD2) realNearby = true;
+    });
+    if (realNearby) return;
+
+    // Nearest ambient (planner-owned) car within reach.
+    const CitySim& sim = city_.sim();
+    int bestAgent = -1;
+    Real bestD2 = kCommandeerRadius * kCommandeerRadius;
     const auto& agents = sim.agents();
     for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
         const Agent& a = agents[i];
         if (a.mode != Agent::Mode::Driver || a.vehicle < 0) continue;
-        int slot = a.vehicle % slots;
-        const VehicleBody& body = vehicleFleetBody(a.vehicle);
-
-        // Shared body mesh per fleet slot (same as the instanced renderer used).
-        if (!bodyMesh_[slot].valid())
-            bodyMesh_[slot] = ctx.assets.acquireMesh(fleetCarMesh(a.vehicle),
-                                                     "cityveh:" + std::to_string(slot));
-
-        Entity e = world.create();
-        // Spawn placement: never inside a junction box, never mid-lane. An idle
-        // ghost is already parked on the verge; a MID-TRIP ghost (the warmed-up
-        // sim) gets its car placed on the verge beside it, staggered so several
-        // spawns don't stack, and backed out of any junction — the car then
-        // merges onto its lane via pursuit instead of materialising in traffic.
-        Vec2 spawnAt = a.pos;
-        if (a.moving) {
-            Vec2 right(a.heading.y, -a.heading.x);
-            spawnAt = spawnAt + right * 3.2 - a.heading * static_cast<Real>((i % 3) * 2.5);
-            for (int guard = 0; guard < 4 && sim.nearJunction(spawnAt, 1.5); ++guard)
-                spawnAt = spawnAt - a.heading * 6.0;
-        }
-        // A little above ground so it drops onto its wheels; physics settles it.
-        // Heading yaw matches the render convention (atan2(x, y) about +Y).
-        Vec3 pos(spawnAt.x, body.height * 0.5 + 0.35, spawnAt.y);
-        Real yaw = std::atan2(a.heading.x, a.heading.y);
-        Transform t;
-        t.position = pos;
-        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-        t.scale = Vec3(1, 1, 1);
-        world.add<Transform>(e, t);
-        world.add<PrevTransform>(e, PrevTransform{t});
-
-        Renderable r;
-        r.mesh = bodyMesh_[slot];
-        r.material.albedo = Vec3(1, 1, 1);   // hue baked into the mesh vertex colour
-        r.material.metallic = 0.0f;
-        r.material.roughness = 0.55f;
-        r.material.opacity = 1.0f;
-        world.add<Renderable>(e, r);
-
-        Vehicle v;
-        v.config = configFromBody(body);
-        world.add<Vehicle>(e, v);
-
-        AgentDriver ad;
-        ad.agentId = i;
-        ad.command.desiredHeading = a.heading;
-        ad.command.desiredSpeed = 0;
-        // Personality (ADR-0061): deterministic per-agent hash varies the
-        // controller gains and following buffer, so no two drivers handle their
-        // (identical) car identically — the fleet stops moving in lockstep.
-        uint32_t h = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
-        auto unit = [&h]() {
-            h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-            return (h >> 8) * (1.0 / 16777216.0);
-        };
-        ad.tuning.steerGain = 1.45 + 0.35 * unit();      // wheel eagerness
-        ad.tuning.turnSlowdown = 0.65 + 0.20 * unit();   // corner caution
-        world.add<AgentDriver>(e, ad);
-
-        NpcCar car;
-        car.entity = e;
-        car.agentId = i;
-        car.bumperGap = 0.6 + 0.7 * unit();              // tailgater .. cautious
-        cars_.push_back(car);
+        if (a.released || a.playerControlled) continue;
+        Real dx = a.pos.x - pXZ.x, dz = a.pos.y - pXZ.y;
+        Real d2 = dx * dx + dz * dz;
+        if (d2 <= bestD2) { bestD2 = d2; bestAgent = i; }
     }
-    spawned_ = true;
-}
+    if (bestAgent < 0) return;
 
-namespace {
-constexpr Real kStandoff = 1.5;      // park this short of the ghost's spot (m)
-constexpr Real kCatchupGain = 0.5;   // station error (m) -> extra speed (m/s)
-constexpr Real kCatchupMax = 4.0;    // max speed over the plan while catching up
-constexpr Real kTetherLead = 12.0;   // ghost may lead its car by at most this (m)
-constexpr Real kSenseRange = 22.0;    // how far ahead traffic is sensed (m)
-constexpr Real kSenseHalfAngle = 0.5; // fallback cone (no path)
-constexpr Real kCorridorHalf = 1.6;   // half-width of the along-path sense corridor
-constexpr Real kFlipRecover = 2.0;    // rolled this long -> right the car (s)
-constexpr Real kCreepAfter = 3.0;     // blocked by a stopped cross car this long ->
-constexpr Real kCreepSpeed = 1.5;     // ...nose through at this speed (anti-gridlock)
-constexpr Real kClearBoxSpeed = 2.2;  // minimum pace while inside a junction box
-}  // namespace
+    // PROMOTE: release the agent (its instanced car + widget vanish this tick)
+    // and spawn a real Vehicle with the same fleet body at the same pose.
+    const Agent& a = agents[bestAgent];
+    const VehicleBody& body = vehicleFleetBody(a.vehicle);
 
-void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
-    World& world = ctx.world;
-    const CitySim& sim = city_.sim();
-    PhysicsWorld& pw = physics_.physicsWorld();
-    Real dt = ctx.clock.fixedStep();
+    Entity e = world.create();
+    Transform t;
+    t.position = Vec3(a.pos.x, body.height * 0.5 + 0.25, a.pos.y);
+    t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0),
+                                        std::atan2(a.heading.x, a.heading.y));
+    t.scale = Vec3(1, 1, 1);
+    world.add<Transform>(e, t);
+    world.add<PrevTransform>(e, PrevTransform{t});
 
-    // Everything on the road at its REAL pose, sensed once for all cars: every
-    // physics vehicle (NPC and the player's alike, driven or parked), the on-foot
-    // player, and the sim's pedestrians. Pedestrians report speed 0 so they are
-    // ALWAYS an obstacle in the lane — a car yields to a walker whichever way the
-    // walker faces (the planner's ped rule, applied to real poses).
-    std::vector<engine::SensedBody> bodies;
-    std::vector<Entity> bodyOwner;
-    world.each<Transform, engine::Vehicle>([&](Entity e, Transform& t, engine::Vehicle& v) {
-        engine::SensedBody b;
-        b.pos = Vec2(t.position.x, t.position.z);
-        Vec3 f3 = t.orientation.rotate(Vec3(0, 0, 1));
-        b.heading = normalized(Vec2(f3.x, f3.z), Vec2(1, 0));
-        if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) {
-            Vec3 vel = pw.vehicleVelocity(v.vehicleId);
-            b.speed = std::fabs(vel.x * f3.x + vel.y * f3.y + vel.z * f3.z);
-        }
-        b.halfLength = v.config.chassisHalfExtent.z;
-        bodies.push_back(b);
-        bodyOwner.push_back(e);
-    });
-    // Every character capsule is a yield-always body: the on-foot player AND the
-    // physical walkers (ADR-0061 CityWalkerSystem) — sensed where physics put
-    // them. Ghost pedestrians are only sensed when walkers have no real bodies.
-    world.each<Transform, engine::CharacterController>(
-        [&](Entity e, Transform& t, engine::CharacterController&) {
-            engine::SensedBody b;
-            b.pos = Vec2(t.position.x, t.position.z);
-            b.speed = 0;
-            b.halfLength = 0.35;
-            b.yieldAlways = true;     // never creep through a person
-            bodies.push_back(b);
-            bodyOwner.push_back(e);
-        });
-    if (!city_.pedsExternallyOwned())
-        for (const Agent& a : sim.agents()) {
-            if (a.mode != Agent::Mode::Pedestrian) continue;
-            engine::SensedBody b;
-            b.pos = a.pos;
-            b.heading = a.heading;
-            b.speed = 0;          // a walker is an obstacle regardless of direction
-            b.halfLength = 0.3;
-            b.yieldAlways = true;
-            bodies.push_back(b);
-            bodyOwner.push_back(Entity{});
-        }
+    Renderable r;
+    r.mesh = ctx.assets.acquireMesh(fleetCarMesh(a.vehicle, /*withWheels=*/false),
+                                    "cityveh:promoted" + std::to_string(a.vehicle));
+    r.material.albedo = Vec3(1, 1, 1);   // hue baked in the mesh vertex colour
+    r.material.metallic = 0.4f;
+    r.material.roughness = 0.5f;
+    r.material.opacity = 1.0f;
+    world.add<Renderable>(e, r);
 
-    // Cannot mutate the sim (release) inside a loop that also reads it — collect.
-    std::vector<int> toRelease;
-    // Real car poses for the render bridge's debug widgets (the ring must circle
-    // the PHYSICAL car, not the planner ghost).
-    std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
-    widgetPoses.reserve(cars_.size());
-    for (NpcCar& car : cars_) {
-        if (car.released) continue;
-        if (!world.alive(car.entity)) { car.released = true; continue; }
-        // The player commandeered it: VehicleSystem removed the AgentDriver on
-        // entry. Free the ghost so the planner stops fighting the physical car.
-        AgentDriver* ad = world.get<AgentDriver>(car.entity);
-        if (!ad) { car.released = true; toRelease.push_back(car.agentId); continue; }
-        if (car.agentId < 0 || car.agentId >= static_cast<int>(sim.agents().size())) continue;
-        const Agent& g = sim.agents()[car.agentId];
-        Transform* t = world.get<Transform>(car.entity);
-        engine::Vehicle* v = world.get<engine::Vehicle>(car.entity);
-        if (!t || !v) continue;
+    Vehicle v;
+    v.config = configFromBody(body);
+    world.add<Vehicle>(e, v);   // VehicleSystem builds the Jolt car + wheels + lamps
 
-        Vec2 carXZ(t->position.x, t->position.z);
-        Vec3 f3 = t->orientation.rotate(Vec3(0, 0, 1));
-        Vec2 carFwd = normalized(Vec2(f3.x, f3.z), g.heading);
-        Real realSpeed = 0, speedMag = 0;
-        if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE) {
-            Vec3 vel = pw.vehicleVelocity(v->vehicleId);
-            realSpeed = vel.x * f3.x + vel.y * f3.y + vel.z * f3.z;
-            speedMag = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
-        }
-
-        // A new trip = a new route: rebuild the pursuit path from the ghost's lane.
-        if (car.trip != g.trips) {
-            car.follower.setPath(sim.lanePath(car.agentId));
-            car.trip = g.trips;
-        }
-
-        // SPEED, layer 1 — the PLAN: proportional station control toward the
-        // ghost. `aheadGap` is how far the ghost sits ahead of the car (along the
-        // car's own forward): drive a little faster than the plan to close it,
-        // ease off (to a stop) when at or past it. A ghost held at a red (speed 0)
-        // parks the car at the line; an arrived ghost parks it at the kerb.
-        Real aheadGap = (g.pos.x - carXZ.x) * carFwd.x + (g.pos.y - carXZ.y) * carFwd.y;
-        Real planned = g.moving ? g.speed : 0.0;
-        Real target = planned + kCatchupGain * (aheadGap - kStandoff);
-        Real cap = planned + kCatchupMax;
-        if (target < 0) target = 0;
-        if (target > cap) target = cap;
-
-        // SPEED, layer 2 — the EYES: cap off the nearest real body ahead (another
-        // physics car, the player, a pedestrian). Plans can't keep physics-driven
-        // cars apart; sensing real poses can. On a trip, sense a CORRIDOR along
-        // the pursuit path — it bends with the road, so a stopped queue in the
-        // oncoming lane of a curve never reads as "ahead of me" (the straight
-        // cone's freeze mode), and only bodies actually on MY lane block me. The
-        // cone is the fallback when there is no path (parked, fresh spawn).
-        int selfIdx = -1;
-        for (std::size_t k = 0; k < bodyOwner.size(); ++k)
-            if (bodyOwner[k] == car.entity) { selfIdx = static_cast<int>(k); break; }
-        bool onTrip = car.follower.valid() && g.moving;
-        engine::LeaderSense lead;
-        if (onTrip) {
-            car.follower.update(carXZ);
-            lead = engine::senseAlongPath(car.follower, kSenseRange, kCorridorHalf,
-                                          bodies, selfIdx);
-        } else {
-            engine::VisionCone cone;
-            cone.origin = carXZ;
-            cone.forward = carFwd;
-            cone.range = kSenseRange;
-            cone.halfAngleRad = kSenseHalfAngle;
-            lead = engine::senseLeader(cone, bodies, /*lateralMax=*/2.2,
-                                       /*stationarySpeed=*/1.0, selfIdx);
-        }
-        target = engine::followSpeed(target, lead, v->config.chassisHalfExtent.z,
-                                     car.bumperGap);
-
-        // ANTI-GRIDLOCK VALVE: held at zero for a while by a STOPPED cross body
-        // (a car straggling in the junction box — never a pedestrian or the
-        // player) -> nose through slowly instead of freezing forever. Two cars
-        // mutually blocked resolve because whoever creeps first clears the box.
-        bool crossBlock = lead.found && !lead.yieldAlways &&
-                          lead.speed < 0.5 && lead.align < 0.5;
-        car.blockTimer = (crossBlock && target < 0.1) ? car.blockTimer + dt : 0.0;
-        if (car.blockTimer > kCreepAfter) target = std::max(target, kCreepSpeed);
-
-        // DON'T BLOCK THE BOX: a car inside a junction whose plan is CROSSING
-        // (ghost moving, not held at the line) never idles there — it commits and
-        // clears at a minimum pace, spooked by nothing except a person right in
-        // front of the bumper. Stopping mid-box for cross traffic is how junction
-        // gridlock forms; the box must always drain.
-        if (g.moving && g.speed > 0.5 && sim.nearJunction(carXZ, 2.0)) {
-            bool personClose = lead.found && lead.yieldAlways &&
-                               lead.gap < v->config.chassisHalfExtent.z + 3.0;
-            if (!personClose) target = std::max(target, kClearBoxSpeed);
-        }
-
-        // HEADING: on a trip, pure pursuit over the lane path from the car's REAL
-        // position (with the built-in ease-to-a-stop at the path end). Off-trip
-        // (arrived / between trips), creep to the ghost's PARKING spot on the
-        // verge — the station-control target above eases to a stop there — so a
-        // finished car pulls over instead of resting where its path ended.
-        Vec2 goal = g.pos;   // where this car is trying to go (debug intent arrow)
-        if (onTrip) {
-            Real look = engine::pursuitLookahead(std::max(realSpeed, Real(3.0)));
-            goal = car.follower.lookahead(look);
-            ad->command = engine::pursuitCommand(car.follower, carXZ, target, look);
-        } else {
-            Vec2 toGhost(g.pos.x - carXZ.x, g.pos.y - carXZ.y);
-            Real d = std::sqrt(toGhost.x * toGhost.x + toGhost.y * toGhost.y);
-            ad->command.desiredHeading =
-                d > 0.8 ? Vec2(toGhost.x / d, toGhost.y / d) : g.heading;
-            ad->command.desiredSpeed = target;
-        }
-
-        // RECOVERY: rolled past ~60 degrees for a while, or wanting speed but
-        // getting none (beached, wedged) -> right/unstick the car in place.
-        Real upY = t->orientation.rotate(Vec3(0, 1, 0)).y;
-        car.flipTimer = (upY < 0.5) ? car.flipTimer + dt : 0.0;
-        bool recover = car.stuck.update(ad->command.desiredSpeed, speedMag, dt) ||
-                       car.flipTimer > kFlipRecover;
-        if (recover && v->vehicleId != PhysicsWorld::INVALID_VEHICLE) {
-            pw.resetVehicleUpright(v->vehicleId);
-            car.flipTimer = 0;
-        }
-
-        // TETHER: feed the sim the car's real position so the ghost waits rather
-        // than outrunning the physics (collision, hill, slow start).
-        city_.simMutable().setAgentTether(car.agentId, carXZ, kTetherLead);
-
-        widgetPoses.push_back(CityRenderSystem::ExternalAgentPose{
-            car.agentId, carXZ, carFwd, goal});
-    }
-    for (int id : toRelease) city_.simMutable().releaseDriver(id);
-    city_.setExternalCarPoses(std::move(widgetPoses));
-}
-
-void CityVehicleSystem::fixedUpdate(engine::FrameContext& ctx) {
-    spawnCars(ctx);
-    driveCars(ctx);
+    city_.simMutable().releaseDriver(bestAgent);
+    promoted_.push_back(PromotedCar{e, bestAgent});
 }
 
 void CityVehicleSystem::onStop(engine::FrameContext&) {
-    // Just drop our tracking; the world/physics teardown reclaims the entities and
-    // Jolt vehicles (VehicleSystem has no per-entity removal hook yet — the same
-    // documented vehicle-destroy leak, harmless at level teardown).
-    cars_.clear();
-    spawned_ = false;
+    // Tracking only; world/physics teardown reclaims the entities (the same
+    // no-removal-hook note as VehicleSystem — fine at level teardown).
+    promoted_.clear();
 }
 
 }  // namespace citysim

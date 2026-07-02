@@ -3,7 +3,6 @@
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
-#include "../../engine/procgen/vehicle_mesh.h"       // buildCarShell (curved fleet)
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
@@ -68,6 +67,18 @@ RenderMaterial signalMaterial(SignalState s) {
         case SignalState::Red:    m.albedo = Vec3(0.2, 0.0, 0.0); m.emission = Vec3(1.6, 0.1, 0.1); break;
     }
     return m;
+}
+
+// Append a coloured box (centred at `c`, dimensions `size`) into `out`.
+void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
+    engine::RenderMesh b = MeshBuilder::box(size);
+    uint32_t base = static_cast<uint32_t>(out.vertices.size());
+    for (engine::Vertex v : b.vertices) {
+        v.position = v.position + c;
+        v.color = color;
+        out.vertices.push_back(v);
+    }
+    for (uint32_t i : b.indices) out.indices.push_back(base + i);
 }
 
 // A ground-PROJECTED ring of unit outer radius: a flat glowing band lying just
@@ -149,14 +160,78 @@ Vec3 stateColor(Agent::State s) {
     }
 }
 
-// A vertex-coloured car body: a LOFTED curved shell (engine/procgen/
-// vehicle_mesh.h) — smooth superellipse sections swept along a style roofline,
-// glass painted into the greenhouse, cylinder wheels. Real automotive curves
-// instead of the box compositions that read as cybertrucks (ADR-0061). The
-// style ints map 1:1 onto CarShellStyle.
-engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size) {
-    return engine::buildCarShell(static_cast<engine::CarShellStyle>(style), color, size,
-                                 /*withWheels=*/true);
+// A vertex-coloured car that mirrors the PLAYER's car body (vehicles.lua
+// `car_body`): a low hull, a set-back greenhouse cabin, dark windshield + rear
+// glass, and pale front / red rear corner lights — so NPC cars share the player's
+// look. `withWheels` bakes wheels into the instanced mesh (ambient traffic); a
+// PROMOTED physical car omits them — VehicleSystem gives it physics wheels. Body
+// STYLE varies the hull/cabin for a mixed fleet. `size` is x=width, y=height,
+// z=length (travel axis, +Z); faces +Z.
+engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size, bool withWheels = true) {
+    const Real w = size.x, h = size.y, l = size.z;
+    const Real hw = w * 0.5, hl = l * 0.5;
+    const Vec3 glass(0.05, 0.06, 0.09);    // dark glass (matches car_body)
+    const Vec3 tyre(0.04, 0.04, 0.05);
+    const Vec3 head(1.0, 0.97, 0.82), tail(0.85, 0.06, 0.05);
+    engine::RenderMesh m;
+
+    switch (style) {
+        case 1:  // hatchback: hull + cabin carried back to the tail, glass fore & aft
+            addBox(m, Vec3(w, h * 0.46, l * 0.92), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.86, h * 0.44, l * 0.56), Vec3(0, h * 0.40, -l * 0.06), color);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, l * 0.12), glass);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, -l * 0.34), glass);
+            break;
+        case 2:  // SUV: tall hull, big greenhouse
+            addBox(m, Vec3(w, h * 0.58, l), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.90, h * 0.46, l * 0.62), Vec3(0, h * 0.44, -l * 0.02), color);
+            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, l * 0.20), glass);
+            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, -l * 0.26), glass);
+            break;
+        case 3:  // pickup: forward cab + open bed
+            addBox(m, Vec3(w, h * 0.42, l), Vec3(0, -h * 0.04, 0), color);
+            addBox(m, Vec3(w * 0.90, h * 0.40, l * 0.34), Vec3(0, h * 0.34, l * 0.22), color);
+            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.40, l * 0.38), glass);
+            addBox(m, Vec3(w * 0.92, h * 0.20, l * 0.42), Vec3(0, h * 0.10, -l * 0.26), color); // bed walls
+            break;
+        case 4:  // van: one tall slab body, raked windshield, low nose
+            addBox(m, Vec3(w, h * 0.72, l * 0.86), Vec3(0, h * 0.06, -l * 0.06), color);
+            addBox(m, Vec3(w, h * 0.34, l * 0.20), Vec3(0, -h * 0.10, l * 0.40), color);       // nose
+            addBox(m, Vec3(w * 0.86, h * 0.30, l * 0.05), Vec3(0, h * 0.22, l * 0.30), glass);  // windshield
+            addBox(m, Vec3(w * 0.86, h * 0.24, l * 0.05), Vec3(0, h * 0.24, -l * 0.48), glass); // rear glass
+            break;
+        case 5:  // box truck: a small cab up front + a tall square cargo box
+            addBox(m, Vec3(w, h * 0.44, l * 0.30), Vec3(0, -h * 0.04, l * 0.33), color);        // cab lower
+            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.24), Vec3(0, h * 0.30, l * 0.35), color);  // cab roof
+            addBox(m, Vec3(w * 0.84, h * 0.30, l * 0.05), Vec3(0, h * 0.30, l * 0.47), glass);  // windshield
+            addBox(m, Vec3(w, h * 0.86, l * 0.62), Vec3(0, h * 0.12, -l * 0.17), color);        // cargo box
+            break;
+        default: // sedan — matches the player's car_body proportions exactly
+            addBox(m, Vec3(w, h * 0.46, l), Vec3(0, 0, 0), color);
+            addBox(m, Vec3(w * 0.84, h * 0.42, l * 0.46), Vec3(0, h * 0.40, -l * 0.04), color);
+            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.42, l * 0.15), glass);
+            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.42, -l * 0.23), glass);
+            break;
+    }
+
+    // Head/taillights at the corners (front +Z pale, rear -Z red) — like car_body.
+    Real ly = -h * 0.08, lx = hw - 0.30;
+    for (Real sx : { Real(1), Real(-1) }) {
+        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, hl - 0.05), head);
+        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, -hl + 0.05), tail);
+    }
+
+    // Four wheels (dark discs, thin along X), sat at the hull's lower edge —
+    // skipped for a promoted physical car (its wheels are physics entities).
+    if (withWheels) {
+        Real wr = h * 0.26, axleY = -h * 0.5 + wr, fz = l * 0.32, wxo = hw - 0.03;
+        for (Real wx : { wxo, -wxo })
+            for (Real wz : { fz, -fz })
+                addBox(m, Vec3(0.12, wr * 2, wr * 2), Vec3(wx, axleY, wz), tyre);
+    } else {
+        (void)tyre;
+    }
+    return m;
 }
 
 // The mesh style that draws each body TYPE (matches buildCarMesh's switch).
@@ -223,12 +298,12 @@ void refreshBounds(InstanceGroup* g) {
 
 }  // namespace
 
-engine::RenderMesh fleetCarMesh(int slot) {
+engine::RenderMesh fleetCarMesh(int slot, bool withWheels) {
     int n = vehicleFleetSize();
     int s = ((slot % n) + n) % n;
     const VehicleBody& b = vehicleFleetBody(s);
     return buildCarMesh(styleForType(b.type), kCarColors[s % kNumCarVariants],
-                        Vec3(b.width, b.height, b.length));
+                        Vec3(b.width, b.height, b.length), withWheels);
 }
 
 Real CityRenderSystem::groundAt(Real x, Real z) const {
@@ -479,6 +554,7 @@ void CityRenderSystem::syncGroups(World& world) {
     for (const Agent& a : sim_.agents()) {
         if (a.mode == Agent::Mode::Driver) {
             if (cars.empty()) continue;   // cars owned externally (ADR-0061 bridge)
+            if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
             int v = (a.vehicle >= 0 ? a.vehicle : 0) % kNumCarVariants;
@@ -518,6 +594,7 @@ void CityRenderSystem::syncGroups(World& world) {
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
             bool car = a.mode == Agent::Mode::Driver;
+            if (car && a.released) continue;   // commandeered: no ghost widget
             Real x = a.pos.x, z = a.pos.y;
             Vec2 heading = a.heading;
             // Where this agent is TRYING to go (the arrow's tip): the ghost's

@@ -186,6 +186,34 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     CHECK(redAtReal);
 }
 
+TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
+    // Promotion (ADR-0061 rethink): when the player commandeers an ambient car,
+    // the sim releases its agent and the instanced fleet must drop that car (the
+    // real Vehicle takes its visual place). Widgets drop it too.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 5;
+    p.pedestrians = 0;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+    city.step(world, 0.1);
+    CHECK(carTotal(world, city) == 5u);
+
+    city.simMutable().releaseDriver(2);
+    city.step(world, 0.1);
+    CHECK(carTotal(world, city) == 4u);   // the commandeered car vanished
+}
+
+TEST_CASE(fleet_mesh_wheelless_variant_drops_the_wheels) {
+    // A promoted physical car renders VehicleSystem's physics wheels; its body
+    // mesh must not bake a second set (the "double wheels" device bug).
+    RenderMesh with = fleetCarMesh(0, true);
+    RenderMesh without = fleetCarMesh(0, false);
+    CHECK(without.vertices.size() < with.vertices.size());
+    CHECK(!without.vertices.empty());
+}
+
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());

@@ -102,7 +102,9 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     PhysicsWorld& pw = physics_.physicsWorld();
     Real dt = ctx.clock.fixedStep();
 
-    // Vehicle poses + speeds once for all walkers (the knockdown trigger).
+    // Vehicle poses + speeds once for all walkers (the knockdown trigger): the
+    // REAL vehicles (player's / promoted), plus the ambient planner cars — with
+    // one motion authority their drawn pose IS the sim pose.
     std::vector<Vec2> carPos;
     std::vector<Real> carSpeed;
     world.each<Transform, engine::Vehicle>([&](Entity, Transform& t, engine::Vehicle& v) {
@@ -114,6 +116,11 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         carSpeed.push_back(s);
     });
+    for (const Agent& a : sim.agents()) {
+        if (a.mode != Agent::Mode::Driver || a.released || !a.moving) continue;
+        carPos.push_back(a.pos);
+        carSpeed.push_back(a.speed);
+    }
     // Every person (other walkers + the on-foot player) for 360° SEPARATION —
     // spatial awareness beyond the planner's forward cone, so a body squeezes
     // AROUND a neighbour instead of clumping against it or brushing the player.

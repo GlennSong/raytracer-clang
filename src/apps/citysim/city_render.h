@@ -9,10 +9,12 @@
 namespace citysim {
 
 // Build the fleet body mesh for slot `slot` (wraps into the fleet) — the same
-// vertex-coloured car the instanced renderer uses, so an NPC Vehicle spawned by
-// the ADR-0061 bridge looks identical to the kinematic car it replaces. x=width,
-// y=height, z=length (travel +Z).
-engine::RenderMesh fleetCarMesh(int slot);
+// vertex-coloured car the instanced renderer uses, so a PROMOTED physical
+// Vehicle (ADR-0061: the player commandeers an ambient car) looks identical to
+// the instanced car it replaces. `withWheels` false for that promotion —
+// VehicleSystem gives a real Vehicle physics wheels. x=width, y=height,
+// z=length (travel +Z).
+engine::RenderMesh fleetCarMesh(int slot, bool withWheels = true);
 
 // The ECS render bridge for the agent-based city simulation (ADR-0059 Phase 6).
 // It builds a NavGraph from the level's RoadNet entities, runs a deterministic

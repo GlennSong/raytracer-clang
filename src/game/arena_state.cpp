@@ -72,17 +72,19 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // perception, and bounded-radius steering over the road network (ADR-0059).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
 #ifdef RT_ENABLE_PHYSICS
-    // ONE car system (ADR-0061): the NPC cars are real engine Vehicles (Jolt),
-    // driven by an AgentDriver from the CitySim planner's ghost — identical physics
-    // to the player's car, and the player can commandeer any of them. So the render
-    // bridge cedes car ownership (peds/signals/crosswalks stay with it), and the
-    // kinematic car colliders are gone — CityPhysicsSystem now only does peds+poles.
-    citySys.setCarsExternallyOwned(true);
-    citySys.setPedsExternallyOwned(true);   // walkers are physics characters too
-    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // signal poles (static)
-    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // spawn + drive NPC cars
+    // Motion authority per regime (ADR-0061 rethink): AMBIENT traffic is moved by
+    // ONE authority — the CitySim planner — drawn instanced and collided via
+    // kinematic proxies (CityPhysicsSystem), which is what keeps forty cars
+    // flowing. Full Jolt dynamics is an INTERACTION response: CityVehicleSystem
+    // PROMOTES an ambient car to a real Vehicle when the player commandeers it
+    // (registered before VehicleSystem so the same enter press then seats the
+    // player). Walkers are physics characters (CityWalkerSystem) — their plant is
+    // trivially controllable, so bodies-follow-planner works for them everywhere.
+    citySys.setPedsExternallyOwned(true);
+    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
+    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
-    addSystem<VehicleSystem>(physSys, camSys);   // drives ALL cars: player + AI (ADR-0058/0061)
+    addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
 #else
     (void)citySys;   // physics-off build: no collider system to consume it
 #endif

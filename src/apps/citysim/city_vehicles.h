@@ -2,78 +2,50 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_VEHICLES_H
 
 #include "../../engine/system.h"
-#include "../../engine/ai/lane_follow.h"     // LaneFollower (closed-loop pursuit)
-#include "../../engine/ai/traffic_sense.h"   // senseLeader / followSpeed / StuckDetector
 #include "../../engine/systems/physics_system.h"
-#include "../../renderer/renderer.h"         // engine::MeshHandle
+#include "../../renderer/renderer.h"   // engine::MeshHandle
 #include "city_render.h"
 
 #include <vector>
 
 namespace citysim {
 
-// The one-car-system bridge (ADR-0061). Instead of drawing NPC cars as kinematic
-// pose-holders, this spawns each CitySim driver agent a REAL engine Vehicle — the
-// exact same Jolt-backed object the player drives — tagged with an AgentDriver.
+// PROMOTION-on-interaction (ADR-0061, motion-authority rethink). Ambient NPC
+// traffic is moved by ONE authority — the CitySim planner, drawn instanced and
+// collided via kinematic proxies (CityPhysicsSystem). Full vehicle dynamics is
+// an INTERACTION response, not the default gait of forty cars: when the player
+// walks up to an ambient car and presses enter, this system PROMOTES it — the
+// sim releases the agent (its instanced car vanishes), a real engine Vehicle
+// with the same fleet body spawns in its place (wheel-less mesh; VehicleSystem
+// adds physics wheels + lamps), and VehicleSystem's normal enter flow seats the
+// player in it that same frame. One car system at the component level; two
+// motion regimes, each owned by the thing that's good at it.
 //
-// The control loop is CLOSED over the car's real pose (not an open-loop ghost
-// chase). The CitySim ghost is the PLANNER — it decides route, signals, and the
-// speed to hold — and the physical car follows the plan from where it actually is:
-//   - HEADING: pure pursuit (LaneFollower) over the ghost's lane path, aimed from
-//     the car's real position — so a car recovers its lane after a shove, arcs a
-//     corner instead of cutting it, and stays stable at speed.
-//   - SPEED: proportional station control toward the ghost (drive up to it, match
-//     its planned speed, brake when overshot) — so a lagging car catches up and a
-//     stopped ghost (red light / arrival) parks the car at the right spot.
-//   - TETHER: the ghost may never LEAD the car by more than a leash — a car
-//     knocked back or climbing finds its plan waiting just ahead, never gone.
+// (The earlier all-dynamic bridge — every NPC car a Jolt vehicle chasing a
+// planner ghost through tether/pursuit/station control — is retired: two clocks
+// over one body needed endless reconciliation and jammed junctions. The
+// pursuit/sensing controller stack remains in engine/ai, harness-tested, for
+// promoted DYNAMIC cars that need AI driving later, e.g. hit reactions.)
 //
-// On top of the plan, each car drives by what it SEES (ADR-0060/0061): a forward
-// cone senses the other PHYSICAL road users — NPC cars where physics actually put
-// them, the player's car, the on-foot player, pedestrians — and caps the speed
-// off the nearest one ahead in its lane (traffic_sense.h). Plans alone can't keep
-// physics-driven cars apart; eyes on real poses can. A stall watchdog + flip
-// timer trigger resetVehicleUpright, so a beached or rolled car self-recovers.
-// Per-car PERSONALITY (deterministic from the agent id) varies the controller
-// gains and following distance, so the fleet doesn't drive in lockstep.
-//
-// Because the cars are real Vehicles, the player can commandeer one (VehicleSystem
-// ejects its AgentDriver on entry); this bridge notices the ejection and releases
-// that ghost from the sim so the planner stops fighting the physical car.
-//
-// Viewer/editor only (needs Jolt via the engine VehicleSystem), not engine_core —
-// like CityPhysicsSystem. UNVERIFIED on device (no Jolt build here); the control
-// loop itself is exercised headless by the bicycle-model harnesses
-// (tests/test_lane_follow.cpp, tests/test_traffic_sense.cpp).
+// Viewer/editor only (needs Jolt via PhysicsSystem/VehicleSystem), not
+// engine_core. UNVERIFIED on device, like the rest of the Jolt path.
 class CityVehicleSystem : public engine::System {
 public:
     CityVehicleSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
         : city_(city), physics_(physics) {}
 
-    void fixedUpdate(engine::FrameContext& ctx) override;
+    void update(engine::FrameContext& ctx) override;   // commandeer check (per frame)
     void onStop(engine::FrameContext& ctx) override;
 
 private:
-    void spawnCars(engine::FrameContext& ctx);
-    void driveCars(engine::FrameContext& ctx);
-
-    struct NpcCar {
-        engine::Entity entity;   // the engine Vehicle entity
-        int agentId = -1;        // the CitySim ghost that plans for it
-        int trip = -1;           // ghost trip counter; a new trip rebuilds the path
-        engine::LaneFollower follower;   // pursuit progress along the lane path
-        engine::StuckDetector stuck;     // stall watchdog -> upright/unstick reset
-        engine::Real flipTimer = 0;      // time spent rolled past recovery
-        engine::Real blockTimer = 0;     // held by a stopped cross car -> creep valve
-        engine::Real bumperGap = 0.8;    // personal following buffer (m)
-        bool released = false;   // player commandeered it -> ghost freed
+    struct PromotedCar {
+        engine::Entity entity;   // the real Vehicle that replaced the ambient car
+        int agentId = -1;        // the released sim agent
     };
 
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
-    std::vector<NpcCar> cars_;
-    std::vector<engine::MeshHandle> bodyMesh_;   // one per fleet slot (shared)
-    bool spawned_ = false;
+    std::vector<PromotedCar> promoted_;
 };
 
 }  // namespace citysim
