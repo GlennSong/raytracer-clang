@@ -4109,15 +4109,36 @@ plan. Now:
   following buffer vary deterministically per agent — the fleet stops moving in
   lockstep. Junction/signal caps stay shared (road rules, not temperament).
 
+**Refinement 3: first device feedback (parked roadblocks, corridor sensing,
+honest widgets).** Device testing surfaced two failures. (a) *Cars piled up at
+junctions*: arrived/idle driver ghosts rested at the END of their lane — harmless
+kinematically, but the PHYSICAL car that follows the pose became a roadblock
+parked at the junction mouth until its next trip, hours later. Drivers now park
+OFF the carriageway (verge beside the link, a per-agent setback so arrivals don't
+stack; idle poses likewise), and the off-trip bridge branch creeps the car to
+that kerb spot. (b) *Debug rings with nothing in them*: the widgets drew at the
+planner-ghost pose while the physical car was elsewhere. The bridge now reports
+each car's REAL pose (`setExternalCarPoses`); a driver's ring circles the actual
+car, and unreported drivers (released to the player) draw none. Alongside: the
+straight sensing cone is replaced on-trip by a **corridor along the pursuit
+path** (`senseAlongPath`) — it bends with the road, so a stopped queue in the
+oncoming lane of a curve can no longer read as "ahead of me" and freeze both
+directions — and an **anti-gridlock valve** noses a car slowly past a STOPPED
+cross car (never a pedestrian/player) after a few blocked seconds, so mutual
+junction blocks self-resolve.
+
 **What's verified vs owed.** The controller, seam wiring (enter/eject),
 `releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, the closed control
-loop, real-pose following, and the stall watchdog are headless-tested (bicycle
-harness + sim tests). The Jolt path itself is **UNVERIFIED on device** (no Jolt
-build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`) against
-the real plant, and a check that `resetVehicleUpright` reads well in play. Owed
-next: lane changes / overtaking on the sensed-neighbour model, and junction
-yielding evaluated from real poses. This repositions ADR-0059's kinematic sim as
-the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
+loop, corridor + cone sensing, the gridlock valve inputs, off-road parking, the
+widget real-pose path, and the stall watchdog are headless-tested (bicycle
+harness + sim/render tests). The Jolt path itself is **UNVERIFIED on device** (no
+Jolt build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`)
+against the real plant, and a check that `resetVehicleUpright` reads well in
+play. Owed next: lane changes / overtaking on the sensed-neighbour model,
+junction yielding evaluated from real poses, and peds don't yet avoid parked
+cars (they can walk through a car parked on the verge). This repositions
+ADR-0059's kinematic sim as the AI *planner*, not a second car mover, and
+subsumes ADR-0060 Phase 5.
 
 ---
 

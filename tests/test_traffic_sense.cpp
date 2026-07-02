@@ -143,6 +143,64 @@ TEST_CASE(stuck_detector_fires_after_a_sustained_stall_only) {
     CHECK(sd.timer == 0.0);
 }
 
+TEST_CASE(corridor_sense_bends_with_the_road) {
+    // A quarter-circle right bend (radius 20). The straight cone's freeze mode:
+    // a STOPPED car in the ONCOMING lane of the curve falls dead ahead of the
+    // straight axis and reads as a blocker. The corridor follows the path, so it
+    // must ignore that car — and still find one actually parked ON my lane.
+    std::vector<Vec2> path;
+    for (int k = 0; k <= 20; ++k) {
+        Real a = 1.5707963267948966 * k / 20.0;
+        path.push_back(Vec2(20 - 20 * std::cos(a), 20 * std::sin(a)));
+    }
+    LaneFollower lf;
+    lf.setPath(path);
+    lf.update(Vec2(0, 0));   // car at the start of the bend, heading ~+z
+
+    // Oncoming-lane car (3.5 m LEFT of my lane, i.e. outside the corridor),
+    // stopped mid-bend — geometrically almost dead ahead of my straight axis.
+    Vec2 midOn = path[10];
+    Vec2 tan = path[11] - path[9];
+    Real tl = std::sqrt(tan.x * tan.x + tan.y * tan.y);
+    tan = Vec2(tan.x / tl, tan.y / tl);
+    Vec2 left(-tan.y, tan.x);
+    std::vector<SensedBody> oncoming = { body(midOn + left * 3.5, Vec2(-tan.x, -tan.y), 0.0) };
+    CHECK(!senseAlongPath(lf, 25.0, 1.6, oncoming).found);
+    // The same stopped car placed ON my lane path IS the leader, at path distance.
+    std::vector<SensedBody> inLane = { body(midOn, tan, 0.0) };
+    LeaderSense l = senseAlongPath(lf, 25.0, 1.6, inLane);
+    CHECK(l.found);
+    CHECK(l.gap > 10.0 && l.gap < 20.0);   // along-path distance to mid-bend
+}
+
+TEST_CASE(corridor_sense_flags_cross_bodies_and_yielders) {
+    // Straight path; a stopped car sideways across the lane 10 m ahead: found,
+    // align ~ 0 (a cross body — the anti-gridlock valve may creep past it), and
+    // a pedestrian in the same spot is found but flagged yield-always (never
+    // creep through a person).
+    std::vector<Vec2> path;
+    for (Real z = 0; z <= 60; z += 3) path.push_back(Vec2(0, z));
+    LaneFollower lf;
+    lf.setPath(path);
+    lf.update(Vec2(0, 0));
+
+    std::vector<SensedBody> crossCar = { body(Vec2(0, 10), Vec2(1, 0), 0.0) };
+    LeaderSense l = senseAlongPath(lf, 25.0, 1.6, crossCar);
+    CHECK(l.found);
+    CHECK(l.align < 0.5);
+    CHECK(!l.yieldAlways);
+
+    SensedBody ped = body(Vec2(0, 10), Vec2(1, 0), 0.0, 0.3);
+    ped.yieldAlways = true;
+    std::vector<SensedBody> walker = { ped };
+    LeaderSense p = senseAlongPath(lf, 25.0, 1.6, walker);
+    CHECK(p.found);
+    CHECK(p.yieldAlways);
+    // Moving cross traffic still passes through unhindered (no deadlock).
+    std::vector<SensedBody> crossing = { body(Vec2(0, 10), Vec2(1, 0), 6.0) };
+    CHECK(!senseAlongPath(lf, 25.0, 1.6, crossing).found);
+}
+
 TEST_CASE(convoy_follower_never_rear_ends_its_leader) {
     // The whole stack closed-loop: leader cruises the lane at 4; the follower is
     // commanded 9 from 25 m back. Real-pose sensing must brake it to convoy pace

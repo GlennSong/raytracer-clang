@@ -64,6 +64,7 @@ private:
         engine::LaneFollower follower;   // pursuit progress along the lane path
         engine::StuckDetector stuck;     // stall watchdog -> upright/unstick reset
         engine::Real flipTimer = 0;      // time spent rolled past recovery
+        engine::Real blockTimer = 0;     // held by a stopped cross car -> creep valve
         engine::Real bumperGap = 0.8;    // personal following buffer (m)
         bool released = false;   // player commandeered it -> ghost freed
     };

@@ -137,9 +137,12 @@ constexpr Real kStandoff = 1.5;      // park this short of the ghost's spot (m)
 constexpr Real kCatchupGain = 0.5;   // station error (m) -> extra speed (m/s)
 constexpr Real kCatchupMax = 4.0;    // max speed over the plan while catching up
 constexpr Real kTetherLead = 12.0;   // ghost may lead its car by at most this (m)
-constexpr Real kSenseRange = 22.0;   // forward traffic cone (m)
-constexpr Real kSenseHalfAngle = 0.5;
-constexpr Real kFlipRecover = 2.0;   // rolled this long -> right the car (s)
+constexpr Real kSenseRange = 22.0;    // how far ahead traffic is sensed (m)
+constexpr Real kSenseHalfAngle = 0.5; // fallback cone (no path)
+constexpr Real kCorridorHalf = 1.6;   // half-width of the along-path sense corridor
+constexpr Real kFlipRecover = 2.0;    // rolled this long -> right the car (s)
+constexpr Real kCreepAfter = 3.0;     // blocked by a stopped cross car this long ->
+constexpr Real kCreepSpeed = 0.8;     // ...nose through at this speed (anti-gridlock)
 }  // namespace
 
 void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
@@ -174,6 +177,7 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
             b.pos = Vec2(t.position.x, t.position.z);
             b.speed = 0;
             b.halfLength = 0.4;
+            b.yieldAlways = true;     // never creep through the player
             bodies.push_back(b);
             bodyOwner.push_back(e);
         });
@@ -184,12 +188,17 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         b.heading = a.heading;
         b.speed = 0;              // a walker is an obstacle regardless of direction
         b.halfLength = 0.3;
+        b.yieldAlways = true;     // never creep through a pedestrian
         bodies.push_back(b);
         bodyOwner.push_back(Entity{});
     }
 
     // Cannot mutate the sim (release) inside a loop that also reads it — collect.
     std::vector<int> toRelease;
+    // Real car poses for the render bridge's debug widgets (the ring must circle
+    // the PHYSICAL car, not the planner ghost).
+    std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
+    widgetPoses.reserve(cars_.size());
     for (NpcCar& car : cars_) {
         if (car.released) continue;
         if (!world.alive(car.entity)) { car.released = true; continue; }
@@ -231,33 +240,57 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         if (target < 0) target = 0;
         if (target > cap) target = cap;
 
-        // SPEED, layer 2 — the EYES: cap off the nearest real body ahead in the
-        // lane (another physics car, the player, a pedestrian). Plans can't keep
-        // physics-driven cars apart; sensing real poses can.
+        // SPEED, layer 2 — the EYES: cap off the nearest real body ahead (another
+        // physics car, the player, a pedestrian). Plans can't keep physics-driven
+        // cars apart; sensing real poses can. On a trip, sense a CORRIDOR along
+        // the pursuit path — it bends with the road, so a stopped queue in the
+        // oncoming lane of a curve never reads as "ahead of me" (the straight
+        // cone's freeze mode), and only bodies actually on MY lane block me. The
+        // cone is the fallback when there is no path (parked, fresh spawn).
         int selfIdx = -1;
         for (std::size_t k = 0; k < bodyOwner.size(); ++k)
             if (bodyOwner[k] == car.entity) { selfIdx = static_cast<int>(k); break; }
-        engine::VisionCone cone;
-        cone.origin = carXZ;
-        cone.forward = carFwd;
-        cone.range = kSenseRange;
-        cone.halfAngleRad = kSenseHalfAngle;
-        engine::LeaderSense lead = engine::senseLeader(cone, bodies,
-                                                       /*lateralMax=*/2.2,
-                                                       /*stationarySpeed=*/1.0, selfIdx);
+        bool onTrip = car.follower.valid() && g.moving;
+        engine::LeaderSense lead;
+        if (onTrip) {
+            car.follower.update(carXZ);
+            lead = engine::senseAlongPath(car.follower, kSenseRange, kCorridorHalf,
+                                          bodies, selfIdx);
+        } else {
+            engine::VisionCone cone;
+            cone.origin = carXZ;
+            cone.forward = carFwd;
+            cone.range = kSenseRange;
+            cone.halfAngleRad = kSenseHalfAngle;
+            lead = engine::senseLeader(cone, bodies, /*lateralMax=*/2.2,
+                                       /*stationarySpeed=*/1.0, selfIdx);
+        }
         target = engine::followSpeed(target, lead, v->config.chassisHalfExtent.z,
                                      car.bumperGap);
 
-        // HEADING: pure pursuit over the lane path from the car's REAL position
-        // (with the built-in ease-to-a-stop at the path end). No path (parked /
-        // fresh spawn): hold the ghost's heading.
-        if (car.follower.valid()) {
-            car.follower.update(carXZ);
+        // ANTI-GRIDLOCK VALVE: held at zero for a while by a STOPPED cross body
+        // (a car straggling in the junction box — never a pedestrian or the
+        // player) -> nose through slowly instead of freezing forever. Two cars
+        // mutually blocked resolve because whoever creeps first clears the box.
+        bool crossBlock = lead.found && !lead.yieldAlways &&
+                          lead.speed < 0.5 && lead.align < 0.5;
+        car.blockTimer = (crossBlock && target < 0.1) ? car.blockTimer + dt : 0.0;
+        if (car.blockTimer > kCreepAfter) target = std::max(target, kCreepSpeed);
+
+        // HEADING: on a trip, pure pursuit over the lane path from the car's REAL
+        // position (with the built-in ease-to-a-stop at the path end). Off-trip
+        // (arrived / between trips), creep to the ghost's PARKING spot on the
+        // verge — the station-control target above eases to a stop there — so a
+        // finished car pulls over instead of resting where its path ended.
+        if (onTrip) {
             ad->command = engine::pursuitCommand(
                 car.follower, carXZ, target,
                 engine::pursuitLookahead(std::max(realSpeed, Real(3.0))));
         } else {
-            ad->command.desiredHeading = g.heading;
+            Vec2 toGhost(g.pos.x - carXZ.x, g.pos.y - carXZ.y);
+            Real d = std::sqrt(toGhost.x * toGhost.x + toGhost.y * toGhost.y);
+            ad->command.desiredHeading =
+                d > 0.8 ? Vec2(toGhost.x / d, toGhost.y / d) : g.heading;
             ad->command.desiredSpeed = target;
         }
 
@@ -275,8 +308,12 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
         // TETHER: feed the sim the car's real position so the ghost waits rather
         // than outrunning the physics (collision, hill, slow start).
         city_.simMutable().setAgentTether(car.agentId, carXZ, kTetherLead);
+
+        widgetPoses.push_back(CityRenderSystem::ExternalAgentPose{
+            car.agentId, carXZ, carFwd});
     }
     for (int id : toRelease) city_.simMutable().releaseDriver(id);
+    city_.setExternalCarPoses(std::move(widgetPoses));
 }
 
 void CityVehicleSystem::fixedUpdate(engine::FrameContext& ctx) {

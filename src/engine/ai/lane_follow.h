@@ -42,6 +42,10 @@ public:
     Real length() const { return cum_.empty() ? 0.0 : cum_.back(); }
     Real station() const { return station_; }               // arc-length progress
     Real remaining() const { return length() - station_; }
+    // Path internals for corridor queries (traffic_sense.h senseAlongPath).
+    const std::vector<Vec2>& points() const { return pts_; }
+    const std::vector<Real>& arcs() const { return cum_; }
+    std::size_t segmentHint() const { return seg_; }
 
     // Advance progress from the car's REAL position and return the lateral
     // distance to the path. Progress is MONOTONIC and the closest-point search

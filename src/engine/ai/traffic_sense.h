@@ -1,7 +1,8 @@
 #ifndef RAYTRACER_ENGINE_AI_TRAFFIC_SENSE_H
 #define RAYTRACER_ENGINE_AI_TRAFFIC_SENSE_H
 
-#include "perception.h"   // VisionCone, sees(), forwardDistance()
+#include "lane_follow.h"   // LaneFollower (corridor sensing along the pursuit path)
+#include "perception.h"    // VisionCone, sees(), forwardDistance()
 
 #include <cmath>
 #include <cstddef>
@@ -21,14 +22,19 @@ struct SensedBody {
     Vec2 heading{1, 0};   // unit travel direction (meaningless when speed ~ 0)
     Real speed = 0;       // forward speed magnitude (m/s)
     Real halfLength = 2.1;
+    // A body cars must ALWAYS yield to (a pedestrian, the on-foot player): the
+    // gridlock creep valve never noses through one of these.
+    bool yieldAlways = false;
 };
 
 // The nearest body ahead that the driver must respect.
 struct LeaderSense {
     bool found = false;
-    Real gap = 0;         // centre-to-centre distance (m)
-    Real speed = 0;       // leader speed ALONG my heading (>= 0)
+    Real gap = 0;         // distance to it (centre-to-centre / along-path, m)
+    Real speed = 0;       // leader speed ALONG my travel direction (>= 0)
     Real halfLength = 0;
+    Real align = 1;       // cos(angle between our headings); < ~0.5 = cross body
+    bool yieldAlways = false;
 };
 
 // Scan `bodies` from a forward cone and return the nearest relevant one:
@@ -61,6 +67,60 @@ inline LeaderSense senseLeader(const VisionCone& cone, const std::vector<SensedB
             out.gap = centreDist;
             out.speed = align > 0 ? b.speed * align : 0.0;
             out.halfLength = b.halfLength;
+            out.align = align;
+            out.yieldAlways = b.yieldAlways;
+        }
+    }
+    return out;
+}
+
+// Corridor sensing ALONG THE PURSUIT PATH (the sharper tool when a path exists):
+// the nearest body within `corridorHalf` of the lane polyline over the next
+// `range` metres of path. Unlike the straight cone this bends with the road — a
+// stopped queue in the ONCOMING lane of a curve never reads as "ahead of me"
+// (with a straight cone it does, and two such queues freeze each other), and a
+// body only blocks me if it actually sits on MY lane's path. `gap` comes back as
+// along-path distance. Same cross-traffic rule as the cone, evaluated against
+// the path tangent where the body sits.
+inline LeaderSense senseAlongPath(const LaneFollower& lf, Real range, Real corridorHalf,
+                                  const std::vector<SensedBody>& bodies,
+                                  int skip = -1, Real stationarySpeed = 1.0) {
+    LeaderSense out;
+    if (!lf.valid()) return out;
+    const std::vector<Vec2>& P = lf.points();
+    const std::vector<Real>& S = lf.arcs();
+    const Real s0 = lf.station(), sEnd = s0 + range;
+    Real bestGap = 1e30;
+    for (std::size_t bi = 0; bi < bodies.size(); ++bi) {
+        if (static_cast<int>(bi) == skip) continue;
+        const SensedBody& b = bodies[bi];
+        // This body's closest in-corridor projection onto the path window.
+        Real gap = 1e30, align = 1;
+        for (std::size_t i = lf.segmentHint(); i + 1 < P.size() && S[i] <= sEnd; ++i) {
+            Vec2 a = P[i], ab = P[i + 1] - a;
+            Real L2 = ab.x * ab.x + ab.y * ab.y;
+            if (L2 < 1e-12) continue;
+            Real t = ((b.pos.x - a.x) * ab.x + (b.pos.y - a.y) * ab.y) / L2;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            Vec2 q = a + ab * t;
+            Real dx = b.pos.x - q.x, dy = b.pos.y - q.y;
+            if (dx * dx + dy * dy > corridorHalf * corridorHalf) continue;
+            Real L = std::sqrt(L2);
+            Real along = S[i] + L * t - s0;
+            if (along <= 0.3 || along > range || along >= gap) continue;
+            gap = along;
+            align = dot(Vec2(ab.x / L, ab.y / L), b.heading);
+        }
+        if (gap > range) continue;
+        if (b.speed > stationarySpeed && align < 0.5) continue;   // crossing through
+        if (gap < bestGap) {
+            bestGap = gap;
+            out.found = true;
+            out.gap = gap;
+            out.speed = align > 0 ? b.speed * align : 0.0;
+            out.halfLength = b.halfLength;
+            out.align = align;
+            out.yieldAlways = b.yieldAlways;
         }
     }
     return out;

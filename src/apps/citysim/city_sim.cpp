@@ -218,10 +218,10 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode) const {
     Vec2 dir = nav_->direction(li);
     Vec2 right(dir.y, -dir.x);
     Real hw = nav_->links[li].width * 0.5;
-    // Driver idles where it would drive (lane 0 centre); a pedestrian waits just
-    // beyond the kerb on the same (right) side.
-    Real off = (mode == Agent::Mode::Driver) ? laneSpacing(nav_->links[li]) * 0.5
-                                             : hw + 1.2;
+    // Both idle OFF the carriageway: a pedestrian just beyond the kerb, a driver
+    // parked on the verge (ADR-0061 — an idle car is a PHYSICAL body now; parked
+    // in lane 0 it blocked the road until its first trip).
+    Real off = (mode == Agent::Mode::Driver) ? hw + 2.8 : hw + 1.2;
     if (off < 0.5) off = 0.5;
     return nav_->nodes[node] + right * off;
 }
@@ -382,13 +382,27 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         a.moving = false;
         a.speed = 0;
         a.elevation = 0;
-        // Rest at the very end of the last link (continuous with the final motion),
-        // NOT snapped to an idle pose on some other side of the node — that snap
-        // was the visible jump.
         int lastLink = a.route.links.back();
-        a.pos = (a.mode == Agent::Mode::Driver)
-                    ? nav_->laneCenter(lastLink, a.lane, 1.0, laneSpacing(nav_->links[lastLink]))
-                    : nav_->sidewalkPoint(lastLink, 1.0);
+        if (a.mode == Agent::Mode::Driver) {
+            // Park OFF the carriageway (ADR-0061). Resting at the lane's very end
+            // was harmless for a kinematic ghost, but the PHYSICAL car that now
+            // follows this pose became a roadblock parked at the junction mouth —
+            // everyone behind piled up until the next trip, hours later. Pull to
+            // the verge beside the link, a few metres short of the node, with a
+            // per-agent setback so arrivals at one destination don't stack.
+            Vec2 dir = nav_->direction(lastLink);
+            Vec2 right(dir.y, -dir.x);
+            Real hw = nav_->links[lastLink].width * 0.5;
+            Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;   // 4..13 m
+            back = std::min(back, nav_->links[lastLink].length * 0.5);
+            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8);
+            a.heading = dir;
+        } else {
+            // A walker rests at the end of its sidewalk (continuous with the final
+            // motion — not snapped across the node, which was the old visible jump).
+            a.pos = nav_->sidewalkPoint(lastLink, 1.0);
+        }
         a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
                                                                : Agent::Activity::AtHome;
         a.route.links.clear();

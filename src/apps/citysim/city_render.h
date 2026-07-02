@@ -57,6 +57,20 @@ public:
     void setCarsExternallyOwned(bool on) { carsExternallyOwned_ = on; }
     bool carsExternallyOwned() const { return carsExternallyOwned_; }
 
+    // The physical car poses (ADR-0061), fed each step by the vehicle bridge so
+    // the per-agent DEBUG WIDGETS ring the REAL car — not the planner ghost, which
+    // legitimately runs ahead/behind (an empty ring on the ground is the ghost).
+    // Only used when cars are externally owned; drivers without a reported pose
+    // (released to the player, dead entity) draw no widget.
+    struct ExternalAgentPose {
+        int agentId = -1;
+        engine::Vec2 pos;
+        engine::Vec2 heading{1, 0};
+    };
+    void setExternalCarPoses(std::vector<ExternalAgentPose> poses) {
+        externalCarPoses_ = std::move(poses);
+    }
+
     // --- testable core (no FrameContext) -----------------------------------
     // Build the NavGraph from every RoadNet in `world`, seed the CitySim, and
     // create the instance-group entities. `assets` may be null (tests): then the
@@ -133,6 +147,7 @@ private:
     bool built_ = false;
     bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
     bool carsExternallyOwned_ = false;   // ADR-0061: a CityVehicleSystem owns the cars
+    std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets
 };
 
 }  // namespace citysim

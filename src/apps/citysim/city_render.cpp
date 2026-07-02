@@ -574,10 +574,29 @@ void CityRenderSystem::syncGroups(World& world) {
         }
         InstanceGroup* fwd = world.get<InstanceGroup>(forwardGroup_);
         if (fwd) fwd->transforms.clear();
-        for (const Agent& a : sim_.agents()) {
-            if (!debugWidgets_) break;   // groups exist but stay empty when toggled off
+        const auto& agents = sim_.agents();
+        for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
+            const Agent& a = agents[ai];
             bool car = a.mode == Agent::Mode::Driver;
             Real x = a.pos.x, z = a.pos.y;
+            Vec2 heading = a.heading;
+            // Externally-owned cars (ADR-0061): the widget must ring the PHYSICAL
+            // car, not the planner ghost — the ghost legitimately runs ahead or
+            // behind, and a ring around it is an empty circle on the ground. Use
+            // the bridge-reported real pose; a driver with no reported car
+            // (released to the player, not yet spawned) draws no widget.
+            if (car && carsExternallyOwned_) {
+                bool reported = false;
+                for (const ExternalAgentPose& p : externalCarPoses_)
+                    if (p.agentId == static_cast<int>(ai)) {
+                        x = p.pos.x;
+                        z = p.pos.y;
+                        heading = p.heading;
+                        reported = true;
+                        break;
+                    }
+                if (!reported) continue;
+            }
             // Float the gizmo up around the agent (not flat on the ground) so it
             // isn't buried under a raised sidewalk; the overlay flag also lets it
             // draw through world geometry.
@@ -598,7 +617,7 @@ void CityRenderSystem::syncGroups(World& world) {
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
             if (fwd && a.moving) {
                 Real len = std::max(Real(0.6), std::min(Real(4.0), a.speed * 0.4));
-                Real yaw = std::atan2(a.heading.x, a.heading.y);
+                Real yaw = std::atan2(heading.x, heading.y);   // real pose when external
                 fwd->transforms.push_back(Mat4::trs(
                     Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
                     Vec3(0.12, 1, len)));

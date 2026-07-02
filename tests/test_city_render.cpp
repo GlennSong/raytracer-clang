@@ -96,6 +96,43 @@ TEST_CASE(city_render_debug_widgets) {
     CHECK(maxArrows >= 1u);     // agents did move at some point, drawing a trajectory
 }
 
+TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
+    // ADR-0061: with cars owned by the vehicle bridge, a driver's debug ring must
+    // circle the PHYSICAL car (the bridge-reported pose), not the planner ghost —
+    // a ring around the ghost is an empty circle on the ground. Drivers with no
+    // reported car draw no ring; pedestrian rings are unaffected.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 4;
+    p.pedestrians = 3;
+    p.debugWidgets = true;
+    CityRenderSystem city(p);
+    city.setCarsExternallyOwned(true);
+    CHECK(city.build(world, nullptr));
+
+    // Report a real pose for agent 0 only, far from any ghost.
+    const Vec2 realPos(500.0, -500.0);
+    city.setExternalCarPoses({ CityRenderSystem::ExternalAgentPose{0, realPos, Vec2(0, 1)} });
+    city.step(world, 0.1);
+
+    std::size_t rings = 0;
+    bool ringAtReal = false;
+    for (int s = 0; s < static_cast<int>(Agent::State::Count); ++s) {
+        InstanceGroup* g = world.get<InstanceGroup>(
+            city.footprintGroup(static_cast<Agent::State>(s)));
+        if (!g) continue;
+        for (const Mat4& m : g->transforms) {
+            ++rings;
+            if (std::fabs(m.m[0][3] - realPos.x) < 1e-6 &&
+                std::fabs(m.m[2][3] - realPos.y) < 1e-6)
+                ringAtReal = true;
+        }
+    }
+    CHECK(rings == 4u);      // 3 ped ghosts + the 1 reported car; 3 unreported drivers skip
+    CHECK(ringAtReal);       // and the car's ring sits at the REAL pose
+}
+
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
