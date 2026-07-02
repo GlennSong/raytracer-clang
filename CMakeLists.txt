@@ -58,6 +58,7 @@ add_library(engine_core STATIC
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/surface_maps.cpp
+    src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/erosion.cpp
@@ -263,6 +264,7 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
+    tests/test_vehicle_mesh.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp
     tests/test_instance_tlas.cpp

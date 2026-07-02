@@ -15,35 +15,14 @@
 
 vehicle = {}
 
--- Solid-colour a part: bake_height_color with low==high paints it flat.
-local function paint(m, c) return mesh.bake_height_color(m, c, c) end
 
--- A low car body that sits around the wheels, with a set-back cabin, dark glass,
--- and front/rear lights. `color` is the paint; faces +Z.
+-- The car body: the engine's lofted CURVED shell (mesh.car_shell) — smooth
+-- superellipse sections along a real roofline with glass painted into the
+-- greenhouse. The SAME generator the NPC fleet instances, so the player's car
+-- matches the traffic 1:1 (ADR-0061). No baked wheels: the player's wheels are
+-- separate physics-driven entities. `color` is the paint; faces +Z.
 local function car_body(L, W, H, color)
-    local hw, hl = W * 0.5, L * 0.5
-    local glass = { 0.05, 0.06, 0.09 }
-    local parts = {}
-    -- Low main hull (its sides come down around the wheels).
-    parts[#parts + 1] = paint(mesh.box({ W, H * 0.46, L }), color)
-    -- Greenhouse / cabin: narrower, set back a touch, sitting on the hull.
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.84, H * 0.42, L * 0.46 }), { 0, H * 0.40, -L * 0.04 }), color)
-    -- Windshield + rear window (dark glass bands).
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.80, H * 0.30, L * 0.05 }), { 0, H * 0.42, L * 0.15 }), glass)
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.80, H * 0.26, L * 0.05 }), { 0, H * 0.42, -L * 0.23 }), glass)
-    -- Head/taillights at the front (+Z) and rear (-Z) corners.
-    local ly = -H * 0.08
-    local lx = hw - 0.30
-    for _, sx in ipairs({ 1, -1 }) do
-        parts[#parts + 1] = paint(mesh.translate(
-            mesh.box({ 0.34, 0.18, 0.10 }), { sx * lx, ly, hl - 0.02 }), { 1.0, 0.97, 0.82 })
-        parts[#parts + 1] = paint(mesh.translate(
-            mesh.box({ 0.34, 0.18, 0.10 }), { sx * lx, ly, -hl + 0.02 }), { 0.85, 0.06, 0.05 })
-    end
-    return mesh.recompute_normals(mesh.merge(parts))
+    return mesh.car_shell("sedan", color, { W, H, L }, false)
 end
 
 function vehicle.sedan(seed, opts)
