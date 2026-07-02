@@ -23,7 +23,8 @@ trap 'cd "$REPO"; git worktree remove "$WT" --force 2>/dev/null || true; git wor
 cp build-web/index.html build-web/viewer.html build-web/about.html build-web/scenes.json \
    build-web/viewer_web.js build-web/viewer_web.wasm build-web/viewer_web.data "$WT"/
 mkdir -p "$WT/thumbs"
-cp build-web/thumbs/*.png "$WT/thumbs/" 2>/dev/null || true
+rm -f "$WT"/thumbs/*.png "$WT"/thumbs/*.webp   # drop stale formats before recopying
+cp build-web/thumbs/*.webp "$WT/thumbs/" 2>/dev/null || true
 touch "$WT/.nojekyll"
 
 git -C "$WT" add -A
