@@ -242,6 +242,21 @@ struct AgentDriver {
     int agentId = -1;           // brain handle (CitySim agent index); -1 = none
 };
 
+// Level-authored city-simulation settings (ADR-0062): a top-level "citysim"
+// block in the level JSON becomes one entity carrying this, and the city render
+// bridge reads it at build. Lets a level choose its own population — the agent
+// lab runs ONE driver and ONE walker with the debug HUD on, while grown.json
+// keeps the default bustle. Defaults mirror CityRenderParams so an absent field
+// changes nothing.
+struct CitySimConfig {
+    int cars = 40;
+    int pedestrians = 40;
+    uint32_t seed = 1;
+    float hoursPerSecond = 0.05f;        // sim-clock hours per real second
+    float perceptionReliability = 0.97f; // <1 -> agents occasionally err
+    bool debugWidgets = false;           // start with the agent-state HUD on
+};
+
 // --- Document hierarchy (stable ids + parenting) --------------------------
 // Document entities (those carrying a SourceSpec) reference one another by
 // stable id, not by runtime Handle. These helpers index and compose that

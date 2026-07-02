@@ -385,3 +385,75 @@ TEST_CASE(crosswalks_sit_at_junction_mouths) {
     CHECK(g != nullptr);
     CHECK(g->transforms.empty());
 }
+
+TEST_CASE(level_citysim_config_overrides_build_params) {
+    // ADR-0062: a level's top-level "citysim" block (parsed into a CitySimConfig
+    // entity) decides the population — the agent lab runs 1 car + 1 walker while
+    // grown.json keeps the default bustle. The entity must beat the constructor.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CitySimConfig cfg;
+    cfg.cars = 1;
+    cfg.pedestrians = 1;
+    cfg.seed = 7;
+    cfg.debugWidgets = true;
+    world.add<CitySimConfig>(world.create(), cfg);
+
+    CityRenderParams p;          // the constructor asks for a crowd...
+    p.cars = 40;
+    p.pedestrians = 40;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+    CHECK(city.sim().agents().size() == 2u);   // ...but the LEVEL's block wins
+    CHECK(carTotal(world, city) == 1u);
+    CHECK(groupCount(world, city.pedGroup()) == 1u);
+}
+
+TEST_CASE(agent_lab_theta_circuit_is_navigable) {
+    // The agent-lab level (assets/levels/agent_lab.json) is a theta circuit: a
+    // 120x80 ring with a middle bar, meeting at two 3-way junctions. Mirror its
+    // geometry here and pin what the lab depends on: both junctions carry
+    // signals, every node routes to every other, and a lone driver + walker
+    // actually get moving on it.
+    RoadNet net;
+    net.nodes = { Vec2(-60, -40), Vec2(60, -40), Vec2(60, 40), Vec2(-60, 40),
+                  Vec2(-60, 0), Vec2(60, 0) };
+    net.edges = { {0, 1}, {1, 5}, {5, 2}, {2, 3}, {3, 4}, {4, 0}, {4, 5} };
+    net.width = 7.0;
+    net.sidewalk = 1.8;
+
+    World world;
+    world.add<RoadNet>(world.create(), net);
+    CitySimConfig cfg;
+    cfg.cars = 1;
+    cfg.pedestrians = 1;
+    cfg.seed = 7;
+    world.add<CitySimConfig>(world.create(), cfg);
+    CityRenderSystem city;
+    CHECK(city.build(world, nullptr));
+
+    const NavGraph& nav = city.nav();
+    int junctions = 0;
+    for (int v = 0; v < nav.nodeCount(); ++v)
+        if (nav.isJunction(v)) ++junctions;
+    CHECK(junctions == 2);   // the two theta mid-side meets; corners just bend
+
+    // Fully connected: every ordered pair routes.
+    bool allRoute = true;
+    for (int a = 0; a < nav.nodeCount(); ++a)
+        for (int b = 0; b < nav.nodeCount(); ++b)
+            if (a != b && !findRoute(nav, a, b).valid()) allRoute = false;
+    CHECK(allRoute);
+
+    // Both lab agents come alive: the driver rolls and the walker walks.
+    bool carMoved = false, pedMoved = false;
+    for (int i = 0; i < 6000 && !(carMoved && pedMoved); ++i) {
+        city.step(world, 0.1);
+        for (const Agent& a : city.sim().agents()) {
+            if (!a.moving || a.speed <= 0.5) continue;
+            (a.mode == Agent::Mode::Driver ? carMoved : pedMoved) = true;
+        }
+    }
+    CHECK(carMoved);
+    CHECK(pedMoved);
+}

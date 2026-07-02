@@ -55,6 +55,14 @@ constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a
                                            // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
+// The cognition loop (ADR-0062): agents act on MEMORY, not on the momentary
+// snapshot. A track must hold at least this much confidence to be acted on —
+// with the default 4 s memory horizon that means a body is reacted to for ~3 s
+// after it was last actually seen (extrapolated along where it was heading).
+constexpr Real kMemoryActConfidence = 0.25;
+constexpr Real kTtcHorizon = 2.0;       // brake when a collision is predicted this soon (s)
+constexpr Real kCollisionRadius = 1.5;  // car-vs-person combined disc radius for that test
+constexpr Real kPedAnticipation = 0.4;  // walkers dodge where a neighbour WILL be (s ahead)
 
 // Lane spacing that fits THIS road: split the right half of the carriageway
 // evenly among the direction's lanes, so a car sits centred in its own lane and
@@ -164,6 +172,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     agents_.clear();
     vehicles_.clear();
     clockHours_ = 8.5;   // start mid morning-rush so agents commute right away
+    simSeconds_ = 0;
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
     signals_.build(graph);
@@ -326,32 +335,61 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         }
     }
 
-    // Perception: brake for a PEDESTRIAN (or the player) the car sees crossing
-    // ahead in its vision cone — the safety case car-following can't cover. We do
-    // NOT brake for other AI cars here: car-vs-car conflicts are resolved by lanes
-    // (opposing traffic sits on the other side), same-lane car-following (the gap
-    // cap below), and the traffic signals. Braking for every car in a wide cone
-    // made oncoming traffic and cross traffic at junctions stop for each other and
-    // deadlock — a snarl with no way to clear. `positions_` therefore holds only
-    // pedestrians + the player (see step()).
-    // Imperfect: with probability (1 - reliability) the agent misses it this step
-    // (a fault), so it may not brake in time.
-    Real seenAhead = std::numeric_limits<Real>::infinity();   // dist to a ped/player ahead
+    // Perception (ADR-0062: sense -> remember -> predict -> decide -> act). Each
+    // tick the car SENSES pedestrians and the player through its 2.5D sensor —
+    // the forward wedge plus a height band, so a walker crossing the overpass is
+    // not a phantom to brake for — and REMEMBERS the sightings as tracks with
+    // velocity estimates. It then acts on the MEMORY, not the snapshot: a person
+    // who slipped out of the cone is still yielded to where they're HEADING for a
+    // few seconds (object permanence), and a crosser on a collision course is
+    // braked for BEFORE entering the lane (time-to-collision on the tracked
+    // velocity). We still do NOT sense other AI cars: car-vs-car is resolved by
+    // lanes, same-lane car-following (the gap cap below) and the signals —
+    // braking for every car in a wide cone deadlocked junctions (see step()).
+    // Imperfect: with probability (1 - reliability) this step's sighting is
+    // missed (a fault) — memory makes a missed frame degrade gracefully instead
+    // of blinding the car outright.
+    Real seenAhead = std::numeric_limits<Real>::infinity();   // dist to a person ahead
     if (car) {
+        engine::VisionCone cone;
+        cone.origin = a.pos;
+        cone.forward = a.heading;
+        cone.range = 18.0;
+        cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
+                                     // not someone standing on the far sidewalk
         if (brainUnit(a) <= a.reliability) {
-            engine::VisionCone cone;
-            cone.origin = a.pos;
-            cone.forward = a.heading;
-            cone.range = 18.0;
-            cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
-                                         // not someone standing on the far sidewalk
-            seenAhead = nearestObstacleAhead(cone, positions_);
-            if (seenAhead < 1e9)
-                target = std::min(target, approachStop(seenAhead - kPedClearance, kCarDecel,
-                                                       target));
+            engine::SensorVolume sensor;
+            sensor.cone = cone;
+            for (const SensedGhost& g : sensed_) {
+                // External points (the live player) carry no elevation from the
+                // host — skip the height gate rather than invent one for them.
+                Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
+                if (engine::sees(sensor, g.pos, dh))
+                    a.memory.observe(g.id, g.pos, simSeconds_);
+            }
         } else {
             ++faultCount_;
         }
+        a.memory.update(simSeconds_);
+        for (const engine::TrackedBody& t : a.memory.tracks()) {
+            if (t.confidence < kMemoryActConfidence) continue;
+            // Where memory says the body IS (extrapolated while unseen): yield
+            // if that estimate sits in the corridor ahead.
+            if (engine::sees(cone, t.pos)) {
+                Real fd = engine::forwardDistance(cone, t.pos);
+                if (fd > 0) seenAhead = std::min(seenAhead, fd);
+            }
+            // Where memory says it's GOING: if our courses collide within the
+            // horizon, brake as if the collision point were an obstacle that
+            // far ahead — anticipation, not reaction.
+            Real ttc = engine::timeToCollision(a.pos, a.heading * a.speed,
+                                               t.pos, t.vel, kCollisionRadius);
+            if (ttc < kTtcHorizon)
+                seenAhead = std::min(seenAhead, std::max(Real(0), a.speed * ttc));
+        }
+        if (seenAhead < 1e9)
+            target = std::min(target, approachStop(seenAhead - kPedClearance, kCarDecel,
+                                                   target));
     }
 
     // minGap is length-aware (computeGaps → pairMinGap): sedan traffic reproduces
@@ -515,6 +553,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
     if (clockHours_ < 0) clockHours_ += 24.0;
+    simSeconds_ += dt;   // memory's time base: sightings age and fade against this
     signals_.update(dt);
 
     // Pass 1: schedule transitions (AI agents only — the host drives players).
@@ -538,16 +577,22 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         }
     }
 
-    // Snapshot the positions cars must yield to — pedestrians and the player —
-    // so perception sees a consistent world this step. AI cars are deliberately
-    // excluded (see advance()): lanes + car-following + signals govern car-vs-car,
-    // and braking for cross/oncoming cars in the cone deadlocked traffic.
-    positions_.clear();
-    for (const Agent& a : agents_)
+    // Snapshot the bodies agents may SENSE this step — pedestrians and the
+    // player — so perception sees a consistent world. Each carries a STABLE id
+    // (agent index; -(1+k) for the k-th host-injected point) so an observer's
+    // memory can track it across steps, and its elevation so the 2.5D sensor can
+    // ignore bodies a bridge deck away. AI cars are deliberately excluded (see
+    // advance()): lanes + car-following + signals govern car-vs-car, and braking
+    // for cross/oncoming cars in the cone deadlocked traffic.
+    sensed_.clear();
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        const Agent& a = agents_[i];
         if (a.mode == Agent::Mode::Pedestrian || a.playerControlled)
-            positions_.push_back(a.pos);
-    // The live player (host-injected) is an obstacle too — cars brake for it.
-    for (const Vec2& o : externalObstacles_) positions_.push_back(o);
+            sensed_.push_back({a.pos, a.elevation, static_cast<int>(i)});
+    }
+    // The live player (host-injected) is a body too — cars brake for it.
+    for (std::size_t k = 0; k < externalObstacles_.size(); ++k)
+        sensed_.push_back({externalObstacles_[k], 0.0, -(1 + static_cast<int>(k))});
 
     // Pass 2: leading gaps. Pass 3: advance.
     computeGaps();
@@ -597,6 +642,26 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             engine::VisionCone cone;
             cone.origin = a.pos; cone.forward = travel;
             cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
+            // SENSE -> REMEMBER (ADR-0062): sight the walking neighbours (and the
+            // player) into memory at think cadence — successive sightings a think
+            // apart are what give each track its velocity estimate.
+            engine::SensorVolume sensor;
+            sensor.cone = cone;
+            for (const SensedGhost& g : sensed_) {
+                if (g.id == static_cast<int>(i)) continue;   // not myself
+                // Skip player-agent ghosts: the host already injects the live
+                // player as an external point — seeing both would double it.
+                if (g.id >= 0 && agents_[g.id].playerControlled) continue;
+                Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
+                if (engine::sees(sensor, g.pos, dh))
+                    a.memory.observe(g.id, g.pos, simSeconds_);
+            }
+            a.memory.update(simSeconds_);
+            // PREDICT -> DECIDE: lean away from where each remembered body will
+            // BE shortly (its track velocity run a beat ahead), not where the
+            // snapshot last had it — so two approaching walkers part early and
+            // smoothly. The answer is COMMITTED (leanTarget) until the next
+            // think. Poles are static and eternal: no memory needed.
             Real bias = 0; bool saw = false;
             auto consider = [&](const Vec2& p) {
                 if (!engine::sees(cone, p)) return;
@@ -607,12 +672,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 Real w = (kPedVisionRange - fd) / kPedVisionRange;   // nearer -> stronger
                 bias += (side >= 0 ? 1.0 : -1.0) * w;                // pass on the side I'm on
             };
-            for (std::size_t j = 0; j < agents_.size(); ++j) {
-                if (j == i) continue;
-                if (agents_[j].mode == Agent::Mode::Pedestrian && agents_[j].moving)
-                    consider(agents_[j].pos);
+            for (const engine::TrackedBody& t : a.memory.tracks()) {
+                if (t.confidence < kMemoryActConfidence) continue;
+                consider(t.pos + t.vel * kPedAnticipation);
             }
-            for (const Vec2& o : externalObstacles_) consider(o);
             for (const Vec2& o : staticObstacles_) consider(o);   // signal poles
             a.leanTarget = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
             a.state = saw ? Agent::State::Avoiding : Agent::State::Walking;

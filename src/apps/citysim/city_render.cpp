@@ -311,6 +311,19 @@ Real CityRenderSystem::groundAt(Real x, Real z) const {
 }
 
 bool CityRenderSystem::build(World& world, AssetManager* assets) {
+    // Level-authored settings (ADR-0062): a CitySimConfig entity — the level's
+    // top-level "citysim" block — overrides the constructor params, so each level
+    // picks its own population, seed, clock rate, reliability, and whether the
+    // agent-state HUD starts on. The agent lab runs 1 car + 1 walker, HUD on.
+    world.each<engine::CitySimConfig>([&](Entity, engine::CitySimConfig& c) {
+        params_.cars = c.cars;
+        params_.pedestrians = c.pedestrians;
+        params_.seed = c.seed;
+        params_.hoursPerSecond = c.hoursPerSecond;
+        params_.perceptionReliability = c.perceptionReliability;
+        debugWidgets_ = c.debugWidgets;
+    });
+
     // Merge every RoadNet's constrained graph into one combined graph (a level
     // with several road entities yields one city). Matches TrafficSystem.
     RoadGraph combined;

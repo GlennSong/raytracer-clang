@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 #define RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 
+#include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
 #include "traffic_signal.h"
@@ -79,6 +80,12 @@ struct Agent {
     // per-agent deterministic RNG so faults reproduce from the sim seed.
     Real reliability = 1.0;
     uint32_t brain = 1;
+    // Working memory (ADR-0062: sense -> REMEMBER -> predict -> decide -> act).
+    // Sightings become tracks with velocity estimates; a body that leaves the
+    // cone persists a few seconds, extrapolated along where it was heading
+    // (object permanence), so the agent acts on a continuous world instead of a
+    // per-tick snapshot — and can anticipate a crossing before it happens.
+    engine::AgentMemory memory;
     // Personality (ADR-0061): this agent's personal pace as a fraction of the
     // nominal speed — a timid driver holds ~0.85x the limit, a pushy one ~1.15x,
     // and walkers stroll or stride. Derived from `brain`'s bits at build (no rng
@@ -121,6 +128,16 @@ struct SimVehicle {
     engine::Vec2 heading{1, 0};
 };
 
+// A body some agent might sense this step (ADR-0062): its plan position, its
+// elevation (bridges — the 2.5D sensor gates on height), and a STABLE id so an
+// observer's memory can track it across steps. Sim agents use their agent index;
+// host-injected external obstacles use -(1+k) for the k-th injected point.
+struct SensedGhost {
+    engine::Vec2 pos;
+    Real elevation = 0;
+    int id = -1;
+};
+
 class CitySim {
 public:
     // `driverCount` agents that each own (possess) a car + `pedCount` walking
@@ -133,6 +150,7 @@ public:
     void step(Real dt, Real hoursPerSecond = 0.05);
 
     Real timeOfDay() const { return clockHours_; }
+    Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
     const std::vector<Agent>& agents() const { return agents_; }
     const std::vector<SimVehicle>& vehicles() const { return vehicles_; }
     const engine::NavGraph* graph() const { return nav_; }
@@ -226,13 +244,15 @@ private:
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
-    std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
+    std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
+                                        // (peds + players + external obstacles)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
+    Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     uint32_t rng_ = 1;
 };

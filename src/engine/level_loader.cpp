@@ -1881,6 +1881,23 @@ bool LevelLoader::load(const std::string& path,
         loadVehicles(root["vehicles"], world, assets, levelDir);
 #endif
 
+    // Level-authored city-sim settings (ADR-0062): the top-level "citysim" block
+    // becomes one CitySimConfig entity the citysim render bridge reads at build —
+    // so a level can choose its own population, seed, clock rate, and whether the
+    // agent-state debug HUD starts on (the agent lab: 1 car, 1 walker, HUD on).
+    if (root.contains("citysim") && root["citysim"].is_object()) {
+        const auto& cs = root["citysim"];
+        CitySimConfig cfg;
+        cfg.cars = cs.value("cars", cfg.cars);
+        cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        cfg.seed = cs.value("seed", cfg.seed);
+        cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        cfg.perceptionReliability =
+            cs.value("perceptionReliability", cfg.perceptionReliability);
+        cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        world.add<CitySimConfig>(world.create(), cfg);
+    }
+
     // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so
     // the first-person gun viewmodel and a settling capsule don't intrude on an overhead frame dump.
     if (!std::getenv("RT_NO_PLAYER")) {

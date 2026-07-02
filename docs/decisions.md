@@ -4235,6 +4235,100 @@ depth state (device evidence says it doesn't apply), and the shell rework
 
 ---
 
+## ADR-0062 — The cognition loop: sense → remember → predict → decide → act
+
+**Context.** ADR-0059/0060 gave agents a vision cone and reactive rules, and
+ADR-0061 settled who owns motion. What agents still lacked was an inner life
+between frames: perception was a momentary snapshot (a body leaving the cone
+ceased to exist), there was no anticipation (a car reacted to a crosser only
+once it was already in the lane), and decisions were values re-derived per
+tick — the mechanism behind every "wigging out" oscillation we fixed piecemeal.
+The user's ask: go a step beyond ambient smoke-and-mirrors — an agent with
+goals, senses, short-term memory, trajectory prediction, and decisions that
+hold — built from math and structure, and a lab level to watch one think.
+
+**Decision.** A five-stage loop, each stage a small pure engine/ai primitive,
+composed in the CitySim and reusable by any future agent:
+
+1. **Sense** — `SensorVolume` (`engine/ai/perception.h`): the planar vision
+   wedge plus a HEIGHT BAND (2.5D). Ground agents decide in plan view, but the
+   city is grade-separated: a car crossing the overpass 5.8 m up must not be a
+   phantom to brake for. A full camera-style frustum was considered and
+   rejected — for agents that neither aim nor fly it buys nothing over
+   wedge+band, and it costs a matrix test per candidate versus two dot
+   products. Occlusion (walls, crests) is a later line-of-sight ray on the few
+   nearest candidates, not a reason to start 3D.
+2. **Remember** — `AgentMemory` (`engine/ai/agent_memory.h`): sightings become
+   TRACKS. Each carries a smoothed velocity estimate (successive sightings
+   differenced + EMA — a poor man's Kalman, which is all a game needs), decays
+   on a confidence over `memorySeconds` (4 s), and while unseen EXTRAPOLATES
+   along its velocity: object permanence. Re-sighting re-anchors; a track cap
+   (32) evicts the weakest. ~1.5 KB per agent.
+3. **Predict** — `closestApproach` / `timeToCollision` (same header): constant-
+   velocity CPA and disc-collision time from the tracked velocities. Dot
+   products, not ML.
+4. **Decide** — `Commitment` (`engine/ai/commitment.h`): utility choice with
+   hysteresis. The incumbent option keeps its seat unless a challenger beats it
+   by a clear margin AND a minimum hold has elapsed; an emergency (imminent
+   TTC) preempts instantly; re-adopting the incumbent never resets its clock.
+   Near-tied scores can flip forever without the behaviour ever flapping — the
+   principled form of the think-cadence commitment that fixed the walkers.
+5. **Act** — the existing motor layers (ADR-0061): planner integration for
+   ambient agents, `AgentDriver` → Jolt for promoted ones.
+
+**Wired into the CitySim** (`city_sim.{h,cpp}`): every `Agent` carries an
+`AgentMemory`; the sim keeps a monotonic `simSeconds_` clock; the per-step
+snapshot is now `SensedGhost{pos, elevation, id}` (stable ids: agent index,
+-(1+k) for host-injected obstacles) so tracks persist across steps and the
+sensor can height-gate. Drivers sense per tick (the reliability roll and fault
+accounting are unchanged — a blind agent never observes, so the perception
+tests hold), then act on MEMORY: yield to any confident track whose predicted
+position sits in the corridor ahead, and brake when `timeToCollision` against a
+track dips under 2 s — anticipation, so a car eases off BEFORE the crosser is
+in the lane, and keeps yielding ~3 s after losing sight (pinned by
+`cars_remember_a_person_after_losing_sight`: the car creeps to the remembered
+spot, walls short of it, and drives on only once the track fades). Walkers
+sense at think cadence — successive sightings a think apart are exactly what
+feeds the velocity estimator — and lean away from where each remembered
+neighbour WILL be (`kPedAnticipation` 0.4 s), so two approaching walkers part
+early instead of flinching late. Poles stay instantaneous (static and eternal —
+memory would add nothing).
+
+**The agent lab** (`assets/levels/agent_lab.json`): a theta circuit — a 120×80
+ring with a middle bar meeting at two signalled 3-way junctions — running ONE
+driver and ONE walker with the debug HUD on from boot. Population comes from a
+new top-level `"citysim"` level block, parsed by `level_loader` into a
+`CitySimConfig` entity (`components.h`) that `CityRenderSystem::build` reads
+and applies over its constructor params (`{cars, pedestrians, seed,
+hoursPerSecond, perceptionReliability, debugWidgets}`) — so the lab isolates
+one thinking agent while `grown.json` keeps its bustle, from data, no code
+fork. Watch the ring: green cruising, amber easing for a remembered crosser
+BEFORE it reaches the lane, red walled at the ghost of someone who just left.
+
+**Scaling (asked: "how do we process many agents — a compute shader?").** The
+loop is O(nearby) per agent and runs at think cadence (0.35 s, staggered), so
+the per-frame cost is `agents / (thinkPeriod / dt)` scans — with spatial
+hashing for candidate pruning and read-only snapshots the `JobSystem` can fan
+out deterministically, this architecture is comfortable at hundreds of agents
+on CPU, and AI-LOD (full cognition near the camera, schedule-only far away)
+buys the next order of magnitude. A compute shader was REJECTED at this scale:
+GPU readback latency lands decisions a frame late, float nondeterminism breaks
+ADR-0002's replayable sims, and debuggability dies — it earns its keep only
+past ~10k homogeneous agents, which is not this game. Grounding: Reynolds
+steering, ORCA/RVO, IDM/MOBIL, pure-pursuit/Stanley (already in
+`lane_follow.h`), Halo 2's perception+memory model, utility AI with hysteresis;
+the ML on-ramps (imitation-learn the classical controller into a tiny MLP; RL
+for the dynamic regime) stay open — the CitySim is already a deterministic gym.
+
+**Tests.** `tests/test_agent_memory.cpp` pins the pure core (velocity
+convergence, extrapolate-then-forget, re-anchoring, eviction, CPA/TTC, flip-
+flop suppression, sustained-winner switching, emergency preemption, height
+gating); `test_city_perception.cpp` gains sim-level object permanence;
+`test_city_render.cpp` pins the level-config override and the lab circuit
+(navigable, exactly two junctions, both agents come alive). Suite 661/661.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
