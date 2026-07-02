@@ -145,6 +145,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_traffic_system.cpp \
 	$(TEST_DIR)/test_traffic_city.cpp \
 	$(TEST_DIR)/test_perception.cpp \
+	$(TEST_DIR)/test_agent_memory.cpp \
 	$(TEST_DIR)/test_traffic_signal.cpp \
 	$(TEST_DIR)/test_traffic_rules.cpp \
 	$(TEST_DIR)/test_city_sim.cpp \

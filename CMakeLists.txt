@@ -290,6 +290,7 @@ add_executable(run_tests
     tests/test_traffic_system.cpp
     tests/test_traffic_city.cpp
     tests/test_perception.cpp
+    tests/test_agent_memory.cpp
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp

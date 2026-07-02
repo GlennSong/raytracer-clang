@@ -34,6 +34,23 @@ inline Real forwardDistance(const VisionCone& c, const Vec2& p) {
     return dot(p - c.origin, c.forward);
 }
 
+// A 2.5D sensor (ADR-0062): the planar wedge plus a HEIGHT BAND. Ground agents
+// decide in plan view, but the city is grade-separated — a car crossing the
+// overpass 5.8 m above is NOT in front of the car below it, and a flat cone
+// would brake for that phantom. A full camera-style frustum buys ground agents
+// nothing more than this (it earns its keep only for agents that aim in 3D);
+// occlusion (walls, crests) is a later line-of-sight ray on the few nearest
+// candidates that pass these cheap tests.
+struct SensorVolume {
+    VisionCone cone;
+    Real maxHeightDelta = 3.0;   // see bodies within +/- this much elevation (m)
+};
+
+inline bool sees(const SensorVolume& s, const Vec2& p, Real heightDelta) {
+    if (std::fabs(heightDelta) > s.maxHeightDelta) return false;
+    return sees(s.cone, p);
+}
+
 }  // namespace engine
 
 #endif
