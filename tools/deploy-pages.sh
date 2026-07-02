@@ -16,6 +16,16 @@ for f in index.html viewer.html about.html scenes.json \
     [ -f "build-web/$f" ] || { echo "missing build-web/$f — build first (docs/web-build.md)"; exit 1; }
 done
 
+# Refuse to publish a viewer.html whose build token was never injected (e.g.
+# a raw copy from web/ pasted over the CMake-processed one) — it would silently
+# fall back to per-visit cache busting and every visitor would re-download.
+if grep -q "__RT_BUILD__" build-web/viewer.html; then
+    echo "build-web/viewer.html still has the __RT_BUILD__ placeholder — rebuild"
+    echo "(or re-run: cmake -DSRC=web/viewer.html -DDST=build-web/viewer.html \\"
+    echo "            -DWASM=build-web/viewer_web.wasm -P cmake/inject_build_id.cmake)"
+    exit 1
+fi
+
 git fetch origin gh-pages -q
 git worktree add "$WT" gh-pages -q
 trap 'cd "$REPO"; git worktree remove "$WT" --force 2>/dev/null || true; git worktree prune' EXIT
