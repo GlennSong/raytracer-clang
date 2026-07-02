@@ -1646,6 +1646,18 @@ public:
         qd.data.surfaceFlags[2] = mapBits(material);
         qd.data.surfaceFlags[3] = 0;
         qd.mat = matKeyOf(material);
+        // World-space bounding sphere for shadow-caster culling: transform the
+        // mesh-local sphere center and scale the radius by the largest column
+        // norm of the upper 3x3 (a conservative bound for non-uniform scale).
+        qd.wCenter = transform.transformPoint(m->bounds.center);
+        Real maxScaleSq = 0;
+        for (int c = 0; c < 3; ++c) {
+            Real s = transform.m[0][c] * transform.m[0][c]
+                   + transform.m[1][c] * transform.m[1][c]
+                   + transform.m[2][c] * transform.m[2][c];
+            maxScaleSq = std::max(maxScaleSq, s);
+        }
+        qd.wRadius = m->bounds.radius * std::sqrt(maxScaleSq);
         draws_.push_back(qd);
     }
 
@@ -1717,7 +1729,11 @@ public:
         // Cascaded sun shadow: split the view frustum into N depth slices and fit
         // a texel-snapped, camera-centered orthographic box to each (port of the
         // Vulkan/Metal cascade fit, adjusted for WebGPU standard-Z: NDC near z=0,
-        // far z=1). Written into globals before the upload below.
+        // far z=1). Written into globals before the upload below. Each cascade's
+        // light view + radius are kept for caster culling in the shadow passes
+        // (in light space the ortho box's XY extents are exactly ±radius).
+        Mat4 cascadeCullView[4];
+        Real cascadeCullRadius[4] = {0, 0, 0, 0};
         activeCascades_ = 0;
         if (shadowOn_) {
             int cc = std::max(1, std::min(shadowCascadeCount_, 4));
@@ -1765,6 +1781,8 @@ public:
                 Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1, pullback + radius);
                 packMat4(lightProj * lightView, globals_.cascadeVP[c]);
                 globals_.cascadeSplit[c] = static_cast<float>(zFar);
+                cascadeCullView[c] = lightView;
+                cascadeCullRadius[c] = radius;
             }
             activeCascades_ = cc;
             globals_.counts[3] = cc;
@@ -1870,8 +1888,21 @@ public:
         // Cascaded shadow depth passes (sun): one depth pass per cascade layer,
         // before the main pass. The cascade index rides shadowIdxGroup_ via a
         // dynamic offset; vs_shadow uses it to pick cascadeVP[c].
+        size_t shadowCulled = 0, shadowConsidered = 0;
         if (shadowOn_ && (!draws_.empty() || !instancedGroups_.empty() || !terrainDraws_.empty())) {
             for (int c = 0; c < activeCascades_; ++c) {
+                // Caster culling: skip draws whose world sphere misses this
+                // cascade's ortho box in light-space XY. Z is never culled — a
+                // caster outside the slice toward the light still casts into it.
+                // Near cascades have small XY extents, so this drops most of the
+                // scene from cascade 0/1. Instanced groups are not culled (no
+                // per-instance bounds).
+                const Mat4& cullView = cascadeCullView[c];
+                const Real cullR = cascadeCullRadius[c];
+                auto casterVisible = [&](const Vec3& wc, Real wr) {
+                    Vec3 p = cullView.transformPoint(wc);
+                    return std::abs(p.x) <= cullR + wr && std::abs(p.y) <= cullR + wr;
+                };
                 WGPURenderPassDepthStencilAttachment sdepth = {};
                 sdepth.view = shadowLayerViews_[c];
                 sdepth.depthLoadOp = WGPULoadOp_Clear;
@@ -1893,6 +1924,11 @@ public:
                 for (size_t i = 0; i < draws_.size(); ++i) {
                     const GpuMesh& m = meshes_[draws_[i].mesh];
                     if (!m.vertexBuffer) continue;   // removed mid-frame
+                    ++shadowConsidered;
+                    if (!casterVisible(draws_[i].wCenter, draws_[i].wRadius)) {
+                        ++shadowCulled;
+                        continue;
+                    }
                     uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
                     wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                     if (draws_[i].mesh != sLastMesh) {
@@ -1921,11 +1957,18 @@ public:
                     }
                 }
                 // Terrain nodes cast morphed shadows (matching the receiver).
+                // Their vertices are world-space (identity transform), so the
+                // mesh bounds ARE the world bounds — cull directly on those.
                 if (!terrainDraws_.empty()) {
                     wgpuRenderPassEncoderSetPipeline(spass, terrainShadowPipeline_);
                     for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                         const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
                         if (!m.vertexBuffer) continue;   // removed mid-frame
+                        ++shadowConsidered;
+                        if (!casterVisible(m.bounds.center, m.bounds.radius)) {
+                            ++shadowCulled;
+                            continue;
+                        }
                         uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                         wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
@@ -2067,10 +2110,12 @@ public:
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
-        if (!bindDiagLogged_ && !draws_.empty()) {
+        if (!bindDiagLogged_ && (!draws_.empty() || !terrainDraws_.empty())) {
             bindDiagLogged_ = true;
-            LOG_INFO("WebGPU binds: %zu draws -> %zu material binds, %zu mesh binds",
-                     draws_.size(), matBinds, meshBinds);
+            LOG_INFO("WebGPU binds: %zu draws -> %zu material binds, %zu mesh binds; "
+                     "shadow casters culled %zu/%zu (across %d cascades)",
+                     draws_.size(), matBinds, meshBinds,
+                     shadowCulled, shadowConsidered, activeCascades_);
         }
 
         // SSAO: reconstruct from the just-written depth into the AO target.
@@ -2223,6 +2268,8 @@ private:
         uint32_t mesh;
         GpuDraw data;
         MaterialKey mat;
+        Vec3 wCenter;      // world-space bounding sphere (mesh bounds x transform),
+        Real wRadius = 0;  // for per-cascade shadow-caster culling
     };
     struct InstancedGroup {
         uint32_t mesh;
