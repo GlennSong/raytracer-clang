@@ -46,6 +46,8 @@ private:
         engine::Entity entity;             // the character-capsule entity
         int agentId = -1;                  // the CitySim ghost that plans for it
         engine::KnockdownTimer knock;      // down-and-recover state
+        engine::StuckDetector blocked;     // wants to walk, body isn't moving
+        engine::Real backoff = 0;          // blocked -> stand still this long
         engine::Vec2 facing{0, 1};         // last real travel direction (render yaw)
     };
 

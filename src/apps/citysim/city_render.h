@@ -75,6 +75,10 @@ public:
         // Where the agent is TRYING to go right now (pursuit lookahead point /
         // planner ghost) — the debug arrow points here, visualising intent.
         engine::Vec2 target;
+        // Optional BODY-truth state for the ring colour (an Agent::State value):
+        // e.g. a walker physically blocked or knocked down shows red even while
+        // its planner ghost thinks it's walking. -1 = use the ghost's state.
+        int stateOverride = -1;
     };
     void setExternalCarPoses(std::vector<ExternalAgentPose> poses) {
         externalCarPoses_ = std::move(poses);

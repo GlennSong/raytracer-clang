@@ -4158,18 +4158,38 @@ junction blocks self-resolve.
   arrow points from the agent to its CURRENT GOAL (the pursuit lookahead /
   planned spot), reported by the bridges alongside the real poses.
 
+**Refinement 5: junction throughput, walker awareness, ground-projected HUD
+(second device round).** All-red rings + junction pile-ups traced to the box
+never draining and spawn placement. (a) **Don't block the box**: a car whose
+plan is crossing (`nearJunction` + ghost moving) never idles inside a junction —
+it commits at a minimum pace, spooked by nothing except a person at its bumper;
+the creep valve quickened. (b) **Spawns never land in the box or mid-lane**: a
+mid-trip ghost's car spawns on the verge beside it, staggered, backed out of any
+junction, and merges via pursuit. (c) **Walkers got 360° spatial awareness**: a
+separation steer from every nearby person (beyond the planner's forward cone), a
+BLOCKED state (wants to walk, body pinned → stand still a beat, re-think — shown
+as a red ring via the widget `stateOverride`), and the player gets a wide hard
+berth in the plan itself (`kPlayerClearance`) so near-misses read as
+step-arounds. (d) **The HUD projects on the GROUND** like painted road markings
+(regular depth — always visible the way lane paint is), rims proud of the body,
+wide intent arrows; the waist-height overlay hoop was invisible inside body
+geometry on device, which also suggests the Metal instanced FLAG_OVERLAY state
+isn't taking effect — recorded below. (e) **The agent is VISIBLE in its car**:
+the driver capsule now shows for `AgentDriver` cars, not just a seated player.
+
 **What's verified vs owed.** The controller, seam wiring (enter/eject),
 `releaseDriver`/tether/`lanePath` plumbing, fleet-body sizing, the closed control
 loop, corridor + cone sensing (incl. near-field cross braking), the gridlock
-valve inputs, off-road parking, think-cadence commitment, the knockdown timer,
-and the widget real-pose/goal plumbing are headless-tested (bicycle harness +
-sim/render tests). The Jolt path itself is **UNVERIFIED on device** (no Jolt
-build here) — expect gain tuning (`steerGain`/lookahead/`configFromBody`/sense
-cone) against the real plant, plus a feel pass on knockdown and the creep valve.
-Owed next: lane changes / overtaking on the sensed-neighbour model, ragdoll
-knockdown, and a real GPU line-primitive path for debug draw (the wire hoop is
-thin emissive geometry, not true lines). This repositions ADR-0059's kinematic
-sim as the AI *planner*, not a second car mover, and subsumes ADR-0060 Phase 5.
+valve inputs, don't-block-the-box inputs (`nearJunction`), off-road parking +
+spawn placement, think-cadence commitment, walker separation/blocked plumbing,
+the knockdown timer, player berth, and the widget real-pose/goal/override
+plumbing are headless-tested (bicycle harness + sim/render tests). The Jolt path
+itself is **UNVERIFIED on device** — expect gain tuning against the real plant.
+Owed next: lane changes / overtaking, ragdoll knockdown, a real GPU
+line-primitive debug path, and verifying/fixing the Metal instanced
+`FLAG_OVERLAY` depth state (device evidence says it doesn't apply). This
+repositions ADR-0059's kinematic sim as the AI *planner*, not a second car
+mover, and subsumes ADR-0060 Phase 5.
 
 ---
 
@@ -4229,7 +4249,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | ~~`ParametricLSystem` not exposed to Lua~~ | ~~`engine/scripting/procgen_bindings.cpp`~~ | *Resolved (ADR-0030): `lsystem.parametric()` (rule/expand with expression successors) + `tree.skin(modules, params, seed) -> bark, leaves` are bound; `growTree` was split into a grammar half and a reusable `skinTree`, so Lua authors the grammar and skins the real curved-cylinder tree. Covered by `procgen_script_skins_a_parametric_tree`.* | — |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
-| Debug-gizmo overlay draw is UNVERIFIED on device | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0060) | The per-agent debug widgets (footprint ring + forward arrow) mark their material `FLAG_OVERLAY` so they draw on top of everything with depth test/write OFF. Wired on **both** backends for parity: Metal selects an Always-compare no-write `depthStateOverlay` per batch; Vulkan routes `FLAG_OVERLAY` items to a dedicated `overlayPipeline` (depth test+write off) drawn last. Neither was compiled/rendered here (no macOS / no Vulkan SDK in this env), so both are UNVERIFIED — the headless `make test` covers the widget *geometry*, not the GPU draw. | A viewer pass on each backend to confirm the gizmos render over the scene and read correctly |
+| Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0060/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 | City generates whole, not streamed | `engine/procgen/city/city.cpp` (`generateCity`) | Phase 3 (ADR-0038) builds a bounded city in one pass (Forest-Arena style); the road graph is city-global, not tile-local | Per-tile generation with the global graph clipped per tile + boundary stitching (ADR-0027 §5 streaming) |

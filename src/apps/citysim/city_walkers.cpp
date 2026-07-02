@@ -32,6 +32,9 @@ constexpr Real kTetherLead = 5.0;       // ghost may lead its walker by at most 
 constexpr Real kKnockRadius = 1.5;      // a vehicle centre this close...
 constexpr Real kKnockSpeed = 2.5;       // ...moving this fast -> knockdown
 constexpr Real kFaceSpeed = 0.3;        // turn to face travel above this speed
+constexpr Real kPersonalSpace = 1.3;    // 360-degree separation radius from people
+constexpr Real kSeparationGain = 1.8;   // push strength inside that radius
+constexpr Real kBackoffTime = 0.8;      // blocked -> stand still this long, re-think
 
 // A small clothing palette, picked per walker by a deterministic hash.
 const Vec3 kClothes[] = {
@@ -85,6 +88,9 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         w.entity = e;
         w.agentId = i;
         w.facing = a.heading;
+        w.blocked.stallSeconds = 1.2;        // walker-scale stall watchdog
+        w.blocked.minCommand = 0.5;
+        w.blocked.minMotion = 0.15;
         walkers_.push_back(w);
     }
     spawned_ = true;
@@ -107,6 +113,15 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             s = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
         }
         carSpeed.push_back(s);
+    });
+    // Every person (other walkers + the on-foot player) for 360° SEPARATION —
+    // spatial awareness beyond the planner's forward cone, so a body squeezes
+    // AROUND a neighbour instead of clumping against it or brushing the player.
+    std::vector<Vec2> people;
+    std::vector<Entity> peopleOwner;
+    world.each<Transform, CharacterController>([&](Entity e, Transform& t, CharacterController&) {
+        people.push_back(Vec2(t.position.x, t.position.z));
+        peopleOwner.push_back(e);
     });
 
     std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
@@ -133,16 +148,47 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         bool down = w.knock.update(dt);
 
+        // Body speed BEFORE this tick's move (the blocked watchdog's input).
+        Vec3 velBefore = pw.characterVelocity(cc->characterId);
+        Real hBefore = std::sqrt(velBefore.x * velBefore.x + velBefore.z * velBefore.z);
+
         // Walk toward the ghost's planned spot (station control, walker-simple):
         // speed grows with the distance behind the plan, capped at a brisk jog;
-        // settles at a standoff. Down: no intent — the body just lies there.
+        // settles at a standoff. Plus 360° SEPARATION from nearby people — the
+        // spatial awareness a forward cone lacks — so a walker squeezes around a
+        // neighbour or the player instead of pressing into them.
+        // Down (knocked): no intent. Backing off (blocked): stand still and let
+        // the think cadence + tethered plan re-route before trying again.
         Vec3 desired;
-        if (!down) {
+        bool backingOff = w.backoff > 0;
+        if (backingOff) w.backoff -= dt;
+        if (!down && !backingOff) {
+            Vec2 steer(0, 0);
             Vec2 to(g.pos.x - posXZ.x, g.pos.y - posXZ.y);
             Real d = to.length();
             if (d > kWalkStandoff) {
                 Real speed = std::min(kWalkMax, kWalkGain * (d - kWalkStandoff));
-                desired = Vec3(to.x / d, 0, to.y / d) * speed;
+                steer = Vec2(to.x / d * speed, to.y / d * speed);
+            }
+            for (std::size_t p = 0; p < people.size(); ++p) {
+                if (peopleOwner[p] == w.entity) continue;
+                Vec2 away = posXZ - people[p];
+                Real ad = away.length();
+                if (ad > 1e-4 && ad < kPersonalSpace) {
+                    Real push = kSeparationGain * (kPersonalSpace - ad) / kPersonalSpace;
+                    steer = steer + away * (push / ad);
+                }
+            }
+            Real sl = steer.length();
+            if (sl > kWalkMax) steer = steer * (kWalkMax / sl);
+            desired = Vec3(steer.x, 0, steer.y);
+            // Wants to walk but the body is pinned (crowd, parked car, wall):
+            // stop trying for a beat — a standing person reads as "waiting", a
+            // pinned person shoving reads as broken.
+            Real commanded = std::sqrt(desired.x * desired.x + desired.z * desired.z);
+            if (w.blocked.update(commanded, hBefore, dt)) {
+                w.backoff = kBackoffTime;
+                desired = Vec3();
             }
         }
         pw.moveCharacter(cc->characterId, desired, dt);   // zero intent still settles
@@ -173,8 +219,12 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // The plan waits for the body (never outruns a blocked/downed walker),
         // and the debug widgets ring the REAL walker.
         city_.simMutable().setAgentTether(w.agentId, posXZ, kTetherLead);
+        // Body truth for the debug ring: a downed or blocked walker shows RED
+        // whatever its planner ghost believes.
+        int stateOverride = (down || w.backoff > 0)
+                                ? static_cast<int>(Agent::State::Waiting) : -1;
         widgetPoses.push_back(CityRenderSystem::ExternalAgentPose{
-            w.agentId, posXZ, w.facing, g.pos});   // goal = the plan's spot
+            w.agentId, posXZ, w.facing, g.pos, stateOverride});
     }
     city_.setExternalPedPoses(std::move(widgetPoses));
 }

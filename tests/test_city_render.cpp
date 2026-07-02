@@ -170,6 +170,20 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     }
     CHECK(rings == 1u);   // ONLY the reported walker (no cars/peds reported besides it)
     CHECK(ringAtReal);
+
+    // Body-truth override: reporting the walker as Waiting (blocked/knocked) puts
+    // its ring in the RED group regardless of what the ghost thinks it's doing.
+    city.setExternalPedPoses({ CityRenderSystem::ExternalAgentPose{
+        2, realPed, Vec2(1, 0), realPed, static_cast<int>(Agent::State::Waiting)} });
+    city.step(world, 0.1);
+    InstanceGroup* red = world.get<InstanceGroup>(city.footprintGroup(Agent::State::Waiting));
+    bool redAtReal = false;
+    if (red)
+        for (const Mat4& m : red->transforms)
+            if (std::fabs(m.m[0][3] - realPed.x) < 1e-6 &&
+                std::fabs(m.m[2][3] - realPed.y) < 1e-6)
+                redAtReal = true;
+    CHECK(redAtReal);
 }
 
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {

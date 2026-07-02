@@ -217,7 +217,7 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
 void VehicleSystem::writeBack(FrameContext& ctx) {
     PhysicsWorld& pw = physicsSys.physicsWorld();
     ctx.world.each<Transform, PrevTransform, Vehicle>(
-        [&](Entity, Transform& t, PrevTransform& prev, Vehicle& v) {
+        [&](Entity e, Transform& t, PrevTransform& prev, Vehicle& v) {
             if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
             prev.value = t;
             t.position = pw.vehiclePosition(v.vehicleId);
@@ -271,12 +271,16 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             for (Entity le : v.taillights)
                 if (Renderable* r = ctx.world.get<Renderable>(le)) r->material.emission = tail;
 
-            // Driver capsule: in the seat when occupied, stowed far below otherwise.
+            // Driver capsule: in the seat when occupied — by a seated PLAYER or by
+            // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
+            // capsule is the proof that an agent is IN the car, not that the car
+            // moves on its own (ADR-0061).
+            bool occupied = v.driver.valid() || ctx.world.has<AgentDriver>(e);
             if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
                     if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
                         dp->value = *dt;
-                    if (v.driver.valid())
+                    if (occupied)
                         dt->position = t.position +
                             t.orientation.rotate(Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05));
                     else

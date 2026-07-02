@@ -5,6 +5,7 @@
 #include "../../engine/ai/pathfind.h"
 #include "traffic_signal.h"
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace citysim {
@@ -177,6 +178,11 @@ public:
     // agent has no active route.
     std::vector<engine::Vec2> lanePath(int agentIndex, Real step = 3.0) const;
 
+    // Is `pos` inside a junction box (within a junction node's widest incident
+    // half-width + `margin`)? The bridge uses this for don't-block-the-box (a
+    // physical car never idles inside one) and for spawn placement.
+    bool nearJunction(engine::Vec2 pos, Real margin = 0.0) const;
+
     // Set every agent's perception reliability (1 = perfect; <1 = makes faults).
     void setPerceptionReliability(Real r) {
         for (Agent& a : agents_) a.reliability = r;
@@ -223,6 +229,7 @@ private:
     std::vector<engine::Vec2> positions_;   // per-step snapshot of ped + player pos (cars yield to these)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
+    std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;

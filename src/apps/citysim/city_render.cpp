@@ -81,35 +81,26 @@ void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
     for (uint32_t i : b.indices) out.indices.push_back(base + i);
 }
 
-// A WIRE hoop of unit radius: a thin glowing band standing on edge (a short
-// cylinder shell, double-sided), so from any angle it reads as a bright LINE
-// circling the agent — not a flat polygon lying on the ground like a shadow.
-// Instanced with scale (radius, 1, radius); the band height stays constant.
-engine::RenderMesh ringXZ(int segs = 40, Real bandH = 0.10) {
+// A ground-PROJECTED ring of unit outer radius: a flat glowing band lying just
+// above the pavement, like painted road markings — always visible from any
+// camera the way lane paint is (regular depth, no reliance on an overlay depth
+// state). Wide enough (20% of radius) to read at street-view distance.
+// Instanced with scale (radius, 1, radius).
+engine::RenderMesh ringXZ(Real innerFrac = 0.80, int segs = 40) {
     engine::RenderMesh m;
     const Vec3 white(1, 1, 1);
     for (int i = 0; i < segs; ++i) {
         Real t0 = (Real(i) / segs) * 6.28318530718;
         Real t1 = (Real(i + 1) / segs) * 6.28318530718;
-        Vec3 lo0(std::cos(t0), 0, std::sin(t0)), lo1(std::cos(t1), 0, std::sin(t1));
-        Vec3 hi0 = lo0 + Vec3(0, bandH, 0), hi1 = lo1 + Vec3(0, bandH, 0);
-        Vec3 n(std::cos((t0 + t1) * 0.5), 0, std::sin((t0 + t1) * 0.5));
-        // Both windings so the band shows whichever side faces the camera.
-        for (int side = 0; side < 2; ++side) {
-            uint32_t b = static_cast<uint32_t>(m.vertices.size());
-            Vec3 nn = side ? n * -1.0 : n;
-            for (const Vec3& p : { lo0, lo1, hi1, hi0 }) {
-                engine::Vertex v; v.position = p; v.normal = nn; v.color = white;
-                m.vertices.push_back(v);
-            }
-            if (side == 0) {
-                m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
-                m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
-            } else {
-                m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 1);
-                m.indices.push_back(b + 0); m.indices.push_back(b + 3); m.indices.push_back(b + 2);
-            }
+        Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
+        Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
+        uint32_t b = static_cast<uint32_t>(m.vertices.size());
+        for (const Vec3& p : { o0, o1, i1, i0 }) {
+            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
+            m.vertices.push_back(v);
         }
+        m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+        m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
     }
     return m;
 }
@@ -143,10 +134,13 @@ engine::RenderMesh arrowXZ() {
 // the backend draws it on top of world geometry (no depth occlusion).
 RenderMaterial widgetMaterial(Vec3 color) {
     RenderMaterial m;
-    // Bright HOLOGRAM look: strong emission (pops through bloom/tonemap), dark
-    // base so lighting can't wash it toward a grey "shadow ring".
+    // Bright glowing paint: strong emission (pops through bloom/tonemap), dark
+    // base so lighting can't wash it toward a grey "shadow ring". Drawn as
+    // GROUND-projected geometry with regular depth (like lane markings) — NOT
+    // FLAG_OVERLAY: the overlay depth state is unverified on device and a marker
+    // hidden inside body geometry is invisible; paint on the pavement never is.
     m.albedo = color * 0.15; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
-    m.emission = color * 4.0; m.flags = RenderMaterial::FLAG_OVERLAY;
+    m.emission = color * 4.0; m.flags = 0;
     return m;
 }
 // Traffic-light semantics (user-requested): GREEN = going, RED = stopped,
@@ -599,6 +593,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // short-horizon intent by default; the bridge's pursuit target when
             // the body is external.
             Vec2 goal = a.pos + a.heading * (2.0 + a.speed);
+            Agent::State ringState = a.state;   // body truth may override below
             // Externally-owned agents (ADR-0061): the widget must ring the
             // PHYSICAL body, not the planner ghost — the ghost legitimately runs
             // ahead or behind, and a ring around it is an empty circle on the
@@ -615,15 +610,17 @@ void CityRenderSystem::syncGroups(World& world) {
                         z = p.pos.y;
                         heading = p.heading;
                         goal = p.target;
+                        if (p.stateOverride >= 0 &&
+                            p.stateOverride < static_cast<int>(Agent::State::Count))
+                            ringState = static_cast<Agent::State>(p.stateOverride);
                         reported = true;
                         break;
                     }
                 if (!reported) continue;
             }
-            // A hologram HOOP at body height (waist for a walker, roof-line-ish
-            // for a car) — clearly a debug marker circling the agent, never a
-            // shadow lying on the pavement; the overlay flag draws it on top.
-            Real y = groundAt(x, z) + a.elevation + (car ? 0.8 : 1.0);
+            // Projected onto the GROUND like painted road markings (always
+            // visible the way lane paint is), just proud of the asphalt/sidewalk.
+            Real y = groundAt(x, z) + a.elevation + 0.06;
             // Ring sized to THIS body (a box truck's footprint is bigger than a
             // sedan's), read from the possessed vehicle's dimensions.
             Real radius = params_.pedSize.x * 0.9;
@@ -635,7 +632,8 @@ void CityRenderSystem::syncGroups(World& world) {
                 }
                 radius = std::max(cw, cl) * 0.5;
             }
-            InstanceGroup* fg = foot[static_cast<int>(a.state)];
+            radius *= 1.2;   // proud of the body so the painted rim always shows
+            InstanceGroup* fg = foot[static_cast<int>(ringState)];
             if (fg) fg->transforms.push_back(
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
             if (fwd && a.moving) {
@@ -649,7 +647,7 @@ void CityRenderSystem::syncGroups(World& world) {
                                        : std::atan2(heading.x, heading.y);
                 fwd->transforms.push_back(Mat4::trs(
                     Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                    Vec3(0.12, 1, len)));
+                    Vec3(0.30, 1, len)));   // wide enough to read at street level
             }
         }
         for (int s = 0; s < kStateCount; ++s) refreshBounds(foot[s]);

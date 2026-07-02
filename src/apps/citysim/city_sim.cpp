@@ -51,6 +51,8 @@ constexpr Real kPedMaxLateral = 1.6;       // furthest a walker leans off its pa
 constexpr Real kPedLateralRate = 1.6;      // how fast that lean changes (m/s) — smooth, not a pop
 constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
 constexpr Real kPoleClearance = 0.7;       // a walker keeps its centre this far from a pole
+constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a wide berth,
+                                           // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 
@@ -113,6 +115,14 @@ Real CitySim::pairMinGap(int follower, int leader) const {
     return 0.5 * vehicleLength(follower) + 0.5 * vehicleLength(leader) + kCarBumperGap;
 }
 
+bool CitySim::nearJunction(Vec2 pos, Real margin) const {
+    for (const auto& j : junctions_) {
+        Real r = j.second + margin;
+        if ((pos - j.first).lengthSquared() <= r * r) return true;
+    }
+    return false;
+}
+
 std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     std::vector<Vec2> out;
     if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
@@ -160,6 +170,16 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
     const int n = graph.nodeCount();
     if (n == 0) return;
+
+    // Junction boxes (centre + radius = widest incident half-width): the bridge's
+    // don't-block-the-box and spawn-placement checks read these.
+    junctions_.clear();
+    for (int v = 0; v < n; ++v) {
+        if (!graph.isJunction(v)) continue;
+        Real r = 0;
+        for (int li : graph.outLinks[v]) r = std::max(r, graph.links[li].width * 0.5);
+        junctions_.push_back({graph.nodes[v], r});
+    }
 
     const int total = driverCount + pedCount;
     agents_.reserve(total);
@@ -640,23 +660,25 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             }
         }
 
-    // Hard radial push-out from static obstacles (signal poles): a walker never
-    // ends up standing inside a pole — if a step would leave it within the pole's
-    // clearance, shove it back out along the pole→ped direction. The cone bias
-    // above makes it lean away in advance; this is the physical backstop.
+    // Hard radial push-out from static obstacles (signal poles) and the PLAYER: a
+    // walker never ends up standing inside a pole — or brushing through the
+    // player (a wider berth, so a near miss reads as a step-around). The cone
+    // bias above makes it lean away in advance; this is the physical backstop.
     for (Agent& a : agents_) {
         if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
-        for (const Vec2& o : staticObstacles_) {
+        auto pushOut = [&](const Vec2& o, Real clearance) {
             Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
             Real d = std::sqrt(dx * dx + dy * dy);
-            if (d > 1e-4 && d < kPoleClearance) {
-                Real push = kPoleClearance - d;
+            if (d > 1e-4 && d < clearance) {
+                Real push = clearance - d;
                 a.pos.x += dx / d * push;
                 a.pos.y += dy / d * push;
             } else if (d <= 1e-4) {
-                a.pos.x += kPoleClearance;   // dead-centre: pick a direction
+                a.pos.x += clearance;        // dead-centre: pick a direction
             }
-        }
+        };
+        for (const Vec2& o : staticObstacles_) pushOut(o, kPoleClearance);
+        for (const Vec2& o : externalObstacles_) pushOut(o, kPlayerClearance);
     }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.

@@ -124,6 +124,46 @@ TEST_CASE(agents_have_distinct_personal_paces) {
     CHECK(factors.size() >= 6u);   // a genuinely mixed crowd, not lockstep
 }
 
+TEST_CASE(near_junction_covers_the_box_and_only_the_box) {
+    // A 4-way cross at the origin, 8 m roads: the box test drives don't-block-
+    // the-box and spawn placement, so it must be tight — inside the node's
+    // half-width (+margin) yes, mid-link no.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(0, 60)}, {Vec2(0, -60)},
+                {Vec2(60, 0)}, {Vec2(-60, 0)} };
+    g.edges = {
+        RoadEdge{0, 1, 8, RoadClass::Local, 0}, RoadEdge{0, 2, 8, RoadClass::Local, 0},
+        RoadEdge{0, 3, 8, RoadClass::Local, 0}, RoadEdge{0, 4, 8, RoadClass::Local, 0},
+    };
+    CitySim sim;
+    sim.build(buildNavGraph(g), 2, 0, 3);
+    CHECK(sim.nearJunction(Vec2(0, 0)));            // dead centre
+    CHECK(sim.nearJunction(Vec2(3, 1)));            // inside the half-width
+    CHECK(sim.nearJunction(Vec2(0, 5.5), 2.0));     // margin extends the box
+    CHECK(!sim.nearJunction(Vec2(0, 30)));          // mid-link: open road
+    CHECK(!sim.nearJunction(Vec2(0, 58)));          // a dead-end is not a junction
+}
+
+TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
+    // The player (an external obstacle) gets a hard clearance like the poles do,
+    // but wider — a ped ghost can never brush through them.
+    NavGraph nav = straightRoad(200.0);
+    CitySim sim;
+    sim.build(nav, 0, 24, 11);
+    // Park the "player" on the sidewalk line the peds walk (right side, +y).
+    Vec2 player = nav.sidewalkPoint(0, 0.5);
+    sim.setExternalObstacles({ player });
+    Real minDist = 1e9;
+    for (int i = 0; i < 4000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents())
+            if (a.mode == Agent::Mode::Pedestrian && a.moving)
+                minDist = std::min(minDist, (a.pos - player).length());
+    }
+    CHECK(minDist >= 1.1 - 1e-3);   // the wide berth held (kPlayerClearance)
+    CHECK(minDist < 3.0);           // and someone really did pass nearby
+}
+
 TEST_CASE(agents_commit_to_decisions_between_thinks) {
     // Think cadence (ADR-0061): the reactive decision (leanTarget) may only
     // change on the agent's slow think clock — between thinks it is COMMITTED,

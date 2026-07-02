@@ -83,10 +83,21 @@ void CityVehicleSystem::spawnCars(engine::FrameContext& ctx) {
                                                      "cityveh:" + std::to_string(slot));
 
         Entity e = world.create();
-        // Start at the ghost's pose, a little above ground so it drops onto its
-        // wheels; physics settles it. Heading yaw matches the render convention
-        // (atan2(heading.x, heading.y) about +Y).
-        Vec3 pos(a.pos.x, body.height * 0.5 + 0.35, a.pos.y);
+        // Spawn placement: never inside a junction box, never mid-lane. An idle
+        // ghost is already parked on the verge; a MID-TRIP ghost (the warmed-up
+        // sim) gets its car placed on the verge beside it, staggered so several
+        // spawns don't stack, and backed out of any junction — the car then
+        // merges onto its lane via pursuit instead of materialising in traffic.
+        Vec2 spawnAt = a.pos;
+        if (a.moving) {
+            Vec2 right(a.heading.y, -a.heading.x);
+            spawnAt = spawnAt + right * 3.2 - a.heading * static_cast<Real>((i % 3) * 2.5);
+            for (int guard = 0; guard < 4 && sim.nearJunction(spawnAt, 1.5); ++guard)
+                spawnAt = spawnAt - a.heading * 6.0;
+        }
+        // A little above ground so it drops onto its wheels; physics settles it.
+        // Heading yaw matches the render convention (atan2(x, y) about +Y).
+        Vec3 pos(spawnAt.x, body.height * 0.5 + 0.35, spawnAt.y);
         Real yaw = std::atan2(a.heading.x, a.heading.y);
         Transform t;
         t.position = pos;
@@ -142,7 +153,8 @@ constexpr Real kSenseHalfAngle = 0.5; // fallback cone (no path)
 constexpr Real kCorridorHalf = 1.6;   // half-width of the along-path sense corridor
 constexpr Real kFlipRecover = 2.0;    // rolled this long -> right the car (s)
 constexpr Real kCreepAfter = 3.0;     // blocked by a stopped cross car this long ->
-constexpr Real kCreepSpeed = 0.8;     // ...nose through at this speed (anti-gridlock)
+constexpr Real kCreepSpeed = 1.5;     // ...nose through at this speed (anti-gridlock)
+constexpr Real kClearBoxSpeed = 2.2;  // minimum pace while inside a junction box
 }  // namespace
 
 void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
@@ -280,6 +292,17 @@ void CityVehicleSystem::driveCars(engine::FrameContext& ctx) {
                           lead.speed < 0.5 && lead.align < 0.5;
         car.blockTimer = (crossBlock && target < 0.1) ? car.blockTimer + dt : 0.0;
         if (car.blockTimer > kCreepAfter) target = std::max(target, kCreepSpeed);
+
+        // DON'T BLOCK THE BOX: a car inside a junction whose plan is CROSSING
+        // (ghost moving, not held at the line) never idles there — it commits and
+        // clears at a minimum pace, spooked by nothing except a person right in
+        // front of the bumper. Stopping mid-box for cross traffic is how junction
+        // gridlock forms; the box must always drain.
+        if (g.moving && g.speed > 0.5 && sim.nearJunction(carXZ, 2.0)) {
+            bool personClose = lead.found && lead.yieldAlways &&
+                               lead.gap < v->config.chassisHalfExtent.z + 3.0;
+            if (!personClose) target = std::max(target, kClearBoxSpeed);
+        }
 
         // HEADING: on a trip, pure pursuit over the lane path from the car's REAL
         // position (with the built-in ease-to-a-stop at the path end). Off-trip
