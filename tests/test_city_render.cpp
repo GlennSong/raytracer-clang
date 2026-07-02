@@ -428,9 +428,11 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     cfg.cars = 1;
     cfg.pedestrians = 1;
     cfg.seed = 7;
+    cfg.wander = true;   // the lab keeps its agents perpetually on the move
     world.add<CitySimConfig>(world.create(), cfg);
     CityRenderSystem city;
     CHECK(city.build(world, nullptr));
+    CHECK(city.sim().wander());
 
     const NavGraph& nav = city.nav();
     int junctions = 0;
@@ -447,7 +449,7 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
 
     // Both lab agents come alive: the driver rolls and the walker walks.
     bool carMoved = false, pedMoved = false;
-    for (int i = 0; i < 6000 && !(carMoved && pedMoved); ++i) {
+    for (int i = 0; i < 6000; ++i) {
         city.step(world, 0.1);
         for (const Agent& a : city.sim().agents()) {
             if (!a.moving || a.speed <= 0.5) continue;
@@ -456,4 +458,12 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     }
     CHECK(carMoved);
     CHECK(pedMoved);
+
+    // Wander keeps the lab ALIVE: the driver strings together trip after trip
+    // instead of parking until the evening commute (device round 3 — "I would
+    // expect the car to be running around the track").
+    int carTrips = 0;
+    for (const Agent& a : city.sim().agents())
+        if (a.mode == Agent::Mode::Driver) carTrips = a.trips;
+    CHECK(carTrips >= 3);
 }

@@ -47,6 +47,7 @@ struct Agent {
     int home = 0, work = 0;
     Real departWork = 8.0, departHome = 17.0;
     Activity activity = Activity::AtHome;
+    int restNode = -1;   // the node this agent last arrived at (wander departs from it)
 
     // Think cadence (ADR-0061): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -206,6 +207,13 @@ public:
         for (Agent& a : agents_) a.reliability = r;
     }
 
+    // WANDER mode (ADR-0062, the agent lab): agents ignore the daily schedule and
+    // start a fresh trip to a random reachable node the moment they arrive — so a
+    // one-car lab level has its car lapping the circuit continuously instead of
+    // parking until the evening commute. Deterministic (draws from the sim rng).
+    void setWander(bool on) { wander_ = on; }
+    bool wander() const { return wander_; }
+
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
     // thinks it commits to the last decision and just acts on it. Default 0.35 s.
     void setThinkPeriod(Real seconds) { thinkPeriod_ = seconds > 0.05 ? seconds : 0.05; }
@@ -254,6 +262,7 @@ private:
     Real clockHours_ = 6.0;
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
+    bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     uint32_t rng_ = 1;
 };
 

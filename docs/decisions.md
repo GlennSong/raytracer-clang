@@ -4327,6 +4327,39 @@ gating); `test_city_perception.cpp` gains sim-level object permanence;
 `test_city_render.cpp` pins the level-config override and the lab circuit
 (navigable, exactly two junctions, both agents come alive). Suite 661/661.
 
+**Device round 3 (rings + moving traffic confirmed working).** Four fixes from
+the first on-device look at the cognition build:
+
+- **The turn "blink".** A car turning at a junction blinked out and back: the
+  pose sampled only the CURRENT leg's lane line, and the lane offset direction
+  rotates with the leg — so crossing a node teleported the car sideways by up
+  to ~4.6 m in one frame (worst on wide arterials). `refreshPose` now traces a
+  quadratic Bezier from the incoming lane line to the outgoing one across every
+  interior node (blend span = road half-width + 1 m, clamped to 45% of each
+  leg), continuous at the leg change by construction — the position finally
+  drives the arc the rate-limited heading was already pretending to. Verified
+  numerically: worst per-tick displacement through a 90° arterial bend dropped
+  from a multi-metre sideways snap to ~1.3x speed·dt (the arc is slightly
+  longer than the leg parameterisation — continuous, chained positions).
+- **Reds must READ as obeyed.** The signal stop line was `length - 0.5` — the
+  node itself — so a car legally holding at a red stood in the middle of the
+  intersection on top of the painted crosswalk, looking exactly like a
+  red-light runner. The car stop line is now set back: junction box radius (the
+  mouth) + the zebra band (painted 0.5..3.6 m past the mouth) + margin + half
+  the car's own body, so the BUMPER holds short of the crosswalk. Walkers still
+  hold at the corner. The braking cap eases to the LINE, not the node.
+- **The lab must keep moving.** With the daily schedule, the lab's one car
+  commuted once and parked for (real) minutes — "I would expect the car to be
+  running around the track." New WANDER mode (`CitySim::setWander`, level
+  `"citysim": {"wander": true}`): agents at rest immediately start a fresh trip
+  to a random reachable node. The theta test now pins ≥3 consecutive trips.
+- **Parked cars looking misplaced + white rings.** Cars idle at home/work parked
+  on the verge by DESIGN (ADR-0061: an idle body on the carriageway is a
+  roadblock), but the initial idle pose kept the default (1,0) heading — parked
+  cars sat at random angles to their road, reading as "failed to be placed".
+  Idle bodies now face along their road from build. Widget ring emission tuned
+  4x → 1.7x: at 4x the bloom saturated every hue toward white on device.
+
 ---
 
 ## Interim seams & tech-debt register

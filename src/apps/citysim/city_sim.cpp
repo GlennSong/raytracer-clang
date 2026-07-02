@@ -55,6 +55,13 @@ constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a
                                            // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
+// The zebra band is painted 0.5..3.6 m past the junction MOUTH (road-texture
+// shaders, ADR-0061); a car held at a red must stop with its BUMPER short of
+// that band — not at the node, which put a legally-waiting car visually in the
+// middle of the intersection, on top of the crosswalk, looking like it ran the
+// light (device round 3).
+constexpr Real kCrosswalkFarEdge = 3.6;   // band's far edge past the mouth (m)
+constexpr Real kStopLineMargin = 0.6;     // bumper clearance short of the band
 // The cognition loop (ADR-0062): agents act on MEMORY, not on the momentary
 // snapshot. A track must hold at least this much confidence to be acted on —
 // with the default 4 s memory horizon that means a body is reacted to for ~3 s
@@ -220,7 +227,13 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.speedFactor = 0.85 + 0.30 * (((a.brain >> 9) & 0x7FFF) / Real(0x7FFF));
         // Stagger the think clocks so the crowd doesn't re-decide in lockstep.
         a.thinkTimer = thinkPeriod_ * (((a.brain >> 17) & 0xFF) / Real(0xFF));
+        a.restNode = a.home;
         a.pos = idlePose(a.home, a.mode);
+        // Idle bodies face along their road from the start — a parked car with
+        // the default (1,0) heading sat at a random angle to the verge it was
+        // parked on, which read as "failed to be placed" (device round 3).
+        if (!graph.outLinks[a.home].empty())
+            a.heading = graph.direction(graph.outLinks[a.home][0]);
 
         // A driver possesses a freshly-created car (two-way possession link). Its
         // body comes from the fleet slot matching its index, so the renderer (which
@@ -287,12 +300,54 @@ void CitySim::refreshPose(Agent& a) {
     if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) return;
     int li = a.route.links[a.leg];
     Real L = nav_->links[li].length;
-    Real t = L > 1e-9 ? a.distOnLeg / L : 0.0;
-    if (t < 0) t = 0; else if (t > 1) t = 1;
-    a.pos = (a.mode == Agent::Mode::Driver)
-                ? nav_->laneCenter(li, a.lane, t, laneSpacing(nav_->links[li]))
-                : nav_->sidewalkPoint(li, t);
+    Real s = a.distOnLeg;
+    if (s < 0) s = 0; else if (s > L) s = L;
+
+    // Sample this agent's own guide line (lane centre / sidewalk) on a link.
+    auto sample = [&](int link, Real t) {
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        return (a.mode == Agent::Mode::Driver)
+                   ? nav_->laneCenter(link, a.lane, t, laneSpacing(nav_->links[link]))
+                   : nav_->sidewalkPoint(link, t);
+    };
+    a.pos = sample(li, L > 1e-9 ? s / L : 0.0);
     a.elevation = nav_->links[li].layer * kLayerClearance;
+
+    // Corner-cut blending (device fix): the lane/sidewalk offset direction
+    // rotates with each leg, so sampling only the CURRENT leg makes the pose
+    // JUMP sideways the tick a node is crossed — on a wide arterial several
+    // metres in one frame, a car visibly blinking across the turn. Near an
+    // interior node, trace a quadratic Bezier from the incoming guide line to
+    // the outgoing one instead: continuous through the corner (u = 0.5 exactly
+    // at the leg change, both halves sampling the same curve), and it reads as
+    // the arc the rate-limited heading was already pretending to drive.
+    auto blendSpan = [&](int la, int lb) {
+        Real B = std::max(nav_->links[la].width, nav_->links[lb].width) * 0.5 + 1.0;
+        B = std::min(B, nav_->links[la].length * 0.45);
+        B = std::min(B, nav_->links[lb].length * 0.45);
+        return B;
+    };
+    auto corner = [&](int la, int lb, Real B, Real u) {   // u in [0,1] across the node
+        Real La = nav_->links[la].length, Lb = nav_->links[lb].length;
+        engine::Vec2 p0 = sample(la, La > 1e-9 ? (La - B) / La : 0.0);
+        engine::Vec2 c = (sample(la, 1.0) + sample(lb, 0.0)) * 0.5;
+        engine::Vec2 p2 = sample(lb, Lb > 1e-9 ? B / Lb : 1.0);
+        Real v = 1.0 - u;
+        return p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
+    };
+    const int legCount = static_cast<int>(a.route.links.size());
+    if (a.leg + 1 < legCount) {              // exit half: approaching the node
+        int nli = a.route.links[a.leg + 1];
+        Real B = blendSpan(li, nli);
+        if (B > 1e-6 && L - s < B)
+            a.pos = corner(li, nli, B, (B - (L - s)) / (2.0 * B));
+    }
+    if (a.leg > 0) {                         // entry half: just past the node
+        int pli = a.route.links[a.leg - 1];
+        Real B = blendSpan(pli, li);
+        if (B > 1e-6 && s < B)
+            a.pos = corner(pli, li, B, 0.5 + s / (2.0 * B));
+    }
 }
 
 // Turn the heading toward the current leg's direction. A pedestrian pivots
@@ -322,15 +377,32 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
                   a.speedFactor;
     Real accel = car ? kCarAccel : kPedAccel;
-    if (nav_->isJunction(nav_->links[li].to)) {
+    // Where this agent's signal STOP LINE sits, measured back from the node. A
+    // walker holds at the corner; a car holds with its front bumper short of the
+    // painted zebra band on its approach: junction box radius (the mouth) + the
+    // band + a margin + half its own body. Stopping at the node itself parked a
+    // legally-waiting car in the middle of the intersection (device round 3).
+    Real stopSetback = 0.5;
+    int toNode = nav_->links[li].to;
+    if (car && nav_->isJunction(toNode)) {
+        Real jr = 0;
+        for (int out : nav_->outLinks[toNode])
+            jr = std::max(jr, nav_->links[out].width * 0.5);
+        Real halfLen = 2.1;   // sedan fallback
+        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
+            halfLen = vehicles_[a.vehicle].length * 0.5;
+        stopSetback = jr + kCrosswalkFarEdge + kStopLineMargin + halfLen;
+    }
+    if (nav_->isJunction(toNode)) {
         Real distToEnd = nav_->links[li].length - a.distOnLeg;
         if (car && distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
-        // Obey the stoplight: ease to a stop at the line unless this approach is
+        // Obey the stoplight: ease to a stop at the LINE unless this approach is
         // green. A pedestrian on a green approach crosses the PERPENDICULAR road
         // (which is then red), so the same condition is safe for cars and peds.
-        if (distToEnd < kSignalApproach && signals_.hasSignal(li) &&
+        Real distToLine = distToEnd - stopSetback;
+        if (distToLine < kSignalApproach && signals_.hasSignal(li) &&
             signals_.stateForLink(li) != SignalState::Green) {
-            target = std::min(target, approachStop(distToEnd, car ? kCarDecel : kPedDecel,
+            target = std::min(target, approachStop(distToLine, car ? kCarDecel : kPedDecel,
                                                    target));
         }
     }
@@ -404,10 +476,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // THROUGH the light. Clamp advance so it cannot pass the line while its
     // approach is not green; it waits here until the signal clears.
     {
-        int toNode = nav_->links[li].to;
         if (nav_->isJunction(toNode) && signals_.hasSignal(li) &&
             signals_.stateForLink(li) != SignalState::Green) {
-            Real stopLine = nav_->links[li].length - 0.5;
+            // A link shorter than the setback still gets a usable line partway
+            // down it — the car holds early rather than never entering at all.
+            Real L = nav_->links[li].length;
+            Real stopLine = std::max(L - stopSetback, std::min(L - 0.5, L * 0.4));
             Real room = std::max(Real(0), stopLine - a.distOnLeg);
             Real motion = std::min(a.speed * dt, room);
             if (motion < a.speed * dt) a.speed = 0;   // held at the line
@@ -465,6 +539,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         }
         a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
                                                                : Agent::Activity::AtHome;
+        a.restNode = nav_->links[lastLink].to;   // wander departs from here
         a.route.links.clear();
     } else {
         refreshPose(a);
@@ -559,7 +634,26 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // Pass 1: schedule transitions (AI agents only — the host drives players).
     // A stranded agent (work == home: no route was found at build) never departs.
     for (Agent& a : agents_) {
-        if (a.playerControlled || a.released || a.home == a.work) continue;
+        if (a.playerControlled || a.released) continue;
+        // WANDER mode (the agent lab): no schedule — the moment an agent is at
+        // rest it picks a fresh random reachable goal and goes, so the lab's one
+        // car laps the circuit continuously instead of parking for hours.
+        if (wander_) {
+            if (!a.moving) {
+                const int n = nav_->nodeCount();
+                int from = (a.restNode >= 0 && a.restNode < n) ? a.restNode : a.home;
+                for (int tries = 0; tries < 8 && n > 1; ++tries) {
+                    int goal = static_cast<int>(rnd() % static_cast<uint32_t>(n));
+                    if (goal == from) continue;
+                    if (!engine::findRoute(*nav_, from, goal).valid()) continue;
+                    a.activity = Agent::Activity::Commuting;
+                    startTrip(a, from, goal);
+                    break;
+                }
+            }
+            continue;
+        }
+        if (a.home == a.work) continue;
         switch (a.activity) {
             case Agent::Activity::AtHome:
                 if (clockHours_ >= a.departWork && clockHours_ < a.departHome) {

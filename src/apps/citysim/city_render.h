@@ -40,6 +40,7 @@ struct CityRenderParams {
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
+    bool wander = false;                   // perpetual random trips (the agent lab)
 };
 
 class CityRenderSystem : public engine::System {

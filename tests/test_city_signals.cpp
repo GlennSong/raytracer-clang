@@ -23,13 +23,17 @@ NavGraph cross4(Real arm) {
     return buildNavGraph(g);
 }
 
-// Is agent `a` halted (speed ~0) right at a red light's stop line?
+// Is agent `a` halted (speed ~0) at a red light's stop line? A walker holds at
+// the corner; a car's line is SET BACK before the painted crosswalk band
+// (junction mouth + band + margin + half its body — device round 3), so its
+// window is correspondingly wider.
 bool stoppedAtRed(const CitySim& sim, const NavGraph& nav, const Agent& a) {
     if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) return false;
     int li = a.route.links[a.leg];
     if (!nav.isJunction(nav.links[li].to)) return false;
     Real distToEnd = nav.links[li].length - a.distOnLeg;
-    return distToEnd < 3.0 && a.speed < 0.5 &&
+    Real window = (a.mode == Agent::Mode::Driver) ? 18.0 : 3.0;
+    return distToEnd < window && a.speed < 0.5 &&
            const_cast<CitySim&>(sim).signals().stateForLink(li) == SignalState::Red;
 }
 

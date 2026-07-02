@@ -139,8 +139,11 @@ RenderMaterial widgetMaterial(Vec3 color) {
     // GROUND-projected geometry with regular depth (like lane markings) — NOT
     // FLAG_OVERLAY: the overlay depth state is unverified on device and a marker
     // hidden inside body geometry is invisible; paint on the pavement never is.
+    // Emission tuned DOWN from 4x (device round 3): at 4x the bloom/tonemap
+    // saturated every ring toward white — a green ring read as "white looking".
+    // 1.7x still glows through daylight but keeps its hue legible.
     m.albedo = color * 0.15; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
-    m.emission = color * 4.0; m.flags = 0;
+    m.emission = color * 1.7; m.flags = 0;
     return m;
 }
 // Traffic-light semantics (user-requested): GREEN = going, RED = stopped,
@@ -321,6 +324,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
+        params_.wander = c.wander;
         debugWidgets_ = c.debugWidgets;
     });
 
@@ -348,6 +352,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
+    sim_.setWander(params_.wander);
     // Warm up so the city is already ALIVE when the level appears — agents depart
     // and spread onto the roads instead of standing still for the first minute.
     for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);

@@ -1895,6 +1895,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.wander = cs.value("wander", cfg.wander);
         world.add<CitySimConfig>(world.create(), cfg);
     }
 
