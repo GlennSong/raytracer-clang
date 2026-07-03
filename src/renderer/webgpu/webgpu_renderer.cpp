@@ -138,8 +138,9 @@ struct GpuSsr {
     float invViewProjection[16];
     float viewProjection[16];
     float cameraPosition[4];
-    float params[4];          // x maxDist, y thickness, z steps, w maxRoughness
-    float texel[4];           // xy = 1/resolution
+    float params[4];          // x maxDist, y thickness, z thicknessFar, w maxRoughness
+    float params2[4];         // x camNear, y camFar, z pixel stride
+    float texel[4];           // xy = 1/effectRes, zw = full resolution
 };
 
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
@@ -1201,8 +1202,11 @@ private:
             std::memcpy(ur.cameraPosition, globals_.cameraPosition, sizeof(ur.cameraPosition));
             ur.params[0] = ssrParams.maxRayDist;
             ur.params[1] = ssrParams.thickness;
-            ur.params[2] = 32.0f;                    // march steps
+            ur.params[2] = ssrParams.thicknessFar;
             ur.params[3] = ssrParams.maxRoughness;
+            ur.params2[0] = static_cast<float>(camNear_);
+            ur.params2[1] = static_cast<float>(camFar_);
+            ur.params2[2] = ssrParams.stride;
             // xy = 1/effectRes (uv from the scaled SSR frag coords);
             // zw = full resolution (to index the full-res depth/G-buffer/HDR).
             ur.texel[0] = 1.0f / static_cast<float>(fxW_);
