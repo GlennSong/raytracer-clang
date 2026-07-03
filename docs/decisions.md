@@ -4448,6 +4448,41 @@ the first on-device look at the cognition build:
   Idle bodies now face along their road from build. Widget ring emission tuned
   4x → 1.7x: at 4x the bloom saturated every hue toward white on device.
 
+**Browser round (the wasm build ran!): time-travel, ghosting, real collisions.**
+The first in-browser session surfaced three more, and fixing them forced the
+junction rules to grow up:
+
+- **"A car jumped backwards in time, then shot forward."** The arrival pose:
+  a finishing car snapped 4-13 m BACKWARDS onto its verge parking spot for one
+  frame, and wander immediately relaunched it. Wander trips now CHAIN — arrival
+  rolls straight into the next route, keeping speed and heading, with the
+  corner-cut Bezier extended across the chain (leg 0 blends from `arrivedLink`)
+  so the restart is as continuous as any turn. Goal picking scans all nodes
+  (U-turn only as a dead-end fallback); rest departures wait for a clear spawn
+  (`launchClear`) and skip past the box when home IS a junction; same-node
+  idlers park at per-brain setbacks instead of stacking in one spot.
+- **Signals: longer green + all-red clearance.** The cycle is now green (12 s,
+  time for a few queued turns) → yellow → ALL-RED (2.5 s) so the box drains
+  before cross traffic gets its green. And two stop-line bugs died: a car past
+  the line when green expired was CLAMPED mid-box (the round-3 setback created
+  the trap zone) — committed cars now always clear; and commuters sharing a
+  destination node crash-locked just short of the exact endpoint — arrival now
+  completes within a ~3 m radius (schedule mode).
+- **"They should collide, not ghost."** Within the planner (NOT the retired
+  all-dynamic design): (1) FENDER-BENDERS — two cars' bodies meeting on a
+  closing course freeze in place (red ring), roll their overshoot back out
+  (direction-checked, remainder to the partner), and resume on staggered
+  per-brain holds; (2) BOX OCCUPANCY — no car crosses its stop line while a
+  crossing-heading car is inside the box, which is what stopped mid-box wrecks
+  FORMING; (3) TURN YIELD — a turn waits for live oncoming approach traffic,
+  with agent-order right-of-way between two stopped opposing turners (the
+  symmetric-yield livelock); (4) an ESCAPE VALVE — a car wedged through >5
+  consecutive freezes ignores contact until it drives clear (the tow-truck
+  resolution; a crossing-path contact can never otherwise resolve without
+  reverse gear). Net effect on the torture-test cross: arrivals 36 → ~200-490,
+  and zero ticks where two cars drive through each other (`ghostTicks == 0`,
+  pinned by `cars_crash_and_stop_instead_of_ghosting`).
+
 ---
 
 ## Interim seams & tech-debt register

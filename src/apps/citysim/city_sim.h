@@ -47,7 +47,17 @@ struct Agent {
     int home = 0, work = 0;
     Real departWork = 8.0, departHome = 17.0;
     Activity activity = Activity::AtHome;
-    int restNode = -1;   // the node this agent last arrived at (wander departs from it)
+    int restNode = -1;     // the node this agent last arrived at (wander departs from it)
+    int arrivedLink = -1;  // the link it arrived ALONG (wander avoids U-turning back up it)
+    // Fender-bender state (device: cars must not ghost through each other). When
+    // two cars' bodies meet on a closing course both freeze here for a moment —
+    // a visible crash-and-recover, staggered per driver so the tangle unwinds.
+    // A car re-crashing over and over in place (a wedged wreck neither party can
+    // steer or reverse out of) eventually ESCAPES: past a few consecutive
+    // freezes it ignores car contact until it has driven clear of the spot.
+    Real crashTimer = 0;
+    int crashCount = 0;              // consecutive freezes at this wreck
+    engine::Vec2 crashAnchor;        // where the pile-up started
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -235,7 +245,12 @@ public:
     }
 
 private:
-    void startTrip(Agent& a, int origin, int goal);
+    // fromRest: the trip starts from a PARKED pose (not chained mid-motion) —
+    // a rest departure whose origin is a junction skips past the box so the car
+    // never materializes among crossing traffic.
+    void startTrip(Agent& a, int origin, int goal, bool fromRest = true);
+    bool startWanderTrip(Agent& a, int from, bool fromRest = true);
+    bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     void computeGaps();
     Real vehicleLength(int agentIndex) const;      // body length, or a ped's footprint
@@ -243,7 +258,7 @@ private:
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
-    engine::Vec2 idlePose(int node, Agent::Mode mode) const;
+    engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;
     uint32_t rnd();
     Real rndUnit();
 

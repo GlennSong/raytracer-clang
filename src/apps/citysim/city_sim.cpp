@@ -228,7 +228,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // Stagger the think clocks so the crowd doesn't re-decide in lockstep.
         a.thinkTimer = thinkPeriod_ * (((a.brain >> 17) & 0xFF) / Real(0xFF));
         a.restNode = a.home;
-        a.pos = idlePose(a.home, a.mode);
+        a.pos = idlePose(a.home, a.mode, a.brain);
         // Idle bodies face along their road from the start — a parked car with
         // the default (1,0) heading sat at a random angle to the verge it was
         // parked on, which read as "failed to be placed" (device round 3).
@@ -254,7 +254,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     }
 }
 
-Vec2 CitySim::idlePose(int node, Agent::Mode mode) const {
+Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     if (!nav_ || node < 0 || node >= nav_->nodeCount()) return Vec2();
     const std::vector<int>& out = nav_->outLinks[node];
     if (out.empty()) return nav_->nodes[node];
@@ -267,10 +267,75 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode) const {
     // in lane 0 it blocked the road until its first trip).
     Real off = (mode == Agent::Mode::Driver) ? hw + 2.8 : hw + 1.2;
     if (off < 0.5) off = 0.5;
-    return nav_->nodes[node] + right * off;
+    // Per-agent setback ALONG the road (mirrors arrival parking): several agents
+    // sharing a home node must not stack in one spot — two cars occupying the
+    // same verge pose spawned interpenetrating the moment both departed.
+    Real back = 2.0 + static_cast<Real>((brain >> 3) & 7) *
+                          ((mode == Agent::Mode::Driver) ? 1.4 : 0.6);
+    back = std::min(back, nav_->links[li].length * 0.45);
+    return nav_->nodes[node] + dir * back + right * off;
 }
 
-void CitySim::startTrip(Agent& a, int origin, int goal) {
+// Pick a random routable wander goal from `from` and start the trip. Prefers a
+// goal that doesn't begin by U-TURNING back up the link just arrived on (a
+// standstill 180 flips the lane offset to the other side of the road — a
+// visible pop); falls back to a U-turn when nothing else routes (dead ends).
+bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
+    const int n = nav_ ? nav_->nodeCount() : 0;
+    if (n <= 1 || from < 0 || from >= n) return false;
+    auto reversesArrival = [&](const engine::Route& r) {
+        if (a.arrivedLink < 0 || r.links.empty()) return false;
+        const engine::NavLink& in = nav_->links[a.arrivedLink];
+        const engine::NavLink& out = nav_->links[r.links.front()];
+        return out.from == in.to && out.to == in.from;
+    };
+    // Scan EVERY node from a random start, so a non-reversing goal is found
+    // whenever one exists — dice rolls occasionally picked only U-turn goals,
+    // and each of those flipped the car to the other side of the road in place.
+    int start = static_cast<int>(rnd() % static_cast<uint32_t>(n));
+    int fallback = -1;
+    for (int k = 0; k < n; ++k) {
+        int goal = (start + k) % n;
+        if (goal == from) continue;
+        engine::Route r = engine::findRoute(*nav_, from, goal);
+        if (!r.valid()) continue;
+        if (reversesArrival(r)) { if (fallback < 0) fallback = goal; continue; }
+        a.activity = Agent::Activity::Commuting;
+        startTrip(a, from, goal, fromRest);
+        return a.moving;
+    }
+    if (fallback >= 0) {
+        a.activity = Agent::Activity::Commuting;
+        startTrip(a, from, fallback, fromRest);
+        return a.moving;
+    }
+    return false;
+}
+
+// Is the spawn area at `node` free of moving cars? Agents departing from rest
+// materialize on the lane there — launching under a crossing (or same-node)
+// car spawned two bodies inside each other, which the crash rule then locked.
+bool CitySim::launchClear(const Agent& a, int node) const {
+    if (!nav_ || node < 0 || node >= nav_->nodeCount()) return true;
+    const Vec2 p = nav_->nodes[node];
+    // The radius must cover every place the launch could put the body: the lane
+    // start at the node PLUS the junction-origin box skip (jr + 2 m down the
+    // first link) — a 5 m check let a second car spawn exactly on a first one
+    // that had been skipped 6 m out.
+    Real jr = 0;
+    for (int out : nav_->outLinks[node]) jr = std::max(jr, nav_->links[out].width * 0.5);
+    Real clear = jr + 2.0 + 6.0;
+    for (const Agent& b : agents_) {
+        if (&b == &a || b.mode != Agent::Mode::Driver) continue;
+        if (!b.moving || b.released) continue;
+        if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
+        Real dx = b.pos.x - p.x, dy = b.pos.y - p.y;
+        if (dx * dx + dy * dy < clear * clear) return false;
+    }
+    return true;
+}
+
+void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.route = engine::findRoute(*nav_, origin, goal);
     a.leg = 0;
     a.distOnLeg = 0;
@@ -281,7 +346,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal) {
         // state, so the agent simply doesn't take this trip.
         a.moving = false;
         a.elevation = 0;
-        a.pos = idlePose(origin, a.mode);
+        a.pos = idlePose(origin, a.mode, a.brain);
         a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtHome
                                                                : Agent::Activity::AtWork;
         return;
@@ -292,6 +357,16 @@ void CitySim::startTrip(Agent& a, int origin, int goal) {
                  : 0;
     ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
+    // A REST departure whose origin is a junction starts a few metres down the
+    // first link, past the box — materializing a parked car among crossing
+    // traffic spawned collisions the crash rule then locked in place.
+    if (fromRest && a.mode == Agent::Mode::Driver && nav_->isJunction(origin)) {
+        Real jr = 0;
+        for (int out : nav_->outLinks[origin])
+            jr = std::max(jr, nav_->links[out].width * 0.5);
+        Real L0 = nav_->links[a.route.links.front()].length;
+        a.distOnLeg = std::min(jr + 2.0, L0 * 0.4);
+    }
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
 }
@@ -347,6 +422,15 @@ void CitySim::refreshPose(Agent& a) {
         Real B = blendSpan(pli, li);
         if (B > 1e-6 && s < B)
             a.pos = corner(pli, li, B, 0.5 + s / (2.0 * B));
+    } else if (wander_ && a.arrivedLink >= 0 &&
+               nav_->links[a.arrivedLink].to == nav_->links[li].from) {
+        // A CHAINED wander trip (arrival rolled straight into the next route):
+        // blend leg 0 from the link the agent arrived along, exactly like an
+        // interior corner — without this the restart popped onto the new lane
+        // line, stacking simultaneous chainers on the node point.
+        Real B = blendSpan(a.arrivedLink, li);
+        if (B > 1e-6 && s < B)
+            a.pos = corner(a.arrivedLink, li, B, 0.5 + s / (2.0 * B));
     }
 }
 
@@ -393,6 +477,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             halfLen = vehicles_[a.vehicle].length * 0.5;
         stopSetback = jr + kCrosswalkFarEdge + kStopLineMargin + halfLen;
     }
+    bool yieldAtLine = false;   // a TURNING car holding for oncoming traffic
     if (nav_->isJunction(toNode)) {
         Real distToEnd = nav_->links[li].length - a.distOnLeg;
         if (car && distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
@@ -400,10 +485,69 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // green. A pedestrian on a green approach crosses the PERPENDICULAR road
         // (which is then red), so the same condition is safe for cars and peds.
         Real distToLine = distToEnd - stopSetback;
-        if (distToLine < kSignalApproach && signals_.hasSignal(li) &&
+        // Only cars still BEFORE the line brake for the signal — a car already
+        // past it is COMMITTED and must clear the box (the all-red clearance
+        // exists for exactly that). Capping a committed car to zero pinned it
+        // mid-intersection every time a green expired under it.
+        if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) &&
             signals_.stateForLink(li) != SignalState::Green) {
             target = std::min(target, approachStop(distToLine, car ? kCarDecel : kPedDecel,
                                                    target));
+        }
+        // HOLDS at the line (cars still before it, any signal state):
+        //  1. BOX OCCUPANCY — never enter while a car on a CROSSING heading is
+        //     inside the box (a lingerer from the last phase, a mid-turn car):
+        //     entering anyway is where mid-box wrecks came from. Same-axis
+        //     occupants (leaders ahead, opposing straight-through on the other
+        //     side of the road) don't hold anyone.
+        //  2. TURN YIELD — a TURN also waits for live ONCOMING approach traffic
+        //     (opposing arms share a green; a left turn crosses it). Going
+        //     straight never yields, so two held turners can't deadlock; two
+        //     opposing stopped turners break the tie by agent order.
+        if (car && distToLine >= 0 && distToLine < kSignalApproach &&
+            a.leg < static_cast<int>(a.route.links.size())) {
+            Vec2 d0 = nav_->direction(li);
+            bool turning = false;
+            Vec2 d1 = d0;
+            if (a.leg + 1 < static_cast<int>(a.route.links.size())) {
+                d1 = nav_->direction(a.route.links[a.leg + 1]);
+                turning = d0.x * d1.x + d0.y * d1.y < 0.85;   // a real bend
+            }
+            Vec2 jc = nav_->nodes[toNode];
+            Real jr = 0;
+            for (int out : nav_->outLinks[toNode])
+                jr = std::max(jr, nav_->links[out].width * 0.5);
+            Real range = jr + 6.0;
+            for (const Agent& b : agents_) {
+                if (&b == &a || b.mode != Agent::Mode::Driver) continue;
+                if (!b.moving || b.released) continue;
+                if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
+                Real dx = b.pos.x - jc.x, dy = b.pos.y - jc.y;
+                Real db2 = dx * dx + dy * dy;
+                if (db2 > range * range) continue;
+                Real along = b.heading.x * d0.x + b.heading.y * d0.y;
+                // 1: crossing-heading occupant INSIDE the box proper.
+                if (db2 < jr * jr && std::fabs(along) < 0.7) {
+                    yieldAtLine = true;
+                    break;
+                }
+                // 2: turn yield against oncoming approach traffic.
+                if (!turning || along >= -0.3) continue;
+                if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
+                if (&b < &a && b.leg + 1 < static_cast<int>(b.route.links.size())) {
+                    int bli = b.route.links[b.leg];
+                    if (nav_->links[bli].to == toNode) {
+                        Vec2 bd0 = nav_->direction(bli);
+                        Vec2 bd1 = nav_->direction(b.route.links[b.leg + 1]);
+                        if (bd0.x * bd1.x + bd0.y * bd1.y < 0.85) {
+                            yieldAtLine = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (yieldAtLine)
+                target = std::min(target, approachStop(distToLine, kCarDecel, target));
         }
     }
 
@@ -476,20 +620,29 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // THROUGH the light. Clamp advance so it cannot pass the line while its
     // approach is not green; it waits here until the signal clears.
     {
-        if (nav_->isJunction(toNode) && signals_.hasSignal(li) &&
-            signals_.stateForLink(li) != SignalState::Green) {
+        bool redAhead = signals_.hasSignal(li) &&
+                        signals_.stateForLink(li) != SignalState::Green;
+        if (nav_->isJunction(toNode) && (redAhead || yieldAtLine)) {
             // A link shorter than the setback still gets a usable line partway
             // down it — the car holds early rather than never entering at all.
             Real L = nav_->links[li].length;
             Real stopLine = std::max(L - stopSetback, std::min(L - 0.5, L * 0.4));
-            Real room = std::max(Real(0), stopLine - a.distOnLeg);
-            Real motion = std::min(a.speed * dt, room);
-            if (motion < a.speed * dt) a.speed = 0;   // held at the line
-            a.distOnLeg += motion;
-            if (car) a.state = Agent::State::Waiting;   // FSM: stopped for a red
-            refreshPose(a);
-            steer(a, dt);
-            return;
+            // The hold applies only BEFORE the line. A car already past it is
+            // committed to the box and drives on — clamping it there trapped it
+            // mid-intersection whenever a green expired under it, and everything
+            // arriving cross-phase piled into it.
+            if (a.distOnLeg <= stopLine + 1e-6) {
+                Real room = std::max(Real(0), stopLine - a.distOnLeg);
+                Real motion = std::min(a.speed * dt, room);
+                if (motion < a.speed * dt) a.speed = 0;   // held at the line
+                a.distOnLeg += motion;
+                // FSM: red = Waiting; holding a turn for oncoming = Yielding.
+                if (car)
+                    a.state = redAhead ? Agent::State::Waiting : Agent::State::Yielding;
+                refreshPose(a);
+                steer(a, dt);
+                return;
+            }
         }
     }
 
@@ -511,12 +664,45 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         if (motion < remain) { a.distOnLeg += motion; motion = 0; }
         else { motion -= remain; ++a.leg; a.distOnLeg = 0; }
     }
+    // ARRIVE a few metres short of the exact endpoint (schedule mode): several
+    // commuters can share a destination node, and with real collisions (the
+    // fender-bender rule) cars converging on the same point crash-locked just
+    // shy of it and never completed. Close enough is arrived; the park pose
+    // takes over. Wander keeps exact arrival — its trips chain THROUGH the node.
+    if (!wander_ && car && a.leg == legCount - 1) {
+        Real L = nav_->links[a.route.links[a.leg]].length;
+        if (L - a.distOnLeg < std::min(Real(3.0), L * 0.5)) a.leg = legCount;
+    }
 
     if (a.leg >= legCount) {
+        Real vArrive = a.speed;   // still rolling — a wander chain keeps it
         a.moving = false;
         a.speed = 0;
         a.elevation = 0;
         int lastLink = a.route.links.back();
+        if (a.mode == Agent::Mode::Driver && wander_) {
+            // WANDER (the agent lab): CHAIN straight into the next trip THIS
+            // tick — no parking pose (which read on device as the car "jumping
+            // backwards in time, then shooting forward") and no one-frame rest
+            // INSIDE the junction box for cross traffic to overlap. The car
+            // keeps its speed and heading through the node; steer() rotates it
+            // onto the new route at the bounded yaw rate, like any other turn.
+            a.restNode = nav_->links[lastLink].to;
+            a.arrivedLink = lastLink;
+            Vec2 keepHeading = a.heading;
+            if (startWanderTrip(a, a.restNode, /*fromRest=*/false)) {
+                a.speed = vArrive;
+                a.heading = keepHeading;   // no snap: the yaw stays rate-limited
+                return;
+            }
+            // No route anywhere (isolated node): rest in-lane at the node; the
+            // scheduling pass will retry from here.
+            a.pos = nav_->laneCenter(lastLink, a.lane, 1.0,
+                                     laneSpacing(nav_->links[lastLink]));
+            a.heading = nav_->direction(lastLink);
+            a.route.links.clear();
+            return;
+        }
         if (a.mode == Agent::Mode::Driver) {
             // Park OFF the carriageway (ADR-0062). Resting at the lane's very end
             // was harmless for a kinematic ghost, but the PHYSICAL car that now
@@ -540,6 +726,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
                                                                : Agent::Activity::AtHome;
         a.restNode = nav_->links[lastLink].to;   // wander departs from here
+        a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
         a.route.links.clear();
     } else {
         refreshPose(a);
@@ -639,30 +826,37 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         // rest it picks a fresh random reachable goal and goes, so the lab's one
         // car laps the circuit continuously instead of parking for hours.
         if (wander_) {
+            // Drivers CHAIN trips at arrival (see advance()); this pass only
+            // launches the very first trip from the build pose, restarts a
+            // walker, or recovers an agent whose last pick found no route.
             if (!a.moving) {
-                const int n = nav_->nodeCount();
-                int from = (a.restNode >= 0 && a.restNode < n) ? a.restNode : a.home;
-                for (int tries = 0; tries < 8 && n > 1; ++tries) {
-                    int goal = static_cast<int>(rnd() % static_cast<uint32_t>(n));
-                    if (goal == from) continue;
-                    if (!engine::findRoute(*nav_, from, goal).valid()) continue;
-                    a.activity = Agent::Activity::Commuting;
-                    startTrip(a, from, goal);
-                    break;
-                }
+                int from = (a.restNode >= 0 && a.restNode < nav_->nodeCount())
+                               ? a.restNode : a.home;
+                // LAUNCH CLEARANCE (drivers): agents sharing a home node rest
+                // near the same verge — launching them the same tick spawned
+                // cars inside each other. Hold this launch while another moving
+                // car is still near the departure node; index order staggers
+                // same-node fleets a few metres apart, like cars pulling out.
+                if (a.mode != Agent::Mode::Driver || launchClear(a, from))
+                    startWanderTrip(a, from);
             }
             continue;
         }
         if (a.home == a.work) continue;
         switch (a.activity) {
+            // A driver departs only once its spawn area is clear of moving cars
+            // (launchClear) — it just waits out the traffic and retries next
+            // step, like anyone pulling out of a parking spot.
             case Agent::Activity::AtHome:
-                if (clockHours_ >= a.departWork && clockHours_ < a.departHome) {
+                if (clockHours_ >= a.departWork && clockHours_ < a.departHome &&
+                    (a.mode != Agent::Mode::Driver || launchClear(a, a.home))) {
                     a.activity = Agent::Activity::Commuting;
                     startTrip(a, a.home, a.work);
                 }
                 break;
             case Agent::Activity::AtWork:
-                if (clockHours_ >= a.departHome || clockHours_ < a.departWork) {
+                if ((clockHours_ >= a.departHome || clockHours_ < a.departWork) &&
+                    (a.mode != Agent::Mode::Driver || launchClear(a, a.work))) {
                     a.activity = Agent::Activity::Returning;
                     startTrip(a, a.work, a.home);
                 }
@@ -693,6 +887,18 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (a.playerControlled || a.released) continue;
+        // Crashed (fender-bender): the car sits where it hit until its hold
+        // expires — a crash is a real stop, not a suggestion.
+        if (a.crashTimer > 0) {
+            a.crashTimer -= dt;
+            a.speed = 0;
+            a.state = Agent::State::Waiting;
+            continue;
+        }
+        if (a.crashCount > 0) {
+            Real dx = a.pos.x - a.crashAnchor.x, dy = a.pos.y - a.crashAnchor.y;
+            if (dx * dx + dy * dy > 6.0 * 6.0) a.crashCount = 0;   // clear of the wreck
+        }
         // Tethered ghost too far from its physical car: WAIT for it. The plan can
         // never outrun the physics — a car knocked back, climbing, or slow off the
         // line finds its ghost holding just ahead instead of gone (ADR-0062).
@@ -705,6 +911,82 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             }
         }
         if (a.moving) advance(a, dt, gaps_[i], minGaps_[i]);
+    }
+
+    // FENDER-BENDERS (device: cars must collide, not ghost). Ambient cars are
+    // planner-owned (ADR-0062) — no rigid bodies between them — so contact is
+    // resolved here: when two moving cars' bodies meet on a CLOSING course, both
+    // freeze on the spot (speed 0, red ring) and resume on staggered per-brain
+    // holds, so a junction tangle crunches to a stop and unwinds car by car.
+    // Triggering only on a closing approach lets the first resumer drive OUT
+    // through the residual overlap without instantly re-freezing the pair.
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        Agent& a = agents_[i];
+        if (a.mode != Agent::Mode::Driver || !a.moving || a.released ||
+            a.playerControlled)
+            continue;
+        for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+            Agent& b = agents_[j];
+            if (b.mode != Agent::Mode::Driver || !b.moving || b.released ||
+                b.playerControlled)
+                continue;
+            if (std::fabs(b.elevation - a.elevation) > 3.0) continue;  // bridge deck
+            // ESCAPE VALVE: a car wedged through many consecutive freezes (a
+            // wreck neither party can steer or reverse out of) stops being a
+            // contact until it drives clear — the tow-truck resolution. Without
+            // it a crossing-path contact never resolves and the junction dies.
+            if (a.crashCount > 5 || b.crashCount > 5) continue;
+            Real rs = 0.35 * (vehicleLength(static_cast<int>(i)) +
+                              vehicleLength(static_cast<int>(j)));
+            Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            Real d2 = dx * dx + dy * dy;
+            if (d2 >= rs * rs) continue;
+            Real rvx = b.heading.x * b.speed - a.heading.x * a.speed;
+            Real rvy = b.heading.y * b.speed - a.heading.y * a.speed;
+            if (rvx * dx + rvy * dy >= 0) continue;   // separating: let them part
+            // Undo the overshoot: whoever MOVED into the contact backs its path
+            // progress out again, split by speed, so the pair rests touching —
+            // without this a resumed car RATCHETED deeper each freeze cycle.
+            Real dist = std::sqrt(d2);
+            Real pen = rs - dist;
+            Real vsum = a.speed + b.speed;
+            if (pen > 0 && vsum > 1e-6) {
+                // Returns whatever couldn't be applied (a car at the very start
+                // of its leg can't back past it) so the PARTNER absorbs it —
+                // otherwise a freshly-chained car at distOnLeg 0 left half the
+                // penetration in place.
+                auto rollBack = [&](Agent& c, Agent& other, Real amount) -> Real {
+                    if (amount <= 0 || !c.moving ||
+                        c.leg >= static_cast<int>(c.route.links.size()))
+                        return amount;
+                    // Backing up must SEPARATE the pair — a car that has already
+                    // slightly passed its partner would back INTO it instead.
+                    Real toOther = c.heading.x * (other.pos.x - c.pos.x) +
+                                   c.heading.y * (other.pos.y - c.pos.y);
+                    if (toOther <= 0) return amount;   // partner behind: hold still
+                    Real applied = std::min(amount, c.distOnLeg);
+                    c.distOnLeg -= applied;
+                    refreshPose(c);
+                    return amount - applied;
+                };
+                Real leftA = rollBack(a, b, pen * (a.speed / vsum));
+                Real leftB = rollBack(b, a, pen * (b.speed / vsum));
+                if (leftA > 0) rollBack(b, a, leftA);
+                if (leftB > 0) rollBack(a, b, leftB);
+            }
+            // NOTE: do not zero speed here — this tick's motion (and steering)
+            // already used it honestly; the hold branch freezes them next tick.
+            auto crash = [](Agent& c) {
+                if (c.crashTimer <= 0) {
+                    c.crashTimer = 1.0 + static_cast<Real>((c.brain >> 5) & 3) * 0.5;
+                    if (c.crashCount == 0) c.crashAnchor = c.pos;
+                    ++c.crashCount;
+                }
+                c.state = Agent::State::Waiting;
+            };
+            crash(a);
+            crash(b);
+        }
     }
 
     // Reactive pedestrian behaviour (ADR-0061): each walker acts on what it SEES

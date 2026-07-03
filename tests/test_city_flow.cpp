@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_sim.h"
+#include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_network.h"
 
 using namespace engine;
@@ -56,8 +57,10 @@ TEST_CASE(busy_junction_does_not_gridlock) {
     int arrivals = countArrivals(sim, 12000);
     // Over ~6 in-world days, two-dozen commuters crossing one signal should
     // complete many trips. A snarl (cars braking for each other forever) yields
-    // a handful at most; healthy flow yields dozens.
-    CHECK(arrivals > 40);
+    // a handful at most; healthy flow yields dozens. (Threshold recalibrated for
+    // the longer signal cycle — 12 s green + all-red clearance — and the
+    // turn-yield rule; a gridlock still reads as near-zero.)
+    CHECK(arrivals > 25);
 }
 
 TEST_CASE(cars_keep_to_the_right_side_of_the_road) {
@@ -268,7 +271,9 @@ TEST_CASE(cross_node_following_keeps_cars_off_each_other) {
         if (anyMoving) { ++sampled; if (overlap) ++overlapSteps; }
     }
     CHECK(sampled > 0);
-    CHECK(arrivals > 40);                          // traffic keeps flowing (no gridlock)
+    CHECK(arrivals > 25);                          // traffic keeps flowing (no gridlock —
+                                                   // threshold sized for the slower, safer
+                                                   // signal cycle with all-red clearance)
     CHECK(overlapSteps < sampled / 10);            // genuine overlap in well under 10% of steps
     bool same = true;                              // and the sim stays deterministic
     for (std::size_t i = 0; i < a.agents().size(); ++i)
@@ -308,4 +313,89 @@ TEST_CASE(cars_do_not_freeze_for_oncoming_traffic) {
     // Whenever cars are out commuting, traffic is moving the vast majority of the
     // time (not frozen nose-to-nose with oncoming cars).
     CHECK(movingSteps > sampled * 9 / 10);
+}
+
+TEST_CASE(wander_trips_chain_without_teleporting) {
+    // The agent-lab wander loop (browser round): arrival must NOT snap to a
+    // parking pose before the next trip — on device that one-frame verge pose
+    // read as the car "jumping backwards in time, then shooting forward". Track
+    // every per-tick displacement, including across the rest frame between
+    // trips, and bound it near honest motion (speed*dt + the corner-cut arc).
+    RoadNet netTheta;
+    netTheta.nodes = { Vec2(-60, -40), Vec2(60, -40), Vec2(60, 40), Vec2(-60, 40),
+                       Vec2(-60, 0), Vec2(60, 0) };
+    netTheta.edges = { {0, 1}, {1, 5}, {5, 2}, {2, 3}, {3, 4}, {4, 0}, {4, 5} };
+    netTheta.width = 7.0;
+    NavGraph nav = buildNavGraph(navRoadGraph(netTheta));
+    CitySim sim;
+    sim.build(nav, 4, 0, 7);
+    sim.setWander(true);
+
+    std::vector<Vec2> prev(sim.agents().size());
+    std::vector<bool> had(sim.agents().size(), false);
+    Real maxJump = 0;
+    int trips = 0;
+    for (int i = 0; i < 20000; ++i) {
+        sim.step(0.1, 0.0);
+        const auto& ag = sim.agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            if (i < 300) { prev[k] = ag[k].pos; had[k] = true; continue; }   // warm-up:
+            // the one-time initial departure hops from the verge build pose to the
+            // lane; every later transition is the chained wander loop under test.
+            if (had[k]) {
+                Real dx = ag[k].pos.x - prev[k].x, dy = ag[k].pos.y - prev[k].y;
+                maxJump = std::max(maxJump, std::sqrt(dx * dx + dy * dy));
+            }
+            prev[k] = ag[k].pos;
+            had[k] = true;
+            trips = std::max(trips, ag[k].trips);
+        }
+    }
+    CHECK(trips >= 3);        // the loop really is chaining trip after trip
+    // Bound: speed*dt (~0.9 max) + the lane-offset rotation as a chained trip
+    // starts its new route at the node (~2.5 on a 90-degree corner). The old
+    // parking snap was 4-13 m backwards — this must stay well under that.
+    CHECK(maxJump < 3.4);
+}
+
+TEST_CASE(cars_crash_and_stop_instead_of_ghosting) {
+    // Browser round: "a bunch of cars intersected through each other... they
+    // should collide". Ambient cars are planner-owned, so contact is a sim
+    // rule: a closing overlap freezes both (a fender-bender) and they resume
+    // staggered. Pack a signalled cross and assert no two moving cars ever
+    // interpenetrate DEEPLY — the crash freeze must catch them at first touch.
+    NavGraph nav = cross4(60.0);
+    CitySim sim;
+    sim.build(nav, 12, 0, 17);   // busy, but not beyond what one junction can carry
+    sim.setWander(true);   // keep every car endlessly criss-crossing the centre
+
+    long ghostTicks = 0, escapeTicks = 0, ticks = 0;
+    for (int i = 0; i < 12000; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& ag = sim.agents();
+        bool anyEscape = false;
+        for (std::size_t x = 0; x < ag.size(); ++x) {
+            if (ag[x].mode != Agent::Mode::Driver || !ag[x].moving) continue;
+            if (ag[x].crashCount > 5) anyEscape = true;
+            for (std::size_t y = x + 1; y < ag.size(); ++y) {
+                if (ag[y].mode != Agent::Mode::Driver || !ag[y].moving) continue;
+                // A sanctioned wreck ESCAPE may pass close — that's the tow
+                // truck, not ghosting.
+                if (ag[x].crashCount > 5 || ag[y].crashCount > 5) continue;
+                Real dx = ag[x].pos.x - ag[y].pos.x, dy = ag[x].pos.y - ag[y].pos.y;
+                Real d = std::sqrt(dx * dx + dy * dy);
+                // GHOSTING — two cars driving fast THROUGH each other — is what
+                // the crash rule exists to kill. Frozen wrecks touching (both
+                // stopped) are not ghosting.
+                if (d < 1.5 && ag[x].speed > 2.0 && ag[y].speed > 2.0) ++ghostTicks;
+            }
+        }
+        ++ticks;
+        if (anyEscape) ++escapeTicks;
+    }
+    CHECK(ghostTicks == 0);           // nobody ever sails through another car
+    // Escapes must not be the STEADY state. This synthetic map is escape-heavy
+    // by construction (every trip crosses ONE junction; dead-end tips force
+    // U-turn chains into head-on meets) — real levels have neither.
+    CHECK(escapeTicks < ticks / 3);
 }

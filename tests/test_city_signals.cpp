@@ -89,3 +89,35 @@ TEST_CASE(city_signals_keep_determinism) {
             same = false;
     CHECK(same);
 }
+
+TEST_CASE(signals_have_an_all_red_clearance_between_phases) {
+    // Browser round: cross traffic used to get green the instant the other
+    // phase's yellow ended, meeting late turners inside the box. The cycle now
+    // holds BOTH phases red for a clearance interval so the junction drains.
+    NavGraph nav = cross4(40.0);
+    SignalController sc;
+    sc.build(nav);
+    // Two PERPENDICULAR approaches into the centre: one per phase.
+    int la = -1, lb = -1;
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        if (nav.links[li].to != 0) continue;
+        if (nav.links[li].from == 1) la = li;   // north arm approach
+        if (nav.links[li].from == 3) lb = li;   // east arm approach
+    }
+    CHECK(la >= 0);
+    CHECK(lb >= 0);
+
+    bool bothRed = false, aGreen = false, bGreen = false, bothGreen = false;
+    for (int i = 0; i < 800; ++i) {   // 80 s: several full cycles
+        sc.update(0.1);
+        SignalState sa = sc.stateForLink(la), sb = sc.stateForLink(lb);
+        bothRed |= (sa == SignalState::Red && sb == SignalState::Red);
+        aGreen |= sa == SignalState::Green;
+        bGreen |= sb == SignalState::Green;
+        bothGreen |= (sa == SignalState::Green && sb == SignalState::Green);
+    }
+    CHECK(bothRed);     // the clearance interval exists
+    CHECK(aGreen);      // both phases still get their turn
+    CHECK(bGreen);
+    CHECK(!bothGreen);  // perpendicular arms are never green together
+}
