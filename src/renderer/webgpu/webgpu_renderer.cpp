@@ -21,6 +21,7 @@
 // still unverified (no GPU in CI).
 
 #include "../renderer.h"
+#include "../cascade_fit.h"
 #include "../../log.h"
 
 #include <webgpu/webgpu.h>
@@ -742,75 +743,100 @@ public:
     void endFrame() override {
         if (!device_ || !surface_) return;
 
-        // Cascaded sun shadow: split the view frustum into N depth slices and fit
-        // a texel-snapped, camera-centered orthographic box to each (port of the
-        // Vulkan/Metal cascade fit, adjusted for WebGPU standard-Z: NDC near z=0,
-        // far z=1). Written into globals before the upload below. Each cascade's
-        // light view + radius are kept for caster culling in the shadow passes
-        // (in light space the ortho box's XY extents are exactly ±radius).
-        Mat4 cascadeCullView[4];
+        // Orchestration only — each render-graph stage lives in its own
+        // record*/update* method below. Order matters: the cascade fit feeds
+        // the globals upload, the draw sort feeds the uniform staging, and all
+        // passes record into one command encoder submitted once at the end.
+        FramePlan plan;
+        updateCascades(plan);
+        uploadFrameData(plan);
+        planPostEffects(plan);
+
+        WGPUSurfaceTexture surfaceTexture = {};
+        wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
+        if (!frameDiagLogged_) {
+            frameDiagLogged_ = true;
+            LOG_INFO("WebGPU frame0: %zu draws, status=%d, %dx%d, shadow=%d dist=%.0f, lights=%d",
+                     draws_.size(), static_cast<int>(surfaceTexture.status),
+                     width_, height_, shadowOn_ ? 1 : 0, shadowDistance_, globals_.counts[0]);
+        }
+        if (!surfaceTexture.texture) {
+            LOG_WARN("WebGPU: no current surface texture this frame");
+            return;
+        }
+        WGPUTextureView backbuffer = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, nullptr);
+
+        recordShadowPasses(encoder, plan);
+        recordMainPass(encoder, plan);
+        recordPostStack(encoder, plan);
+        recordComposite(encoder, backbuffer, plan);
+
+        WGPUCommandBuffer commands = wgpuCommandEncoderFinish(encoder, nullptr);
+        wgpuQueueSubmit(queue_, 1, &commands);
+
+        wgpuCommandBufferRelease(commands);
+        wgpuCommandEncoderRelease(encoder);
+        wgpuTextureViewRelease(backbuffer);
+        wgpuTextureRelease(surfaceTexture.texture);
+        // The browser presents automatically after the queue work resolves;
+        // there is no wgpuSurfacePresent on the web.
+    }
+
+private:
+    // Per-frame pass plan: which post passes run, the dynamic-buffer slot
+    // layout, the cascade cull data, and the shadow-cull counters — computed
+    // once per frame and threaded through the record* stages.
+    struct FramePlan {
+        size_t terrainBase = 0;              // first terrain slot in the draw buffer
+        bool ssaoOn = false, ssaoForDebug = false, ssrOn = false, bloomOn = false;
+        bool needGbuf = false;               // main pass stores depth + G-buffer?
+        Mat4 cascadeCullView[4];             // per-cascade light view (cull space)
         Real cascadeCullRadius[4] = {0, 0, 0, 0};
+        size_t shadowCulled = 0, shadowConsidered = 0;
+    };
+
+    // Cascade fit -> globals_ (cascadeVP/split/shadowParams) + the plan's cull
+    // data. The split/fit math itself is the shared, unit-tested
+    // computeCascadeFits (../cascade_fit.h) — the same function the other
+    // backends are meant to adopt (WebGPU standard-Z: NDC near 0, far 1).
+    void updateCascades(FramePlan& plan) {
         activeCascades_ = 0;
-        if (shadowOn_) {
-            int cc = std::max(1, std::min(shadowCascadeCount_, 4));
-            Real lambda = shadowParams.splitLambda;
-            Real camNear = camNear_, camFar = camFar_;
-            Real shadowDist = std::max(std::min(static_cast<Real>(shadowDistance_), camFar), camNear * 2.0);
-
-            Vec3 up = std::abs(sunDir_.y) > 0.99 ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
-            Mat4 invVP = camVP_.inverse();
-            // WebGPU standard-Z: near plane at NDC z=0, far at z=1.
-            auto corner = [&](Real x, Real y, Real z) { return invVP.transformPoint(Vec3(x, y, z)); };
-            Vec3 nearC[4] = {corner(-1,-1,0), corner(1,-1,0), corner(1,1,0), corner(-1,1,0)};
-            Vec3 farC[4]  = {corner(-1,-1,1), corner(1,-1,1), corner(1,1,1), corner(-1,1,1)};
-
-            Real prevFar = camNear;
-            for (int c = 0; c < cc; ++c) {
-                Real f = Real(c + 1) / Real(cc);
-                Real uni = camNear + (shadowDist - camNear) * f;
-                Real lg = camNear * std::pow(shadowDist / camNear, f);
-                Real zFar = lambda * lg + (1.0 - lambda) * uni;
-                Real zNear = prevFar;
-                prevFar = zFar;
-
-                Real fN = (zNear - camNear) / (camFar - camNear);
-                Real fF = (zFar - camNear) / (camFar - camNear);
-                Vec3 corners[8];
-                for (int k = 0; k < 4; ++k) {
-                    corners[k]     = nearC[k] + (farC[k] - nearC[k]) * fN;
-                    corners[k + 4] = nearC[k] + (farC[k] - nearC[k]) * fF;
-                }
-                Vec3 center = cameraEye_;   // camera-centered fit: stable when turning
-                Real radius = 0.01;
-                for (const Vec3& p : corners) radius = std::max(radius, (p - center).length());
-                radius = std::ceil(radius * 16.0) / 16.0;
-
-                Real pullback = radius + 50.0;
-                Real texelWorld = (radius * 2.0) / static_cast<Real>(kShadowMapSize);
-                Mat4 lightView = Mat4::lookAt(center + sunDir_ * pullback, center, up);
-                Vec3 centerLS = lightView.transformPoint(center);
-                centerLS.x = std::round(centerLS.x / texelWorld) * texelWorld;
-                centerLS.y = std::round(centerLS.y / texelWorld) * texelWorld;
-                Vec3 snapped = lightView.inverse().transformPoint(centerLS);
-
-                lightView = Mat4::lookAt(snapped + sunDir_ * pullback, snapped, up);
-                Mat4 lightProj = Mat4::orthographic(radius * 2.0, 1.0, 0.1, pullback + radius);
-                packMat4(lightProj * lightView, globals_.cascadeVP[c]);
-                globals_.cascadeSplit[c] = static_cast<float>(zFar);
-                cascadeCullView[c] = lightView;
-                cascadeCullRadius[c] = radius;
-            }
-            activeCascades_ = cc;
-            globals_.counts[3] = cc;
-            globals_.shadowParams[0] = 1.0f;
-            globals_.shadowParams[1] = shadowDepthBias_;
-            globals_.shadowParams[2] = shadowNormalBias_;
-            globals_.shadowParams[3] = shadowPcf_;
-        } else {
+        if (!shadowOn_) {
             globals_.counts[3] = 0;
             globals_.shadowParams[0] = 0.0f;
+            return;
         }
+        CascadeFitInput in;
+        in.camViewProj = camVP_;
+        in.cameraEye = cameraEye_;
+        in.sunDir = sunDir_;
+        in.camNear = camNear_;
+        in.camFar = camFar_;
+        in.shadowDistance = static_cast<Real>(shadowDistance_);
+        in.splitLambda = shadowParams.splitLambda;
+        in.cascadeCount = shadowCascadeCount_;
+        in.shadowMapSize = kShadowMapSize;
+        CascadeFit fits[4];
+        int cc = computeCascadeFits(in, fits);
+        for (int c = 0; c < cc; ++c) {
+            packMat4(fits[c].viewProj, globals_.cascadeVP[c]);
+            globals_.cascadeSplit[c] = static_cast<float>(fits[c].splitFar);
+            plan.cascadeCullView[c] = fits[c].lightView;
+            plan.cascadeCullRadius[c] = fits[c].radius;
+        }
+        activeCascades_ = cc;
+        globals_.counts[3] = cc;
+        globals_.shadowParams[0] = 1.0f;
+        globals_.shadowParams[1] = shadowDepthBias_;
+        globals_.shadowParams[2] = shadowNormalBias_;
+        globals_.shadowParams[3] = shadowPcf_;
+    }
 
+    // Wind clock, scene globals upload, the material/mesh draw sort, the
+    // strided per-draw uniform staging, and the instance-model upload.
+    void uploadFrameData(FramePlan& plan) {
         // Wind clock (ambient.w): a monotonic time for FLAG_WIND vertex sway.
         // Advance by real elapsed time — rAF runs at the display rate (60/120/144
         // Hz, or throttled), so a fixed 1/60 step would tie sway speed to fps.
@@ -847,8 +873,8 @@ public:
         // draws, at slots [draws_.size() .. draws_.size()+instancedGroups_.size()).
         // Slot layout in the dynamic draw buffer: regular draws, then instanced
         // group materials, then terrain draws.
-        const size_t terrainBase = draws_.size() + instancedGroups_.size();
-        size_t totalSlots = terrainBase + terrainDraws_.size();
+        plan.terrainBase = draws_.size() + instancedGroups_.size();
+        size_t totalSlots = plan.terrainBase + terrainDraws_.size();
         ensureDrawCapacity(totalSlots);
 
         if (totalSlots > 0) {
@@ -865,7 +891,7 @@ public:
                 std::memcpy(staging + (draws_.size() + i) * kDrawStride,
                             &instancedGroups_[i].data, sizeof(GpuDraw));
             for (size_t i = 0; i < terrainDraws_.size(); ++i)
-                std::memcpy(staging + (terrainBase + i) * kDrawStride,
+                std::memcpy(staging + (plan.terrainBase + i) * kDrawStride,
                             &terrainDraws_[i].data, sizeof(GpuDraw));
             wgpuQueueWriteBuffer(queue_, drawBuf_, 0, staging, totalSlots * kDrawStride);
         }
@@ -885,26 +911,30 @@ public:
                                  instanceStaging_.size() * sizeof(float));
         }
 
-        WGPUSurfaceTexture surfaceTexture = {};
-        wgpuSurfaceGetCurrentTexture(surface_, &surfaceTexture);
-        if (!frameDiagLogged_) {
-            frameDiagLogged_ = true;
-            LOG_INFO("WebGPU frame0: %zu draws, status=%d, %dx%d, shadow=%d dist=%.0f, lights=%d",
-                     draws_.size(), static_cast<int>(surfaceTexture.status),
-                     width_, height_, shadowOn_ ? 1 : 0, shadowDistance_, globals_.counts[0]);
-        }
-        if (!surfaceTexture.texture) {
-            LOG_WARN("WebGPU: no current surface texture this frame");
-            return;
-        }
-        WGPUTextureView backbuffer = wgpuTextureCreateView(surfaceTexture.texture, nullptr);
+    }
 
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, nullptr);
+    // Which post passes actually run this frame (zero-strength = off), and
+    // whether the main pass needs to store depth + G-buffer at all.
+    void planPostEffects(FramePlan& plan) {
+        // Which post passes actually run this frame — decided up front so the
+        // main pass can skip storing attachments nothing will read. Zero-strength
+        // effects are treated as off (their passes would render into targets the
+        // composite multiplies by 0).
+        plan.ssaoOn = ssaoEnabled && globals_.counts[1] == 0 && ssaoParams.intensity > 0.0f;
+        plan.ssaoForDebug = globals_.counts[1] == 1;   // AO debug view shows AO even if disabled
+        plan.ssrOn = ssrEnabled && globals_.counts[1] == 0 && ssrParams.blendStrength > 0.0f;
+        plan.bloomOn = bloomEnabled && globals_.counts[1] == 0 && bloomParams.intensity > 0.0f;
+        // Depth + G-buffer are only ever sampled by SSAO/SSR; when neither runs,
+        // Discard skips the attachment writeback (a real win on tiler GPUs).
+        plan.needGbuf = plan.ssaoOn || plan.ssaoForDebug || plan.ssrOn;
 
+    }
+
+    // Depth-only sun passes, one per cascade, with per-cascade caster culling.
+    void recordShadowPasses(WGPUCommandEncoder encoder, FramePlan& plan) {
         // Cascaded shadow depth passes (sun): one depth pass per cascade layer,
         // before the main pass. The cascade index rides shadowIdxGroup_ via a
         // dynamic offset; vs_shadow uses it to pick cascadeVP[c].
-        size_t shadowCulled = 0, shadowConsidered = 0;
         if (shadowOn_ && (!draws_.empty() || !instancedGroups_.empty() || !terrainDraws_.empty())) {
             for (int c = 0; c < activeCascades_; ++c) {
                 // Caster culling: skip draws whose world sphere misses this
@@ -913,8 +943,8 @@ public:
                 // Near cascades have small XY extents, so this drops most of the
                 // scene from cascade 0/1. Instanced groups are not culled (no
                 // per-instance bounds).
-                const Mat4& cullView = cascadeCullView[c];
-                const Real cullR = cascadeCullRadius[c];
+                const Mat4& cullView = plan.cascadeCullView[c];
+                const Real cullR = plan.cascadeCullRadius[c];
                 auto casterVisible = [&](const Vec3& wc, Real wr) {
                     Vec3 p = cullView.transformPoint(wc);
                     return std::abs(p.x) <= cullR + wr && std::abs(p.y) <= cullR + wr;
@@ -940,9 +970,9 @@ public:
                 for (size_t i = 0; i < draws_.size(); ++i) {
                     const GpuMesh& m = meshes_[draws_[i].mesh];
                     if (!m.vertexBuffer) continue;   // removed mid-frame
-                    ++shadowConsidered;
+                    ++plan.shadowConsidered;
                     if (!casterVisible(draws_[i].wCenter, draws_[i].wRadius)) {
-                        ++shadowCulled;
+                        ++plan.shadowCulled;
                         continue;
                     }
                     uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
@@ -980,12 +1010,12 @@ public:
                     for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                         const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
                         if (!m.vertexBuffer) continue;   // removed mid-frame
-                        ++shadowConsidered;
+                        ++plan.shadowConsidered;
                         if (!casterVisible(m.bounds.center, m.bounds.radius)) {
-                            ++shadowCulled;
+                            ++plan.shadowCulled;
                             continue;
                         }
-                        uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
+                        uint32_t dynOffset = static_cast<uint32_t>((plan.terrainBase + i) * kDrawStride);
                         wgpuRenderPassEncoderSetBindGroup(spass, 0, bindGroup_, 1, &dynOffset);
                         wgpuRenderPassEncoderSetVertexBuffer(spass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                         wgpuRenderPassEncoderSetIndexBuffer(spass, m.indexBuffer, WGPUIndexFormat_Uint32,
@@ -998,18 +1028,11 @@ public:
             }
         }
 
-        // Which post passes actually run this frame — decided up front so the
-        // main pass can skip storing attachments nothing will read. Zero-strength
-        // effects are treated as off (their passes would render into targets the
-        // composite multiplies by 0).
-        bool ssaoOn = ssaoEnabled && globals_.counts[1] == 0 && ssaoParams.intensity > 0.0f;
-        bool ssaoForDebug = globals_.counts[1] == 1;   // AO debug view shows AO even if disabled
-        bool ssrOn = ssrEnabled && globals_.counts[1] == 0 && ssrParams.blendStrength > 0.0f;
-        bool bloomOn = bloomEnabled && globals_.counts[1] == 0 && bloomParams.intensity > 0.0f;
-        // Depth + G-buffer are only ever sampled by SSAO/SSR; when neither runs,
-        // Discard skips the attachment writeback (a real win on tiler GPUs).
-        bool needGbuf = ssaoOn || ssaoForDebug || ssrOn;
+    }
 
+    // Sky + lit geometry (regular, instanced, terrain) into the HDR target +
+    // G-buffer MRT, with sorted-state bind skipping.
+    void recordMainPass(WGPUCommandEncoder encoder, const FramePlan& plan) {
         WGPURenderPassColorAttachment colorAtt[2] = {};
         colorAtt[0].view = hdrView_;   // scene -> HDR target; composite -> swapchain
         colorAtt[0].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
@@ -1019,13 +1042,13 @@ public:
         colorAtt[1].view = gbufView_;  // material G-buffer (normal, roughness)
         colorAtt[1].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
         colorAtt[1].loadOp = WGPULoadOp_Clear;
-        colorAtt[1].storeOp = needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
+        colorAtt[1].storeOp = plan.needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
         colorAtt[1].clearValue = {0.0, 0.0, 0.0, 1.0};
 
         WGPURenderPassDepthStencilAttachment depth = {};
         depth.view = depthView_;
         depth.depthLoadOp = WGPULoadOp_Clear;
-        depth.depthStoreOp = needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
+        depth.depthStoreOp = plan.needGbuf ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
         depth.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor passDesc = {};
@@ -1111,7 +1134,7 @@ public:
             for (size_t i = 0; i < terrainDraws_.size(); ++i) {
                 const GpuMesh& m = meshes_[terrainDraws_[i].mesh];
                 if (!m.vertexBuffer) continue;   // removed mid-frame
-                uint32_t dynOffset = static_cast<uint32_t>((terrainBase + i) * kDrawStride);
+                uint32_t dynOffset = static_cast<uint32_t>((plan.terrainBase + i) * kDrawStride);
                 wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
                 bindMaterial(terrainDraws_[i].mat);
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
@@ -1131,11 +1154,15 @@ public:
             LOG_INFO("WebGPU binds: %zu draws -> %zu material binds, %zu mesh binds; "
                      "shadow casters culled %zu/%zu (across %d cascades)",
                      draws_.size(), matBinds, meshBinds,
-                     shadowCulled, shadowConsidered, activeCascades_);
+                     plan.shadowCulled, plan.shadowConsidered, activeCascades_);
         }
 
+    }
+
+    // Screen-space effects reading the main pass outputs: SSAO, SSR, bloom.
+    void recordPostStack(WGPUCommandEncoder encoder, const FramePlan& plan) {
         // SSAO: reconstruct from the just-written depth into the AO target.
-        if (ssaoOn || ssaoForDebug) {
+        if (plan.ssaoOn || plan.ssaoForDebug) {
             GpuSsao us = {};
             std::memcpy(us.invViewProjection, globals_.invViewProjection, sizeof(us.invViewProjection));
             std::memcpy(us.viewProjection, globals_.viewProjection, sizeof(us.viewProjection));
@@ -1167,7 +1194,7 @@ public:
         }
 
         // SSR: reflect the HDR color off the G-buffer into the SSR target.
-        if (ssrOn) {
+        if (plan.ssrOn) {
             GpuSsr ur = {};
             std::memcpy(ur.invViewProjection, globals_.invViewProjection, sizeof(ur.invViewProjection));
             std::memcpy(ur.viewProjection, globals_.viewProjection, sizeof(ur.viewProjection));
@@ -1200,7 +1227,7 @@ public:
 
         // Bloom: bright-pass (HDR -> bloomA) then a separable blur (A->B->A).
         // Only when enabled and not in a debug view (debug bypasses post).
-        if (bloomOn) {
+        if (plan.bloomOn) {
             GpuBloom ub = {};
             ub.params[0] = bloomParams.threshold;
             ub.params[1] = bloomParams.knee;
@@ -1233,6 +1260,11 @@ public:
             bloomPass(bloomViewA_, bloomBlurPipeline_, bloomBlurVGroup_);     // B -> A (V)
         }
 
+    }
+
+    // Tone map / grade the HDR scene (+ AO/SSR/bloom) onto the swapchain.
+    void recordComposite(WGPUCommandEncoder encoder, WGPUTextureView backbuffer,
+                         const FramePlan& plan) {
         // Composite the HDR target to the swapchain (view transform / post).
         GpuPost post = {};
         post.postParams[0] = globals_.postParams[0];
@@ -1240,9 +1272,9 @@ public:
         post.postParams[2] = globals_.postParams[2];
         post.postParams[3] = globals_.postParams[3];
         post.debugView[0] = globals_.counts[1];
-        post.effects[0] = bloomOn ? bloomParams.intensity : 0.0f;
-        post.effects[1] = ssaoOn ? 1.0f : 0.0f;   // SSAO strength (0..1)
-        post.effects[2] = ssrOn ? ssrParams.blendStrength : 0.0f;
+        post.effects[0] = plan.bloomOn ? bloomParams.intensity : 0.0f;
+        post.effects[1] = plan.ssaoOn ? 1.0f : 0.0f;   // SSAO strength (0..1)
+        post.effects[2] = plan.ssrOn ? ssrParams.blendStrength : 0.0f;
         wgpuQueueWriteBuffer(queue_, postBuf_, 0, &post, sizeof(post));
 
         WGPURenderPassColorAttachment ccolor = {};
@@ -1261,18 +1293,8 @@ public:
         wgpuRenderPassEncoderEnd(cpass);
         wgpuRenderPassEncoderRelease(cpass);
 
-        WGPUCommandBuffer commands = wgpuCommandEncoderFinish(encoder, nullptr);
-        wgpuQueueSubmit(queue_, 1, &commands);
-
-        wgpuCommandBufferRelease(commands);
-        wgpuCommandEncoderRelease(encoder);
-        wgpuTextureViewRelease(backbuffer);
-        wgpuTextureRelease(surfaceTexture.texture);
-        // The browser presents automatically after the queue work resolves;
-        // there is no wgpuSurfacePresent on the web.
     }
 
-private:
     struct GpuMesh {
         WGPUBuffer vertexBuffer = nullptr;
         WGPUBuffer indexBuffer = nullptr;
