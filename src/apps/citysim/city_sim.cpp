@@ -130,6 +130,11 @@ Real CitySim::pairMinGap(int follower, int leader) const {
     return 0.5 * vehicleLength(follower) + 0.5 * vehicleLength(leader) + kCarBumperGap;
 }
 
+Real CitySim::junctionRadius(int node) const {
+    if (node < 0 || node >= static_cast<int>(nodeBoxRadius_.size())) return 0;
+    return nodeBoxRadius_[node];
+}
+
 bool CitySim::nearJunction(Vec2 pos, Real margin) const {
     for (const auto& j : junctions_) {
         Real r = j.second + margin;
@@ -191,14 +196,17 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     const int n = graph.nodeCount();
     if (n == 0) return;
 
-    // Junction boxes (centre + radius = widest incident half-width): the bridge's
-    // don't-block-the-box and spawn-placement checks read these.
+    // Per-node box radius (widest incident half-width) — every junction rule and
+    // the launch clearance read this via junctionRadius(). Junction boxes (centre
+    // + radius) additionally feed the bridge's don't-block-the-box and
+    // spawn-placement checks (nearJunction).
     junctions_.clear();
+    nodeBoxRadius_.assign(n, 0.0);
     for (int v = 0; v < n; ++v) {
-        if (!graph.isJunction(v)) continue;
         Real r = 0;
         for (int li : graph.outLinks[v]) r = std::max(r, graph.links[li].width * 0.5);
-        junctions_.push_back({graph.nodes[v], r});
+        nodeBoxRadius_[v] = r;
+        if (graph.isJunction(v)) junctions_.push_back({graph.nodes[v], r});
     }
 
     const int total = driverCount + pedCount;
@@ -333,9 +341,7 @@ bool CitySim::launchClear(const Agent& a, int node) const {
     // start at the node PLUS the junction-origin box skip (jr + 2 m down the
     // first link) — a 5 m check let a second car spawn exactly on a first one
     // that had been skipped 6 m out.
-    Real jr = 0;
-    for (int out : nav_->outLinks[node]) jr = std::max(jr, nav_->links[out].width * 0.5);
-    Real clear = jr + 2.0 + 6.0;
+    Real clear = junctionRadius(node) + 2.0 + 6.0;
     for (const Agent& b : agents_) {
         if (&b == &a || b.mode != Agent::Mode::Driver) continue;
         if (!b.moving || b.released) continue;
@@ -375,11 +381,8 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     // first link, past the box — materializing a parked car among crossing
     // traffic spawned collisions the crash rule then locked in place.
     if (fromRest && a.mode == Agent::Mode::Driver && nav_->isJunction(origin)) {
-        Real jr = 0;
-        for (int out : nav_->outLinks[origin])
-            jr = std::max(jr, nav_->links[out].width * 0.5);
         Real L0 = nav_->links[a.route.links.front()].length;
-        a.distOnLeg = std::min(jr + 2.0, L0 * 0.4);
+        a.distOnLeg = std::min(junctionRadius(origin) + 2.0, L0 * 0.4);
     }
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
@@ -486,13 +489,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     Real stopSetback = 0.5;
     int toNode = nav_->links[li].to;
     if (car && nav_->isJunction(toNode)) {
-        Real jr = 0;
-        for (int out : nav_->outLinks[toNode])
-            jr = std::max(jr, nav_->links[out].width * 0.5);
         Real halfLen = 2.1;   // sedan fallback
         if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
             halfLen = vehicles_[a.vehicle].length * 0.5;
-        stopSetback = jr + kCrosswalkFarEdge + kStopLineMargin + halfLen;
+        stopSetback = junctionRadius(toNode) + kCrosswalkFarEdge + kStopLineMargin +
+                      halfLen;
     }
     // The ONE effective stop line every junction rule agrees on: the setback
     // short of the node, but never behind the link start — a link shorter than
@@ -547,9 +548,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 turning = true;
             }
             Vec2 jc = nav_->nodes[toNode];
-            Real jr = 0;
-            for (int out : nav_->outLinks[toNode])
-                jr = std::max(jr, nav_->links[out].width * 0.5);
+            Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
             for (const Agent& b : agents_) {
                 if (&b == &a || b.mode != Agent::Mode::Driver) continue;

@@ -255,6 +255,10 @@ private:
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     void computeGaps();
+    // Per-node junction box radius: the widest incident half-width. Nonzero at
+    // PLAIN nodes too (their road's half-width) — launchClear reads it at
+    // arbitrary departure nodes; 0 only where a node has no out-links.
+    Real junctionRadius(int node) const;
     Real vehicleLength(int agentIndex) const;      // body length, or a ped's footprint
     Real pairMinGap(int follower, int leader) const;   // bumper-to-bumper follow gap
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
@@ -274,6 +278,7 @@ private:
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
+    std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width
     SignalController signals_;
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
