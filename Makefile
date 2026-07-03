@@ -105,6 +105,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_hierarchy.cpp \
 	$(TEST_DIR)/test_job_system.cpp \
 	$(TEST_DIR)/test_frustum.cpp \
+	$(TEST_DIR)/test_cascade_fit.cpp \
 	$(TEST_DIR)/test_fall_respawn.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
 	$(TEST_DIR)/test_cube_faces.cpp \
