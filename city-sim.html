@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<!--
+  "How the city thinks" — an educational tour of the citysim's agent AI for a
+  technical hobbyist. Self-contained: no external scripts or fonts (the inline
+  SVG diagram keeps it dependency-free). Facts and constants come from
+  docs/decisions.md ADR-0060..0063 — keep them in sync with the code.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How the City Thinks — Raytracer Engine</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    a { color: #8ec5ff; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h2 { font-size: 19px; margin: 34px 0 10px; color: #bcd; }
+    .lede { color: #9fb4c9; font-size: 15px; margin: 0; }
+    .nav { margin-bottom: 8px; font-size: 14px; }
+    p, li { color: #c6d4e2; font-size: 15px; }
+    code { background: #131c27; border: 1px solid #22303f; border-radius: 5px;
+      padding: 1px 5px; font: 13px ui-monospace, monospace; color: #b9e0ff; }
+    .diagram { margin: 20px 0 8px; background: #0a0e14; border: 1px solid #1f2a37;
+      border-radius: 12px; padding: 12px; overflow-x: auto; }
+    .cap { color: #7f93a8; font-size: 13px; margin: 0 0 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 14px; }
+    .grid .b { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px; padding: 13px 15px; }
+    .grid .b h3 { margin: 0 0 6px; font-size: 15px; color: #cfe4ff; }
+    .grid .b p { margin: 0 0 8px; font-size: 13.5px; color: #93a6ba; }
+    .grid .b p:last-child { margin-bottom: 0; }
+    .grid .b b { color: #b9cde2; }
+    footer { margin-top: 40px; color: #64768a; font-size: 13px; }
+    .ring { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      margin-right: 6px; vertical-align: baseline; }
+    .layers { margin: 18px 0 6px; }
+    .layers .l { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px;
+      padding: 13px 16px; margin-bottom: 10px; }
+    .layers .l h3 { margin: 0 0 5px; font-size: 15px; color: #cfe4ff; }
+    .layers .l p { margin: 0; font-size: 14px; color: #9db0c4; }
+    .layers .l .tag { display: inline-block; font-size: 10.5px; font-weight: 800;
+      letter-spacing: .8px; text-transform: uppercase; color: #8ec5ff;
+      background: #0c2036; border: 1px solid #235a7a; border-radius: 5px;
+      padding: 2px 7px; margin-left: 8px; vertical-align: 2px; }
+    .try { margin: 22px 0 6px; padding: 16px 18px; border-radius: 12px;
+      background: linear-gradient(135deg, #10233a, #14182a);
+      border: 1px solid #2f6a86; }
+    .try p { margin: 0 0 8px; color: #d8e6f5; font-size: 15px; }
+    .try p:last-child { margin-bottom: 0; }
+    kbd { background: #1a2634; border: 1px solid #2c3d50; border-bottom-width: 2px;
+      border-radius: 5px; padding: 1px 7px; font: 13px ui-monospace, monospace; color: #cfe4ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="index.html">← all scenes</a> ·
+      <a href="about.html">about the engine</a></div>
+    <h1>How the City Thinks</h1>
+    <p class="lede">The living-world scenes are full of cars and pedestrians that
+      commute, queue at red lights, yield to each other, and occasionally
+      fender-bender. Here is the machinery behind that — no machine learning,
+      just perception, memory, and a few honest rules.</p>
+
+    <h2>The layer cake: three altitudes of decision</h2>
+    <p>Every agent — a driver or a walker — is a stack of three layers, each
+      answering a different question. The split is the load-bearing design
+      decision of the whole sim.</p>
+    <div class="layers">
+      <div class="l">
+        <h3>Strategic — where am I going?<span class="tag">route</span></h3>
+        <p>An A* search over the <b>NavGraph</b> — the directed lane graph derived
+          from the procedural road network — produces a lane-accurate route for
+          the current trip (a commute on a daily schedule, or a perpetual random
+          wander in the lab level). This layer is just data: a polyline of lane
+          centrelines to travel.</p>
+      </div>
+      <div class="l">
+        <h3>Tactical — what do I do right now?<span class="tag">the agent</span></h3>
+        <p>Perception + memory + a small state machine decide, on a slow think
+          cadence, a target speed along that route: stop at the line, follow the
+          leader, slow into the turn, yield to the person about to cross. This
+          layer <b>is</b> the agent. It never touches a physics engine, which is
+          why it runs identically headless in the test suite.</p>
+      </div>
+      <div class="l">
+        <h3>Motor — who moves the body?<span class="tag">one authority per regime</span></h3>
+        <p><b>Ambient traffic</b> (the default) is integrated directly by the
+          planner: position&nbsp;=&nbsp;path(s), s&nbsp;+=&nbsp;v·dt — drawn as
+          instanced meshes, collided via kinematic proxies. <b>Interactive
+          cars</b> are promoted: when you commandeer an ambient car, the sim
+          releases its agent and a real Jolt physics vehicle with the same body
+          spawns in its place, driven through the same
+          <code>{throttle, steer, brake}</code> seam the player uses.</p>
+      </div>
+    </div>
+    <p>The "one motion authority per regime" rule came from pain. An earlier
+      design gave every ambient car <em>two</em> clocks — a kinematic planner
+      ghost marching on rails and a physics body trying to chase it — and every
+      fix was another reconciliation loop between them. Pedestrians, whose bodies
+      simply execute what the plan proposes, worked all along. So each regime now
+      has exactly one owner of motion: the planner for ambient traffic, physics
+      for anything the player touches. This is also how ambient traffic works in
+      shipped open-world games, for the same reason.</p>
+
+    <h2>The cognition loop</h2>
+    <p class="cap">Every thinking agent runs the same five-stage cycle; each
+      stage is a small pure primitive in <code>engine/ai</code>.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 780 350" width="100%" role="img"
+           aria-label="The cognition loop: sense, remember, predict, decide, act, and back to sense"
+           font-family="system-ui, sans-serif">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#3b6ea5"/>
+          </marker>
+          <style>
+            .box{rx:9;stroke-width:1.5}
+            .lbl{fill:#dfe9f3;font-size:13px;font-weight:600;text-anchor:middle}
+            .sub{fill:#8fa6bd;font-size:11px;text-anchor:middle}
+            .edge{stroke:#3b6ea5;stroke-width:1.6;fill:none;marker-end:url(#ar)}
+          </style>
+        </defs>
+
+        <!-- Sense (top centre) -->
+        <rect class="box" x="290" y="16" width="200" height="52" fill="#153042" stroke="#2f6a86"/>
+        <text class="lbl" x="390" y="38">1 · Sense</text>
+        <text class="sub" x="390" y="56">2.5D vision cone (wedge + height band)</text>
+
+        <!-- Remember (right) -->
+        <rect class="box" x="550" y="130" width="212" height="52" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="656" y="152">2 · Remember</text>
+        <text class="sub" x="656" y="170">tracks + velocity estimates, 4 s memory</text>
+
+        <!-- Predict (bottom right) -->
+        <rect class="box" x="430" y="270" width="212" height="52" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="536" y="292">3 · Predict</text>
+        <text class="sub" x="536" y="310">closest approach / time-to-collision</text>
+
+        <!-- Decide (bottom left) -->
+        <rect class="box" x="138" y="270" width="200" height="52" fill="#122033" stroke="#284563"/>
+        <text class="lbl" x="238" y="292">4 · Decide</text>
+        <text class="sub" x="238" y="310">commitment with hysteresis</text>
+
+        <!-- Act (left) -->
+        <rect class="box" x="20" y="130" width="200" height="52" fill="#1a2a1f" stroke="#356b45"/>
+        <text class="lbl" x="120" y="152">5 · Act</text>
+        <text class="sub" x="120" y="170">speed along the lane</text>
+
+        <!-- cycle edges -->
+        <path class="edge" d="M492 60 C 560 78, 610 98, 642 126"/>
+        <path class="edge" d="M646 184 C 630 216, 606 244, 580 266"/>
+        <path class="edge" d="M428 296 L 342 296"/>
+        <path class="edge" d="M192 266 C 166 244, 144 216, 128 186"/>
+        <path class="edge" d="M132 126 C 168 96, 222 74, 286 56"/>
+      </svg>
+    </div>
+    <ul>
+      <li><b>Sense.</b> A flat vision wedge in the ground plane plus a height
+        band — 2.5D, because the city is grade-separated: a car crossing an
+        overpass 5.8&nbsp;m up must not read as "in front of me". Perception is
+        imperfect by design: below reliability 1.0 an agent occasionally misses
+        a sighting, deterministically from its seed.</li>
+      <li><b>Remember.</b> Sightings become <em>tracks</em> with smoothed
+        velocity estimates (successive sightings differenced + an EMA — a poor
+        man's Kalman). A track decays over 4 seconds and, while unseen,
+        extrapolates along its velocity: object permanence. A cap of 32 tracks
+        (~1.5&nbsp;KB per agent) evicts the weakest.</li>
+      <li><b>Predict.</b> Constant-velocity closest-approach and disc-collision
+        time from the tracked velocities. Dot products, not ML — a driver brakes
+        when a predicted collision is less than 2 seconds away, which means it
+        eases off <em>before</em> the crosser is in the lane, and keeps yielding
+        about 3 seconds after losing sight of them.</li>
+      <li><b>Decide.</b> A utility choice with hysteresis: the incumbent option
+        keeps its seat unless a challenger beats it by a clear margin <em>and</em>
+        a minimum hold has elapsed; an emergency (imminent collision) preempts
+        instantly. Near-tied scores can flip forever without the behaviour ever
+        flapping. Decisions are made on a slow, per-agent-staggered think clock
+        (0.35&nbsp;s) and held between thinks — a held answer reads as intent,
+        a new answer every 100&nbsp;ms reads as wigging out.</li>
+      <li><b>Act.</b> The motor layer above: planner integration for ambient
+        agents, the physics driver seam for promoted ones.</li>
+    </ul>
+
+    <h2>Drivers vs pedestrians</h2>
+    <div class="grid">
+      <div class="b">
+        <h3>Drivers</h3>
+        <p><b>Sees:</b> a narrow forward cone — 18&nbsp;m range, 0.45&nbsp;rad
+          (~26°) to each side: a crosser in the lane ahead, not someone on the
+          far sidewalk. Deliberately does <em>not</em> treat other moving cars as
+          cone obstacles — car-vs-car is handled by lanes, length-aware
+          car-following, and the signals (braking for every car in a wide cone
+          deadlocked junctions).</p>
+        <p><b>Thinks:</b> senses every tick; re-decides on the 0.35&nbsp;s think
+          cadence. Personality: a per-agent pace factor in [0.85,&nbsp;1.15]
+          derived from the brain seed's bits, so the fleet doesn't move in
+          lockstep.</p>
+        <p><b>Yields to:</b> people (remembered tracks predicted into its
+          corridor), red signals at a set-back stop line, the junction box, and
+          oncoming traffic when turning.</p>
+        <p><b>Ring colours:</b>
+          <span class="ring" style="background:#26e640"></span>green cruising ·
+          <span class="ring" style="background:#1aa6b3"></span>teal following ·
+          <span class="ring" style="background:#ff8c14"></span>amber yielding ·
+          <span class="ring" style="background:#b359f2"></span>violet turning ·
+          <span class="ring" style="background:#ff1a14"></span>red held.</p>
+      </div>
+      <div class="b">
+        <h3>Pedestrians</h3>
+        <p><b>Sees:</b> a short, wide cone — 4.5&nbsp;m range, 1.2&nbsp;rad
+          (~69°) to each side: peripheral vision for a body that turns easily —
+          plus 360° separation from anyone standing close.</p>
+        <p><b>Thinks:</b> senses at think cadence (successive sightings a think
+          apart are exactly what feeds the velocity estimator) and leans away
+          from where each remembered neighbour <em>will be</em> 0.4&nbsp;s from
+          now, so two approaching walkers part early instead of flinching late.</p>
+        <p><b>Yields to:</b> signals at the corner (walkers hold at the kerb, not
+          a stop line), other walkers, signal poles, and the player — who gets a
+          wide hard berth so near-misses read as step-arounds.</p>
+        <p><b>Ring colours:</b>
+          <span class="ring" style="background:#26e640"></span>green walking ·
+          <span class="ring" style="background:#ff8c14"></span>amber avoiding ·
+          <span class="ring" style="background:#ff1a14"></span>red held (waiting
+          at a crossing, or physically blocked).</p>
+      </div>
+    </div>
+
+    <h2>The junction rulebook</h2>
+    <p>Junctions are where flat rules stop being enough, and every rule below
+      exists because its absence produced a visible failure:</p>
+    <ul>
+      <li><b>The stop line is behind the crosswalk.</b> A car holds at the
+        junction-box radius plus the painted zebra band (0.5–3.6&nbsp;m past the
+        mouth) plus a margin plus half its own body length — so the bumper stops
+        short of the crosswalk instead of legally "waiting" in the middle of the
+        intersection looking like a red-light runner.</li>
+      <li><b>Signals: 12&nbsp;s green, then all-red clearance.</b> The cycle is
+        green (12&nbsp;s, time for a few queued turns) → yellow → 2.5&nbsp;s of
+        all-red so the box drains before cross traffic gets its green. A car
+        already past the line when green expires always commits and clears — a
+        clamped mid-box car is a trap for everyone.</li>
+      <li><b>Box occupancy.</b> No car crosses its stop line while a
+        crossing-heading car is inside the box. This is the rule that stopped
+        mid-box wrecks from forming.</li>
+      <li><b>Turn yield.</b> A turning car waits for live oncoming approach
+        traffic, with agent-order right-of-way between two stopped opposing
+        turners — otherwise both yield to each other forever.</li>
+      <li><b>Fender-benders, then recovery.</b> Two cars meeting on a closing
+        course don't ghost through each other: both freeze (red rings), roll
+        their overshoot back out, and resume on staggered per-brain holds so the
+        tangle unwinds. And an <b>escape valve</b>: a car wedged through more
+        than 5 consecutive freezes ignores contact until it drives clear — the
+        tow-truck resolution, since a crossing-path contact can never otherwise
+        resolve without reverse gear.</li>
+    </ul>
+
+    <div class="try">
+      <p><b>Try it.</b> Open
+        <a href="viewer.html?level=agent_lab">the agent lab</a> — a small theta
+        circuit running exactly one driver and one walker with the debug HUD on
+        from boot — or <a href="viewer.html?level=grown">the full grown city</a>
+        with its whole commuting population.</p>
+      <p>Press <kbd>j</kbd> to toggle the agent HUD: footprint rings coloured by
+        the state machine (the colour key above), intent arrows pointing at each
+        agent's current goal, the lane graph they route over, and each agent's
+        vision cone — so you can watch a driver's ring go amber the moment a
+        remembered pedestrian's track crosses its corridor.</p>
+    </div>
+
+    <footer>
+      Source and the full decision log:
+      <a href="https://github.com/glennsong/raytracer-clang">glennsong/raytracer-clang</a>
+      — see <code>docs/decisions.md</code> ADR-0060…0063 for the history behind
+      every rule on this page.
+    </footer>
+  </div>
+</body>
+</html>
