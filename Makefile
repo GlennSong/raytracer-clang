@@ -221,6 +221,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
+	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

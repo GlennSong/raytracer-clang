@@ -113,6 +113,7 @@ add_library(engine_core STATIC
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
+    src/apps/citysim/city_meshes.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
