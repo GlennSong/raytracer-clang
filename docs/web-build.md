@@ -125,6 +125,24 @@ the scene gallery; click a scene (or go straight to
 
 ---
 
+## Proxied / offline environments
+
+If the automatic `emdawnwebgpu` port download 403s (locked-down proxies often
+block GitHub *release assets* while allowing clones), build the package from
+Dawn's source and point the build at it:
+
+```bash
+git clone --depth 1 --branch <pinned tag> https://github.com/google/dawn.git
+# dawn's third_party/abseil-cpp is a submodule; any recent clone satisfies configure
+git clone --depth 1 https://github.com/abseil/abseil-cpp.git dawn/third_party/abseil-cpp
+pip3 install jinja2 markupsafe
+emcmake cmake -S dawn -B dawn-build -DCMAKE_BUILD_TYPE=Release   -DDAWN_BUILD_SAMPLES=OFF -DDAWN_BUILD_TESTS=OFF -DDAWN_FETCH_DEPENDENCIES=OFF   -DTINT_BUILD_TESTS=OFF -DTINT_BUILD_IR_BINARY=OFF -DTINT_BUILD_CMD_TOOLS=OFF
+cmake --build dawn-build --target emdawnwebgpu_pkg
+emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release   "-DRT_EMDAWN_PORT=$(pwd)/dawn-build/emdawnwebgpu_pkg/emdawnwebgpu.port.py"
+```
+
+The pinned tag is in Emscripten's `tools/ports/emdawnwebgpu.py` (`_VERSION`).
+
 ## One-shot rebuild loop
 
 After the initial setup, the day-to-day loop is just:

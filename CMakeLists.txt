@@ -185,7 +185,11 @@ if(RT_ENABLE_SCRIPTING)
     endif()
 
     file(GLOB LUA_SOURCES ${LUA_DIR}/*.c)
-    list(REMOVE_ITEM LUA_SOURCES ${LUA_DIR}/lua.c ${LUA_DIR}/luac.c)
+    # lua.c/luac.c are the standalone interpreter/compiler mains; onelua.c is the
+    # single-file amalgamation that #includes every other .c — leaving it in the
+    # archive defines every Lua symbol twice. Desktop linkers never happened to
+    # pull that member, but wasm-ld does and the web link exploded in duplicates.
+    list(REMOVE_ITEM LUA_SOURCES ${LUA_DIR}/lua.c ${LUA_DIR}/luac.c ${LUA_DIR}/onelua.c)
     add_library(lua_static STATIC ${LUA_SOURCES})
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
@@ -680,6 +684,13 @@ if(EMSCRIPTEN)
             src/engine/systems/physics_system.cpp
             src/engine/systems/player_system.cpp
             src/engine/systems/shooting_system.cpp
+            # The living-world bridges arena_state registers (ADR-0062/0063):
+            # drivable vehicles + the citysim physics/promotion/walker systems.
+            # Same list as the desktop viewer — Jolt compiles to wasm.
+            src/engine/systems/vehicle_system.cpp
+            src/apps/citysim/city_physics.cpp
+            src/apps/citysim/city_vehicles.cpp
+            src/apps/citysim/city_walkers.cpp
         )
     endif()
     # WGSL sources live in shaders/webgpu/*.wgsl; a generated header embeds
