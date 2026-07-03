@@ -42,9 +42,11 @@ fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
   let steps = i32(s.params.z);
   let stepLen = s.params.x / max(f32(steps), 1.0);
   var pos = P + N * 0.05;
+  var prev = pos;                    // last position in front of geometry
   var hitUV = vec2<f32>(0.0);
   var hit = false;
   for (var i = 0; i < steps; i = i + 1) {
+    prev = pos;
     pos = pos + R * stepLen;
     let clip = s.viewProj * vec4<f32>(pos, 1.0);
     if (clip.w <= 0.0) { break; }
@@ -56,7 +58,38 @@ fn fs_ssr(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {
     let sP = reconW(suv, sd);
     let rayDist = length(s.camPos.xyz - pos);
     let sceneDist = length(s.camPos.xyz - sP);
-    if (rayDist > sceneDist && (rayDist - sceneDist) < s.params.y) { hit = true; hitUV = suv; break; }
+    // Accept within thickness + one step: a thinner window misses geometry
+    // that falls between coarse samples and reads as alternating hit/miss
+    // bands (matches ssr.frag).
+    if (rayDist > sceneDist && (rayDist - sceneDist) < s.params.y + stepLen) {
+      // Binary-refine the crossing between the last in-front position and
+      // this behind position (port of ssr.frag's refine loop). The coarse
+      // fixed world-step quantises the hit to step boundaries, which makes a
+      // tall reflection look repeated / laddered ("stripes"); a few
+      // bisections localise it to the true surface.
+      var a = prev;
+      var b = pos;
+      hitUV = suv;
+      for (var j = 0; j < 5; j = j + 1) {
+        let mid = 0.5 * (a + b);
+        let mc = s.viewProj * vec4<f32>(mid, 1.0);
+        if (mc.w <= 0.0) { break; }
+        let mndc = mc.xyz / mc.w;
+        let muv = vec2<f32>(mndc.x * 0.5 + 0.5, 0.5 - mndc.y * 0.5);
+        if (muv.x < 0.0 || muv.x > 1.0 || muv.y < 0.0 || muv.y > 1.0) { break; }
+        let md = textureLoad(depthTex, vec2<i32>(muv * s.texel.zw), 0);
+        if (md >= 1.0) { a = mid; continue; }        // sky: midpoint is in front
+        let mP = reconW(muv, md);
+        if (length(s.camPos.xyz - mid) > length(s.camPos.xyz - mP)) {
+          b = mid;                                   // behind geometry: pull far end in
+          hitUV = muv;
+        } else {
+          a = mid;                                   // in front: pull near end in
+        }
+      }
+      hit = true;
+      break;
+    }
   }
   if (!hit) { return vec4<f32>(0.0); }
   let refl = textureLoad(hdrTex, vec2<i32>(hitUV * s.texel.zw), 0).rgb;
