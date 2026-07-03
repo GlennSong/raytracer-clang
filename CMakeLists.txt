@@ -637,7 +637,23 @@ if(EMSCRIPTEN)
             src/engine/systems/shooting_system.cpp
         )
     endif()
+    # WGSL sources live in shaders/webgpu/*.wgsl; a generated header embeds
+    # them into the backend (no runtime fetch). Regenerates when any .wgsl or
+    # the embed script changes.
+    file(GLOB RT_WGSL_SOURCES ${CMAKE_SOURCE_DIR}/shaders/webgpu/*.wgsl)
+    set(RT_WGSL_GEN ${CMAKE_BINARY_DIR}/generated/webgpu_shaders_gen.h)
+    add_custom_command(OUTPUT ${RT_WGSL_GEN}
+        COMMAND ${CMAKE_COMMAND}
+                -DSHADER_DIR=${CMAKE_SOURCE_DIR}/shaders/webgpu
+                -DOUT=${RT_WGSL_GEN}
+                -P ${CMAKE_SOURCE_DIR}/cmake/embed_wgsl.cmake
+        DEPENDS ${RT_WGSL_SOURCES} ${CMAKE_SOURCE_DIR}/cmake/embed_wgsl.cmake
+        COMMENT "Embedding WGSL shaders")
+    add_custom_target(webgpu_shaders DEPENDS ${RT_WGSL_GEN})
+
     add_executable(viewer_web ${WEB_SOURCES})
+    add_dependencies(viewer_web webgpu_shaders)
+    target_include_directories(viewer_web PRIVATE ${CMAKE_BINARY_DIR}/generated)
     if(RT_ENABLE_PHYSICS)
         target_link_libraries(viewer_web PRIVATE Jolt)
         target_compile_definitions(viewer_web PRIVATE RT_ENABLE_PHYSICS=1)
