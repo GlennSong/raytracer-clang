@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/ai/perception.h"
 #include "../src/engine/procgen/city/road_network.h"
@@ -12,14 +13,8 @@ using namespace engine;
 using namespace citysim;
 
 namespace {
-NavGraph cityNav() {
-    GridRoadParams p;
-    p.extent = 180;
-    p.cellSize = 45;
-    p.dropout = 0.0;
-    p.seed = 4;
-    return buildNavGraph(gridRoads(p));
-}
+// This file's grid town (city_test_util.h cityNav, historical dimensions/seed).
+NavGraph cityNav() { return citytest::cityNav(180, 45, 4); }
 }  // namespace
 
 TEST_CASE(pedestrians_walk_around_static_poles) {

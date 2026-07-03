@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_network.h"
@@ -9,21 +10,10 @@ using namespace citysim;
 
 namespace {
 
-// A 4-way cross with long arms: routes between arms all cross the centre
-// junction, so a busy run piles cars into one conflict point — exactly where a
-// naive "brake for everything you see" rule deadlocks.
-NavGraph cross4(Real arm) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)},
-                {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
+// cross4 (city_test_util.h) with long arms: a busy run piles cars into the one
+// centre conflict point — exactly where a naive "brake for everything you see"
+// rule deadlocks.
+using citytest::cross4;
 
 // Count how many times any car completes a trip (arrives at work or home) over
 // the run. A gridlocked sim produces almost none; flowing traffic produces many.

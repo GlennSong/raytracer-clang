@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -11,20 +12,9 @@ using namespace citysim;
 
 namespace {
 
-// 4-way cross: routing between perpendicular arms forces a 90-degree turn
-// through the centre junction, exercising the steering arc.
-NavGraph cross4(Real arm) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)},
-                {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
+// cross4 (city_test_util.h): routing between perpendicular arms forces a
+// 90-degree turn through the centre junction, exercising the steering arc.
+using citytest::cross4;
 
 // Y junction: three arms at 0/120/240 deg around centre node 0. No two arms are
 // collinear, so EVERY route between distinct arm tips bends ~60 deg at the

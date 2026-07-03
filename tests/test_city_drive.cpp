@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -16,12 +17,8 @@ using namespace citysim;
 
 namespace {
 
-NavGraph straightRoad(Real len) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(len, 0)} };
-    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    return buildNavGraph(g);
-}
+using citytest::straightRoad;   // an open road: no junctions between the tests
+                                // and the pursuit path / tether behaviour
 
 // Step until some driver agent is moving; returns its index (or -1).
 int firstMovingDriver(CitySim& sim, int maxSteps = 4000) {

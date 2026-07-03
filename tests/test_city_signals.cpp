@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -8,20 +9,9 @@ using namespace citysim;
 
 namespace {
 
-// A 4-way cross with long arms: centre node 0 is a junction; arm tips 1..4.
-// buildNavGraph makes each edge two-way, so routes between arms cross the centre.
-NavGraph cross4(Real arm) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)},
-                {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
+// cross4 (city_test_util.h): every route between arms crosses the signalled
+// centre, so red phases really hold traffic on each approach.
+using citytest::cross4;
 
 // Is agent `a` halted (speed ~0) at a red light's stop line? A walker holds at
 // the corner; a car's line is SET BACK before the painted crosswalk band

@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -16,28 +17,12 @@ using namespace citysim;
 
 namespace {
 
-NavGraph cross4(Real arm) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)},
-                {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
-
-// A single straight road (two nodes, one edge). Same-direction cars queue in one
-// line with NO junction and NO merges — so car-following is the only thing that
-// separates them, and the length-aware follow gap can be checked cleanly.
-NavGraph straightRoad(Real len) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(len, 0)} };
-    g.edges = { RoadEdge{0, 1, 5, RoadClass::Local, 0} };   // narrow → a single lane
-    return buildNavGraph(g);
-}
+// Scenarios (city_test_util.h). This file's straight road is NARROW (5 m → a
+// single lane): same-direction cars queue in one line with NO junction and NO
+// merges — car-following is the only thing that separates them, so the
+// length-aware follow gap can be checked cleanly.
+using citytest::cross4;
+NavGraph narrowRoad(Real len) { return citytest::straightRoad(len, 5.0); }
 
 }  // namespace
 
@@ -100,7 +85,7 @@ TEST_CASE(mixed_fleet_cars_keep_length_aware_gaps) {
     // them apart. With the box truck (slot 11) in the fleet, adjacent bodies must
     // never drive through one another: the along-lane centre distance between a car
     // and the one directly ahead stays at least the sum of their half-lengths.
-    NavGraph nav = straightRoad(300.0);
+    NavGraph nav = narrowRoad(300.0);
     CitySim sim;
     sim.build(nav, 16, 0, 17);   // 16 > 12 → the box truck is among the fleet
 
@@ -160,7 +145,7 @@ TEST_CASE(mixed_fleet_cars_keep_length_aware_gaps) {
 TEST_CASE(released_driver_stops_being_driven) {
     // When the player commandeers a car (ADR-0062), the sim releases that agent so
     // its ghost no longer moves and can't fight the now player-driven physical car.
-    NavGraph nav = straightRoad(300.0);
+    NavGraph nav = narrowRoad(300.0);
     CitySim sim;
     sim.build(nav, 8, 0, 3);
     // Run until some driver is actually moving, then release it.

@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -17,30 +18,12 @@ using namespace citysim;
 
 namespace {
 
-// A single straight two-node road: one leg, no junction, no signal — a car has a
-// clear open stretch to reach free speed, so it must report Cruising.
-NavGraph straightRoad(Real len) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(len, 0)} };
-    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    return buildNavGraph(g);
-}
-
-// A 4-way cross: routes between arms bend 90 deg through a signalled centre, and
-// many cars share the approaches — so Turning, Waiting (red) and Following all
-// occur over a busy run.
-NavGraph cross4(Real arm) {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)},
-                {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
+// Scenarios (city_test_util.h): straightRoad gives a car a clear open stretch to
+// reach free speed, so it must report Cruising; on cross4 routes between arms
+// bend 90 deg through a signalled centre and many cars share the approaches — so
+// Turning, Waiting (red) and Following all occur over a busy run.
+using citytest::cross4;
+using citytest::straightRoad;
 
 // Which behaviour states any DRIVER wore at least once over `steps`.
 std::array<bool, static_cast<int>(Agent::State::Count)> observeDriverStates(
