@@ -362,6 +362,23 @@ if(RT_ENABLE_PHYSICS)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
+    # The physics-host source set every host target (viewer, editor_app,
+    # viewer_web) compiles alongside engine_core: the Jolt world + job adapter,
+    # the gameplay systems that need it, drivable vehicles, and the living-world
+    # citysim bridges (ADR-0062/0063). Defined once so the three targets cannot
+    # drift apart.
+    set(RT_PHYSICS_HOST_SOURCES
+        src/engine/physics/physics_world.cpp
+        src/engine/physics/jolt_job_adapter.cpp
+        src/engine/systems/physics_system.cpp
+        src/engine/systems/player_system.cpp
+        src/engine/systems/shooting_system.cpp
+        src/engine/systems/vehicle_system.cpp
+        src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
+        src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
+        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
+    )
+
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
@@ -433,17 +450,7 @@ set(VIEWER_SOURCES
 )
 
 if(RT_ENABLE_PHYSICS)
-    list(APPEND VIEWER_SOURCES
-        src/engine/physics/physics_world.cpp
-        src/engine/physics/jolt_job_adapter.cpp
-        src/engine/systems/physics_system.cpp
-        src/engine/systems/player_system.cpp
-        src/engine/systems/shooting_system.cpp
-        src/engine/systems/vehicle_system.cpp
-        src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
-        src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
-        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
-    )
+    list(APPEND VIEWER_SOURCES ${RT_PHYSICS_HOST_SOURCES})
 endif()
 
 # Platform-specific renderer backend
@@ -563,17 +570,7 @@ if(Qt6_FOUND)
     target_link_libraries(editor_app PRIVATE engine_core Qt6::Widgets Threads::Threads)
 
     if(RT_ENABLE_PHYSICS)
-        target_sources(editor_app PRIVATE
-            src/engine/physics/physics_world.cpp
-            src/engine/physics/jolt_job_adapter.cpp
-            src/engine/systems/physics_system.cpp
-            src/engine/systems/player_system.cpp
-            src/engine/systems/shooting_system.cpp
-            src/engine/systems/vehicle_system.cpp
-            src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars
-            src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
-            src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
-        )
+        target_sources(editor_app PRIVATE ${RT_PHYSICS_HOST_SOURCES})
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;
         # without it the editor's Play mode silently loses the first-person
@@ -676,20 +673,8 @@ if(EMSCRIPTEN)
     # bring the physics sources + Jolt (same as the desktop viewer). Jolt is
     # cross-platform C++ and compiles to wasm.
     if(RT_ENABLE_PHYSICS)
-        list(APPEND WEB_SOURCES
-            src/engine/physics/physics_world.cpp
-            src/engine/physics/jolt_job_adapter.cpp
-            src/engine/systems/physics_system.cpp
-            src/engine/systems/player_system.cpp
-            src/engine/systems/shooting_system.cpp
-            # The living-world bridges arena_state registers (ADR-0062/0063):
-            # drivable vehicles + the citysim physics/promotion/walker systems.
-            # Same list as the desktop viewer — Jolt compiles to wasm.
-            src/engine/systems/vehicle_system.cpp
-            src/apps/citysim/city_physics.cpp
-            src/apps/citysim/city_vehicles.cpp
-            src/apps/citysim/city_walkers.cpp
-        )
+        # Same set as the desktop viewer — Jolt compiles to wasm.
+        list(APPEND WEB_SOURCES ${RT_PHYSICS_HOST_SOURCES})
     endif()
     # WGSL sources live in shaders/webgpu/*.wgsl; a generated header embeds
     # them into the backend (no runtime fetch). Regenerates when any .wgsl or
