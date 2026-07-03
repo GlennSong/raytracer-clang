@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<!--
+  Web shell for the WebGPU/WASM viewer (ADR-0058).
+
+  Provides the canvas, an on-screen log overlay (debuggable without a dev
+  console), FPS touch controls (dual virtual sticks: left = move, right = look;
+  a RUN/boost button), and a debug panel that drives the engine via exported
+  hooks (rt_web_axis/button = virtual gamepad; rt_web_flag/stat = renderer
+  flags + stats). The wasm acquires the WebGPU device itself (ASYNCIFY).
+
+  Build: emcmake cmake -S . -B build-web && cmake --build build-web --target viewer_web
+  then serve build-web/ over HTTP (WebGPU needs a secure context).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Raytracer Engine — WebGPU</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; overflow: hidden;
+      font-family: system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+    #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+    #error { position: fixed; inset: 0; display: none; place-content: center;
+      color: #e66; font-size: 16px; text-align: center; padding: 2rem; z-index: 30; }
+    /* Console log overlay — hidden by default; toggled from the debug panel so
+       the user lands on the scene, not a wall of text. */
+    #log { position: fixed; left: 0; top: 0; right: 0; max-height: 32vh; margin: 0;
+      overflow: auto; background: rgba(0,0,0,.72); color: #9fe;
+      font: 11px/1.35 ui-monospace, monospace; white-space: pre-wrap; padding: 6px 8px;
+      z-index: 10; display: none; }
+    #log .e { color: #f88; }
+
+    /* Top-right icon toolbar: play/stop + menu. Sits over where the panel slides
+       in, so it's hidden while the panel is open. */
+    #toolbar { position: fixed; top: 10px; right: 10px; display: flex; gap: 8px; z-index: 22; }
+    .iconbtn { width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer;
+      border-radius: 11px; border: 1px solid rgba(90,200,255,.45); background: rgba(16,28,40,.72);
+      color: #cfefff; -webkit-tap-highlight-color: transparent; padding: 0; }
+    .iconbtn:hover { background: rgba(30,60,90,.82); }
+    .iconbtn.play { border-color: rgba(80,220,140,.6); }
+    .iconbtn.play.on { background: rgba(180,50,50,.75); border-color: rgba(255,120,120,.7); }
+    .iconbtn svg { width: 20px; height: 20px; fill: currentColor; }
+
+    /* On-canvas stats HUD (FPS + key counters), toggled from the panel. */
+    #hud { position: fixed; top: 62px; left: 12px; z-index: 18; display: none;
+      background: rgba(6,12,18,.72); border: 1px solid #ffffff1f; border-radius: 8px;
+      padding: 7px 10px; color: #9fe; font: 12px/1.5 ui-monospace, monospace;
+      white-space: pre; pointer-events: none; }
+
+    /* Pointer-lock hint (desktop play). */
+    #hint { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 21;
+      display: none; background: rgba(6,12,18,.82); border: 1px solid #ffffff24; border-radius: 999px;
+      padding: 8px 16px; color: #cfe6f5; font: 500 13px system-ui; pointer-events: none; }
+
+    /* Touch sticks: floating base + thumb that appear where you press. */
+    .zone { position: fixed; bottom: 0; height: 42vh; width: 42vw; z-index: 15; touch-action: none; }
+    #zoneL { left: 0; } #zoneR { right: 0; }
+    .base, .thumb { position: fixed; border-radius: 50%; pointer-events: none;
+      display: none; transform: translate(-50%, -50%); z-index: 16; }
+    .base { width: 110px; height: 110px; background: rgba(120,160,200,.12); border: 2px solid rgba(120,200,255,.35); }
+    .thumb { width: 52px; height: 52px; background: rgba(80,160,220,.55); border: 1px solid rgba(180,230,255,.7); }
+
+    .btn { position: fixed; z-index: 20; border-radius: 12px; border: 1px solid rgba(80,200,255,.5);
+      background: rgba(20,40,60,.55); color: #cfefff; font: 600 14px system-ui; padding: 10px 12px;
+      -webkit-tap-highlight-color: transparent; }
+    .btn:active { background: rgba(40,120,180,.8); }
+    #run { bottom: 24px; left: 50%; transform: translateX(-50%); width: 90px; height: 48px; }
+    #fire { right: 18px; bottom: 46vh; width: 84px; height: 84px; border-radius: 50%;
+      background: rgba(120,30,30,.5); border-color: rgba(255,90,90,.6); color: #ffdede; font-weight: 700; }
+    #fire:active { background: rgba(200,40,40,.85); }
+    #dbg { position: fixed; top: 0; right: 0; bottom: 0; width: min(78vw, 320px);
+      background: rgba(10,16,24,.94); color: #dff; z-index: 25; padding: 14px; overflow: auto;
+      display: none; box-shadow: -4px 0 16px #0008; font-size: 14px; }
+    #dbg h3 { margin: 6px 0 10px; font-size: 15px; color: #8df; }
+    #dbg .row { display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 7px 0; border-bottom: 1px solid #ffffff14; }
+    #dbg button { border-radius: 8px; border: 1px solid #4cf6; background: #1b3346; color: #dff;
+      padding: 7px 10px; font: 600 13px system-ui; }
+    #dbg button.on { background: #2a7; border-color: #3fc; color: #021; }
+    #dbg select { border-radius: 8px; border: 1px solid #4cf6; background: #1b3346;
+      color: #dff; padding: 7px 8px; font: 600 13px system-ui; }
+    #dbg a { color: #8df; text-decoration: none; }
+    #dbg a:hover { text-decoration: underline; }
+    #dbg #stats { font: 12px/1.5 ui-monospace, monospace; color: #9fe; white-space: pre; padding-top: 8px; }
+    /* Panel header bar: back-link on the left, close on the right — no overlap. */
+    #dbg .hdr { display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; }
+    #dbg .hdr .close { background: none; border: none; color: #9cf; font-size: 22px; cursor: pointer; padding: 0 2px; }
+    #dbg .val { color: #9fe; font: 600 12px ui-monospace, monospace; min-width: 42px; text-align: right; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" tabindex="0"></canvas>
+  <div id="error"></div>
+  <pre id="log" title="tap to hide"></pre>
+
+  <div id="zoneL" class="zone"></div>
+  <div id="zoneR" class="zone"></div>
+  <div id="baseL" class="base"></div><div id="thumbL" class="thumb"></div>
+  <div id="baseR" class="base"></div><div id="thumbR" class="thumb"></div>
+
+  <button id="run" class="btn" style="display:none">RUN</button>
+  <button id="fire" class="btn" style="display:none">FIRE</button>
+
+  <div id="toolbar" style="display:none">
+    <button id="playBtn" class="iconbtn play" title="Play / Stop" aria-label="Play">
+      <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <button id="menuBtn" class="iconbtn" title="Debug panel" aria-label="Menu">
+      <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/></svg>
+    </button>
+  </div>
+  <div id="hud"></div>
+  <div id="hint"></div>
+
+  <div id="dbg">
+    <div class="hdr">
+      <a href="index.html">← all scenes</a>
+      <button class="close" id="dbgClose" aria-label="Close">✕</button>
+    </div>
+    <h3>Quality</h3>
+    <div class="row"><span>Preset</span>
+      <select id="quality" aria-label="Quality preset">
+        <option value="mobile">Mobile</option>
+        <option value="balanced">Balanced</option>
+        <option value="high">High</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <h3 style="margin-top:14px">Mode</h3>
+    <div class="row"><span>Play (gun + physics)</span><button id="play">off</button></div>
+    <div class="row"><span>Draw gun (slot 2)</span><button id="drawgun">equip</button></div>
+    <h3 style="margin-top:14px">World</h3>
+    <div class="row"><span>Day/night cycle</span><button id="dncycle">on</button></div>
+    <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" aria-label="Time of day" min="0" max="1000" value="350" style="flex:1"></div>
+    <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
+    <div class="row"><span>Speed</span><input id="dnspeed" type="range" aria-label="Day/night speed" min="0" max="200" value="20" style="flex:1"></div>
+
+    <h3 style="margin-top:14px">View / Tone</h3>
+    <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
+    <div class="row"><span>Exposure</span><input id="exposure" type="range" aria-label="Exposure" min="10" max="400" value="100" style="flex:1"><span class="val" id="exposureVal">100%</span></div>
+    <div class="row"><span>Contrast</span><input id="contrast" type="range" aria-label="Contrast" min="50" max="200" value="100" style="flex:1"><span class="val" id="contrastVal">100%</span></div>
+    <div class="row"><span>Saturation</span><input id="saturation" type="range" aria-label="Saturation" min="0" max="200" value="100" style="flex:1"><span class="val" id="saturationVal">100%</span></div>
+
+    <h3 style="margin-top:14px">Debug</h3>
+    <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
+    <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
+    <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
+    <div class="row"><span>SSAO</span><button id="ssao">on</button></div>
+    <div class="row"><span>SSR</span><button id="ssr">on</button></div>
+    <div class="row"><span>FX res <span id="fxreslbl">50%</span></span><input id="fxres" type="range" aria-label="SSAO/SSR resolution scale" min="25" max="100" value="50" style="flex:1"></div>
+    <div class="row"><span>Bloom</span><button id="bloom">on</button></div>
+    <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
+    <div class="row"><span>Stats overlay (FPS)</span><button id="hudToggle">off</button></div>
+    <div class="row"><span>Console log</span><button id="logToggle">off</button></div>
+    <h3 style="margin-top:14px">Stats</h3>
+    <div id="stats">—</div>
+  </div>
+
+  <script>
+    (async () => {
+      const $ = (id) => document.getElementById(id);
+      const logEl = $('log');
+      logEl.addEventListener('click', () => { logEl.style.display = 'none';
+        const t = $('logToggle'); if (t) { t.classList.remove('on'); t.textContent = 'off'; } });
+      const log = (t, cls) => { const s = document.createElement('span');
+        if (cls) s.className = cls; s.textContent = t + '\n'; logEl.appendChild(s);
+        logEl.scrollTop = logEl.scrollHeight; };
+      window.addEventListener('error', (e) => log('JS error: ' + (e.message || e), 'e'));
+      window.addEventListener('unhandledrejection', (e) => log('rejection: ' + e.reason, 'e'));
+      const fail = (m) => { $('error').style.display = 'grid'; $('error').textContent = m; log(m, 'e'); };
+
+      if (!('gpu' in navigator)) return fail('WebGPU not available. Use Chrome/Edge, Safari 18+, or Firefox.');
+
+      const canvas = $('canvas');
+      // Read devicePixelRatio per resize (not once): dragging the window to a
+      // different-DPI monitor changes it.
+      const resize = () => { const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor((canvas.clientWidth || innerWidth) * dpr));
+        canvas.height = Math.max(1, Math.floor((canvas.clientHeight || innerHeight) * dpr)); };
+      resize(); window.addEventListener('resize', resize);
+
+      // Cache-bust the engine binary with a BUILD token, not a per-visit one:
+      // the ?v= changes only when the wasm bytes change, so repeat visits hit the
+      // browser/CDN cache (~1.6 MB saved per load) while a deploy still busts.
+      // __RT_BUILD__ is replaced with the wasm content hash by the CMake copy
+      // step (cmake/inject_build_id.cmake). Serving the raw source (placeholder
+      // intact, e.g. python3 -m http.server from web/) falls back to Date.now().
+      const BUILD = '__RT_BUILD__';
+      const V = BUILD.indexOf('RT_BUILD') >= 0 ? Date.now() : BUILD;
+      try {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'viewer_web.js?v=' + V;
+          s.onload = res;
+          s.onerror = () => rej(new Error('failed to load viewer_web.js'));
+          document.head.appendChild(s);
+        });
+      } catch (e) { return fail('' + e); }
+
+      let mod;
+      try {
+        mod = await createViewer({
+          canvas,
+          locateFile: (p) => p + '?v=' + V,   // busts viewer_web.wasm / .data too
+          print: (t) => log(t), printErr: (t) => log(t, 'e'),
+        });
+      } catch (e) { return fail('Failed to start: ' + e); }
+      window.__mod = mod;   // for debugging/automated checks
+
+      const haveCtl = typeof mod._rt_web_axis === 'function';
+      if (!haveCtl) { log('control hooks missing', 'e'); return; }
+      const axis = (s, x, y) => mod._rt_web_axis(s, x, y);
+      const button = (i, d) => mod._rt_web_button(i, d);
+      const flag = (id, v) => mod._rt_web_flag(id, v);
+      const key = (i, d) => mod._rt_web_key(i, d);
+      // Tap a virtual key (press then release next frame) — for one-shot actions
+      // like the weapon-slot keys the engine reads as edge-triggered "pressed".
+      const tapKey = (i) => { key(i, 1); setTimeout(() => key(i, 0), 80); };
+
+      // --- floating joystick (multitouch by identifier) ---
+      const R = 46;
+      function makeStick(zoneId, baseId, thumbId, idx) {
+        const zone = $(zoneId), base = $(baseId), thumb = $(thumbId);
+        let id = null, ox = 0, oy = 0;
+        const show = (x, y) => { for (const el of [base, thumb]) { el.style.display = 'block'; el.style.left = x + 'px'; el.style.top = y + 'px'; } };
+        zone.addEventListener('touchstart', (e) => {
+          e.preventDefault(); if (id !== null) return;
+          const t = e.changedTouches[0]; id = t.identifier; ox = t.clientX; oy = t.clientY;
+          base.style.left = ox + 'px'; base.style.top = oy + 'px'; base.style.display = 'block';
+          show(ox, oy);
+        }, { passive: false });
+        zone.addEventListener('touchmove', (e) => {
+          e.preventDefault();
+          for (const t of e.changedTouches) if (t.identifier === id) {
+            let dx = t.clientX - ox, dy = t.clientY - oy;
+            const len = Math.hypot(dx, dy) || 1; if (len > R) { dx *= R / len; dy *= R / len; }
+            thumb.style.left = (ox + dx) + 'px'; thumb.style.top = (oy + dy) + 'px';
+            axis(idx, dx / R, dy / R);
+          }
+        }, { passive: false });
+        const end = (e) => { for (const t of e.changedTouches) if (t.identifier === id) {
+          id = null; base.style.display = thumb.style.display = 'none'; axis(idx, 0, 0); } };
+        zone.addEventListener('touchend', end); zone.addEventListener('touchcancel', end);
+      }
+      // Touch surfaces get the on-screen sticks + RUN/FIRE; keyboard + mouse are
+      // registered UNCONDITIONALLY so touchscreen laptops keep both (only the
+      // touch UI's visibility is gated on hasTouch, not the input paths).
+      const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+      // Shared play + pointer-lock state (used by the toolbar, the panel, and the
+      // desktop mouse handlers below).
+      let playing = false, locked = false;
+      const hint = $('hint');
+      const showHint = (t) => { hint.textContent = t || ''; hint.style.display = t ? 'block' : 'none'; };
+      // requestPointerLock can throw, and in Chromium returns a Promise that
+      // rejects on rapid toggles — swallow both so a lock hiccup never aborts
+      // the caller (the rejection otherwise lands in the on-page log as noise).
+      const lockPointer = () => {
+        try { const p = canvas.requestPointerLock && canvas.requestPointerLock();
+              if (p && p.catch) p.catch(() => {}); } catch (e) { /* non-fatal */ }
+      };
+
+      // Reset every engine-side input (keys, sticks, buttons). Called when focus
+      // or visibility is lost and when leaving play mode — a keyup/touchend that
+      // never arrives would otherwise leave the character walking or firing
+      // forever (physics keeps stepping in play).
+      const resetInput = () => {
+        for (let i = 0; i < 9; i++) key(i, 0);
+        button(0, 0); button(2, 0);
+        axis(0, 0, 0); axis(1, 0, 0);
+        $('run').classList.remove('on'); $('fire').classList.remove('on');
+      };
+      window.addEventListener('blur', resetInput);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) resetInput(); });
+
+      if (hasTouch) {
+        makeStick('zoneL', 'baseL', 'thumbL', 0);   // move
+        makeStick('zoneR', 'baseR', 'thumbR', 1);   // look
+        const run = $('run');
+        run.addEventListener('touchstart', (e) => { e.preventDefault(); button(0, 1); run.classList.add('on'); }, { passive: false });
+        const runUp = (e) => { e.preventDefault(); button(0, 0); run.classList.remove('on'); };
+        run.addEventListener('touchend', runUp); run.addEventListener('touchcancel', runUp);
+        run.style.display = 'block';
+        // FIRE button (gameplay): held = shooting (RightBumper, button 2). Shown
+        // only while in Play mode (toggled below).
+        const fire = $('fire');
+        fire.addEventListener('touchstart', (e) => { e.preventDefault(); button(2, 1); fire.classList.add('on'); }, { passive: false });
+        const fireUp = (e) => { e.preventDefault(); button(2, 0); fire.classList.remove('on'); };
+        fire.addEventListener('touchend', fireUp); fire.addEventListener('touchcancel', fireUp);
+      } else {
+        // No touch surface: hide the stick zones so the mouse reaches the canvas.
+        $('zoneL').style.display = 'none';
+        $('zoneR').style.display = 'none';
+        log('desktop: WASD/QE move, Shift run, 1/2 weapon. Editor: drag to look. Play: mouse captured (Esc releases).');
+      }
+
+      // Keyboard (always registered; Emscripten GLFW's keyboard doesn't reliably
+      // reach this build, so the page drives the virtual-key hooks).
+      const keyMap = { KeyW: 0, KeyS: 1, KeyA: 2, KeyD: 3, KeyE: 4, KeyQ: 5,
+                       ShiftLeft: 6, ShiftRight: 6, Digit1: 7, Digit2: 8 };
+      window.addEventListener('keydown', (e) => {
+        const k = keyMap[e.code];
+        if (k !== undefined) { mod._rt_web_key(k, 1); e.preventDefault(); }
+      });
+      window.addEventListener('keyup', (e) => {
+        const k = keyMap[e.code];
+        if (k !== undefined) { mod._rt_web_key(k, 0); e.preventDefault(); }
+      });
+
+      // Mouse look (always registered), differing by mode:
+      //  - Editor: hold-drag to look (nothing is captured; the cursor stays).
+      //  - Play: the pointer is locked to the canvas, so moving the mouse looks
+      //    without holding a button (standard FPS); Esc releases it. A first
+      //    click while unlocked re-captures instead of firing — and if the debug
+      //    panel is open, the click closes it instead of locking underneath it.
+      let dragging = false;
+      document.addEventListener('pointerlockchange', () => {
+        locked = (document.pointerLockElement === canvas);
+        if (playing) showHint(locked ? 'Mouse captured — press Esc to release'
+                                      : 'Click the view to look around');
+        if (!locked) resetInput();   // don't leave fire/keys stuck held on release
+      });
+      canvas.addEventListener('mousedown', (e) => {
+        if (playing) {
+          if (panelOpen()) { closePanel(); return; }     // never lock under the panel
+          if (!locked) { lockPointer(); return; }
+          if (e.button === 0) button(2, 1);              // captured: click fires
+        } else {
+          dragging = true; if (e.button === 0) button(2, 1);   // editor: drag look
+        }
+      });
+      window.addEventListener('mouseup', (e) => { dragging = false; if (e.button === 0) button(2, 0); });
+      window.addEventListener('mousemove', (e) => {
+        if (locked || dragging) mod._rt_web_look(e.movementX, e.movementY);
+      });
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
+
+      // --- toolbar (play/stop + menu) + debug panel ---
+      // Pause the sim while the panel is open or the player isn't actively in FPS
+      // mode (mouse captured on desktop / playing on touch). Rendering + the
+      // free-look camera keep running; only fixed-step gameplay/physics freezes.
+      // Pause only for the menu or the (non-playing) editor — NOT on mouse
+      // capture. Gameplay physics runs in fixed steps while scripts (the gun) run
+      // every frame, so pausing a live play session would spawn bullets that never
+      // simulate (they'd hang at the muzzle). A play session stays live whether or
+      // not the pointer is currently locked; releasing the mouse doesn't pause it.
+      // Use the COMPUTED display, not the inline style: #dbg starts hidden via
+      // the stylesheet (inline style is ''), so an inline-only check would read
+      // "open" before the panel is ever toggled and wrongly pause a play session.
+      const panelOpen = () => getComputedStyle($('dbg')).display !== 'none';
+      const updatePause = () => { mod._rt_web_pause && mod._rt_web_pause((panelOpen() || !playing) ? 1 : 0); };
+      const openPanel = () => { $('dbg').style.display = 'block'; $('toolbar').style.display = 'none'; updatePause(); };
+      const closePanel = () => { $('dbg').style.display = 'none'; $('toolbar').style.display = 'flex'; updatePause(); };
+
+      $('toolbar').style.display = 'flex';
+      $('menuBtn').onclick = openPanel;
+      $('dbgClose').onclick = closePanel;
+
+      // Play/Edit toggle: enter ArenaState (gun + Jolt physics) or back to the
+      // free-look editor. Shared by the toolbar icon and the panel row; on desktop
+      // it captures the mouse (pointer lock) for FPS look, on touch it shows FIRE.
+      const PLAY_PATH = 'M8 5v14l11-7z', STOP_PATH = 'M6 6h12v12H6z';
+      const playIconPath = document.querySelector('#playIcon path');
+      const playBtn = $('playBtn'), panelPlay = $('play');
+      const setPlay = (on) => {
+        if (on === playing) return;
+        playing = on;
+        mod._rt_web_play(on ? 1 : 0);
+        playBtn.classList.toggle('on', on);
+        playIconPath.setAttribute('d', on ? STOP_PATH : PLAY_PATH);
+        playBtn.setAttribute('aria-label', on ? 'Stop' : 'Play');
+        playBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        panelPlay.classList.toggle('on', on); panelPlay.textContent = on ? 'on' : 'off';
+        if (hasTouch) $('fire').style.display = on ? 'block' : 'none';
+        if (!on) resetInput();   // never carry a held FIRE/keys out of a session
+        // Entering play from the panel row would otherwise capture the mouse with
+        // the panel still open (locked cursor over unclickable, sim-pausing UI).
+        if (on && panelOpen()) closePanel();
+        if (!hasTouch) {
+          if (on) { lockPointer(); showHint('Click the view to look · Esc releases the mouse'); }
+          else { try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} showHint(''); }
+        }
+        // Play forces grounded FPS controls (rt_web_play); restore the panel's
+        // Fly choice on the way back so the toggle doesn't desync from reality.
+        if (!on) mod._rt_web_camera(flyOn ? 1 : 0);
+        log(on ? 'play mode' : 'editor mode');
+        updatePause();
+      };
+      playBtn.onclick = () => setPlay(!playing);
+      panelPlay.onclick = () => setPlay(!playing);
+      // Draw gun: taps the slot-2 weapon key the gun script equips on.
+      $('drawgun').onclick = () => tapKey(8);
+      updatePause();   // editor / not-playing starts paused (free-look still works)
+
+      // --- World: day/night cycle (drives the sun + procedural sky) ---
+      const env = (id, v) => mod._rt_web_env(id, v);
+      const fmtClock = (tod) => { const m = Math.floor(tod * 24 * 60) % (24 * 60);
+        return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+      const dntime = $('dntime'), dnclock = $('dnclock');
+      const setTime = () => { const tod = dntime.value / 1000; env(0, tod); dnclock.textContent = fmtClock(tod); };
+      dntime.addEventListener('input', setTime);
+      setTime();                                  // push the initial time
+      env(1, 0); env(2, 1);                       // start paused (speed irrelevant)
+      let dnCycleOn = true; const dnCycleB = $('dncycle');
+      dnCycleB.onclick = () => { dnCycleOn = !dnCycleOn; env(3, dnCycleOn ? 1 : 0);
+        dnCycleB.classList.toggle('on', dnCycleOn); dnCycleB.textContent = dnCycleOn ? 'on' : 'off'; };
+      dnCycleB.classList.add('on');
+      let dnPlayOn = false; const dnPlayB = $('dnplay'), dnspeed = $('dnspeed');
+      const applySpeed = () => env(1, dnPlayOn ? dnspeed.value / 1000 : 0);
+      dnPlayB.onclick = () => { dnPlayOn = !dnPlayOn; env(2, dnPlayOn ? 0 : 1); applySpeed();
+        dnPlayB.classList.toggle('on', dnPlayOn); dnPlayB.textContent = dnPlayOn ? 'on' : 'off'; };
+      dnspeed.addEventListener('input', applySpeed);
+
+      // --- View transform: tone map + exposure + grade (forward output stage) ---
+      const post = (id, v) => mod._rt_web_post(id, v);
+      let agx = false; const tmB = $('tonemap');
+      const setTone = (on) => { agx = on; post(0, on ? 1 : 0);
+        tmB.classList.toggle('on', on); tmB.textContent = on ? 'AgX' : 'ACES'; };
+      tmB.onclick = () => setTone(!agx);
+      // Grade sliders: push on input and show a live percentage.
+      const gradeSlider = (id, postId) => { const el = $(id), lab = $(id + 'Val');
+        el.addEventListener('input', () => { lab.textContent = el.value + '%'; post(postId, el.value / 100); }); };
+      gradeSlider('exposure', 1); gradeSlider('contrast', 2); gradeSlider('saturation', 3);
+
+      // Defaults: AgX tone map (gentler than ACES) + a little more exposure.
+      setTone(true);
+      $('exposure').value = 130; $('exposureVal').textContent = '130%'; post(1, 1.3);
+
+      // Fly toggle: grounded FPS walk (default) <-> free 6-DOF flight.
+      let flyOn = false; const flyB = $('fly');
+      flyB.onclick = () => { flyOn = !flyOn; mod._rt_web_camera(flyOn ? 1 : 0);
+        flyB.classList.toggle('on', flyOn); flyB.textContent = flyOn ? 'on' : 'off'; };
+
+      let dview = 0;
+      const DV = ['normal', 'AO', 'SSR', 'depth', 'normals', 'shadow', 'albedo', 'facing', 'cascades'];
+      $('dview').onclick = () => { dview = (dview + 1) % DV.length; flag(0, dview); $('dview').textContent = dview + ': ' + DV[dview]; };
+      let wire = 0; const WM = ['off', 'only', 'overlay'];
+      $('wire').onclick = () => { wire = (wire + 1) % 3; flag(1, wire); $('wire').textContent = WM[wire]; };
+      // Effect toggles expose a setter so quality presets can drive them too.
+      // Manual clicks flip the preset dropdown to "Custom".
+      const toggles = {};
+      const mkToggle = (id, flagId, def) => {
+        const b = $(id);
+        const paint = (on) => { toggles[id] = on; b.classList.toggle('on', on);
+          b.textContent = on ? 'on' : 'off'; b.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+        paint(def);
+        b.onclick = () => { paint(!toggles[id]); flag(flagId, toggles[id] ? 1 : 0); $('quality').value = 'custom'; };
+        return { set: (on) => { paint(on); flag(flagId, on ? 1 : 0); } };
+      };
+      const tSsao = mkToggle('ssao', 2, true), tSsr = mkToggle('ssr', 3, true),
+            tBloom = mkToggle('bloom', 4, true), tLens = mkToggle('lens', 5, true);
+
+      // SSAO/SSR buffer resolution scale (perf). Lower = faster, softer effects.
+      const setFx = (pct) => { $('fxres').value = pct; $('fxreslbl').textContent = pct + '%'; post(4, pct / 100); };
+      $('fxres').addEventListener('input', (e) => { setFx(e.target.value); $('quality').value = 'custom'; });
+
+      // Quality presets: gate the expensive effects between mobile and desktop.
+      const PRESETS = {
+        mobile:   { ssao: false, ssr: false, bloom: true, lens: false, fx: 25 },
+        balanced: { ssao: true,  ssr: false, bloom: true, lens: true,  fx: 50 },
+        high:     { ssao: true,  ssr: true,  bloom: true, lens: true,  fx: 100 },
+      };
+      const applyPreset = (name) => {
+        const p = PRESETS[name]; if (!p) return;
+        tSsao.set(p.ssao); tSsr.set(p.ssr); tBloom.set(p.bloom); tLens.set(p.lens);
+        setFx(p.fx); $('quality').value = name;
+      };
+      $('quality').addEventListener('change', (e) => applyPreset(e.target.value));
+      // Auto-pick: coarse pointer / touch / narrow viewport => Mobile, else High.
+      const isMobile = matchMedia('(pointer: coarse)').matches ||
+                       (navigator.maxTouchPoints || 0) > 0 || innerWidth < 820;
+      applyPreset(isMobile ? 'mobile' : 'high');
+
+      // FPS meter (rAF-timed) + on-canvas stats HUD + console-log toggles.
+      let frames = 0, fpsT = performance.now(), fps = 0;
+      const fpsTick = (now) => { frames++;
+        if (now - fpsT >= 500) { fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
+        requestAnimationFrame(fpsTick); };
+      requestAnimationFrame(fpsTick);
+      // A hidden->visible transition leaves a huge gap in fpsT (rAF pauses while
+      // hidden); reset so the first visible reading isn't ~0 fps.
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) { frames = 0; fpsT = performance.now(); } });
+
+      let hudOn = false;
+      $('hudToggle').onclick = () => { hudOn = !hudOn; $('hud').style.display = hudOn ? 'block' : 'none';
+        $('hudToggle').classList.toggle('on', hudOn); $('hudToggle').textContent = hudOn ? 'on' : 'off'; };
+      // Computed style, not inline: #log starts hidden via the stylesheet, so the
+      // inline display is '' until first toggled (same bug class as panelOpen).
+      $('logToggle').onclick = () => { const show = getComputedStyle(logEl).display === 'none';
+        logEl.style.display = show ? 'block' : 'none';
+        $('logToggle').classList.toggle('on', show); $('logToggle').textContent = show ? 'on' : 'off'; };
+
+      // Stats poll — feeds the panel readout and the HUD box (only when visible).
+      const stat = (w) => mod._rt_web_stat(w);
+      setInterval(() => {
+        const dbgOpen = panelOpen();
+        if (!dbgOpen && !hudOn) return;
+        if (hudOn) $('hud').textContent = `fps ${fps}   draws ${stat(0)}   tris ${stat(3)}   ents ${stat(4)}`;
+        if (dbgOpen) $('stats').textContent =
+          `fps        ${fps}\ndraws      ${stat(0)}\ninstanced  ${stat(1)}\ninstances  ${stat(2)}\ntriangles  ${stat(3)}\nentities   ${stat(4)}`;
+      }, 300);
+
+      log('controls ready — press ▶ to play');
+    })();
+  </script>
+</body>
+</html>

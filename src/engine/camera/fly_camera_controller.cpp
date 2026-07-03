@@ -28,10 +28,20 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     if (positionLocked) return;
 
     Real speed = moveSpeed * dt * (input.boost ? boostMultiplier : Real(1.0));
-    Vec3 f = forward();
     Vec3 r = right();
-    Vec3 worldUp(0, 1, 0);
 
+    if (grounded) {
+        // FPS walk: forward follows yaw only (no pitch), so looking up/down
+        // doesn't change altitude; no vertical axis; eye height stays fixed.
+        Real yawRad = degreesToRadians(yaw);
+        Vec3 fGround(std::sin(yawRad), 0.0, -std::cos(yawRad));
+        eye += fGround * (input.moveForward * speed);
+        eye += r * (input.moveRight * speed);
+        return;
+    }
+
+    Vec3 f = forward();
+    Vec3 worldUp(0, 1, 0);
     eye += f * (input.moveForward * speed);
     eye += r * (input.moveRight * speed);
     eye += worldUp * (input.moveUp * speed);

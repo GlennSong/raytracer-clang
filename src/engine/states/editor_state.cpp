@@ -8,6 +8,9 @@
 #include "../systems/camera_panel_system.h"
 #include "../systems/terrain_lod_system.h"
 #include "../systems/render_system.h"
+#ifdef __EMSCRIPTEN__
+#include "../systems/day_night_system.h"
+#endif
 #include "../../log.h"
 
 namespace engine {
@@ -20,6 +23,12 @@ EditorState::EditorState(Window& window, Renderer& renderer,
       levelFile(std::move(levelFile)) {
     addSystem<DevControlSystem>();   // Esc quits the app from the editor
     auto& camSys = addSystem<CameraSystem>();
+#ifdef __EMSCRIPTEN__
+    // The web editor has no ImGui day/night panel, so run the cycle here and
+    // let the page's debug panel drive it through settings (rt_web_env). Native
+    // editors keep a static sky and reach the cycle via play mode's ImGui.
+    addSystem<DayNightSystem>();
+#endif
     addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036)
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);

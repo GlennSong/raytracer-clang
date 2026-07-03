@@ -297,3 +297,90 @@ TEST_CASE(physics_ccd_box_does_not_tunnel_thin_wall) {
     CHECK(shoot(false) > 0.5);   // discrete: tunnelled clean through the wall
     CHECK(shoot(true) < 0.0);    // CCD: stopped on the near side
 }
+
+// --- Fall-respawn safety net (FallRespawnTracker + character teleport) --------
+// Integration of the tracker with the real character controller: walking off a
+// ledge triggers exactly one respawn and the character re-settles; a level with
+// no floor triggers the give-up path instead of teleport-cycling forever. Also
+// pins the teleport contract: setCharacterPosition drops carried velocity.
+#include "../src/engine/systems/player_system.h"
+
+TEST_CASE(character_fall_respawn_recovers_off_ledge) {
+    PhysicsWorld world;
+    world.initialize();
+    // A narrow floor: top at y=0, only 1m wide in x.
+    world.addBox(Vec3(1, 1, 50), Vec3(0, -1, 0), Quat::identity(),
+                 BodyMotion::Static);
+    const Vec3 spawn(0, 2.0, 0);
+    CharacterId c = world.addCharacter(0.4, 0.3, spawn);
+    world.optimizeBroadPhase();
+
+    FallRespawnTracker fall;
+    fall.onSpawnCaptured(spawn.y);
+    int respawns = 0;
+    auto tick = [&](const Vec3& vel) {
+        world.moveCharacter(c, vel, 1.0 / 60.0);
+        Real y = world.characterPosition(c).y;
+        GroundState gs = world.characterGroundState(c);
+        if (gs == GroundState::OnGround || gs == GroundState::OnSteepGround)
+            fall.onGrounded(y);
+        if (fall.shouldRespawn(y)) {
+            world.setCharacterPosition(c, spawn);
+            fall.onRespawn(false);
+            ++respawns;
+        }
+    };
+
+    for (int i = 0; i < 60; ++i) tick(Vec3());            // settle on the ledge
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    for (int i = 0; i < 120; ++i) tick(Vec3(4, 0, 0));    // walk off the edge
+    // Falls 40m below the footing (~2.9s), respawns once, settles again.
+    for (int i = 0; i < 400; ++i) tick(Vec3());
+    CHECK(respawns == 1);
+    CHECK_APPROX(world.characterPosition(c).y, 0.7, 0.1);
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    world.shutdown();
+}
+
+TEST_CASE(character_fall_respawn_gives_up_without_floor) {
+    PhysicsWorld world;
+    world.initialize();          // no bodies at all: nothing to land on
+    const Vec3 spawn(0, 200.0, 0);
+    CharacterId c = world.addCharacter(0.4, 0.3, spawn);
+    world.optimizeBroadPhase();
+
+    FallRespawnTracker fall;
+    fall.onSpawnCaptured(spawn.y);
+    int respawns = 0;
+    // Simulate long enough for several 300m fall cycles (~8s each without the
+    // give-up; ~7.8s per cycle at 1/60 steps).
+    for (int i = 0; i < 60 * 40 && respawns <= FallRespawnTracker::kMaxFailedRespawns + 1; ++i) {
+        world.moveCharacter(c, Vec3(), 1.0 / 60.0);
+        Real y = world.characterPosition(c).y;
+        if (fall.shouldRespawn(y)) {
+            world.setCharacterPosition(c, spawn);
+            fall.onRespawn(false);
+            ++respawns;
+        }
+    }
+    CHECK(respawns == FallRespawnTracker::kMaxFailedRespawns);   // then disarmed
+    CHECK(world.characterPosition(c).y < spawn.y - 300.0);       // falling free, no more snaps
+    world.shutdown();
+}
+
+TEST_CASE(character_teleport_zeroes_velocity) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);   // top at y=0
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 60.0, 0));
+    world.optimizeBroadPhase();
+
+    walk(world, c, Vec3(), 90);   // 1.5s of free fall: ~14.7 m/s downward
+    CHECK(world.characterPosition(c).y < 55.0);
+    world.setCharacterPosition(c, Vec3(0, 2.0, 0));
+    // One step after the teleport: with velocity zeroed the drop is ~g*dt*dt
+    // (millimetres); with the old carried velocity it would be ~0.25m.
+    world.moveCharacter(c, Vec3(), 1.0 / 60.0);
+    CHECK(world.characterPosition(c).y > 1.9);
+    world.shutdown();
+}
