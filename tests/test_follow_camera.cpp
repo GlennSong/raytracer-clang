@@ -67,6 +67,43 @@ TEST_CASE(follow_zoom_clamps_distance) {
     CHECK(cam.distance <= cam.maxDistance + EPS);
 }
 
+TEST_CASE(shoulder_preset_offsets_in_the_follow_frame) {
+    // The over-the-shoulder preset (third person ON FOOT): the aim point rides
+    // a bit above head height and a little to the target's RIGHT, and that
+    // offset lives in the follow frame — it turns with the heading.
+    FollowCameraController cam;
+    cam.applyShoulderPreset();
+    cam.setTarget(Vec3(0, 0, 0), 0.0);           // facing -Z: right = +X
+    CameraState s = cam.cameraState(1.0f);
+    CHECK_APPROX(s.target.x, FollowCameraController::SHOULDER_SIDE, EPS);
+    CHECK_APPROX(s.target.y, FollowCameraController::SHOULDER_HEIGHT, EPS);
+    CHECK_APPROX(s.target.z, 0.0, EPS);
+    CHECK(s.position.z > 0.0);                   // behind a -Z-facing target
+
+    cam.setTarget(Vec3(0, 0, 0), 90.0);          // facing +X: right = +Z
+    s = cam.cameraState(1.0f);
+    CHECK_APPROX(s.target.x, 0.0, EPS);
+    CHECK_APPROX(s.target.z, FollowCameraController::SHOULDER_SIDE, EPS);
+}
+
+TEST_CASE(shoulder_preset_arm_is_short_and_respected) {
+    // The shoulder arm is the eye-to-aim distance exactly, and it is much
+    // shorter than the vehicle chase default.
+    FollowCameraController car;                  // vehicle chase defaults
+    FollowCameraController onFoot;
+    onFoot.applyShoulderPreset();
+    CHECK(onFoot.distance < car.distance);
+    onFoot.setTarget(Vec3(3, 1, -7), 30.0);
+    CameraState s = onFoot.cameraState(1.0f);
+    CHECK_APPROX((s.position - s.target).length(),
+                 FollowCameraController::SHOULDER_ARM, 1e-6);
+    // Zoom clamps re-anchor to the preset's shorter range.
+    CameraInput zoomOut;
+    zoomOut.zoomDelta = -1000.0;
+    onFoot.update(zoomOut, 1.0);
+    CHECK(onFoot.distance <= FollowCameraController::SHOULDER_ARM_MAX + EPS);
+}
+
 TEST_CASE(follow_heading_rotates_rig) {
     FollowCameraController cam;
     cam.setTarget(Vec3(0, 0, 0), 0.0);

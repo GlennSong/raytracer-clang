@@ -3,6 +3,7 @@
 
 #include "../system.h"
 #include "../camera/fly_camera_controller.h"
+#include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
 
 namespace engine {
@@ -48,6 +49,14 @@ struct FallRespawnTracker {
     }
 };
 
+// Drives the on-foot player character and its camera. The FLY controller is
+// the player's HEADING either way (CameraSystem feeds it mouse/stick look):
+// first person renders from its pinned eye; third person (V — the on-foot
+// camera toggle) frames the same heading from an over-the-shoulder follow rig
+// (FollowCameraController::applyShoulderPreset), fly pitch tilting the rig.
+// The mode is published to Settings ("playerThirdPerson") so the render-side
+// body system (apps/citysim/city_player_body.*) shows/hides the player's
+// person mesh without a dependency on this system.
 class PlayerSystem : public System {
 public:
     PlayerSystem(FlyCameraController& camera, PhysicsSystem& physics)
@@ -57,9 +66,17 @@ public:
     void fixedUpdate(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
 
+    bool thirdPersonActive() const { return thirdPerson; }
+
 private:
     FlyCameraController& camera;
     PhysicsSystem& physicsSys;
+    FollowCameraController shoulder;   // third-person on-foot rig (shoulder preset)
+    bool thirdPerson = false;
+    // Fly pitch -> shoulder tilt clamps: enough to look up without dropping the
+    // eye through the pavement, and down without flipping overhead.
+    static constexpr Real kShoulderPitchMin = -70.0;
+    static constexpr Real kShoulderPitchMax = 30.0;
     Entity playerEntity;
     Real moveSpeed = 6.0;
     Real eyeHeight = 0.7;
