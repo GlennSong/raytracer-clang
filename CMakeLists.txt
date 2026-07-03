@@ -111,6 +111,7 @@ add_library(engine_core STATIC
     # src/apps/citysim but compiles into the shared lib.
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_meshes.cpp
@@ -297,6 +298,7 @@ add_executable(run_tests
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp
+    tests/test_city_goals.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp

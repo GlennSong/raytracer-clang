@@ -87,6 +87,28 @@ TEST_CASE(state_machine_guards_veto_and_order_decides) {
     CHECK(m.current() == fight);           // guard passed: first row wins
 }
 
+TEST_CASE(state_machine_peek_is_stateless) {
+    // One shared table, many agents: peek answers "where would this event take
+    // state X" without running hooks or moving current() — each agent keeps its
+    // own current-state int (the citysim goal layer).
+    StateMachine m;
+    int home = m.addState("AtHome");
+    int commuting = m.addState("Commuting");
+    int leave = m.addEvent("depart");
+    bool open = false;
+    int fired = 0;
+    m.addTransition(home, leave, commuting,
+                    {[&] { return open; }, [&] { ++fired; }});
+
+    m.start(home);
+    CHECK(m.peek(home, leave) == -1);          // guard vetoes
+    open = true;
+    CHECK(m.peek(home, leave) == commuting);   // row found...
+    CHECK(m.current() == home);                // ...but nothing moved
+    CHECK(fired == 0);                         // ...and no action ran
+    CHECK(m.peek(commuting, leave) == -1);     // no row from here
+}
+
 TEST_CASE(state_machine_hook_order_is_exit_action_enter) {
     StateMachine m;
     int a = m.addState("A");

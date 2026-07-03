@@ -4,6 +4,7 @@
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
+#include "city_goals.h"
 #include "traffic_signal.h"
 #include <cstdint>
 #include <utility>
@@ -23,7 +24,11 @@ using engine::Real;   // the engine's scalar (double); used throughout the sim
 
 struct Agent {
     enum class Mode : uint8_t { Pedestrian, Driver };
-    enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning };
+    // The GOAL layer's outward label (ADR-0064): what the agent's day currently
+    // reads as. The value comes from the agent's goal STATE in the archetype's
+    // GoalTable (city_goals.h) — kept as a field so tests/renderers keep their
+    // historical `Agent::Activity` reads while the table drives the behaviour.
+    using Activity = citysim::Activity;
     // Reactive behaviour state (ADR-0061): what the agent is doing right now,
     // decided from what it can SEE this step. Rendered by the debug widgets. The
     // first four are shared / pedestrian; the rest are the driver FSM (Cruising →
@@ -47,6 +52,11 @@ struct Agent {
     int home = 0, work = 0;
     Real departWork = 8.0, departHome = 17.0;
     Activity activity = Activity::AtHome;
+    // Goal layer (ADR-0064): the agent's current state in its archetype's
+    // GoalTable, plus the in-world hours spent resting in it (feeds the
+    // table's optional DwellDone event). `activity` mirrors the state's label.
+    int goal = 0;
+    Real goalHours = 0;
     int restNode = -1;     // the node this agent last arrived at (wander departs from it)
     int arrivedLink = -1;  // the link it arrived ALONG (wander avoids U-turning back up it)
     // Fender-bender state (device: cars must not ghost through each other). When
@@ -223,8 +233,22 @@ public:
     // start a fresh trip to a random reachable node the moment they arrive — so a
     // one-car lab level has its car lapping the circuit continuously instead of
     // parking until the evening commute. Deterministic (draws from the sim rng).
-    void setWander(bool on) { wander_ = on; }
+    // Since ADR-0064 this INSTALLS the built-in wander goal tables (replacing
+    // whatever tables are set — call setGoalTables after it, not before).
+    void setWander(bool on);
     bool wander() const { return wander_; }
+
+    // The goal layer as data (ADR-0064): replace the per-archetype goal tables
+    // (states + transitions over the C++ action vocabulary — city_goals.h).
+    // Load-time only by design: call at level load (e.g. from tables authored
+    // in agents.lua); every per-tick transition then runs in C++ from the
+    // table. Agents are remapped onto the new table by their activity label
+    // (first state with a matching label, else the entry state); a rebuild or
+    // setWander() resets back to the built-ins.
+    void setGoalTables(GoalTable pedestrian, GoalTable driver);
+    const GoalTable& goalTable(Agent::Mode mode) const {
+        return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+    }
 
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
     // thinks it commits to the last decision and just acts on it. Default 0.35 s.
@@ -252,6 +276,20 @@ private:
     // never materializes among crossing traffic.
     void startTrip(Agent& a, int origin, int goal, bool fromRest = true);
     bool startWanderTrip(Agent& a, int from, bool fromRest = true);
+    // Goal layer (ADR-0064). goalThink is step()'s pass 1 for one agent: run
+    // the agent's current goal state — retry a GoTo departure, or (Rest) emit
+    // this tick's events and take the first table row that fires.
+    void goalThink(Agent& a, Real dtHours);
+    enum class GoalFire { NoRow, Blocked, Fired };
+    GoalFire tryGoalEvent(Agent& a, GoalEvent event);
+    // Execute the agent's (GoTo) goal state: start the trip toward its target.
+    // False when no trip launched (then a NoRoute row, if any, has been taken).
+    bool startGoalTrip(Agent& a, int origin, bool fromRest);
+    int departNode(const Agent& a) const;   // where a rest departure starts from
+    GoalTable& goalsFor(Agent::Mode mode) {
+        return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+    }
+    void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
@@ -292,6 +330,11 @@ private:
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width
     SignalController signals_;
+    // Per-archetype goal tables (ADR-0064): what each agent's day IS. Built-in
+    // defaults mirror the historical schedule/wander control flow bit-exactly;
+    // scripting builds may replace them at load via setGoalTables.
+    GoalTable goalPed_ = defaultScheduleGoals();
+    GoalTable goalDriver_ = defaultScheduleGoals();
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on

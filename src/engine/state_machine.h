@@ -74,6 +74,22 @@ public:
         return false;
     }
 
+    // Stateless lookup: the state that delivering `event` in state `from` would
+    // land in — the first matching row (insertion order; exact `from` and kAny
+    // both match) whose guard passes — or -1 when none would fire. No hooks run
+    // and current() is untouched. This is what lets ONE shared table drive MANY
+    // agents that each hold their own current-state int (the citysim goal
+    // layer), where handle()'s single built-in current_ can't.
+    int peek(int from, int event) const {
+        for (const Row& r : transitions_) {
+            if (r.event != event) continue;
+            if (r.from != kAny && r.from != from) continue;
+            if (r.hooks.guard && !r.hooks.guard()) continue;
+            return r.to;
+        }
+        return -1;
+    }
+
     int current() const { return current_; }
     const std::string& stateName(int id) const { return states_[id]; }
     int stateCount() const { return static_cast<int>(states_.size()); }
