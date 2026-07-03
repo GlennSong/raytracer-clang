@@ -362,6 +362,15 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32) -> vec3<f32> {
   let w = max(wL, wR);
   var c = mix(base, vec3<f32>(0.82, 0.68, 0.13), y);
   c = mix(c, vec3<f32>(0.86, 0.86, 0.83), w);
+  // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
+  // the junction mouth (baked by the road mesher), so the band sits set back on
+  // the approach, not in the intersection. Bars run across the carriageway (mu).
+  // Mirror of Metal (shaders/metal/common.metal) and Vulkan (mesh.frag) for
+  // backend parity. Gate on mu > 1.05: the raised curb shares this surface with
+  // a 0..1 UV, and the band must never paint onto it.
+  let cwEdge = smoothstep(0.5, 0.8, mv) * (1.0 - smoothstep(3.3, 3.6, mv));
+  let bars = step(0.5, fract((mu - 1.0) * 4.0));
+  c = mix(c, vec3<f32>(0.90, 0.90, 0.88), cwEdge * bars * step(1.05, mu));
   return c;
 }
 fn applySurface(id : u32, base : vec3<f32>, worldPos : vec3<f32>, n : vec3<f32>, meshUV : vec2<f32>) -> vec3<f32> {
