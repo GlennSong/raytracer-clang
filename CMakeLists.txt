@@ -80,7 +80,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/city.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
-    src/engine/ai/agent_sim.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -107,10 +106,9 @@ add_library(engine_core STATIC
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
-    src/engine/systems/traffic_system.cpp
     # Agent-based city simulation app (ADR-0060). Pure C++, headless-safe; the
     # game (arena_state) registers citysim::CityRenderSystem. Lives under
-    # src/apps/citysim but compiles into the shared lib like traffic_system.
+    # src/apps/citysim but compiles into the shared lib.
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_sim.cpp
@@ -290,9 +288,6 @@ add_executable(run_tests
     tests/test_terrain_lod.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
-    tests/test_agent_sim.cpp
-    tests/test_traffic_system.cpp
-    tests/test_traffic_city.cpp
     tests/test_perception.cpp
     tests/test_agent_memory.cpp
     tests/test_cascade_fit.cpp
