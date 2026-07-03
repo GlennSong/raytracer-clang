@@ -471,16 +471,14 @@ void CitySim::steer(Agent& a, Real dt) {
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
 
-void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
-    if (!a.moving) return;
-    int li = a.route.links[a.leg];
+// The junction rules of advance(): the stop-line geometry, the signal brake, and
+// the box-occupancy / turn-yield scan. Returns the speed target after those caps
+// plus the effective stop line the hard clamp in advance() holds at. Pure query:
+// no rng draws, no agent mutation.
+CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
+                                                Real target) const {
+    JunctionGate gate;
     bool car = a.mode == Agent::Mode::Driver;
-    // Nominal pace scaled by personality (ADR-0062): drivers and walkers each
-    // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
-    // Junction/signal caps below are shared road rules and stay unscaled.
-    Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
-                  a.speedFactor;
-    Real accel = car ? kCarAccel : kPedAccel;
     // Where this agent's signal STOP LINE sits, measured back from the node. A
     // walker holds at the corner; a car holds with its front bumper short of the
     // painted zebra band on its approach: junction box radius (the mouth) + the
@@ -582,59 +580,87 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 target = std::min(target, approachStop(distToLine, kCarDecel, target));
         }
     }
+    gate.cap = target;
+    gate.stopLinePos = stopLinePos;
+    gate.yieldAtLine = yieldAtLine;
+    return gate;
+}
 
-    // Perception (ADR-0063: sense -> remember -> predict -> decide -> act). Each
-    // tick the car SENSES pedestrians and the player through its 2.5D sensor —
-    // the forward wedge plus a height band, so a walker crossing the overpass is
-    // not a phantom to brake for — and REMEMBERS the sightings as tracks with
-    // velocity estimates. It then acts on the MEMORY, not the snapshot: a person
-    // who slipped out of the cone is still yielded to where they're HEADING for a
-    // few seconds (object permanence), and a crosser on a collision course is
-    // braked for BEFORE entering the lane (time-to-collision on the tracked
-    // velocity). We still do NOT sense other AI cars: car-vs-car is resolved by
-    // lanes, same-lane car-following (the gap cap below) and the signals —
-    // braking for every car in a wide cone deadlocked junctions (see step()).
-    // Imperfect: with probability (1 - reliability) this step's sighting is
-    // missed (a fault) — memory makes a missed frame degrade gracefully instead
-    // of blinding the car outright.
+// The perception block of advance() (ADR-0063: sense -> remember -> predict ->
+// decide -> act). Each tick the car SENSES pedestrians and the player through its
+// 2.5D sensor — the forward wedge plus a height band, so a walker crossing the
+// overpass is not a phantom to brake for — and REMEMBERS the sightings as tracks
+// with velocity estimates. It then acts on the MEMORY, not the snapshot: a person
+// who slipped out of the cone is still yielded to where they're HEADING for a
+// few seconds (object permanence), and a crosser on a collision course is
+// braked for BEFORE entering the lane (time-to-collision on the tracked
+// velocity). We still do NOT sense other AI cars: car-vs-car is resolved by
+// lanes, same-lane car-following (advance()'s gap cap) and the signals —
+// braking for every car in a wide cone deadlocked junctions (see step()).
+// Imperfect: with probability (1 - reliability) this step's sighting is
+// missed (a fault) — memory makes a missed frame degrade gracefully instead
+// of blinding the car outright. Returns the distance to the nearest person (or
+// predicted collision point) ahead; infinity when nothing demands a brake.
+Real CitySim::senseAhead(Agent& a) {
     Real seenAhead = std::numeric_limits<Real>::infinity();   // dist to a person ahead
+    engine::VisionCone cone;
+    cone.origin = a.pos;
+    cone.forward = a.heading;
+    cone.range = 18.0;
+    cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
+                                 // not someone standing on the far sidewalk
+    if (brainUnit(a) <= a.reliability) {
+        engine::SensorVolume sensor;
+        sensor.cone = cone;
+        for (const SensedGhost& g : sensed_) {
+            // External points (the live player) carry no elevation from the
+            // host — skip the height gate rather than invent one for them.
+            Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
+            if (engine::sees(sensor, g.pos, dh))
+                a.memory.observe(g.id, g.pos, simSeconds_);
+        }
+    } else {
+        ++faultCount_;
+    }
+    a.memory.update(simSeconds_);
+    for (const engine::TrackedBody& t : a.memory.tracks()) {
+        if (t.confidence < kMemoryActConfidence) continue;
+        // Where memory says the body IS (extrapolated while unseen): yield
+        // if that estimate sits in the corridor ahead.
+        if (engine::sees(cone, t.pos)) {
+            Real fd = engine::forwardDistance(cone, t.pos);
+            if (fd > 0) seenAhead = std::min(seenAhead, fd);
+        }
+        // Where memory says it's GOING: if our courses collide within the
+        // horizon, brake as if the collision point were an obstacle that
+        // far ahead — anticipation, not reaction.
+        Real ttc = engine::timeToCollision(a.pos, a.heading * a.speed,
+                                           t.pos, t.vel, kCollisionRadius);
+        if (ttc < kTtcHorizon)
+            seenAhead = std::min(seenAhead, std::max(Real(0), a.speed * ttc));
+    }
+    return seenAhead;
+}
+
+void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
+    if (!a.moving) return;
+    int li = a.route.links[a.leg];
+    bool car = a.mode == Agent::Mode::Driver;
+    // Nominal pace scaled by personality (ADR-0062): drivers and walkers each
+    // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
+    // Junction/signal caps are shared road rules and stay unscaled.
+    Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
+                  a.speedFactor;
+    Real accel = car ? kCarAccel : kPedAccel;
+    // Junction rules (stop line, signal brake, box occupancy / turn yield) cap
+    // the target; the gate carries the line the hard clamp below holds at.
+    JunctionGate gate = junctionSpeedCap(a, li, target);
+    target = gate.cap;
+    // Perception: how far ahead the nearest person (or predicted collision) is;
+    // ease to a stop kPedClearance short of it.
+    Real seenAhead = std::numeric_limits<Real>::infinity();
     if (car) {
-        engine::VisionCone cone;
-        cone.origin = a.pos;
-        cone.forward = a.heading;
-        cone.range = 18.0;
-        cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
-                                     // not someone standing on the far sidewalk
-        if (brainUnit(a) <= a.reliability) {
-            engine::SensorVolume sensor;
-            sensor.cone = cone;
-            for (const SensedGhost& g : sensed_) {
-                // External points (the live player) carry no elevation from the
-                // host — skip the height gate rather than invent one for them.
-                Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
-                if (engine::sees(sensor, g.pos, dh))
-                    a.memory.observe(g.id, g.pos, simSeconds_);
-            }
-        } else {
-            ++faultCount_;
-        }
-        a.memory.update(simSeconds_);
-        for (const engine::TrackedBody& t : a.memory.tracks()) {
-            if (t.confidence < kMemoryActConfidence) continue;
-            // Where memory says the body IS (extrapolated while unseen): yield
-            // if that estimate sits in the corridor ahead.
-            if (engine::sees(cone, t.pos)) {
-                Real fd = engine::forwardDistance(cone, t.pos);
-                if (fd > 0) seenAhead = std::min(seenAhead, fd);
-            }
-            // Where memory says it's GOING: if our courses collide within the
-            // horizon, brake as if the collision point were an obstacle that
-            // far ahead — anticipation, not reaction.
-            Real ttc = engine::timeToCollision(a.pos, a.heading * a.speed,
-                                               t.pos, t.vel, kCollisionRadius);
-            if (ttc < kTtcHorizon)
-                seenAhead = std::min(seenAhead, std::max(Real(0), a.speed * ttc));
-        }
+        seenAhead = senseAhead(a);
         if (seenAhead < 1e9)
             target = std::min(target, approachStop(seenAhead - kPedClearance, kCarDecel,
                                                    target));
@@ -652,15 +678,16 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // THROUGH the light. Clamp advance so it cannot pass the line while its
     // approach is not green; it waits here until the signal clears.
     {
+        int toNode = nav_->links[li].to;
         bool redAhead = signals_.hasSignal(li) &&
                         signals_.stateForLink(li) != SignalState::Green;
-        if (nav_->isJunction(toNode) && (redAhead || yieldAtLine)) {
+        if (nav_->isJunction(toNode) && (redAhead || gate.yieldAtLine)) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
             // mid-intersection whenever a green expired under it, and everything
             // arriving cross-phase piled into it.
-            if (a.distOnLeg <= stopLinePos + 1e-6) {
-                Real room = std::max(Real(0), stopLinePos - a.distOnLeg);
+            if (a.distOnLeg <= gate.stopLinePos + 1e-6) {
+                Real room = std::max(Real(0), gate.stopLinePos - a.distOnLeg);
                 Real motion = std::min(a.speed * dt, room);
                 if (motion < a.speed * dt) a.speed = 0;   // held at the line
                 a.distOnLeg += motion;
@@ -715,93 +742,102 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 
     if (a.leg >= legCount) {
-        Real vArrive = a.speed;   // still rolling — a wander chain keeps it
-        a.moving = false;
-        a.speed = 0;
-        int lastLink = a.route.links.back();
-        // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
-        // arrivals at ground level, under their own road.
-        a.elevation = nav_->links[lastLink].layer * kLayerClearance;
-        if (a.mode == Agent::Mode::Driver && wander_) {
-            // WANDER (the agent lab): CHAIN straight into the next trip THIS
-            // tick — no parking pose (which read on device as the car "jumping
-            // backwards in time, then shooting forward") and no one-frame rest
-            // INSIDE the junction box for cross traffic to overlap. The car
-            // keeps its speed and heading through the node; steer() rotates it
-            // onto the new route at the bounded yaw rate, like any other turn.
-            a.restNode = nav_->links[lastLink].to;
-            a.arrivedLink = lastLink;
-            Vec2 keepHeading = a.heading;
-            if (startWanderTrip(a, a.restNode, /*fromRest=*/false)) {
-                a.speed = vArrive;
-                a.heading = keepHeading;   // no snap: the yaw stays rate-limited
-                return;
-            }
-            // No route anywhere (isolated node): pull onto the VERGE like a
-            // schedule arrival — resting in-lane left a body no gap key, no box
-            // rule, and no crash pass could see. The scheduling pass retries.
-            {
-                Vec2 dir = nav_->direction(lastLink);
-                Vec2 right(dir.y, -dir.x);
-                Real hw = nav_->links[lastLink].width * 0.5;
-                Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;
-                back = std::min(back, nav_->links[lastLink].length * 0.5);
-                a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                        right * (hw + 2.8);
-                a.heading = dir;
-            }
-            a.route.links.clear();
+        arriveOrChain(a, a.speed);   // pass the still-rolling speed: a chain keeps it
+    } else {
+        refreshPose(a);
+        steer(a, dt);
+        if (car) labelDriverState(a, seenAhead, gap, legCount);
+    }
+}
+
+// The arrival branch of advance(): a wander driver CHAINS into its next trip, a
+// schedule driver parks on the verge, a walker rests at its sidewalk end.
+// `vArrive` is the speed still carried at the arrival tick — a chain keeps it.
+void CitySim::arriveOrChain(Agent& a, Real vArrive) {
+    a.moving = false;
+    a.speed = 0;
+    int lastLink = a.route.links.back();
+    // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
+    // arrivals at ground level, under their own road.
+    a.elevation = nav_->links[lastLink].layer * kLayerClearance;
+    if (a.mode == Agent::Mode::Driver && wander_) {
+        // WANDER (the agent lab): CHAIN straight into the next trip THIS
+        // tick — no parking pose (which read on device as the car "jumping
+        // backwards in time, then shooting forward") and no one-frame rest
+        // INSIDE the junction box for cross traffic to overlap. The car
+        // keeps its speed and heading through the node; steer() rotates it
+        // onto the new route at the bounded yaw rate, like any other turn.
+        a.restNode = nav_->links[lastLink].to;
+        a.arrivedLink = lastLink;
+        Vec2 keepHeading = a.heading;
+        if (startWanderTrip(a, a.restNode, /*fromRest=*/false)) {
+            a.speed = vArrive;
+            a.heading = keepHeading;   // no snap: the yaw stays rate-limited
             return;
         }
-        if (a.mode == Agent::Mode::Driver) {
-            // Park OFF the carriageway (ADR-0062). Resting at the lane's very end
-            // was harmless for a kinematic ghost, but the PHYSICAL car that now
-            // follows this pose became a roadblock parked at the junction mouth —
-            // everyone behind piled up until the next trip, hours later. Pull to
-            // the verge beside the link, a few metres short of the node, with a
-            // per-agent setback so arrivals at one destination don't stack.
+        // No route anywhere (isolated node): pull onto the VERGE like a
+        // schedule arrival — resting in-lane left a body no gap key, no box
+        // rule, and no crash pass could see. The scheduling pass retries.
+        {
             Vec2 dir = nav_->direction(lastLink);
             Vec2 right(dir.y, -dir.x);
             Real hw = nav_->links[lastLink].width * 0.5;
-            Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;   // 4..13 m
+            Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;
             back = std::min(back, nav_->links[lastLink].length * 0.5);
             a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
                     right * (hw + 2.8);
             a.heading = dir;
-        } else {
-            // A walker rests at the end of its sidewalk (continuous with the final
-            // motion — not snapped across the node, which was the old visible jump).
-            a.pos = nav_->sidewalkPoint(lastLink, 1.0);
         }
-        a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
-                                                               : Agent::Activity::AtHome;
-        a.restNode = nav_->links[lastLink].to;   // wander departs from here
-        a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
         a.route.links.clear();
-    } else {
-        refreshPose(a);
-        steer(a, dt);
-        // Driver FSM (ADR-0061): label what's governing the car this step, from
-        // what it sees, so the behaviour is legible (debug widgets read a.state).
-        // Precedence mirrors how the speed was actually capped above: a ped/player
-        // in the cone (Yielding) dominates a same-lane leader (Following), which
-        // dominates a heading change at the coming node (Turning); otherwise the
-        // car runs free (Cruising). The Waiting-at-a-red case returned earlier.
-        if (car) {
-            bool bendAhead = false;
-            if (a.leg + 1 < legCount) {
-                Vec2 d0 = nav_->direction(a.route.links[a.leg]);
-                Vec2 d1 = nav_->direction(a.route.links[a.leg + 1]);
-                Real align = d0.x * d1.x + d0.y * d1.y;   // 1 = straight through
-                Real distToEnd = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
-                if (align < 0.98 && distToEnd < kJunctionApproach) bendAhead = true;
-            }
-            if (seenAhead < 1e9)          a.state = Agent::State::Yielding;
-            else if (gap < kCarSlowZone)  a.state = Agent::State::Following;
-            else if (bendAhead)           a.state = Agent::State::Turning;
-            else                          a.state = Agent::State::Cruising;
-        }
+        return;
     }
+    if (a.mode == Agent::Mode::Driver) {
+        // Park OFF the carriageway (ADR-0062). Resting at the lane's very end
+        // was harmless for a kinematic ghost, but the PHYSICAL car that now
+        // follows this pose became a roadblock parked at the junction mouth —
+        // everyone behind piled up until the next trip, hours later. Pull to
+        // the verge beside the link, a few metres short of the node, with a
+        // per-agent setback so arrivals at one destination don't stack.
+        Vec2 dir = nav_->direction(lastLink);
+        Vec2 right(dir.y, -dir.x);
+        Real hw = nav_->links[lastLink].width * 0.5;
+        Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;   // 4..13 m
+        back = std::min(back, nav_->links[lastLink].length * 0.5);
+        a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                right * (hw + 2.8);
+        a.heading = dir;
+    } else {
+        // A walker rests at the end of its sidewalk (continuous with the final
+        // motion — not snapped across the node, which was the old visible jump).
+        a.pos = nav_->sidewalkPoint(lastLink, 1.0);
+    }
+    a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
+                                                            : Agent::Activity::AtHome;
+    a.restNode = nav_->links[lastLink].to;   // wander departs from here
+    a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
+    a.route.links.clear();
+}
+
+// Driver FSM (ADR-0061): label what's governing the car this step, from what it
+// sees, so the behaviour is legible (debug widgets read a.state). Precedence
+// mirrors how advance() actually capped the speed: a ped/player in the cone
+// (Yielding) dominates a same-lane leader (Following), which dominates a heading
+// change at the coming node (Turning); otherwise the car runs free (Cruising).
+// The Waiting-at-a-red case returned from advance() earlier.
+void CitySim::labelDriverState(Agent& a, Real seenAhead, Real gap,
+                               int legCount) const {
+    bool bendAhead = false;
+    if (a.leg + 1 < legCount) {
+        Vec2 d0 = nav_->direction(a.route.links[a.leg]);
+        Vec2 d1 = nav_->direction(a.route.links[a.leg + 1]);
+        Real align = d0.x * d1.x + d0.y * d1.y;   // 1 = straight through
+        Real distToEnd = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
+        if (align < 0.98 && distToEnd < kJunctionApproach) bendAhead = true;
+    }
+    if (seenAhead < 1e9)          a.state = Agent::State::Yielding;
+    else if (gap < kCarSlowZone)  a.state = Agent::State::Following;
+    else if (bendAhead)           a.state = Agent::State::Turning;
+    else                          a.state = Agent::State::Cruising;
 }
 
 void CitySim::computeGaps() {

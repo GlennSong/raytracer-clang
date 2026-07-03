@@ -254,6 +254,18 @@ private:
     bool startWanderTrip(Agent& a, int from, bool fromRest = true);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void advance(Agent& a, Real dt, Real gap, Real minGap);
+    // advance()'s junction verdict: the speed target after the signal brake and
+    // the box-occupancy / turn-yield scan, plus the effective stop line (distance
+    // along the current leg) the hard clamp in advance() holds at.
+    struct JunctionGate {
+        Real cap = 0;               // speed target after junction/signal/yield caps
+        Real stopLinePos = 0;       // effective stop line on the current leg
+        bool yieldAtLine = false;   // a TURNING car holding for box/oncoming traffic
+    };
+    JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
+    Real senseAhead(Agent& a);   // perception/memory/TTC: distance to a body ahead
+    void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
+    void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
     // Per-node junction box radius: the widest incident half-width. Nonzero at
     // PLAIN nodes too (their road's half-width) — launchClear reads it at
