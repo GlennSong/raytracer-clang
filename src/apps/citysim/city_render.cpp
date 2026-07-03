@@ -6,6 +6,11 @@
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
+#ifdef RT_ENABLE_SCRIPTING
+#include "../../engine/scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "../../engine/scripting/script_vm.h"
+#include "../../log.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +77,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
         params_.wander = c.wander;
+        params_.agentScript = c.agentScript;
         debugWidgets_ = c.debugWidgets;
     });
 
@@ -100,6 +106,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
+#ifdef RT_ENABLE_SCRIPTING
+    // Scripted goal tables (ADR-0064): a level's citysim block may name an
+    // agents.lua-style script (level_loader reads its text into the config);
+    // its archetype tables replace the built-ins BEFORE the warm-up below, so
+    // the whole visible day runs on the scripted goals. Lua runs only here, at
+    // load — every per-tick transition executes in C++ from the tables.
+    if (!params_.agentScript.empty()) {
+        engine::ScriptVM vm;
+        std::string err;
+        citysim::GoalTable ped, driver;
+        const char* pedName = params_.wander ? "wander_pedestrian" : "schedule";
+        const char* drvName = params_.wander ? "wander_driver" : "schedule";
+        if (vm.doString(params_.agentScript, &err) &&
+            engine::loadGoalTable(vm, pedName, ped, &err) &&
+            engine::loadGoalTable(vm, drvName, driver, &err)) {
+            sim_.setGoalTables(std::move(ped), std::move(driver));
+        } else {
+            LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
+        }
+    }
+#endif
     // Warm up so the city is already ALIVE when the level appears — agents depart
     // and spread onto the roads instead of standing still for the first minute.
     for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);

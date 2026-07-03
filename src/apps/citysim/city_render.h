@@ -6,6 +6,7 @@
 #include "city_meshes.h"   // fleetCarMesh, buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include <functional>
+#include <string>
 
 namespace citysim {
 
@@ -34,6 +35,10 @@ struct CityRenderParams {
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
+    // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
+    // whose archetype tables replace the sim's built-ins at build. Loaded from
+    // the level's citysim block; used only in scripting builds; "" = built-ins.
+    std::string agentScript;
 };
 
 class CityRenderSystem : public engine::System {

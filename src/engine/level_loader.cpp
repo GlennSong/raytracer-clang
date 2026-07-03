@@ -1896,6 +1896,17 @@ bool LevelLoader::load(const std::string& path,
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
         cfg.wander = cs.value("wander", cfg.wander);
+        // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
+        // goal-table script; its TEXT rides the config so the citysim bridge
+        // (scripting builds only) can install the tables at build. Missing
+        // file -> warn and fall back to the built-in tables.
+        std::string agentsFile = cs.value("agents", std::string());
+        if (!agentsFile.empty()) {
+            cfg.agentScript = loadScriptCode(agentsFile, levelDir);
+            if (cfg.agentScript.empty())
+                LOG_WARN << "citysim: agents script '" << agentsFile
+                         << "' not found — using built-in goal tables";
+        }
         world.add<CitySimConfig>(world.create(), cfg);
     }
 

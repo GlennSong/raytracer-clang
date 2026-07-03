@@ -257,6 +257,11 @@ struct CitySimConfig {
     bool debugWidgets = false;           // start with the agent-state HUD on
     bool wander = false;                 // agents take perpetual random trips
                                          // (no schedule) — the lab car keeps lapping
+    // Scripted goal tables (ADR-0064): the loaded TEXT of the level's
+    // `"agents"` script (an agents.lua-style file resolved by level_loader).
+    // The citysim render bridge runs it at build (scripting builds only) and
+    // installs its archetype tables over the built-ins. "" = built-ins.
+    std::string agentScript;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------
