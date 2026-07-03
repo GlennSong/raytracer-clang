@@ -4408,6 +4408,26 @@ steering, ORCA/RVO, IDM/MOBIL, pure-pursuit/Stanley (already in
 the ML on-ramps (imitation-learn the classical controller into a tiny MLP; RL
 for the dynamic regime) stay open — the CitySim is already a deterministic gym.
 
+**Post-review hardening + reorg.** Two adversarial review agents swept the layer
+(one for correctness, one for structure). All eleven verified defects were
+fixed and pinned — headliners: the tether-held pedestrian ghost accumulated its
+reactive lean without re-anchoring (unbounded sideways drift); lanes were never
+re-clamped across legs (kerb-driving cars invisible to followers); the yield
+gates were dead on links shorter than the stop-line setback; overlapping-but-
+separating memory tracks read as imminent hits (phantom freezes); walker BODIES
+(not ghosts) are what cars brake for; real Vehicles (promoted/abandoned) are
+obstacles now; commutes validate both directions of the directed graph. The
+pre-citysim `AgentSim`/`TrafficSystem` pair was deleted (dead since ADR-0060,
+−899 lines). Structure: one `junctionRadius()` lookup replaced six hand-rolled
+loops; `advance()` decomposed into named stages (junction gate → sense →
+follow → arrive, ~90-line orchestration); the procedural meshes moved to
+`city_meshes.{h,cpp}`; the test scenarios share `tests/city_test_util.h`; the
+physics-host source list is defined once (`RT_PHYSICS_HOST_SOURCES`); the
+brain-bit derivations are named functions with documented bit ownership.
+Deferred, by choice: the Agent struct decomposition into nested component
+structs, spatial hashing for the O(n²) scans (fine at current counts), and
+k-phase signals for 5-way junctions.
+
 **Tests.** `tests/test_agent_memory.cpp` pins the pure core (velocity
 convergence, extrapolate-then-forget, re-anchoring, eviction, CPA/TTC, flip-
 flop suppression, sustained-winner switching, emergency preemption, height
