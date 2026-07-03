@@ -48,9 +48,9 @@ parallel, hand-written shader trees**:
   Metal driver; embedded as source strings).
 - **Vulkan** — GLSL in [`shaders/vulkan/*.{vert,frag}`](../shaders/vulkan),
   compiled **offline** to SPIR-V bytecode as a build step.
-- **WebGPU** — WGSL embedded as string literals inside
-  [`webgpu_renderer.cpp`](../src/renderer/webgpu/webgpu_renderer.cpp)
-  (e.g. `kMeshWgsl`, `kCompositeWgsl`), compiled at runtime by the browser.
+- **WebGPU** — WGSL in [`shaders/webgpu/*.wgsl`](../shaders/webgpu), embedded
+  into the backend at **build time** (`cmake/embed_wgsl.cmake` generates a
+  header) and compiled at runtime by the browser.
 
 They are kept **behaviorally identical** by porting carefully (the WGSL is a
 line-for-line port of the proven Vulkan GLSL / Metal MSL), but they are three
@@ -111,6 +111,78 @@ Why the detour through an HDR target? Lighting is computed in unbounded
 scene-linear values (the sun can be far brighter than white). Tone-mapping and
 all the screen-space effects need those real HDR values; only the very last step
 compresses them into the 0–1 range a display shows.
+
+## Pipeline anatomy — shaders, bind groups, and targets (WebGPU)
+
+The concrete wiring of the frame above, as the WebGPU backend builds it (Metal
+and Vulkan mirror the same structure with their own binding vocabulary). Shader
+sources: [`shaders/webgpu/*.wgsl`](../shaders/webgpu). The backend's
+`endFrame()` is a thin orchestrator — one method per stage below
+(`recordShadowPasses`, `recordMainPass`, `recordPostStack`, `recordComposite`).
+
+```mermaid
+flowchart TD
+    subgraph inputs["Bind groups (mesh-family pipelines)"]
+        G0["group 0 — scene/frame<br/>globals UBO · per-draw dynamic UBO (256B slots)<br/>env equirect + sampler · BRDF LUT"]
+        G1["group 1 — shadows<br/>main: depth array + compare sampler<br/>shadow pass: cascade-index dynamic UBO"]
+        G2["group 2 — material<br/>albedo/normal/MR/emissive/AO + sampler<br/>(cached per map-set)"]
+    end
+
+    subgraph shadow["Shadow passes — mesh.wgsl vs_shadow*"]
+        SM["shadow map<br/>depth24plus array ×4<br/>2048², 1 layer/cascade"]
+    end
+
+    subgraph main["Main pass — mesh.wgsl (vs_main / vs_instanced / vs_terrain + fs_main), sky first"]
+        HDR["HDR color<br/>rgba16float"]
+        GB["G-buffer<br/>rgba16float<br/>(normal.xyz, roughness)"]
+        DEP["depth<br/>depth24plus"]
+    end
+
+    subgraph post["Post stack (fullscreen triangles)"]
+        AO["ssao.wgsl → AO<br/>r8unorm, ×postEffectScale"]
+        SR["ssr.wgsl → reflections<br/>rgba16float, ×postEffectScale"]
+        BLM["bloom.wgsl → bright + blur H/V<br/>rgba16float, half-res ping-pong"]
+    end
+
+    CP["composite.wgsl<br/>exposure → grade → ACES/AgX<br/>+ AO multiply, SSR add, bloom add"]
+    SC["swapchain (canvas)<br/>bgra8unorm"]
+
+    G0 --> shadow
+    G1 --> shadow
+    G0 --> main
+    G1 --> main
+    G2 --> main
+    SM -->|PCF compare| main
+    DEP --> AO
+    GB --> AO
+    DEP --> SR
+    GB --> SR
+    HDR --> SR
+    HDR --> BLM
+    HDR --> CP
+    AO --> CP
+    SR --> CP
+    BLM --> CP
+    CP --> SC
+```
+
+Reading notes:
+
+- **Bind groups are ordered by update frequency** — group 0 changes per frame
+  (plus a 256-byte dynamic offset per draw), group 1 per pass, group 2 per
+  material. Draws are sorted by (material, mesh) so consecutive draws reuse
+  groups and vertex bindings without re-binding.
+- **Vertex streams:** slot 0 is the packed `GpuVertex`
+  (position/normal/tangent/uv/color); instanced draws add slot 1, a per-instance
+  model matrix as four `vec4` attributes.
+- **One-time pipelines** not in the per-frame graph: `brdf_lut.wgsl` bakes the
+  split-sum BRDF LUT (rg16float, 256²) once at init, and `blit.wgsl` downsamples
+  texture mip chains at upload time.
+- **When SSAO and SSR are both off** (e.g. the Mobile preset), the main pass
+  drops its depth/G-buffer stores (`StoreOp_Discard`) since nothing reads them,
+  and shadow passes cull casters per cascade against each cascade's light-space
+  box. The cascade *fit* itself is shared, unit-tested math in
+  [`src/renderer/cascade_fit.h`](../src/renderer/cascade_fit.h).
 
 ## Concepts / glossary
 

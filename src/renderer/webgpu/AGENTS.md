@@ -33,9 +33,10 @@ faithful port of the proven Metal/Vulkan trees. Visual confirmation is on-device
   AO/SSR/bloom) → swapchain. The scene renders into an offscreen `RGBA16Float`
   HDR target; only the composite writes the swapchain. SSAO/SSR render at
   `postEffectScale` (half-res default) and are linear-upscaled in the composite.
-- **Shaders:** WGSL embedded as string literals (`kMeshWgsl`, `kCompositeWgsl`,
-  `kBloomWgsl`, `kSsaoWgsl`, `kSsrWgsl`, `kBlitWgsl`, `kBrdfWgsl`), compiled at
-  runtime — matches Metal's MSL-string approach (no offline SPIR-V step).
+- **Shaders:** WGSL sources in `shaders/webgpu/*.wgsl` (mesh, composite, bloom,
+  ssao, ssr, blit, brdf_lut), embedded at build time by `cmake/embed_wgsl.cmake`
+  into a generated header (`kMeshWgsl`, ...) and compiled at runtime by the
+  browser. Edit the `.wgsl` files, never the generated header.
 - **Seam plumbing:** no new `Window`/`Renderer` methods — the surface comes from
   the canvas selector, and `nativeWindowHandle()` (null on the web) is ignored.
   CMake's `if(EMSCRIPTEN)` block selects this backend and builds `viewer_web`;
