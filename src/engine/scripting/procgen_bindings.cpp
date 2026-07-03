@@ -6,6 +6,7 @@
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
 #include "../procgen/tree.h"
+#include "../procgen/vehicle_mesh.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
@@ -291,6 +292,27 @@ int l_mesh_capsule(lua_State* L) {
     auto r = static_cast<float>(luaL_checknumber(L, 1));
     auto h = static_cast<float>(luaL_checknumber(L, 2));
     pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::capsule(r, h)));
+    return 1;
+}
+
+// mesh.car_shell(style, color, {W, H, L} [, with_wheels]) — the lofted, curved
+// car body (ADR-0062): superellipse sections along a style roofline, glass
+// painted into the greenhouse. The SAME generator the NPC fleet instances, so a
+// Lua vehicle recipe (the player's car) matches the traffic 1:1. Styles:
+// "sedan", "hatchback", "suv", "pickup", "van", "boxtruck".
+int l_mesh_car_shell(lua_State* L) {
+    std::string s = luaL_checkstring(L, 1);
+    CarShellStyle style = CarShellStyle::Sedan;
+    if (s == "hatchback") style = CarShellStyle::Hatchback;
+    else if (s == "suv") style = CarShellStyle::SUV;
+    else if (s == "pickup") style = CarShellStyle::Pickup;
+    else if (s == "van") style = CarShellStyle::Van;
+    else if (s == "boxtruck") style = CarShellStyle::BoxTruck;
+    else if (s != "sedan") return luaL_error(L, "car_shell: unknown style '%s'", s.c_str());
+    Vec3 color = checkVec3(L, 2);
+    Vec3 size = checkVec3(L, 3);
+    bool wheels = lua_isboolean(L, 4) ? lua_toboolean(L, 4) != 0 : true;
+    pushMesh(L, std::make_shared<RenderMesh>(buildCarShell(style, color, size, wheels)));
     return 1;
 }
 
@@ -2365,6 +2387,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"plane", l_mesh_plane},
         {"torus", l_mesh_torus},
         {"capsule", l_mesh_capsule},
+        {"car_shell", l_mesh_car_shell},
         {"merge", l_mesh_merge},
         {"translate", l_mesh_translate},
         {"place", l_mesh_place},

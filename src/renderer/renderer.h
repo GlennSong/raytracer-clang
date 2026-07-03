@@ -73,6 +73,10 @@ struct RenderMaterial {
     // function, weighted by height above the instance origin (base planted, tips
     // move). For grass/foliage; applied on the instanced draw path.
     static constexpr uint32_t FLAG_WIND = 4;
+    // Debug overlay: draw ON TOP of everything (depth test always passes, no depth
+    // write) and unlit/emissive, for gizmos like the agent footprints/trajectory
+    // vectors that must stay visible through world geometry. Backend-honoured.
+    static constexpr uint32_t FLAG_OVERLAY = 8;
 
     // World-space procedural surface library (applySurface in common.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

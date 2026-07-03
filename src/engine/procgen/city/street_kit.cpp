@@ -123,12 +123,18 @@ void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir,
     place(out, MeshBuilder::cylinder(0.20f, 0.5f, 8), housing,
           base + Vec3(0, 0.25, 0), yaw);
 
-    // Horizontal mast arm reaching out over the carriageway along faceDir.
-    Vec3 armMid = base + Vec3(0, armY, 0) + fwd * (armLen * 0.5);
-    place(out, MeshBuilder::box(Vec3(0.12, 0.12, armLen)), poleCol, armMid, yaw);
+    // Horizontal mast arm reaching SIDEWAYS over the carriageway (perpendicular to
+    // the facing direction), so the head hangs out over the lane rather than
+    // sticking out toward the driver. `side` is the in-plane perpendicular; with a
+    // near-right-corner placement it points toward the road centre.
+    Vec3 side(f.y, 0, -f.x);
+    Real armYaw = std::atan2(side.x, side.z);
+    Vec3 armMid = base + Vec3(0, armY, 0) + side * (armLen * 0.5);
+    place(out, MeshBuilder::box(Vec3(0.12, 0.12, armLen)), poleCol, armMid, armYaw);
 
-    // Three-lamp signal head hung from the arm end, lenses on the faceDir side.
-    Vec3 headTop = base + Vec3(0, armY - 0.1, 0) + fwd * (armLen - 0.2);
+    // Three-lamp signal head hung from the arm end; the head faces the driver
+    // (lenses on the faceDir side) even though the arm runs perpendicular.
+    Vec3 headTop = base + Vec3(0, armY - 0.1, 0) + side * (armLen - 0.2);
     Vec3 headCenter = headTop + Vec3(0, -0.55, 0);
     place(out, MeshBuilder::box(Vec3(0.42, 1.30, 0.40)), housing, headCenter, yaw);
     Vec3 lensFace = fwd * 0.22;

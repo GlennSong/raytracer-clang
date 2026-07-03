@@ -698,7 +698,13 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Editor-authored road (shape:"road", ADR-0049): the same RoadNet the
         // editor edits, baked to the carriageway and draped on the level terrain.
         if (ent.value("shape", std::string()) == "road") {
-            RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"] : json::object());
+            const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
+            RoadNet net = roadNetFromJson(roadBlock);
+            // A generated network (ADR-0056 "generate" recipe — grown.json's whole
+            // city) has no authored nodes: grow it exactly like the level loader
+            // does, or the offline render shows bare ground where the city is.
+            if (roadBlock.contains("generate"))
+                applyGenerateRecipe(net, roadBlock["generate"]);
             if (levelGround) net.heightAt = levelGround;
             Material rm = Material::pbr(Vec3(1, 1, 1), 0.0, 0.93);
             if (net.markings)   // lane paint via the RoadMarkings surface, not geometry

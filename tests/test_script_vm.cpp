@@ -80,6 +80,39 @@ TEST_CASE(procgen_script_builds_an_sdf_sphere_mesh) {
     CHECK(onSurface);
 }
 
+TEST_CASE(procgen_script_builds_a_curved_car_shell) {
+    // mesh.car_shell (ADR-0062): the Lua vehicle recipes (the player's car) use
+    // the SAME lofted body generator the NPC fleet instances — one body path.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    const char* code = R"LUA(
+        return mesh.car_shell("sedan", {0.72, 0.10, 0.10}, {1.8, 1.3, 4.2}, false)
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() > 100);
+    CHECK(mesh->indices.size() % 3 == 0);
+    // It's the shell: curved (narrower at the roof than the belt) and glazed.
+    Real beltW = 0, roofW = 0;
+    bool hasGlass = false;
+    for (const Vertex& v : mesh->vertices) {
+        if (v.position.y > -0.2 && v.position.y < 0.05)
+            beltW = std::max(beltW, (Real)std::fabs(v.position.x));
+        if (v.position.y > 0.42 && v.position.y < 0.70)
+            roofW = std::max(roofW, (Real)std::fabs(v.position.x));
+        if (std::fabs(v.color.x - 0.05) < 1e-6 && std::fabs(v.color.z - 0.10) < 1e-6)
+            hasGlass = true;
+    }
+    CHECK(roofW < beltW * 0.85);
+    CHECK(hasGlass);
+    // Bad style: a Lua error, not a crash.
+    std::shared_ptr<RenderMesh> bad;
+    CHECK(!runProcgenMesh(vm, "return mesh.car_shell('hovercraft', {1,0,0}, {2,1,4})",
+                          bad, &err));
+}
+
 TEST_CASE(procgen_script_matches_the_cpp_substrate) {
     // ADR-0023: the Lua front-end and the C++ generators are the SAME substrate.
     // An identical recipe must yield an identical mesh.

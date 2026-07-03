@@ -8,6 +8,13 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
+#include "../apps/citysim/city_render.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "../apps/citysim/city_physics.h"
+#include "../apps/citysim/city_vehicles.h"
+#include "../apps/citysim/city_walkers.h"
+#endif
+#include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
@@ -61,6 +68,26 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
 #endif
     addSystem<MotionSystem>();
+    // Agent-based city: drivers + pedestrians with acceleration, signals,
+    // perception, and bounded-radius steering over the road network (ADR-0060).
+    auto& citySys = addSystem<citysim::CityRenderSystem>();
+#ifdef RT_ENABLE_PHYSICS
+    // Motion authority per regime (ADR-0062 rethink): AMBIENT traffic is moved by
+    // ONE authority — the CitySim planner — drawn instanced and collided via
+    // kinematic proxies (CityPhysicsSystem), which is what keeps forty cars
+    // flowing. Full Jolt dynamics is an INTERACTION response: CityVehicleSystem
+    // PROMOTES an ambient car to a real Vehicle when the player commandeers it
+    // (registered before VehicleSystem so the same enter press then seats the
+    // player). Walkers are physics characters (CityWalkerSystem) — their plant is
+    // trivially controllable, so bodies-follow-planner works for them everywhere.
+    citySys.setPedsExternallyOwned(true);
+    addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
+    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // commandeer promotion
+    addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
+    addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
+#else
+    (void)citySys;   // physics-off build: no collider system to consume it
+#endif
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
@@ -115,6 +142,8 @@ void ArenaState::onEnter(FrameContext& ctx) {
             }
         }
     }
+    // Vehicles are spawned by the level loader from the level's "vehicles" block
+    // (ADR-0059), so they are data-driven rather than hardcoded here.
 #endif
 
     // Play From Here (one-shot flag): start the player at the editor's view

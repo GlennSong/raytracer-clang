@@ -3844,10 +3844,682 @@ pthreads + COOP/COEP).
 
 ---
 
+## ADR-0059 — A living-world agent layer: runtime NavGraph + A* + deterministic agent sim, then physics vehicles in Lua
+
+**Context.** The procgen pipeline builds beautiful but *empty* worlds — spline
+road graphs, welded junctions, scattered forests — with no motion in them. The
+engine already has the three things a traffic/crowd system needs and most
+engines lack at this stage: a **deterministic seeded sim** (ADR-0002), **Jolt
+physics** (ADR-0012) — and Jolt v5.5.0 ships the full vehicle API
+(`VehicleConstraint`/`WheeledVehicleController`) — and a **real spline road
+graph** (ADR-0049/0056). The wishlist (June 2026): cars and pedestrians that
+*use* the generated roads; a car the player can jump into and drive with a
+forgiving, video-game feel; vehicle bodies authored in **Lua** like `flora` and
+`gun.lua`; and agents with a *reason* to move — a daily schedule, home→work→home.
+
+The blocker: the road network is consumed at mesh-build time and discarded. The
+`RoadNet`/`RoadGraph` exist only long enough to stroke ribbons; nothing
+navigable survives to runtime. (`netGraph(net)` already samples every edge into a
+fine straight-segment polyline that follows the rendered centerline exactly — the
+ideal source for a nav graph, computed and thrown away.)
+
+**Decision.** Build the system in phases over the existing value types and seams,
+deterministic from a seed, headless/CI-testable before any GPU/physics work
+(ADR-0002, "small reversible steps"). Confirmed scope (June 2026): **Jolt wheeled
+vehicle tuned arcade-forgiving** for the player car; **hybrid simulation** —
+AI agents kinematic on lane splines (scales to hundreds), the player's car (and
+optionally a few near it) on full Jolt physics; vehicle bodies authored in Lua.
+
+*Phase 1 (this ADR — the navigation foundation, headless):* a new `engine/ai/`
+module, pure data + pure functions, no ECS/render/physics:
+1. **`NavGraph`** (`nav_graph.{h,cpp}`) — the persistent, *directed* lane graph
+   derived from a (sampled) `RoadGraph`. Each undirected `RoadEdge` becomes two
+   `NavLink`s (one per direction; one-way for `Ramp`); lane count per direction
+   is derived from carriageway width. Geometry helpers place a point in a lane
+   (`laneCenter`, right-hand traffic) or on the sidewalk verge (`sidewalkPoint`),
+   plus `nearestNode`/`nearestLink` to snap trip ends. Built from the *same*
+   `netGraph(net)` the mesher uses, so lanes line up with the visible asphalt.
+2. **Pathfinding** (`pathfind.{h,cpp}`) — A* over the directed lane graph. Cost is
+   **travel time** (`length / classSpeed`), so routes prefer arterials over local
+   streets like real driving; the heuristic is straight-line time at the fastest
+   class speed (admissible → optimal). Deterministic tie-break by link index.
+3. **Agent sim** (`agent_sim.{h,cpp}`) — a deterministic `AgentSim` owning cars
+   and pedestrians, each with a `home` and `work` node and a daily schedule
+   (depart-for-work / depart-for-home, per-agent jittered). A wrapping in-world
+   clock drives state transitions (AtHome→Commuting→AtWork→Returning); agents A*
+   to their destination and advance along the route by arc length at a
+   class-appropriate speed (cars) or walking speed (pedestrians). Same seed + dt
+   sequence → identical trajectories.
+
+*Phase 2 (landed):* an ECS `TrafficSystem` (`systems/traffic_system.{h,cpp}`)
+that builds the NavGraph from the level's `RoadNet` entities (via the new public
+`navRoadGraph` accessor — the same sampled+constrained graph the mesher uses),
+runs the `AgentSim`, and bakes agent poses into two `InstanceGroup`s (cars,
+pedestrians) rebuilt each fixed step, so RenderSystem draws the whole crowd as
+two instanced batches. Built lazily on the first `fixedUpdate` after load and
+registered in `ArenaState`. `build`/`step` take a `World` directly so the spawn +
+pose-sync logic is unit-tested headless (the GPU mesh upload is the only
+AssetManager-gated part). **Render path is backend-agnostic:** the crowd draws
+through the generic `Renderer` seam (`drawMeshInstanced`, whose default loops
+`drawMesh`), so it renders on **both** Metal and the new Vulkan backend (ADR-0057)
+with no traffic-specific wiring — i.e. verifiable on a Linux/Vulkan viewer build,
+not Metal-only. (Coalesced GPU instancing on Vulkan — Metal already batches by
+mesh handle — is an open perf optimization, noted in the tech-debt register; the
+default per-instance loop is correct meanwhile.) The nav stack is additionally
+proven headless over the real grid/radial/tensor generators
+(`tests/test_traffic_city.cpp`): connectivity, routing, a simulated commute day,
+and determinism over a generated city.
+
+*Chase camera (landed, verified):* `FollowCameraController` — a pure, window-free
+third-person rig (orbit behind a tracked target, look-to-orbit, zoom-dolly),
+unit-tested headless like the fly/orbit controllers. The camera half of "jump in
+and drive", landed ahead of the physics car so it ships verified.
+
+*Phases 3-4 (landed, UNVERIFIED — submodule-gated):* the drivable physics car and
+its Lua authoring. This sandbox cannot fetch the Jolt/Lua submodules (the git
+proxy only allows the repo, so submodule clones 403), so this code is written
+against the documented Jolt v5.5.0 vehicle API and the existing flora/gun Lua
+patterns but has NOT been compiled here — it must be built/tuned on a submodule
+machine. What was added:
+- **`PhysicsWorld` vehicle seam** — Jolt-free `VehicleConfig`/`VehicleWheel`, an
+  opaque `VehicleId`, and `addVehicle`/`setVehicleInput`/`vehiclePosition`/
+  `wheelTransform`/`removeVehicle`, wrapping Jolt's `WheeledVehicleController` +
+  `VehicleConstraint` + a raycast collision tester in the .cpp (no JPH:: in the
+  header, per ADR-0012).
+- **`Vehicle`/`InVehicle` components + `VehicleSystem`** — creates the Jolt
+  vehicle from the config + Transform, drives it from the seated driver's input,
+  writes chassis + wheel transforms back, and owns the enter/exit interaction
+  (board a nearby car with G, suppress on-foot movement via `InVehicle`, switch
+  the view to the chase camera; `PlayerSystem` yields while seated).
+- **Lua bodies** — `assets/scripts/vehicles.lua` (`vehicle.sedan/hatchback`,
+  authored over the procgen `mesh.*` builders like `flora`), a `VehicleSpec`
+  reader (`scripting/vehicle_spec.cpp`) that runs the recipe and reads the body
+  mesh + handling params, and `spawnVehicle` to build the entity.
+- **Data-driven placement** — the level loader reads a top-level `"vehicles"`
+  array (`loadVehicles`): each entry is a `recipe` name (or a full `script`) plus
+  a `position`, `yaw`, and `seed`, spawned in play mode via the reader above.
+  `assets/levels/arena.json` ships two (a sedan + a hatchback) near the player.
+The non-submodule-bound glue (VehicleSystem, the camera switch, the loader hook,
+components) was nonetheless syntax-checked (`clang -fsyntax-only`) against the
+real engine headers; only the Jolt body code and the Lua reader are uncompiled.
+
+*Later phases (planned):* the kinematic-far / physics-near handoff (promote AI
+traffic cars near the player to full Jolt vehicles, demote distant ones).
+
+**Why this shape.** It is a *convergence* of shipped systems, not a new pillar:
+the nav graph falls out of the road graph; A* rides the existing curve/arc-length
+math; the sim obeys the deterministic-clock discipline already used for physics.
+Phase 1 is entirely pure and unit-tested on Linux/CI (`make test`), matching the
+engine's culture and de-risking the GPU/physics phases that follow.
+
+**Owed.** A compile/tune pass on the submodule-gated vehicle code (Phases 3-4
+above) on a Jolt/Lua build — likely small Jolt member-name/ctor touch-ups and
+handling/feel tuning. The kinematic-far/physics-near handoff and a level-JSON
+`vehicles` block (above). `NavGraph` is rebuilt from the `RoadNet` on demand
+rather than cached on an entity; turn-restrictions are not modelled (all turns
+except U-turns allowed). Same-lane **car-following** keeps agents queued behind
+each other (`carFollowingCap`), and cars **ease to a crawl approaching
+intersections** (`NavGraph::isJunction` + a deadlock-free slowdown, never a stop)
+— but full **right-of-way / traffic-signal arbitration** is still future work, so
+cross-traffic doesn't yet truly yield, and the player's physics car isn't avoided
+(no inter-agent collision). All headless-tested. Destroyed
+`Vehicle` entities don't `removeVehicle` (no destroy hook, same bounded-leak class
+as the ScriptBehaviour note below).
+
+---
+
+## ADR-0060 — Agent-based city simulation as an application (perception, signals, rules)
+
+**Context.** The traffic/crowd sim (ADR-0057/0058) had grown realistic enough to
+expose what "realistic" really needs: agents that perceive, obey signals, yield to
+pedestrians, turn with a radius, and drive their cars *as agents* — and which can
+make faults. That is a simulation *application*, not core engine: its policy
+(traffic rules, schedules, signal timing) is game-specific, while the substrate
+(NavGraph, A*, perception, wheeled-vehicle physics) is reusable.
+
+**Decision.** Build it under `src/apps/citysim/`, a deterministic agent sim over
+the core navigation substrate. Full plan + phases + test cases:
+`docs/agent-sim-plan.md`. Key choices:
+- **Agent = brain (data); a car is an inert `Vehicle` until an agent possesses it.**
+  A pedestrian is a brain-only agent. The *player is just an agent whose brain is
+  input* — same possession model, unifying player and crowd.
+- **Two layers:** a pure, deterministic decision core (perception → rules →
+  kinematic motion), headless/CI-tested; and a device-verified physics/render skin
+  (Jolt wheeled cars near/driven by the player; instanced models for
+  cars/peds/signs/lights).
+- **Core vs app split:** `NavGraph`/A*/`perception` (vision cone) and the
+  `PhysicsWorld` vehicle stay in `engine/`; traffic signals, rules, agent brains,
+  schedules, and the `CitySim` driver live in the app. Anything that proves
+  generally useful graduates back into `engine/` (perception already did).
+
+**Phase 1 (landed, headless):** core `engine/ai/perception.h` (a forward
+`VisionCone` + `sees`/`forwardDistance`); app `traffic_signal.{h,cpp}` (a
+deterministic `SignalController` over NavGraph junctions — opposing arms share a
+phase, phases cycle green→yellow→red, perpendicular arms never both green); app
+`traffic_rules.{h,cpp}` (pure `approachStop` / `signalSpeedCap` /
+`nearestObstacleAhead`). 12 tests; suite 566/566.
+
+**Phases 2-5 (landed, headless).** `CitySim` (`src/apps/citysim/city_sim.{h,cpp}`)
+is the agent framework: agents possess cars (two-way link), commute on a daily
+schedule, follow lanes/gaps, obey signals (hard stop line at red) and crosswalks,
+brake for what they SEE in a vision cone, make deterministic perception faults
+below reliability 1.0, and steer through junctions on a bounded-turn-radius arc
+(rate-limited heading) instead of snapping. Tests: `test_city_sim`,
+`test_city_signals`, `test_city_perception`, `test_city_steering`.
+
+**Phase 6 (render landed, headless-tested; hybrid physics device-side).** App
+`CityRenderSystem` (`src/apps/citysim/city_render.{h,cpp}`) builds the NavGraph
+from the level's RoadNets, runs the `CitySim`, and bakes poses into
+InstanceGroups — one for cars, one for pedestrians, one per signal state with an
+emissive lens that lights up for the active phase. `arena_state` now registers it
+in place of the old AgentSim-backed `TrafficSystem`. App sources compile into
+`engine_core` (like `traffic_system.cpp`) so viewer/editor link them; the
+core→app dependency direction is preserved (the bridge depends on core, not vice
+versa). Tests: `test_city_render`. Remaining device-side: running near/driven AI
+cars on Jolt wheeled physics (the hybrid model — far cars stay kinematic); the
+player car already uses Jolt via `VehicleSystem`.
+
+---
+
+## ADR-0061 — Reactive, perception-driven agents (state machines + local steering) and one composable vehicle
+
+**Context.** The city sim (ADR-0060) moves agents by GLOBAL plans: an A* route is
+computed up front and each agent snaps along lanes leg by leg. That produces
+discontinuities (lane-side snaps at nodes, arrival teleports, one-step merge
+overlaps), agents that can drive/​walk *through* each other (no real reaction),
+and NPC cars that share nothing with the player's car (separate mesh + separate
+kinematic mover). The desired feel is more emergent: an agent should act on what
+it can SEE in front of it and decide locally — closer to boids than to a solved
+path — and every vehicle should be the same kind of object the player drives.
+
+**Decision (direction; phased).**
+
+1. **An agent is a reactive brain with a cone of vision and a state machine.**
+   Each step an agent perceives only what falls in its `VisionCone` (neighbours,
+   the car/person ahead, a signal, the player), runs a small finite state machine
+   (e.g. pedestrian: `Resting → Walking → Avoiding → WaitingToCross → Crossing`;
+   driver: `Cruising → Following → Yielding → Stopping → Turning`), and outputs a
+   **steering intent**, not a teleport. Decisions use only visible/local
+   information — an agent can be surprised (it does not know what is behind it or
+   what is coming next). Optional agent MEMORY (recently-seen obstacles) is a
+   later pass.
+2. **Movement is continuous local steering (boids-style), integrated over time.**
+   Behaviours combine as weighted steering: SEEK the current goal/waypoint,
+   SEPARATE from visible neighbours (evade — but only ones in the cone), align/
+   follow to form lanes, and avoid obstacles. This replaces the leg-by-leg lane
+   snap, so motion is continuous and agents part around each other instead of
+   overlapping. The NavGraph still supplies the road/sidewalk geometry and a goal
+   to seek; it stops being a rigid rail. A* (if kept) only picks a coarse goal
+   sequence — the moment-to-moment behaviour is reactive.
+3. **One composable vehicle for player and AI.** A vehicle is an entity composed
+   of components — Body (Lua-authored mesh + dimensions + type: car/truck/tractor-
+   trailer), Chassis (Jolt physics + drivetrain), Handling (input→forces), Seats
+   (occupancy: an agent or the player), Lights (toggle), and a **Controller** that
+   is the sole source of `{throttle, steer, brake}`. `PlayerController` reads
+   input; `DriverAgent` is the reactive brain above producing the same three
+   numbers. The vehicle does not know who drives it — so NPC cars look and move
+   like the player's, just with an AI at the wheel, and discontinuities vanish
+   because physics integrates position.
+4. **Debug widgets.** Each agent can render a footprint (bounding circle/rect) and
+   a forward trajectory vector on the ground, to make the perception/steering
+   legible while tuning.
+
+**Why this over the A* rail.** It is *less* optimal for routing but far more
+dynamic and robust: reactive agents don't teleport, resolve their own conflicts
+by steering, and degrade gracefully. It also unifies the two vehicle code paths
+onto the player's.
+
+**Phasing (each shippable).** (1) Pedestrians go reactive first — perception-
+gated local avoidance + a walking FSM (headless-testable). (2) Debug widgets.
+(3) Drivers go reactive — FSM + steering that follows the lane and reacts to what
+it sees. (4) Unify the vehicle body (NPC cars from `vehicles.lua`). (5) The
+`DriverAgent` controller drives a real Jolt vehicle near the camera (device). See
+`docs/vehicle-agent-plan.md`.
+
+**Status.** Phases 1–3 have landed (headless-tested). (1) Pedestrians steer
+continuously around what they see (`city_sim.cpp` reactive pass) + a hard body
+floor. (2) Per-agent debug widgets — footprint ring coloured by state + forward
+arrow — draw on top via `FLAG_OVERLAY` on both backends. (3) The driver reactive
+layer was already in `advance()` (bounded-turn-radius steering, cone braking for
+people, car-following, signal stops); Phase 3 adds the **explicit driver FSM** on
+top of it: each step a car labels itself Cruising / Following / Yielding / Turning
+/ Waiting from what governs it, surfaced through the debug widgets and covered by
+`tests/test_city_driver_fsm.cpp`. The `Agent::State` enum now spans both the
+pedestrian and driver states (`Count` sizes the render arrays).
+
+Phase 4 (composable vehicle body) has landed in its headless-testable form: a
+shared **fleet table** (`city_sim.cpp` `kFleet`) gives every vehicle a Body — a
+`VehicleType` + real dimensions (sedan / hatchback / SUV / pickup / van / box
+truck). The sim's `SimVehicle` takes its slot's body; the renderer mirrors the
+SAME slot (mesh style + size from the fleet, `city_render.cpp`); and the collider
+sizes each group's boxes to match (`carGroupHalfExtents`). Car-following is now
+**length-aware** (`pairMinGap`): a sedan pair reproduces the historical 5.0 m gap
+exactly, and a longer body keeps (and is kept at) a proportionally larger bumper
+gap, so adding trucks never lets traffic pack tighter — covered by
+`tests/test_city_fleet.cpp`. What is NOT yet done in Phase 4: NPC bodies are still
+procedural box meshes that MIRROR the player's `vehicles.lua car_body` by hand
+rather than being built from the actual Lua recipe (true 1:1 unification needs the
+Lua/viewer build). Phase 5 (`DriverAgent` controller on a real Jolt vehicle near
+the camera) remains — it needs a device build (Jolt/Lua/viewer) to verify.
+
+---
+
+## ADR-0062 — One car system: every car is a physics Vehicle driven by a Controller
+
+**Context.** The engine had TWO car systems that shared nothing (ADR-0060/0060).
+The player drove a real Jolt wheeled `Vehicle` (`VehicleSystem`), read from host
+input. NPC city cars were KINEMATIC `SimVehicle` pose-holders moved along the
+NavGraph by `CitySim` and mirrored into kinematic collider boxes — they could not
+be driven, could not be entered, did not obey physics, and did not handle like the
+player's car. This split is exactly what an "agent" is supposed to dissolve: if an
+agent's car isn't the same object the player drives, the agent idea is hollow. The
+user's standing requirement: **one car system** — the player can walk up to ANY
+car and drive it, ejecting whatever agent was inside, and every car drives the
+same because every car IS the same object.
+
+**Decision.** There is one kind of car — an engine `Vehicle` (Jolt) — and one
+control seam. Whoever drives it, the player or an AI, speaks only in a
+`DriverInput {throttle, steer, brake, handBrake}`, fed to the one physics path
+(`PhysicsWorld::setVehicleInput`).
+
+1. **The controller seam (`engine/ai/driver_agent.h`).** `computeDriverInput` is a
+   pure function: given what the car IS (`DriverState`: forward heading + forward
+   speed) and what the brain WANTS (`DriverCommand`: desired heading + speed), it
+   returns the pedal/wheel positions — steering aims the heading, throttle/brake
+   close the speed gap. Unit-tested headless (`test_driver_agent.cpp`).
+2. **`AgentDriver` component.** Marks a `Vehicle` as AI-driven: it carries the
+   brain's current `DriverCommand` + tuning + an `agentId` back to the brain.
+   `VehicleSystem::driveVehicles` is now one path: a seated player writes input
+   from host axes; an `AgentDriver` car computes input from its command via the
+   shared controller; an empty car holds the brake. Same input → same physics for
+   every car.
+3. **Enter any car / eject the agent.** `handleEnterExit` lets the player take the
+   nearest car whether or not an AI drives it; entering removes the car's
+   `AgentDriver` (the agent is kicked out) and seats the player — one car, one
+   driver.
+4. **The city bridge (`apps/citysim/city_vehicles.cpp`, viewer/device).**
+   `CityVehicleSystem` spawns each CitySim driver a real `Vehicle` from its fleet
+   body (a `VehicleConfig` sized from the body + the same fleet mesh), tagged
+   `AgentDriver{agentId}`. The `CitySim` keeps running as the **planner**: each
+   step its ghost agent produces a heading + speed, which the bridge writes into
+   the car's command; the real car chases its ghost (heading blended with a pull
+   back toward the planned lane). The render bridge cedes car ownership
+   (`setCarsExternallyOwned`) so cars aren't drawn twice, and the kinematic car
+   colliders are gone — `CityPhysicsSystem` now only does peds + poles. When the
+   player commandeers a car, the bridge sees the `AgentDriver` removed and calls
+   `CitySim::releaseDriver` so the planner stops fighting the physical car.
+
+**Refinement: the loop is CLOSED (same ADR, follow-up).** The first cut chased
+the ghost open-loop (heading blended toward the ghost's position, speed copied
+verbatim), which lags, cuts corners, and strands a car that falls behind its
+plan. Now:
+
+- **Heading — pure pursuit** (`engine/ai/lane_follow.h`): `LaneFollower` tracks
+  the car's real progress along the ghost's lane polyline (monotonic, windowed —
+  a path that doubles back can't snap progress onto the wrong leg) and aims at a
+  speed-proportional lookahead point. `CitySim::lanePath()` exports the route as
+  that polyline; the bridge rebuilds it per trip (`Agent::trips`).
+- **Speed — station control**: the bridge commands `planned + gain*(gapToGhost -
+  standoff)`, capped — a lagging car catches up, an overshooting car eases off,
+  a ghost held at a red parks the car at the line. `pursuitCommand` additionally
+  caps speed by the REMAINING path, so a car can never sail past its path end
+  and orbit the last point (the harness caught exactly that failure).
+- **Tether — the plan waits for the physics**: `CitySim::setAgentTether` holds a
+  ghost that leads its physical car by more than a leash, so a collision, hill,
+  or slow start can never permanently separate car from plan.
+- **Controller — slow into turns**: `computeDriverInput` sheds target speed as
+  the desired heading swings away from the car's (`DriverTuning::turnSlowdown`),
+  so a car brakes into a sharp turn and accelerates out instead of carrying
+  cruise speed through it.
+- **A closed-loop harness** (`tests/test_lane_follow.cpp`): a kinematic
+  bicycle-model car driven by the real controller stack — lane convergence from
+  an offset, a 90° corner, a hairpin with monotonic progress, parking at the
+  path end, determinism. Driving quality is now measured headless; the on-device
+  work is tuning, not debugging the control law.
+
+**Refinement 2: real-pose perception, recovery, personality.**
+
+- **Eyes on real poses** (`engine/ai/traffic_sense.h`): each physical car senses
+  the other PHYSICAL road users from a forward cone — NPC cars where physics
+  actually put them, the player's car, the on-foot player, pedestrians — and
+  `followSpeed` caps its commanded speed off the nearest one ahead in its lane
+  (length-aware ramp to zero at the bumper, floored at a moving leader's pace so
+  convoys flow). Moving cross/oncoming traffic is deliberately not a leader (the
+  planner's anti-deadlock lesson); anything STOPPED in the lane is an obstacle
+  whichever way it faces. Closed-loop tested: a two-car bicycle-model convoy
+  never touches and still keeps up (`tests/test_traffic_sense.cpp`).
+- **Stuck/flip recovery**: a `StuckDetector` (wants speed, gets none, for 4 s)
+  or a >2 s roll triggers `PhysicsWorld::resetVehicleUpright` — a beached,
+  wedged, or flipped NPC car self-recovers instead of blocking a lane forever.
+- **Personality**: each agent carries a `speedFactor` in [0.85, 1.15] (derived
+  from its brain seed's bits — no rng draw, so seeded scenarios are unchanged)
+  applied to its nominal driving/walking pace, and each car's controller gains +
+  following buffer vary deterministically per agent — the fleet stops moving in
+  lockstep. Junction/signal caps stay shared (road rules, not temperament).
+
+**Refinement 3: first device feedback (parked roadblocks, corridor sensing,
+honest widgets).** Device testing surfaced two failures. (a) *Cars piled up at
+junctions*: arrived/idle driver ghosts rested at the END of their lane — harmless
+kinematically, but the PHYSICAL car that follows the pose became a roadblock
+parked at the junction mouth until its next trip, hours later. Drivers now park
+OFF the carriageway (verge beside the link, a per-agent setback so arrivals don't
+stack; idle poses likewise), and the off-trip bridge branch creeps the car to
+that kerb spot. (b) *Debug rings with nothing in them*: the widgets drew at the
+planner-ghost pose while the physical car was elsewhere. The bridge now reports
+each car's REAL pose (`setExternalCarPoses`); a driver's ring circles the actual
+car, and unreported drivers (released to the player) draw none. Alongside: the
+straight sensing cone is replaced on-trip by a **corridor along the pursuit
+path** (`senseAlongPath`) — it bends with the road, so a stopped queue in the
+oncoming lane of a curve can no longer read as "ahead of me" and freeze both
+directions — and an **anti-gridlock valve** noses a car slowly past a STOPPED
+cross car (never a pedestrian/player) after a few blocked seconds, so mutual
+junction blocks self-resolve.
+
+**Refinement 4: physical walkers, think cadence, honest debug HUD.**
+
+- **Pedestrians get bodies** (`apps/citysim/city_walkers.cpp`): each ped agent
+  spawns an entity with a kinematic character capsule (the player's own
+  `CharacterController` + `moveCharacter` mechanism), driven each step toward
+  its planner ghost (walker-simple station control) — walkers now collide with
+  parked cars, poles, kerbs, the player; the ghost tether applies to them too.
+  Knockdown-and-recover: a fast vehicle passing through a walker's body floors
+  it (`KnockdownTimer`, a proximity+speed trigger) — it lies flat, gets up,
+  walks on. The render bridge cedes ped ownership (`setPedsExternallyOwned`).
+  The v1 down pose tilts the render box; the capsule stays upright (ragdoll is
+  future work).
+- **Think cadence** (`Agent::thinkTimer`/`leanTarget`, `setThinkPeriod`): agents
+  DECIDE on a slow, per-agent-staggered clock (default 0.35 s) and COMMIT — the
+  reactive scan runs only on think ticks; between them the committed decision
+  holds while every tick still integrates smoothly toward it. Per-tick
+  re-deciding was the walker oscillation ("wigging out"); a held decision reads
+  as intent. Controllers stay per-tick (stability); decisions go slow
+  (commitment).
+- **Near-field cross braking** (`senseAlongPath` `crossNearRange`): far-field
+  moving cross traffic is still ignored (flow control belongs to the signals),
+  but a crosser within ~8 m ON MY PATH is an imminent T-bone — brake. Two
+  mutual stoppers resolve via the creep valve. This is what physical junction
+  bodies needed that ghost junctions never did.
+- **Debug HUD that answers "what is it thinking?"**: the footprint is now a
+  bright emissive WIRE HOOP at body height (never a flat "shadow ring"),
+  coloured by the FSM state with traffic-light semantics — green = going, RED =
+  held, amber = braking/avoiding, violet = turning, teal = following — and the
+  arrow points from the agent to its CURRENT GOAL (the pursuit lookahead /
+  planned spot), reported by the bridges alongside the real poses.
+
+**Refinement 5: junction throughput, walker awareness, ground-projected HUD
+(second device round).** All-red rings + junction pile-ups traced to the box
+never draining and spawn placement. (a) **Don't block the box**: a car whose
+plan is crossing (`nearJunction` + ghost moving) never idles inside a junction —
+it commits at a minimum pace, spooked by nothing except a person at its bumper;
+the creep valve quickened. (b) **Spawns never land in the box or mid-lane**: a
+mid-trip ghost's car spawns on the verge beside it, staggered, backed out of any
+junction, and merges via pursuit. (c) **Walkers got 360° spatial awareness**: a
+separation steer from every nearby person (beyond the planner's forward cone), a
+BLOCKED state (wants to walk, body pinned → stand still a beat, re-think — shown
+as a red ring via the widget `stateOverride`), and the player gets a wide hard
+berth in the plan itself (`kPlayerClearance`) so near-misses read as
+step-arounds. (d) **The HUD projects on the GROUND** like painted road markings
+(regular depth — always visible the way lane paint is), rims proud of the body,
+wide intent arrows; the waist-height overlay hoop was invisible inside body
+geometry on device, which also suggests the Metal instanced FLAG_OVERLAY state
+isn't taking effect — recorded below. (e) **The agent is VISIBLE in its car**:
+the driver capsule now shows for `AgentDriver` cars, not just a seated player.
+
+**RETHINK (supersedes the ambient-dynamic default): one motion authority per
+regime.** Three device rounds of jammed junctions forced the honest diagnosis.
+The all-dynamic design put TWO clocks over every ambient car — a kinematic
+planner ghost marching on rails, and an untuned, never-yet-driven Jolt plant
+trying to chase it — and every fix (tether, station control, box-drain, creep
+valves) was another reconciliation loop between them. That is the signature of a
+structural error, not a tuning problem. The counter-evidence was in the same
+builds: pedestrians work great, because their plant (a kinematic character) is
+trivially commandable — the plan proposes, the body executes, one authority.
+And the pre-bridge kinematic traffic DROVE (its bugs were flow bugs, which got
+fixed), because it too had one authority.
+
+**The answer to "how should an agent be constructed to drive a vehicle":**
+
+1. **Strategic** — A* route over the NavGraph → a lane-accurate path. Data.
+2. **Tactical (the agent)** — the FSM + perception deciding, at think cadence,
+   a target speed along that path (stop at the line, follow the leader, slow
+   for the turn) and when to re-plan. This layer IS the agent; it is
+   plant-agnostic and headless-testable, and it already exists.
+3. **Motor — exactly ONE owner per regime.**
+   - **Ambient regime (the default for all traffic)**: the planner integrates
+     the car along its path directly (position = path(s), s += v*dt) — the
+     CitySim as it always worked — drawn instanced, collided via KINEMATIC
+     proxies. No ghost, no tether, no reconciliation, no way to "get stuck"
+     except where the brain says stop. This is how ambient traffic works in
+     shipped open-world games, for this reason.
+   - **Interactive regime (promotion)**: full Jolt dynamics is an INTERACTION
+     response, not a gait. When the player commandeers an ambient car
+     (`CityVehicleSystem`, now the PROMOTION system), the sim releases the
+     agent (instanced car + widget vanish), a real `Vehicle` with the same
+     fleet body spawns in its place, and VehicleSystem's enter flow seats the
+     player the same frame. Later, the same mechanism can make a shot/rammed
+     car briefly dynamic — the AgentDriver + pursuit/sensing stack stays in
+     engine/ai, harness-tested, ready to drive promoted cars.
+
+"One car system" survives where it matters — one component model, one fleet
+body, one enter flow, one physics API — while motion is owned per regime by the
+machinery that is good at it.
+
+**Also this round:** the lofted car shell REGRESSED on device (inverted faces
+from a winding heuristic, plus double wheels/lamps — VehicleSystem already adds
+physics wheels + lens entities to every Vehicle) — the fleet and `vehicles.lua`
+are back on the boxy bodies; the shell stays in-tree as experimental (register
+row below). `fleetCarMesh` gained a wheel-less variant for promoted cars;
+commandeered agents disappear from the instanced bake + widgets.
+
+**What's verified vs owed.** The planner (signals, following, junctions, think
+cadence, personality), the walkers, promotion bookkeeping (release → instance
+drop), and the engine/ai controller stack are headless-tested. The promotion
+spawn and the player's own car remain Jolt-gated and device-UNVERIFIED. Owed:
+verify the Jolt vehicle drives well ONCE (the player's car is the test bed —
+tune `configFromBody` there before any AI ever drives dynamics again), ragdoll
+knockdown, a GPU line-primitive debug path, the Metal instanced `FLAG_OVERLAY`
+depth state (device evidence says it doesn't apply), and the shell rework
+(correct winding, crisper colour islands, no baked trim) before it returns.
+
+---
+
+## ADR-0063 — The cognition loop: sense → remember → predict → decide → act
+
+**Context.** ADR-0060/0060 gave agents a vision cone and reactive rules, and
+ADR-0062 settled who owns motion. What agents still lacked was an inner life
+between frames: perception was a momentary snapshot (a body leaving the cone
+ceased to exist), there was no anticipation (a car reacted to a crosser only
+once it was already in the lane), and decisions were values re-derived per
+tick — the mechanism behind every "wigging out" oscillation we fixed piecemeal.
+The user's ask: go a step beyond ambient smoke-and-mirrors — an agent with
+goals, senses, short-term memory, trajectory prediction, and decisions that
+hold — built from math and structure, and a lab level to watch one think.
+
+**Decision.** A five-stage loop, each stage a small pure engine/ai primitive,
+composed in the CitySim and reusable by any future agent:
+
+1. **Sense** — `SensorVolume` (`engine/ai/perception.h`): the planar vision
+   wedge plus a HEIGHT BAND (2.5D). Ground agents decide in plan view, but the
+   city is grade-separated: a car crossing the overpass 5.8 m up must not be a
+   phantom to brake for. A full camera-style frustum was considered and
+   rejected — for agents that neither aim nor fly it buys nothing over
+   wedge+band, and it costs a matrix test per candidate versus two dot
+   products. Occlusion (walls, crests) is a later line-of-sight ray on the few
+   nearest candidates, not a reason to start 3D.
+2. **Remember** — `AgentMemory` (`engine/ai/agent_memory.h`): sightings become
+   TRACKS. Each carries a smoothed velocity estimate (successive sightings
+   differenced + EMA — a poor man's Kalman, which is all a game needs), decays
+   on a confidence over `memorySeconds` (4 s), and while unseen EXTRAPOLATES
+   along its velocity: object permanence. Re-sighting re-anchors; a track cap
+   (32) evicts the weakest. ~1.5 KB per agent.
+3. **Predict** — `closestApproach` / `timeToCollision` (same header): constant-
+   velocity CPA and disc-collision time from the tracked velocities. Dot
+   products, not ML.
+4. **Decide** — `Commitment` (`engine/ai/commitment.h`): utility choice with
+   hysteresis. The incumbent option keeps its seat unless a challenger beats it
+   by a clear margin AND a minimum hold has elapsed; an emergency (imminent
+   TTC) preempts instantly; re-adopting the incumbent never resets its clock.
+   Near-tied scores can flip forever without the behaviour ever flapping — the
+   principled form of the think-cadence commitment that fixed the walkers.
+5. **Act** — the existing motor layers (ADR-0062): planner integration for
+   ambient agents, `AgentDriver` → Jolt for promoted ones.
+
+**Wired into the CitySim** (`city_sim.{h,cpp}`): every `Agent` carries an
+`AgentMemory`; the sim keeps a monotonic `simSeconds_` clock; the per-step
+snapshot is now `SensedGhost{pos, elevation, id}` (stable ids: agent index,
+-(1+k) for host-injected obstacles) so tracks persist across steps and the
+sensor can height-gate. Drivers sense per tick (the reliability roll and fault
+accounting are unchanged — a blind agent never observes, so the perception
+tests hold), then act on MEMORY: yield to any confident track whose predicted
+position sits in the corridor ahead, and brake when `timeToCollision` against a
+track dips under 2 s — anticipation, so a car eases off BEFORE the crosser is
+in the lane, and keeps yielding ~3 s after losing sight (pinned by
+`cars_remember_a_person_after_losing_sight`: the car creeps to the remembered
+spot, walls short of it, and drives on only once the track fades). Walkers
+sense at think cadence — successive sightings a think apart are exactly what
+feeds the velocity estimator — and lean away from where each remembered
+neighbour WILL be (`kPedAnticipation` 0.4 s), so two approaching walkers part
+early instead of flinching late. Poles stay instantaneous (static and eternal —
+memory would add nothing).
+
+**The agent lab** (`assets/levels/agent_lab.json`): a theta circuit — a 120×80
+ring with a middle bar meeting at two signalled 3-way junctions — running ONE
+driver and ONE walker with the debug HUD on from boot. Population comes from a
+new top-level `"citysim"` level block, parsed by `level_loader` into a
+`CitySimConfig` entity (`components.h`) that `CityRenderSystem::build` reads
+and applies over its constructor params (`{cars, pedestrians, seed,
+hoursPerSecond, perceptionReliability, debugWidgets}`) — so the lab isolates
+one thinking agent while `grown.json` keeps its bustle, from data, no code
+fork. Watch the ring: green cruising, amber easing for a remembered crosser
+BEFORE it reaches the lane, red walled at the ghost of someone who just left.
+
+**Scaling (asked: "how do we process many agents — a compute shader?").** The
+loop is O(nearby) per agent and runs at think cadence (0.35 s, staggered), so
+the per-frame cost is `agents / (thinkPeriod / dt)` scans — with spatial
+hashing for candidate pruning and read-only snapshots the `JobSystem` can fan
+out deterministically, this architecture is comfortable at hundreds of agents
+on CPU, and AI-LOD (full cognition near the camera, schedule-only far away)
+buys the next order of magnitude. A compute shader was REJECTED at this scale:
+GPU readback latency lands decisions a frame late, float nondeterminism breaks
+ADR-0002's replayable sims, and debuggability dies — it earns its keep only
+past ~10k homogeneous agents, which is not this game. Grounding: Reynolds
+steering, ORCA/RVO, IDM/MOBIL, pure-pursuit/Stanley (already in
+`lane_follow.h`), Halo 2's perception+memory model, utility AI with hysteresis;
+the ML on-ramps (imitation-learn the classical controller into a tiny MLP; RL
+for the dynamic regime) stay open — the CitySim is already a deterministic gym.
+
+**Post-review hardening + reorg.** Two adversarial review agents swept the layer
+(one for correctness, one for structure). All eleven verified defects were
+fixed and pinned — headliners: the tether-held pedestrian ghost accumulated its
+reactive lean without re-anchoring (unbounded sideways drift); lanes were never
+re-clamped across legs (kerb-driving cars invisible to followers); the yield
+gates were dead on links shorter than the stop-line setback; overlapping-but-
+separating memory tracks read as imminent hits (phantom freezes); walker BODIES
+(not ghosts) are what cars brake for; real Vehicles (promoted/abandoned) are
+obstacles now; commutes validate both directions of the directed graph. The
+pre-citysim `AgentSim`/`TrafficSystem` pair was deleted (dead since ADR-0060,
+−899 lines). Structure: one `junctionRadius()` lookup replaced six hand-rolled
+loops; `advance()` decomposed into named stages (junction gate → sense →
+follow → arrive, ~90-line orchestration); the procedural meshes moved to
+`city_meshes.{h,cpp}`; the test scenarios share `tests/city_test_util.h`; the
+physics-host source list is defined once (`RT_PHYSICS_HOST_SOURCES`); the
+brain-bit derivations are named functions with documented bit ownership.
+Deferred, by choice: the Agent struct decomposition into nested component
+structs, spatial hashing for the O(n²) scans (fine at current counts), and
+k-phase signals for 5-way junctions.
+
+**Tests.** `tests/test_agent_memory.cpp` pins the pure core (velocity
+convergence, extrapolate-then-forget, re-anchoring, eviction, CPA/TTC, flip-
+flop suppression, sustained-winner switching, emergency preemption, height
+gating); `test_city_perception.cpp` gains sim-level object permanence;
+`test_city_render.cpp` pins the level-config override and the lab circuit
+(navigable, exactly two junctions, both agents come alive). Suite 661/661.
+
+**Device round 3 (rings + moving traffic confirmed working).** Four fixes from
+the first on-device look at the cognition build:
+
+- **The turn "blink".** A car turning at a junction blinked out and back: the
+  pose sampled only the CURRENT leg's lane line, and the lane offset direction
+  rotates with the leg — so crossing a node teleported the car sideways by up
+  to ~4.6 m in one frame (worst on wide arterials). `refreshPose` now traces a
+  quadratic Bezier from the incoming lane line to the outgoing one across every
+  interior node (blend span = road half-width + 1 m, clamped to 45% of each
+  leg), continuous at the leg change by construction — the position finally
+  drives the arc the rate-limited heading was already pretending to. Verified
+  numerically: worst per-tick displacement through a 90° arterial bend dropped
+  from a multi-metre sideways snap to ~1.3x speed·dt (the arc is slightly
+  longer than the leg parameterisation — continuous, chained positions).
+- **Reds must READ as obeyed.** The signal stop line was `length - 0.5` — the
+  node itself — so a car legally holding at a red stood in the middle of the
+  intersection on top of the painted crosswalk, looking exactly like a
+  red-light runner. The car stop line is now set back: junction box radius (the
+  mouth) + the zebra band (painted 0.5..3.6 m past the mouth) + margin + half
+  the car's own body, so the BUMPER holds short of the crosswalk. Walkers still
+  hold at the corner. The braking cap eases to the LINE, not the node.
+- **The lab must keep moving.** With the daily schedule, the lab's one car
+  commuted once and parked for (real) minutes — "I would expect the car to be
+  running around the track." New WANDER mode (`CitySim::setWander`, level
+  `"citysim": {"wander": true}`): agents at rest immediately start a fresh trip
+  to a random reachable node. The theta test now pins ≥3 consecutive trips.
+- **Parked cars looking misplaced + white rings.** Cars idle at home/work parked
+  on the verge by DESIGN (ADR-0062: an idle body on the carriageway is a
+  roadblock), but the initial idle pose kept the default (1,0) heading — parked
+  cars sat at random angles to their road, reading as "failed to be placed".
+  Idle bodies now face along their road from build. Widget ring emission tuned
+  4x → 1.7x: at 4x the bloom saturated every hue toward white on device.
+
+**Browser round (the wasm build ran!): time-travel, ghosting, real collisions.**
+The first in-browser session surfaced three more, and fixing them forced the
+junction rules to grow up:
+
+- **"A car jumped backwards in time, then shot forward."** The arrival pose:
+  a finishing car snapped 4-13 m BACKWARDS onto its verge parking spot for one
+  frame, and wander immediately relaunched it. Wander trips now CHAIN — arrival
+  rolls straight into the next route, keeping speed and heading, with the
+  corner-cut Bezier extended across the chain (leg 0 blends from `arrivedLink`)
+  so the restart is as continuous as any turn. Goal picking scans all nodes
+  (U-turn only as a dead-end fallback); rest departures wait for a clear spawn
+  (`launchClear`) and skip past the box when home IS a junction; same-node
+  idlers park at per-brain setbacks instead of stacking in one spot.
+- **Signals: longer green + all-red clearance.** The cycle is now green (12 s,
+  time for a few queued turns) → yellow → ALL-RED (2.5 s) so the box drains
+  before cross traffic gets its green. And two stop-line bugs died: a car past
+  the line when green expired was CLAMPED mid-box (the round-3 setback created
+  the trap zone) — committed cars now always clear; and commuters sharing a
+  destination node crash-locked just short of the exact endpoint — arrival now
+  completes within a ~3 m radius (schedule mode).
+- **"They should collide, not ghost."** Within the planner (NOT the retired
+  all-dynamic design): (1) FENDER-BENDERS — two cars' bodies meeting on a
+  closing course freeze in place (red ring), roll their overshoot back out
+  (direction-checked, remainder to the partner), and resume on staggered
+  per-brain holds; (2) BOX OCCUPANCY — no car crosses its stop line while a
+  crossing-heading car is inside the box, which is what stopped mid-box wrecks
+  FORMING; (3) TURN YIELD — a turn waits for live oncoming approach traffic,
+  with agent-order right-of-way between two stopped opposing turners (the
+  symmetric-yield livelock); (4) an ESCAPE VALVE — a car wedged through >5
+  consecutive freezes ignores contact until it drives clear (the tow-truck
+  resolution; a crossing-path contact can never otherwise resolve without
+  reverse gear). Net effect on the torture-test cross: arrivals 36 → ~200-490,
+  and zero ticks where two cars drive through each other (`ghostTicks == 0`,
+  pinned by `cars_crash_and_stop_instead_of_ghosting`).
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
 to be replaced; listed here so they stay visible.
+
+**Cross-platform parity discipline.** The realtime viewer targets two backends —
+Metal (macOS) and Vulkan (Linux/Windows) — and they must stay at feature parity
+(ADR-0044/0057). A render feature is not "done" when it works on one backend: it
+is done when it is wired on **both**, or when the gap is recorded here as a
+parity debt with the file + the backend that still owes it. Land a feature on
+one backend and forget the other and the two drift apart fast. So: when you add
+anything to one renderer (`metal_renderer.mm`) mirror it in the other
+(`vulkan_renderer.cpp`) in the same change if you can, and if you can't (e.g. one
+side needs a device you can't build here), add a register row naming the owed
+backend and mark it UNVERIFIED so a device pass closes it.
 
 | Item | Where | Why interim | Replace with |
 |---|---|---|---|
@@ -3868,6 +4540,19 @@ to be replaced; listed here so they stay visible.
 | Lights & render settings outside the document model | `renderer.h` (`SceneLighting`), level JSON `lighting` | Authored by hand-editing JSON; not entities, not inspectable/undoable | `Light` component + a LightSystem; art-direction render settings via the property layer (ADR-0018), perf/quality stay in settings.json |
 | ~~`ScriptSystem` not wired into a running state~~ | ~~`engine/scripting/script_system.*`~~ | *Resolved (ADR-0024): registered in `ArenaState` in place of `ShootingSystem`; the player gets the `gun.lua` ScriptBehaviour on level load. macOS/viewer-gated, so CI-unverified.* | An editor "attach script" affordance (author scripts in the editor) |
 | Lua behaviour instance refs aren't released | `engine/scripting/script_system.cpp`, `script_behaviour.h` | Slice (ADR-0024): a destroyed entity's registry ref isn't `luaL_unref`'d — bounded leak until the VM closes | `luaL_unref` on `ScriptBehaviour` removal / entity destroy (needs a removal hook) |
+| Vehicle physics + Lua code is UNVERIFIED | `engine/physics/physics_world.cpp` (vehicle), `engine/scripting/vehicle_spec.cpp`, `assets/scripts/vehicles.lua` (ADR-0059) | The Jolt/Lua submodules can't be fetched in this env (proxy 403s submodule clones), so the Jolt `WheeledVehicleController` wrapper and the Lua spec reader were written against the documented API but never compiled. The surrounding glue (VehicleSystem, camera switch, arena hook) was `clang -fsyntax-only`-checked | A compile + drive/tune pass on a Jolt/Lua build; expect minor Jolt member-name/ctor fixes and handling tuning |
+| Destroyed `Vehicle` entities leak the Jolt vehicle | `engine/systems/vehicle_system.cpp` (ADR-0059) | No entity-destroy hook to call `PhysicsWorld::removeVehicle` (same class as the ScriptBehaviour leak above) | `removeVehicle` on `Vehicle` removal / entity destroy when a removal hook lands |
+| Vulkan has no coalesced instanced draw | `renderer/vulkan/vulkan_renderer.cpp` (ADR-0057/0058) | The Vulkan backend doesn't override `drawMeshInstanced`, so traffic/foliage `InstanceGroup`s render via the base per-instance `drawMesh` loop — correct but CPU-bound for big crowds; Metal already batches by mesh handle | A Vulkan instanced path (instance-matrix vertex buffer or SSBO + `vkCmdDrawIndexed` instanceCount) on a device build |
+| AI-car Jolt bridge is UNVERIFIED on device | `apps/citysim/city_vehicles.cpp`, `engine/ai/{driver_agent,lane_follow,traffic_sense}.h`, `engine/systems/vehicle_system.cpp` (ADR-0062) | RESOLVED IN DESIGN, owed a device pass: NPC cars are real engine `Vehicle`s (Jolt) driven by an `AgentDriver` through the shared controller — one car system, player can enter/eject any of them. The control loop is CLOSED over the car's real pose (pure-pursuit heading, station-control speed, ghost tether), each car SENSES the other physical road users and follows them length-aware (`traffic_sense.h`), stalls/flips self-recover via `resetVehicleUpright`, and per-agent personality varies pace/gains/gaps. All of that is exercised headless against a bicycle-model plant (`test_lane_follow.cpp`, `test_traffic_sense.cpp`), so the on-device work is gain tuning against the real Jolt plant, not control-law debugging | Device tune (steerGain / lookahead / configFromBody / sense cone); then lane changes + junction yielding on the sensed-neighbour model |
+| City pedestrians render as boxes | `apps/citysim/city_render.cpp`, `apps/citysim/city_walkers.cpp` (ADR-0060/0061) | Cars are now curved lofted shells (`buildCarShell` — see the resolved row below); pedestrians are still `MeshBuilder::box` bodies (per-walker clothing tints). A walker needs a simple articulated body (capsule torso, head, leg swing) to stop reading as a crate. | A procedural walker body + simple walk-cycle animation (a content pass) |
+| Curved car shell is EXPERIMENTAL (regressed on device) | `engine/procgen/vehicle_mesh.{h,cpp}`, `mesh.car_shell` binding (ADR-0062) | The lofted shell shipped with inverted faces (the outward-winding heuristic fails on parts of the loft — see-through panels), smeared vertex-colour "textures", and it baked wheels/lamps that DOUBLED VehicleSystem's physics wheels + lens entities. The fleet and `vehicles.lua` are back on the boxy bodies; the generator + `mesh.car_shell` + tests stay in-tree, unwired. | Rework before return: robust winding (build quads with known orientation instead of a fix-up pass), per-face colour islands (crisp glass edges), no baked trim, more segments; then a viewer look pass |
+| Wide vehicle bodies may cross the lane centreline | `apps/citysim/city_sim.cpp` (`laneCenter`/`laneSpacing`), `apps/citysim/city_render.cpp` | Following is length-aware, but lane placement still centres a car at a width-relative lane offset regardless of the body's WIDTH. A wide van/box-truck (2.0–2.4 m) on a narrow lane could visually overhang the centreline / clip an oncoming wide body. Unverified (no viewer here). | Lateral lane-fit (inset wide bodies, or widen the effective lane) + an oncoming-width check; verify on device |
+| Crosswalk road-texture paint is UNVERIFIED on device | `engine/procgen/city/road_mesh.cpp` (`weldSolid`), `shaders/metal/common.metal`, `shaders/vulkan/mesh.frag`, `shaders/webgpu/mesh.wgsl`, `src/scene.cpp` (`surfRoadMarkings`) (ADR-0062) | RESOLVED (design): crosswalks are painted into the ROAD TEXTURE, not overlaid geometry. The default weld mesher bakes the carriageway UV `mv` as metres past the junction MOUTH (`min(arc, len-arc) - halfWidth`), and the RoadMarkings shader stripes a set-back zebra band there — part of the road surface, on the approach, never a floating decal over the centreline. Gated on `mu > 1.05` so it never lands on the raised curb (which shares the surface with a 0..1 UV). The CityRenderSystem decal group is gone (kept only its centres). Mesher baking is headless-tested (`test_road_net.cpp`); the shader paint is UNVERIFIED (no Metal/Vulkan/WebGPU build here). The zebra band was mirrored into the WebGPU backend's WGSL when main's web renderer merged in (parity discipline), equally unverified. Owed elsewhere: the SDF (`unionRoadbed`) + analytic meshers don't bake the crosswalk `mv` (opt-in paths). | Viewer check on each backend; bake the crosswalk `mv` in the SDF/analytic meshers too if either becomes default |
+| AI city cars use kinematic collider proxies (UNVERIFIED) | `apps/citysim/city_physics.cpp`, `engine/physics/physics_world.cpp` (`moveKinematic`) (ADR-0060) | `CityPhysicsSystem` (viewer/editor only — needs Jolt) gives each AI car a KINEMATIC Jolt box that tracks the drawn car pose via `PhysicsWorld::moveKinematic` (Jolt `MoveKinematic`), so the player + physics gun collide with cars and a moving car pushes what it hits. The cars are NOT dynamically simulated (the sim owns their motion) — no suspension/wheel response, and a car can shove a body through a wall since its motion is scripted. The Jolt `moveKinematic` impl is written against the documented API but UNVERIFIED here (Jolt can't build in this env), like the vehicle code. | Full hybrid: near the camera promote AI cars to real Jolt wheeled vehicles fed by the agent brain; verify on a device build |
+| Destroyed AI-car colliders leak on count change | `apps/citysim/city_physics.cpp` | `onStop` releases the kinematic bodies, but there is no per-car removal hook mid-session (the pool is rebuilt wholesale if the car count changes) — fine for a fixed car set, same class as the vehicle-destroy leak | Per-car body lifecycle if cars ever spawn/despawn at runtime |
+| AI cars can still briefly overlap at merges/turns | `apps/citysim/city_sim.cpp` (ADR-0060) | Car-following now spans NODES (a car keeps its gap to the leader on its continuing route across a junction/bend, chaining over short links), which removed the constant same-direction pile-through. Signals separate perpendicular traffic. What remains is a one-step touch when two cars from different approaches merge/turn onto the same point the same tick (all cars advance from the start-of-step snapshot) — genuine body overlap in only ~2-3% of steps on a single-junction stress test, far less on a real grid. A single-owner junction RESERVATION was tried and REMOVED: it clustered cars at the stop line and made overlap worse. | Sequential (index-ordered) advance or sub-stepping so a follower sees the leader's move within the tick; or a proper turn/merge conflict matrix with yielding |
+| AI cars don't react to being shot | `apps/citysim/city_vehicles.cpp` (ADR-0060/0061) | Superseded by ADR-0062: NPC cars are now real dynamic Jolt `Vehicle`s, so a bullet impulse SHOULD shove/rock them like the player's car (low CoM resists flipping). Unverified until the device build runs — confirm the response reads right and doesn't fling cars. | Verify on device; add a small settle/brace so a hit car recovers its lane instead of drifting off |
+| Pedestrian avoidance misses knock-down + queueing | `apps/citysim/city_sim.cpp` (ADR-0060/0060) | Peds push apart each step (they step around, not through, each other + the player), steer around their vision-cone neighbours, AND now avoid signal POLES: the render bridge feeds pole foot positions to the sim as static obstacles, which peds lean around and are radially pushed out of so they never stand inside one (`setStaticObstacles`, `kPoleClearance`; covered by `test_city_perception.cpp`). Still missing: longitudinal following (peds queue close at a shared destination) and a knock-down-then-recover state when struck. | Simple ped following, and a ragdoll/knock-down physics state |
 | Script entity **destroy** (and component edits) not exposed | `engine/scripting/gameplay_bindings.*` | Spawn is done (deferred command buffer, ADR-0024); destroy/structural edits still need command-buffer ops | Extend the command buffer with destroy + add/remove-component; bullets also need a lifetime/despawn rule |
 | `shape:"tree"` inlines a recipe in level JSON | `engine/level_loader.cpp` (`loadTreeEntity`) | Slice to ship a collidable parametric tree; a second authoring path against ADR-0025 | An entity that references a Lua **recipe asset** (ADR-0026); remove the inline `tree` block |
 | Tree skeleton discarded after skinning | `engine/procgen/tree.cpp` (`growTree`) | The branch node tree (a natural bone rig) is dropped; output is a static mesh + triangle collider only | A `TreeAsset` with skeleton + skin weights + capsule collision; wind/animation rig (ADR-0026) |
@@ -3876,8 +4561,11 @@ to be replaced; listed here so they stay visible.
 | ~~`ParametricLSystem` not exposed to Lua~~ | ~~`engine/scripting/procgen_bindings.cpp`~~ | *Resolved (ADR-0030): `lsystem.parametric()` (rule/expand with expression successors) + `tree.skin(modules, params, seed) -> bark, leaves` are bound; `growTree` was split into a grammar half and a reusable `skinTree`, so Lua authors the grammar and skins the real curved-cylinder tree. Covered by `procgen_script_skins_a_parametric_tree`.* | — |
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
+| Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0061/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
+| Parking is an informal verge, homes are abstract nodes | `apps/citysim/city_sim.cpp` (`idlePose`, arrival parking) (ADR-0062/0062) | An idle car parks on the grass beside its home/work NODE (off the carriageway so it can't roadblock — correct, but it reads as "failed to be placed" until you know it's an agent at home). Homes/works are raw graph nodes, not the buildings the generator already produces. | Buildings as stops (assign home/work to a parcel; park at its frontage), a painted parking-lane band on residential links (the mesher already does surface bands — same technique as the crosswalk paint), and/or despawn-at-home with the schedule persisting (hybrid: keep parked bodies near the player, cull distant ones) |
+| Living-world wasm build is browser-UNVERIFIED | `CMakeLists.txt` (WEB_SOURCES), `src/game/arena_state.cpp` (ADR-0058/0063) | The web target now links the full living-world stack — CitySim + cognition, VehicleSystem, the citysim physics/promotion/walker bridges, Jolt, Lua — and `viewer_web` compiles + links clean under Emscripten 6.0.1 (also fixed: `onelua.c` was in the lua_static glob, latent on lazy desktop linkers, duplicate-symbol fatal under wasm-ld). Never yet RUN in a browser: WebGPU frame, wasm perf with 40 agents + Jolt, and input are unproven. | Load grown/agent_lab in a WebGPU browser; profile; then decide AI-LOD needs for web |
 | City generates whole, not streamed | `engine/procgen/city/city.cpp` (`generateCity`) | Phase 3 (ADR-0038) builds a bounded city in one pass (Forest-Arena style); the road graph is city-global, not tile-local | Per-tile generation with the global graph clipped per tile + boundary stitching (ADR-0027 §5 streaming) |
 | City impostor/HLOD bake is unbuilt | `engine/procgen/city/`, renderer | The generator emits a coarse per-building proxy + a merged `CityModel::hlodProxy` (headless-tested), but the **impostor-card bake** (render-to-octahedral-atlas) and **HLOD swap/crossfade** are GPU/Metal work, gated on the spatial partition | Impostor bake + LOD-selection/crossfade (ADR-0034 §5); same lever as the owed distant-tree impostors |
 | City Lua surface is buildings-only | `engine/scripting/procgen_bindings.cpp` (`building.*`) | Only the split/shape grammar is Lua-exposed; the road→block→parcel pipeline + the city are C++/level-JSON-driven, not yet a Lua **world region recipe** (ADR-0027) | A `roads`/`parcels`/`city` Lua surface so a city is an authorable region recipe like flora |

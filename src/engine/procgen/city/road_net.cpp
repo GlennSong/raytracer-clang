@@ -242,6 +242,10 @@ RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
 
 }  // namespace
 
+// Public accessor (ADR-0059): hand runtime consumers the same sampled+constrained
+// graph the mesher uses, without exposing the file-local builder above.
+RoadGraph navRoadGraph(const RoadNet& net) { return constrainedNetGraph(net); }
+
 // One UnionSpine per CHAIN (a maximal degree-2 run between junctions/dead-ends), carrying that
 // road's WIDTH — so the weld gets smooth per-road ribbons (no per-edge spikes) AND the right width
 // (arterials stay wider than streets, which a width-less chain trace loses). A pure cycle with no
@@ -362,6 +366,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.curbHeight = net.curb;
     wp.topColor = net.color;
     wp.heightAt = net.heightAt;
+    wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
     return weldSolid(weldChainSpines(g), wp);
 }
 

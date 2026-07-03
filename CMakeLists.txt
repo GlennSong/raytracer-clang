@@ -58,6 +58,7 @@ add_library(engine_core STATIC
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/surface_maps.cpp
+    src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/erosion.cpp
@@ -77,6 +78,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
+    src/engine/ai/nav_graph.cpp
+    src/engine/ai/pathfind.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -92,6 +95,7 @@ add_library(engine_core STATIC
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp
     src/engine/camera/fly_camera_controller.cpp
+    src/engine/camera/follow_camera_controller.cpp
     src/engine/camera/scene_camera.cpp
     src/engine/systems/camera_system.cpp
     src/engine/systems/camera_panel_system.cpp
@@ -102,6 +106,14 @@ add_library(engine_core STATIC
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
+    # Agent-based city simulation app (ADR-0060). Pure C++, headless-safe; the
+    # game (arena_state) registers citysim::CityRenderSystem. Lives under
+    # src/apps/citysim but compiles into the shared lib.
+    src/apps/citysim/traffic_signal.cpp
+    src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_render.cpp
+    src/apps/citysim/city_meshes.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -172,7 +184,11 @@ if(RT_ENABLE_SCRIPTING)
     endif()
 
     file(GLOB LUA_SOURCES ${LUA_DIR}/*.c)
-    list(REMOVE_ITEM LUA_SOURCES ${LUA_DIR}/lua.c ${LUA_DIR}/luac.c)
+    # lua.c/luac.c are the standalone interpreter/compiler mains; onelua.c is the
+    # single-file amalgamation that #includes every other .c — leaving it in the
+    # archive defines every Lua symbol twice. Desktop linkers never happened to
+    # pull that member, but wasm-ld does and the web link exploded in duplicates.
+    list(REMOVE_ITEM LUA_SOURCES ${LUA_DIR}/lua.c ${LUA_DIR}/luac.c ${LUA_DIR}/onelua.c)
     add_library(lua_static STATIC ${LUA_SOURCES})
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
@@ -182,6 +198,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
+        src/engine/scripting/vehicle_spec.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -223,6 +240,7 @@ add_executable(run_tests
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
+    tests/test_follow_camera.cpp
     tests/test_scene_camera.cpp
     tests/test_camera_store.cpp
     tests/test_lens.cpp
@@ -249,6 +267,7 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
+    tests/test_vehicle_mesh.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp
     tests/test_instance_tlas.cpp
@@ -268,6 +287,26 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_nav_graph.cpp
+    tests/test_pathfind.cpp
+    tests/test_perception.cpp
+    tests/test_agent_memory.cpp
+    tests/test_cascade_fit.cpp
+    tests/test_fall_respawn.cpp
+    tests/test_traffic_signal.cpp
+    tests/test_traffic_rules.cpp
+    tests/test_city_sim.cpp
+    tests/test_city_signals.cpp
+    tests/test_city_perception.cpp
+    tests/test_driver_agent.cpp
+    tests/test_lane_follow.cpp
+    tests/test_traffic_sense.cpp
+    tests/test_city_steering.cpp
+    tests/test_city_driver_fsm.cpp
+    tests/test_city_fleet.cpp
+    tests/test_city_drive.cpp
+    tests/test_city_render.cpp
+    tests/test_city_flow.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -322,6 +361,23 @@ if(RT_ENABLE_PHYSICS)
     set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
+
+    # The physics-host source set every host target (viewer, editor_app,
+    # viewer_web) compiles alongside engine_core: the Jolt world + job adapter,
+    # the gameplay systems that need it, drivable vehicles, and the living-world
+    # citysim bridges (ADR-0062/0063). Defined once so the three targets cannot
+    # drift apart.
+    set(RT_PHYSICS_HOST_SOURCES
+        src/engine/physics/physics_world.cpp
+        src/engine/physics/jolt_job_adapter.cpp
+        src/engine/systems/physics_system.cpp
+        src/engine/systems/player_system.cpp
+        src/engine/systems/shooting_system.cpp
+        src/engine/systems/vehicle_system.cpp
+        src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
+        src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
+        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
+    )
 
     add_executable(physics_tests
         tests/main.cpp
@@ -394,13 +450,7 @@ set(VIEWER_SOURCES
 )
 
 if(RT_ENABLE_PHYSICS)
-    list(APPEND VIEWER_SOURCES
-        src/engine/physics/physics_world.cpp
-        src/engine/physics/jolt_job_adapter.cpp
-        src/engine/systems/physics_system.cpp
-        src/engine/systems/player_system.cpp
-        src/engine/systems/shooting_system.cpp
-    )
+    list(APPEND VIEWER_SOURCES ${RT_PHYSICS_HOST_SOURCES})
 endif()
 
 # Platform-specific renderer backend
@@ -520,13 +570,7 @@ if(Qt6_FOUND)
     target_link_libraries(editor_app PRIVATE engine_core Qt6::Widgets Threads::Threads)
 
     if(RT_ENABLE_PHYSICS)
-        target_sources(editor_app PRIVATE
-            src/engine/physics/physics_world.cpp
-            src/engine/physics/jolt_job_adapter.cpp
-            src/engine/systems/physics_system.cpp
-            src/engine/systems/player_system.cpp
-            src/engine/systems/shooting_system.cpp
-        )
+        target_sources(editor_app PRIVATE ${RT_PHYSICS_HOST_SOURCES})
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;
         # without it the editor's Play mode silently loses the first-person
@@ -629,13 +673,8 @@ if(EMSCRIPTEN)
     # bring the physics sources + Jolt (same as the desktop viewer). Jolt is
     # cross-platform C++ and compiles to wasm.
     if(RT_ENABLE_PHYSICS)
-        list(APPEND WEB_SOURCES
-            src/engine/physics/physics_world.cpp
-            src/engine/physics/jolt_job_adapter.cpp
-            src/engine/systems/physics_system.cpp
-            src/engine/systems/player_system.cpp
-            src/engine/systems/shooting_system.cpp
-        )
+        # Same set as the desktop viewer — Jolt compiles to wasm.
+        list(APPEND WEB_SOURCES ${RT_PHYSICS_HOST_SOURCES})
     endif()
     # WGSL sources live in shaders/webgpu/*.wgsl; a generated header embeds
     # them into the backend (no runtime fetch). Regenerates when any .wgsl or

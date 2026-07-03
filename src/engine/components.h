@@ -3,6 +3,7 @@
 
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
+#include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "physics/physics_world.h"
 #include "procgen/terrain.h"
 #include "world.h"
@@ -195,6 +196,67 @@ struct MeshCollider {
     std::vector<uint32_t> indices;
     Real friction = 0.6;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
+};
+
+// A physics-driven car (ADR-0059). VehicleSystem creates the Jolt vehicle from
+// `config` + the entity's Transform, drives it from the seated driver's input,
+// and writes the chassis Transform back each fixed step. The entity also carries
+// a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
+// `wheelEntities` are optional child Renderables whose transforms VehicleSystem
+// refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
+struct Vehicle {
+    PhysicsWorld::VehicleConfig config;
+    PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
+    Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
+    // Live driver input, written by VehicleSystem each step (for inspection/debug).
+    Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
+    std::vector<Entity> wheelEntities;   // rendered wheels (optional)
+    // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
+    // positions + lights each frame; `driverModel` is a capsule shown in the seat
+    // while occupied.
+    bool lightsOn = false;
+    std::vector<Entity> headlights;      // front lenses (warm)
+    std::vector<Entity> taillights;      // rear lenses (red)
+    Entity driverModel;                  // driver capsule (stowed when unoccupied)
+};
+
+// Marks a player entity currently seated in a vehicle (ADR-0059). PlayerSystem
+// suppresses on-foot character movement while this is present; the enter/exit
+// logic in VehicleSystem adds it on entry and removes it on exit. `vehicle` is
+// the car entity being driven.
+struct InVehicle {
+    Entity vehicle;
+};
+
+// Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
+// SAME physics Vehicle, but its {throttle, steer, brake} come from
+// computeDriverInput(command) instead of host input, so an NPC car and the
+// player's car share one physics path. A brain (e.g. the CitySim bridge) writes
+// `command` each step; VehicleSystem consumes it. `agentId` links back to that
+// brain (e.g. a CitySim agent index) so the player can EJECT the agent on entry
+// (remove this component) and the brain can free the agent. When the player takes
+// the wheel this component is removed; on exit it may be restored.
+struct AgentDriver {
+    DriverCommand command;      // heading + speed the brain currently wants
+    DriverTuning tuning;        // controller gains
+    int agentId = -1;           // brain handle (CitySim agent index); -1 = none
+};
+
+// Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
+// block in the level JSON becomes one entity carrying this, and the city render
+// bridge reads it at build. Lets a level choose its own population — the agent
+// lab runs ONE driver and ONE walker with the debug HUD on, while grown.json
+// keeps the default bustle. Defaults mirror CityRenderParams so an absent field
+// changes nothing.
+struct CitySimConfig {
+    int cars = 40;
+    int pedestrians = 40;
+    uint32_t seed = 1;
+    float hoursPerSecond = 0.05f;        // sim-clock hours per real second
+    float perceptionReliability = 0.97f; // <1 -> agents occasionally err
+    bool debugWidgets = false;           // start with the agent-state HUD on
+    bool wander = false;                 // agents take perpetual random trips
+                                         // (no schedule) — the lab car keeps lapping
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

@@ -58,6 +58,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
@@ -93,6 +94,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
+	$(TEST_DIR)/test_follow_camera.cpp \
 	$(TEST_DIR)/test_scene_camera.cpp \
 	$(TEST_DIR)/test_camera_store.cpp \
 	$(TEST_DIR)/test_lens.cpp \
@@ -134,10 +136,29 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_handle_source.cpp \
 	$(TEST_DIR)/test_path_edit_tool.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
+	$(TEST_DIR)/test_vehicle_mesh.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
 	$(TEST_DIR)/test_instance_tlas.cpp \
 	$(TEST_DIR)/test_texture_field.cpp \
-	$(TEST_DIR)/test_terrain_field.cpp
+	$(TEST_DIR)/test_terrain_field.cpp \
+	$(TEST_DIR)/test_nav_graph.cpp \
+	$(TEST_DIR)/test_pathfind.cpp \
+	$(TEST_DIR)/test_perception.cpp \
+	$(TEST_DIR)/test_agent_memory.cpp \
+	$(TEST_DIR)/test_traffic_signal.cpp \
+	$(TEST_DIR)/test_traffic_rules.cpp \
+	$(TEST_DIR)/test_city_sim.cpp \
+	$(TEST_DIR)/test_city_signals.cpp \
+	$(TEST_DIR)/test_city_perception.cpp \
+	$(TEST_DIR)/test_driver_agent.cpp \
+	$(TEST_DIR)/test_lane_follow.cpp \
+	$(TEST_DIR)/test_traffic_sense.cpp \
+	$(TEST_DIR)/test_city_steering.cpp \
+	$(TEST_DIR)/test_city_driver_fsm.cpp \
+	$(TEST_DIR)/test_city_fleet.cpp \
+	$(TEST_DIR)/test_city_drive.cpp \
+	$(TEST_DIR)/test_city_render.cpp \
+	$(TEST_DIR)/test_city_flow.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -149,6 +170,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/input/player_input.cpp \
 	$(SRC_DIR)/engine/camera/orbit_camera_controller.cpp \
 	$(SRC_DIR)/engine/camera/fly_camera_controller.cpp \
+	$(SRC_DIR)/engine/camera/follow_camera_controller.cpp \
 	$(SRC_DIR)/engine/camera/scene_camera.cpp \
 	$(SRC_DIR)/engine/camera_store.cpp \
 	$(SRC_DIR)/engine/level_writer.cpp \
@@ -173,6 +195,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
@@ -192,6 +215,13 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
+	$(SRC_DIR)/engine/ai/nav_graph.cpp \
+	$(SRC_DIR)/engine/ai/pathfind.cpp \
+	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
+	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
+	$(SRC_DIR)/apps/citysim/city_sim.cpp \
+	$(SRC_DIR)/apps/citysim/city_render.cpp \
+	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \

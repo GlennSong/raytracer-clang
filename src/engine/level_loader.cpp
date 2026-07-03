@@ -17,6 +17,7 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
+#include "scripting/vehicle_spec.h"
 #endif
 #include "model_importer.h"
 #include <random>
@@ -296,6 +297,20 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     if (!mesh.vertices.empty())
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
     world.add<Renderable>(e, r);
+
+    // Static collision from the carriageway geometry (ADR-0059): without this a
+    // road has no collider of its own — ground roads borrow the terrain's, but an
+    // elevated bridge DECK has nothing under it, so cars fall through. Build a
+    // MeshCollider from the same triangles (deck + ramps + piers) so the player's
+    // car (and physics bodies) drive on roads, the overpass included.
+    if (!mesh.vertices.empty()) {
+        MeshCollider mc;
+        mc.vertices.reserve(mesh.vertices.size());
+        for (const Vertex& v : mesh.vertices) mc.vertices.push_back(v.position);
+        mc.indices = mesh.indices;
+        mc.friction = 0.85;
+        world.add<MeshCollider>(e, mc);
+    }
 }
 
 // A hero parametric tree (shape: "tree"): a real, collidable object you can
@@ -1671,6 +1686,55 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     }
 }
 
+#ifdef RT_ENABLE_SCRIPTING
+// Spawn drivable vehicles authored in Lua (ADR-0059). Each "vehicles" entry is
+// either `{ "recipe": "sedan", "opts"... }` (-> vehicle.<recipe>(seed, {})) or a
+// full `{ "script": "return vehicle.hatchback(seed, {...})" }`, plus a world
+// `position` and optional `yaw` (degrees) and `seed`. The vehicles.lua library is
+// loaded once into a procgen VM; VehicleSystem (when physics is on) then turns
+// each into a Jolt vehicle the player can drive.
+static void loadVehicles(const json& vehicles, World& world, AssetManager& assets,
+                         const std::string& levelDir) {
+    if (!vehicles.is_array() || vehicles.empty()) return;
+    std::string lib = loadScriptCode("vehicles.lua", levelDir);
+    if (lib.empty()) {
+        LOG_WARN << "vehicles: assets/scripts/vehicles.lua not found";
+        return;
+    }
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    if (!vm.doString(lib, &err)) {
+        LOG_WARN << "vehicles.lua: " << err;
+        return;
+    }
+    int index = 0;
+    for (const auto& v : vehicles) {
+        const int i = index++;
+        std::string chunk;
+        if (v.contains("script") && v["script"].is_string()) {
+            chunk = v["script"].get<std::string>();
+        } else {
+            std::string recipe = v.value("recipe", std::string("sedan"));
+            chunk = "return vehicle." + recipe + "(seed, {})";
+        }
+        uint32_t seed = static_cast<uint32_t>(v.value("seed", i + 1));
+        VehicleSpec spec;
+        if (!loadVehicleSpec(vm, chunk, seed, spec, &err)) {
+            LOG_WARN << "vehicle[" << i << "]: " << err;
+            continue;
+        }
+        Vec3 pos;
+        if (v.contains("position") && v["position"].is_array() &&
+            v["position"].size() == 3) {
+            pos = Vec3(v["position"][0].get<double>(), v["position"][1].get<double>(),
+                       v["position"][2].get<double>());
+        }
+        spawnVehicle(world, assets, spec, pos, v.value("yaw", 0.0));
+    }
+}
+#endif
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
@@ -1809,6 +1873,31 @@ bool LevelLoader::load(const std::string& path,
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, cityEnt, &cityModel, &scriptCache,
                      entityGround ? &entityGround : nullptr);
+
+    // Drivable vehicles (ADR-0059) — play mode only (runtime actors, like the
+    // player; not editor document entities).
+#ifdef RT_ENABLE_SCRIPTING
+    if (!editorMode && root.contains("vehicles"))
+        loadVehicles(root["vehicles"], world, assets, levelDir);
+#endif
+
+    // Level-authored city-sim settings (ADR-0063): the top-level "citysim" block
+    // becomes one CitySimConfig entity the citysim render bridge reads at build —
+    // so a level can choose its own population, seed, clock rate, and whether the
+    // agent-state debug HUD starts on (the agent lab: 1 car, 1 walker, HUD on).
+    if (root.contains("citysim") && root["citysim"].is_object()) {
+        const auto& cs = root["citysim"];
+        CitySimConfig cfg;
+        cfg.cars = cs.value("cars", cfg.cars);
+        cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        cfg.seed = cs.value("seed", cfg.seed);
+        cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        cfg.perceptionReliability =
+            cs.value("perceptionReliability", cfg.perceptionReliability);
+        cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.wander = cs.value("wander", cfg.wander);
+        world.add<CitySimConfig>(world.create(), cfg);
+    }
 
     // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so
     // the first-person gun viewmodel and a settling capsule don't intrude on an overhead frame dump.

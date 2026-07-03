@@ -1,6 +1,20 @@
 {
   "scenes": [
     {
+      "id": "grown",
+      "title": "Living City",
+      "tag": "Agents",
+      "blurb": "A grown street network with living traffic \u2014 commuting drivers, walkers, working signals.",
+      "thumb": "thumbs/grown.webp"
+    },
+    {
+      "id": "agent_lab",
+      "title": "Agent Lab",
+      "tag": "Agents",
+      "blurb": "A theta circuit where cognition-loop agents drive and walk, debug HUD on.",
+      "thumb": "thumbs/agent_lab.webp"
+    },
+    {
       "id": "city_arena",
       "title": "City Arena",
       "tag": "City",

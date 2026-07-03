@@ -81,6 +81,7 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> depthStateFoliageLit;    // reverse-Z: Equal, no write (prepass)
     id<MTLDepthStencilState> depthStateTransparent;   // reverse-Z: Greater, no write
     id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
+    id<MTLDepthStencilState> depthStateOverlay;       // Always pass, no write (debug gizmos on top)
     id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
@@ -830,6 +831,13 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     depthDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateWireOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Debug-gizmo overlay: always pass, never write — FLAG_OVERLAY draws sit on
+    // top of the world geometry drawn before them in the pass.
+    depthDesc.depthCompareFunction = MTLCompareFunctionAlways;
+    depthDesc.depthWriteEnabled = NO;
+    impl->depthStateOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+    depthDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;   // restore for below
 
     // Forward-Z opaque state for the reflection-probe bake only: that pass owns
     // a self-contained depth buffer (clearDepth 1.0, DontCare store) with a
@@ -2525,6 +2533,12 @@ void MetalRenderer::endFrame() {
 
             const GPUMesh* mesh = impl->meshes.get(batchMesh);
             if (!mesh) continue;
+
+            // Debug-gizmo overlay batches ignore depth so they draw on top of the
+            // world; everything else uses the pass's depth state.
+            [impl->currentEncoder setDepthStencilState:
+                (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_OVERLAY)
+                    ? impl->depthStateOverlay : depthState];
 
             // Alpha-cut foliage is drawn by the depth-prepass path (issueFoliage)
             // when enabled — skip it here so it isn't also drawn single-pass.

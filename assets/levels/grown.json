@@ -96,5 +96,30 @@
       "intensity": 6.0
     }
   },
-  "version": 1
+  "version": 1,
+  "player": {
+    "position": [
+      0,
+      1.2,
+      0
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.4
+    },
+    "friction": 0.5
+  },
+  "vehicles": [
+    {
+      "recipe": "sedan",
+      "position": [
+        8,
+        1.0,
+        0
+      ],
+      "yaw": 0,
+      "seed": 1
+    }
+  ]
 }
