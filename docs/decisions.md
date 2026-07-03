@@ -4503,6 +4503,64 @@ junction rules to grow up:
   and zero ticks where two cars drive through each other (`ghostTicks == 0`,
   pinned by `cars_crash_and_stop_instead_of_ghosting`).
 
+## ADR-0064 — Agent goals become data: the GoalTable, Lua-authored at load
+
+**Context.** The reactive layer (ADR-0061/0063) was already principled, but the
+GOAL layer above it — what an agent does with its day — was still control flow:
+a hand-written `switch` on `Agent::Activity` in `step()` pass 1 (the AtHome →
+commute → AtWork → return schedule) plus wander's trip chaining spliced into
+`arriveOrChain`. Every new behaviour ("go shopping", an animal's graze/flee)
+meant editing CitySim. Meanwhile the generic `engine::StateMachine` existed for
+exactly this ("one mechanism for AI goals…"), unused by the goal layer.
+
+**Decision.** The goal layer is a **GoalTable** (`apps/citysim/city_goals.h`):
+named states that each bind one action from a deliberately tiny C++ vocabulary
+— `Rest` (stay put; optional `dwellHours` clock) or `GoTo(work|home|random)` —
+plus transitions on the fixed events CitySim emits: `departWork`/`departHome`
+(the schedule clock windows), `arrived`, `noRoute`, `idle` (every resting
+tick), `dwellDone`. The table rides `engine::StateMachine` (which gained a
+stateless `peek(from, event)`) so ONE shared per-archetype table drives every
+agent; an agent holds only a current-state int (`Agent::goal`), and
+`Agent::activity` remains as the label each state wears — tests, the debug
+HUD, and renderers keep their historical reads. Composition, not new actions,
+is the extension mechanism: "go to a random node and dwell 2 h" is
+`GoTo(random) --arrived--> Rest(dwell=2) --dwellDone--> …`, pure data.
+
+**The load-time-Lua / tick-time-C++ split.** `assets/scripts/agents.lua`
+authors the archetype tables as plain Lua data (the `vehicle_spec` pattern:
+Lua defines DATA at load, C++ consumes it); `engine/scripting/agent_goals.cpp`
+reads them into GoalTables, and a level's citysim block (`"agents":
+"agents.lua"`) installs them at build via `CitySim::setGoalTables` — before
+the warm-up, so the whole visible day runs scripted. Lua executes ONLY at
+load; every per-tick transition and action runs in C++ from the table. That
+keeps the Makefile test build Lua-free (CitySim depends only on
+`city_goals.h`), keeps ticks deterministic and cheap, and makes a broken
+script a loud load-time error instead of a silent runtime misbehaviour.
+
+**Parity, by construction.** The built-in tables (`defaultScheduleGoals`,
+`wanderGoals`) reproduce the deleted control flow BIT-EXACTLY — same
+`rnd()`/`brainUnit()` draws in the same order, same tick each transition
+fires: event emission keeps the original gate order (launch clearance checked
+before a depart fires; `home == work` strands an agent exactly as before), a
+driver arriving into a GoTo state CHAINS through the node (wander's Roam
+self-loop = the old `wander_ && Driver` branch), a walker rests one tick at
+the kerb first (Roam → RoamRest → idle). Verified with an FNV hash over
+pos/heading/speed/activity/trips/faults/crash state across seven seeded
+scenarios (schedule, peds-only, wander chaining, mixed, mid-run setWander
+flip) before/after the swap — identical — plus a permanent pin
+(`installing_the_default_tables_changes_nothing`). `setWander` still sets the
+`wander_` flag (the motion layer keys chain blending, exact arrival, and the
+final-leg turn-yield off it — a custom chaining table won't get those without
+it, a known seam) and now installs the built-in wander tables; custom tables
+go in AFTER via `setGoalTables`, and a rebuild resets to the built-ins.
+
+**Tests.** `test_city_goals.cpp` (Makefile + ctest, Lua-free) pins the table
+shapes, the parity twin, and the errand/dwell behaviour as data;
+`test_agent_goals.cpp` (ctest, scripting-gated) pins that the shipped
+agents.lua rebuilds all three C++ defaults `describe()`-identically, param
+round-tripping, and malformed-table rejection; `test_state_machine.cpp` pins
+`peek`. Suite 673/673 (+ 4 scripting-gated).
+
 ---
 
 ## Interim seams & tech-debt register
