@@ -3756,6 +3756,94 @@ toolchain and descriptor model here are the foundation.
 
 ---
 
+## ADR-0058 — WebGPU is the web render backend (Emscripten/WASM), behind the existing seam
+**Status:** Pending · **Date:** 2026-06-29
+
+**Context.** ADR-0057's revisit trigger named "needing a … web target" as the
+moment to reconsider WebGPU. We want the realtime viewer to run in a browser.
+The same property that made Vulkan a backend-not-an-engine change holds here: the
+`Renderer` RHI seam (ADR-0001) is backend-neutral, and the frame loop is already
+decomposed into `begin()`/`runFrame()` (application.h, the editor host path), so
+the browser's requestAnimationFrame-driven loop is a drop-in for the blocking
+`while (running())` loop. ADR-0057 rejected WebGPU only as a *desktop* backend,
+because Dawn/wgpu are heavy native dependencies that clash with the
+standard-library-only rule. On the **web** that objection disappears: the
+toolchain (Emscripten) *is* the build target and ships WebGPU bindings — there is
+no third-party native library to vendor.
+
+**Decision.** Add a WebGPU backend (`src/renderer/webgpu/webgpu_renderer.cpp`) as
+the web implementation of `Renderer`, selected by CMake under the Emscripten
+toolchain (`if(EMSCRIPTEN)`) and providing `Renderer::create()`. Specific
+choices:
+
+- **Reuse the GLFW window seam via Emscripten's GLFW3 shim** (`-sUSE_GLFW=3`), so
+  `window.cpp` is reused unchanged (it already hints `GLFW_NO_API`, so no GL
+  context is created and the canvas is WebGPU-ready). No web-specific `Window`.
+- **The surface is the canvas, not the native handle.** `nativeWindowHandle()` is
+  null on the web (window.cpp's non-Apple path); the backend creates its surface
+  from the `#canvas` selector (`WGPUSurfaceDescriptorFromCanvasHTMLSelector`), so
+  no new seam method is needed (contrast Vulkan's `createVulkanSurface`).
+- **WebGPU via the emdawnwebgpu port, device acquired with ASYNCIFY.** Emscripten
+  6.x removed the legacy `-sUSE_WEBGPU` binding (and `emscripten_webgpu_get_device`)
+  in favour of the **emdawnwebgpu** port (Dawn's standardized `<webgpu/webgpu.h>`,
+  `--use-port=emdawnwebgpu`). Adapter/device acquisition is async-only there, but
+  `Renderer::initialize()` is synchronous, so the backend awaits
+  `RequestAdapter`/`RequestDevice` with `emscripten_sleep` under `-sASYNCIFY` —
+  keeping the async dance contained in the backend (no JS device handoff; the
+  MODULARIZE'd module just needs the canvas).
+- **WGSL shaders embedded as source strings**, compiled at runtime — matching the
+  Metal backend (which compiles MSL strings) rather than the Vulkan offline
+  SPIR-V path, since the web build has no build-time shader compiler step and
+  file I/O is awkward in the browser FS.
+- **Single-threaded.** `Application` forces `JobSystem` synchronous mode under
+  `__EMSCRIPTEN__`, so the build links without `-pthread` and needs no
+  `SharedArrayBuffer` / cross-origin-isolation (COOP/COEP) headers to be served.
+  Revisit if a profile shows the main thread is the bottleneck (then opt into
+  pthreads + the isolation headers, or move sim work to a worker).
+
+**Alternatives considered.**
+- **WebGL2 (via Emscripten).** Widest browser reach and Emscripten's most mature
+  path — rejected as the primary path: it is a global-state-machine API that maps
+  poorly onto the command-encoder-style `Renderer` seam (we'd fight our own
+  abstraction), it forecloses compute, and it is the legacy direction. Kept in
+  reserve as a separate fallback project if supporting pre-WebGPU browsers / very
+  old devices becomes a hard requirement.
+- **Native build + pixel streaming** (run Vulkan/Metal server-side, stream
+  frames) — rejected: not "compiling to the web"; heavy infra, latency, and cost.
+- **Dawn/wgpu compiled to wasm ourselves** — rejected: redundant. Emscripten
+  already provides the WebGPU C API mapped onto the browser's `navigator.gpu`.
+
+**Consequences / tech debt.**
+- A **third shader tree** (MSL + GLSL + WGSL) to keep in lockstep — the dominant
+  long-term cost ADR-0057 flagged. A future shader-transpile step (Tint/Naga, or
+  generating WGSL from the GLSL) could retire it; out of scope for the foundation.
+- **Compiles + links on emsdk 6.0.1** (`viewer_web`: WebGPU backend + Jolt +
+  engine_core, all to wasm) and **runs in a real browser** (headless Chromium /
+  SwiftShader): the device/surface/pipeline come up, the frame loop pumps,
+  `endFrame` records the scene's draws against a successfully-acquired surface
+  texture, and there are **no WebGPU validation errors** (a device uncaptured-error
+  callback is wired to the log). Visible pixel capture is the one thing still
+  unconfirmed — headless SwiftShader doesn't composite a WebGPU canvas for
+  screenshot/readback, so a real-GPU browser run is needed to eyeball output. The
+  emdawnwebgpu Dawn-specific API is explicitly not stable, so a newer port may
+  need small edits — `src/renderer/webgpu/AGENTS.md` lists the current gotchas.
+- **Bundle size** (verified, with physics): ~1.6 MB gzipped over the wire at `-O2`
+  (4.6 MB raw), ~1.3 MB gzipped at `-Oz` (wasm dominates; Jolt is a large share).
+  Comparable to a medium SPA — not a blocker for a desktop-browser target.
+- Built incrementally like Vulkan (clear screen → lit mesh → full forward →
+  shadows → post → instancing/terrain), each stage independently verifiable.
+  **This ADR lands Phases 0+1** (bring-up + forward single-light Cook-Torrance);
+  later phases are tracked in `docs/webgpu-renderer-plan.md`.
+- The `Real = double` engine math (ADR-0005) stays valid CPU-side; the GPU side
+  is `f32` only (matrices/vertices are packed to float on upload, as on Vulkan).
+
+**Revisit trigger.** Needing pre-WebGPU browser support (reconsider a WebGL2
+fallback); the three-way shader divergence becoming painful (adopt a transpile
+step); or the single-threaded main loop becoming the bottleneck (opt into
+pthreads + COOP/COEP).
+
+---
+
 ## ADR-0059 — A living-world agent layer: runtime NavGraph + A* + deterministic agent sim, then physics vehicles in Lua
 
 **Context.** The procgen pipeline builds beautiful but *empty* worlds — spline

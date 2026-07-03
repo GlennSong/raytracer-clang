@@ -408,6 +408,13 @@ public:
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
 
+    // Resolution scale for the screen-space effect buffers (SSAO + SSR), a
+    // fraction of the framebuffer. These effects are low/medium frequency, so
+    // rendering them smaller and upscaling is a large perf win at little visual
+    // cost. 1.0 = full res; 0.5 (default) = quarter the pixels. Backends that
+    // support it clamp to a sane range and recreate the buffers when it changes.
+    float postEffectScale = 0.5f;
+
     // HDR environment map (baked cubemap + IBL). When off, the renderer ignores a
     // bound HDR and falls back to the procedural sky + analytic IBL. Levels with no
     // "hdr" key clear it on load; this is the live override.

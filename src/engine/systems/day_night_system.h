@@ -4,6 +4,10 @@
 #include "../system.h"
 #include "../day_night_cycle.h"
 
+#ifdef __EMSCRIPTEN__
+#include <limits>
+#endif
+
 namespace engine {
 
 // Advances a DayNightCycle on SIMULATION time and writes its state into the
@@ -40,6 +44,13 @@ private:
     float  cloudScale     = 1.5f;
     float  cloudWindSpeed = 1.0f;
     double cloudPhase     = 0.0;   // accumulated drift, seconds
+
+#ifdef __EMSCRIPTEN__
+    // Last time-of-day the web panel pushed through settings; lets update()
+    // distinguish a fresh slider drag (jump there) from the cycle's own
+    // animation (leave alone). NaN so the first read always applies.
+    double webLastTimeOfDay_ = std::numeric_limits<double>::quiet_NaN();
+#endif
 };
 
 }  // namespace engine

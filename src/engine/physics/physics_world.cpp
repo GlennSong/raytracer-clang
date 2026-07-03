@@ -463,8 +463,13 @@ GroundState PhysicsWorld::characterGroundState(CharacterId id) const {
 
 void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
     if (!impl || id >= impl->characters.size()) return;
-    if (JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr())
+    if (JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr()) {
         ch->SetPosition(toJoltR(position));
+        // A set-position is a teleport: drop any carried velocity, or a respawned
+        // character arrives still falling at terminal speed and slams into (or
+        // tunnels through) whatever it lands on.
+        ch->SetLinearVelocity(JPH::Vec3::sZero());
+    }
 }
 
 // --- Wheeled vehicle (ADR-0059) --------------------------------------------

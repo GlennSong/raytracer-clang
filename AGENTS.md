@@ -78,7 +78,10 @@ a module should only include what it directly uses.
 `AGENTS.md` — read it before working in that directory rather than re-reading the
 source. Current guides: `src/renderer/AGENTS.md` (the RHI/window seams and how
 backends plug in), `src/renderer/metal/AGENTS.md` (Metal backend internals — the
-parity reference), and `src/renderer/vulkan/AGENTS.md` (Vulkan backend spec).
+parity reference), `src/renderer/vulkan/AGENTS.md` (Vulkan backend spec), and
+`src/renderer/webgpu/AGENTS.md` (WebGPU/WASM backend — the browser build). How the
+three backends relate, the shader story, and the frame/render-graph are in
+`docs/rendering.md`; the web build is spelled out in `docs/web-build.md`.
 
 ## Platform Abstraction (Engine Rule)
 

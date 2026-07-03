@@ -12,6 +12,12 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
+#include <cmath>
+#endif
+
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -82,7 +88,124 @@ struct GlfwWindow::Impl {
     double lastFrameTime = 0;
     double deltaTime = 0;
     bool firstMouse = true;
+
+#ifdef __EMSCRIPTEN__
+    // Touch state (ADR-0058). Gestures map onto the mouse InputState the camera
+    // already reads. Deltas accumulate in the touch callbacks (which fire between
+    // frames) and are drained in pollEvents.
+    double touchAccumDX = 0, touchAccumDY = 0, touchAccumScroll = 0;
+    double lastTouchX = 0, lastTouchY = 0, lastPinchDist = 0;
+    bool touchLeftDown = false, touchRightDown = false, touchPinch = false;
+    // Keyboard fed from JS via rt_web_key (W,S,A,D,E,Q,Shift,Num1,Num2);
+    // pollEvents turns edges into the same KeyPressed/Released the keyboard emits.
+    bool vkey[9] = {};
+    bool vkeyPrev[9] = {};
+    // Virtual gamepad driven by the page's on-screen sticks (left = move, right
+    // = look) — fed to the engine as gamepad 0, the analog path the camera reads.
+    GamepadState virtualPad;
+#endif
 };
+
+#ifdef __EMSCRIPTEN__
+// The live window's Impl, so the exported rt_web_key (called from the page's
+// on-screen D-pad) can reach the input state. One window per web app lifetime.
+static GlfwWindow::Impl* g_activeImpl = nullptr;
+#endif
+
+#ifdef __EMSCRIPTEN__
+// Touch -> mouse mapping for the web. iOS/Android have no GLFW mouse, so map
+// gestures onto the same InputState the camera reads: one-finger drag = left-drag
+// (orbit), two-finger drag = right-drag (pan) + pinch = scroll (zoom). Returns
+// EM_TRUE to consume the event (the canvas has touch-action: none).
+static double rtTouchDist(const EmscriptenTouchPoint& a, const EmscriptenTouchPoint& b) {
+    double dx = a.targetX - b.targetX, dy = a.targetY - b.targetY;
+    return std::sqrt(dx * dx + dy * dy);
+}
+static EM_BOOL onTouchStart(int, const EmscriptenTouchEvent* e, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    if (e->numTouches >= 2) {
+        impl->touchPinch = true; impl->touchLeftDown = false; impl->touchRightDown = true;
+        impl->lastPinchDist = rtTouchDist(e->touches[0], e->touches[1]);
+        impl->lastTouchX = (e->touches[0].targetX + e->touches[1].targetX) * 0.5;
+        impl->lastTouchY = (e->touches[0].targetY + e->touches[1].targetY) * 0.5;
+    } else if (e->numTouches == 1) {
+        impl->touchPinch = false; impl->touchLeftDown = true; impl->touchRightDown = false;
+        impl->lastTouchX = e->touches[0].targetX; impl->lastTouchY = e->touches[0].targetY;
+        impl->input.mouseX = e->touches[0].targetX; impl->input.mouseY = e->touches[0].targetY;
+    }
+    return EM_TRUE;
+}
+static EM_BOOL onTouchMove(int, const EmscriptenTouchEvent* e, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    if (e->numTouches >= 2) {
+        double d = rtTouchDist(e->touches[0], e->touches[1]);
+        impl->touchAccumScroll += (d - impl->lastPinchDist) * 0.01;  // px -> scroll units
+        impl->lastPinchDist = d;
+        double cx = (e->touches[0].targetX + e->touches[1].targetX) * 0.5;
+        double cy = (e->touches[0].targetY + e->touches[1].targetY) * 0.5;
+        impl->touchAccumDX += cx - impl->lastTouchX;
+        impl->touchAccumDY += cy - impl->lastTouchY;
+        impl->lastTouchX = cx; impl->lastTouchY = cy;
+    } else if (e->numTouches == 1) {
+        double x = e->touches[0].targetX, y = e->touches[0].targetY;
+        impl->touchAccumDX += x - impl->lastTouchX;
+        impl->touchAccumDY += y - impl->lastTouchY;
+        impl->lastTouchX = x; impl->lastTouchY = y;
+        impl->input.mouseX = x; impl->input.mouseY = y;
+    }
+    return EM_TRUE;
+}
+static EM_BOOL onTouchEnd(int, const EmscriptenTouchEvent*, void* user) {
+    auto* impl = static_cast<GlfwWindow::Impl*>(user);
+    impl->touchLeftDown = false; impl->touchRightDown = false; impl->touchPinch = false;
+    return EM_TRUE;
+}
+
+// Called from the page's on-screen movement buttons. idx: 0=W 1=S 2=A 3=D 4=E
+// 5=Q 6=Shift 7=Num1 8=Num2; down = press/release. pollEvents converts the
+// change into the keyboard events the InputMap binds to camera/gameplay actions
+// (Num1/Num2 are the weapon-slot keys play mode binds to slot_1/slot_2).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_key(int idx, int down) {
+    if (g_activeImpl && idx >= 0 && idx < 9) g_activeImpl->vkey[idx] = (down != 0);
+}
+
+// On-screen analog sticks. stick 0 = left (move) -> LeftX/LeftY; stick 1 = right
+// (look) -> RightX/RightY. Components in [-1, 1] (x right+, y down+).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_axis(int stick, float x, float y) {
+    if (!g_activeImpl) return;
+    auto& a = g_activeImpl->virtualPad.axes;
+    if (stick == 0) {
+        a[static_cast<size_t>(GamepadAxis::LeftX)] = x;
+        a[static_cast<size_t>(GamepadAxis::LeftY)] = y;
+    } else if (stick == 1) {
+        a[static_cast<size_t>(GamepadAxis::RightX)] = x;
+        a[static_cast<size_t>(GamepadAxis::RightY)] = y;
+    }
+}
+
+// On-screen gamepad buttons: idx 0 = boost (LeftBumper), 1 = camera toggle
+// (Back, flips fly/orbit via cam_toggle), 2 = fire (RightBumper, the gameplay
+// fire binding play mode reads).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_button(int idx, int down) {
+    if (!g_activeImpl) return;
+    GamepadButton b;
+    switch (idx) {
+        case 1:  b = GamepadButton::Back; break;
+        case 2:  b = GamepadButton::RightBumper; break;
+        default: b = GamepadButton::LeftBumper; break;
+    }
+    g_activeImpl->virtualPad.buttons[static_cast<size_t>(b)] = (down != 0);
+}
+
+// Desktop mouse-look: feed a look delta (px) into the same accumulator touch uses,
+// which pollEvents drains into the camera's mouse delta. Bypasses Emscripten
+// GLFW's mouse path (which doesn't reliably deliver events in this build).
+extern "C" EMSCRIPTEN_KEEPALIVE void rt_web_look(float dx, float dy) {
+    if (!g_activeImpl) return;
+    g_activeImpl->touchAccumDX += dx;
+    g_activeImpl->touchAccumDY += dy;
+}
+#endif  // __EMSCRIPTEN__
 
 // Maps backend (GLFW) key codes to the backend-independent KeyCode the rest of
 // the engine sees. This table is the only place that knows GLFW key values.
@@ -135,6 +258,7 @@ static GlfwWindow::Impl* implOf(GLFWwindow* window) {
 // GamepadButton/GamepadAxis enums mirror GLFW's standard layout order, but we
 // map explicitly (and normalize triggers from GLFW's [-1, 1] to [0, 1]) so the
 // neutral types stay decoupled from GLFW values.
+#ifndef __EMSCRIPTEN__  // unused on the web (no glfwGetGamepadState there)
 static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
     out.connected = true;
     for (std::size_t i = 0; i < GAMEPAD_BUTTON_COUNT; i++)
@@ -153,6 +277,7 @@ static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
     out.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] =
         (in.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
 }
+#endif
 
 static void onCursorPos(GLFWwindow* window, double xpos, double ypos) {
     auto* impl = implOf(window);
@@ -256,6 +381,9 @@ GlfwWindow::~GlfwWindow() {
 bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     if (!glfwInit()) return false;
 
+    // Emscripten's GLFW shim doesn't implement the gamepad-mapping API; the web
+    // build skips loading the SDL controller DB (browser gamepads come mapped).
+#ifndef __EMSCRIPTEN__
     {
         std::ifstream file("gamecontrollerdb.txt");
         if (file) {
@@ -268,6 +396,7 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
                 LOG_WARN << "gamecontrollerdb.txt found but glfwUpdateGamepadMappings failed";
         }
     }
+#endif
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -290,6 +419,16 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     glfwSetWindowCloseCallback(impl->window, onWindowClose);
     glfwSetWindowRefreshCallback(impl->window, onWindowRefresh);
 
+#ifdef __EMSCRIPTEN__
+    g_activeImpl = impl.get();
+    impl->virtualPad.connected = true;  // on-screen sticks act as gamepad 0
+    // Touch input on the canvas (the web has no GLFW mouse). useCapture=true.
+    emscripten_set_touchstart_callback("#canvas", impl.get(), EM_TRUE, onTouchStart);
+    emscripten_set_touchmove_callback("#canvas", impl.get(), EM_TRUE, onTouchMove);
+    emscripten_set_touchend_callback("#canvas", impl.get(), EM_TRUE, onTouchEnd);
+    emscripten_set_touchcancel_callback("#canvas", impl.get(), EM_TRUE, onTouchEnd);
+#endif
+
     impl->lastFrameTime = glfwGetTime();
     return true;
 }
@@ -303,9 +442,17 @@ void GlfwWindow::shutdown() {
 }
 
 void GlfwWindow::setCursorMode(CursorMode mode) {
+#ifdef __EMSCRIPTEN__
+    // No-op on the web. iOS Safari has no Pointer Lock API at all, so *both*
+    // requestPointerLock (CURSOR_DISABLED) and exitPointerLock (CURSOR_NORMAL)
+    // are undefined and throw — and the throw during startup aborts main()
+    // before the render loop registers. So touch nothing here.
+    (void)mode;
+#else
     int glfwMode = (mode == CursorMode::Disabled) ? GLFW_CURSOR_DISABLED
                                                   : GLFW_CURSOR_NORMAL;
     glfwSetInputMode(impl->window, GLFW_CURSOR, glfwMode);
+#endif
 }
 
 void GlfwWindow::resetMouseDelta() {
@@ -327,8 +474,34 @@ void GlfwWindow::pollEvents() {
     glfwPollEvents();
 
     GLFWwindow* window = impl->window;
+#ifdef __EMSCRIPTEN__
+    // Desktop browser: real mouse comes through GLFW (onCursorPos/onScroll set the
+    // deltas during glfwPollEvents). Add the touch accumulators on top, and OR the
+    // touch button state with the real mouse buttons — so keyboard+mouse work on
+    // desktop and touch works on mobile, from the same build.
+    impl->input.mouseDeltaX += impl->touchAccumDX; impl->touchAccumDX = 0;
+    impl->input.mouseDeltaY += impl->touchAccumDY; impl->touchAccumDY = 0;
+    impl->input.scrollDelta += impl->touchAccumScroll; impl->touchAccumScroll = 0;
+    impl->input.mouseLeftDown =
+        (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) || impl->touchLeftDown;
+    impl->input.mouseRightDown =
+        (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) || impl->touchRightDown;
+    // Turn on-screen button state changes into keyboard events (same path as a
+    // real keyboard → InputMap → camera move/boost axes).
+    static const KeyCode kVKeys[9] = {KeyCode::W, KeyCode::S, KeyCode::A, KeyCode::D,
+                                      KeyCode::E, KeyCode::Q, KeyCode::LeftShift,
+                                      KeyCode::Num1, KeyCode::Num2};
+    for (int i = 0; i < 9; ++i) {
+        if (impl->vkey[i] == impl->vkeyPrev[i]) continue;
+        Event ev(impl->vkey[i] ? EventType::KeyPressed : EventType::KeyReleased);
+        ev.key = kVKeys[i];
+        impl->events.push_back(ev);
+        impl->vkeyPrev[i] = impl->vkey[i];
+    }
+#else
     impl->input.mouseLeftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     impl->input.mouseRightDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+#endif
     impl->input.keyW = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
     impl->input.keyA = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
     impl->input.keyS = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
@@ -347,12 +520,18 @@ void GlfwWindow::pollEvents() {
     for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
         GamepadState& slot = impl->gamepads[jid];
 
+        // Emscripten's GLFW shim lacks glfwGetGamepadState; the web build leaves
+        // the slots cleared (browser gamepad support is a later phase).
+#ifndef __EMSCRIPTEN__
         GLFWgamepadstate gs;
         if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &gs)) {
             fillGamepadState(slot, gs);
         } else {
             slot = GamepadState{};
         }
+#else
+        slot = (jid == 0) ? impl->virtualPad : GamepadState{};  // on-screen sticks
+#endif
     }
 
     // GCController overlay: fills slots that GLFW left empty (or overwrites

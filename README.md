@@ -1,8 +1,15 @@
 # Raytracer / Realtime Engine
 
+> **100% AI-written.** Every line of this project was written by AI (Anthropic's
+> Claude — Opus and Fable), prompted from start to finish; the author has not
+> written a single line of code by hand. It's a personal experiment in how far
+> you can get building a modern rendering and game engine purely by prompting —
+> and then using it as a personal toolchain to explore procedural generation and
+> simulation.
+
 A from-scratch C++17 renderer and game engine, built with only the standard
 library and a handful of vendored single-header/submodule dependencies. It ships
-two programs from a shared core:
+three programs from a shared core:
 
 - **`raytracer`** — an offline CPU path tracer. Renders a scene to a PNG/PPM
   image. Unbiased Monte Carlo with next-event estimation, physical lens model,
@@ -12,6 +19,10 @@ two programs from a shared core:
   a GPU renderer behind a platform-neutral seam (Metal on macOS; **Vulkan for
   Linux/Windows is in progress** — see [ADR-0057](docs/decisions.md) and
   [docs/vulkan-renderer-plan.md](docs/vulkan-renderer-plan.md)).
+- **`viewer_web`** — the same engine compiled to **WebAssembly**, rendering
+  through **WebGPU** in the browser (ADR-0058). Runs the full realtime pipeline
+  and gameplay; ships as a scene gallery + in-browser viewer. Build it with
+  [docs/web-build.md](docs/web-build.md).
 
 The two paths share scene/level loading, materials, lights, and the entire
 procedural-generation substrate. They differ only in the renderer — the offline
@@ -73,6 +84,38 @@ Authoring").
 
 ---
 
+## Architecture at a glance
+
+The engine is organized around **backend-neutral seams**: engine, ECS, physics,
+procgen, and scripting are written once against abstract interfaces, and
+platform-specific code lives *behind* those interfaces (one implementation per
+platform, selected at build time). The load-bearing seam is the **`Renderer`** —
+the same engine drives Metal, Vulkan, or WebGPU by linking a different
+implementation, with no `#ifdef`s in engine code.
+
+```mermaid
+flowchart TD
+    subgraph app["Entry points"]
+        A1["raytracer<br/>(offline)"]
+        A2["viewer<br/>(native)"]
+        A3["viewer_web<br/>(browser/WASM)"]
+    end
+    app --> ENG["Engine core<br/>ECS · systems · physics (Jolt) · procgen · Lua"]
+    ENG --> CORE["Shared math + utilities<br/>rt_math · handle · slot_map · scene"]
+    ENG --> SEAM["Renderer seam (renderer.h)"]
+    SEAM --> MET["Metal<br/>(macOS)"]
+    SEAM --> VLK["Vulkan<br/>(Linux/Windows)"]
+    SEAM --> WGP["WebGPU<br/>(browser)"]
+    A1 --> CORE
+```
+
+How the three GPU backends relate, how shaders are handled (three hand-written
+trees — MSL / GLSL→SPIR-V / WGSL), what a frame does (the render graph), and a
+glossary of terms (swapchain, HDR target, bind group, …) are all in
+**[docs/rendering.md](docs/rendering.md)**.
+
+---
+
 ## Build
 
 ### Prerequisites
@@ -113,6 +156,18 @@ make clean
 ```
 (The tracer also builds via CMake as the `raytracer` target.)
 
+### Web build — browser / WebGPU (`viewer_web`)
+Compiles the engine to WebAssembly and renders through WebGPU. Needs the
+[Emscripten SDK](https://emscripten.org); no GPU drivers required to build. Short
+version (full step-by-step in **[docs/web-build.md](docs/web-build.md)**):
+```bash
+source /path/to/emsdk/emsdk_env.sh                     # activate the toolchain
+emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release
+cmake --build build-web --target viewer_web            # -> viewer_web.{js,wasm,data}
+python3 -m http.server --directory build-web 8000      # serve (WebGPU needs http://localhost)
+# open http://localhost:8000/
+```
+
 ### Full build — viewer, physics, tests (CMake)
 The **same commands on every platform**; CMake picks the GPU backend per OS
 (Metal on Apple, Vulkan elsewhere once it lands, `NullRenderer` as fallback):
@@ -144,29 +199,44 @@ src/
   rt_math, handle, slot_map, log, image, camera, geometry, material, scene,
   kdtree, path_tracer …   — shared core + offline tracer
   renderer/               — RHI seam (renderer.h), window/input, GPU backends
-    metal/                — Metal backend (macOS)         [see metal/AGENTS.md]
-    vulkan/               — Vulkan backend (Linux/Windows) [see vulkan/AGENTS.md]
+    metal/                — Metal backend (macOS)          [see metal/AGENTS.md]
+    vulkan/               — Vulkan backend (Linux/Windows)  [see vulkan/AGENTS.md]
+    webgpu/               — WebGPU backend (browser/WASM)   [see webgpu/AGENTS.md]
   engine/                 — ECS, systems, physics, scripting, procgen
+  web_main.cpp            — Emscripten entry point (viewer_web)
 shaders/
-  metal/                  — Metal Shading Language sources
-  vulkan/                 — GLSL → SPIR-V (planned)
+  metal/                  — Metal Shading Language (MSL) sources
+  vulkan/                 — GLSL → SPIR-V (compiled offline)
+                            (WebGPU WGSL is embedded in webgpu_renderer.cpp)
+web/                      — browser front-end: gallery (index.html) + viewer.html
 docs/
+  rendering.md            — how the 3 GPU backends / shaders / frame work
+  web-build.md            — step-by-step WebGPU/WASM build guide
   decisions.md            — Architecture Decision Records (ADRs)
   ROADMAP.md              — multi-tier development plan
   *-plan.md               — per-feature design docs
 ```
 
 ## Documentation
+- **[docs/rendering.md](docs/rendering.md)** — how the three GPU backends relate,
+  how shaders work, what a frame does (the render graph), and a glossary
+  (swapchain, HDR target, bind group, …). Start here for the renderer.
+- **[docs/web-build.md](docs/web-build.md)** — step-by-step WebGPU/WASM build.
 - **`AGENTS.md`** — engineering standards, conventions, and the load-bearing
   engine rules (platform abstraction, procgen authoring, playable scenes).
 - **`docs/decisions.md`** — every significant architectural decision, with
   alternatives and revisit triggers.
 - **`docs/ROADMAP.md`** — where the project is going.
-- Per-area `AGENTS.md` files (e.g. `src/renderer/AGENTS.md`,
-  `src/renderer/metal/AGENTS.md`) — focused guides to a subsystem's internals.
+- Per-area `AGENTS.md` files (`src/renderer/AGENTS.md` and the per-backend
+  `metal/`, `vulkan/`, `webgpu/` guides) — focused subsystem internals.
 
 ## Conventions (short version)
 C++17, clang++, standard library only — no *new* external deps without an ADR.
 PascalCase types, camelCase functions/variables, UPPER_SNAKE constants, no
 Hungarian notation. Smart pointers for heap ownership. One header + one `.cpp`
 per module. Front faces wind **clockwise**. See `AGENTS.md` for the full set.
+
+## License
+[MIT](LICENSE). Vendored third-party code under `third_party/` (Jolt, Dear
+ImGui, Lua, tinygltf, the stb headers) remains under its own permissive
+licenses — see each project's notice.

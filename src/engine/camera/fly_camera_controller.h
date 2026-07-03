@@ -20,6 +20,9 @@ public:
     Real nearPlane = 0.1;
     Real farPlane = 8000.0;   // large enough for distant LOD terrain (view distance)
     bool positionLocked = false;
+    // FPS walk: move on the horizontal plane (forward ignores pitch) at a fixed
+    // eye height, no vertical axis. Off = free 6-DOF fly. Look is free either way.
+    bool grounded = false;
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;

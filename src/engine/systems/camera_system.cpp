@@ -144,6 +144,9 @@ void CameraSystem::update(FrameContext& ctx) {
 
     Entity viewBefore = activeCamera;
 
+    // FPS walk vs. free fly (live toggle; default free). Web defaults to walk.
+    fly.grounded = ctx.settings.getBool("cameraGrounded", false);
+
     // Detach/re-attach the fly camera (game states pin it to the player via
     // positionLocked; see PlayerSystem). Detaching switches to fly so the
     // freecam is immediately steerable.

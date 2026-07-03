@@ -19,7 +19,11 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             // chase camera owns the view, so on-foot movement is suppressed.
             if (ctx.world.has<InVehicle>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
-            if (!spawnCaptured) { spawnPos = t.position; spawnCaptured = true; }   // authored spawn
+            if (!spawnCaptured) {                                  // authored spawn
+                spawnPos = t.position;
+                spawnCaptured = true;
+                fall.onSpawnCaptured(t.position.y);
+            }
 
             // Detached freecam (cam_detach): the movement axes drive the fly
             // camera, not the player — otherwise WASD would walk the player while
@@ -43,7 +47,26 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
 
             physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
             t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
+
+            // Auto-respawn safety net: if the character falls far below solid
+            // ground — off a ledge, or straight through a level whose ground under
+            // the spawn has no collider — snap it back so starting a level never
+            // dead-ends in an endless fall. The decision logic (initial-drop vs
+            // after-footing thresholds, and giving up when respawning never finds
+            // ground) lives in FallRespawnTracker — see player_system.h.
+            GroundState gs = physicsSys.physicsWorld().characterGroundState(cc.characterId);
+            if (gs == GroundState::OnGround || gs == GroundState::OnSteepGround)
+                fall.onGrounded(t.position.y);
+            if (spawnCaptured && fall.shouldRespawn(t.position.y)) {
+                respawn(cc.characterId, /*manual=*/false);
+                t.position = spawnPos;
+            }
         });
+}
+
+void PlayerSystem::respawn(CharacterId characterId, bool manual) {
+    physicsSys.physicsWorld().setCharacterPosition(characterId, spawnPos);
+    fall.onRespawn(manual);
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
@@ -52,7 +75,7 @@ void PlayerSystem::update(FrameContext& ctx) {
     if (ctx.actions.pressed("player_respawn") && spawnCaptured && ctx.world.alive(playerEntity)) {
         if (auto* cc = ctx.world.get<CharacterController>(playerEntity))
             if (cc->characterId != INVALID_CHARACTER) {
-                physicsSys.physicsWorld().setCharacterPosition(cc->characterId, spawnPos);
+                respawn(cc->characterId, /*manual=*/true);
                 if (auto* t = ctx.world.get<Transform>(playerEntity)) t->position = spawnPos;
             }
     }

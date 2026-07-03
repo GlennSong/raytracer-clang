@@ -84,7 +84,14 @@ private:
     Settings settingsStore;
     // The one shared thread pool (ADR-0014). Declared before `systems` so it
     // outlives them — a system (e.g. physics) may hold work referencing it.
+    // The web build (ADR-0058) is single-threaded: it links without -pthread, so
+    // it forces synchronous mode (0 workers) — spawning a std::thread there would
+    // abort at runtime. parallelFor/run still execute inline, just on the caller.
+#ifdef __EMSCRIPTEN__
+    JobSystem jobs{0};
+#else
     JobSystem jobs;
+#endif
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;

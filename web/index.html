@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!--
+  Scene gallery / landing page (ADR-0058). Lists the camera-framed levels as
+  project cards with a path-traced thumbnail (web/thumbs/<id>.png, baked offline
+  by ./raytracer) and deep-links each into the WebGPU viewer (viewer.html?level=<id>).
+  Reads web/scenes.json for the scene list; thumbnails are plain PNGs referenced
+  by convention — no data is embedded in the level JSON.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Raytracer Engine — Scenes</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; }
+    header { padding: 28px 24px 8px; max-width: 1200px; margin: 0 auto; }
+    header h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: .2px; }
+    header p { margin: 0; color: #8fa6bd; font-size: 14px; }
+    .filters { max-width: 1200px; margin: 16px auto 0; padding: 0 24px;
+      display: flex; flex-wrap: wrap; gap: 8px; }
+    .filters button { border: 1px solid #2a3a4c; background: #141c26; color: #bcd;
+      border-radius: 999px; padding: 6px 14px; font: 600 13px system-ui; cursor: pointer; }
+    .filters button.on { background: #1f6feb; border-color: #3b82f6; color: #fff; }
+    main { max-width: 1200px; margin: 20px auto 60px; padding: 0 24px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
+    .card { display: block; text-decoration: none; color: inherit; background: #131a24;
+      border: 1px solid #1f2a37; border-radius: 12px; overflow: hidden;
+      transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .card:hover { transform: translateY(-3px); border-color: #3b82f6;
+      box-shadow: 0 8px 24px #0007; }
+    .thumb { aspect-ratio: 1 / 1; width: 100%; background: #0a0e14 center/cover no-repeat;
+      display: grid; place-items: center; color: #44566a; font-size: 13px; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .meta { padding: 11px 13px 13px; }
+    .meta .t { font-size: 15px; font-weight: 650; }
+    .meta .tag { display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 700;
+      letter-spacing: .4px; text-transform: uppercase; color: #8ec5ff;
+      background: #122540; border: 1px solid #1e3a5f; border-radius: 6px; padding: 2px 7px; }
+    .meta .b { margin-top: 8px; font-size: 12.5px; line-height: 1.4; color: #92a6ba; }
+    footer { max-width: 1200px; margin: 0 auto 40px; padding: 0 24px; color: #64768a; font-size: 12.5px; }
+    footer a { color: #8ec5ff; }
+  </style>
+</head>
+<body>
+  <script>
+    // Deep-link compatibility: index.html?level=xxx used to open the viewer.
+    // Preserve those links now that the viewer lives at viewer.html.
+    const q = new URLSearchParams(location.search);
+    if (q.has('level')) location.replace('viewer.html?' + q.toString());
+  </script>
+
+  <header>
+    <h1>Raytracer Engine — Scenes</h1>
+    <p>Procedural levels rendered live in the browser (WebGPU). Pick a scene to explore it.
+       Thumbnails are path-traced offline by the same engine.
+       <a href="about.html" style="white-space:nowrap">How it works →</a></p>
+  </header>
+  <div class="filters" id="filters"></div>
+  <main id="grid"></main>
+  <footer>
+    Rendered in your browser with WebGPU. <a href="about.html">About this engine</a> ·
+    Source: <a href="https://github.com/glennsong/raytracer-clang">glennsong/raytracer-clang</a>.
+  </footer>
+
+  <script>
+    (async () => {
+      const grid = document.getElementById('grid');
+      const filtersEl = document.getElementById('filters');
+      let scenes = [];
+      try {
+        // no-cache = revalidate with the server (a cheap 304 when unchanged)
+        // instead of a unique-URL full re-download every visit.
+        const r = await fetch('scenes.json', { cache: 'no-cache' });
+        scenes = (await r.json()).scenes || [];
+      } catch (e) {
+        grid.innerHTML = '<p style="color:#e88">Could not load scenes.json.</p>';
+        return;
+      }
+
+      const card = (s, i) => {
+        const a = document.createElement('a');
+        a.className = 'card';
+        a.href = 'viewer.html?level=' + encodeURIComponent(s.id);
+        a.dataset.tag = s.tag || 'Scene';
+        const thumb = document.createElement('div');
+        thumb.className = 'thumb';
+        if (s.thumb) {
+          const img = new Image();
+          // Above-the-fold row loads eagerly (lazy-loading it hurts LCP);
+          // the rest defer. Decode off the main thread either way.
+          img.loading = i < 6 ? 'eager' : 'lazy';
+          img.decoding = 'async';
+          img.width = 400; img.height = 400;
+          img.alt = s.title;
+          img.src = s.thumb;
+          img.onerror = () => { thumb.textContent = 'no preview'; };
+          thumb.appendChild(img);
+        } else { thumb.textContent = 'no preview'; }
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.innerHTML = `<div class="t"></div><span class="tag"></span>` +
+                         (s.blurb ? `<div class="b"></div>` : '');
+        meta.querySelector('.t').textContent = s.title;
+        meta.querySelector('.tag').textContent = s.tag || 'Scene';
+        if (s.blurb) meta.querySelector('.b').textContent = s.blurb;
+        a.appendChild(thumb); a.appendChild(meta);
+        return a;
+      };
+
+      scenes.forEach((s, i) => grid.appendChild(card(s, i)));
+
+      // Tag filter chips.
+      const tags = ['All', ...[...new Set(scenes.map((s) => s.tag || 'Scene'))]];
+      let active = 'All';
+      tags.forEach((t) => {
+        const b = document.createElement('button');
+        b.textContent = t; b.classList.toggle('on', t === active);
+        b.onclick = () => {
+          active = t;
+          [...filtersEl.children].forEach((c) => c.classList.toggle('on', c.textContent === t));
+          [...grid.children].forEach((c) => {
+            c.style.display = (t === 'All' || c.dataset.tag === t) ? '' : 'none';
+          });
+        };
+        filtersEl.appendChild(b);
+      });
+    })();
+  </script>
+</body>
+</html>

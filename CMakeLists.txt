@@ -651,3 +651,121 @@ if(Qt6_FOUND)
 else()
     message(STATUS "Qt6 not found — skipping the editor application")
 endif()
+
+# ============================================================
+# Web target (WebGPU + WebAssembly) — built under the Emscripten toolchain
+# (`emcmake cmake -S . -B build-web`). ADR-0058. The WebGPU backend
+# (src/renderer/webgpu/webgpu_renderer.cpp) is the web implementation of the
+# `Renderer` seam and provides Renderer::create(); the GLFW window backend is
+# Emscripten's built-in GLFW3 shim (-sUSE_GLFW=3), so window.cpp is reused as-is.
+# Single-threaded by design (Application forces JobSystem synchronous mode under
+# __EMSCRIPTEN__), so the build needs no -pthread / SharedArrayBuffer / COOP-COEP.
+# Physics/Qt/Vulkan paths above are skipped on this toolchain (their
+# find_package calls don't resolve), so only this block needs adding.
+# ============================================================
+if(EMSCRIPTEN)
+    set(WEB_SOURCES
+        src/web_main.cpp
+        src/renderer/window.cpp
+        src/renderer/webgpu/webgpu_renderer.cpp
+        src/game/arena_state.cpp
+    )
+    # engine_core's terrain_lod_system references PhysicsWorld, so the host must
+    # bring the physics sources + Jolt (same as the desktop viewer). Jolt is
+    # cross-platform C++ and compiles to wasm.
+    if(RT_ENABLE_PHYSICS)
+        list(APPEND WEB_SOURCES
+            src/engine/physics/physics_world.cpp
+            src/engine/physics/jolt_job_adapter.cpp
+            src/engine/systems/physics_system.cpp
+            src/engine/systems/player_system.cpp
+            src/engine/systems/shooting_system.cpp
+        )
+    endif()
+    # WGSL sources live in shaders/webgpu/*.wgsl; a generated header embeds
+    # them into the backend (no runtime fetch). Regenerates when any .wgsl or
+    # the embed script changes.
+    file(GLOB RT_WGSL_SOURCES ${CMAKE_SOURCE_DIR}/shaders/webgpu/*.wgsl)
+    set(RT_WGSL_GEN ${CMAKE_BINARY_DIR}/generated/webgpu_shaders_gen.h)
+    add_custom_command(OUTPUT ${RT_WGSL_GEN}
+        COMMAND ${CMAKE_COMMAND}
+                -DSHADER_DIR=${CMAKE_SOURCE_DIR}/shaders/webgpu
+                -DOUT=${RT_WGSL_GEN}
+                -P ${CMAKE_SOURCE_DIR}/cmake/embed_wgsl.cmake
+        DEPENDS ${RT_WGSL_SOURCES} ${CMAKE_SOURCE_DIR}/cmake/embed_wgsl.cmake
+        COMMENT "Embedding WGSL shaders")
+    add_custom_target(webgpu_shaders DEPENDS ${RT_WGSL_GEN})
+
+    add_executable(viewer_web ${WEB_SOURCES})
+    add_dependencies(viewer_web webgpu_shaders)
+    target_include_directories(viewer_web PRIVATE ${CMAKE_BINARY_DIR}/generated)
+    if(RT_ENABLE_PHYSICS)
+        target_link_libraries(viewer_web PRIVATE Jolt)
+        target_compile_definitions(viewer_web PRIVATE RT_ENABLE_PHYSICS=1)
+    endif()
+    # WebGPU comes from the emdawnwebgpu port (Dawn's standardized webgpu.h) —
+    # the legacy -sUSE_WEBGPU binding was removed in Emscripten 6.x. Default is
+    # the remote port (auto-downloaded); override with a local emdawnwebgpu.port.py
+    # path (-DRT_EMDAWN_PORT=...) for offline builds. The port flag is needed at
+    # both compile (header include path) and link (JS glue).
+    set(RT_EMDAWN_PORT "emdawnwebgpu" CACHE STRING
+        "emdawnwebgpu port name, or path to a local emdawnwebgpu.port.py")
+    target_compile_options(viewer_web PRIVATE -Wall -Wextra "--use-port=${RT_EMDAWN_PORT}")
+    target_include_directories(viewer_web SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+    target_link_libraries(viewer_web PRIVATE engine_core)
+
+    # The GLFW shim, a growable heap, and MODULARIZE so the page instantiates the
+    # module by name (web/viewer.html). ASYNCIFY lets the backend await the async
+    # WebGPU adapter/device request inside the synchronous Renderer::initialize().
+    # The assets are baked into the virtual FS so the level/scripts load via FS.
+    target_link_options(viewer_web PRIVATE
+        "--use-port=${RT_EMDAWN_PORT}"
+        "-sUSE_GLFW=3"
+        "-sASYNCIFY=1"
+        "-sALLOW_MEMORY_GROWTH=1"
+        # Jolt's collision narrow-phase recurses deeply; the 64 KB Emscripten
+        # default stack overflows the moment play mode steps physics (it
+        # surfaces in -O2 as a corrupt "table index is out of bounds"). Match the
+        # native 8 MB thread stack so gameplay has the headroom it expects.
+        "-sSTACK_SIZE=8388608"
+        "-sMODULARIZE=1"
+        "-sEXPORT_NAME=createViewer"
+        "-sENVIRONMENT=web"
+        # Hooks the page calls (on-screen sticks/buttons + debug panel; keep _main).
+        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause"
+        # web_main's EM_ASM uses stringToNewUTF8; Emscripten doesn't dependency-
+        # scan EM_ASM bodies, so pin it explicitly or a toolchain bump can DCE it.
+        "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8"
+        "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
+    )
+    # Emit viewer_web.js (+ .wasm + .data); web/viewer.html loads it.
+    set_target_properties(viewer_web PROPERTIES OUTPUT_NAME "viewer_web")
+
+    # Copy the hand-written shell + gallery next to the build output so the
+    # directory is servable as-is (the MODULARIZE build has no auto-generated
+    # HTML). index.html = scene gallery (landing), viewer.html = the renderer,
+    # scenes.json = the gallery manifest, thumbs/ = baked scene thumbnails.
+    add_custom_command(TARGET viewer_web POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/index.html
+                $<TARGET_FILE_DIR:viewer_web>/index.html
+        # viewer.html gets __RT_BUILD__ replaced with the wasm content hash so
+        # its cache-busting ?v= changes exactly when the engine bytes do.
+        COMMAND ${CMAKE_COMMAND}
+                -DSRC=${CMAKE_SOURCE_DIR}/web/viewer.html
+                -DDST=$<TARGET_FILE_DIR:viewer_web>/viewer.html
+                -DWASM=$<TARGET_FILE_DIR:viewer_web>/viewer_web.wasm
+                -P ${CMAKE_SOURCE_DIR}/cmake/inject_build_id.cmake
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/about.html
+                $<TARGET_FILE_DIR:viewer_web>/about.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/scenes.json
+                $<TARGET_FILE_DIR:viewer_web>/scenes.json
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_SOURCE_DIR}/web/thumbs
+                $<TARGET_FILE_DIR:viewer_web>/thumbs
+        VERBATIM)
+
+    message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")
+endif()
