@@ -7,6 +7,7 @@
 #include "../../renderer/renderer.h"         // engine::MeshHandle
 #include "city_render.h"
 
+#include <unordered_map>
 #include <vector>
 
 namespace citysim {
@@ -49,12 +50,17 @@ private:
         engine::StuckDetector blocked;     // wants to walk, body isn't moving
         engine::Real backoff = 0;          // blocked -> stand still this long
         engine::Vec2 facing{0, 1};         // last real travel direction (render yaw)
+        int outfit = 0;                    // deterministic shirt/pants/skin pick
+        engine::Real stride = 0;           // walk-cycle phase (advances with speed)
     };
 
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
     std::vector<Walker> walkers_;
-    engine::MeshHandle bodyMesh_;          // shared walker box
+    // Shared pose meshes, acquired lazily per (outfit, pose): the walk cycle is
+    // a handful of pre-built limb-swing poses the walkers hop between by phase.
+    engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
+    std::unordered_map<int, engine::MeshHandle> poseMeshes_;
     bool spawned_ = false;
 };
 

@@ -16,6 +16,16 @@ namespace citysim {
 // z=length (travel +Z).
 engine::RenderMesh fleetCarMesh(int slot, bool withWheels = true);
 
+// A simple articulated PERSON (device ask: "people should look like people"):
+// six vertex-coloured boxes — head, torso, two legs, two arms — centred like the
+// old walker box (y in [-0.9, 0.9], facing +Z). `swing` pitches the limbs about
+// hip/shoulder pivots (radians; legs opposed, arms counter-swing), so a small
+// set of these meshes IS the walk cycle — walkers hop between shared pose
+// meshes by walk phase, no skeleton needed. `outfit` picks a deterministic
+// shirt/pants/skin combination.
+engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit);
+int personOutfitCount();
+
 // The ECS render bridge for the agent-based city simulation (ADR-0060 Phase 6).
 // It builds a NavGraph from the level's RoadNet entities, runs a deterministic
 // CitySim of driver+pedestrian agents over it, and bakes their poses into

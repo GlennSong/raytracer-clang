@@ -36,22 +36,32 @@ constexpr Real kPersonalSpace = 1.3;    // 360-degree separation radius from peo
 constexpr Real kSeparationGain = 1.8;   // push strength inside that radius
 constexpr Real kBackoffTime = 0.8;      // blocked -> stand still this long, re-think
 
-// A small clothing palette, picked per walker by a deterministic hash.
-const Vec3 kClothes[] = {
-    Vec3(0.62, 0.35, 0.25), Vec3(0.30, 0.42, 0.58), Vec3(0.38, 0.50, 0.32),
-    Vec3(0.55, 0.48, 0.30), Vec3(0.45, 0.32, 0.48), Vec3(0.60, 0.58, 0.55),
-};
-constexpr int kNumClothes = static_cast<int>(sizeof(kClothes) / sizeof(kClothes[0]));
+// The walk cycle: a handful of pre-built limb-swing poses shared by every
+// walker of an outfit; each body hops between them as its stride advances.
+// Pose k swings sin(2*pi*k/N) of the max — pose 0 is standing.
+constexpr int kWalkPoses = 6;
+constexpr Real kMaxSwing = 0.55;       // peak limb pitch (radians, ~32 degrees)
+constexpr Real kStrideLength = 1.5;    // metres per full walk cycle
+constexpr Real kAnimMinSpeed = 0.3;    // below this the body stands (pose 0)
 }  // namespace
+
+engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
+                                              int outfit, int pose) {
+    int key = outfit * kWalkPoses + pose;
+    auto it = poseMeshes_.find(key);
+    if (it != poseMeshes_.end()) return it->second;
+    Real swing = kMaxSwing * std::sin(2.0 * engine::PI * pose / kWalkPoses);
+    engine::MeshHandle h = assets.acquireMesh(
+        buildPersonMesh(swing, outfit),
+        "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose));
+    poseMeshes_[key] = h;
+    return h;
+}
 
 void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
     if (spawned_ || !city_.built()) return;
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
-
-    if (!bodyMesh_.valid())
-        bodyMesh_ = ctx.assets.acquireMesh(
-            engine::MeshBuilder::box(Vec3(0.5, 1.8, 0.5)), "citywalk:ped");
 
     const auto& agents = sim.agents();
     for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
@@ -69,10 +79,14 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
 
+        // A simple articulated person (device ask): head, torso, swinging limbs,
+        // outfit picked deterministically per walker. Hue lives in the mesh's
+        // vertex colours, so the material stays white.
+        int outfit = static_cast<int>((static_cast<uint32_t>(i) * 2654435761u >> 8) %
+                                      static_cast<uint32_t>(personOutfitCount()));
         Renderable r;
-        r.mesh = bodyMesh_;
-        r.material.albedo = kClothes[(static_cast<uint32_t>(i) * 2654435761u >> 8) %
-                                     kNumClothes];
+        r.mesh = poseMesh(ctx.assets, outfit, 0);
+        r.material.albedo = Vec3(1, 1, 1);
         r.material.metallic = 0.0f;
         r.material.roughness = 0.9f;
         r.material.opacity = 1.0f;
@@ -87,6 +101,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         Walker w;
         w.entity = e;
         w.agentId = i;
+        w.outfit = outfit;
         w.facing = a.heading;
         w.blocked.stallSeconds = 1.2;        // walker-scale stall watchdog
         w.blocked.minCommand = 0.5;
@@ -209,6 +224,21 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.facing = Vec2(vel.x / hSpeed, vel.z / hSpeed);
         }
 
+        // WALK CYCLE: the stride phase advances with the body's REAL speed, so
+        // the legs move exactly as fast as the ground goes by — a held body
+        // stands (pose 0), a knocked-down one keeps whatever it fell in.
+        if (!down) {
+            if (hSpeed > kAnimMinSpeed) {
+                w.stride += hSpeed * dt / kStrideLength;
+                w.stride -= std::floor(w.stride);
+                int pose = static_cast<int>(w.stride * kWalkPoses) % kWalkPoses;
+                if (Renderable* r = world.get<Renderable>(w.entity))
+                    r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+            } else if (Renderable* r = world.get<Renderable>(w.entity)) {
+                r->mesh = poseMesh(ctx.assets, w.outfit, 0);
+            }
+        }
+
         // Pose write-back. Standing: the box rides the capsule centre. Down: lay
         // the box flat at shin height, pitched forward over its facing (the
         // capsule itself stays standing — a v1 visual; ragdoll is future work).
@@ -245,6 +275,7 @@ void CityWalkerSystem::onStop(engine::FrameContext&) {
     // Tracking only; world/physics teardown reclaims entities + characters (the
     // same no-removal-hook note as the vehicle bridge — fine at level teardown).
     walkers_.clear();
+    poseMeshes_.clear();
     spawned_ = false;
 }
 

@@ -44,7 +44,7 @@ RenderMaterial carMaterial() {
 
 RenderMaterial pedMaterial() {
     RenderMaterial m;
-    m.albedo = Vec3(0.80, 0.55, 0.40);
+    m.albedo = Vec3(1, 1, 1);   // hue carried in the person mesh's vertex colours
     m.metallic = 0.0f;
     m.roughness = 0.85f;
     m.opacity = 1.0f;
@@ -162,6 +162,46 @@ Vec3 stateColor(Agent::State s) {
         default:                      return Vec3(0.45, 0.45, 0.48);   // grey: resting/parked
     }
 }
+
+// Append a coloured box PITCHED about an X-axis pivot (for limbs: the hip or
+// shoulder line). `center` is the box centre before rotation; the whole box
+// rotates by `angle` around the line y = pivotY (z = 0 plane of the body).
+void addBoxPitched(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color,
+                   Real pivotY, Real angle) {
+    engine::RenderMesh b = MeshBuilder::box(size);
+    Real ca = std::cos(angle), sa = std::sin(angle);
+    uint32_t base = static_cast<uint32_t>(out.vertices.size());
+    for (engine::Vertex v : b.vertices) {
+        Vec3 p = v.position + c;
+        Real ry = p.y - pivotY, rz = p.z;
+        p.y = pivotY + ry * ca - rz * sa;
+        p.z = ry * sa + rz * ca;
+        v.position = p;
+        Vec3 n = v.normal;
+        v.normal = Vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
+        v.color = color;
+        out.vertices.push_back(v);
+    }
+    for (uint32_t i : b.indices) out.indices.push_back(base + i);
+}
+
+// Deterministic outfits for the person mesh: shirt / pants / skin triples.
+struct PersonOutfit { Vec3 shirt, pants, skin; };
+const PersonOutfit kOutfits[] = {
+    {{0.62, 0.35, 0.25}, {0.22, 0.24, 0.30}, {0.87, 0.68, 0.55}},
+    {{0.30, 0.42, 0.58}, {0.16, 0.16, 0.18}, {0.55, 0.38, 0.28}},
+    {{0.38, 0.50, 0.32}, {0.30, 0.26, 0.22}, {0.76, 0.56, 0.42}},
+    {{0.55, 0.48, 0.30}, {0.24, 0.28, 0.36}, {0.42, 0.29, 0.22}},
+    {{0.45, 0.32, 0.48}, {0.20, 0.20, 0.24}, {0.87, 0.68, 0.55}},
+    {{0.60, 0.58, 0.55}, {0.28, 0.22, 0.20}, {0.64, 0.46, 0.34}},
+    {{0.72, 0.62, 0.28}, {0.18, 0.22, 0.28}, {0.55, 0.38, 0.28}},
+    {{0.35, 0.55, 0.55}, {0.26, 0.24, 0.22}, {0.76, 0.56, 0.42}},
+    {{0.66, 0.30, 0.34}, {0.22, 0.26, 0.24}, {0.87, 0.68, 0.55}},
+    {{0.42, 0.38, 0.60}, {0.20, 0.18, 0.16}, {0.64, 0.46, 0.34}},
+    {{0.52, 0.56, 0.62}, {0.30, 0.30, 0.34}, {0.42, 0.29, 0.22}},
+    {{0.58, 0.44, 0.36}, {0.24, 0.20, 0.26}, {0.76, 0.56, 0.42}},
+};
+constexpr int kNumOutfits = static_cast<int>(sizeof(kOutfits) / sizeof(kOutfits[0]));
 
 // A vertex-coloured car that mirrors the PLAYER's car body (vehicles.lua
 // `car_body`): a low hull, a set-back greenhouse cabin, dark windshield + rear
@@ -309,6 +349,28 @@ engine::RenderMesh fleetCarMesh(int slot, bool withWheels) {
                         Vec3(b.width, b.height, b.length), withWheels);
 }
 
+int personOutfitCount() { return kNumOutfits; }
+
+engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
+    const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];
+    engine::RenderMesh m;
+    // Proportions of a 1.8 m body, centred at mid-height (y in [-0.9, 0.9]) so it
+    // drops in wherever the old walker box went. Facing +Z; hips at y = -0.05,
+    // shoulders at y = 0.50. Legs swing opposed; arms counter-swing at ~70%.
+    const Real hipY = -0.05, shoulderY = 0.50;
+    addBoxPitched(m, Vec3(0.17, 0.85, 0.22), Vec3(-0.115, -0.475, 0), o.pants,
+                  hipY, swing);                                        // left leg
+    addBoxPitched(m, Vec3(0.17, 0.85, 0.22), Vec3(0.115, -0.475, 0), o.pants,
+                  hipY, -swing);                                       // right leg
+    addBox(m, Vec3(0.44, 0.60, 0.26), Vec3(0, 0.25, 0), o.shirt);      // torso
+    addBoxPitched(m, Vec3(0.12, 0.62, 0.16), Vec3(-0.29, 0.19, 0), o.shirt,
+                  shoulderY, -swing * 0.7);                            // left arm
+    addBoxPitched(m, Vec3(0.12, 0.62, 0.16), Vec3(0.29, 0.19, 0), o.shirt,
+                  shoulderY, swing * 0.7);                             // right arm
+    addBox(m, Vec3(0.26, 0.26, 0.26), Vec3(0, 0.70, 0), o.skin);       // head
+    return m;
+}
+
 Real CityRenderSystem::groundAt(Real x, Real z) const {
     return (heightAt_ ? heightAt_(x, z) : 0.0) + roadLift_;
 }
@@ -359,7 +421,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     MeshHandle pedMesh{}, lensMesh{};
     if (assets) {
-        pedMesh = assets->acquireMesh(MeshBuilder::box(params_.pedSize), "city:ped");
+        pedMesh = assets->acquireMesh(buildPersonMesh(0.0, 0), "city:ped");
         Real e = params_.signalLensSize;
         lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, e)), "city:signal");
     }

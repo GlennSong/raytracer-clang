@@ -467,3 +467,36 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
         if (a.mode == Agent::Mode::Driver) carTrips = a.trips;
     CHECK(carTrips >= 3);
 }
+
+TEST_CASE(person_mesh_stands_and_swings) {
+    // The simple articulated person (device ask: "people should look like
+    // people"): six vertex-coloured boxes, 1.8 m tall, centred at mid-height
+    // like the old walker box. A swing pose moves the limbs but never changes
+    // topology — the walk cycle hops between shared pose meshes.
+    RenderMesh stand = buildPersonMesh(0.0, 0);
+    RenderMesh step = buildPersonMesh(0.5, 0);
+    CHECK(stand.vertices.size() == 6u * 24u);   // head/torso/2 legs/2 arms
+    CHECK(step.vertices.size() == stand.vertices.size());
+    CHECK(step.indices.size() == stand.indices.size());
+
+    Real lo = 1e9, hi = -1e9;
+    bool moved = false;
+    for (std::size_t i = 0; i < stand.vertices.size(); ++i) {
+        lo = std::min(lo, stand.vertices[i].position.y);
+        hi = std::max(hi, stand.vertices[i].position.y);
+        if ((stand.vertices[i].position - step.vertices[i].position).length() > 0.05)
+            moved = true;
+    }
+    CHECK(lo >= -0.95);
+    CHECK(lo <= -0.85);      // feet at the bottom of the old box envelope...
+    CHECK(hi <= 0.90);       // ...head inside the top
+    CHECK(moved);            // the pose really articulates
+    // Outfits differ (deterministic palette) and wrap safely.
+    CHECK(personOutfitCount() > 4);
+    RenderMesh other = buildPersonMesh(0.0, 1);
+    bool recolored = false;
+    for (std::size_t i = 0; i < stand.vertices.size(); ++i)
+        if ((stand.vertices[i].color - other.vertices[i].color).length() > 0.01)
+            recolored = true;
+    CHECK(recolored);
+}
