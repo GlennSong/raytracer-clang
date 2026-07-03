@@ -105,6 +105,31 @@ Vec2 rotateToward(Vec2 from, Vec2 to, Real maxRad) {
     Real ca = std::cos(a), sa = std::sin(a);
     return Vec2(from.x * ca - from.y * sa, from.x * sa + from.y * ca);
 }
+
+// Personality traits read from FIXED bits of an agent's `brain` (ADR-0062): no
+// rng draw, so seeded build streams are unchanged. Each helper owns its bits.
+
+// Personal pace in [0.85, 1.15] of the nominal speed — owns brain bits 9..23.
+Real paceFactor(uint32_t brain) {
+    return 0.85 + 0.30 * (((brain >> 9) & 0x7FFF) / Real(0x7FFF));
+}
+
+// Think-clock stagger as a 0..1 fraction of the think period — owns bits 17..24.
+Real thinkStagger(uint32_t brain) {
+    return ((brain >> 17) & 0xFF) / Real(0xFF);
+}
+
+// Park/idle setback slot (0..7) spacing same-node agents along the verge — owns
+// bits 3..5.
+Real parkSetbackSlot(uint32_t brain) {
+    return static_cast<Real>((brain >> 3) & 7);
+}
+
+// Post-fender-bender freeze (1.0..2.5 s, staggered so tangles unwind car by
+// car) — owns bits 5..6.
+Real crashHoldSeconds(uint32_t brain) {
+    return 1.0 + static_cast<Real>((brain >> 5) & 3) * 0.5;
+}
 }  // namespace
 
 int vehicleFleetSize() { return kFleetSize; }
@@ -241,11 +266,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.activity = Agent::Activity::AtHome;
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         // Personality from the brain's own bits (NOT an rnd() draw, so the build
-        // stream — and every seeded test scenario — is unchanged): pace in
-        // [0.85, 1.15] of nominal.
-        a.speedFactor = 0.85 + 0.30 * (((a.brain >> 9) & 0x7FFF) / Real(0x7FFF));
+        // stream — and every seeded test scenario — is unchanged).
+        a.speedFactor = paceFactor(a.brain);
         // Stagger the think clocks so the crowd doesn't re-decide in lockstep.
-        a.thinkTimer = thinkPeriod_ * (((a.brain >> 17) & 0xFF) / Real(0xFF));
+        a.thinkTimer = thinkPeriod_ * thinkStagger(a.brain);
         a.restNode = a.home;
         a.pos = idlePose(a.home, a.mode, a.brain);
         // Idle bodies face along their road from the start — a parked car with
@@ -289,7 +313,7 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     // Per-agent setback ALONG the road (mirrors arrival parking): several agents
     // sharing a home node must not stack in one spot — two cars occupying the
     // same verge pose spawned interpenetrating the moment both departed.
-    Real back = 2.0 + static_cast<Real>((brain >> 3) & 7) *
+    Real back = 2.0 + parkSetbackSlot(brain) *
                           ((mode == Agent::Mode::Driver) ? 1.4 : 0.6);
     back = std::min(back, nav_->links[li].length * 0.45);
     return nav_->nodes[node] + dir * back + right * off;
@@ -782,7 +806,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             Vec2 dir = nav_->direction(lastLink);
             Vec2 right(dir.y, -dir.x);
             Real hw = nav_->links[lastLink].width * 0.5;
-            Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;
+            Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;
             back = std::min(back, nav_->links[lastLink].length * 0.5);
             a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
                     right * (hw + 2.8);
@@ -801,7 +825,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         Vec2 dir = nav_->direction(lastLink);
         Vec2 right(dir.y, -dir.x);
         Real hw = nav_->links[lastLink].width * 0.5;
-        Real back = 4.0 + static_cast<Real>((a.brain >> 3) & 7) * 1.3;   // 4..13 m
+        Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;   // 4..13 m
         back = std::min(back, nav_->links[lastLink].length * 0.5);
         a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
                 right * (hw + 2.8);
@@ -1077,7 +1101,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             // already used it honestly; the hold branch freezes them next tick.
             auto crash = [](Agent& c) {
                 if (c.crashTimer <= 0) {
-                    c.crashTimer = 1.0 + static_cast<Real>((c.brain >> 5) & 3) * 0.5;
+                    c.crashTimer = crashHoldSeconds(c.brain);
                     if (c.crashCount == 0) c.crashAnchor = c.pos;
                     ++c.crashCount;
                 }
