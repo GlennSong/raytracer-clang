@@ -176,7 +176,7 @@ struct PhysicsWorld::Impl {
     };
     std::vector<Character> characters;
 
-    // Wheeled vehicles (ADR-0058). Each owns a VehicleConstraint (also a step
+    // Wheeled vehicles (ADR-0059). Each owns a VehicleConstraint (also a step
     // listener) over a dynamic chassis body. Slots are never compacted so
     // VehicleIds stay valid; removeVehicle releases the ref and invalidates the id.
     struct Vehicle {
@@ -467,7 +467,7 @@ void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
         ch->SetPosition(toJoltR(position));
 }
 
-// --- Wheeled vehicle (ADR-0058) --------------------------------------------
+// --- Wheeled vehicle (ADR-0059) --------------------------------------------
 // UNVERIFIED: written against the documented Jolt v5.5.0 vehicle API; the Jolt
 // submodule can't be fetched in this environment, so this has NOT been compiled.
 // Likely tuning/rename touch-ups on a real build (member names on WheelSettingsWV

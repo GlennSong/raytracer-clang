@@ -19,7 +19,7 @@ struct Route {
 // the agent's target speed, so the planner and the sim agree on "fast roads".
 Real classSpeed(RoadClass klass);
 
-// A* over the directed lane graph (ADR-0058). Cost is TRAVEL TIME
+// A* over the directed lane graph (ADR-0059). Cost is TRAVEL TIME
 // (length / classSpeed), so routes prefer arterials over local streets like real
 // driving; the heuristic is straight-line time at the fastest class speed
 // (admissible -> optimal). Deterministic: ties broken by link index. Returns an

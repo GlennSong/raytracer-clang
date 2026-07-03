@@ -51,7 +51,7 @@ TEST_CASE(road_net_builds_a_surface) {
 }
 
 TEST_CASE(crosswalks_bake_a_setback_band_into_the_road_uv) {
-    // Crosswalks are painted into the road TEXTURE (ADR-0061): the mesher bakes the
+    // Crosswalks are painted into the road TEXTURE (ADR-0062): the mesher bakes the
     // carriageway UV `v` (mv) as metres past the junction mouth, so the RoadMarkings
     // shader stripes a set-back band. Verify the baking is gated and lands near a
     // junction. (carriageway vertices carry u = mu >= ~1; sidewalks stay at u = 0.)

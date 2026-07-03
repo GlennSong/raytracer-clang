@@ -6,7 +6,7 @@
 
 namespace engine {
 
-// A forward vision cone in the ground (XZ) plane (ADR-0059): an agent at `origin`
+// A forward vision cone in the ground (XZ) plane (ADR-0060): an agent at `origin`
 // looking along unit `forward`, seeing out to `range` metres within +/- the
 // half-angle. Generic perception — reusable by any agent, so it lives in the core
 // engine rather than the city-sim application.
@@ -34,7 +34,7 @@ inline Real forwardDistance(const VisionCone& c, const Vec2& p) {
     return dot(p - c.origin, c.forward);
 }
 
-// A 2.5D sensor (ADR-0062): the planar wedge plus a HEIGHT BAND. Ground agents
+// A 2.5D sensor (ADR-0063): the planar wedge plus a HEIGHT BAND. Ground agents
 // decide in plan view, but the city is grade-separated — a car crossing the
 // overpass 5.8 m above is NOT in front of the car below it, and a flat cone
 // would brake for that phantom. A full camera-style frustum buys ground agents

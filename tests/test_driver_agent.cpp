@@ -6,7 +6,7 @@
 
 using namespace engine;
 
-// The unified driver controller (ADR-0061): the SAME {throttle, steer, brake}
+// The unified driver controller (ADR-0062): the SAME {throttle, steer, brake}
 // the player produces, computed by an AI from what its brain wants. These pin the
 // steering sign convention and the throttle/brake behaviour so player and AI cars
 // drive identically.

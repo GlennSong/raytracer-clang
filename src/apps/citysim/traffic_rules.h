@@ -7,7 +7,7 @@
 
 namespace citysim {
 
-// Pure driving-decision helpers (ADR-0059) — no state, easy to unit-test. All
+// Pure driving-decision helpers (ADR-0060) — no state, easy to unit-test. All
 // speeds m/s, distances m, decel m/s^2.
 
 // Comfortable speed to come to rest in `dist` metres at `decel`: v = sqrt(2*decel*dist),

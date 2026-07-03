@@ -28,7 +28,7 @@ constexpr Real kJunctionSpeed    = 4.0;   // m/s (~14 km/h)
 // Approximate bridge-deck height per grade-separation layer (clearance 5.0 +
 // deck 0.8, matching DesignRules), so agents on an overpass ride the deck instead
 // of the ground. A flat lift — the ramp slope at the layer transition is not yet
-// modelled (ADR-0058 owed).
+// modelled (ADR-0059 owed).
 constexpr Real kLayerClearance = 5.8;
 }  // namespace
 

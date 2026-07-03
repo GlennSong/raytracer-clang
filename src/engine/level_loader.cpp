@@ -298,7 +298,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
     world.add<Renderable>(e, r);
 
-    // Static collision from the carriageway geometry (ADR-0058): without this a
+    // Static collision from the carriageway geometry (ADR-0059): without this a
     // road has no collider of its own — ground roads borrow the terrain's, but an
     // elevated bridge DECK has nothing under it, so cars fall through. Build a
     // MeshCollider from the same triangles (deck + ramps + piers) so the player's
@@ -1687,7 +1687,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
 }
 
 #ifdef RT_ENABLE_SCRIPTING
-// Spawn drivable vehicles authored in Lua (ADR-0058). Each "vehicles" entry is
+// Spawn drivable vehicles authored in Lua (ADR-0059). Each "vehicles" entry is
 // either `{ "recipe": "sedan", "opts"... }` (-> vehicle.<recipe>(seed, {})) or a
 // full `{ "script": "return vehicle.hatchback(seed, {...})" }`, plus a world
 // `position` and optional `yaw` (degrees) and `seed`. The vehicles.lua library is
@@ -1874,14 +1874,14 @@ bool LevelLoader::load(const std::string& path,
                      editorMode, cityEnt, &cityModel, &scriptCache,
                      entityGround ? &entityGround : nullptr);
 
-    // Drivable vehicles (ADR-0058) — play mode only (runtime actors, like the
+    // Drivable vehicles (ADR-0059) — play mode only (runtime actors, like the
     // player; not editor document entities).
 #ifdef RT_ENABLE_SCRIPTING
     if (!editorMode && root.contains("vehicles"))
         loadVehicles(root["vehicles"], world, assets, levelDir);
 #endif
 
-    // Level-authored city-sim settings (ADR-0062): the top-level "citysim" block
+    // Level-authored city-sim settings (ADR-0063): the top-level "citysim" block
     // becomes one CitySimConfig entity the citysim render bridge reads at build —
     // so a level can choose its own population, seed, clock rate, and whether the
     // agent-state debug HUD starts on (the agent lab: 1 car, 1 walker, HUD on).

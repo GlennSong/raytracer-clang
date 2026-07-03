@@ -1,4 +1,4 @@
-# Reactive agents + one composable vehicle — plan (ADR-0060)
+# Reactive agents + one composable vehicle — plan (ADR-0061)
 
 The shift: agents act on what they can SEE (a vision cone) and decide locally via
 a small state machine, steering continuously (boids-style) instead of snapping

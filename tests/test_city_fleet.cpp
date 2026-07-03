@@ -9,7 +9,7 @@
 using namespace engine;
 using namespace citysim;
 
-// The composable vehicle fleet (ADR-0060 Phase 4): NPC cars are built from a
+// The composable vehicle fleet (ADR-0061 Phase 4): NPC cars are built from a
 // shared body table (dimensions + type), so they come in real sizes — sedans,
 // hatchbacks, SUVs, pickups, a van, a box truck — and car-following keeps a gap
 // scaled to those lengths, so a longer body never packs tighter than a sedan.
@@ -158,7 +158,7 @@ TEST_CASE(mixed_fleet_cars_keep_length_aware_gaps) {
 }
 
 TEST_CASE(released_driver_stops_being_driven) {
-    // When the player commandeers a car (ADR-0061), the sim releases that agent so
+    // When the player commandeers a car (ADR-0062), the sim releases that agent so
     // its ghost no longer moves and can't fight the now player-driven physical car.
     NavGraph nav = straightRoad(300.0);
     CitySim sim;

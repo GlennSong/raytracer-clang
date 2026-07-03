@@ -2923,7 +2923,7 @@ bool VulkanRenderer::Impl::createPipeline() {
         return false;
     }
 
-    // Overlay variant (RenderMaterial::FLAG_OVERLAY — debug gizmos, ADR-0060): the
+    // Overlay variant (RenderMaterial::FLAG_OVERLAY — debug gizmos, ADR-0061): the
     // same opaque mesh shaders, but depth test AND write are off so the geometry
     // always draws over everything already in the frame (parity with the Metal
     // depthStateOverlay: Always-compare, no write). Drawn last, after opaque /
@@ -3875,7 +3875,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         recordGeometry(opaque, meshPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(terrainItems, terrainPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
-        // Debug gizmos on top, after everything, with depth off (ADR-0060).
+        // Debug gizmos on top, after everything, with depth off (ADR-0061).
         recordGeometry(overlay, overlayPipeline, /*wire=*/false, /*countStats=*/true);
         if (wireframeFrame == 2)
             recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/false);

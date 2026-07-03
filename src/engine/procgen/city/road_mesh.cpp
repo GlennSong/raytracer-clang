@@ -1308,7 +1308,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 if (junction) continue;
                 Vec3 mL0 = P(c0, o0, h0 + markLift, +1), mR0 = P(c0, o0, h0 + markLift, -1),
                      mL1 = P(c1, o1, h1 + markLift, +1), mR1 = P(c1, o1, h1 + markLift, -1);
-                // The v coordinate (mv) carries CROSSWALK placement (ADR-0061):
+                // The v coordinate (mv) carries CROSSWALK placement (ADR-0062):
                 // metres PAST the junction mouth, so the RoadMarkings shader stripes
                 // a set-back band on each approach (not in the intersection). = the
                 // distance to the nearest chain end minus the road half-width (the

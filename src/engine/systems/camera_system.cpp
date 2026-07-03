@@ -123,7 +123,7 @@ void CameraSystem::update(FrameContext& ctx) {
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
 
-    // Chase camera (ADR-0058): while following a vehicle, the view tracks it and
+    // Chase camera (ADR-0059): while following a vehicle, the view tracks it and
     // the editor controllers / placed cameras are bypassed. A dead target (the
     // car was destroyed) drops the follow back to the normal view.
     if (followTarget.valid() &&

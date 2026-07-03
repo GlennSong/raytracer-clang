@@ -6,7 +6,7 @@
 
 namespace engine {
 
-// A runtime, queryable navigation graph derived from the road network (ADR-0058).
+// A runtime, queryable navigation graph derived from the road network (ADR-0059).
 // The procedural pipeline consumes the RoadGraph at mesh-build time and discards
 // it; agents need it to live. NavGraph is the persistent, *directed* lane graph
 // that vehicles and pedestrians route over and drive on. Pure data + pure
@@ -38,7 +38,7 @@ struct NavGraph {
     int linkCount() const { return static_cast<int>(links.size()); }
 
     // True if `node` is an intersection (three or more distinct neighbours) — a
-    // place agents slow for / will yield at (ADR-0058).
+    // place agents slow for / will yield at (ADR-0059).
     bool isJunction(int node) const {
         return node >= 0 && node < static_cast<int>(junction.size()) && junction[node];
     }

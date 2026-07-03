@@ -7,7 +7,7 @@
 
 using namespace engine;
 
-// The lofted car shell (ADR-0061): curved automotive bodies with painted glass —
+// The lofted car shell (ADR-0062): curved automotive bodies with painted glass —
 // the fix for a fleet of box compositions that all read as cybertrucks. These pin
 // the properties that make it read as a CAR: curvature (no box silhouette),
 // windows, style differentiation, correct bounds, determinism.

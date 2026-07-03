@@ -69,10 +69,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #endif
     addSystem<MotionSystem>();
     // Agent-based city: drivers + pedestrians with acceleration, signals,
-    // perception, and bounded-radius steering over the road network (ADR-0059).
+    // perception, and bounded-radius steering over the road network (ADR-0060).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
 #ifdef RT_ENABLE_PHYSICS
-    // Motion authority per regime (ADR-0061 rethink): AMBIENT traffic is moved by
+    // Motion authority per regime (ADR-0062 rethink): AMBIENT traffic is moved by
     // ONE authority — the CitySim planner — drawn instanced and collided via
     // kinematic proxies (CityPhysicsSystem), which is what keeps forty cars
     // flowing. Full Jolt dynamics is an INTERACTION response: CityVehicleSystem
@@ -143,7 +143,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
         }
     }
     // Vehicles are spawned by the level loader from the level's "vehicles" block
-    // (ADR-0058), so they are data-driven rather than hardcoded here.
+    // (ADR-0059), so they are data-driven rather than hardcoded here.
 #endif
 
     // Play From Here (one-shot flag): start the player at the editor's view

@@ -9,7 +9,7 @@
 
 namespace citysim {
 
-// Gives the kinematic AI cars a physics presence (ADR-0059). The CitySim decides
+// Gives the kinematic AI cars a physics presence (ADR-0060). The CitySim decides
 // each car's pose; this viewer-side system mirrors that pose into a KINEMATIC
 // Jolt box per car (via PhysicsWorld::moveKinematic), so the player and the
 // physics gun collide with cars and a moving car pushes what it touches — without

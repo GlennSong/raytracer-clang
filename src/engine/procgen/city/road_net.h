@@ -51,7 +51,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net);
 // to a fine polyline (a curved road becomes a chain of short straight edges; a
 // straight run collapses back to one), with the local roundabout constraints
 // applied — exactly the geometry the carriageway is meshed over. Exposed so
-// runtime consumers (the navigation graph, ADR-0058) route on the SAME centrelines
+// runtime consumers (the navigation graph, ADR-0059) route on the SAME centrelines
 // the asphalt is drawn on. (Wraps the file-local builder; defined in road_net.cpp.)
 RoadGraph navRoadGraph(const RoadNet& net);
 

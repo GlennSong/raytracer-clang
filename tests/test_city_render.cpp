@@ -97,7 +97,7 @@ TEST_CASE(city_render_debug_widgets) {
 }
 
 TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
-    // ADR-0061: with cars owned by the vehicle bridge, a driver's debug ring must
+    // ADR-0062: with cars owned by the vehicle bridge, a driver's debug ring must
     // circle the PHYSICAL car (the bridge-reported pose), not the planner ghost —
     // a ring around the ghost is an empty circle on the ground. Drivers with no
     // reported car draw no ring; pedestrian rings are unaffected.
@@ -134,7 +134,7 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
 }
 
 TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
-    // ADR-0061 walkers: with peds owned by CityWalkerSystem, the render bridge
+    // ADR-0062 walkers: with peds owned by CityWalkerSystem, the render bridge
     // must not bake instanced ped boxes (they'd draw twice), and a ped's debug
     // ring follows the bridge-reported REAL body — unreported walkers draw none.
     World world;
@@ -187,7 +187,7 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
 }
 
 TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
-    // Promotion (ADR-0061 rethink): when the player commandeers an ambient car,
+    // Promotion (ADR-0062 rethink): when the player commandeers an ambient car,
     // the sim releases its agent and the instanced fleet must drop that car (the
     // real Vehicle takes its visual place). Widgets drop it too.
     World world;
@@ -379,7 +379,7 @@ TEST_CASE(crosswalks_sit_at_junction_mouths) {
         CHECK(dNode > halfW * 0.8);    // outside the intersection box...
         CHECK(dNode < halfW + 6.0);    // ...but right at the mouth, not mid-block
     }
-    // The bars are painted into the ROAD TEXTURE now (ADR-0061), not a decal group:
+    // The bars are painted into the ROAD TEXTURE now (ADR-0062), not a decal group:
     // the group still exists (a stable anchor) but carries no overlay instances.
     InstanceGroup* g = world.get<InstanceGroup>(city.crosswalkGroup());
     CHECK(g != nullptr);
@@ -387,7 +387,7 @@ TEST_CASE(crosswalks_sit_at_junction_mouths) {
 }
 
 TEST_CASE(level_citysim_config_overrides_build_params) {
-    // ADR-0062: a level's top-level "citysim" block (parsed into a CitySimConfig
+    // ADR-0063: a level's top-level "citysim" block (parsed into a CitySimConfig
     // entity) decides the population — the agent lab runs 1 car + 1 walker while
     // grown.json keeps the default bustle. The entity must beat the constructor.
     World world;

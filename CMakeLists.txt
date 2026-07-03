@@ -108,7 +108,7 @@ add_library(engine_core STATIC
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/traffic_system.cpp
-    # Agent-based city simulation app (ADR-0059). Pure C++, headless-safe; the
+    # Agent-based city simulation app (ADR-0060). Pure C++, headless-safe; the
     # game (arena_state) registers citysim::CityRenderSystem. Lives under
     # src/apps/citysim but compiles into the shared lib like traffic_system.
     src/apps/citysim/traffic_signal.cpp
@@ -439,8 +439,8 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
-        src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0061)
-        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0061)
+        src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
+        src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
     )
 endif()
 
@@ -569,8 +569,8 @@ if(Qt6_FOUND)
             src/engine/systems/shooting_system.cpp
             src/engine/systems/vehicle_system.cpp
             src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars
-            src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0061)
-            src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0061)
+            src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
+            src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         )
         target_link_libraries(editor_app PRIVATE Jolt)
         # arena_state.cpp gates its physics/player systems on this define;

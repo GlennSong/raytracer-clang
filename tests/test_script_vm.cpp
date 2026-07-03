@@ -81,7 +81,7 @@ TEST_CASE(procgen_script_builds_an_sdf_sphere_mesh) {
 }
 
 TEST_CASE(procgen_script_builds_a_curved_car_shell) {
-    // mesh.car_shell (ADR-0061): the Lua vehicle recipes (the player's car) use
+    // mesh.car_shell (ADR-0062): the Lua vehicle recipes (the player's car) use
     // the SAME lofted body generator the NPC fleet instances — one body path.
     ScriptVM vm;
     openProcgenLibrary(vm);

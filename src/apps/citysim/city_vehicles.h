@@ -10,7 +10,7 @@
 
 namespace citysim {
 
-// PROMOTION-on-interaction (ADR-0061, motion-authority rethink). Ambient NPC
+// PROMOTION-on-interaction (ADR-0062, motion-authority rethink). Ambient NPC
 // traffic is moved by ONE authority — the CitySim planner, drawn instanced and
 // collided via kinematic proxies (CityPhysicsSystem). Full vehicle dynamics is
 // an INTERACTION response, not the default gait of forty cars: when the player

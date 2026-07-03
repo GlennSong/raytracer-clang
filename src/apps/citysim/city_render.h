@@ -10,13 +10,13 @@ namespace citysim {
 
 // Build the fleet body mesh for slot `slot` (wraps into the fleet) — the same
 // vertex-coloured car the instanced renderer uses, so a PROMOTED physical
-// Vehicle (ADR-0061: the player commandeers an ambient car) looks identical to
+// Vehicle (ADR-0062: the player commandeers an ambient car) looks identical to
 // the instanced car it replaces. `withWheels` false for that promotion —
 // VehicleSystem gives a real Vehicle physics wheels. x=width, y=height,
 // z=length (travel +Z).
 engine::RenderMesh fleetCarMesh(int slot, bool withWheels = true);
 
-// The ECS render bridge for the agent-based city simulation (ADR-0059 Phase 6).
+// The ECS render bridge for the agent-based city simulation (ADR-0060 Phase 6).
 // It builds a NavGraph from the level's RoadNet entities, runs a deterministic
 // CitySim of driver+pedestrian agents over it, and bakes their poses into
 // InstanceGroups so RenderSystem draws the whole city as a few instanced
@@ -35,7 +35,7 @@ struct CityRenderParams {
     int pedestrians = 40;
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
-    Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0059)
+    Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
@@ -52,7 +52,7 @@ public:
     void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
 
-    // When a CityVehicleSystem owns the NPC cars as real physics Vehicles (ADR-0061),
+    // When a CityVehicleSystem owns the NPC cars as real physics Vehicles (ADR-0062),
     // this render bridge must NOT also draw them as instanced kinematic boxes (that
     // would double every car). Call before build(): it skips creating/baking the car
     // instance groups; peds, signals, and crosswalks stay owned here. The CitySim
@@ -60,13 +60,13 @@ public:
     void setCarsExternallyOwned(bool on) { carsExternallyOwned_ = on; }
     bool carsExternallyOwned() const { return carsExternallyOwned_; }
 
-    // Same handoff for PEDESTRIANS (ADR-0061): when a CityWalkerSystem owns them
+    // Same handoff for PEDESTRIANS (ADR-0062): when a CityWalkerSystem owns them
     // as physics characters, this bridge stops baking the instanced ped boxes
     // (they'd draw twice) — the CitySim keeps planning; walkers follow bodies.
     void setPedsExternallyOwned(bool on) { pedsExternallyOwned_ = on; }
     bool pedsExternallyOwned() const { return pedsExternallyOwned_; }
 
-    // The physical car poses (ADR-0061), fed each step by the vehicle bridge so
+    // The physical car poses (ADR-0062), fed each step by the vehicle bridge so
     // the per-agent DEBUG WIDGETS ring the REAL car — not the planner ghost, which
     // legitimately runs ahead/behind (an empty ring on the ground is the ghost).
     // Only used when cars are externally owned; drivers without a reported pose
@@ -102,7 +102,7 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
-    CitySim& simMutable() { return sim_; }   // ADR-0061 bridge: release ejected drivers
+    CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
     const engine::NavGraph& nav() const { return nav_; }
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
@@ -113,7 +113,7 @@ public:
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
-    // Debug widgets (ADR-0060): per-agent ground footprint coloured by behaviour
+    // Debug widgets (ADR-0061): per-agent ground footprint coloured by behaviour
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
     engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
     engine::Entity forwardGroup() const { return forwardGroup_; }
@@ -165,8 +165,8 @@ private:
     Real roadLift_ = 0.0;
     bool built_ = false;
     bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
-    bool carsExternallyOwned_ = false;   // ADR-0061: a CityVehicleSystem owns the cars
-    bool pedsExternallyOwned_ = false;   // ADR-0061: a CityWalkerSystem owns the peds
+    bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
+    bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets
     std::vector<ExternalAgentPose> externalPedPoses_;   // real walker poses for widgets
 };

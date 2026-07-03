@@ -6,7 +6,7 @@
 
 namespace engine {
 
-// The unified vehicle-control seam (ADR-0061). Every car in the world is ONE kind
+// The unified vehicle-control seam (ADR-0062). Every car in the world is ONE kind
 // of object — a physics Vehicle — and whoever drives it, the player or an AI,
 // speaks only in these four pedal/wheel values. So there is a single control path
 // (`PhysicsWorld::setVehicleInput`) and a single physics path; an NPC car handles

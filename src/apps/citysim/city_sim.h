@@ -13,7 +13,7 @@ namespace citysim {
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
-// The agent-based city simulation (ADR-0059). An Agent is a brain (data): it
+// The agent-based city simulation (ADR-0060). An Agent is a brain (data): it
 // either WALKS (a pedestrian) or POSSESSES and drives a SimVehicle. A car has no
 // agency of its own — a SimVehicle with no driver is inert (parked). The player
 // is modelled as an agent too (playerControlled = its brain is host input); the
@@ -24,7 +24,7 @@ using engine::Real;   // the engine's scalar (double); used throughout the sim
 struct Agent {
     enum class Mode : uint8_t { Pedestrian, Driver };
     enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning };
-    // Reactive behaviour state (ADR-0060): what the agent is doing right now,
+    // Reactive behaviour state (ADR-0061): what the agent is doing right now,
     // decided from what it can SEE this step. Rendered by the debug widgets. The
     // first four are shared / pedestrian; the rest are the driver FSM (Cruising →
     // Following → Yielding → Turning, with Waiting for a held red). `Count` sizes
@@ -38,7 +38,7 @@ struct Agent {
     Mode mode = Mode::Driver;
     State state = State::Resting;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
-    bool released = false;           // ejected by the player (ADR-0061): the sim stops
+    bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
     int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
@@ -49,7 +49,7 @@ struct Agent {
     Activity activity = Activity::AtHome;
     int restNode = -1;   // the node this agent last arrived at (wander departs from it)
 
-    // Think cadence (ADR-0061): agents DECIDE on a slow clock and COMMIT — the
+    // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
     // thinkTimer expires (staggered per agent), and the committed decision
     // (`leanTarget`, the FSM state) holds between thinks while every tick still
@@ -61,33 +61,33 @@ struct Agent {
     // Current trip along the lane graph.
     engine::Route route;
     int leg = 0;
-    int trips = 0;   // trips started so far — the ADR-0061 bridge rebuilds its
+    int trips = 0;   // trips started so far — the ADR-0062 bridge rebuilds its
                      // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
     int lane = 0;
-    // Tether (ADR-0061): while set, this planner ghost may not LEAD `tetherAnchor`
+    // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The
     // host feeds the car's real position each step, so the plan can never outrun
     // the physics (a collision, a hill, a slow start no longer strands the car).
     bool tethered = false;
     engine::Vec2 tetherAnchor;
     Real tetherLead = 10.0;
-    // Continuous sideways lean off the path (ADR-0060), rate-limited, so a walker
+    // Continuous sideways lean off the path (ADR-0061), rate-limited, so a walker
     // steers smoothly around what it sees instead of popping. Decays back to 0.
     Real lateralOffset = 0;
 
-    // Imperfect perception (ADR-0059): each step the agent perceives obstacles
+    // Imperfect perception (ADR-0060): each step the agent perceives obstacles
     // with probability `reliability`; otherwise it misses (a fault). `brain` is a
     // per-agent deterministic RNG so faults reproduce from the sim seed.
     Real reliability = 1.0;
     uint32_t brain = 1;
-    // Working memory (ADR-0062: sense -> REMEMBER -> predict -> decide -> act).
+    // Working memory (ADR-0063: sense -> REMEMBER -> predict -> decide -> act).
     // Sightings become tracks with velocity estimates; a body that leaves the
     // cone persists a few seconds, extrapolated along where it was heading
     // (object permanence), so the agent acts on a continuous world instead of a
     // per-tick snapshot — and can anticipate a crossing before it happens.
     engine::AgentMemory memory;
-    // Personality (ADR-0061): this agent's personal pace as a fraction of the
+    // Personality (ADR-0062): this agent's personal pace as a fraction of the
     // nominal speed — a timid driver holds ~0.85x the limit, a pushy one ~1.15x,
     // and walkers stroll or stride. Derived from `brain`'s bits at build (no rng
     // draw, so seeded scenarios are unchanged); traffic stops moving in lockstep.
@@ -99,7 +99,7 @@ struct Agent {
     bool moving = false;
 };
 
-// The kind of body a vehicle wears (ADR-0060 Phase 4: one composable vehicle,
+// The kind of body a vehicle wears (ADR-0061 Phase 4: one composable vehicle,
 // varied by a Body component). Dimensions come from the shared fleet table below,
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
 enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck };
@@ -129,7 +129,7 @@ struct SimVehicle {
     engine::Vec2 heading{1, 0};
 };
 
-// A body some agent might sense this step (ADR-0062): its plan position, its
+// A body some agent might sense this step (ADR-0063): its plan position, its
 // elevation (bridges — the 2.5D sensor gates on height), and a STABLE id so an
 // observer's memory can track it across steps. Sim agents use their agent index;
 // host-injected external obstacles use -(1+k) for the k-th injected point.
@@ -163,7 +163,7 @@ public:
             agents_[agentIndex].playerControlled = on;
     }
 
-    // Release an agent whose car the player commandeered (ADR-0061): the sim parks
+    // Release an agent whose car the player commandeered (ADR-0062): the sim parks
     // its ghost and stops advancing it, so the brain no longer fights the physical
     // car the player now drives. Idempotent; -1/out-of-range is a no-op.
     void releaseDriver(int agentIndex) {
@@ -175,7 +175,7 @@ public:
         a.speed = 0;
     }
 
-    // Tether a planner ghost to its physical car (ADR-0061): the ghost holds
+    // Tether a planner ghost to its physical car (ADR-0062): the ghost holds
     // whenever it is more than `maxLead` metres from `anchor` (the car's real
     // position, re-fed each step). Determinism holds for an identical call
     // sequence — the host owns whatever nondeterminism it feeds in.
@@ -193,7 +193,7 @@ public:
 
     // Sample agent `agentIndex`'s current route as a polyline of lane-centre
     // (driver) / sidewalk (pedestrian) points, ~`step` metres apart — the pursuit
-    // path the ADR-0061 bridge follows from the car's real pose. Empty when the
+    // path the ADR-0062 bridge follows from the car's real pose. Empty when the
     // agent has no active route.
     std::vector<engine::Vec2> lanePath(int agentIndex, Real step = 3.0) const;
 
@@ -207,7 +207,7 @@ public:
         for (Agent& a : agents_) a.reliability = r;
     }
 
-    // WANDER mode (ADR-0062, the agent lab): agents ignore the daily schedule and
+    // WANDER mode (ADR-0063, the agent lab): agents ignore the daily schedule and
     // start a fresh trip to a random reachable node the moment they arrive — so a
     // one-car lab level has its car lapping the circuit continuously instead of
     // parking until the evening commute. Deterministic (draws from the sim rng).

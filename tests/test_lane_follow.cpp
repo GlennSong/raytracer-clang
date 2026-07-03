@@ -7,7 +7,7 @@
 
 using namespace engine;
 
-// Closed-loop driving quality (ADR-0061): a kinematic BICYCLE-MODEL car driven
+// Closed-loop driving quality (ADR-0062): a kinematic BICYCLE-MODEL car driven
 // by the real controller stack — LaneFollower (pure pursuit) -> DriverCommand ->
 // computeDriverInput -> vehicle. This is the headless stand-in for the Jolt car:
 // same controller, same sign conventions, a simple but honest plant (speed-

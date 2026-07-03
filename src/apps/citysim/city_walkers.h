@@ -11,7 +11,7 @@
 
 namespace citysim {
 
-// Physical pedestrians (ADR-0061) — the walker counterpart of CityVehicleSystem.
+// Physical pedestrians (ADR-0062) — the walker counterpart of CityVehicleSystem.
 // Each CitySim pedestrian agent gets a REAL body: an entity with a kinematic
 // character capsule (the same CharacterController + PhysicsWorld::moveCharacter
 // mechanism that moves the player), driven each step toward its planner ghost.

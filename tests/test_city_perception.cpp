@@ -99,7 +99,7 @@ TEST_CASE(imperfect_agents_make_faults_deterministically) {
 }
 
 TEST_CASE(cars_remember_a_person_after_losing_sight) {
-    // Object permanence at the sim level (ADR-0062): a car that saw a person in
+    // Object permanence at the sim level (ADR-0063): a car that saw a person in
     // its lane keeps yielding to the MEMORY of them for a few seconds after they
     // vanish from sight — then the track fades and the car resumes. A snapshot-
     // driven car would floor it the very frame the person disappeared.

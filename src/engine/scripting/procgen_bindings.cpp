@@ -296,7 +296,7 @@ int l_mesh_capsule(lua_State* L) {
 }
 
 // mesh.car_shell(style, color, {W, H, L} [, with_wheels]) — the lofted, curved
-// car body (ADR-0061): superellipse sections along a style roofline, glass
+// car body (ADR-0062): superellipse sections along a style roofline, glass
 // painted into the greenhouse. The SAME generator the NPC fleet instances, so a
 // Lua vehicle recipe (the player's car) matches the traffic 1:1. Styles:
 // "sedan", "hatchback", "suv", "pickup", "van", "boxtruck".

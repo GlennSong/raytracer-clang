@@ -256,7 +256,7 @@ struct WeldSolidParams {
     // Zebra crosswalks painted into the road TEXTURE (not overlaid geometry): when
     // true, the carriageway UV `mv` is baked as metres PAST the junction mouth, so
     // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
-    // When false, mv is a large sentinel so no band is painted (ADR-0061).
+    // When false, mv is a large sentinel so no band is painted (ADR-0062).
     bool   crosswalks = false;
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);

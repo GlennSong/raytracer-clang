@@ -10,7 +10,7 @@
 
 namespace engine {
 
-// Real-pose traffic perception (ADR-0061). The planner's car-following runs on
+// Real-pose traffic perception (ADR-0062). The planner's car-following runs on
 // its own ghosts; these helpers give a PHYSICAL car eyes on the other PHYSICAL
 // road users — the car ahead that physics has actually put there, the player's
 // car, a pedestrian in the lane — so two real cars can never rely on their plans
@@ -150,7 +150,7 @@ inline Real followSpeed(Real desired, const LeaderSense& l, Real ownHalfLength,
     return cap < desired ? cap : desired;
 }
 
-// Knockdown-and-recover for walkers (ADR-0061): a hit — a car shoving through, a
+// Knockdown-and-recover for walkers (ADR-0062): a hit — a car shoving through, a
 // blast — puts a walker DOWN for a spell; it then gets up and walks on. Pure
 // timer logic so the trigger policy (contact, proximity, impulse) stays with the
 // caller and the behaviour is headless-testable.

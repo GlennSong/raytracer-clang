@@ -8,7 +8,7 @@ namespace citysim {
 
 enum class SignalState { Green, Yellow, Red };
 
-// Stoplights over a NavGraph's junctions (ADR-0059). Every link that ENTERS a
+// Stoplights over a NavGraph's junctions (ADR-0060). Every link that ENTERS a
 // junction (its `to` is a node of degree >= 3) is assigned to one of two phases by
 // its approach axis — opposing arms (N/S vs E/W) share a phase. The two phases
 // alternate green -> yellow -> (other green), so perpendicular arms are never both

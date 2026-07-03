@@ -180,7 +180,7 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
     Real hand = ctx.actions.held("drive_handbrake") ? 1.0 : 0.0;
 
     PhysicsWorld& pw = physicsSys.physicsWorld();
-    // One control path for EVERY car (ADR-0061). Whoever drives — the seated player
+    // One control path for EVERY car (ADR-0062). Whoever drives — the seated player
     // or an AI brain — produces the same DriverInput, fed to the same Jolt vehicle.
     ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
         if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
@@ -274,7 +274,7 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // Driver capsule: in the seat when occupied — by a seated PLAYER or by
             // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
             // capsule is the proof that an agent is IN the car, not that the car
-            // moves on its own (ADR-0061).
+            // moves on its own (ADR-0062).
             bool occupied = v.driver.valid() || ctx.world.has<AgentDriver>(e);
             if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {

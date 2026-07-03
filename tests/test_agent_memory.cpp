@@ -8,7 +8,7 @@
 
 using namespace engine;
 
-// The cognition core (ADR-0062: sense -> remember -> predict -> decide -> act).
+// The cognition core (ADR-0063: sense -> remember -> predict -> decide -> act).
 // These pin the three pure pieces the loop stands on: working MEMORY (tracks
 // with velocity estimates, object permanence, decay), PREDICTION (closest
 // approach / time-to-collision), and decision COMMITMENT (hysteresis: choices

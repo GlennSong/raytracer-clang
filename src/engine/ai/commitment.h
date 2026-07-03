@@ -7,7 +7,7 @@
 
 namespace engine {
 
-// DECISION COMMITMENT (ADR-0062: ...predict -> DECIDE -> act). A utility chooser
+// DECISION COMMITMENT (ADR-0063: ...predict -> DECIDE -> act). A utility chooser
 // with hysteresis: the agent scores a small menu of options (maneuvers) each
 // think tick, but the INCUMBENT choice keeps its seat unless a challenger beats
 // it by a clear margin — and never before a minimum hold time. So a decision is

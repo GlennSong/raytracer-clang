@@ -198,7 +198,7 @@ struct MeshCollider {
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
-// A physics-driven car (ADR-0058). VehicleSystem creates the Jolt vehicle from
+// A physics-driven car (ADR-0059). VehicleSystem creates the Jolt vehicle from
 // `config` + the entity's Transform, drives it from the seated driver's input,
 // and writes the chassis Transform back each fixed step. The entity also carries
 // a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
@@ -211,7 +211,7 @@ struct Vehicle {
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
     Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
-    // Head/taillight glow toggle (ADR-0058) and the lens entities VehicleSystem
+    // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
     // positions + lights each frame; `driverModel` is a capsule shown in the seat
     // while occupied.
     bool lightsOn = false;
@@ -220,7 +220,7 @@ struct Vehicle {
     Entity driverModel;                  // driver capsule (stowed when unoccupied)
 };
 
-// Marks a player entity currently seated in a vehicle (ADR-0058). PlayerSystem
+// Marks a player entity currently seated in a vehicle (ADR-0059). PlayerSystem
 // suppresses on-foot character movement while this is present; the enter/exit
 // logic in VehicleSystem adds it on entry and removes it on exit. `vehicle` is
 // the car entity being driven.
@@ -228,7 +228,7 @@ struct InVehicle {
     Entity vehicle;
 };
 
-// Marks a Vehicle as driven by an AI brain rather than the player (ADR-0061): the
+// Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
 // SAME physics Vehicle, but its {throttle, steer, brake} come from
 // computeDriverInput(command) instead of host input, so an NPC car and the
 // player's car share one physics path. A brain (e.g. the CitySim bridge) writes
@@ -242,7 +242,7 @@ struct AgentDriver {
     int agentId = -1;           // brain handle (CitySim agent index); -1 = none
 };
 
-// Level-authored city-simulation settings (ADR-0062): a top-level "citysim"
+// Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
 // block in the level JSON becomes one entity carrying this, and the city render
 // bridge reads it at build. Lets a level choose its own population — the agent
 // lab runs ONE driver and ONE walker with the debug HUD on, while grown.json

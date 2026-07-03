@@ -8,7 +8,7 @@
 
 using namespace engine;
 
-// Real-pose traffic perception (ADR-0061): a physical car senses the other
+// Real-pose traffic perception (ADR-0062): a physical car senses the other
 // PHYSICAL road users ahead of it and caps its speed off them — plans alone
 // can't keep two physics-driven cars apart. Unit rules first, then the whole
 // stack closed-loop: two bicycle-model cars in convoy on one lane.

@@ -11,7 +11,7 @@
 
 namespace engine {
 
-// WORKING MEMORY for an agent (ADR-0062: sense -> REMEMBER -> PREDICT -> decide
+// WORKING MEMORY for an agent (ADR-0063: sense -> REMEMBER -> PREDICT -> decide
 // -> act). A vision cone produces momentary snapshots; acting on snapshots makes
 // a goldfish — no continuity, no anticipation, and flicker at the cone's edge.
 // Memory turns sightings into TRACKS: each body the agent has seen keeps a

@@ -1,4 +1,4 @@
-# Agent-Based City Simulation — Plan (ADR-0059)
+# Agent-Based City Simulation — Plan (ADR-0060)
 
 A realistic, deterministic agent simulation built as an **application** of the
 engine (not core), living under `src/apps/citysim/`. Agents are data; vehicles,

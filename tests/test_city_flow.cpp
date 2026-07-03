@@ -143,7 +143,7 @@ TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
 }
 
 TEST_CASE(pedestrians_react_and_walk_around_each_other) {
-    // Reactive walkers (ADR-0060): they see neighbours in a vision cone and step
+    // Reactive walkers (ADR-0061): they see neighbours in a vision cone and step
     // aside to go around them, their bodies never overlap, they enter the Avoiding
     // state when they see someone, they still reach their goals, and it's
     // deterministic.

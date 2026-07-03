@@ -250,7 +250,7 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
     double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
     Vec3 c = base * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
-    // Zebra crosswalk painted into the road texture (ADR-0061): mv = metres PAST the
+    // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST the
     // junction mouth (baked by the road mesher), so the band sits set back on the
     // approach, not in the intersection. Bars run across the carriageway (mu). This
     // mirrors the Metal/Vulkan RoadMarkings shader for realtime<->offline parity.

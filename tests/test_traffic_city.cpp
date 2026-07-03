@@ -11,7 +11,7 @@ using namespace engine;
 
 // Exercises the navigation stack over the REAL procedural road generators
 // (grid / radial / tensor), not just hand-built graphs — the integration the
-// whole living-world feature stands on. Fully headless (ADR-0058).
+// whole living-world feature stands on. Fully headless (ADR-0059).
 
 namespace {
 

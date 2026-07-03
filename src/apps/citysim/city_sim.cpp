@@ -20,7 +20,7 @@ constexpr Real kCarMinGap = 5.0, kCarSlowZone = 14.0;
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
 constexpr Real kCarBumperGap = 0.8;   // clear space kept between two cars' bumpers
 
-// The fleet of body slots (ADR-0060 Phase 4). A sedan is the player's body
+// The fleet of body slots (ADR-0061 Phase 4). A sedan is the player's body
 // exactly (4.2 long) and its follow gap works out to the historical 5.0 m; larger
 // bodies keep proportionally more room. Lengths are all >= the sedan, so adding
 // them never lets cars pack tighter than before. Order is mirrored by the render
@@ -56,13 +56,13 @@ constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 // The zebra band is painted 0.5..3.6 m past the junction MOUTH (road-texture
-// shaders, ADR-0061); a car held at a red must stop with its BUMPER short of
+// shaders, ADR-0062); a car held at a red must stop with its BUMPER short of
 // that band — not at the node, which put a legally-waiting car visually in the
 // middle of the intersection, on top of the crosswalk, looking like it ran the
 // light (device round 3).
 constexpr Real kCrosswalkFarEdge = 3.6;   // band's far edge past the mouth (m)
 constexpr Real kStopLineMargin = 0.6;     // bumper clearance short of the band
-// The cognition loop (ADR-0062): agents act on MEMORY, not on the momentary
+// The cognition loop (ADR-0063): agents act on MEMORY, not on the momentary
 // snapshot. A track must hold at least this much confidence to be acted on —
 // with the default 4 s memory horizon that means a body is reacted to for ~3 s
 // after it was last actually seen (extrapolated along where it was heading).
@@ -263,7 +263,7 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode) const {
     Vec2 right(dir.y, -dir.x);
     Real hw = nav_->links[li].width * 0.5;
     // Both idle OFF the carriageway: a pedestrian just beyond the kerb, a driver
-    // parked on the verge (ADR-0061 — an idle car is a PHYSICAL body now; parked
+    // parked on the verge (ADR-0062 — an idle car is a PHYSICAL body now; parked
     // in lane 0 it blocked the road until its first trip).
     Real off = (mode == Agent::Mode::Driver) ? hw + 2.8 : hw + 1.2;
     if (off < 0.5) off = 0.5;
@@ -371,7 +371,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
     int li = a.route.links[a.leg];
     bool car = a.mode == Agent::Mode::Driver;
-    // Nominal pace scaled by personality (ADR-0061): drivers and walkers each
+    // Nominal pace scaled by personality (ADR-0062): drivers and walkers each
     // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
     // Junction/signal caps below are shared road rules and stay unscaled.
     Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
@@ -407,7 +407,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         }
     }
 
-    // Perception (ADR-0062: sense -> remember -> predict -> decide -> act). Each
+    // Perception (ADR-0063: sense -> remember -> predict -> decide -> act). Each
     // tick the car SENSES pedestrians and the player through its 2.5D sensor —
     // the forward wedge plus a height band, so a walker crossing the overpass is
     // not a phantom to brake for — and REMEMBERS the sightings as tracks with
@@ -518,7 +518,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         a.elevation = 0;
         int lastLink = a.route.links.back();
         if (a.mode == Agent::Mode::Driver) {
-            // Park OFF the carriageway (ADR-0061). Resting at the lane's very end
+            // Park OFF the carriageway (ADR-0062). Resting at the lane's very end
             // was harmless for a kinematic ghost, but the PHYSICAL car that now
             // follows this pose became a roadblock parked at the junction mouth —
             // everyone behind piled up until the next trip, hours later. Pull to
@@ -544,7 +544,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     } else {
         refreshPose(a);
         steer(a, dt);
-        // Driver FSM (ADR-0060): label what's governing the car this step, from
+        // Driver FSM (ADR-0061): label what's governing the car this step, from
         // what it sees, so the behaviour is legible (debug widgets read a.state).
         // Precedence mirrors how the speed was actually capped above: a ped/player
         // in the cone (Yielding) dominates a same-lane leader (Following), which
@@ -695,7 +695,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         if (a.playerControlled || a.released) continue;
         // Tethered ghost too far from its physical car: WAIT for it. The plan can
         // never outrun the physics — a car knocked back, climbing, or slow off the
-        // line finds its ghost holding just ahead instead of gone (ADR-0061).
+        // line finds its ghost holding just ahead instead of gone (ADR-0062).
         if (a.moving && a.tethered) {
             Real dx = a.pos.x - a.tetherAnchor.x, dy = a.pos.y - a.tetherAnchor.y;
             if (std::sqrt(dx * dx + dy * dy) > a.tetherLead) {
@@ -707,7 +707,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         if (a.moving) advance(a, dt, gaps_[i], minGaps_[i]);
     }
 
-    // Reactive pedestrian behaviour (ADR-0060): each walker acts on what it SEES
+    // Reactive pedestrian behaviour (ADR-0061): each walker acts on what it SEES
     // in its vision cone. It steers to one side to go AROUND the neighbours (and
     // the player) it sees ahead — and never reacts to what's behind it. A hard
     // body-overlap floor below is the physical backstop so two people can't occupy
@@ -724,7 +724,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         Vec2 travel = a.heading;
         Vec2 rightv(travel.y, -travel.x);
 
-        // THINK on the slow clock, ACT every tick (ADR-0061). The reactive scan
+        // THINK on the slow clock, ACT every tick (ADR-0062). The reactive scan
         // (who's ahead, which side do I pass) runs only when this agent's think
         // timer expires — staggered per agent — and its answer is COMMITTED to
         // `leanTarget` + the FSM state until the next think. Re-deciding every
@@ -736,7 +736,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             engine::VisionCone cone;
             cone.origin = a.pos; cone.forward = travel;
             cone.range = kPedVisionRange; cone.halfAngleRad = kPedVisionHalfAngle;
-            // SENSE -> REMEMBER (ADR-0062): sight the walking neighbours (and the
+            // SENSE -> REMEMBER (ADR-0063): sight the walking neighbours (and the
             // player) into memory at think cadence — successive sightings a think
             // apart are what give each track its velocity estimate.
             engine::SensorVolume sensor;

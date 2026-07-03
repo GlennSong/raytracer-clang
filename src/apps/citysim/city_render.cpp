@@ -314,7 +314,7 @@ Real CityRenderSystem::groundAt(Real x, Real z) const {
 }
 
 bool CityRenderSystem::build(World& world, AssetManager* assets) {
-    // Level-authored settings (ADR-0062): a CitySimConfig entity — the level's
+    // Level-authored settings (ADR-0063): a CitySimConfig entity — the level's
     // top-level "citysim" block — overrides the constructor params, so each level
     // picks its own population, seed, clock rate, reliability, and whether the
     // agent-state HUD starts on. The agent lab runs 1 car + 1 walker, HUD on.
@@ -369,7 +369,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // of sedans, hatchbacks, SUVs, pickups, a van, and a box truck — every NPC car
     // built the same way as (and to scale with) the player's. Drivers spread across
     // the slots by vehicle index.
-    // When a CityVehicleSystem owns the cars as real physics Vehicles (ADR-0061),
+    // When a CityVehicleSystem owns the cars as real physics Vehicles (ADR-0062),
     // skip the instanced kinematic car bodies entirely — otherwise every car draws
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
@@ -432,7 +432,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         sim_.setStaticObstacles(std::move(poles));
     }
 
-    // Crosswalks are painted into the ROAD TEXTURE now (ADR-0061): the road mesher
+    // Crosswalks are painted into the ROAD TEXTURE now (ADR-0062): the road mesher
     // bakes a set-back "metres past the junction mouth" coordinate into the
     // carriageway UV, and the RoadMarkings shader stripes the zebra band there — so
     // it's part of the road surface, set back on the approach, and never a floating
@@ -453,7 +453,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.add<InstanceGroup>(crosswalkGroup_, InstanceGroup{});   // empty: road paints the bars
     }
 
-    // Debug widgets (ADR-0060): per-agent footprint ring (one group per behaviour
+    // Debug widgets (ADR-0061): per-agent footprint ring (one group per behaviour
     // state, coloured) + a forward trajectory arrow. The groups always exist so a
     // key can toggle them at runtime; they stay empty unless debugWidgets_ is on.
     {
@@ -571,7 +571,7 @@ void CityRenderSystem::syncGroups(World& world) {
 
     for (const Agent& a : sim_.agents()) {
         if (a.mode == Agent::Mode::Driver) {
-            if (cars.empty()) continue;   // cars owned externally (ADR-0061 bridge)
+            if (cars.empty()) continue;   // cars owned externally (ADR-0062 bridge)
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
@@ -620,7 +620,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // the body is external.
             Vec2 goal = a.pos + a.heading * (2.0 + a.speed);
             Agent::State ringState = a.state;   // body truth may override below
-            // Externally-owned agents (ADR-0061): the widget must ring the
+            // Externally-owned agents (ADR-0062): the widget must ring the
             // PHYSICAL body, not the planner ghost — the ghost legitimately runs
             // ahead or behind, and a ring around it is an empty circle on the
             // ground. Use the bridge-reported real pose; an agent with no

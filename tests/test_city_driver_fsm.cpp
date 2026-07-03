@@ -9,7 +9,7 @@
 using namespace engine;
 using namespace citysim;
 
-// The driver finite state machine (ADR-0060 Phase 3): each step a car labels what
+// The driver finite state machine (ADR-0061 Phase 3): each step a car labels what
 // is governing it — Cruising (free), Following (a leader in its lane), Yielding
 // (a person in its vision cone), Turning (a bend at the coming node), or Waiting
 // (held at a red). These tests drive scenarios that should each surface a state

@@ -10,14 +10,14 @@ namespace engine {
 
 enum class AgentKind : uint8_t { Car, Pedestrian };
 
-// Car-following speed cap (ADR-0058): given an agent's free-flow target speed and
+// Car-following speed cap (ADR-0059): given an agent's free-flow target speed and
 // the centre-to-centre gap to the agent ahead on its lane, return the speed it may
 // safely travel. Full stop at/under `minGap` (bumper distance), linear ramp up to
 // `slowZone`, free above it. Pure + deterministic, so it is unit-tested directly.
 Real carFollowingCap(Real freeSpeed, Real gap, Real minGap, Real slowZone);
 
 // What an agent is doing right now. The daily loop is
-// AtHome -> Commuting -> AtWork -> Returning -> AtHome (ADR-0058).
+// AtHome -> Commuting -> AtWork -> Returning -> AtHome (ADR-0059).
 enum class AgentActivity : uint8_t { AtHome, Commuting, AtWork, Returning };
 
 // One simulated inhabitant. Lives between a `home` node and a `work` node, with a

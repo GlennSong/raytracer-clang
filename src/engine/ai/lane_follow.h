@@ -11,7 +11,7 @@
 
 namespace engine {
 
-// Closed-loop lane following (ADR-0061): PURE PURSUIT over a lane-centre
+// Closed-loop lane following (ADR-0062): PURE PURSUIT over a lane-centre
 // polyline. The AI driver's heading is derived from the car's REAL position —
 // track progress along the path, aim at a point a speed-proportional distance
 // ahead — instead of chasing a planner ghost open-loop. That is what makes an

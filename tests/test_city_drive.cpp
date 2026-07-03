@@ -9,7 +9,7 @@
 using namespace engine;
 using namespace citysim;
 
-// The planner<->physics contract for AI-driven cars (ADR-0061): the CitySim ghost
+// The planner<->physics contract for AI-driven cars (ADR-0062): the CitySim ghost
 // PLANS; the physical car follows the plan closed-loop. These cover the two sim
 // hooks the bridge stands on — the route exported as a pursuit lane path, and the
 // tether that stops a ghost outrunning the car it plans for.
@@ -104,7 +104,7 @@ TEST_CASE(tethered_ghost_waits_for_its_car) {
 }
 
 TEST_CASE(agents_have_distinct_personal_paces) {
-    // Personality (ADR-0061): each agent holds its own fraction of the nominal
+    // Personality (ADR-0062): each agent holds its own fraction of the nominal
     // speed, derived from its brain seed — varied, bounded, and reproducible.
     NavGraph nav = straightRoad(200.0);
     CitySim a, b;
@@ -165,7 +165,7 @@ TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
 }
 
 TEST_CASE(agents_commit_to_decisions_between_thinks) {
-    // Think cadence (ADR-0061): the reactive decision (leanTarget) may only
+    // Think cadence (ADR-0062): the reactive decision (leanTarget) may only
     // change on the agent's slow think clock — between thinks it is COMMITTED,
     // however often the sim ticks. Re-deciding every tick is the "wigging out".
     NavGraph nav = straightRoad(200.0);

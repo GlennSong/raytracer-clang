@@ -200,7 +200,7 @@ float3 surfRoadMarkings(float3 base, float mu, float mv) {
     float w  = max(wL, wR);                          // white edge lines
     float3 c = mix(base, float3(0.82, 0.68, 0.13), y);
     c = mix(c, float3(0.86, 0.86, 0.83), w);
-    // Zebra crosswalk painted into the road texture (ADR-0061): mv = metres PAST
+    // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
     // the junction mouth (baked by the road mesher), so the band sits set back on
     // the approach, not in the intersection. Bars run across the carriageway (by
     // the lateral coord mu). mv is a large sentinel where no crosswalk belongs.
