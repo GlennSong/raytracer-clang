@@ -61,6 +61,11 @@ const PersonOutfit kOutfits[] = {
     {{0.42, 0.38, 0.60}, {0.20, 0.18, 0.16}, {0.64, 0.46, 0.34}},
     {{0.52, 0.56, 0.62}, {0.30, 0.30, 0.34}, {0.42, 0.29, 0.22}},
     {{0.58, 0.44, 0.36}, {0.24, 0.20, 0.26}, {0.76, 0.56, 0.42}},
+    // LAST SLOT: the PLAYER's outfit (playerOutfit()) — a vivid red jacket over
+    // near-black trousers, deliberately absent from the muted walker palette
+    // above so the player reads instantly in a crowd. personOutfitCount()
+    // excludes it, so it is never dealt to a walker.
+    {{0.88, 0.12, 0.10}, {0.10, 0.10, 0.12}, {0.87, 0.68, 0.55}},
 };
 constexpr int kNumOutfits = static_cast<int>(sizeof(kOutfits) / sizeof(kOutfits[0]));
 
@@ -185,7 +190,19 @@ engine::RenderMesh fleetCarMesh(int slot, bool withWheels) {
                         Vec3(b.width, b.height, b.length), withWheels);
 }
 
-int personOutfitCount() { return kNumOutfits; }
+int personOutfitCount() { return kNumOutfits - 1; }   // last slot = the player's
+int playerOutfit() { return kNumOutfits - 1; }
+
+Real walkPoseSwing(int pose) {
+    return kMaxSwing * std::sin(2.0 * engine::PI * pose / kWalkPoses);
+}
+
+int walkPoseIndex(Real& stridePhase, Real speed, Real dt) {
+    if (speed <= kWalkAnimMinSpeed) return 0;
+    stridePhase += speed * dt / kStrideLength;
+    stridePhase -= std::floor(stridePhase);
+    return static_cast<int>(stridePhase * kWalkPoses) % kWalkPoses;
+}
 
 engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
     const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];

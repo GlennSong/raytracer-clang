@@ -382,6 +382,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
+        src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
     )
 
     add_executable(physics_tests

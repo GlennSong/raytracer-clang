@@ -13,6 +13,7 @@
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
 #include "../apps/citysim/city_walkers.h"
+#include "../apps/citysim/city_player_body.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
@@ -84,6 +85,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
     addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
+    // The player IS a person in third person (ADR-0064): draws the walker body
+    // over the on-foot shoulder camera, walk cycle shared with the crowd. After
+    // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
+    addSystem<citysim::CityPlayerBodySystem>();
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
 #else
     (void)citySys;   // physics-off build: no collider system to consume it

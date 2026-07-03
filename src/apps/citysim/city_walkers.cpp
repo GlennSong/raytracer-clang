@@ -35,24 +35,18 @@ constexpr Real kFaceSpeed = 0.3;        // turn to face travel above this speed
 constexpr Real kPersonalSpace = 1.3;    // 360-degree separation radius from people
 constexpr Real kSeparationGain = 1.8;   // push strength inside that radius
 constexpr Real kBackoffTime = 0.8;      // blocked -> stand still this long, re-think
-
-// The walk cycle: a handful of pre-built limb-swing poses shared by every
-// walker of an outfit; each body hops between them as its stride advances.
-// Pose k swings sin(2*pi*k/N) of the max — pose 0 is standing.
-constexpr int kWalkPoses = 6;
-constexpr Real kMaxSwing = 0.55;       // peak limb pitch (radians, ~32 degrees)
-constexpr Real kStrideLength = 1.5;    // metres per full walk cycle
-constexpr Real kAnimMinSpeed = 0.3;    // below this the body stands (pose 0)
 }  // namespace
 
+// The walk cycle (kWalkPoses / walkPoseSwing / walkPoseIndex, city_meshes.h) is
+// SHARED with the third-person player body — one set of constants, one phase
+// rule, so the player and the crowd stride identically.
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
                                               int outfit, int pose) {
     int key = outfit * kWalkPoses + pose;
     auto it = poseMeshes_.find(key);
     if (it != poseMeshes_.end()) return it->second;
-    Real swing = kMaxSwing * std::sin(2.0 * engine::PI * pose / kWalkPoses);
     engine::MeshHandle h = assets.acquireMesh(
-        buildPersonMesh(swing, outfit),
+        buildPersonMesh(walkPoseSwing(pose), outfit),
         "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose));
     poseMeshes_[key] = h;
     return h;
@@ -228,15 +222,9 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // the legs move exactly as fast as the ground goes by — a held body
         // stands (pose 0), a knocked-down one keeps whatever it fell in.
         if (!down) {
-            if (hSpeed > kAnimMinSpeed) {
-                w.stride += hSpeed * dt / kStrideLength;
-                w.stride -= std::floor(w.stride);
-                int pose = static_cast<int>(w.stride * kWalkPoses) % kWalkPoses;
-                if (Renderable* r = world.get<Renderable>(w.entity))
-                    r->mesh = poseMesh(ctx.assets, w.outfit, pose);
-            } else if (Renderable* r = world.get<Renderable>(w.entity)) {
-                r->mesh = poseMesh(ctx.assets, w.outfit, 0);
-            }
+            int pose = walkPoseIndex(w.stride, hSpeed, dt);
+            if (Renderable* r = world.get<Renderable>(w.entity))
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
         }
 
         // Pose write-back. Standing: the box rides the capsule centre. Down: lay
