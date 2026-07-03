@@ -235,3 +235,8 @@ C++17, clang++, standard library only — no *new* external deps without an ADR.
 PascalCase types, camelCase functions/variables, UPPER_SNAKE constants, no
 Hungarian notation. Smart pointers for heap ownership. One header + one `.cpp`
 per module. Front faces wind **clockwise**. See `AGENTS.md` for the full set.
+
+## License
+[MIT](LICENSE). Vendored third-party code under `third_party/` (Jolt, Dear
+ImGui, Lua, tinygltf, the stb headers) remains under its own permissive
+licenses — see each project's notice.
