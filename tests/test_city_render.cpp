@@ -468,6 +468,102 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     CHECK(carTrips >= 3);
 }
 
+TEST_CASE(wedge_mesh_is_a_flat_outline_cone) {
+    // The vision-cone wedge (city_meshes): a ground-facing OUTLINE — two straight
+    // edges from the origin plus the arc — of unit radius, built from thin quads
+    // like ringXZ so it draws with the same widgetMaterial ground-paint technique.
+    RenderMesh w = wedgeXZ(0.45);
+    CHECK(!w.vertices.empty());
+    CHECK(w.vertices.size() == (2u + 12u) * 4u);   // 2 edge quads + 12 arc quads
+    CHECK(w.indices.size() == (2u + 12u) * 6u);
+    Real maxR = 0, minR = 1e9;
+    bool flat = true;
+    for (const Vertex& v : w.vertices) {
+        if (std::fabs(v.position.y) > 1e-9) flat = false;
+        Real r = std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z);
+        maxR = std::max(maxR, r);
+        minR = std::min(minR, r);
+    }
+    CHECK(flat);                          // all y == 0: lies in the ground plane
+    CHECK(std::fabs(maxR - 1.0) < 0.05);  // rim (arc + edge tips) at unit radius
+    CHECK(minR < 0.05);                   // edges really start at the origin
+    // The half-angle is baked into the mesh, so cones of different widths are
+    // different geometry (a walker's 1.2 rad wedge vs a driver's 0.45 rad).
+    RenderMesh wide = wedgeXZ(1.2);
+    CHECK(wide.vertices.size() == w.vertices.size());
+    bool differs = false;
+    for (std::size_t i = 0; i < w.vertices.size(); ++i)
+        if ((wide.vertices[i].position - w.vertices[i].position).length() > 0.01)
+            differs = true;
+    CHECK(differs);
+}
+
+TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
+    // The `j` HUD's two new views: the NAVGRAPH (lane-centreline strips + a ring
+    // per junction node, baked once at build) and the VISION CONES (one wedge per
+    // moving agent, in its mode's group).
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());
+    CityRenderParams p;
+    p.cars = 4;
+    p.pedestrians = 3;
+    p.debugWidgets = true;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+
+    // One strip per lane per link, lifted just off the road like the rings.
+    const NavGraph& nav = city.nav();
+    std::size_t lanes = 0;
+    for (const NavLink& l : nav.links)
+        lanes += static_cast<std::size_t>(l.lanes < 1 ? 1 : l.lanes);
+    CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+    InstanceGroup* strips = world.get<InstanceGroup>(city.navLinkGroup());
+    CHECK(strips != nullptr);
+    for (const Mat4& m : strips->transforms)
+        CHECK(std::fabs(m.m[1][3] - (0.3 + 0.04)) < 1e-6);   // road lift (0.3) + 0.04
+    // One ring per junction node (the cross has exactly one).
+    int junctions = 0;
+    for (int n = 0; n < nav.nodeCount(); ++n)
+        if (nav.isJunction(n)) ++junctions;
+    CHECK(junctions == 1);
+    CHECK(groupCount(world, city.navNodeGroup()) == static_cast<std::size_t>(junctions));
+
+    // Cones: exactly one per MOVING agent every step, split by mode; the
+    // navgraph stays put (static bake, not rebaked per frame).
+    bool sawCarCone = false, sawPedCone = false;
+    for (int i = 0; i < 3000; ++i) {
+        city.step(world, 0.1);
+        std::size_t movingCars = 0, movingPeds = 0;
+        for (const Agent& a : city.sim().agents()) {
+            if (!a.moving) continue;
+            (a.mode == Agent::Mode::Driver ? movingCars : movingPeds) += 1;
+        }
+        CHECK(groupCount(world, city.visionGroup(Agent::Mode::Driver)) == movingCars);
+        CHECK(groupCount(world, city.visionGroup(Agent::Mode::Pedestrian)) == movingPeds);
+        CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+        if (movingCars > 0) sawCarCone = true;
+        if (movingPeds > 0) sawPedCone = true;
+    }
+    CHECK(sawCarCone);   // agents really moved, so both views really drew
+    CHECK(sawPedCone);
+}
+
+TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());
+    CityRenderParams p;
+    p.cars = 4;
+    p.pedestrians = 3;
+    p.debugWidgets = false;   // HUD off: every debug group must stay empty
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+    for (int i = 0; i < 500; ++i) city.step(world, 0.1);
+    CHECK(groupCount(world, city.navLinkGroup()) == 0u);
+    CHECK(groupCount(world, city.navNodeGroup()) == 0u);
+    CHECK(groupCount(world, city.visionGroup(Agent::Mode::Driver)) == 0u);
+    CHECK(groupCount(world, city.visionGroup(Agent::Mode::Pedestrian)) == 0u);
+}
+
 TEST_CASE(person_mesh_stands_and_swings) {
     // The simple articulated person (device ask: "people should look like
     // people"): six vertex-coloured boxes, 1.8 m tall, centred at mid-height

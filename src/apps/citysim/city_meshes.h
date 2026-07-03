@@ -64,6 +64,18 @@ engine::RenderMesh ringXZ(engine::Real innerFrac = 0.80, int segs = 40);
 // the debug trajectory vector. Instanced with scale (width, 1, length) + yaw.
 engine::RenderMesh arrowXZ();
 
+// A flat ground strip: a unit quad along +Z (x in [-0.5, 0.5], z in [0, 1]),
+// facing +Y — the debug navgraph lane line. Instanced with scale
+// (width, 1, length) + yaw.
+engine::RenderMesh stripXZ();
+
+// A ground-facing OUTLINE wedge of unit radius centred on +Z: the two straight
+// edges from the origin plus the arc between them, built from thin quads (band
+// ~4% of radius) like ringXZ's band so it draws with the same widgetMaterial
+// technique — the debug vision-cone view. The half-angle is baked into the
+// mesh; instanced with scale (range, 1, range) + yaw.
+engine::RenderMesh wedgeXZ(engine::Real halfAngleRad, int segs = 12);
+
 // Materials the citysim instance groups draw with (hue mostly carried in each
 // mesh's vertex colours).
 engine::RenderMaterial carMaterial();

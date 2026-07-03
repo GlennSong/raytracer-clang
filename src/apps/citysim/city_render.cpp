@@ -32,6 +32,15 @@ namespace {
 
 Vec3 translationOf(const Mat4& t) { return Vec3(t.m[0][3], t.m[1][3], t.m[2][3]); }
 
+// Debug vision-cone dimensions — MUST match the sim's sensors: senseAhead's
+// per-tick driver cone and the walkers' think-cadence kPedVision* constants
+// (city_sim.cpp). The wedge draws what the agent can actually see.
+constexpr Real kCarConeRange = 18.0, kCarConeHalfAngle = 0.45;
+constexpr Real kPedConeRange = 4.5, kPedConeHalfAngle = 1.2;
+// Debug tints, dimmer than the state rings so neither view shouts over them.
+const Vec3 kNavTint(0.18, 0.32, 0.55);    // faint blue: the road/lane graph
+const Vec3 kConeTint(0.55, 0.36, 0.10);   // dim amber: the sensing wedge
+
 void refreshBounds(InstanceGroup* g) {
     if (!g) return;
     if (g->transforms.empty()) { g->boundsRadius = 0; return; }
@@ -193,10 +202,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // state, coloured) + a forward trajectory arrow. The groups always exist so a
     // key can toggle them at runtime; they stay empty unless debugWidgets_ is on.
     {
-        MeshHandle ringMesh{}, arrowMesh{};
+        MeshHandle ringMesh{}, arrowMesh{}, stripMesh{};
+        MeshHandle wedgeMesh[2]{};
         if (assets) {
             ringMesh = assets->acquireMesh(ringXZ(), "city:dbgring");
             arrowMesh = assets->acquireMesh(arrowXZ(), "city:dbgarrow");
+            stripMesh = assets->acquireMesh(stripXZ(), "city:dbglane");
+            // The half-angle is baked into the wedge, so each mode gets its own
+            // mesh; the instance scale carries only the range.
+            wedgeMesh[static_cast<int>(Agent::Mode::Pedestrian)] =
+                assets->acquireMesh(wedgeXZ(kPedConeHalfAngle), "city:dbgwedgeped");
+            wedgeMesh[static_cast<int>(Agent::Mode::Driver)] =
+                assets->acquireMesh(wedgeXZ(kCarConeHalfAngle), "city:dbgwedgecar");
         }
         const int stateCount = static_cast<int>(Agent::State::Count);
         for (int s = 0; s < stateCount; ++s) {
@@ -207,10 +224,65 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             world.add<InstanceGroup>(footprintGroups_[s], g);
         }
         forwardGroup_ = world.create();
-        InstanceGroup g;
-        g.mesh = arrowMesh;
-        g.material = widgetMaterial(Vec3(0.15, 0.85, 0.95));   // cyan trajectory
-        world.add<InstanceGroup>(forwardGroup_, g);
+        {
+            InstanceGroup g;
+            g.mesh = arrowMesh;
+            g.material = widgetMaterial(Vec3(0.15, 0.85, 0.95));   // cyan trajectory
+            world.add<InstanceGroup>(forwardGroup_, g);
+        }
+        for (int mi = 0; mi < 2; ++mi) {
+            visionGroups_[mi] = world.create();
+            InstanceGroup g;
+            g.mesh = wedgeMesh[mi];
+            g.material = widgetMaterial(kConeTint);
+            world.add<InstanceGroup>(visionGroups_[mi], g);
+        }
+        navLinkGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(kNavTint);
+            world.add<InstanceGroup>(navLinkGroup_, g);
+        }
+        navNodeGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = ringMesh;
+            g.material = widgetMaterial(kNavTint);
+            world.add<InstanceGroup>(navNodeGroup_, g);
+        }
+    }
+
+    // Bake the navgraph view ONCE — it depends only on nav_, so unlike the
+    // per-agent widgets it never rebakes per frame. syncGroups copies the cached
+    // transforms in (HUD on) or leaves the groups empty (HUD off). The bake uses
+    // no sim RNG, so determinism is untouched.
+    navLinkBake_.clear();
+    navNodeBake_.clear();
+    for (int li = 0; li < nav_.linkCount(); ++li) {
+        const engine::NavLink& L = nav_.links[li];
+        int lanes = L.lanes < 1 ? 1 : L.lanes;
+        // Mirror the sim's laneSpacing: the right half-carriageway split evenly
+        // among this direction's lanes, so the strips sit under real traffic.
+        Real spacing = (L.width * 0.5) / static_cast<Real>(lanes);
+        for (int lane = 0; lane < lanes; ++lane) {
+            Vec2 a = nav_.laneCenter(li, lane, 0.0, spacing);
+            Vec2 b = nav_.laneCenter(li, lane, 1.0, spacing);
+            Vec2 d(b.x - a.x, b.y - a.y);
+            Real len = std::sqrt(d.x * d.x + d.y * d.y);
+            if (len < 1e-6) continue;
+            Real y = groundAt(a.x, a.y) + L.layer * Real(5.8) + 0.04;
+            Real yaw = std::atan2(d.x, d.y);
+            navLinkBake_.push_back(Mat4::trs(
+                Vec3(a.x, y, a.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                Vec3(0.15, 1, len)));   // a thin lane-centreline strip
+        }
+    }
+    for (int n = 0; n < nav_.nodeCount(); ++n) {
+        if (!nav_.isJunction(n)) continue;
+        Vec2 p = nav_.nodes[n];
+        navNodeBake_.push_back(Mat4::trs(
+            Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
     built_ = true;
@@ -344,6 +416,19 @@ void CityRenderSystem::syncGroups(World& world) {
         }
         InstanceGroup* fwd = world.get<InstanceGroup>(forwardGroup_);
         if (fwd) fwd->transforms.clear();
+        InstanceGroup* cone[2];
+        for (int mi = 0; mi < 2; ++mi) {
+            cone[mi] = world.get<InstanceGroup>(visionGroups_[mi]);
+            if (cone[mi]) cone[mi]->transforms.clear();
+        }
+        // The navgraph view is a static bake: copy it in when the HUD is on,
+        // leave the groups empty when it's off (mirrors the vanishing rings).
+        InstanceGroup* navL = world.get<InstanceGroup>(navLinkGroup_);
+        InstanceGroup* navN = world.get<InstanceGroup>(navNodeGroup_);
+        if (navL) navL->transforms = debugWidgets_ ? navLinkBake_
+                                                   : std::vector<Mat4>{};
+        if (navN) navN->transforms = debugWidgets_ ? navNodeBake_
+                                                   : std::vector<Mat4>{};
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
@@ -411,9 +496,25 @@ void CityRenderSystem::syncGroups(World& world) {
                     Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
                     Vec3(0.30, 1, len)));   // wide enough to read at street level
             }
+            // The sensing wedge: what this agent can SEE, yawed to its heading
+            // and scaled to its mode's cone range (the half-angle is baked into
+            // the mesh). Moving agents only — a parked car senses nothing worth
+            // drawing — and just below the ring so the two never z-fight.
+            InstanceGroup* cg = cone[static_cast<int>(a.mode)];
+            if (cg && a.moving) {
+                Real range = car ? kCarConeRange : kPedConeRange;
+                Real coneYaw = std::atan2(heading.x, heading.y);
+                cg->transforms.push_back(Mat4::trs(
+                    Vec3(x, y - 0.01, z),
+                    Quat::fromAxisAngle(Vec3(0, 1, 0), coneYaw),
+                    Vec3(range, 1, range)));
+            }
         }
         for (int s = 0; s < kStateCount; ++s) refreshBounds(foot[s]);
         refreshBounds(fwd);
+        for (int mi = 0; mi < 2; ++mi) refreshBounds(cone[mi]);
+        refreshBounds(navL);
+        refreshBounds(navN);
     }
 }
 

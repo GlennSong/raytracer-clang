@@ -110,6 +110,17 @@ public:
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
     engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
     engine::Entity forwardGroup() const { return forwardGroup_; }
+    // Debug NAVGRAPH view: ground strips along every link's lane centrelines +
+    // a small ring at each junction node. Static data (depends only on nav_),
+    // baked once at build; shown/hidden with the same HUD toggle as the rings.
+    engine::Entity navLinkGroup() const { return navLinkGroup_; }
+    engine::Entity navNodeGroup() const { return navNodeGroup_; }
+    // Debug VISION-CONE view: one ground wedge per MOVING agent, sized to its
+    // mode's sensing cone (drivers 18 m / 0.45 rad, walkers 4.5 m / 1.2 rad),
+    // at the same widget pose the rings use (real bodies when external).
+    engine::Entity visionGroup(Agent::Mode m) const {
+        return visionGroups_[static_cast<int>(m)];
+    }
     // Half-extents of a car / pedestrian box, for a physics collider that tracks
     // the drawn instance.
     engine::Vec3 carHalfExtent() const {
@@ -152,6 +163,11 @@ private:
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
+    engine::Entity navLinkGroup_{};          // debug navgraph lane strips (static bake)
+    engine::Entity navNodeGroup_{};          // debug junction-node rings (static bake)
+    engine::Entity visionGroups_[2]{};       // debug sensing wedges, indexed by Agent::Mode
+    std::vector<engine::Mat4> navLinkBake_;  // cached navgraph transforms (built once)
+    std::vector<engine::Mat4> navNodeBake_;
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
