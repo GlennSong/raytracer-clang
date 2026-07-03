@@ -217,6 +217,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
     signals_.build(graph);
+    // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
+    // (persistent) wander flag; a host with custom tables re-installs after.
+    goalPed_ = wander_ ? wanderGoals(false) : defaultScheduleGoals();
+    goalDriver_ = wander_ ? wanderGoals(true) : defaultScheduleGoals();
 
     const int n = graph.nodeCount();
     if (n == 0) return;
@@ -264,6 +268,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         a.departWork = 7.5 + rndUnit() * 1.5;
         a.departHome = 16.5 + rndUnit() * 1.5;
         a.activity = Agent::Activity::AtHome;
+        a.goal = goalsFor(a.mode).entry();   // the day starts at the table's entry
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         // Personality from the brain's own bits (NOT an rnd() draw, so the build
         // stream — and every seeded test scenario — is unchanged).
@@ -343,16 +348,145 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
         engine::Route r = engine::findRoute(*nav_, from, goal);
         if (!r.valid()) continue;
         if (reversesArrival(r)) { if (fallback < 0) fallback = goal; continue; }
-        a.activity = Agent::Activity::Commuting;
         startTrip(a, from, goal, fromRest);
         return a.moving;
     }
     if (fallback >= 0) {
-        a.activity = Agent::Activity::Commuting;
         startTrip(a, from, fallback, fromRest);
         return a.moving;
     }
     return false;
+}
+
+// --- the GOAL layer (ADR-0064) ----------------------------------------------
+// An agent's day is a GoalTable (city_goals.h): states that each bind one small
+// C++ action, transitions on the events emitted below. The built-in tables
+// mirror the historical schedule/wander control flow bit-exactly — same rng
+// draws in the same order, same tick the transitions fire; a scripting build
+// may replace them at load (setGoalTables), and every per-tick transition still
+// executes right here, in C++.
+
+// Where a rest departure starts from: the node the agent last arrived at, or
+// its home before the first trip. Matches the historical schedule origins too —
+// an agent resting AtHome has restNode == home, one AtWork has restNode == work.
+int CitySim::departNode(const Agent& a) const {
+    return (nav_ && a.restNode >= 0 && a.restNode < nav_->nodeCount()) ? a.restNode
+                                                                       : a.home;
+}
+
+// Execute the agent's current (GoTo) goal state: start the trip toward its
+// target. On failure the table's NoRoute row (if any) decides the fallback
+// state — the historical "no path: fall back to the origin's resting state".
+bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
+    const GoalState& s = goalsFor(a.mode).state(a.goal);
+    bool started = false;
+    switch (s.target) {
+        case GoalTarget::Random:
+            started = startWanderTrip(a, origin, fromRest);
+            break;
+        case GoalTarget::Work:
+        case GoalTarget::Home:
+            startTrip(a, origin, s.target == GoalTarget::Work ? a.work : a.home,
+                      fromRest);
+            started = a.moving;
+            break;
+        default:
+            break;   // a GoTo with no target: nothing to do
+    }
+    if (started) {
+        a.activity = s.activity;   // the day now reads as this state's label
+        return true;
+    }
+    int next = goalsFor(a.mode).onEvent(a.goal, GoalEvent::NoRoute);
+    if (next >= 0) {
+        a.goal = next;
+        a.goalHours = 0;
+        a.activity = goalsFor(a.mode).state(next).activity;
+    }
+    return false;
+}
+
+// Deliver one event: take the first table row that matches the agent's state.
+// A row into a GoTo state is launch-gated for drivers (a car departs only once
+// its spawn area is clear of moving traffic — it waits out the traffic and the
+// event simply fires again next tick, like anyone pulling out of a spot).
+CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
+    const GoalTable& t = goalsFor(a.mode);
+    int next = t.onEvent(a.goal, event);
+    if (next < 0) return GoalFire::NoRow;
+    const GoalState& to = t.state(next);
+    if (to.action == GoalAction::GoTo) {
+        int from = departNode(a);
+        if (a.mode == Agent::Mode::Driver && !launchClear(a, from))
+            return GoalFire::Blocked;
+        a.goal = next;
+        a.goalHours = 0;
+        startGoalTrip(a, from, /*fromRest=*/true);
+    } else {
+        a.goal = next;
+        a.goalHours = 0;
+        a.activity = to.activity;
+    }
+    return GoalFire::Fired;
+}
+
+// step()'s pass 1 for one agent: run its current goal state. A GoTo state whose
+// trip isn't running retries the departure each tick; a Rest state emits this
+// tick's events in a fixed order — DwellDone, the clock-window depart, Idle —
+// and the first row that fires (or blocks on launch clearance) wins.
+void CitySim::goalThink(Agent& a, Real dtHours) {
+    const GoalTable& t = goalsFor(a.mode);
+    if (a.goal < 0 || a.goal >= t.stateCount()) return;   // no table: inert
+    const GoalState& s = t.state(a.goal);
+    if (s.action == GoalAction::GoTo) {
+        if (!a.moving) {
+            int from = departNode(a);
+            if (a.mode != Agent::Mode::Driver || launchClear(a, from))
+                startGoalTrip(a, from, /*fromRest=*/true);
+        }
+        return;
+    }
+    // Rest: the dwell clock runs on in-world hours, like the schedule windows.
+    a.goalHours += dtHours;
+    if (s.dwellHours > 0 && a.goalHours >= s.dwellHours)
+        if (tryGoalEvent(a, GoalEvent::DwellDone) != GoalFire::NoRow) return;
+    // The commute clock: inside the [departWork, departHome) window the day
+    // says "be at work", outside it "be at home". Only meaningful for agents
+    // with a real commute — a stranded pair (work == home, no route at build)
+    // never departs, exactly as before.
+    if (a.home != a.work) {
+        bool inWindow = clockHours_ >= a.departWork && clockHours_ < a.departHome;
+        if (tryGoalEvent(a, inWindow ? GoalEvent::DepartWork
+                                     : GoalEvent::DepartHome) != GoalFire::NoRow)
+            return;
+    }
+    tryGoalEvent(a, GoalEvent::Idle);
+}
+
+// Re-seat every agent onto the (new) tables: the first state wearing the
+// agent's current activity label, else the entry state. Mid-trip agents keep
+// driving — only their next transition consults the new table.
+void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
+    goalPed_ = std::move(pedestrian);
+    goalDriver_ = std::move(driver);
+    for (Agent& a : agents_) {
+        const GoalTable& t = goalsFor(a.mode);
+        int mapped = t.entry();
+        for (int s = 0; s < t.stateCount(); ++s)
+            if (t.state(s).activity == a.activity) { mapped = s; break; }
+        a.goal = mapped;
+        a.goalHours = 0;
+    }
+}
+
+void CitySim::setGoalTables(GoalTable pedestrian, GoalTable driver) {
+    installGoalTables(std::move(pedestrian), std::move(driver));
+}
+
+void CitySim::setWander(bool on) {
+    wander_ = on;
+    installGoalTables(on ? wanderGoals(false) : defaultScheduleGoals(),
+                      on ? wanderGoals(true) : defaultScheduleGoals());
 }
 
 // Is the spawn area at `node` free of moving cars? Agents departing from rest
@@ -383,13 +517,11 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.speed = 0;
     if (!a.route.valid()) {
         // No path: do NOT teleport to the goal (that was the "disappear/reappear"
-        // bug). Stay parked at the ORIGIN and fall back to the origin's resting
-        // state, so the agent simply doesn't take this trip.
+        // bug). Stay parked at the ORIGIN so the agent simply doesn't take this
+        // trip; the goal layer's NoRoute row decides where its day falls back to.
         a.moving = false;
         a.elevation = 0;
         a.pos = idlePose(origin, a.mode, a.brain);
-        a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtHome
-                                                               : Agent::Activity::AtWork;
         return;
     }
     int lanes = nav_->links[a.route.links.front()].lanes;
@@ -774,8 +906,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 }
 
-// The arrival branch of advance(): a wander driver CHAINS into its next trip, a
-// schedule driver parks on the verge, a walker rests at its sidewalk end.
+// The arrival branch of advance(), table-driven (ADR-0064): the Arrived event
+// asks the agent's GoalTable what comes next. A DRIVER whose next state is
+// another trip (a GoTo state — wander's Roam self-loop) CHAINS straight into
+// it; otherwise the agent rests — a driver parks on the verge, a walker rests
+// at its sidewalk end — wearing the new state's activity label.
 // `vArrive` is the speed still carried at the arrival tick — a chain keeps it.
 void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     a.moving = false;
@@ -784,24 +919,29 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
     // arrivals at ground level, under their own road.
     a.elevation = nav_->links[lastLink].layer * kLayerClearance;
-    if (a.mode == Agent::Mode::Driver && wander_) {
-        // WANDER (the agent lab): CHAIN straight into the next trip THIS
-        // tick — no parking pose (which read on device as the car "jumping
+    const GoalTable& t = goalsFor(a.mode);
+    int next = t.onEvent(a.goal, GoalEvent::Arrived);
+    if (a.mode == Agent::Mode::Driver && next >= 0 &&
+        t.state(next).action == GoalAction::GoTo) {
+        // CHAIN straight into the next trip THIS tick (wander, the agent
+        // lab) — no parking pose (which read on device as the car "jumping
         // backwards in time, then shooting forward") and no one-frame rest
         // INSIDE the junction box for cross traffic to overlap. The car
         // keeps its speed and heading through the node; steer() rotates it
         // onto the new route at the bounded yaw rate, like any other turn.
         a.restNode = nav_->links[lastLink].to;
         a.arrivedLink = lastLink;
+        a.goal = next;
+        a.goalHours = 0;
         Vec2 keepHeading = a.heading;
-        if (startWanderTrip(a, a.restNode, /*fromRest=*/false)) {
+        if (startGoalTrip(a, a.restNode, /*fromRest=*/false)) {
             a.speed = vArrive;
             a.heading = keepHeading;   // no snap: the yaw stays rate-limited
             return;
         }
         // No route anywhere (isolated node): pull onto the VERGE like a
         // schedule arrival — resting in-lane left a body no gap key, no box
-        // rule, and no crash pass could see. The scheduling pass retries.
+        // rule, and no crash pass could see. The goal pass retries the trip.
         {
             Vec2 dir = nav_->direction(lastLink);
             Vec2 right(dir.y, -dir.x);
@@ -835,9 +975,18 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // motion — not snapped across the node, which was the old visible jump).
         a.pos = nav_->sidewalkPoint(lastLink, 1.0);
     }
-    a.activity = (a.activity == Agent::Activity::Commuting) ? Agent::Activity::AtWork
-                                                            : Agent::Activity::AtHome;
-    a.restNode = nav_->links[lastLink].to;   // wander departs from here
+    if (next >= 0) {
+        a.goal = next;
+        a.goalHours = 0;
+        a.activity = t.state(next).activity;
+    } else {
+        // No Arrived row (a sparse custom table): keep the historical flip so
+        // the day's label still reads sensibly.
+        a.activity = (a.activity == Agent::Activity::Commuting)
+                         ? Agent::Activity::AtWork
+                         : Agent::Activity::AtHome;
+    }
+    a.restNode = nav_->links[lastLink].to;   // the next departure starts here
     a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
     a.route.links.clear();
 }
@@ -932,51 +1081,17 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     simSeconds_ += dt;   // memory's time base: sightings age and fade against this
     signals_.update(dt);
 
-    // Pass 1: schedule transitions (AI agents only — the host drives players).
-    // A stranded agent (work == home: no route was found at build) never departs.
+    // Pass 1: the GOAL layer (ADR-0064) — AI agents only, the host drives
+    // players. Each agent runs its current state in its archetype's GoalTable:
+    // a resting agent emits this tick's events (clock windows, dwell, idle) and
+    // takes the first matching transition; a GoTo agent whose trip isn't
+    // running retries the departure (launch-clearance gated for drivers, so a
+    // car waits out traffic near its spot and pulls out when clear). The
+    // built-in tables reproduce the historical schedule and wander behaviour
+    // exactly; see goalThink / city_goals.h.
     for (Agent& a : agents_) {
         if (a.playerControlled || a.released) continue;
-        // WANDER mode (the agent lab): no schedule — the moment an agent is at
-        // rest it picks a fresh random reachable goal and goes, so the lab's one
-        // car laps the circuit continuously instead of parking for hours.
-        if (wander_) {
-            // Drivers CHAIN trips at arrival (see advance()); this pass only
-            // launches the very first trip from the build pose, restarts a
-            // walker, or recovers an agent whose last pick found no route.
-            if (!a.moving) {
-                int from = (a.restNode >= 0 && a.restNode < nav_->nodeCount())
-                               ? a.restNode : a.home;
-                // LAUNCH CLEARANCE (drivers): agents sharing a home node rest
-                // near the same verge — launching them the same tick spawned
-                // cars inside each other. Hold this launch while another moving
-                // car is still near the departure node; index order staggers
-                // same-node fleets a few metres apart, like cars pulling out.
-                if (a.mode != Agent::Mode::Driver || launchClear(a, from))
-                    startWanderTrip(a, from);
-            }
-            continue;
-        }
-        if (a.home == a.work) continue;
-        switch (a.activity) {
-            // A driver departs only once its spawn area is clear of moving cars
-            // (launchClear) — it just waits out the traffic and retries next
-            // step, like anyone pulling out of a parking spot.
-            case Agent::Activity::AtHome:
-                if (clockHours_ >= a.departWork && clockHours_ < a.departHome &&
-                    (a.mode != Agent::Mode::Driver || launchClear(a, a.home))) {
-                    a.activity = Agent::Activity::Commuting;
-                    startTrip(a, a.home, a.work);
-                }
-                break;
-            case Agent::Activity::AtWork:
-                if ((clockHours_ >= a.departHome || clockHours_ < a.departWork) &&
-                    (a.mode != Agent::Mode::Driver || launchClear(a, a.work))) {
-                    a.activity = Agent::Activity::Returning;
-                    startTrip(a, a.work, a.home);
-                }
-                break;
-            default: break;
-        }
+        goalThink(a, dt * hoursPerSecond);
     }
 
     // Snapshot the bodies agents may SENSE this step — pedestrians and the

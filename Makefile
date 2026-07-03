@@ -145,9 +145,11 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_pathfind.cpp \
 	$(TEST_DIR)/test_perception.cpp \
 	$(TEST_DIR)/test_agent_memory.cpp \
+	$(TEST_DIR)/test_state_machine.cpp \
 	$(TEST_DIR)/test_traffic_signal.cpp \
 	$(TEST_DIR)/test_traffic_rules.cpp \
 	$(TEST_DIR)/test_city_sim.cpp \
+	$(TEST_DIR)/test_city_goals.cpp \
 	$(TEST_DIR)/test_city_signals.cpp \
 	$(TEST_DIR)/test_city_perception.cpp \
 	$(TEST_DIR)/test_driver_agent.cpp \
@@ -219,6 +221,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/ai/pathfind.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
+	$(SRC_DIR)/apps/citysim/city_goals.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \

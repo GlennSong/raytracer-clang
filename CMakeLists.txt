@@ -111,6 +111,7 @@ add_library(engine_core STATIC
     # src/apps/citysim but compiles into the shared lib.
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_meshes.cpp
@@ -199,6 +200,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/agent_goals.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -291,11 +293,13 @@ add_executable(run_tests
     tests/test_pathfind.cpp
     tests/test_perception.cpp
     tests/test_agent_memory.cpp
+    tests/test_state_machine.cpp
     tests/test_cascade_fit.cpp
     tests/test_fall_respawn.cpp
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp
     tests/test_city_sim.cpp
+    tests/test_city_goals.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp
@@ -316,7 +320,8 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_script_vm.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp
-        tests/test_flora.cpp)
+        tests/test_flora.cpp
+        tests/test_agent_goals.cpp)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
@@ -753,6 +758,9 @@ if(EMSCRIPTEN)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/about.html
                 $<TARGET_FILE_DIR:viewer_web>/about.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/city-sim.html
+                $<TARGET_FILE_DIR:viewer_web>/city-sim.html
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/scenes.json
                 $<TARGET_FILE_DIR:viewer_web>/scenes.json

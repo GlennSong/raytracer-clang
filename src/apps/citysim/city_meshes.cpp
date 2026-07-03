@@ -78,6 +78,18 @@ const Vec3 kCarColors[] = {
 };
 constexpr int kNumCarVariants = static_cast<int>(sizeof(kCarColors) / sizeof(kCarColors[0]));
 
+// Append a flat white quad (two triangles, +Y normal) — the building block of
+// the ground-projected debug meshes (strips, wedge edges/arc).
+void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+    uint32_t base = static_cast<uint32_t>(m.vertices.size());
+    for (const Vec3& p : { a, b, c, d }) {
+        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = Vec3(1, 1, 1);
+        m.vertices.push_back(v);
+    }
+    m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
+    m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
+}
+
 }  // namespace
 
 engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size, bool withWheels) {
@@ -234,6 +246,32 @@ engine::RenderMesh arrowXZ() {
         m.vertices.push_back(v);
     }
     m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+    return m;
+}
+
+engine::RenderMesh stripXZ() {
+    engine::RenderMesh m;
+    addQuadXZ(m, Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 1), Vec3(-0.5, 0, 1));
+    return m;
+}
+
+engine::RenderMesh wedgeXZ(Real halfAngleRad, int segs) {
+    engine::RenderMesh m;
+    const Real band = 0.04;   // thin outline band, like ringXZ's — reads as paint
+    // The two straight edges, origin to rim, at +/- the half-angle off +Z.
+    for (Real side : { Real(1), Real(-1) }) {
+        Real a = side * halfAngleRad;
+        Vec3 dir(std::sin(a), 0, std::cos(a));
+        Vec3 off = Vec3(dir.z, 0, -dir.x) * (band * 0.5);   // in-plane perpendicular
+        addQuadXZ(m, Vec3(0, 0, 0) - off, off, dir + off, dir - off);
+    }
+    // The arc between them: a ring band clipped to the wedge's angular span.
+    for (int i = 0; i < segs; ++i) {
+        Real t0 = -halfAngleRad + (2 * halfAngleRad) * i / segs;
+        Real t1 = -halfAngleRad + (2 * halfAngleRad) * (i + 1) / segs;
+        Vec3 o0(std::sin(t0), 0, std::cos(t0)), o1(std::sin(t1), 0, std::cos(t1));
+        addQuadXZ(m, o0, o1, o1 * (1 - band), o0 * (1 - band));
+    }
     return m;
 }
 
