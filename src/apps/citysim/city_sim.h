@@ -183,6 +183,8 @@ public:
         a.tethered = false;
         a.moving = false;
         a.speed = 0;
+        a.crashTimer = 0;   // released agents skip the sim's passes — stale wreck
+        a.crashCount = 0;   // state would never decay and poison a future resume
     }
 
     // Tether a planner ghost to its physical car (ADR-0062): the ghost holds

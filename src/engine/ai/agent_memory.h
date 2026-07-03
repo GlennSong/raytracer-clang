@@ -137,7 +137,10 @@ inline Real timeToCollision(const Vec2& pa, const Vec2& va,
     const Real kNever = std::numeric_limits<Real>::infinity();
     Vec2 dp = pb - pa, dv = vb - va;
     Real c = dp.x * dp.x + dp.y * dp.y - radius * radius;
-    if (c <= 0) return 0;                                  // touching already
+    // Touching already: a collision only if still CLOSING — a remembered track
+    // whose extrapolation drifts through a stopped observer is behind/beside
+    // it, not an imminent hit (it froze cars for phantoms they had passed).
+    if (c <= 0) return (dp.x * dv.x + dp.y * dv.y < 0) ? Real(0) : kNever;
     Real a = dv.x * dv.x + dv.y * dv.y;
     if (a < 1e-9) return kNever;                           // no relative motion
     Real b = 2.0 * (dp.x * dv.x + dp.y * dv.y);

@@ -772,6 +772,14 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
             engine::ControlledBy&) {
             obstacles.push_back(Vec2(t.position.x, t.position.z));
         });
+    // Every REAL physics Vehicle too (the player's car, commandeered/promoted
+    // cars — driven OR abandoned): a promoted car has no planner ghost, so
+    // without this ambient traffic plans straight through a car parked across
+    // the lane and the kinematic proxies bulldoze the dynamic body.
+    ctx.world.each<engine::Transform, engine::Vehicle>(
+        [&](engine::Entity, engine::Transform& t, engine::Vehicle&) {
+            obstacles.push_back(Vec2(t.position.x, t.position.z));
+        });
     sim_.setExternalObstacles(std::move(obstacles));
 
     step(ctx.world, ctx.clock.fixedStep());

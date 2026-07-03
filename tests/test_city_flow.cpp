@@ -399,3 +399,88 @@ TEST_CASE(cars_crash_and_stop_instead_of_ghosting) {
     // U-turn chains into head-on meets) — real levels have neither.
     CHECK(escapeTicks < ticks / 3);
 }
+
+TEST_CASE(cars_stay_on_the_carriageway_across_width_changes) {
+    // Review fix (lane re-clamp): a car that drew lane 1 on a two-lane arterial
+    // used to KEEP lane 1 onto a one-lane local link — an offset past the kerb,
+    // driving on the verge and invisible to same-link followers. Route traffic
+    // over an arterial -> local width step and assert every moving car stays
+    // within its current link's carriageway.
+    RoadGraph g;
+    g.nodes = { {Vec2(-150, 0)}, {Vec2(0, 0)}, {Vec2(150, 0)}, {Vec2(0, 150)} };
+    g.edges = {
+        RoadEdge{0, 1, 14, RoadClass::Arterial, 0},   // 2 lanes per direction
+        RoadEdge{1, 2, 6, RoadClass::Local, 0},       // 1 lane per direction
+        RoadEdge{1, 3, 6, RoadClass::Local, 0},
+    };
+    NavGraph nav = buildNavGraph(g);
+    CitySim sim;
+    sim.build(nav, 16, 0, 21);
+    sim.setWander(true);   // keep everyone criss-crossing the width change
+
+    Real worstOverhang = 0;
+    for (int i = 0; i < 8000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            // Junction boxes are paved corner to corner and the corner-cut arc
+            // legitimately sweeps across them — only MID-LINK overhang is the
+            // kerb-driving bug this test pins.
+            if (sim.nearJunction(a.pos, 2.0)) continue;
+            // Lateral distance from the nearest link's centreline, minus that
+            // link's half-width: positive = off the carriageway.
+            Real best = 1e9, bestHw = 0;
+            for (int li = 0; li < nav.linkCount(); ++li) {
+                Vec2 A = nav.nodes[nav.links[li].from], B = nav.nodes[nav.links[li].to];
+                Vec2 ab = B - A;
+                Real len2 = ab.lengthSquared();
+                Real t = len2 > 1e-9
+                             ? std::max(Real(0), std::min(Real(1),
+                                   ((a.pos.x - A.x) * ab.x + (a.pos.y - A.y) * ab.y) / len2))
+                             : Real(0);
+                Vec2 c(A.x + ab.x * t, A.y + ab.y * t);
+                Real d = (a.pos - c).length();
+                if (d < best) { best = d; bestHw = nav.links[li].width * 0.5; }
+            }
+            worstOverhang = std::max(worstOverhang, best - bestHw);
+        }
+    }
+    // Corner-cut arcs may momentarily shave inside a junction, never OUTSIDE the
+    // kerb by more than a body's slack. The unclamped-lane bug overhung by ~1.5m.
+    CHECK(worstOverhang < 0.6);
+}
+
+TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
+    // Review fix (H1): the reactive lean is pos += offset on top of a re-anchored
+    // pose. A tether-HELD ghost skipped advance() (no re-anchor) but still got the
+    // lean re-applied every tick — a pinned walker's ghost slid sideways without
+    // bound. Pin a walking ped's tether far behind it and hold for 30 s: the
+    // ghost must stay put (waiting), not wander off the map.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(200, 0)} };
+    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
+    NavGraph nav = buildNavGraph(g);
+    CitySim sim;
+    sim.build(nav, 0, 6, 9);   // several walkers so the cone SEES neighbours
+                               // (a non-zero lean is what used to accumulate)
+    // Walk until someone is properly en route.
+    int target = -1;
+    for (int i = 0; i < 4000 && target < 0; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& ag = sim.agents();
+        for (int k = 0; k < static_cast<int>(ag.size()); ++k)
+            if (ag[k].moving && ag[k].speed > 0.5) { target = k; break; }
+    }
+    CHECK(target >= 0);
+
+    // Pin its body anchor far behind: the hold engages immediately and stays.
+    Vec2 heldAt = sim.agents()[target].pos;
+    Vec2 anchor(heldAt.x - 50.0, heldAt.y - 50.0);
+    Real maxDrift = 0;
+    for (int i = 0; i < 300; ++i) {
+        sim.setAgentTether(target, anchor, 5.0);
+        sim.step(0.1, 0.5);
+        maxDrift = std::max(maxDrift, (sim.agents()[target].pos - heldAt).length());
+    }
+    CHECK(maxDrift < 1.0);   // held means held — the bug drifted metres per tick
+}
