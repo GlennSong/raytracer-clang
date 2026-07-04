@@ -59,7 +59,14 @@
     "perceptionReliability": 1.0,
     "debugWidgets": true,
     "wander": true,
-    "vehicles": "vehicles.lua"
+    "vehicles": "vehicles.lua",
+    "places": [
+      { "type": "home",   "position": [-50.0, 0.0, -30.0], "name": "Rowe House" },
+      { "type": "shop",   "position": [50.0, 0.0, -30.0], "name": "Corner Store", "open": 8.0, "close": 20.0 },
+      { "type": "office", "position": [50.0, 0.0, 30.0], "name": "Works Ltd", "open": 9.0, "close": 17.0 },
+      { "type": "park",   "position": [0.0, 0.0, 33.0], "name": "Green" },
+      { "type": "civic",  "position": [-50.0, 0.0, 30.0], "name": "Town Hall" }
+    ]
   },
   "player": {
     "position": [0, 1.2, -20],

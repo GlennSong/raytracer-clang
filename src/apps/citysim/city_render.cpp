@@ -1,11 +1,13 @@
 #include "city_render.h"
 
 #include "car_lamps.h"                                // lamp decision core (ADR-0065)
+#include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
+#include "../../log.h"                               // LOG_WARN (place-type validation)
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>                                   // Living City debug section
@@ -137,6 +139,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
         debugWidgets_ = c.debugWidgets;
+        authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
     });
 
     // Merge every RoadNet's constrained graph into one combined graph (a level
@@ -160,6 +163,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+
+    // Places (ADR-0066): turn the level-authored destinations into a routable
+    // PlaceMap now that the nav graph exists (each entrance snaps to a sidewalk).
+    // An unrecognized type tag is warned-and-skipped so one typo can't drop the
+    // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
+    places_ = PlaceMap{};
+    for (const engine::AuthoredPlace& ap : authoredPlaces_) {
+        PlaceType type;
+        if (!parsePlaceType(ap.type, type)) {
+            LOG_WARN << "citysim: unknown place type '" << ap.type << "' — skipped";
+            continue;
+        }
+        places_.add(type, Vec2(ap.x, ap.z), nav_, ap.openHour, ap.closeHour, 0,
+                    ap.name);
+    }
 
     sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
@@ -777,6 +795,19 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
 
 #ifdef RT_ENABLE_IMGUI
 namespace {
+// Overlay colour per place type (ADR-0066 labels): home green, shop amber, office
+// blue, park teal, civic violet — the same hue keys the marker, connector, dot,
+// and text so a place reads as one unit.
+ImU32 placeColor(PlaceType t) {
+    switch (t) {
+        case PlaceType::Home:   return IM_COL32( 90, 200, 110, 255);
+        case PlaceType::Shop:   return IM_COL32(240, 170,  60, 255);
+        case PlaceType::Office: return IM_COL32( 90, 160, 240, 255);
+        case PlaceType::Park:   return IM_COL32( 60, 210, 190, 255);
+        case PlaceType::Civic:  return IM_COL32(190, 130, 240, 255);
+        default:                return IM_COL32(220, 220, 220, 255);
+    }
+}
 // Short label for an Agent::State (the reactive FSM value the ring colours use).
 const char* agentStateName(Agent::State s) {
     switch (s) {
@@ -794,7 +825,7 @@ const char* agentStateName(Agent::State s) {
 }  // namespace
 #endif
 
-void CityRenderSystem::render(engine::FrameContext&) {
+void CityRenderSystem::render(engine::FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (a backend without the debug UI): stay inert — same guard
     // the engine's DebugOverlaySystem uses.
@@ -825,6 +856,18 @@ void CityRenderSystem::render(engine::FrameContext&) {
         ImGui::Unindent();
         ImGui::EndDisabled();
 
+        // Places (ADR-0066): the level-authored destinations + their type counts.
+        ImGui::Separator();
+        ImGui::Checkbox("Places (labels + markers)", &showPlaces_);
+        if (places_.empty()) {
+            ImGui::TextDisabled("  (no authored places in this level)");
+        } else {
+            for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+                const int n = places_.countOfType(static_cast<PlaceType>(t));
+                if (n) ImGui::Text("  %-7s %d", placeTypeName(static_cast<PlaceType>(t)), n);
+            }
+        }
+
         // Selected-agent inspector: identity (UID) + schedule + live state.
         ImGui::Separator();
         const int count = static_cast<int>(agents.size());
@@ -842,6 +885,42 @@ void CityRenderSystem::render(engine::FrameContext&) {
         }
     }
     ImGui::End();
+
+    // The place overlay (approach A): project each place to the screen and draw a
+    // site ring, an entrance dot, a connector, and a type/name label on the
+    // foreground draw list (independent of any window, so it reads over the 3D
+    // scene). Perspective view only; an orthographic debug camera would need its
+    // own projection, which the gameplay camera never uses.
+    if (showPlaces_ && !places_.empty()) {
+        const engine::CameraState& cam = ctx.view.camera;
+        const Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+        const Mat4 proj = Mat4::perspective(cam.fovDegrees * 3.14159265358979 / 180.0,
+                                            cam.aspectRatio, cam.nearPlane, cam.farPlane);
+        const Mat4 vp = proj * view;
+        const ImGuiIO& io = ImGui::GetIO();
+        const Real w = io.DisplaySize.x, h = io.DisplaySize.y;
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        for (const Place& p : places_.places()) {
+            const Vec3 siteW(p.site.x, groundAt(p.site.x, p.site.y) + 0.1, p.site.y);
+            const Vec3 entW(p.entrance.x, groundAt(p.entrance.x, p.entrance.y) + 0.1,
+                            p.entrance.y);
+            Vec2 sp, ep;
+            const bool sv = worldToScreen(vp, siteW, w, h, sp);
+            const bool ev = worldToScreen(vp, entW, w, h, ep);
+            const ImU32 col = placeColor(p.type);
+            if (sv && ev)
+                dl->AddLine(ImVec2(sp.x, sp.y), ImVec2(ep.x, ep.y), col, 1.5f);
+            if (ev) dl->AddCircleFilled(ImVec2(ep.x, ep.y), 4.0f, col);   // entrance
+            if (sv) {
+                dl->AddCircle(ImVec2(sp.x, sp.y), 6.0f, col, 0, 2.0f);    // site
+                const char* nm = p.name.empty() ? placeTypeName(p.type)
+                                                 : p.name.c_str();
+                dl->AddText(ImVec2(sp.x + 8, sp.y - 6), col, nm);
+            }
+        }
+    }
+#else
+    (void)ctx;
 #endif
 }
 

@@ -1919,6 +1919,22 @@ bool LevelLoader::load(const std::string& path,
                 LOG_WARN << "citysim: vehicles script '" << vehiclesFile
                          << "' not found — using built-in fleet meshes";
         }
+        // Authored places (ADR-0066): a `"places"` array of labelled destinations
+        // the citysim bridge snaps onto the sidewalk network and turns into a
+        // PlaceMap. Each: {type, position:[x,y,z] (y ignored), name?, open?, close?}.
+        if (cs.contains("places") && cs["places"].is_array()) {
+            for (const auto& pj : cs["places"]) {
+                engine::AuthoredPlace p;
+                p.type = pj.value("type", std::string());
+                Vec3 pos = parseVec3(pj.value("position", json()));
+                p.x = static_cast<float>(pos.x);
+                p.z = static_cast<float>(pos.z);
+                p.name = pj.value("name", std::string());
+                p.openHour = pj.value("open", 0.0f);
+                p.closeHour = pj.value("close", 24.0f);
+                cfg.places.push_back(std::move(p));
+            }
+        }
         world.add<CitySimConfig>(world.create(), cfg);
     }
 

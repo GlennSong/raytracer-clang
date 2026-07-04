@@ -3,10 +3,13 @@
 
 #include "../../engine/system.h"
 #include "../../engine/ai/nav_graph.h"
+#include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
 #include "city_meshes.h"   // fleetCarMesh, buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
+#include "places.h"        // PlaceMap (ADR-0066)
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace citysim {
 
@@ -249,6 +252,12 @@ private:
     bool showVisionCones_ = true;    // per-agent sensing wedges
     bool showNavGraph_ = true;       // lane strips + junction-node rings
     int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)
+    // Places (ADR-0066): the level-authored destinations, and the routable
+    // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
+    // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
+    std::vector<engine::AuthoredPlace> authoredPlaces_;
+    PlaceMap places_;
+    bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

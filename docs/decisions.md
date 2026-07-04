@@ -4770,11 +4770,35 @@ dependency INVERSION (core reaching up into an app). Now:
   as `engine_core` keeps Jolt systems out. Hosts (viewer, editor, web, tests)
   link `citysim`.
 
-This is what lets the forthcoming "Living City" ImGui debug panel live on
-`CityRenderSystem` and appear ONLY when a city is present — an engine-only app
-never links the code that would draw it. The Makefile Lua-free suite (706/706)
-and the CMake scripting-on suite (771/771, incl. the relocated reader tests)
-both stay green across the move; it is a pure relocation, no behaviour change.
+This is what lets the "Living City" ImGui debug panel live on `CityRenderSystem`
+and appear ONLY when a city is present — an engine-only app never links the code
+that would draw it. The Makefile Lua-free suite (706/706) and the CMake
+scripting-on suite (771/771, incl. the relocated reader tests) both stay green
+across the move; it is a pure relocation, no behaviour change.
+
+**The Living City debug panel + place visibility.** `CityRenderSystem::render()`
+contributes a collapsible "Living City" section to the SHARED Debug window by
+calling `ImGui::Begin(kDebugWindowTitle)` with the same title the engine's
+`DebugOverlaySystem` uses — ImGui merges same-titled Begin() calls in a frame, so
+the section stacks inside the one Debug panel instead of floating separately. The
+ONLY coupling is that title literal (a shared string, not a code dependency —
+which would reinstate the engine→app arrow). All guarded by RT_ENABLE_IMGUI + a
+null-context check + "a city is loaded". The section carries per-layer widget
+toggles (agent rings+intent / vision cones / nav graph — each refining the master
+J-key flag) and a selected-agent inspector (UID, mode, live FSM state, home/work,
+depart times, pose). To make the Phase-1 places VISIBLE, the citysim block gained
+an authored `"places"` array (⟨A1⟩ hybrid: authored first, generator later): each
+`{type, position, name?, open?, close?}` becomes an engine `AuthoredPlace`
+(string-typed so core stays citysim-free), which the render bridge parses
+(`parsePlaceType`) into the routable `PlaceMap` at build. Places draw as a
+projected overlay (approach A) on the ImGui foreground draw list — a site ring,
+an entrance dot, a connector, and a type/name label per place, colour-keyed by
+type — projected by the pure, headless-tested `worldToScreen`
+(`apps/citysim/screen_project.h`). No meshes, no instance groups: the whole place
+overlay is self-contained in `render()`. `agent_lab.json` authors one place of
+each type so the layer shows immediately. Headless suites cover the data + the
+projection (`test_places`, `test_screen_project`); the on-screen look is
+viewer-gated (RT_ENABLE_IMGUI + GLFW) and owed a device pass.
 
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware

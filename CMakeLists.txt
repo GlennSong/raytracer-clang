@@ -343,6 +343,7 @@ add_executable(run_tests
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
     tests/test_places.cpp
+    tests/test_screen_project.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

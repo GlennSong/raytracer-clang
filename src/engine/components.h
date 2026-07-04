@@ -248,6 +248,18 @@ struct AgentDriver {
 // lab runs ONE driver and ONE walker with the debug HUD on, while grown.json
 // keeps the default bustle. Defaults mirror CityRenderParams so an absent field
 // changes nothing.
+// A level-authored place (Living City, ADR-0066): a labelled destination in the
+// citysim world. Its TYPE is a citysim PlaceType TAG kept as a string here — the
+// citysim bridge parses it (parsePlaceType) — so engine core stays free of
+// citysim types. `x`/`z` are the site (world XZ); the bridge snaps the entrance
+// onto the nearest sidewalk. Hours are in-world 0..24 (default = always open).
+struct AuthoredPlace {
+    std::string type;      // "home" | "shop" | "office" | "park" | "civic"
+    float x = 0, z = 0;    // building site (world XZ)
+    std::string name;      // optional label (may be empty)
+    float openHour = 0, closeHour = 24;
+};
+
 struct CitySimConfig {
     int cars = 40;
     int pedestrians = 40;
@@ -268,6 +280,10 @@ struct CitySimConfig {
     // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
     // failure falls back to the C++ fleetCarMesh; "" = built-in fleet meshes.
     std::string vehicleScript;
+    // Level-authored places (ADR-0066): labelled destinations (home/shop/office/
+    // park/civic) the citysim bridge turns into a routable PlaceMap at build.
+    // Empty for levels that don't author any (the generator emits them later).
+    std::vector<AuthoredPlace> places;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

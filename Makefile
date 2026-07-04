@@ -163,7 +163,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_car_lamps.cpp \
 	$(TEST_DIR)/test_city_flow.cpp \
 	$(TEST_DIR)/test_city_spectate.cpp \
-	$(TEST_DIR)/test_places.cpp
+	$(TEST_DIR)/test_places.cpp \
+	$(TEST_DIR)/test_screen_project.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
