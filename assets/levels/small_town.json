@@ -56,8 +56,8 @@
     }
   ],
   "citysim": {
-    "cars": 5,
-    "pedestrians": 5,
+    "cars": 10,
+    "pedestrians": 14,
     "seed": 11,
     "hoursPerSecond": 0.05,
     "perceptionReliability": 1.0,

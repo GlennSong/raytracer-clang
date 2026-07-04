@@ -348,6 +348,7 @@ add_executable(run_tests
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
+    tests/test_city_generated.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
