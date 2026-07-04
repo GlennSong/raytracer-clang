@@ -109,6 +109,11 @@ struct CityModel {
     RenderMesh hlodProxy;
 
     std::vector<CityBuilding> buildings;
+    // The planarized road graph the carriageway was meshed over (ADR-0066): nodes
+    // + edges (edge widths = the drawn ribbon). A host spawns a RoadNet from this
+    // so the citysim can drive the generated streets. Empty only for a road-less
+    // city.
+    RoadGraph roadGraph;
     std::vector<Poly2> blocks;     // extracted block footprints (debug / collision)
     int blockCount = 0;
     int lotCount = 0;

@@ -717,6 +717,12 @@ CityModel generateCity(const CityParams& cp) {
         std::remove_if(model.parts.begin(), model.parts.end(),
                        [](const RenderMesh& m) { return m.vertices.empty(); }),
         model.parts.end());
+
+    // Surface the road GRAPH (Living City, ADR-0066): the same planarized graph the
+    // carriageway was meshed over — its edges now carry the drawn ribbon width. A
+    // host can spawn a RoadNet from it so the citysim drives the generated streets
+    // (and buildings become places), turning a procedural city into a living one.
+    model.roadGraph = graph;
     return model;
 }
 

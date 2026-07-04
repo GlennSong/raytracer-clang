@@ -1969,6 +1969,45 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
         }
+        // Real buildings become a living city (ADR-0066): when the level has a
+        // generated `shape:"city"` entity, drive the citysim on ITS streets and
+        // tag ITS buildings as places — no hand-authoring. The generator already
+        // built the road graph; spawn a nav-only RoadNet from it (no Renderable —
+        // the city drew its own carriageway) so `world.each<RoadNet>` finds it,
+        // and map each building's District to a place type.
+        if (!cityModel.roadGraph.edges.empty()) {
+            engine::RoadNet net;
+            net.nodes.reserve(cityModel.roadGraph.nodes.size());
+            for (const auto& n : cityModel.roadGraph.nodes) net.nodes.push_back(n.pos);
+            net.edges.reserve(cityModel.roadGraph.edges.size());
+            for (const auto& e : cityModel.roadGraph.edges)
+                net.edges.push_back({e.a, e.b});
+            net.width = 12.0;      // = the generator's carriageway ribbon (roadW)
+            net.sidewalk = 2.5;
+            net.markings = false;  // the city already drew its own road surface
+            net.crosswalks = false;
+            world.add<engine::RoadNet>(world.create(), net);
+
+            // District → place type. Kept as string tags (the citysim bridge
+            // parses them) so engine core stays free of citysim's PlaceType.
+            auto placeTag = [](engine::District d) -> const char* {
+                switch (d) {
+                    case engine::District::Residential: return "home";
+                    case engine::District::Commercial:  return "shop";
+                    case engine::District::HighRise:     return "office";
+                    case engine::District::Industrial:   return "office";
+                    case engine::District::Park:         return "park";
+                    default:                             return "civic";
+                }
+            };
+            for (const engine::CityBuilding& b : cityModel.buildings) {
+                engine::AuthoredPlace p;
+                p.type = placeTag(b.district);
+                p.x = static_cast<float>(b.site.x);
+                p.z = static_cast<float>(b.site.y);
+                cfg.places.push_back(std::move(p));   // building already drawn — label only
+            }
+        }
         world.add<CitySimConfig>(world.create(), cfg);
     }
 

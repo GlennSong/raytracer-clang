@@ -900,7 +900,15 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         const ImGuiIO& io = ImGui::GetIO();
         const Real w = io.DisplaySize.x, h = io.DisplaySize.y;
         ImDrawList* dl = ImGui::GetForegroundDrawList();
+        // A generated city has hundreds of places; only annotate the ones near the
+        // camera so the overlay stays legible (and cheap). Text drops out sooner
+        // than the marker so distant places read as dots, nearby ones as labels.
+        const Real kMarkerRange = 120.0, kLabelRange = 55.0;
         for (const Place& p : places_.places()) {
+            const Real dx = p.site.x - cam.position.x, dz = p.site.y - cam.position.z;
+            const Real dist2 = dx * dx + dz * dz;
+            if (dist2 > kMarkerRange * kMarkerRange) continue;
+            const bool label = dist2 <= kLabelRange * kLabelRange;
             const Vec3 siteW(p.site.x, groundAt(p.site.x, p.site.y) + 0.1, p.site.y);
             const Vec3 entW(p.entrance.x, groundAt(p.entrance.x, p.entrance.y) + 0.1,
                             p.entrance.y);
@@ -913,9 +921,11 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             if (ev) dl->AddCircleFilled(ImVec2(ep.x, ep.y), 4.0f, col);   // entrance
             if (sv) {
                 dl->AddCircle(ImVec2(sp.x, sp.y), 6.0f, col, 0, 2.0f);    // site
-                const char* nm = p.name.empty() ? placeTypeName(p.type)
-                                                 : p.name.c_str();
-                dl->AddText(ImVec2(sp.x + 8, sp.y - 6), col, nm);
+                if (label) {
+                    const char* nm = p.name.empty() ? placeTypeName(p.type)
+                                                    : p.name.c_str();
+                    dl->AddText(ImVec2(sp.x + 8, sp.y - 6), col, nm);
+                }
             }
         }
     }

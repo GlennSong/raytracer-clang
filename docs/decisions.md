@@ -4817,6 +4817,26 @@ place-AWARE routing (agents choosing home/work/errands from these places) is
 still Phase 3. The buildings render only in the ECS/viewer path (device-gated);
 the offline tracer uses a separate scene loader and does not spawn them.
 
+**Real generated buildings become a living city (the generator bridge).** The
+hand-authored slice proved the model; this makes a *procedural* city alive with
+no authoring. `generateCity` already built its street network internally
+(`planarize(gridRoads(...))`) but discarded it — `CityModel` now SURFACES it as
+`roadGraph` (nodes + edges, edge widths = the drawn ribbon). When a level has
+both a `shape:"city"` entity and a `citysim` block, `level_loader` spawns a
+**nav-only `RoadNet`** from that graph (no `Renderable` — the city already drew
+its carriageway) so `CityRenderSystem`'s `world.each<RoadNet>` drives agents on
+the generated streets, and maps each `CityBuilding`'s `District` to a place-type
+tag (Residential→home, Commercial→shop, HighRise/Industrial→office, Park→park,
+else civic) — so every generated building becomes a labelled, routable place with
+no hand work. The District→tag map is string-valued in engine core (the citysim
+bridge parses it), so core stays citysim-free. Because a city has hundreds of
+places, the label overlay distance-caps: markers within 120 m, text within 55 m
+of the camera, so it stays legible and cheap. `assets/levels/living_city.json` is
+a compact generated city wired this way. `run_tests` 775/775; the drive-the-
+generated-streets behaviour is viewer-gated (device pass owed). This is the
+Phase-6 payoff — a whole procedural city instantly alive — reached by exposing a
+graph the generator already had.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    {
+      "name": "downtown",
+      "shape": "city",
+      "position": [0, 0, 0],
+      "city": {
+        "extent": 120,
+        "cellSize": 70,
+        "roadJitter": 0.12,
+        "downtownRadius": 60,
+        "midtownRadius": 120,
+        "parkFraction": 0.08,
+        "buildChance": 0.85,
+        "seed": 3
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 8,
+    "pedestrians": 8,
+    "seed": 5,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": true,
+    "wander": true,
+    "vehicles": "vehicles.lua"
+  },
+  "player": {
+    "position": [0, 2, 60],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [0.45, 0.55, -0.5],
+      "color": [1.0, 0.95, 0.85],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}
