@@ -36,6 +36,8 @@ const std::vector<std::pair<KeyCode, const char*>>& keyNameTable() {
         {KeyCode::Comma, "Comma"}, {KeyCode::Period, "Period"},
         {KeyCode::Slash, "Slash"}, {KeyCode::Semicolon, "Semicolon"},
         {KeyCode::Minus, "Minus"}, {KeyCode::Equal, "Equal"},
+        {KeyCode::LeftBracket, "LeftBracket"},
+        {KeyCode::RightBracket, "RightBracket"},
     };
     return table;
 }
