@@ -202,6 +202,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/agent_goals.cpp
+        src/engine/scripting/vehicle_body.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -323,7 +324,8 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_script_system.cpp
         tests/test_gun_script.cpp
         tests/test_flora.cpp
-        tests/test_agent_goals.cpp)
+        tests/test_agent_goals.cpp
+        tests/test_vehicle_body.cpp)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
