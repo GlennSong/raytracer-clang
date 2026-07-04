@@ -1,8 +1,22 @@
 {
   "scenes": [
     {
-      "id": "grown",
+      "id": "living_city",
       "title": "Living City",
+      "tag": "Agents",
+      "blurb": "A whole procedural city, alive \u2014 agents given a home and a job commute the generated streets; every building is a labelled place.",
+      "thumb": "thumbs/grown.webp"
+    },
+    {
+      "id": "small_town",
+      "title": "Small Town",
+      "tag": "Agents",
+      "blurb": "A hand-built town where each place is a real building \u2014 homes, a shop, an office, a town hall, a green.",
+      "thumb": "thumbs/agent_lab.webp"
+    },
+    {
+      "id": "grown",
+      "title": "Grown Streets",
       "tag": "Agents",
       "blurb": "A grown street network with living traffic \u2014 commuting drivers, walkers, working signals.",
       "thumb": "thumbs/grown.webp"
