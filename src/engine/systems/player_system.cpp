@@ -137,6 +137,14 @@ void PlayerSystem::update(FrameContext& ctx) {
         // feeds it look input); the shoulder rig just frames that heading from
         // behind, fly pitch tilting the rig.
         shoulder.setTarget(t->position, camera.yaw);
+        // Scroll dollies the shoulder arm (into its preset zoom range). Feed
+        // ZOOM ONLY: the fly controller owns yaw/pitch, so a full update() would
+        // double-apply the look delta on top of it — with zero look delta
+        // orbitYaw += 0 is a no-op and the orbitPitch write below overrides
+        // update()'s pitch clamp, leaving only the distance dolly.
+        CameraInput zoom;
+        zoom.zoomDelta = ctx.input.scrollDelta;
+        shoulder.update(zoom, ctx.frameDelta);
         shoulder.orbitPitch =
             std::clamp(camera.pitch, kShoulderPitchMin, kShoulderPitchMax);
         ctx.view.camera = shoulder.cameraState(aspect);

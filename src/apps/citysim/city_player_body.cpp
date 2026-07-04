@@ -24,6 +24,9 @@ using engine::World;
 namespace {
 constexpr Real kFaceSpeed = 0.3;        // turn to face travel above this (walkers')
 constexpr Real kPersonHalfHeight = 0.9; // buildPersonMesh spans y in [-0.9, 0.9]
+constexpr Real kTeleportJump = 3.0;     // a horizontal step past this in ONE tick is a
+                                        // teleport (respawn/fall net), not locomotion —
+                                        // ~30x a sprint tick; re-anchor, don't animate it
 }  // namespace
 
 engine::MeshHandle CityPlayerBodySystem::poseMesh(engine::FrameContext& ctx,
@@ -96,16 +99,31 @@ void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
     // body stands and the legs match the ground speed.
     Vec3 d = t->position - lastPos_;
     lastPos_ = t->position;
-    Real hSpeed = std::sqrt(d.x * d.x + d.z * d.z) / dt;
+    Real hDist = std::sqrt(d.x * d.x + d.z * d.z);
+
+    // Teleport re-anchor (respawn / fall-safety net move the capsule in one
+    // tick, not the player walking): snap the speed sampling AND the render
+    // interpolation to the new spot, so the body doesn't spin its legs up or
+    // streak across the map for a frame. Facing is held; no next-tick lag since
+    // lastPos_/prevPose_ both become the new position here.
+    if (hDist > kTeleportJump) {
+        if (Renderable* r = world.get<Renderable>(player))
+            r->mesh = poseMesh(ctx, 0, scale);   // stand
+        if (PrevTransform* pt = world.get<PrevTransform>(player)) pt->value = *t;
+        prevPose_ = *t;
+        stride_ = 0;
+        return;
+    }
+
+    Real hSpeed = hDist / dt;
     int pose = walkPoseIndex(stride_, hSpeed, dt);
     if (Renderable* r = world.get<Renderable>(player))
         r->mesh = poseMesh(ctx, pose, scale);
 
     // Face the actual travel direction once really moving (walker rule); the
     // camera heading is free to look around a standing body.
-    if (hSpeed > kFaceSpeed) {
-        Real len = std::sqrt(d.x * d.x + d.z * d.z);
-        facing_ = Vec2(d.x / len, d.z / len);
+    if (hSpeed > kFaceSpeed && hDist > 1e-6) {
+        facing_ = Vec2(d.x / hDist, d.z / hDist);
     }
 
     // Pose write-back with render interpolation: prev gets LAST tick's drawn
