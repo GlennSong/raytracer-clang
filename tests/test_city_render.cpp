@@ -317,6 +317,99 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     CHECK(totalStable);     // and every approach is always represented exactly once
 }
 
+// --- car lamps (ADR-0065 follow-up) ------------------------------------------
+// The lamp DECISION logic (carLampState) is unit-tested headless in
+// test_car_lamps.cpp; these exercise the instanced RENDER BAKE — that the right
+// emissive lamp transforms appear on drawn cars — which is otherwise viewer-gated.
+// The bake is deterministic (sim clock drives even the turn-signal blink), so
+// these are stable, not flaky.
+
+TEST_CASE(car_headlights_track_the_night_clock) {
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 6;
+    p.pedestrians = 0;
+    p.hoursPerSecond = 3.0;   // sweep a full day in a few hundred steps
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+
+    bool nightLit = false, dayDark = false;
+    for (int i = 0; i < 2000; ++i) {
+        city.step(world, 0.1);
+        Real t = city.sim().timeOfDay();
+        std::size_t heads = groupCount(world, city.headlightGroup());
+        std::size_t cars = carTotal(world, city);
+        if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car
+            if (cars > 0 && heads == cars * 2) nightLit = true;
+        } else if (t > 9.0 && t < 16.0) {   // midday: none
+            if (heads == 0) dayDark = true;
+        }
+    }
+    CHECK(nightLit);   // every drawn car lights two headlights at night
+    CHECK(dayDark);    // and none by day
+}
+
+TEST_CASE(car_brake_lights_come_on_when_holding) {
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());   // signalled junction
+    CityRenderParams p;
+    p.cars = 8;
+    p.pedestrians = 0;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+
+    bool sawBrake = false;
+    for (int i = 0; i < 3000; ++i) {
+        city.step(world, 0.1);
+        if (groupCount(world, city.brakeLightGroup()) > 0) sawBrake = true;
+    }
+    CHECK(sawBrake);   // cars hold at the red / yield and light their brakes
+}
+
+TEST_CASE(car_turn_signals_flash_on_turns) {
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());
+    CityRenderParams p;
+    p.cars = 8;
+    p.pedestrians = 0;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+
+    bool sawTurn = false;
+    for (int i = 0; i < 4000; ++i) {
+        city.step(world, 0.1);
+        // A turning car's indicator flashes (sim-clock blink), so over many steps
+        // a Turning-state car coincides with a blink-on window.
+        if (groupCount(world, city.turnSignalGroup()) > 0) sawTurn = true;
+    }
+    CHECK(sawTurn);
+}
+
+TEST_CASE(externally_owned_cars_draw_no_lamps) {
+    // ADR-0062: a car owned by the vehicle bridge isn't drawn here, so it lights no
+    // lamps here either (its real Vehicle owns them) — even at night.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 5;
+    p.pedestrians = 0;
+    p.hoursPerSecond = 3.0;   // pass through night too
+    CityRenderSystem city(p);
+    city.setCarsExternallyOwned(true);
+    CHECK(city.build(world, nullptr));
+
+    bool everLit = false;
+    for (int i = 0; i < 500; ++i) {
+        city.step(world, 0.1);
+        if (groupCount(world, city.headlightGroup()) > 0 ||
+            groupCount(world, city.brakeLightGroup()) > 0 ||
+            groupCount(world, city.turnSignalGroup()) > 0)
+            everLit = true;
+    }
+    CHECK(!everLit);   // no instanced lamps while the cars are externally owned
+}
+
 // Distance from point p to segment [a,b] (XZ).
 static double segDist(Vec2 p, Vec2 a, Vec2 b) {
     Vec2 ab(b.x - a.x, b.y - a.y);
