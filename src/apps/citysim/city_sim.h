@@ -6,6 +6,8 @@
 #include "../../engine/ai/pathfind.h"
 #include "agent_id.h"
 #include "city_goals.h"
+#include "places.h"
+#include "relationships.h"
 #include "traffic_signal.h"
 #include <cstdint>
 #include <utility>
@@ -54,6 +56,13 @@ struct Agent {
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
     int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
+
+    // Where this agent lives and works (Living City, ADR-0066 Phase 3): the
+    // PlaceMap UIDs assigned at build, or kNoPlace when the city authored none.
+    // `home`/`work` NODES below are derived from these places' entrances, so the
+    // existing commute machinery routes the agent to REAL buildings.
+    PlaceId homePlace = kNoPlace;
+    PlaceId workPlace = kNoPlace;
 
     // Daily schedule (hours, 0..24), per-agent jittered.
     int home = 0, work = 0;
@@ -257,6 +266,16 @@ public:
         return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
 
+    // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
+    // (a Home place) and a job (a routable Shop/Office/Civic place), pin its
+    // home/work commute NODES to those places' sidewalk entrances, and seed the
+    // surface-level relationship table (same workplace → coworker, same home →
+    // neighbor). Deterministic (draws from each agent's `brain`, not the rng, so
+    // the build stream is unchanged). Call AFTER build()/setWander with the same
+    // graph; a no-op when `places` has no homes. `graph` must be the built one.
+    void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    const RelationshipTable& relationships() const { return relationships_; }
+
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
     // thinks it commits to the last decision and just acts on it. Default 0.35 s.
     void setThinkPeriod(Real seconds) { thinkPeriod_ = seconds > 0.05 ? seconds : 0.05; }
@@ -342,6 +361,7 @@ private:
     // scripting builds may replace them at load via setGoalTables.
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable goalDriver_ = defaultScheduleGoals();
+    RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on

@@ -25,7 +25,7 @@
     "hoursPerSecond": 0.05,
     "perceptionReliability": 1.0,
     "debugWidgets": true,
-    "wander": true,
+    "wander": false,
     "vehicles": "vehicles.lua"
   },
   "player": {

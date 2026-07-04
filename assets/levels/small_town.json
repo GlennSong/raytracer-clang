@@ -62,7 +62,7 @@
     "hoursPerSecond": 0.05,
     "perceptionReliability": 1.0,
     "debugWidgets": true,
-    "wander": true,
+    "wander": false,
     "vehicles": "vehicles.lua",
     "places": [
       { "type": "home",   "position": [-52.0, 0.0, -16.0], "name": "Maple House",

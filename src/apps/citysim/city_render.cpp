@@ -203,6 +203,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         }
     }
 #endif
+    // Make the agents LIVE in the city (ADR-0066 Phase 3): pin each one's home +
+    // job to real places and seed the relationship table, so the commute below
+    // routes them to actual buildings. No-op when the level authored no places
+    // (then the built random home/work schedule stands). After setWander so the
+    // (persistent) mode is settled; before the warm-up so day one runs on places.
+    sim_.assignPlaces(places_, nav_);
+
     // Warm up so the city is already ALIVE when the level appears — agents depart
     // and spread onto the roads instead of standing still for the first minute.
     for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);
@@ -879,7 +886,22 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
                         a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian");
             ImGui::Text("State: %s%s", agentStateName(a.state),
                         a.playerControlled ? "  (player)" : "");
-            ImGui::Text("Home node %d   Work node %d", a.home, a.work);
+            // Where it lives / works (ADR-0066 Phase 3): real place names.
+            auto placeLabel = [&](PlaceId id) -> const char* {
+                if (id == kNoPlace || id >= static_cast<PlaceId>(places_.size()))
+                    return "—";
+                const Place& pl = places_[id];
+                return pl.name.empty() ? placeTypeName(pl.type) : pl.name.c_str();
+            };
+            ImGui::Text("Lives: %s", placeLabel(a.homePlace));
+            ImGui::Text("Works: %s", placeLabel(a.workPlace));
+            // Surface-level social graph: who this agent knows.
+            const RelationshipTable& rel = sim_.relationships();
+            const auto& knows = rel.relationsOf(a.uid);
+            ImGui::Text("Knows %d", static_cast<int>(knows.size()));
+            for (std::size_t k = 0; k < knows.size() && k < 6; ++k)
+                ImGui::BulletText("UID %u (%s)", knows[k].first,
+                                  relationshipName(knows[k].second));
             ImGui::Text("Depart work %.1f h   home %.1f h", a.departWork, a.departHome);
             ImGui::Text("Pos (%.1f, %.1f)   Speed %.1f m/s", a.pos.x, a.pos.y, a.speed);
         }

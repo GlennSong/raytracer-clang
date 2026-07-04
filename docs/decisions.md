@@ -4837,6 +4837,28 @@ generated-streets behaviour is viewer-gated (device pass owed). This is the
 Phase-6 payoff — a whole procedural city instantly alive — reached by exposing a
 graph the generator already had.
 
+**Agents live in the city (Phase 3 — home, job, relationships).** The buildings
+were labelled and drivable, but agents still wandered. Now they LIVE there:
+`CitySim::assignPlaces(PlaceMap, NavGraph)` (called from `CityRenderSystem::build`
+after the sim + places are built, before the warm-up) gives every agent a **home**
+(a Home place) and a **job** (a routable Shop/Office/Civic place), and pins its
+existing commute NODES to those places' sidewalk entrances — so the shipped
+schedule machinery (ADR-0064) now routes agents to REAL buildings with no new
+routing code. A job that isn't reachable from home is swapped for one that is; an
+agent with no reachable job works from home. Every agent carries its
+`homePlace`/`workPlace` UIDs. Assignment is deterministic — it draws from each
+agent's `brain` bits, never the sim rng, so the build's random stream (and every
+seeded test) is unchanged (ADR-0002). It also seeds a **surface-level social
+graph** (`relationships.{h,cpp}`, ⟨A6⟩): a `RelationshipTable` keyed on UID pairs
+with a single tag (coworker / neighbor / acquaintance), stronger-tag-wins,
+symmetric — agents sharing a workplace become coworkers, sharing a home become
+neighbors. Deliberately shallow: a tag, not an affinity model. The panel inspector
+now shows an agent's home + job by name and who it knows; the town levels switch
+to `wander:false` so agents commute to their places. Headless-tested
+(`test_relationships` — table symmetry/upgrade/no-downgrade, and home/job
+assignment + coworker seeding + determinism through a real `CitySim`); the visible
+commuting is viewer-gated. Suites: Makefile 714/714, CMake 781/781.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship

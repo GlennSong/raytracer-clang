@@ -304,6 +304,66 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     }
 }
 
+void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
+    relationships_.clear();
+    for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
+    if (places.empty() || graph.nodeCount() == 0) return;
+
+    const std::vector<PlaceId>& homes = places.ofType(PlaceType::Home);
+    // A "job" is a workplace place: shop / office / civic (a park is not a job).
+    std::vector<PlaceId> jobs;
+    for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic})
+        for (PlaceId id : places.ofType(t)) jobs.push_back(id);
+    if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
+
+    // The nav node a place routes through (nearest to its snapped entrance).
+    auto nodeOf = [&](PlaceId id) { return graph.nearestNode(places[id].entrance); };
+    auto commutable = [&](int h, int w) {
+        return w != h && engine::findRoute(graph, h, w).valid() &&
+               engine::findRoute(graph, w, h).valid();
+    };
+
+    for (Agent& a : agents_) {
+        // Home: deterministic pick from the agent's own brain bits (no rng draw).
+        PlaceId hp = homes[a.brain % homes.size()];
+        int hn = nodeOf(hp);
+        a.homePlace = hp;
+        a.home = hn;
+        a.restNode = hn;
+        a.pos = idlePose(hn, a.mode, a.brain);
+        if (!graph.outLinks[hn].empty())
+            a.heading = graph.direction(graph.outLinks[hn][0]);
+
+        // Job: prefer the brain-picked workplace; if it isn't routable from home,
+        // scan for any that is; if none, the agent works from home (never departs).
+        a.work = a.home;
+        if (!jobs.empty()) {
+            PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
+            if (commutable(hn, nodeOf(pick))) {
+                a.workPlace = pick;
+                a.work = nodeOf(pick);
+            } else {
+                for (PlaceId cand : jobs) {
+                    const int cn = nodeOf(cand);
+                    if (commutable(hn, cn)) { a.workPlace = cand; a.work = cn; break; }
+                }
+            }
+        }
+    }
+
+    // Seed the surface-level social graph: agents sharing a workplace are
+    // coworkers; those sharing a home are neighbors (housemates). Insertion order.
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+            const Agent& A = agents_[i];
+            const Agent& B = agents_[j];
+            if (A.workPlace != kNoPlace && A.workPlace == B.workPlace)
+                relationships_.set(A.uid, B.uid, Relationship::Coworker);
+            else if (A.homePlace != kNoPlace && A.homePlace == B.homePlace)
+                relationships_.set(A.uid, B.uid, Relationship::Neighbor);
+        }
+}
+
 Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     if (!nav_ || node < 0 || node >= nav_->nodeCount()) return Vec2();
     const std::vector<int>& out = nav_->outLinks[node];
