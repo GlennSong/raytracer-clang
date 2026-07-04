@@ -446,6 +446,15 @@ static CityModel cityModelFromEntity(const json& ent, const json& root) {
         cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
         cp.seed           = j.value("seed", cp.seed);
         onTerrain         = j.value("onTerrain", false);
+        // District road tech (ADR-0066): real arterials + irregular streets whose
+        // blocks feed the lot/building pipeline, instead of the regular grid.
+        cp.districtRoads  = j.value("districtRoads", cp.districtRoads);
+        cp.arterials      = j.value("arterials", cp.arterials);
+        cp.blockSizeMin   = j.value("blockSizeMin", cp.blockSizeMin);
+        cp.blockSizeMax   = j.value("blockSizeMax", cp.blockSizeMax);
+        cp.arteryWidth    = j.value("arteryWidth", cp.arteryWidth);
+        cp.streetWidth    = j.value("streetWidth", cp.streetWidth);
+        cp.irregular      = j.value("irregular", cp.irregular);
     }
     if (onTerrain && root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
@@ -1986,6 +1995,11 @@ bool LevelLoader::load(const std::string& path,
             net.sidewalk = 2.5;
             net.markings = false;  // the city already drew its own road surface
             net.crosswalks = false;
+            // Drape on terrain (ADR-0066): an on-terrain city's roads conform to
+            // the ground, so the sim must too — CityRenderSystem reads net.heightAt
+            // for agent elevation. Without this, agents float over / sink under a
+            // hilly city's streets.
+            if (entityGround) net.heightAt = entityGround;
             world.add<engine::RoadNet>(world.create(), net);
 
             // District → place type. Kept as string tags (the citysim bridge

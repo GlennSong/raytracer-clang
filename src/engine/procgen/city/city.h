@@ -44,6 +44,20 @@ struct CityParams {
     Real buildChance = 0.9;   // per-lot occupancy (some lots become plazas)
     uint32_t seed = 1;
 
+    // Road STYLE (Living City, ADR-0066). When `districtRoads` is set, the streets
+    // come from the district subdivision generator (buildDistrict — arterials +
+    // irregular streets, the SAME road-network tech grown.json drives on) instead
+    // of the built-in regular grid, and its block polygons feed the lot/building
+    // pipeline directly. So a city built here composes the real roads + real lots +
+    // buildings + terrain as one system. Unset = the classic grid (unchanged).
+    bool districtRoads = false;
+    int  arterials = 3;        // major roads splitting the footprint into sectors
+    Real blockSizeMin = 22;    // smallest block edge (m)
+    Real blockSizeMax = 40;    // largest block edge (m) before a block keeps splitting
+    Real arteryWidth = 13;     // arterial carriageway width (m)
+    Real streetWidth = 7;      // local street carriageway width (m)
+    Real irregular = 0.22;     // footprint irregularity (0 = circular)
+
     // The City Arena (ADR-0027/0038 §6): drape the city on terrain. When set,
     // building foundations sit on the ground (at the min terrain height under
     // their footprint, so they never float on a slope) and roads follow it; when

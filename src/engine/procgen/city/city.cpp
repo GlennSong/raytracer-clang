@@ -1,6 +1,7 @@
 #include "city.h"
 
 #include "parcel.h"
+#include "district.h"     // buildDistrict: the real road-network tech (ADR-0066)
 #include "street_kit.h"
 #include "road_mesh.h"
 #include "../tree.h"
@@ -284,12 +285,34 @@ CityModel generateCity(const CityParams& cp) {
     for (int i = 0; i < static_cast<int>(PartId::Count); ++i)
         model.parts[i].materialIndex = i;
 
-    // 1. Roads -> 2. planarize -> 3. block faces.
-    GridRoadParams gp;
-    gp.center = cp.center; gp.extent = cp.extent; gp.cellSize = cp.cellSize;
-    gp.jitter = cp.roadJitter; gp.seed = cp.seed;
-    RoadGraph graph = planarize(gridRoads(gp));
-    model.blocks = extractBlocks(graph);
+    // 1. Roads -> 2. planarize -> 3. block faces. Two road sources (ADR-0066):
+    // the classic regular GRID, or the DISTRICT subdivision tech (arterials +
+    // irregular streets — what grown.json drives on), which hands back both the
+    // planarized graph AND its block polygons, so the same lot/building pipeline
+    // below runs on the real road network.
+    RoadGraph graph;
+    if (cp.districtRoads) {
+        DistrictParams dpp;
+        dpp.center = cp.center;
+        dpp.radius = cp.extent;
+        dpp.arterials = cp.arterials;
+        dpp.blockSizeMin = cp.blockSizeMin;
+        dpp.blockSizeMax = cp.blockSizeMax;
+        dpp.arteryWidth = cp.arteryWidth;
+        dpp.streetWidth = cp.streetWidth;
+        dpp.irregular = cp.irregular;
+        dpp.jitter = cp.roadJitter;
+        dpp.seed = cp.seed;
+        DistrictNet dn = buildDistrict(dpp);
+        graph = dn.graph;              // already planarized + connected
+        model.blocks = dn.blocks;      // buildDistrict emits the block faces itself
+    } else {
+        GridRoadParams gp;
+        gp.center = cp.center; gp.extent = cp.extent; gp.cellSize = cp.cellSize;
+        gp.jitter = cp.roadJitter; gp.seed = cp.seed;
+        graph = planarize(gridRoads(gp));
+        model.blocks = extractBlocks(graph);
+    }
     model.blockCount = static_cast<int>(model.blocks.size());
 
     // Road-grade solver: assign each intersection an elevation, then Laplacian-

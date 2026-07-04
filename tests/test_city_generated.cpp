@@ -57,6 +57,30 @@ TEST_CASE(generated_city_is_drivable_by_the_sim) {
     CHECK(moving > 0);
 }
 
+TEST_CASE(district_city_composes_real_roads_lots_and_buildings) {
+    // The Living City proper: streets from the district road tech (arterials +
+    // irregular streets), lots subdivided from ITS blocks, buildings on the lots —
+    // all one system, and the same graph the sim drives.
+    CityParams cp;
+    cp.districtRoads = true;
+    cp.extent = 130; cp.arterials = 3; cp.blockSizeMin = 24; cp.blockSizeMax = 42;
+    cp.buildChance = 0.9; cp.seed = 4;
+    CityModel m = generateCity(cp);
+    CHECK(!m.roadGraph.edges.empty());   // real roads, surfaced for the sim
+    CHECK(m.blockCount > 0);             // blocks came from the district net
+    CHECK(!m.buildings.empty());         // lots grew buildings
+
+    NavGraph nav = navFromCity(m);
+    CHECK(nav.linkCount() > 0);
+    CitySim sim;
+    sim.build(nav, 20, 20, 6);
+    for (int i = 0; i < 300; ++i) sim.step(0.1);
+    int moving = 0;
+    for (const Agent& a : sim.agents())
+        if (a.moving || a.speed > 0.05) ++moving;
+    CHECK(moving > 0);                   // agents drive the district streets
+}
+
 TEST_CASE(generated_city_buildings_snap_as_places) {
     CityParams cp;
     cp.extent = 120; cp.cellSize = 70; cp.seed = 3; cp.buildChance = 0.85;
