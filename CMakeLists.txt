@@ -114,6 +114,7 @@ add_library(engine_core STATIC
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
+    src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
     src/apps/citysim/city_meshes.cpp
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
@@ -311,6 +312,7 @@ add_executable(run_tests
     tests/test_city_drive.cpp
     tests/test_city_render.cpp
     tests/test_city_flow.cpp
+    tests/test_city_spectate.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

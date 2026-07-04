@@ -9,6 +9,7 @@
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
+#include "../apps/citysim/city_spectate.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
@@ -72,6 +73,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // Agent-based city: drivers + pedestrians with acceleration, signals,
     // perception, and bounded-radius steering over the road network (ADR-0060).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
+    // Spectate camera (ADR-0064 follow-up): K cycles the view through the city's
+    // agents and follows one (drive/walk their life with ring + cone lit). Reads
+    // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
+    // Jolt block, after CameraSystem/PlayerSystem so its override wins the frame.
+    addSystem<citysim::CitySpectateSystem>(citySys);
 #ifdef RT_ENABLE_PHYSICS
     // Motion authority per regime (ADR-0062 rethink): AMBIENT traffic is moved by
     // ONE authority — the CitySim planner — drawn instanced and collided via
@@ -91,7 +97,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPlayerBodySystem>();
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
 #else
-    (void)citySys;   // physics-off build: no collider system to consume it
+    // physics-off build: no collider/vehicle/walker bridges; the spectate camera
+    // above still follows the sim ghosts (citySys is consumed there).
 #endif
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
