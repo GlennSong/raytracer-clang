@@ -112,3 +112,38 @@ TEST_CASE(assign_places_no_homes_is_a_noop) {
     for (const Agent& a : sim.agents()) CHECK(a.homePlace == kNoPlace);
     CHECK(sim.relationships().pairCount() == 0);
 }
+
+// ----- roles (Phase 4) -------------------------------------------------------
+
+TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
+    NavGraph nav = citytest::cross4(45);
+    // A town with homes, a shop (8–20), an office, and a park — one of each role
+    // is reachable.
+    PlaceMap places;
+    for (int i = 0; i < 3; ++i) places.add(PlaceType::Home, Vec2(-30 + i * 8.0, 20), nav);
+    places.add(PlaceType::Shop, Vec2(30, 20), nav, 8, 20);
+    places.add(PlaceType::Office, Vec2(30, -20), nav, 9, 17);
+    places.add(PlaceType::Park, Vec2(-20, -20), nav);
+
+    CitySim a, b;
+    a.build(nav, 4, 8, 21);
+    a.assignPlaces(places, nav);
+    b.build(nav, 4, 8, 21);
+    b.assignPlaces(places, nav);
+
+    for (std::size_t i = 0; i < a.agents().size(); ++i) {
+        const Agent& ag = a.agents()[i];
+        // A shopkeeper works at a shop, kept open through its hours.
+        if (ag.role == Agent::Role::Shopkeeper) {
+            CHECK(ag.workPlace != kNoPlace);
+            CHECK(places[ag.workPlace].type == PlaceType::Shop);
+            CHECK(ag.departWork <= places[ag.workPlace].openHour);
+            CHECK(ag.departHome >= places[ag.workPlace].closeHour);
+        }
+        // A stroller holds no job (its day-destination is a park node, not a job).
+        if (ag.role == Agent::Role::Stroller)
+            CHECK(ag.workPlace == kNoPlace);
+        // Same seed → same role assignment (ADR-0002).
+        CHECK(ag.role == b.agents()[i].role);
+    }
+}

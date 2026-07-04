@@ -4859,6 +4859,21 @@ to `wander:false` so agents commute to their places. Headless-tested
 assignment + coworker seeding + determinism through a real `CitySim`); the visible
 commuting is viewer-gated. Suites: Makefile 714/714, CMake 781/781.
 
+**Roles (Phase 4) — the crowd becomes people.** A role is not new machinery; it
+FLAVOURS the existing home↔work schedule so the street isn't all identical
+commuters. `assignPlaces` gives each agent an `Agent::Role` deterministically
+from its brain bits + workplace: a **Commuter** keeps the jittered office hours; a
+**Shopkeeper** (assigned to a Shop) opens the shop half an hour before it opens
+and closes it half an hour after (departWork/departHome pinned to the place's
+`openHour`/`closeHour`); a **Stroller** (~1 in 5 when the city has a park) holds
+no job and spends the day out at a park (its "work" node is the park; workPlace
+stays kNoPlace so it seeds no coworker bonds). All deterministic (brain bits, not
+the rng), so seeded scenarios are unchanged (ADR-0002). The panel inspector shows
+the role. Headless-tested (`test_relationships` — shopkeepers work at shops kept
+open through hours, strollers hold no job, same seed → same roles). Suites:
+Makefile 717/717, CMake 782/782. Phase 2 (a true door-to-door pedestrian
+nav-graph) and Phase 5 (tools/capabilities) remain as enrichment.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship

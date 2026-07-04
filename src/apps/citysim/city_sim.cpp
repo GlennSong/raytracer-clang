@@ -310,6 +310,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     if (places.empty() || graph.nodeCount() == 0) return;
 
     const std::vector<PlaceId>& homes = places.ofType(PlaceType::Home);
+    const std::vector<PlaceId>& parks = places.ofType(PlaceType::Park);
     // A "job" is a workplace place: shop / office / civic (a park is not a job).
     std::vector<PlaceId> jobs;
     for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic})
@@ -334,19 +335,45 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         if (!graph.outLinks[hn].empty())
             a.heading = graph.direction(graph.outLinks[hn][0]);
 
-        // Job: prefer the brain-picked workplace; if it isn't routable from home,
-        // scan for any that is; if none, the agent works from home (never departs).
+        // Role (Phase 4) decides how the day runs. ~1 in 5 (when the city has a
+        // park) is a Stroller — no job, a day out at the park; the rest hold a job
+        // and are a Shopkeeper (if their workplace is a shop) or a Commuter. All
+        // deterministic from the brain's bits (no rng draw).
         a.work = a.home;
-        if (!jobs.empty()) {
+        a.role = Agent::Role::Commuter;
+        const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
+        const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
+        auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
+
+        if (stroller) {
+            PlaceId pk = parks[(a.brain >> 4) % parks.size()];
+            if (commutable(hn, nodeOf(pk))) {
+                a.role = Agent::Role::Stroller;
+                a.work = nodeOf(pk);              // a daytime destination, not a job
+                a.workPlace = kNoPlace;
+                a.departWork = 9.5 + 2.0 * unit(a.brain);         // late-morning out
+                a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
+            }
+        } else if (!jobs.empty()) {
+            // Prefer the brain-picked workplace; if it isn't routable from home,
+            // scan for any that is; if none, the agent works from home.
             PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
-            if (commutable(hn, nodeOf(pick))) {
+            if (!commutable(hn, nodeOf(pick))) {
+                pick = kNoPlace;
+                for (PlaceId cand : jobs)
+                    if (commutable(hn, nodeOf(cand))) { pick = cand; break; }
+            }
+            if (pick != kNoPlace) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
-            } else {
-                for (PlaceId cand : jobs) {
-                    const int cn = nodeOf(cand);
-                    if (commutable(hn, cn)) { a.workPlace = cand; a.work = cn; break; }
+                if (places[pick].type == PlaceType::Shop) {
+                    // Shopkeeper: open the shop before it opens, close it after.
+                    a.role = Agent::Role::Shopkeeper;
+                    Real open = places[pick].openHour, close = places[pick].closeHour;
+                    a.departWork = open > 0.5 ? open - 0.5 : 0.0;
+                    a.departHome = close < 23.5 ? close + 0.5 : 24.0;
                 }
+                // else Commuter — keep the jittered office hours from build().
             }
         }
     }

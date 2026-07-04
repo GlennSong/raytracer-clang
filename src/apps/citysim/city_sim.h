@@ -49,6 +49,14 @@ struct Agent {
     // Distinct from the array index by design (indices churn on rebuild/recycle).
     AgentId uid = kNoAgent;
 
+    // What KIND of life this agent leads (Living City, ADR-0066 Phase 4). A role
+    // is not new machinery — it just flavours the existing home↔work schedule:
+    // a Commuter keeps office hours; a Shopkeeper opens their shop before it opens
+    // and closes it after; a Stroller has no job and spends the day at a park.
+    // Assigned in assignPlaces from the agent's workplace + its own brain bits.
+    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Count };
+    Role role = Role::Commuter;
+
     Mode mode = Mode::Driver;
     State state = State::Resting;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
