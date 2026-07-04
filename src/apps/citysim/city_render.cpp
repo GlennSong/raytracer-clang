@@ -65,6 +65,40 @@ Real CityRenderSystem::groundAt(Real x, Real z) const {
     return (heightAt_ ? heightAt_(x, z) : 0.0) + roadLift_;
 }
 
+bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
+                                      Vec2& outHeading) const {
+    if (agentId < 0 || agentId >= static_cast<int>(sim_.agents().size()))
+        return false;
+    const Agent& a = sim_.agents()[agentId];
+    if (a.released) return false;   // its physical car is player-driven now
+
+    Real x = a.pos.x, z = a.pos.y;
+    Vec2 heading = a.heading;
+    // Prefer the REAL body pose when this agent is externally owned (same source
+    // the debug widgets ring): the planner ghost legitimately runs ahead/behind.
+    // An externally-owned agent with no reported body (released, not yet spawned)
+    // has no pose to follow — report failure so the caller cycles on.
+    const bool car = a.mode == Agent::Mode::Driver;
+    const bool external = car ? carsExternallyOwned_ : pedsExternallyOwned_;
+    if (external) {
+        const std::vector<ExternalAgentPose>& poses =
+            car ? externalCarPoses_ : externalPedPoses_;
+        bool reported = false;
+        for (const ExternalAgentPose& p : poses)
+            if (p.agentId == agentId) {
+                x = p.pos.x;
+                z = p.pos.y;
+                heading = p.heading;
+                reported = true;
+                break;
+            }
+        if (!reported) return false;
+    }
+    outPos = Vec3(x, groundAt(x, z) + a.elevation, z);
+    outHeading = heading;
+    return true;
+}
+
 bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // Level-authored settings (ADR-0063): a CitySimConfig entity — the level's
     // top-level "citysim" block — overrides the constructor params, so each level
