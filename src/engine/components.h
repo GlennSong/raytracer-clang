@@ -262,6 +262,12 @@ struct CitySimConfig {
     // The citysim render bridge runs it at build (scripting builds only) and
     // installs its archetype tables over the built-ins. "" = built-ins.
     std::string agentScript;
+    // Data-driven fleet bodies (ADR-0065): the loaded TEXT of the level's
+    // `"vehicles"` script (a vehicles.lua-style file resolved by level_loader).
+    // The citysim render bridge runs it at build (scripting builds only) and
+    // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
+    // failure falls back to the C++ fleetCarMesh; "" = built-in fleet meshes.
+    std::string vehicleScript;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

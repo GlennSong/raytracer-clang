@@ -39,6 +39,11 @@ struct CityRenderParams {
     // whose archetype tables replace the sim's built-ins at build. Loaded from
     // the level's citysim block; used only in scripting builds; "" = built-ins.
     std::string agentScript;
+    // Data-driven fleet bodies (ADR-0065): the SOURCE of a vehicles.lua-style
+    // script whose `vehicle.fleet` recipes build the instanced car meshes at
+    // build. Loaded from the level's citysim block; used only in scripting
+    // builds; any failure (or "") falls back to the C++ fleetCarMesh.
+    std::string vehicleScript;
 };
 
 class CityRenderSystem : public engine::System {
