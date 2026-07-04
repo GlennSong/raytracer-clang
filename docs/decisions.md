@@ -4800,6 +4800,23 @@ each type so the layer shows immediately. Headless suites cover the data + the
 projection (`test_places`, `test_screen_project`); the on-screen look is
 viewer-gated (RT_ENABLE_IMGUI + GLFW) and owed a device pass.
 
+**A place IS a building (the small-town slice).** A place should be a structure,
+not a floating point. An authored place may now carry a `"building": [w, h, d]`
+footprint + `"color"`; when present, the loader spawns a static box STRUCTURE at
+the site (mesh + box `Collider` + static `RigidBody`, `AuthoredPlace`'s building
+fields), so one JSON entry yields BOTH the building and its `Place` — the tightest
+association, matching the plan's "each building gains a type + entrance." The box
+is plain engine geometry spawned in `level_loader` (engine core, no citysim
+dependency — the citysim bridge only reads the place site/type for the PlaceMap +
+labels); it is a runtime companion regenerated each load, like the road meshes.
+The new `assets/levels/small_town.json` is the first hand-authored slice: a loop
++ cross-street grid, five typed places each a real building (Maple House home,
+Corner Store shop, Town Hall civic, Works Ltd office, and The Green — a low park
+pad), with a small ambient population. This is Phase-4 authoring pulled forward;
+place-AWARE routing (agents choosing home/work/errands from these places) is
+still Phase 3. The buildings render only in the ECS/viewer path (device-gated);
+the offline tracer uses a separate scene loader and does not spawn them.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship

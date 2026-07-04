@@ -1932,7 +1932,41 @@ bool LevelLoader::load(const std::string& path,
                 p.name = pj.value("name", std::string());
                 p.openHour = pj.value("open", 0.0f);
                 p.closeHour = pj.value("close", 24.0f);
-                cfg.places.push_back(std::move(p));
+                // Optional building footprint [w, h, d] + colour: a place that
+                // names a `"building"` size becomes a real solid structure.
+                Vec3 bs = parseVec3(pj.value("building", json()), Vec3(0, 0, 0));
+                p.buildingW = static_cast<float>(bs.x);
+                p.buildingH = static_cast<float>(bs.y);
+                p.buildingD = static_cast<float>(bs.z);
+                p.buildingColor = parseVec3(pj.value("color", json()),
+                                            Vec3(0.72, 0.70, 0.64));
+                cfg.places.push_back(p);
+
+                // Spawn the building STRUCTURE (Living City Phase 4): a static box
+                // resting on the ground at the site, so the labelled place is an
+                // actual structure the player and agents collide with. Regenerated
+                // from the recipe each load (no SourceSpec), like the road meshes.
+                if (bs.x > 0 && bs.y > 0 && bs.z > 0) {
+                    Entity b = world.create();
+                    Transform t;
+                    t.position = Vec3(pos.x, pos.y + bs.y * 0.5, pos.z);
+                    world.add<Transform>(b, t);
+                    world.add<PrevTransform>(b, PrevTransform{t});
+                    Renderable r;
+                    r.mesh = assets.acquirePrimitive("box", bs);
+                    r.material.albedo = p.buildingColor;
+                    r.material.metallic = 0.0f;
+                    r.material.roughness = 0.9f;
+                    world.add<Renderable>(b, r);
+                    Collider c;
+                    c.shape = ColliderShape::Box;
+                    c.halfExtent = bs * 0.5;
+                    c.friction = 0.9;
+                    world.add<Collider>(b, c);
+                    RigidBody rb;
+                    rb.motion = BodyMotion::Static;
+                    world.add<RigidBody>(b, rb);
+                }
             }
         }
         world.add<CitySimConfig>(world.create(), cfg);

@@ -258,6 +258,12 @@ struct AuthoredPlace {
     float x = 0, z = 0;    // building site (world XZ)
     std::string name;      // optional label (may be empty)
     float openHour = 0, closeHour = 24;
+    // Optional building (Living City Phase 4): when width/depth/height are all > 0
+    // the loader spawns a static box STRUCTURE of this footprint at the site, so
+    // the place IS a building you can walk up to (its door snaps to the sidewalk).
+    // All-zero = a bare marker (e.g. a park). `buildingColor` tints the structure.
+    float buildingW = 0, buildingH = 0, buildingD = 0;   // full extents (m)
+    Vec3 buildingColor{0.72f, 0.70f, 0.64f};
 };
 
 struct CitySimConfig {
