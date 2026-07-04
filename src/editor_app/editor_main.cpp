@@ -106,6 +106,8 @@ KeyCode mapQtKey(int key) {
         case Qt::Key_Semicolon: return KeyCode::Semicolon;
         case Qt::Key_Minus:     return KeyCode::Minus;
         case Qt::Key_Equal:     return KeyCode::Equal;
+        case Qt::Key_BracketLeft:  return KeyCode::LeftBracket;
+        case Qt::Key_BracketRight: return KeyCode::RightBracket;
         case Qt::Key_QuoteLeft: return KeyCode::GraveAccent;
         default:                return KeyCode::Unknown;
     }

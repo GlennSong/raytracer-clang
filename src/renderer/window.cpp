@@ -237,6 +237,8 @@ static KeyCode translateKey(int glfwKey) {
         case GLFW_KEY_SEMICOLON:     return KeyCode::Semicolon;
         case GLFW_KEY_MINUS:         return KeyCode::Minus;
         case GLFW_KEY_EQUAL:         return KeyCode::Equal;
+        case GLFW_KEY_LEFT_BRACKET:  return KeyCode::LeftBracket;
+        case GLFW_KEY_RIGHT_BRACKET: return KeyCode::RightBracket;
         case GLFW_KEY_GRAVE_ACCENT:  return KeyCode::GraveAccent;
         default:                     return KeyCode::Unknown;
     }

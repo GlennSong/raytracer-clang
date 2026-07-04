@@ -160,7 +160,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_fleet.cpp \
 	$(TEST_DIR)/test_city_drive.cpp \
 	$(TEST_DIR)/test_city_render.cpp \
-	$(TEST_DIR)/test_city_flow.cpp
+	$(TEST_DIR)/test_city_flow.cpp \
+	$(TEST_DIR)/test_city_spectate.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -224,6 +225,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/city_goals.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
+	$(SRC_DIR)/apps/citysim/city_spectate.cpp \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \

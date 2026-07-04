@@ -50,6 +50,20 @@ public:
     void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
 
+    // Debug widgets (rings / vision cones / navgraph) show/hide state. The `j`
+    // action flips it in update(); this setter lets another system force it (the
+    // spectate camera turns it on so the followed agent shows its ring + cone).
+    void setDebugWidgets(bool on) { debugWidgets_ = on; }
+    bool debugWidgets() const { return debugWidgets_; }
+
+    // Agent `agentId`'s current WORLD pose for spectating: the real external body
+    // pose when one is reported (cars/peds owned by the physics bridges), else the
+    // sim ghost (pos + groundAt + elevation). `outPos` is the body ORIGIN on the
+    // ground (y = terrain + elevation); `outHeading` is its XZ heading. Returns
+    // false for an out-of-range / released / unreported (no external body) agent.
+    bool agentWorldPose(int agentId, engine::Vec3& outPos,
+                        engine::Vec2& outHeading) const;
+
     // When a CityVehicleSystem owns the NPC cars as real physics Vehicles (ADR-0062),
     // this render bridge must NOT also draw them as instanced kinematic boxes (that
     // would double every car). Call before build(): it skips creating/baking the car
