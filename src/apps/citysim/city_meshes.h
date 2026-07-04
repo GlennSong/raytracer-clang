@@ -51,7 +51,32 @@ int carVariantCount();
 // meshes by walk phase, no skeleton needed. `outfit` picks a deterministic
 // shirt/pants/skin combination.
 engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit);
+
+// Outfits a WALKER may be dealt (deterministic per walker). The table holds one
+// extra slot past this count — the player's fixed, distinctive outfit
+// (playerOutfit()) — so walkers dealing `hash % personOutfitCount()` can never
+// dress like the player.
 int personOutfitCount();
+int playerOutfit();
+
+// --- the shared walk cycle ---------------------------------------------------
+// ONE walk cycle for everyone who walks (city walkers AND the third-person
+// player body): a handful of pre-built limb-swing pose meshes, hopped between
+// as a body's stride advances with its REAL horizontal speed — the legs move
+// exactly as fast as the ground goes by. Pose 0 is standing.
+constexpr int kWalkPoses = 6;                    // poses per stride cycle
+constexpr engine::Real kMaxSwing = 0.55;         // peak limb pitch (radians, ~32 deg)
+constexpr engine::Real kStrideLength = 1.5;      // metres per full walk cycle
+constexpr engine::Real kWalkAnimMinSpeed = 0.3;  // below this the body stands
+
+// The limb swing baked into pose `pose` (sinusoidal over the cycle; pose 0
+// stands) — feed it to buildPersonMesh.
+engine::Real walkPoseSwing(int pose);
+
+// Advance `stridePhase` (kept wrapped to [0,1)) by the distance walked this
+// tick and return the pose index to draw. Below kWalkAnimMinSpeed the phase
+// holds and the body stands (pose 0) — a held body never moonwalks.
+int walkPoseIndex(engine::Real& stridePhase, engine::Real speed, engine::Real dt);
 
 // A ground-PROJECTED ring of unit outer radius: a flat glowing band lying just
 // above the pavement, like painted road markings — always visible from any

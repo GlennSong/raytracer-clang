@@ -596,3 +596,46 @@ TEST_CASE(person_mesh_stands_and_swings) {
             recolored = true;
     CHECK(recolored);
 }
+
+TEST_CASE(player_outfit_is_reserved_and_distinct) {
+    // The player IS a person: a fixed outfit slot past the walker-dealable
+    // range (walkers deal `hash % personOutfitCount()`), coloured unlike every
+    // walker outfit so the player reads instantly in a crowd.
+    CHECK(playerOutfit() >= personOutfitCount());
+    RenderMesh body = buildPersonMesh(0.0, playerOutfit());
+    for (int i = 0; i < personOutfitCount(); ++i) {
+        RenderMesh walker = buildPersonMesh(0.0, i);
+        bool differs = false;
+        for (std::size_t v = 0; v < body.vertices.size(); ++v)
+            if ((body.vertices[v].color - walker.vertices[v].color).length() > 0.01)
+                differs = true;
+        CHECK(differs);
+    }
+}
+
+TEST_CASE(walk_pose_index_tracks_real_speed) {
+    // The shared walk cycle (walkers AND the third-person player body): below
+    // the stand threshold the phase holds and the body stands (pose 0)...
+    Real phase = 0.0;
+    CHECK(walkPoseIndex(phase, 0.1, 0.1) == 0);
+    CHECK(walkPoseIndex(phase, 0.0, 0.1) == 0);
+    CHECK(phase == 0.0);
+
+    // ...and at stride speed (kStrideLength m/s = one cycle per second) the
+    // pose index sweeps every pose and the phase stays wrapped to [0, 1).
+    bool seen[kWalkPoses] = {};
+    for (int i = 0; i < 10; ++i) {
+        int pose = walkPoseIndex(phase, kStrideLength, 0.1);
+        CHECK(pose >= 0);
+        CHECK(pose < kWalkPoses);
+        seen[pose] = true;
+        CHECK(phase >= 0.0);
+        CHECK(phase < 1.0);
+    }
+    for (int p = 0; p < kWalkPoses; ++p) CHECK(seen[p]);
+
+    // Pose 0 stands; the others really articulate (walkPoseSwing feeds the
+    // person-mesh builder).
+    CHECK_APPROX(walkPoseSwing(0), 0.0, 1e-12);
+    CHECK(std::fabs(walkPoseSwing(1)) > 0.1);
+}

@@ -1,12 +1,21 @@
 #include "player_system.h"
 #include "physics_system.h"
 #include "../components.h"
+#include "../camera/scene_camera.h"
+#include "../../log.h"
+
+#include <algorithm>
 
 namespace engine {
 
 void PlayerSystem::onStart(FrameContext& ctx) {
     camera.positionLocked = true;
+    shoulder.applyShoulderPreset();
+    thirdPerson = ctx.settings.getBool("playerThirdPerson", false);
     ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn
+    // First <-> third person on foot. V is also CameraSystem's viewport-cycle
+    // key; see the placed-camera guard in update().
+    ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
@@ -80,6 +89,24 @@ void PlayerSystem::update(FrameContext& ctx) {
             }
     }
 
+    // First <-> third person on foot (V). V also cycles placed-camera
+    // viewports (CameraSystem's cam_cycle_next): while any placed SceneCamera
+    // exists the key keeps that meaning and this toggle stands down, so one
+    // press never does two things.
+    if (ctx.actions.pressed("player_camera_toggle")) {
+        bool placedCameras = false;
+        ctx.world.each<SceneCamera>([&](Entity, SceneCamera&) { placedCameras = true; });
+        if (!placedCameras) {
+            thirdPerson = !thirdPerson;
+            // Published for the body system (apps/citysim/city_player_body.*):
+            // it shows the player's person mesh only in third person.
+            ctx.settings.setBool("playerThirdPerson", thirdPerson);
+            LOG_INFO << "On-foot camera: "
+                     << (thirdPerson ? "third person (over the shoulder)"
+                                     : "first person");
+        }
+    }
+
     // Driving: the chase camera (CameraSystem follow) owns the view; don't pin
     // the first-person eye over it.
     if (ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))
@@ -92,6 +119,9 @@ void PlayerSystem::update(FrameContext& ctx) {
     auto* t = ctx.world.get<Transform>(playerEntity);
     if (!t) return;
 
+    // The eye stays pinned in BOTH modes: the fly controller is the heading
+    // (and other eye readers — the gun script — keep working), and switching
+    // back to first person is seamless.
     camera.eye = t->position + Vec3(0, eyeHeight, 0);
 
     // A placed SceneCamera owns the view this frame; keep the eye pinned above
@@ -101,7 +131,26 @@ void PlayerSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
-    ctx.view.camera = camera.cameraState(aspect);
+    if (thirdPerson) {
+        // Over the shoulder: mouse look still steers the player heading — the
+        // fly controller owns yaw/pitch exactly as in first person (CameraSystem
+        // feeds it look input); the shoulder rig just frames that heading from
+        // behind, fly pitch tilting the rig.
+        shoulder.setTarget(t->position, camera.yaw);
+        // Scroll dollies the shoulder arm (into its preset zoom range). Feed
+        // ZOOM ONLY: the fly controller owns yaw/pitch, so a full update() would
+        // double-apply the look delta on top of it — with zero look delta
+        // orbitYaw += 0 is a no-op and the orbitPitch write below overrides
+        // update()'s pitch clamp, leaving only the distance dolly.
+        CameraInput zoom;
+        zoom.zoomDelta = ctx.input.scrollDelta;
+        shoulder.update(zoom, ctx.frameDelta);
+        shoulder.orbitPitch =
+            std::clamp(camera.pitch, kShoulderPitchMin, kShoulderPitchMax);
+        ctx.view.camera = shoulder.cameraState(aspect);
+    } else {
+        ctx.view.camera = camera.cameraState(aspect);
+    }
 }
 
 }  // namespace engine
