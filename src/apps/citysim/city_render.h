@@ -129,6 +129,15 @@ public:
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
+    // Car lamp instance groups (ADR-0065 follow-up): emissive headlights (white),
+    // brake lights (red), and turn signals (amber), rebuilt each step from each
+    // drawn car's carLampState — the same shape as the signal lenses (one group
+    // per lamp kind; a lit lamp pushes an emissive box at its body marker's world
+    // pose). Exposed so headless tests read the baked transforms (mirrors
+    // signalGroup()).
+    engine::Entity headlightGroup() const { return headlightGroup_; }
+    engine::Entity brakeLightGroup() const { return brakeLightGroup_; }
+    engine::Entity turnSignalGroup() const { return turnSignalGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
     // Debug widgets (ADR-0061): per-agent ground footprint coloured by behaviour
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
@@ -160,8 +169,19 @@ public:
                             params_.pedSize.z * 0.5);
     }
 
+    // A retained lamp attachment marker (ADR-0065 follow-up): a lamp name
+    // ("headlight_l/r", "taillight_l/r") and its body-local position (+Z forward).
+    // Kept independent of the scripting-only engine::Attachment type so the
+    // non-scripting (Makefile) build stores markers too.
+    struct LampMarker {
+        std::string name;
+        engine::Vec3 pos;
+    };
+
 private:
     void syncGroups(engine::World& world);
+    void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
+    int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
     engine::Mat4 agentPose(const Agent& a) const;   // box sized by a.mode (car/ped)
     // Where a signalled approach's pole stands and which way its head/arm point
     // (matches the city's street_kit placement, scaled to road width).
@@ -184,6 +204,16 @@ private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
+    // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
+    engine::Entity headlightGroup_{};  // white, forward
+    engine::Entity brakeLightGroup_{}; // red, rear
+    engine::Entity turnSignalGroup_{}; // amber, blinks (render clock)
+    // Retained lamp markers, one list per car variant (indexed like carGroups_):
+    // the Lua fleet's headlight_l/r + taillight_l/r markers in body-local space,
+    // or a synthesized default set for C++ fallback cars. An empty entry => that
+    // variant draws no lamps.
+    std::vector<std::vector<LampMarker>> carLights_;
+    std::vector<Real> prevCarSpeed_;   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows

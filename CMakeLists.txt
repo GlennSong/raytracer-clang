@@ -312,6 +312,7 @@ add_executable(run_tests
     tests/test_city_fleet.cpp
     tests/test_city_drive.cpp
     tests/test_city_render.cpp
+    tests/test_car_lamps.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
     ${CORE_SOURCES}

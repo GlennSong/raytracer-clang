@@ -1,5 +1,6 @@
 #include "city_render.h"
 
+#include "car_lamps.h"                                // lamp decision core (ADR-0065)
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
@@ -46,6 +47,24 @@ constexpr Real kPedConeRange = 4.5, kPedConeHalfAngle = 1.2;
 // Debug tints, dimmer than the state rings so neither view shouts over them.
 const Vec3 kNavTint(0.18, 0.32, 0.55);    // faint blue: the road/lane graph
 const Vec3 kConeTint(0.55, 0.36, 0.10);   // dim amber: the sensing wedge
+
+// Synthesize a default lamp marker set for a car of body `size` (x=width,
+// y=height, z=length; +Z forward) — used for the C++ fallback fleet, a
+// scripting-off build, and headless tests where no Lua `lights` markers exist.
+// Mirrors vehicles.lua `fleet_car`: head/taillights at the front/rear corners, so
+// fallback cars still light up rather than going dark.
+std::vector<CityRenderSystem::LampMarker> defaultLampMarkers(Vec3 size) {
+    const Real hw = size.x * 0.5, hl = size.z * 0.5;
+    const Real ly = -size.y * 0.08;   // lamp band height
+    const Real lx = hw - 0.30;        // inset from the corner
+    std::vector<CityRenderSystem::LampMarker> out;
+    for (Real s : {Real(1), Real(-1)}) {
+        const std::string side = s > 0 ? "r" : "l";
+        out.push_back({"headlight_" + side, Vec3(s * lx, ly, hl - 0.05)});
+        out.push_back({"taillight_" + side, Vec3(s * lx, ly, -hl + 0.05)});
+    }
+    return out;
+}
 
 void refreshBounds(InstanceGroup* g) {
     if (!g) return;
@@ -183,6 +202,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // skip the instanced kinematic car bodies entirely — otherwise every car draws
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
+    carLights_.clear();
     if (!carsExternallyOwned_) {
 #ifdef RT_ENABLE_SCRIPTING
         // Data-driven fleet bodies (ADR-0065): the citysim block may name a
@@ -206,6 +226,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 #endif
         for (int v = 0; v < carVariantCount(); ++v) {
             MeshHandle mh{};
+            std::vector<LampMarker> lights;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
@@ -216,9 +237,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                     if (engine::loadFleetCarBody(vehVM, v, recipe, &err)) {
                         mesh = std::move(recipe.mesh);
                         scripted = true;
-                        // recipe.lights are parsed but not yet rendered — the
-                        // seam for future emissive lens entities (owed: ADR-0065
-                        // register row in docs/decisions.md).
+                        // RETAIN the Lua fleet's light markers (ADR-0065 follow-up):
+                        // headlight_l/r + taillight_l/r become the emissive lamps
+                        // baked in syncCarLamps. Previously parsed-and-dropped.
+                        for (const engine::Attachment& att : recipe.lights)
+                            lights.push_back({att.name, att.pos});
                     } else {
                         LOG_WARN << "citysim vehicles fleet[" << v << "]: " << err
                                  << " (using built-in fleet mesh)";
@@ -228,6 +251,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                 if (!scripted) mesh = fleetCarMesh(v);
                 mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
             }
+            // No Lua markers (C++ fallback fleet, scripting off, or headless/no
+            // assets): synthesize a default set from the body size so fallback cars
+            // still light up. (Skipping lamps for fallback cars was the alternative
+            // — see the ADR-0065 follow-up; we synthesize instead.)
+            if (lights.empty()) lights = defaultLampMarkers(fleetBodySize(v));
+            carLights_.push_back(std::move(lights));
+
             Entity e = world.create();
             InstanceGroup g;
             g.mesh = mh;
@@ -245,6 +275,23 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.material = signalMaterial(static_cast<SignalState>(s));
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
+
+    // Car lamp groups (ADR-0065 follow-up): one emissive instance batch per lamp
+    // kind, sharing a small lens box. Created unconditionally (they stay empty
+    // when cars are externally owned); syncCarLamps pushes the lit lamps each step.
+    MeshHandle lampMesh{};
+    if (assets)
+        lampMesh = assets->acquireMesh(MeshBuilder::box(Vec3(0.28, 0.16, 0.12)),
+                                       "city:carlamp");
+    headlightGroup_ = world.create();
+    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
+      world.add<InstanceGroup>(headlightGroup_, g); }
+    brakeLightGroup_ = world.create();
+    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
+      world.add<InstanceGroup>(brakeLightGroup_, g); }
+    turnSignalGroup_ = world.create();
+    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
+      world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -388,6 +435,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
+    // Per-agent speed history for the brake-light hard-decel test (ADR-0065
+    // follow-up); seeded to the warmed-up speed so the first bake sees no spurious
+    // deceleration.
+    prevCarSpeed_.assign(sim_.agents().size(), 0.0);
+    for (std::size_t i = 0; i < sim_.agents().size(); ++i)
+        prevCarSpeed_[i] = sim_.agents()[i].speed;
+
     built_ = true;
     syncGroups(world);
     return true;
@@ -466,6 +520,85 @@ Mat4 CityRenderSystem::signalLensPose(int link, SignalState s) const {
     Real slotY = (s == SignalState::Red) ? 0.42 : (s == SignalState::Green) ? -0.42 : 0.0;
     Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.22;
     return Mat4::trs(p, Quat(), Vec3(1, 1, 1));
+}
+
+// The turn side (-1 left / +1 right / 0 none) a car will take at the coming node,
+// from the bend between its current and next route legs — mirrors the sim's own
+// bendAhead read in labelDriverState, reused for the turn-signal decision.
+int CityRenderSystem::carTurnDir(const Agent& a) const {
+    if (a.mode != Agent::Mode::Driver) return 0;
+    const int legCount = static_cast<int>(a.route.links.size());
+    if (a.leg < 0 || a.leg + 1 >= legCount) return 0;
+    Vec2 d0 = nav_.direction(a.route.links[a.leg]);
+    Vec2 d1 = nav_.direction(a.route.links[a.leg + 1]);
+    return carTurnSide(d0, d1);
+}
+
+// Bake the emissive car lamps (ADR-0065 follow-up). Same shape as the signal
+// lenses: clear each per-kind group, then for every DRAWN car push a small
+// emissive box at each lit lamp marker's WORLD pose. Only the lit lamps are
+// pushed, so a phase change (headlights on at dusk, brakes on braking) just moves
+// transforms between batches — cheap, a handful of quads per car, rebuilt per step.
+void CityRenderSystem::syncCarLamps(World& world) {
+    InstanceGroup* head = world.get<InstanceGroup>(headlightGroup_);
+    InstanceGroup* brake = world.get<InstanceGroup>(brakeLightGroup_);
+    InstanceGroup* turn = world.get<InstanceGroup>(turnSignalGroup_);
+    if (head) head->transforms.clear();
+    if (brake) brake->transforms.clear();
+    if (turn) turn->transforms.clear();
+
+    const std::vector<Agent>& agents = sim_.agents();
+    if (prevCarSpeed_.size() != agents.size())
+        prevCarSpeed_.assign(agents.size(), 0.0);
+
+    // Externally-owned cars aren't drawn by this bridge (carGroups_ empty), so
+    // their lamps aren't either. We still update prevCarSpeed_ below.
+    const bool drawCars = !carGroups_.empty();
+
+    // Turn signals blink off the SIM clock — deterministic (~1.5 Hz, 50% duty), so
+    // the bake is reproducible and headless-testable. A render-time wall clock
+    // would be acceptable too (a non-deterministic blink is fine per the ADR), but
+    // the sim clock keeps determinism intact.
+    const bool blinkOn = std::fmod(sim_.seconds() * kTurnBlinkHz, 1.0) < 0.5;
+
+    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+        const Agent& a = agents[ai];
+        const Real prev = prevCarSpeed_[ai];
+        prevCarSpeed_[ai] = a.speed;   // record for next step's decel test
+        if (!drawCars) continue;
+        if (a.mode != Agent::Mode::Driver) continue;
+        if (a.released) continue;      // commandeered: the physical car owns its lamps
+        const int v = (a.vehicle >= 0 ? a.vehicle : 0) % carVariantCount();
+        if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
+        const std::vector<LampMarker>& markers = carLights_[v];
+        if (markers.empty()) continue;
+
+        CarLamps lamps = carLampState(a.state, a.speed, prev, sim_.timeOfDay(),
+                                      carTurnDir(a));
+        if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
+
+        const Mat4 pose = agentPose(a);
+        const Real yaw = std::atan2(a.heading.x, a.heading.y);
+        const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        for (const LampMarker& m : markers) {
+            const bool isHead = m.name.rfind("headlight", 0) == 0;
+            const bool isTail = m.name.rfind("taillight", 0) == 0;
+            const bool leftSide = !m.name.empty() && m.name.back() == 'l';
+            const bool rightSide = !m.name.empty() && m.name.back() == 'r';
+            const Vec3 wpos = pose.transformPoint(m.pos);
+            const Mat4 xf = Mat4::trs(wpos, rot, Vec3(1, 1, 1));
+            if (isHead && lamps.head && head) head->transforms.push_back(xf);
+            if (isTail && lamps.brake && brake) brake->transforms.push_back(xf);
+            // The turn indicator on the signalling side flashes on BOTH the front
+            // and rear corner markers of that side.
+            const bool signalling =
+                (leftSide && lamps.left) || (rightSide && lamps.right);
+            if (signalling && blinkOn && turn) turn->transforms.push_back(xf);
+        }
+    }
+    refreshBounds(head);
+    refreshBounds(brake);
+    refreshBounds(turn);
 }
 
 void CityRenderSystem::syncGroups(World& world) {
@@ -619,6 +752,10 @@ void CityRenderSystem::syncGroups(World& world) {
         refreshBounds(navL);
         refreshBounds(navN);
     }
+
+    // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
+    // driven by each drawn car's carLampState. Always baked (not a debug widget).
+    syncCarLamps(world);
 }
 
 void CityRenderSystem::step(World& world, Real dt) {

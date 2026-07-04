@@ -108,6 +108,12 @@ engine::RenderMaterial pedMaterial();
 engine::RenderMaterial signalMaterial(SignalState s);      // emissive lit lens
 engine::RenderMaterial signalPostMaterial();               // pole/arm/head assembly
 engine::RenderMaterial widgetMaterial(engine::Vec3 color); // debug ground paint
+// An emissive CAR lamp lens (ADR-0065 follow-up): a dark lens body with strong
+// self-illumination in `emission` so headlights (white), brake lights (red), and
+// turn signals (amber) glow like the traffic-signal lenses. Same material recipe
+// as signalMaterial (FLAG none, regular depth), so it renders on device exactly
+// the way the signal lenses do.
+engine::RenderMaterial lampMaterial(engine::Vec3 emission);
 
 // Traffic-light semantics (user-requested): GREEN = going, RED = stopped,
 // AMBER = braking/avoiding, violet = turning, teal = following a leader.

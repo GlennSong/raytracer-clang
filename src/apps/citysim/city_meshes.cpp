@@ -360,6 +360,20 @@ RenderMaterial widgetMaterial(Vec3 color) {
     return m;
 }
 
+// A car lamp lens: dark body so the housing reads when unlit, strong emission in
+// the lamp colour so it glows through daylight and bloom — the same recipe as
+// signalMaterial (FLAG none, regular depth), just parameterised by colour.
+RenderMaterial lampMaterial(Vec3 emission) {
+    RenderMaterial m;
+    m.albedo = emission * 0.12f;   // dark lens; the glow carries the hue
+    m.metallic = 0.0f;
+    m.roughness = 0.4f;
+    m.opacity = 1.0f;
+    m.emission = emission;
+    m.flags = 0;
+    return m;
+}
+
 Vec3 stateColor(Agent::State s) {
     switch (s) {
         // Pedestrian / shared
