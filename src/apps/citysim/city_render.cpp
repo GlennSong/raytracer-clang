@@ -8,6 +8,7 @@
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
 #ifdef RT_ENABLE_SCRIPTING
 #include "../../engine/scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "../../engine/scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../log.h"
 #endif
@@ -112,6 +113,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.perceptionReliability = c.perceptionReliability;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
+        params_.vehicleScript = c.vehicleScript;
         debugWidgets_ = c.debugWidgets;
     });
 
@@ -181,12 +183,51 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // skip the instanced kinematic car bodies entirely — otherwise every car draws
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
-    if (!carsExternallyOwned_)
+    if (!carsExternallyOwned_) {
+#ifdef RT_ENABLE_SCRIPTING
+        // Data-driven fleet bodies (ADR-0065): the citysim block may name a
+        // vehicles.lua-style script (level_loader reads its text into the
+        // config). Run it ONCE here, at load, and build each variant's instanced
+        // mesh from its `vehicle.fleet[slot]` recipe (parts -> vertex-coloured
+        // boxes, plus named light attachment markers). ANY failure — no script,
+        // a Lua error, a malformed slot — LOG_WARNs and falls back to the C++
+        // fleetCarMesh, so the streets are never left empty. Lua runs only here;
+        // the baked mesh is plain data (no sim state), so determinism is intact.
+        engine::ScriptVM vehVM;
+        bool vehScript = assets && !params_.vehicleScript.empty();
+        if (vehScript) {
+            std::string err;
+            if (!vehVM.doString(params_.vehicleScript, &err)) {
+                LOG_WARN << "citysim vehicles script: " << err
+                         << " (using built-in fleet meshes)";
+                vehScript = false;
+            }
+        }
+#endif
         for (int v = 0; v < carVariantCount(); ++v) {
             MeshHandle mh{};
-            if (assets)
-                mh = assets->acquireMesh(fleetCarMesh(v),
-                                         "city:car" + std::to_string(v));
+            if (assets) {
+                engine::RenderMesh mesh;
+                bool scripted = false;
+#ifdef RT_ENABLE_SCRIPTING
+                if (vehScript) {
+                    engine::CarBodyRecipe recipe;
+                    std::string err;
+                    if (engine::loadFleetCarBody(vehVM, v, recipe, &err)) {
+                        mesh = std::move(recipe.mesh);
+                        scripted = true;
+                        // recipe.lights are parsed but not yet rendered — the
+                        // seam for future emissive lens entities (owed: ADR-0065
+                        // register row in docs/decisions.md).
+                    } else {
+                        LOG_WARN << "citysim vehicles fleet[" << v << "]: " << err
+                                 << " (using built-in fleet mesh)";
+                    }
+                }
+#endif
+                if (!scripted) mesh = fleetCarMesh(v);
+                mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
+            }
             Entity e = world.create();
             InstanceGroup g;
             g.mesh = mh;
@@ -194,6 +235,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
         }
+    }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial(); world.add<InstanceGroup>(pedGroup_, g); }
     for (int s = 0; s < 3; ++s) {

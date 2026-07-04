@@ -1907,6 +1907,18 @@ bool LevelLoader::load(const std::string& path,
                 LOG_WARN << "citysim: agents script '" << agentsFile
                          << "' not found — using built-in goal tables";
         }
+        // Data-driven fleet bodies (ADR-0065): `"vehicles": "vehicles.lua"`
+        // names a car-body script; its TEXT rides the config so the citysim
+        // bridge (scripting builds only) builds the instanced fleet meshes from
+        // its `vehicle.fleet` recipes. Missing file -> warn and fall back to the
+        // built-in C++ fleet meshes. Opt-in per level, exactly like `agents`.
+        std::string vehiclesFile = cs.value("vehicles", std::string());
+        if (!vehiclesFile.empty()) {
+            cfg.vehicleScript = loadScriptCode(vehiclesFile, levelDir);
+            if (cfg.vehicleScript.empty())
+                LOG_WARN << "citysim: vehicles script '" << vehiclesFile
+                         << "' not found — using built-in fleet meshes";
+        }
         world.add<CitySimConfig>(world.create(), cfg);
     }
 

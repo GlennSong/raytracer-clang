@@ -4608,6 +4608,60 @@ heading→degrees conversion, and the empty/one-agent edge cases — are headles
 (`test_city_spectate.cpp`); the ctx-driven system (bindButton, `ctx.view.camera`)
 is viewer-gated and UNVERIFIED on device (register row below). Suite 683/683.
 
+## ADR-0065 — The AI car fleet becomes data: Lua-authored bodies, C++ fallback, light seams
+
+**Context.** ADR-0064 moved the agent GOAL layer into Lua data (`agents.lua`)
+behind a C++ default, so a new behaviour is a script edit, not a CitySim change.
+The AI car FLEET meshes were the mirror-image gap: `buildCarMesh` /
+`fleetCarMesh` (`apps/citysim/city_meshes.cpp`) hand-composed each body slot —
+hull + set-back cabin + dark glass + corner lamps + wheels, six styles — in C++,
+so a new body shape (or moving a lamp) meant editing C++ and rebuilding. The
+player's car body already lived in Lua (`vehicles.lua` `car_body`, ADR-0059);
+the AI fleet and the player were authored in two different languages for the same
+boxy look.
+
+**Decision.** The fleet body is **data**, authored in `assets/scripts/vehicles.lua`
+exactly like the agent goal tables. A new `vehicle.fleet` array carries one
+recipe per fleet slot (same order + dimensions as `city_sim.cpp` `kFleet` and the
+paints in `city_meshes.cpp` `kCarColors`, slot for slot). A recipe is plain data:
+
+    parts  = { { pos={x,y,z}, size={w,h,l}, color={r,g,b} }, ... }   -- boxes
+    lights = { { name="headlight_r", pos={x,y,z} }, ... }           -- lamp markers
+
+`parts` is the box composition — the SAME primitive C++'s `addBox` uses — so the
+Lua bodies reproduce the current boxy look (this is a data move, NOT the fancier
+low-poly car, which stays a later task; the regressed lofted shell is a separate
+register row). `lights` are named ATTACHMENT MARKERS at the front/rear lamp
+positions: the seam where future emissive lens entities / light actuators will
+attach.
+
+**The load-time-Lua / render-time-C++-fallback split.** New reader
+`engine/scripting/vehicle_body.cpp` (`loadFleetCarBody`, mirroring
+`agent_goals`) reads `vehicle.fleet[slot+1]` into a `CarBodyRecipe { RenderMesh
+mesh; std::vector<Attachment> lights; }`, building the mesh with the same winding
+as `addBox` (`MeshBuilder::box` + offset + vertex tint). In `city_render.cpp`
+`build()`, under `#ifdef RT_ENABLE_SCRIPTING`: if the level's citysim block names
+a `"vehicles"` script (level_loader reads its text into `CitySimConfig`, opt-in
+exactly like `"agents"`), a ScriptVM runs it ONCE at load and each fleet variant
+mesh is built from `loadFleetCarBody(slot)`; on ANY failure — no script, a Lua
+error, a malformed slot — it `LOG_WARN`s and falls back to the C++
+`fleetCarMesh(v)`. The C++ `buildCarMesh` / `fleetCarMesh` path is UNCHANGED and
+remains the default when no script is named or scripting is off — so the Makefile
+(headless, Lua-free) test build keeps working and the streets are never
+data-dependent to be non-empty. Lua runs only at load; the baked mesh is plain
+data (no ECS, no sim state), so determinism is untouched.
+
+**Tests.** `test_vehicle_body.cpp` (ctest, scripting-gated, wired like
+`test_agent_goals.cpp`) loads the shipped `vehicles.lua` and asserts
+`loadFleetCarBody` succeeds for every slot `0..carVariantCount()-1` — each mesh
+has vertices + whole-triangle indices, real vertex colours (not all white), and
+at least two named light attachments — plus that a malformed recipe (missing
+`parts`, a zero-size part, an out-of-range slot, no library loaded) is rejected
+with a non-empty error. The C++ `buildCarMesh`/`fleetCarMesh` fallback stays
+covered headless by `test_city_fleet.cpp` / `test_city_render.cpp`; `make test`
+count is unchanged (683/683 — the new cases are scripting-gated). The light
+markers are parsed but not yet rendered — owed row below.
+
 ---
 
 ## Interim seams & tech-debt register
@@ -4653,6 +4707,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Third-person camera + player body are UNVERIFIED on device | `engine/systems/player_system.cpp`, `engine/camera/follow_camera_controller.cpp`, `apps/citysim/city_player_body.{h,cpp}`, `src/game/arena_state.cpp` (ADR-0064) | RESOLVED IN DESIGN, owed a viewer pass: **V** toggles first ↔ third person on foot (guarded against the placed-camera viewport cycle); third person is a `FollowCameraController` over-the-shoulder preset framing the fly-controller heading, and the player renders as the shared `buildPersonMesh` walker body in a reserved outfit, walk cycle driven by real capsule speed via the shared `walkPoseIndex`. The camera math, shoulder preset, walk-cycle helper, and reserved-outfit distinctness are headless-tested; the two systems need GLFW/Jolt (viewer) and are unrun here. Owed checks: shoulder framing/feel (arm, shoulder side, pitch clamps), the body scaled to the capsule sits feet-on-ground, first-person really hides the body, and the V/placed-camera guard reads right. | Viewer pass: tune the shoulder preset, confirm the body grounds + hides correctly, gamepad look in third person |
 | Spectate camera is UNVERIFIED on device | `apps/citysim/city_spectate.{h,cpp}`, `apps/citysim/city_render.cpp` (`agentWorldPose`/`setDebugWidgets`), `src/game/arena_state.cpp`, `renderer/{event.h,window.cpp}`, `editor_app/editor_main.cpp` (ADR-0064) | RESOLVED IN DESIGN, owed a viewer pass: **K** toggles a spectate mode that cycles the view through the city's agents (**[** / **]** prev/next) and chases one with a `FollowCameraController`, forcing the debug ring/cone on so you watch the NPC drive its commute / walk its route. The camera reads the real external body pose (else the sim ghost) and is fed zoom-only so the agent heading owns the yaw. The pure selection + heading math (cycle/wrap/skip released, stale-index clamp, heading→degrees, empty/one-agent edges) is headless-tested (`test_city_spectate.cpp`); the system's `bindButton` / `ctx.view.camera` drive needs GLFW (viewer) and is unrun here. Owed checks: the chase framing feels right for drivers and walkers, the followed BODY (not the planner ghost) is what's framed, the widget force-on/restore reads right, and the new `[`/`]` keys register on device. | Viewer pass: tune the driver/walker presets, confirm the external-body pose tracks, add an on-screen "spectating agent N (driving/walking)" HUD label |
 | Curved car shell is EXPERIMENTAL (regressed on device) | `engine/procgen/vehicle_mesh.{h,cpp}`, `mesh.car_shell` binding (ADR-0062) | The lofted shell shipped with inverted faces (the outward-winding heuristic fails on parts of the loft — see-through panels), smeared vertex-colour "textures", and it baked wheels/lamps that DOUBLED VehicleSystem's physics wheels + lens entities. The fleet and `vehicles.lua` are back on the boxy bodies; the generator + `mesh.car_shell` + tests stay in-tree, unwired. | Rework before return: robust winding (build quads with known orientation instead of a fix-up pass), per-face colour islands (crisp glass edges), no baked trim, more segments; then a viewer look pass |
+| Fleet car LIGHT markers are parsed but not rendered | `assets/scripts/vehicles.lua` (`vehicle.fleet[*].lights`), `engine/scripting/vehicle_body.cpp` (`CarBodyRecipe::lights`), `apps/citysim/city_render.cpp` (ADR-0065) | The Lua fleet recipes carry NAMED lamp attachment markers (`headlight_l/r`, `taillight_l/r`) at the front/rear lamp positions, and `loadFleetCarBody` reads them into `CarBodyRecipe::lights` — the seam for future emissive lens entities / light actuators. Today the render bridge builds the body mesh from `parts` and DROPS the markers (the visible lamp geometry is still just the coloured `parts` boxes, as before). So a car has no glowing headlamps at night, no brake-light response. | Spawn small emissive lens entities (like the traffic-signal lenses) at each marker in the instanced car build — head white / tail red — and drive them from car state (headlights on at dusk, tail-lights brighten on braking) once the citysim day/night + brake signals are wired |
 | Wide vehicle bodies may cross the lane centreline | `apps/citysim/city_sim.cpp` (`laneCenter`/`laneSpacing`), `apps/citysim/city_render.cpp` | Following is length-aware, but lane placement still centres a car at a width-relative lane offset regardless of the body's WIDTH. A wide van/box-truck (2.0–2.4 m) on a narrow lane could visually overhang the centreline / clip an oncoming wide body. Unverified (no viewer here). | Lateral lane-fit (inset wide bodies, or widen the effective lane) + an oncoming-width check; verify on device |
 | Crosswalk road-texture paint is UNVERIFIED on device | `engine/procgen/city/road_mesh.cpp` (`weldSolid`), `shaders/metal/common.metal`, `shaders/vulkan/mesh.frag`, `shaders/webgpu/mesh.wgsl`, `src/scene.cpp` (`surfRoadMarkings`) (ADR-0062) | RESOLVED (design): crosswalks are painted into the ROAD TEXTURE, not overlaid geometry. The default weld mesher bakes the carriageway UV `mv` as metres past the junction MOUTH (`min(arc, len-arc) - halfWidth`), and the RoadMarkings shader stripes a set-back zebra band there — part of the road surface, on the approach, never a floating decal over the centreline. Gated on `mu > 1.05` so it never lands on the raised curb (which shares the surface with a 0..1 UV). The CityRenderSystem decal group is gone (kept only its centres). Mesher baking is headless-tested (`test_road_net.cpp`); the shader paint is UNVERIFIED (no Metal/Vulkan/WebGPU build here). The zebra band was mirrored into the WebGPU backend's WGSL when main's web renderer merged in (parity discipline), equally unverified. Owed elsewhere: the SDF (`unionRoadbed`) + analytic meshers don't bake the crosswalk `mv` (opt-in paths). | Viewer check on each backend; bake the crosswalk `mv` in the SDF/analytic meshers too if either becomes default |
 | AI city cars use kinematic collider proxies (UNVERIFIED) | `apps/citysim/city_physics.cpp`, `engine/physics/physics_world.cpp` (`moveKinematic`) (ADR-0060) | `CityPhysicsSystem` (viewer/editor only — needs Jolt) gives each AI car a KINEMATIC Jolt box that tracks the drawn car pose via `PhysicsWorld::moveKinematic` (Jolt `MoveKinematic`), so the player + physics gun collide with cars and a moving car pushes what it hits. The cars are NOT dynamically simulated (the sim owns their motion) — no suspension/wheel response, and a car can shove a body through a wall since its motion is scripted. The Jolt `moveKinematic` impl is written against the documented API but UNVERIFIED here (Jolt can't build in this env), like the vehicle code. | Full hybrid: near the camera promote AI cars to real Jolt wheeled vehicles fed by the agent brain; verify on a device build |
