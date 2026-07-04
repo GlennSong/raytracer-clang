@@ -160,6 +160,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_fleet.cpp \
 	$(TEST_DIR)/test_city_drive.cpp \
 	$(TEST_DIR)/test_city_render.cpp \
+	$(TEST_DIR)/test_car_lamps.cpp \
 	$(TEST_DIR)/test_city_flow.cpp \
 	$(TEST_DIR)/test_city_spectate.cpp
 TEST_ENGINE_SRCS = \
