@@ -46,6 +46,15 @@ struct CityRenderParams {
     std::string vehicleScript;
 };
 
+// The Dear ImGui window this system appends its "Living City" section into. It
+// MUST match engine DebugOverlaySystem's ImGui::Begin(...) title: ImGui merges
+// same-titled Begin() calls within a frame into ONE window, so the city section
+// stacks inside the existing Debug panel instead of floating separately. This
+// string is the ONLY coupling between the engine's debug panel and the city app
+// — deliberately a shared literal, not a code dependency (which would reinstate
+// the engine→app arrow the citysim library extraction removed).
+inline constexpr const char* kDebugWindowTitle = "Debug";
+
 class CityRenderSystem : public engine::System {
 public:
     explicit CityRenderSystem(const CityRenderParams& params = {})
@@ -54,6 +63,11 @@ public:
     void onStart(engine::FrameContext& ctx) override;
     void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
+    // The "Living City" debug section (ADR-0066). Appends into the shared Debug
+    // ImGui window (see kDebugWindowTitle) — per-layer widget toggles + a
+    // selected-agent inspector. Guarded by RT_ENABLE_IMGUI + a null-context
+    // check + "a city is loaded", so it draws only when a living city is present.
+    void render(engine::FrameContext& ctx) override;
 
     // Debug widgets (rings / vision cones / navgraph) show/hide state. The `j`
     // action flips it in update(); this setter lets another system force it (the
@@ -227,7 +241,14 @@ private:
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     bool built_ = false;
-    bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
+    bool debugWidgets_ = false;   // master runtime toggle (init from params; J flips it)
+    // Per-layer refinements of debugWidgets_ (ADR-0066 panel): when the master is
+    // on, each of these gates one widget layer independently from the Living City
+    // ImGui section. Default on, so the J key alone behaves exactly as before.
+    bool showAgentWidgets_ = true;   // per-agent state rings + intent arrows
+    bool showVisionCones_ = true;    // per-agent sensing wedges
+    bool showNavGraph_ = true;       // lane strips + junction-node rings
+    int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

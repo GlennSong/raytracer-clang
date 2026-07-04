@@ -7,6 +7,9 @@
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>                                   // Living City debug section
+#endif
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
@@ -661,10 +664,9 @@ void CityRenderSystem::syncGroups(World& world) {
         // leave the groups empty when it's off (mirrors the vanishing rings).
         InstanceGroup* navL = world.get<InstanceGroup>(navLinkGroup_);
         InstanceGroup* navN = world.get<InstanceGroup>(navNodeGroup_);
-        if (navL) navL->transforms = debugWidgets_ ? navLinkBake_
-                                                   : std::vector<Mat4>{};
-        if (navN) navN->transforms = debugWidgets_ ? navNodeBake_
-                                                   : std::vector<Mat4>{};
+        const bool showNav = debugWidgets_ && showNavGraph_;
+        if (navL) navL->transforms = showNav ? navLinkBake_ : std::vector<Mat4>{};
+        if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
@@ -717,9 +719,9 @@ void CityRenderSystem::syncGroups(World& world) {
             }
             radius *= 1.2;   // proud of the body so the painted rim always shows
             InstanceGroup* fg = foot[static_cast<int>(ringState)];
-            if (fg) fg->transforms.push_back(
+            if (showAgentWidgets_ && fg) fg->transforms.push_back(
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
-            if (fwd && a.moving) {
+            if (showAgentWidgets_ && fwd && a.moving) {
                 // The INTENT arrow: from the agent to where it's trying to go —
                 // the pursuit target for external bodies, the ghost's short-
                 // horizon aim otherwise. Reads as "this is my plan".
@@ -737,7 +739,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // the mesh). Moving agents only — a parked car senses nothing worth
             // drawing — and just below the ring so the two never z-fight.
             InstanceGroup* cg = cone[static_cast<int>(a.mode)];
-            if (cg && a.moving) {
+            if (showVisionCones_ && cg && a.moving) {
                 Real range = car ? kCarConeRange : kPedConeRange;
                 Real coneYaw = std::atan2(heading.x, heading.y);
                 cg->transforms.push_back(Mat4::trs(
@@ -771,6 +773,76 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
+}
+
+#ifdef RT_ENABLE_IMGUI
+namespace {
+// Short label for an Agent::State (the reactive FSM value the ring colours use).
+const char* agentStateName(Agent::State s) {
+    switch (s) {
+        case Agent::State::Resting:   return "Resting";
+        case Agent::State::Walking:   return "Walking";
+        case Agent::State::Avoiding:  return "Avoiding";
+        case Agent::State::Waiting:   return "Waiting";
+        case Agent::State::Cruising:  return "Cruising";
+        case Agent::State::Following: return "Following";
+        case Agent::State::Yielding:  return "Yielding";
+        case Agent::State::Turning:   return "Turning";
+        default:                      return "?";
+    }
+}
+}  // namespace
+#endif
+
+void CityRenderSystem::render(engine::FrameContext&) {
+#ifdef RT_ENABLE_IMGUI
+    // No ImGui context (a backend without the debug UI): stay inert — same guard
+    // the engine's DebugOverlaySystem uses.
+    if (ImGui::GetCurrentContext() == nullptr) return;
+    // Only when a living city is actually loaded: an engine app that happens to
+    // register this system (or a level with no roads) shows no city section.
+    if (!built_ || sim_.agents().empty()) return;
+
+    // Append into the SHARED Debug window by matching its title (ImGui merges
+    // same-titled Begin() calls in a frame). We do not create a second panel.
+    ImGui::Begin(kDebugWindowTitle);
+    if (ImGui::CollapsingHeader("Living City")) {
+        const auto& agents = sim_.agents();
+        int drivers = 0, peds = 0;
+        for (const Agent& a : agents)
+            (a.mode == Agent::Mode::Driver ? drivers : peds)++;
+        ImGui::Text("Time %05.2f h   Agents %d  (%d cars, %d peds)",
+                    sim_.timeOfDay(), static_cast<int>(agents.size()), drivers, peds);
+        ImGui::Text("Perception faults: %ld", sim_.faults());
+
+        // Master toggle (mirrors the J key) + per-layer refinements.
+        ImGui::Checkbox("Debug widgets (J)", &debugWidgets_);
+        ImGui::BeginDisabled(!debugWidgets_);
+        ImGui::Indent();
+        ImGui::Checkbox("Agent rings + intent", &showAgentWidgets_);
+        ImGui::Checkbox("Vision cones", &showVisionCones_);
+        ImGui::Checkbox("Nav graph", &showNavGraph_);
+        ImGui::Unindent();
+        ImGui::EndDisabled();
+
+        // Selected-agent inspector: identity (UID) + schedule + live state.
+        ImGui::Separator();
+        const int count = static_cast<int>(agents.size());
+        if (inspectAgent_ >= count) inspectAgent_ = count - 1;
+        ImGui::SliderInt("Inspect agent", &inspectAgent_, -1, count - 1);
+        if (inspectAgent_ >= 0) {
+            const Agent& a = agents[inspectAgent_];
+            ImGui::Text("UID %u   %s", a.uid,
+                        a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian");
+            ImGui::Text("State: %s%s", agentStateName(a.state),
+                        a.playerControlled ? "  (player)" : "");
+            ImGui::Text("Home node %d   Work node %d", a.home, a.work);
+            ImGui::Text("Depart work %.1f h   home %.1f h", a.departWork, a.departHome);
+            ImGui::Text("Pos (%.1f, %.1f)   Speed %.1f m/s", a.pos.x, a.pos.y, a.speed);
+        }
+    }
+    ImGui::End();
+#endif
 }
 
 void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
