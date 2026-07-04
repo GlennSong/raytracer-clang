@@ -1,7 +1,7 @@
-#ifndef RAYTRACER_ENGINE_SCRIPTING_VEHICLE_BODY_H
-#define RAYTRACER_ENGINE_SCRIPTING_VEHICLE_BODY_H
+#ifndef RAYTRACER_APPS_CITYSIM_SCRIPTING_VEHICLE_BODY_H
+#define RAYTRACER_APPS_CITYSIM_SCRIPTING_VEHICLE_BODY_H
 
-#include "../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
+#include "../../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
 
 #include <string>
 #include <vector>

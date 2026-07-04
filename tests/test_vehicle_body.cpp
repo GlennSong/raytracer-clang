@@ -2,7 +2,7 @@
 
 #include "../src/apps/citysim/city_meshes.h"        // carVariantCount
 #include "../src/engine/scripting/script_vm.h"
-#include "../src/engine/scripting/vehicle_body.h"
+#include "../src/apps/citysim/scripting/vehicle_body.h"
 
 #include <cstdio>
 #include <fstream>

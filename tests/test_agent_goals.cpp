@@ -1,7 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_goals.h"
-#include "../src/engine/scripting/agent_goals.h"
+#include "../src/apps/citysim/scripting/agent_goals.h"
 #include "../src/engine/scripting/script_vm.h"
 
 #include <cstdio>

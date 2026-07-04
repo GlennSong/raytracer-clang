@@ -1,6 +1,6 @@
 #include "agent_goals.h"
 
-#include "lua_state.h"   // luaState() + the Lua C API (scripting-internal)
+#include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
 
 namespace engine {
 

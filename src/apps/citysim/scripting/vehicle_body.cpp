@@ -1,7 +1,7 @@
 #include "vehicle_body.h"
 
-#include "lua_state.h"            // luaState() + the Lua C API (scripting-internal)
-#include "../mesh_builder.h"      // MeshBuilder::box (same primitive as addBox)
+#include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
+#include "../../../engine/mesh_builder.h"          // MeshBuilder::box (same primitive as addBox)
 
 namespace engine {
 

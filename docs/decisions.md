@@ -4749,11 +4749,40 @@ unique UID and the same seed reproduces the same UID sequence. The added field
 is purely additive (default `kNoAgent`) and default-empty structures mean the
 Lua-free build and every prior test are unaffected.
 
+**Organization — the city becomes its own library.** Before building further we
+made the app/core boundary structural, not just cosmetic. Previously
+`apps/citysim/*` compiled *into* `engine_core` (the comment admitted it: "lives
+under src/apps/citysim but compiles into the shared lib"), and two engine-core
+scripting files (`agent_goals`, `vehicle_body`) `#include`d citysim headers — a
+dependency INVERSION (core reaching up into an app). Now:
+
+- `apps/citysim/*` builds as its own **`citysim` static library** that links
+  `engine_core`. That is the only arrow — `citysim → engine_core`, never the
+  reverse. A host that wants the living world links `citysim`; a plain engine app
+  links only `engine_core` and carries none of the city's code. `engine_core` is
+  verifiably city-free (no `apps/citysim` include remains under `src/engine` or
+  `src/renderer`).
+- the citysim-specific Lua readers moved from `engine/scripting/` into
+  `apps/citysim/scripting/` (they read `citysim::` types, so they belong to the
+  app). The generic `ScriptVM` / bindings stay in core.
+- the Jolt-coupled bridges (`city_physics`/`vehicles`/`walkers`/`player_body`)
+  stay in `RT_PHYSICS_HOST_SOURCES`, compiled per host alongside Jolt — exactly
+  as `engine_core` keeps Jolt systems out. Hosts (viewer, editor, web, tests)
+  link `citysim`.
+
+This is what lets the forthcoming "Living City" ImGui debug panel live on
+`CityRenderSystem` and appear ONLY when a city is present — an engine-only app
+never links the code that would draw it. The Makefile Lua-free suite (706/706)
+and the CMake scripting-on suite (771/771, incl. the relocated reader tests)
+both stay green across the move; it is a pure relocation, no behaviour change.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship
-table). 4: role goal-tables + the vertical-slice level (device). 5: capabilities
-/ tools. 6: the generator emits the PlaceMap + ped graph for a whole city.
+table). 4: role goal-tables + the vertical-slice level (device) — plus the
+Living City ImGui debug panel (per-layer toggles + selected-agent inspector) and
+projected place labels. 5: capabilities / tools. 6: the generator emits the
+PlaceMap + ped graph for a whole city.
 
 ---
 

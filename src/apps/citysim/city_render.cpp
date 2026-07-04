@@ -8,8 +8,8 @@
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
 #ifdef RT_ENABLE_SCRIPTING
-#include "../../engine/scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
-#include "../../engine/scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
+#include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../log.h"
 #endif
