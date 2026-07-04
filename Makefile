@@ -165,7 +165,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_spectate.cpp \
 	$(TEST_DIR)/test_places.cpp \
 	$(TEST_DIR)/test_screen_project.cpp \
-	$(TEST_DIR)/test_relationships.cpp
+	$(TEST_DIR)/test_relationships.cpp \
+	$(TEST_DIR)/test_ped_graph.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -228,6 +229,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_goals.cpp \
 	$(SRC_DIR)/apps/citysim/places.cpp \
+	$(SRC_DIR)/apps/citysim/ped_graph.cpp \
 	$(SRC_DIR)/apps/citysim/relationships.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \

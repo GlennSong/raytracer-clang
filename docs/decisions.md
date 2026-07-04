@@ -4871,8 +4871,24 @@ stays kNoPlace so it seeds no coworker bonds). All deterministic (brain bits, no
 the rng), so seeded scenarios are unchanged (ADR-0002). The panel inspector shows
 the role. Headless-tested (`test_relationships` — shopkeepers work at shops kept
 open through hours, strollers hold no job, same seed → same roles). Suites:
-Makefile 717/717, CMake 782/782. Phase 2 (a true door-to-door pedestrian
-nav-graph) and Phase 5 (tools/capabilities) remain as enrichment.
+Makefile 717/717, CMake 782/782.
+
+**Pedestrian nav-graph (Phase 2 — the walkable layer).** Cars and pedestrians
+share the road NavGraph, which has two consequences: a walker can only route to
+the nearest road NODE (never AT a door), and any door connector added to that
+graph would let a CAR "drive" to a front door. So the walkable layer is a
+SEPARATE structure — `ped_graph.{h,cpp}`: a corner node per road node, an
+undirected sidewalk edge per road link (deduped from the directed pairs), and one
+ENTRANCE node + connector per place (snapped to its nearest corner). `pedRoute`
+is A* with a Euclidean heuristic over it, so a walk begins and ends at real doors
+— house → corner → … → shop-door. Pure data + queries, deterministic, headless;
+crosswalks are implicit at shared corner nodes (explicit mid-block crossings are
+a refinement). This lands the TESTED foundation (`test_ped_graph` — a door per
+place, door-to-door routes that never leave the walkable net, degenerate cases,
+determinism); routing live walkers on it instead of the car graph is a separate,
+careful integration step (deferred so the deployed traffic isn't destabilised).
+Suites: Makefile 721/721, CMake 786/786. Phase 5 (tools/capabilities) and the
+ped-graph live integration remain as enrichment.
 
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware

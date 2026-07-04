@@ -219,6 +219,7 @@ add_library(citysim STATIC
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
+    src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
@@ -346,6 +347,7 @@ add_executable(run_tests
     tests/test_places.cpp
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
+    tests/test_ped_graph.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
