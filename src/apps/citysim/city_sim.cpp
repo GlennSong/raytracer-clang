@@ -216,6 +216,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     simSeconds_ = 0;
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
+    ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
     signals_.build(graph);
     // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
     // (persistent) wander flag; a host with custom tables re-installs after.
@@ -243,6 +244,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     vehicles_.reserve(driverCount);
     for (int i = 0; i < total; ++i) {
         Agent a;
+        a.uid = ids_.next();   // stable identity for relationships / memory / jobs
         a.mode = (i < driverCount) ? Agent::Mode::Driver : Agent::Mode::Pedestrian;
         a.home = static_cast<int>(rnd() % n);
         a.work = static_cast<int>(rnd() % n);

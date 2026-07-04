@@ -112,6 +112,7 @@ add_library(engine_core STATIC
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
+    src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
@@ -315,6 +316,7 @@ add_executable(run_tests
     tests/test_car_lamps.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
+    tests/test_places.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

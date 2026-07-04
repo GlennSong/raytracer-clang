@@ -4,6 +4,7 @@
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
+#include "agent_id.h"
 #include "city_goals.h"
 #include "traffic_signal.h"
 #include <cstdint>
@@ -39,6 +40,12 @@ struct Agent {
         Cruising, Following, Yielding, Turning, // driver FSM
         Count
     };
+
+    // Stable identity (Living City, ADR-0066 Phase 1). Assigned once at build in
+    // agent order and never reused for a different agent this run, so relationship
+    // tables / per-agent memory / job assignment key on THIS, not the array slot.
+    // Distinct from the array index by design (indices churn on rebuild/recycle).
+    AgentId uid = kNoAgent;
 
     Mode mode = Mode::Driver;
     State state = State::Resting;
@@ -341,6 +348,10 @@ private:
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     uint32_t rng_ = 1;
+    // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
+    // order. Separate from rng_ so identity allocation never perturbs the sim's
+    // deterministic draw stream.
+    AgentIdAllocator ids_;
 };
 
 }  // namespace citysim

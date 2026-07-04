@@ -4688,6 +4688,75 @@ is viewer-gated and UNVERIFIED on device (register row updated). Suite 698/698.
 
 ---
 
+## ADR-0066 — The Living City: places, pedestrian routing, and agent identity
+
+**Context.** ADR-0060…0065 built agents that perceive, decide, and drive/walk a
+road network deterministically, with goals and bodies authored as Lua data. But
+the world they move through is *featureless*: a car laps a graph, a walker
+strolls a sidewalk, and neither has anywhere to *go*. Buildings are inert mass
+boxes (ADR-0038 `CityBuilding`) with no meaning — no home, no shop, no office —
+and there is no walkable graph off the carriageway, so an agent cannot route
+"house → corner → crosswalk → shop door." Nor does any agent have a durable
+identity: it is its array slot, which churns on rebuild, so nothing can remember
+"A knows B" or "A works at the diner." The full plan (six phases, headless
+through phase 3) lives in `docs/living-city-plan.md`; this ADR records the
+decisions and lands **Phase 1**.
+
+**Decision — three new pieces, everything else reuse.** A **places layer**
+(buildings become typed, routable destinations), a **pedestrian navigation
+graph** (a walkable graph the existing A* traverses), and a thin **identity
+layer** (a stable UID per agent + surface-level relationships/memory + jobs).
+Roles are goal-table variants (ADR-0064), tools reuse the capability/`gun.lua`
+seam, and the player joins as a *participant* — an agent with a UID, a home, and
+a job — with observer free-roam retained as a camera mode. Deliberately shallow
+where it could go deep (⟨A6⟩): relationships are pair *tags*, not an affinity
+sim; memory is a bounded set of familiar places/faces, not an episodic store.
+
+**Phase 1 (this change) — places model + agent identity, headless.**
+
+- `apps/citysim/places.{h,cpp}` — a `Place` (type ∈ {Home, Shop, Office, Park,
+  Civic}, footprint `site`, an `entrance` snapped onto the walkable network, and
+  light metadata: `openHour`/`closeHour` with a midnight-wrapping `openAt`, and
+  `capacity`) plus a `PlaceMap` that indexes places by type and answers
+  `nearest(type, from)` — "a shop near me" returns a concrete, routable target.
+  Entrance snapping (`snapToSidewalk`) scans every NavLink, projects the site
+  onto each centreline, and keeps the closest *sidewalk* point — so a two-way
+  road's two opposite-kerb links resolve the door to the FRONTAGE side, off the
+  carriageway. Pure data + pure queries; deterministic; no ECS/render/Lua.
+
+- `apps/citysim/agent_id.h` — `AgentId` (a UID, NOT the array index) + an
+  `AgentIdAllocator` (a monotonic counter, `reset()` at build). `CitySim::build`
+  resets the allocator and hands each agent a UID in order, off a stream
+  SEPARATE from the sim rng_ so identity never perturbs the deterministic draw
+  sequence. UIDs are dense, unique, and reproducible from the seed; a live scene
+  that later spawns agents keeps counting up, never recycling an id a
+  still-remembered agent held. This is the key later phases hang relationships,
+  memory, and job assignment on.
+
+**Why the sim rng and the id stream are separate.** Determinism (ADR-0002) is
+per-call-order. Threading UID allocation through `rnd()` would have been simpler
+but would couple identity to the draw count — adding a UID would shift every
+subsequent random decision. A dedicated monotonic counter keeps `build`'s draw
+stream bit-identical to before, so every existing seeded test is unchanged.
+
+**Tests.** `test_places.cpp` (Makefile + ctest, headless): type-tag round-trip
+and rejection; entrance snapping lands every door on a walkable edge, off the
+carriageway (offset ≥ road half-width), with a graph-empty fallback to the site;
+type indexing + insertion order; `nearest`-of-type with a deterministic tie
+break; open-hours including the midnight wrap; the allocator's monotonic/reset
+contract; and — through a real `CitySim::build` — that every agent gets a dense,
+unique UID and the same seed reproduces the same UID sequence. The added field
+is purely additive (default `kNoAgent`) and default-empty structures mean the
+Lua-free build and every prior test are unaffected.
+
+**Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
+(sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
+`GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship
+table). 4: role goal-tables + the vertical-slice level (device). 5: capabilities
+/ tools. 6: the generator emits the PlaceMap + ped graph for a whole city.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
