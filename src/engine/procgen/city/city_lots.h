@@ -29,10 +29,6 @@ struct LotBuilding {
     Real yaw = 0;           // OBB rotation about +Y (rad) — collider orientation
     std::string type;       // "home" | "shop" | "office" | "civic" | "park"
     Vec3 color{0.72, 0.70, 0.64};
-    // The grown building geometry, already world-space and vertex-coloured (a real
-    // shape-grammar mass — floors, windows, roof — that FITS this lot), ready to
-    // upload. Empty only for a park (a low green pad the caller draws as a box).
-    RenderMesh mesh;
 };
 
 struct LotParams {
@@ -59,9 +55,17 @@ struct LotPlanDebug {
 
 // One building per viable lot across every block. Deterministic in seed.
 // `debug`, when non-null, receives the intermediate blocks + lots.
+//
+// `outParts`, when non-null, receives the buildings' GEOMETRY merged by material
+// class — one world-space RenderMesh per shape-grammar PartId (Wall / Glass /
+// Brick / Concrete / Stucco / …), exactly like CityModel::parts — so the caller
+// binds the SAME PBR recipes (materialFor + baked surface maps) the shape:"city"
+// pipeline uses, and the whole district draws as a handful of textured meshes.
+// Each entry's materialIndex is set to its PartId.
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& params,
-                                          LotPlanDebug* debug = nullptr);
+                                          LotPlanDebug* debug = nullptr,
+                                          std::vector<RenderMesh>* outParts = nullptr);
 
 // EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
 // blocks, which leaves the town rim bare. Synthesize rectangular blocks on the

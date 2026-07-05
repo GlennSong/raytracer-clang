@@ -2016,7 +2016,13 @@ bool LevelLoader::load(const std::string& path,
             lp.midRadius = cs.value("midtownRadius", 135.0);
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             engine::LotPlanDebug plan;   // blocks + lots, for the debug overlay
-            for (const engine::LotBuilding& lb : engine::growLotBuildings(blocks, lp, &plan)) {
+            // The buildings' geometry, merged by shape-grammar PartId across the
+            // whole district — the SAME structure as CityModel::parts, so the same
+            // PBR recipes bind below. (Buildings stay visual-only: an oriented-box
+            // collider spilled onto the streets — see the invisible-walls fix.)
+            std::vector<RenderMesh> lotParts;
+            for (const engine::LotBuilding& lb :
+                 engine::growLotBuildings(blocks, lp, &plan, &lotParts)) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Tag it as a place the agents can route to.
                 engine::AuthoredPlace p;
@@ -2025,8 +2031,8 @@ bool LevelLoader::load(const std::string& path,
                 p.z = static_cast<float>(lb.site.y);
                 cfg.places.push_back(std::move(p));
 
-                if (lb.mesh.vertices.empty()) {
-                    // A park (or a building that failed to grow): a low coloured pad.
+                if (lb.type == "park") {
+                    // A park: a low green pad, not a grown building.
                     Entity e = world.create();
                     Transform t;
                     t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
@@ -2038,28 +2044,35 @@ bool LevelLoader::load(const std::string& path,
                     r.mesh = pad;
                     r.material.albedo = lb.color;
                     world.add<Renderable>(e, r);
-                    continue;
                 }
-                // A real building. The grown mesh is WORLD-SPACE, so it renders at
-                // an identity transform; vertex colours carry the facade, so the
-                // material is white (albedo × vertex colour).
-                //
-                // NO collider for now (visual only). A box collider sized to the
-                // lot's ORIENTED footprint became an axis-aligned "invisible wall"
-                // that spilled onto the street and jammed the physical cars/walkers
-                // at intersections (device feedback). Proper collision (an oriented
-                // box, or per-building convex from the mesh, set clear of the kerb)
-                // is a follow-up; the streets staying clear matters more here.
-                Entity e = world.create();
-                Transform t;   // identity — the mesh already sits at the lot
-                world.add<Transform>(e, t);
-                world.add<PrevTransform>(e, PrevTransform{t});
-                Renderable r;
-                r.mesh = assets.acquireMesh(lb.mesh, "");   // unkeyed: per-building
-                r.material.albedo = Vec3(1, 1, 1);
-                r.material.metallic = 0.0f;
-                r.material.roughness = 0.85f;
-                world.add<Renderable>(e, r);
+            }
+            // One entity per non-empty part class, with the shape-grammar's OWN
+            // material recipes: materialFor(PartId) names the procedural surface
+            // (brick/concrete/stucco/metal), which gets world-scaled UVs + the
+            // baked PBR texture set — identical to the shape:"city" pipeline
+            // (user: "we absolutely should be using the pre-existing recipes").
+            {
+                using Surface = RenderMaterial::Surface;
+                SurfaceTexCache lotTex;   // one bake+upload per surface class
+                for (std::size_t pi = 0; pi < lotParts.size(); ++pi) {
+                    RenderMesh& pm = lotParts[pi];
+                    if (pm.vertices.empty()) continue;
+                    Renderable r;
+                    r.material = materialFor(static_cast<PartId>(pi),
+                                             Vec3(0.80, 0.78, 0.75));
+                    const Surface surf = r.material.surface();
+                    if (surf != Surface::None) {
+                        applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
+                        bindSurfaceMaps(r.material,
+                                        bakeSurfaceTextures(renderer, surf, lotTex));
+                    }
+                    r.mesh = assets.acquireMesh(pm, "");   // world-space, unkeyed
+                    Entity e = world.create();
+                    Transform t;   // identity — the merged mesh sits in world space
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    world.add<Renderable>(e, r);
+                }
             }
             // Publish the plan (blocks + lots) for the citysim debug overlay.
             if (!plan.blocks.empty()) {

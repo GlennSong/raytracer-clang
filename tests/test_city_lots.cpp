@@ -31,7 +31,8 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
     LotParams p;
     p.center = {0, 0};
     p.seed = 3;
-    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p);
+    std::vector<RenderMesh> parts;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
     CHECK(!b.empty());   // real blocks yield buildings
     for (const LotBuilding& lb : b) {
         const Real shortSide = std::min(lb.width, lb.depth);
@@ -40,10 +41,17 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
         CHECK(longSide <= shortSide * p.maxAspect + 1e-6);
         CHECK(lb.height > 0.0);                         // has mass (park = low pad)
         CHECK(isKnownType(lb.type));                    // a valid schedule tag
-        // A real building carries grown geometry (floors/windows/roof); only a
-        // park is a bare pad with no mesh.
-        if (lb.type != "park") CHECK(!lb.mesh.vertices.empty());
     }
+    // The buildings' geometry lands in the per-PartId meshes with the part id set
+    // (the loader binds the shape-grammar PBR recipes onto exactly these).
+    CHECK(!parts.empty());
+    int filled = 0;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (parts[i].vertices.empty()) continue;
+        ++filled;
+        CHECK(parts[i].materialIndex == static_cast<int>(i));
+    }
+    CHECK(filled >= 2);   // at least walls + one more class (glass/roof/trim)
 }
 
 TEST_CASE(lot_buildings_are_deterministic) {

@@ -3,6 +3,7 @@
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
+#include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
 #include <cmath>
 
@@ -93,8 +94,14 @@ Vec3 colorFor(const std::string& t) {
 }  // namespace
 
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
-                                          const LotParams& p, LotPlanDebug* debug) {
+                                          const LotParams& p, LotPlanDebug* debug,
+                                          std::vector<RenderMesh>* outParts) {
     std::vector<LotBuilding> out;
+    if (outParts) {
+        outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
+        for (std::size_t i = 0; i < outParts->size(); ++i)
+            (*outParts)[i].materialIndex = static_cast<int>(i);
+    }
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
@@ -149,11 +156,19 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
             // Grow a REAL building that FITS the lot: its oriented footprint IS the
             // scope, so the mass is contained by the lot; height comes from floors.
+            // Parts keep their shape-grammar PartId (Wall/Glass/Brick/…), merged
+            // into outParts so the caller binds the SAME PBR material recipes the
+            // shape:"city" pipeline uses — not a flattened vertex-colour blob.
             BuildingParams bp = paramsFor(b.type, shortSide, b.color, rng);
             Scope scope = scopeFromFootprint(site, 0.0, 10.0 /* height set by floors */);
             BuildingMesh bm = growBuilding(scope, bp);
             if (bm.parts.empty()) continue;
-            b.mesh = bm.merged();
+            if (outParts)
+                for (const RenderMesh& part : bm.parts) {
+                    const int mi = part.materialIndex;
+                    if (mi >= 0 && mi < static_cast<int>(outParts->size()))
+                        MeshBuilder::append((*outParts)[mi], part);
+                }
             b.height = bm.height > 0 ? bm.height : 8.0;
             out.push_back(std::move(b));
         }
