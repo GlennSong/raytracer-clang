@@ -365,8 +365,13 @@ CityModel generateCity(const CityParams& cp) {
     Vec3 sidewalkCol(0.52, 0.52, 0.50), asphaltCol(0.12, 0.12, 0.13),
          retainCol(0.42, 0.42, 0.42), yellow(0.72, 0.62, 0.12), white(0.78, 0.78, 0.76);
     const Real roadThickness = 0.12;   // carriageway slab depth over the cut ground
-    const Real roadW = 12.0;           // fill the corridor (= 2 x apron setback)
-    for (RoadEdge& e : graph.edges) e.width = roadW;   // ribbon width
+    // Corridor / apron setback basis. GRID roads fill a uniform 12 m ribbon.
+    // DISTRICT roads keep buildDistrict's real per-edge widths (arterials ~13 m,
+    // streets ~7 m), so a narrow street draws narrow instead of a fat 12 m ribbon
+    // overrunning its sidewalk (user feedback); the apron sizes to the widest road.
+    const Real roadW = cp.districtRoads ? 13.0 : 12.0;
+    if (!cp.districtRoads)
+        for (RoadEdge& e : graph.edges) e.width = roadW;   // grid: one ribbon width
 
     auto appendMesh = [](RenderMesh& dst, const RenderMesh& src) {
         uint32_t base = static_cast<uint32_t>(dst.vertices.size());
@@ -612,10 +617,15 @@ CityModel generateCity(const CityParams& cp) {
             if (rng.unit() > cp.buildChance) continue;        // plaza / empty
             if (lot.area < 50) continue;
             // Reject sliver lots — a long, thin footprint extrudes into an
-            // impossibly narrow blade. Need a real minimum short side.
+            // impossibly narrow blade. Need a real minimum short side AND a
+            // bounded aspect ratio, or an irregular block's off-cuts become
+            // knife-edge buildings (user feedback).
             {
                 Vec2 llo, lhi; bounds(lot.footprint, llo, lhi);
-                if (std::min(lhi.x - llo.x, lhi.y - llo.y) < 6.0) continue;
+                Real w = lhi.x - llo.x, dpt = lhi.y - llo.y;
+                Real shortSide = std::min(w, dpt), longSide = std::max(w, dpt);
+                if (shortSide < 9.0) continue;                  // too skinny to be a building
+                if (longSide > shortSide * 3.5) continue;       // long thin blade
             }
             // Pull the building in from the lot lines a little (setback to the lot).
             Poly2 site = inset(lot.footprint, 1.2);

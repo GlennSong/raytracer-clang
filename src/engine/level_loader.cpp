@@ -1989,9 +1989,12 @@ bool LevelLoader::load(const std::string& path,
             net.nodes.reserve(cityModel.roadGraph.nodes.size());
             for (const auto& n : cityModel.roadGraph.nodes) net.nodes.push_back(n.pos);
             net.edges.reserve(cityModel.roadGraph.edges.size());
-            for (const auto& e : cityModel.roadGraph.edges)
+            net.edgeWidths.reserve(cityModel.roadGraph.edges.size());
+            for (const auto& e : cityModel.roadGraph.edges) {
                 net.edges.push_back({e.a, e.b});
-            net.width = 12.0;      // = the generator's carriageway ribbon (roadW)
+                net.edgeWidths.push_back(e.width);   // real per-road width (arterial vs street)
+            }
+            net.width = 12.0;      // fallback ribbon (grid city; district uses edgeWidths)
             net.sidewalk = 2.5;
             net.markings = false;  // the city already drew its own road surface
             net.crosswalks = false;

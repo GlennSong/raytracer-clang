@@ -15,6 +15,10 @@ void SignalController::build(const engine::NavGraph& graph, double greenTime,
     for (int li = 0; li < graph.linkCount(); ++li) {
         int to = graph.links[li].to;
         if (!graph.isJunction(to)) continue;            // open road: no signal
+        // Only signalise real crossings — a node with 4+ approaches (a proper
+        // intersection). T-junctions and minor merges (degree 3) go uncontrolled,
+        // so a dense district network isn't a forest of stoplights (user feedback).
+        if (graph.outLinks[to].size() < 4) continue;
         // Bin the approach direction to one of two perpendicular axes: angles a
         // and a+PI land in the same bin (opposing arms share a phase), a+PI/2 in
         // the other. quantise atan2 to quarter-turns, then mod 2.
