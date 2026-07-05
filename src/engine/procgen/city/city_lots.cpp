@@ -1,7 +1,9 @@
 #include "city_lots.h"
 
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
+#include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
+#include <algorithm>
 #include <cmath>
 
 namespace engine {
@@ -154,6 +156,117 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.mesh = bm.merged();
             b.height = bm.height > 0 ? bm.height : 8.0;
             out.push_back(std::move(b));
+        }
+    }
+    return out;
+}
+
+
+namespace {
+// Distance from p to segment [a,b].
+Real segDist(const Vec2& p, const Vec2& a, const Vec2& b) {
+    Vec2 ab = b - a;
+    Real len2 = ab.lengthSquared();
+    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+    return (p - q).length();
+}
+}  // namespace
+
+std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
+                              const std::vector<Poly2>& closedBlocks,
+                              const EdgeBlockParams& p) {
+    std::vector<Poly2> out;
+    const int n = static_cast<int>(roads.nodes.size());
+    if (n == 0) return out;
+
+    // Adjacency + degree, then walk maximal CHAINS between non-degree-2 ends
+    // (each chain is one road run between junctions / dead ends).
+    std::vector<std::vector<std::pair<int, int>>> adj(n);   // node -> {edge, other}
+    for (std::size_t ei = 0; ei < roads.edges.size(); ++ei) {
+        const RoadEdge& e = roads.edges[ei];
+        if (e.a < 0 || e.b < 0 || e.a >= n || e.b >= n || e.a == e.b) continue;
+        adj[e.a].push_back({static_cast<int>(ei), e.b});
+        adj[e.b].push_back({static_cast<int>(ei), e.a});
+    }
+    std::vector<uint8_t> used(roads.edges.size(), 0);
+
+    // A candidate rectangle is kept only if its centre is truly OPEN ground:
+    // inside no closed block, and no OTHER road passes near it.
+    auto isOpen = [&](const Vec2& c) {
+        for (const Poly2& b : closedBlocks)
+            if (pointInPolygon(b, c)) return false;
+        for (const RoadEdge& e : roads.edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= n || e.b >= n) continue;
+            if (segDist(c, roads.nodes[e.a].pos, roads.nodes[e.b].pos) <
+                p.margin + p.depth * 0.35)
+                return false;   // some road runs through/near this ground
+        }
+        return true;
+    };
+
+    for (int start = 0; start < n; ++start) {
+        if (adj[start].size() == 2) continue;   // chain interior, not an end
+        for (const auto& [e0, n0] : adj[start]) {
+            if (used[e0]) continue;
+            // Walk the chain from `start` through degree-2 nodes.
+            std::vector<Vec2> line{roads.nodes[start].pos};
+            int prev = start, cur = n0, edge = e0;
+            used[edge] = 1;
+            line.push_back(roads.nodes[cur].pos);
+            while (adj[cur].size() == 2) {
+                const auto& [ea, na] = adj[cur][0];
+                const auto& [eb, nb] = adj[cur][1];
+                int nextEdge = (na == prev && !used[eb]) ? eb
+                             : (nb == prev && !used[ea]) ? ea
+                             : -1;
+                if (nextEdge < 0) break;
+                prev = cur;
+                cur = roads.edges[nextEdge].a == cur ? roads.edges[nextEdge].b
+                                                     : roads.edges[nextEdge].a;
+                used[nextEdge] = 1;
+                line.push_back(roads.nodes[cur].pos);
+            }
+            // Arc length; subdivide into pieces within [minLen, maxLen].
+            Real total = 0;
+            for (std::size_t i = 1; i < line.size(); ++i)
+                total += (line[i] - line[i - 1]).length();
+            if (total < p.minLen) continue;
+            const int pieces = std::max(1, static_cast<int>(total / p.maxLen) + 
+                                           (std::fmod(total, p.maxLen) > p.minLen ? 1 : 0));
+            const Real pieceLen = total / pieces;
+            // Point at arc-length s along the polyline.
+            auto at = [&](Real s) {
+                for (std::size_t i = 1; i < line.size(); ++i) {
+                    Real seg = (line[i] - line[i - 1]).length();
+                    if (s <= seg || i + 1 == line.size())
+                        return line[i - 1] + (line[i] - line[i - 1]) *
+                                                 (seg > 1e-9 ? s / seg : 0.0);
+                    s -= seg;
+                }
+                return line.back();
+            };
+            for (int k = 0; k < pieces; ++k) {
+                Vec2 a = at(k * pieceLen + 2.0);          // small end setbacks so
+                Vec2 b = at((k + 1) * pieceLen - 2.0);    // neighbours don't touch
+                Vec2 d = b - a;
+                Real len = d.length();
+                if (len < p.minLen * 0.6) continue;
+                d = d / len;
+                Vec2 nrm(-d.y, d.x);
+                for (Real side : {Real(1), Real(-1)}) {
+                    Vec2 c = (a + b) * 0.5 + nrm * side * (p.margin + p.depth * 0.5);
+                    if (!isOpen(c)) continue;
+                    Vec2 i0 = a + nrm * side * p.margin;
+                    Vec2 i1 = b + nrm * side * p.margin;
+                    Vec2 o1 = b + nrm * side * (p.margin + p.depth);
+                    Vec2 o0 = a + nrm * side * (p.margin + p.depth);
+                    Poly2 rect{i0, i1, o1, o0};
+                    ensureCCW(rect);
+                    out.push_back(std::move(rect));
+                }
+            }
         }
     }
     return out;

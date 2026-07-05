@@ -562,11 +562,17 @@ CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
     // off along the approach by the widest crossing road's half-width (so it sits
     // beyond the perpendicular carriageway) and out to the side by this road's own
     // half-width. A fixed setback left poles in the middle of wider cross streets.
+    // A KNOT-MERGED junction's drawn crossing extends nodeSpread beyond the node
+    // (the node is the knot centroid) — back off by that too, or the pole stands
+    // mid-carriageway on generated crossings (device feedback).
     Real thisHalf = nav_.links[link].width * 0.5;
     Real crossHalf = thisHalf;
     for (int ol : nav_.outLinks[toNode])
         crossHalf = std::max(crossHalf, nav_.links[ol].width * 0.5);
-    Vec2 corner = node - d * (crossHalf + kCurbGap) + right * (thisHalf + kCurbGap);
+    Real spread = toNode < static_cast<int>(nav_.nodeSpread.size())
+                      ? nav_.nodeSpread[toNode] : 0.0;
+    Vec2 corner = node - d * (crossHalf + spread + kCurbGap) +
+                  right * (thisHalf + kCurbGap);
     Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
     SignalSite s;
     s.base = Vec3(corner.x, baseY, corner.y);
@@ -857,6 +863,21 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         showPlan_ = !showPlan_;
         if (showPlan_) debugWidgets_ = true;
     }
+    // Web debug panel (rt_web_city): ONE-SHOT settings writes — apply and clear,
+    // so the page's checkboxes and the J/L keys can share the same flags without
+    // a persistent setting overriding the keys every frame.
+    auto pull = [&](const char* key, bool& flag) {
+        const double v = ctx.settings.getDouble(key, -1.0);
+        if (v >= 0.0) {
+            flag = v > 0.5;
+            ctx.settings.setDouble(key, -1.0);
+        }
+    };
+    pull("citysim.master", debugWidgets_);
+    pull("citysim.agents", showAgentWidgets_);
+    pull("citysim.cones", showVisionCones_);
+    pull("citysim.nav", showNavGraph_);
+    pull("citysim.plan", showPlan_);
 }
 
 #ifdef RT_ENABLE_IMGUI

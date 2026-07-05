@@ -33,6 +33,10 @@ struct NavGraph {
     std::vector<NavLink> links;             // directed links
     std::vector<std::vector<int>> outLinks; // node -> indices of links departing it
     std::vector<uint8_t> junction;          // 1 if the node is an intersection (deg >= 3)
+    // How far a KNOT-MERGED junction's members sat from its centroid (m); 0 for
+    // ordinary nodes. The drawn crossing spans this far around the merged node,
+    // so anything PLACED relative to the node (signal poles) backs off by it.
+    std::vector<Real> nodeSpread;
 
     int nodeCount() const { return static_cast<int>(nodes.size()); }
     int linkCount() const { return static_cast<int>(links.size()); }

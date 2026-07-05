@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/city_lots.h"
+#include "../src/engine/procgen/city/road_network.h"
 
 using namespace engine;
 
@@ -73,4 +74,46 @@ TEST_CASE(lot_buildings_zone_radially) {
         if (lb.type != "home") nearNonHome++;
     }
     CHECK(nearNonHome > 0);
+}
+
+TEST_CASE(edge_blocks_build_the_town_rim) {
+    // A single long straight boundary road, no enclosed faces anywhere: edge
+    // blocks must appear on BOTH open sides, sized within [minLen, maxLen] and
+    // set back by the margin, and the usual lot pass grows buildings on them.
+    RoadGraph roads;
+    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
+    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
+    EdgeBlockParams ep;   // margin 9, depth 34, len 26..58
+    std::vector<Poly2> rim = edgeBlocks(roads, {}, ep);
+    CHECK(!rim.empty());
+    CHECK(rim.size() % 2 == 0u);   // both sides of a road with open ground
+    for (const Poly2& r : rim) {
+        CHECK(r.size() == 4u);
+        Vec2 lo, hi; bounds(r, lo, hi);
+        const Real len = hi.x - lo.x, depth = hi.y - lo.y;
+        CHECK(len >= ep.minLen * 0.6 - 1e-6);
+        CHECK(len <= ep.maxLen + 1e-6);
+        CHECK_APPROX(depth, ep.depth, 1e-6);
+        // Set back from the road (y=0) by the margin: no corner nearer than it.
+        CHECK(std::min(std::abs(lo.y), std::abs(hi.y)) >= ep.margin - 1e-6);
+    }
+    // The rim rectangles grow buildings through the ordinary lot pass.
+    LotParams lp; lp.seed = 9; lp.roadMargin = 2.0;   // rim blocks are pre-set-back
+    CHECK(!growLotBuildings(rim, lp).empty());
+}
+
+TEST_CASE(edge_blocks_skip_covered_ground) {
+    // The same road, but one side is an enclosed city block: only the open side
+    // gets rim rectangles.
+    RoadGraph roads;
+    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
+    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
+    Poly2 block{{-10, 5}, {160, 5}, {160, 80}, {-10, 80}};   // covers +y side
+    EdgeBlockParams ep;
+    std::vector<Poly2> rim = edgeBlocks(roads, {block}, ep);
+    CHECK(!rim.empty());
+    for (const Poly2& r : rim) {
+        Vec2 lo, hi; bounds(r, lo, hi);
+        CHECK(hi.y < 0);   // every rim block sits on the OPEN (-y) side
+    }
 }

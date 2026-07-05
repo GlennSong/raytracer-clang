@@ -82,6 +82,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
     std::vector<Edge> edges;
     edges.reserve(roads.edges.size());
     for (const RoadEdge& e : roads.edges) edges.push_back({e.a, e.b, e});
+    std::vector<Real> spread(pos.size(), 0.0);   // per-node knot spread (see header)
 
     if (params.junctionMergeRadius > 0 && !pos.empty()) {
         // Degree per node (distinct neighbours), on the raw graph.
@@ -128,17 +129,28 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
             if (cnt[remap[i]] > 1)
                 pos[remap[i]] = sum[remap[i]] / static_cast<Real>(cnt[remap[i]]);
         }
+        // The knot's SPREAD: how far members sat from their cluster centroid.
+        // Recorded per surviving node so placement (signal poles) can clear the
+        // whole drawn crossing, which spans the knot around the merged node.
+        std::vector<Real> spreadOf(pos.size(), 0.0);
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            const int r = find(static_cast<int>(i));
+            if (cnt[r] < 2) continue;
+            spreadOf[r] = std::max(spreadOf[r], (roads.nodes[i].pos - pos[r]).length());
+        }
         // Compact away the merged-off members (a stale orphan node would still be
         // returned by nearestNode and strand trips), then remap edges through the
         // compaction; drop intra-knot stubs and duplicate pairs (keep the first —
         // insertion order keeps this deterministic).
         std::vector<int> compact(pos.size(), -1);
         std::vector<Vec2> packed;
+        std::vector<Real> packedSpread;
         packed.reserve(pos.size());
         for (std::size_t i = 0; i < pos.size(); ++i) {
             if (remap[i] != static_cast<int>(i)) continue;   // merged away
             compact[i] = static_cast<int>(packed.size());
             packed.push_back(pos[i]);
+            packedSpread.push_back(spreadOf[i]);
         }
         std::vector<Edge> kept;
         kept.reserve(edges.size());
@@ -154,10 +166,12 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         }
         edges.swap(kept);
         pos.swap(packed);
+        spread.swap(packedSpread);
     }
 
     NavGraph g;
     g.nodes = pos;
+    g.nodeSpread = spread;
     g.outLinks.resize(g.nodes.size());
 
     const int n = static_cast<int>(g.nodes.size());

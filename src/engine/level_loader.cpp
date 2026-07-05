@@ -1985,17 +1985,29 @@ bool LevelLoader::load(const std::string& path,
         // (floors/windows/roof, fitting the lot), each tagged as a place agents
         // start/end their schedules at. Runs on the RoadNet(s) already in the world.
         if (cs.value("buildLots", false)) {
-            std::vector<Poly2> blocks;
+            // One combined raw planar graph across every RoadNet (the sampled
+            // navRoadGraph loses faces, so build from the nets' own nodes/edges).
+            engine::RoadGraph rg;
             world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
-                // Blocks from the raw planar road graph (net's own nodes/edges) —
-                // the sampled navRoadGraph loses faces, so build from the graph.
-                engine::RoadGraph rg;
+                const int base = static_cast<int>(rg.nodes.size());
                 for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
                 for (const auto& e : net.edges)
-                    rg.edges.push_back(engine::RoadEdge{e[0], e[1], 8, engine::RoadClass::Local, 0});
-                std::vector<Poly2> bs = engine::extractBlocks(rg);
-                blocks.insert(blocks.end(), bs.begin(), bs.end());
+                    rg.edges.push_back(engine::RoadEdge{base + e[0], base + e[1], 8,
+                                                        engine::RoadClass::Local, 0});
             });
+            std::vector<Poly2> blocks = engine::extractBlocks(rg);
+            // Edge blocks (device feedback): the town RIM has no enclosed faces —
+            // synthesize rectangular blocks on boundary roads' open sides so the
+            // outskirts build up too. Sized by min/max length + depth knobs.
+            {
+                engine::EdgeBlockParams ep;
+                ep.depth = cs.value("edgeBlockDepth", ep.depth);
+                ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
+                ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
+                ep.margin = 4.0 + cs.value("sidewalk", 4.0);
+                std::vector<Poly2> rim = engine::edgeBlocks(rg, blocks, ep);
+                blocks.insert(blocks.end(), rim.begin(), rim.end());
+            }
             engine::LotParams lp;
             lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
             lp.buildChance = cs.value("buildChance", 0.9);

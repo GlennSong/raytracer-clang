@@ -63,6 +63,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& params,
                                           LotPlanDebug* debug = nullptr);
 
+// EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
+// blocks, which leaves the town rim bare. Synthesize rectangular blocks on the
+// OPEN side of boundary roads: walk each road chain between junctions, subdivide
+// it into [minLen, maxLen] pieces, and where a side faces open ground (inside no
+// closed block, clear of other roads) emit a `depth`-wide rectangle set back by
+// `margin`. The rectangles feed growLotBuildings like any other block. Pure
+// geometry, deterministic.
+struct EdgeBlockParams {
+    Real margin = 9.0;     // setback from the road centreline to the block edge
+    Real depth = 34.0;     // block width, outward from the road (m)
+    Real minLen = 26.0;    // shortest block along the road (m)
+    Real maxLen = 58.0;    // longest block along the road (m)
+};
+struct RoadGraph;   // road_network.h (forward-declared to keep this header light)
+std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
+                              const std::vector<Poly2>& closedBlocks,
+                              const EdgeBlockParams& params);
+
 }  // namespace engine
 
 #endif

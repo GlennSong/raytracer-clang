@@ -148,6 +148,18 @@ EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
     }
 }
 
+// Living City debug layers from the page (the web build has no ImGui panel).
+// One-shot writes: each lands in a settings key the citysim render bridge polls
+// and CLEARS every frame, so the J/L keyboard toggles keep working between
+// panel writes. id: 0=master widgets 1=agent rings 2=vision cones 3=nav graph
+// 4=city plan (blocks + lots).
+EMSCRIPTEN_KEEPALIVE void rt_web_city(int id, int val) {
+    static const char* keys[] = {"citysim.master", "citysim.agents",
+                                 "citysim.cones", "citysim.nav", "citysim.plan"};
+    if (id >= 0 && id < 5)
+        g_app.settings().setDouble(keys[id], val != 0 ? 1.0 : 0.0);
+}
+
 // Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
 // 2=instances 3=triangles 4=entities.
 EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {
