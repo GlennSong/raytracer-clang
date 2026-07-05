@@ -61,14 +61,17 @@ TEST_CASE(district_city_composes_real_roads_lots_and_buildings) {
     // The Living City proper: streets from the district road tech (arterials +
     // irregular streets), lots subdivided from ITS blocks, buildings on the lots —
     // all one system, and the same graph the sim drives.
+    // Mirrors living_city.json: wide sidewalks (roadInset = 8 + sidewalk) need
+    // blocks big enough that lots still carry a building after the setback.
     CityParams cp;
     cp.districtRoads = true;
-    cp.extent = 130; cp.arterials = 3; cp.blockSizeMin = 24; cp.blockSizeMax = 42;
-    cp.buildChance = 0.9; cp.seed = 4;
+    cp.extent = 150; cp.arterials = 3;
+    cp.blockSizeMin = 38; cp.blockSizeMax = 64;
+    cp.sidewalk = 5.0; cp.buildChance = 0.9; cp.seed = 4;
     CityModel m = generateCity(cp);
     CHECK(!m.roadGraph.edges.empty());   // real roads, surfaced for the sim
     CHECK(m.blockCount > 0);             // blocks came from the district net
-    CHECK(!m.buildings.empty());         // lots grew buildings
+    CHECK(!m.buildings.empty());         // wide sidewalks still leave room for buildings
 
     NavGraph nav = navFromCity(m);
     CHECK(nav.linkCount() > 0);
