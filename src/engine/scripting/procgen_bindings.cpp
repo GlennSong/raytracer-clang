@@ -603,6 +603,53 @@ int l_building_grow_parts(lua_State* L) {
     return 1;
 }
 
+// building.grow_plan_parts{ plan = {{x,z}, ...}, setback = m, ... } -> parts
+// The FLOORPLAN grammar (building-grammar-plan.md P3): the massing is the given
+// closed polygon — the lot's own shape — optionally inset by `setback`, grown
+// with the same elements as grow_parts and returned as named parts. Tiers via
+// setback_floors/setback_every give the base/shaft/capital stack.
+int l_building_grow_plan_parts(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Poly2 plan;
+    lua_getfield(L, 1, "plan");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                plan.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)));
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    const Real setback = static_cast<Real>(optField(L, 1, "setback", 0.0));
+    if (setback > 0 && plan.size() >= 3) plan = inset(plan, setback);
+    BuildingMesh bm = growPlanBuilding(plan, p);
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood"};
+    lua_newtable(L);
+    int cnt = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
+                                                             sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++cnt);
+    }
+    return 1;
+}
+
 // building.height{...} -> number : the grown height in metres (no mesh). Cheap
 // query for layout code that places a building before committing geometry.
 int l_building_height(lua_State* L) {
@@ -2497,6 +2544,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     static const luaL_Reg kBuildingFns[] = {
         {"grow", l_building_grow},
         {"grow_parts", l_building_grow_parts},
+        {"grow_plan_parts", l_building_grow_plan_parts},
         {"height", l_building_height},
         {nullptr, nullptr},
     };

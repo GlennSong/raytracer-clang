@@ -65,21 +65,41 @@ local MATS = {
   roof     = material.new{ roughness = 0.85 },
 }
 
-local width = (hi[1] - lo[1]) - 2.4
-local depth = (hi[2] - lo[2]) - 2.4
-local grown = building.grow_parts{
-  floors = floors, width = width, depth = depth,
-  style = style, seed = seed,
-  ground_retail = true, walkable_ground = true,
-  window_head = opts.window_head, window_hood = opts.window_hood,
-  lights_x = opts.lights_x, lights_y = opts.lights_y,
-  arch_rise = opts.arch_rise, frame_width = opts.frame_width,
-  quoins = opts.quoins, sill = opts.sill,
-}
-local cxz = {(lo[1] + hi[1]) * 0.5, 0, (lo[2] + hi[2]) * 0.5}
-for _, entry in ipairs(grown) do
-  local placed = mesh.translate(entry.mesh, cxz)
-  m:add(placed, MATS[entry.part])   -- nil material = plain vertex colour
+-- Massing (P3): the LOT POLYGON is the floorplan — an L lot grows an
+-- L-shaped building, the flatiron lot a flatiron. opts.massing = "box"
+-- falls back to the rectangular grammar for comparison. Tiered towers:
+-- set opts.setback_floors / opts.setback_every for base/shaft/capital.
+local grown
+if (opts.massing or "plan") == "plan" then
+  grown = building.grow_plan_parts{
+    plan = lot, setback = 1.2,
+    floors = floors, style = style, seed = seed,
+    ground_retail = true, walkable_ground = true,
+    window_head = opts.window_head, window_hood = opts.window_hood,
+    lights_x = opts.lights_x, lights_y = opts.lights_y,
+    arch_rise = opts.arch_rise, frame_width = opts.frame_width,
+    quoins = opts.quoins, sill = opts.sill,
+    setback_floors = opts.setback_floors, setback_every = opts.setback_every,
+  }
+  for _, entry in ipairs(grown) do
+    m:add(entry.mesh, MATS[entry.part])   -- plan geometry is already in place
+  end
+else
+  local width = (hi[1] - lo[1]) - 2.4
+  local depth = (hi[2] - lo[2]) - 2.4
+  grown = building.grow_parts{
+    floors = floors, width = width, depth = depth,
+    style = style, seed = seed,
+    ground_retail = true, walkable_ground = true,
+    window_head = opts.window_head, window_hood = opts.window_hood,
+    lights_x = opts.lights_x, lights_y = opts.lights_y,
+    arch_rise = opts.arch_rise, frame_width = opts.frame_width,
+    quoins = opts.quoins, sill = opts.sill,
+  }
+  local cxz = {(lo[1] + hi[1]) * 0.5, 0, (lo[2] + hi[2]) * 0.5}
+  for _, entry in ipairs(grown) do
+    m:add(mesh.translate(entry.mesh, cxz), MATS[entry.part])
+  end
 end
 
 return m

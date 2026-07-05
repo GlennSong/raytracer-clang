@@ -1,5 +1,6 @@
 #include "shape_grammar.h"
 
+#include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -293,9 +294,8 @@ enum class FacadeMode { Residential, Retail, Entrance, Solid };
 // windows — an opaque spandrel band hiding the floor slab, vision glass above,
 // and a proud steel mullion/transom grid. This is what a glass tower actually
 // is (a skin hung off a frame), and it reads far better than flat panels.
-void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
-                     const Vec3& wallColor) {
-    FaceRect fr = faceOf(storey, side);
+void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
+                         const Vec3& wallColor) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
     RenderMesh glass, mull;
@@ -324,13 +324,18 @@ void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
 }
+void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
+                     const Vec3& wallColor) {
+    emitCurtainWallRect(out, faceOf(storey, side), wallColor);
+}
 
 // Subdivide one face into window bays. Wall margins around each window read as
 // mullions/piers; the window is recessed by `inset` (Glass). In Entrance mode the
 // centre bay is a real door-height opening (no fill) so the shell is enterable.
-void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mode,
-                const BuildingParams& p, const Vec3& wallColor) {
-    FaceRect fr = faceOf(storey, side);
+// Works on a bare FaceRect so BOTH massing paths share it: the box grammar
+// (faceOf a storey scope) and the floorplan grammar (one rect per plan edge).
+void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
+                    const BuildingParams& p, const Vec3& wallColor) {
     // Accumulate into locals, then append once each — never hold a part reference
     // across a partMesh() that could reallocate out.parts.
     // surround = sill/hood trim courses; frame = window frames + muntin lights.
@@ -642,7 +647,7 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     if (p.pilasters && mode != FacadeMode::Entrance) {
         RenderMesh trim;
         Real proud = 0.18, pw = 0.5;
-        Vec3 up = storey.axis[1];
+        Vec3 up = fr.v;
         for (int b = 0; b <= bays; ++b) {
             Real x = std::min(std::max(b * bw, pw * 0.5), fr.width - pw * 0.5);
             Vec3 c0 = fr.at(x, 0), c1 = fr.at(x, fr.height);
@@ -667,6 +672,13 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     appendToPart(out, PartId::Door, door);
     appendToPart(out, PartId::Trim, surround);
     appendToPart(out, PartId::Detail, frame);   // frames/muntins read as joinery
+}
+
+// The box-grammar wrapper: pick the storey scope's face, then share the
+// element machinery above with the floorplan path.
+void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mode,
+                const BuildingParams& p, const Vec3& wallColor) {
+    emitFacadeRect(out, faceOf(storey, side), mode, p, wallColor);
 }
 
 }  // namespace
@@ -1085,6 +1097,266 @@ RenderMesh BuildingMesh::merged() const {
     RenderMesh m;
     for (const RenderMesh& p : parts) MeshBuilder::append(m, p);
     return m;
+}
+
+
+// --- Floorplan buildings (building-grammar-plan.md P3) ----------------------
+
+namespace {
+
+// Offset a CCW plan polygon: d > 0 shrinks (inset), d < 0 grows (outset) — the
+// swept-cornice / setback-tier primitive. Same line-intersection construction
+// as polygon.h's inset, without its d > 0 guard (cornices need the outset).
+Poly2 offsetPlan(const Poly2& poly, Real d) {
+    const std::size_t n = poly.size();
+    if (n < 3 || d == 0) return poly;
+    Poly2 p = poly;
+    ensureCCW(p);
+    struct Line { Vec2 pt, dir; };
+    std::vector<Line> lines(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        Vec2 a = p[i], b = p[(i + 1) % n];
+        Vec2 dir = normalize(b - a);
+        Vec2 inward(-dir.y, dir.x);          // interior is LEFT of a CCW edge
+        lines[i] = {a + inward * d, dir};
+    }
+    Poly2 out(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const Line& l0 = lines[(i + n - 1) % n];
+        const Line& l1 = lines[i];
+        Real denom = cross(l0.dir, l1.dir);
+        if (std::abs(denom) < 1e-9) { out[i] = l1.pt; continue; }
+        Real t = cross(l1.pt - l0.pt, l1.dir) / denom;
+        out[i] = l0.pt + l0.dir * t;
+    }
+    return out;
+}
+
+// One plan edge as a facade rectangle: outward for CCW is the RIGHT of a->b.
+FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
+    Vec2 a = pl[i], b = pl[(i + 1) % pl.size()];
+    Vec2 d = normalize(b - a);
+    FaceRect fr;
+    fr.bl = Vec3(a.x, y, a.y);
+    fr.h = Vec3(d.x, 0, d.y);
+    fr.v = Vec3(0, 1, 0);
+    fr.n = Vec3(d.y, 0, -d.x);
+    fr.width = (b - a).length();
+    fr.height = h;
+    return fr;
+}
+
+// A horizontal SLAB filling the plan: triangulated top + underside, plus a
+// side band around the outline — roof decks, cornice tiers, ground pads.
+void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
+                  PartId part, const Vec3& col) {
+    if (pl.size() < 3) return;
+    RenderMesh m;
+    for (const auto& t : triangulatePolygon(pl)) {
+        Vec3 a(pl[t[0]].x, yTop, pl[t[0]].y);
+        Vec3 b(pl[t[1]].x, yTop, pl[t[1]].y);
+        Vec3 c(pl[t[2]].x, yTop, pl[t[2]].y);
+        MeshBuilder::emitTri(m, a, b, c, Vec3(0, 1, 0), col);
+        Vec3 a2 = a, b2 = b, c2 = c;
+        a2.y = b2.y = c2.y = yTop - thick;
+        MeshBuilder::emitTri(m, a2, b2, c2, Vec3(0, -1, 0), col);
+    }
+    for (std::size_t i = 0; i < pl.size(); ++i) {
+        FaceRect fr = planEdgeRect(pl, i, yTop - thick, thick);
+        emitQuad(m, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, thick),
+                 fr.at(0, thick), fr.n, col);
+    }
+    appendToPart(out, part, m);
+}
+
+// A parapet ring along the plan outline: a low wall standing on the roof.
+void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
+                     const Vec3& col) {
+    if (h <= 0) return;
+    Poly2 inner = offsetPlan(pl, 0.24);
+    emitPlanSlab(out, pl, roofY + h, h, PartId::Trim, col);
+    (void)inner;   // v1: a solid ring slab reads correctly from the street
+}
+
+}  // namespace
+
+BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
+                              Real baseY) {
+    BuildingMesh out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return out;
+    ensureCCW(plan);
+    Rng rng(params.seed);
+    const Vec3 wallColor = params.wallColor * (0.92 + 0.08 * rng.unit());
+
+    // Street-facing edge: the longest edge whose outward normal points most
+    // toward faceDir — the door (and its awning/architrave) lands there.
+    std::size_t entranceEdge = 0;
+    Real bestScore = -1e30;
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
+        Vec2 d = b - a;
+        Real len = d.length();
+        if (len < human::DOOR_WIDTH + 1.2) continue;
+        Vec2 nrm(d.y / len, -d.x / len);
+        Real score = nrm.x * params.faceDir.x + nrm.y * params.faceDir.z + len * 0.01;
+        if (score > bestScore) { bestScore = score; entranceEdge = i; }
+    }
+
+    // Swept cornice: three stepped courses following the CURRENT plan outline.
+    auto sweptCornice = [&](const Poly2& pl, Real yTop, Real scale) {
+        struct Tier { Real grow, h; };
+        const Tier tiers[3] = {{0.10, 0.16}, {0.24, 0.18}, {0.34, 0.08}};
+        Real yb = yTop;
+        for (const Tier& t : tiers) {
+            emitPlanSlab(out, offsetPlan(pl, -t.grow * scale), yb + t.h * scale,
+                         t.h * scale, PartId::Trim, params.trimColor);
+            yb += t.h * scale;
+        }
+    };
+    // Corner POSTS at every plan vertex: a square pier hiding the wall miter
+    // (the floorplan counterpart of the box path's quoined arris). With quoins
+    // on, the post alternates block heights like a quoin stack.
+    auto cornerPosts = [&](const Poly2& pl, Real y0, Real h) {
+        if (params.curtainWall || params.solidFacade) return;
+        for (std::size_t i = 0; i < pl.size(); ++i) {
+            Vec2 P = pl[i];
+            Vec2 pPrev = pl[(i + pl.size() - 1) % pl.size()];
+            Vec2 pNext = pl[(i + 1) % pl.size()];
+            Vec2 d0 = normalize(P - pPrev), d1 = normalize(pNext - P);
+            Vec2 n0(d0.y, -d0.x), n1(d1.y, -d1.x);
+            Vec2 bis = n0 + n1;
+            Real bl = bis.length();
+            if (bl < 1e-6) continue;                       // straight-through vertex
+            if (std::fabs(cross(d0, d1)) < 0.05) continue; // nearly collinear: no post
+            bis = bis * (1.0 / bl);
+            Vec2 side(-bis.y, bis.x);
+            const Real half = 0.20, proud = 0.05;
+            Vec3 r3(side.x, 0, side.y), f3(bis.x, 0, bis.y);
+            if (params.quoins) {
+                const Real qh = 0.42, gap = 0.03;
+                int k = 0;
+                for (Real qy = y0; qy + qh <= y0 + h; qy += qh, ++k) {
+                    Real w = (k & 1) ? half * 1.5 : half * 2.3;
+                    Scope s{Vec3(P.x, qy, P.y) - r3 * (w * 0.5) - f3 * (half - proud),
+                            {r3, Vec3(0, 1, 0), f3}, Vec3(w, qh - gap, half * 2)};
+                    emitBox(out, s, PartId::Trim, params.trimColor);
+                }
+            } else {
+                Scope s{Vec3(P.x, y0, P.y) - r3 * half - f3 * (half - proud),
+                        {r3, Vec3(0, 1, 0), f3}, Vec3(half * 2, h, half * 2)};
+                emitBox(out, s, PartId::Trim, params.trimColor * 0.92);
+            }
+        }
+    };
+
+    Real y = baseY;
+    const Real gh = params.groundHeight;
+    FacadeMode groundMode = params.solidFacade ? FacadeMode::Solid
+                          : params.groundRetail ? FacadeMode::Retail
+                                                : FacadeMode::Residential;
+    // Ground storey: one facade rect per plan edge; the door on the street edge.
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        FacadeMode mode = (i == entranceEdge && params.walkableGround)
+                              ? FacadeMode::Entrance : groundMode;
+        if (params.curtainWall && mode != FacadeMode::Entrance)
+            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor);
+        else
+            emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
+    }
+    emitPlanSlab(out, plan, y + 0.05, 0.1, PartId::Ground,
+                 materialFor(PartId::Ground, wallColor).albedo);
+    // Base course wraps the plan (skipping the door edge).
+    if (params.baseCourse) {
+        const Real bh = std::min(Real(0.45), gh * 0.12);
+        RenderMesh band;
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            if (i == entranceEdge && params.walkableGround) continue;
+            FaceRect fr = planEdgeRect(plan, i, y, bh);
+            Vec3 ov = fr.n * 0.1;
+            emitQuad(band, fr.at(0, 0) + ov, fr.at(fr.width, 0) + ov,
+                     fr.at(fr.width, bh) + ov, fr.at(0, bh) + ov, fr.n,
+                     params.trimColor * 0.8);
+            emitQuad(band, fr.at(0, bh) + ov, fr.at(fr.width, bh) + ov,
+                     fr.at(fr.width, bh), fr.at(0, bh), fr.v, params.trimColor * 0.8);
+        }
+        appendToPart(out, PartId::Trim, band);
+    }
+    if (params.stringCourse) sweptCornice(plan, y + gh - 0.32, 1.0);
+    cornerPosts(plan, y, gh);
+    y += gh;
+
+    // Upper floors; setbacks shrink the plan per tier (base/shaft/capital),
+    // each transition capped by a roof slab + a swept cornice.
+    BuildingParams upper = params;
+    upper.pilasters = false;
+    Poly2 cur = plan;
+    Real tierY0 = y;
+    for (int i = 0; i < params.floors; ++i) {
+        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
+            i % params.setbackFloors == 0) {
+            Poly2 next = offsetPlan(cur, params.setbackEvery);
+            if (area(next) > 60.0 && next.size() == cur.size()) {
+                emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
+                             materialFor(PartId::Roof, wallColor).albedo);
+                if (params.stringCourse && !params.curtainWall)
+                    sweptCornice(cur, y - 0.4, 1.0);
+                cornerPosts(cur, tierY0, y - tierY0);
+                emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
+                                materialFor(PartId::Trim, wallColor).albedo);
+                cur = next;
+                tierY0 = y;
+            }
+        }
+        const Real fh = params.floorHeight;
+        for (std::size_t e = 0; e < cur.size(); ++e) {
+            if (params.curtainWall)
+                emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor);
+            else
+                emitFacadeRect(out, planEdgeRect(cur, e, y, fh),
+                               params.solidFacade ? FacadeMode::Solid
+                                                  : FacadeMode::Residential,
+                               upper, wallColor);
+        }
+        if (i == params.floors / 2) {
+            FaceRect ff = planEdgeRect(cur, entranceEdge % cur.size(), y, fh);
+            out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
+        }
+        y += fh;
+    }
+    cornerPosts(cur, tierY0, y - tierY0);
+    if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
+    emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
+                 materialFor(PartId::Roof, wallColor).albedo);
+    if (params.parapet > 0)
+        emitPlanParapet(out, cur, y + 0.05, params.parapet,
+                        materialFor(PartId::Trim, wallColor).albedo);
+
+    // Crown (penthouse + tank) seated on the top tier's oriented frame.
+    {
+        OBB2 obb = orientedBoundingBox(cur);
+        Vec3 r3(obb.axis[0].x, 0, obb.axis[0].y), f3(obb.axis[1].x, 0, obb.axis[1].y);
+        Vec3 fo = Vec3(obb.center.x, 0, obb.center.y) - r3 * obb.half[0] - f3 * obb.half[1];
+        emitCrown(out, fo, obb.half[0] * 2, obb.half[1] * 2, r3, f3,
+                  y + 0.05, params, rng);
+    }
+    out.attaches.push_back({Vec3(centroid(cur).x, y, centroid(cur).y),
+                            Vec3(0, 1, 0), "roof"});
+    out.height = (y + params.parapet) - baseY;
+
+    // Coarse HLOD proxy: the plan's oriented box, ground to roof.
+    {
+        OBB2 obb = orientedBoundingBox(plan);
+        Vec3 r3(obb.axis[0].x, 0, obb.axis[0].y), f3(obb.axis[1].x, 0, obb.axis[1].y);
+        BuildingMesh scratch;
+        emitBox(scratch, Scope{Vec3(obb.center.x, baseY, obb.center.y) -
+                                   r3 * obb.half[0] - f3 * obb.half[1],
+                               {r3, Vec3(0, 1, 0), f3},
+                               Vec3(obb.half[0] * 2, out.height, obb.half[1] * 2)},
+                PartId::Wall, wallColor);
+        out.proxy = scratch.merged();
+    }
+    return out;
 }
 
 }  // namespace engine

@@ -896,3 +896,66 @@ TEST_CASE(city_parks_leave_blocks_empty) {
     CityModel m2 = generateCity(cp2);
     CHECK(m.buildings.size() < m2.buildings.size());
 }
+
+// --- Floorplan buildings (building-grammar-plan.md P3) ----------------------
+
+TEST_CASE(plan_building_extrudes_an_l_plan) {
+    // An L-shaped plan grows an L-shaped building: geometry reaches into BOTH
+    // wings, the winding convention holds (it culls correctly in the viewer),
+    // and the build is deterministic.
+    Poly2 L = {{-12, -10}, {12, -10}, {12, 2}, {2, 2}, {2, 10}, {-12, 10}};
+    BuildingParams p;
+    p.floors = 3;
+    p.seed = 4;
+    p.wallPart = PartId::Brick;
+    p.quoins = true;
+    BuildingMesh bm = growPlanBuilding(L, p);
+    CHECK(!bm.parts.empty());
+    CHECK(bm.height > 6.0);
+    RenderMesh m = bm.merged();
+    CHECK(!m.vertices.empty());
+    // Coverage of both wings: some wall vertex deep in the east wing (x > 8,
+    // z < 0) AND some in the south wing (z > 6, x < 0).
+    bool east = false, south = false;
+    for (const Vertex& v : m.vertices) {
+        if (v.position.x > 8 && v.position.z < 0) east = true;
+        if (v.position.z > 6 && v.position.x < 0) south = true;
+    }
+    CHECK(east);
+    CHECK(south);
+    int bad = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vertex& a = m.vertices[m.indices[i]];
+        const Vertex& b = m.vertices[m.indices[i + 1]];
+        const Vertex& c = m.vertices[m.indices[i + 2]];
+        if (dot(cross(b.position - a.position, c.position - a.position), a.normal) > 1e-6)
+            ++bad;
+    }
+    CHECK(bad == 0);
+    BuildingMesh bm2 = growPlanBuilding(L, p);
+    CHECK(bm2.merged().vertices.size() == m.vertices.size());
+}
+
+TEST_CASE(plan_building_setbacks_stack_tiers) {
+    // setbackFloors/setbackEvery shrink the plan per tier (base/shaft/capital):
+    // wall vertices in the TOP tier sit strictly inside the base footprint.
+    Poly2 sq = {{-10, -10}, {10, -10}, {10, 10}, {-10, 10}};
+    BuildingParams p;
+    p.floors = 9;
+    p.setbackFloors = 3;
+    p.setbackEvery = 1.5;
+    p.seed = 2;
+    p.groundHeight = 4.0;
+    p.floorHeight = 3.0;
+    BuildingMesh bm = growPlanBuilding(sq, p);
+    RenderMesh m = bm.merged();
+    // Top tier spans the last three floors: y in [4 + 6*3, 4 + 9*3].
+    Real topY0 = 4.0 + 6 * 3.0 + 0.5;
+    Real maxR = 0;
+    for (const Vertex& v : m.vertices) {
+        if (v.position.y < topY0 || v.position.y > 4.0 + 9 * 3.0) continue;
+        maxR = std::max(maxR, std::max(std::fabs(v.position.x), std::fabs(v.position.z)));
+    }
+    CHECK(maxR > 1.0);            // the top tier exists
+    CHECK(maxR < 10.0 - 1.0);     // and is set back inside the base (2 tiers in)
+}

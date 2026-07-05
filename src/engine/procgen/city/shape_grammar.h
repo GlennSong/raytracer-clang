@@ -183,6 +183,19 @@ struct BuildingParams {
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params);
 
+// Grow a FLOORPLAN building (building-grammar-plan.md P3): the massing is a
+// closed polygon — the lot's own shape, an L/T/U composition, a flatiron
+// wedge — extruded storey by storey with the SAME facade/element machinery
+// the box grammar uses (each plan edge becomes one facade rectangle: bays,
+// windows, arches, frames, the door on the street-facing edge). Roof and
+// ground slabs triangulate the plan; cornices are SWEPT around the plan
+// outline; corner posts hide the wall miters at every vertex. Setbacks
+// (setbackFloors/setbackEvery) shrink the plan by a uniform offset per tier —
+// the base/shaft/capital stack — with a swept cornice at every transition.
+// Winding is normalized internally; deterministic for `params.seed`.
+BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
+                              Real baseY = 0.0);
+
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);
 
