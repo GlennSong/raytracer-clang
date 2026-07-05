@@ -4890,6 +4890,46 @@ careful integration step (deferred so the deployed traffic isn't destabilised).
 Suites: Makefile 721/721, CMake 786/786. Phase 5 (tools/capabilities) and the
 ped-graph live integration remain as enrichment.
 
+**The intersection gridlock (device round, three locks deep).** living_city's
+cars all pinned at one crossing, permanently. A headless repro of the exact
+level pipeline (roads → lots → places → assignPlaces → a full sim day) showed a
+328-second total standstill and let each layer of the deadlock be peeled with
+instrumented dumps rather than guesses:
+1. *Junction knots.* A curvy generated crossing planarizes into several nodes
+   joined by car-length stub links; each node's hold box (arterial half-width,
+   6.5 m vs 4.5 m stubs) swallowed its neighbours' stop lines — every held car
+   sat inside another junction's box, a circular wait. Fixed twice over: the box
+   radius is capped at 60% of the node's shortest incident link, and
+   `buildNavGraph` now MERGES junction nodes (degree ≥ 3) within 7 m into one
+   intersection at their centroid (`NavBuildParams::junctionMergeRadius`).
+   Degree-2 nodes are curve samples and never merge, so drawn bends survive.
+2. *Follower rings.* The jam's terminal form: cars nose-to-nose across adjacent
+   junctions, each pinned by the FOLLOW gap behind the next stalled car — no
+   yield rule ever releases that. Fixed with a gridlock clock: any car pinned
+   near a junction (never by a red — the light will change) accumulates
+   `Agent::holdTimer`; past ~6–12 s (staggered by brain bits, deterministic) it
+   stops yielding to STALLED traffic — box occupancy and the stopped-turner
+   tie-break both — and CREEPS at 0.7 m/s, unpicking the ring the way real
+   drivers inch through a blocked box. The timer resets only above creep speed;
+   resetting at 0.5 m/s sawtoothed the escape into one creep-tick per ten
+   seconds.
+3. *The device root cause.* A RESTING pedestrian — semantically "at home" — was
+   left standing at the road-corner idle pose, physically inside the traffic
+   corridor; every approaching car sensed the stationary body and braked
+   forever. Two semantic fixes: resting (off-trip) pedestrians are NOT sensable
+   (they are indoors), and a resting walker now stands at its place's DOORSTEP
+   (`homeDoor`/`workDoor` — the entrance nudged toward the building), set at
+   assignment and on every arrival.
+Worst all-stopped streak 328 s → 9 s; `living_city_traffic_never_gridlocks`
+pins the whole pipeline as a regression. Buildings also stopped growing
+malformed: a lot must fill ≥ 72% of its oriented bounding box (the grammar
+fills the OBB, so triangular off-cuts overhung their lots) and floors are
+clamped so height ≤ ~1.8× the footprint's short side. And the plan became
+visible: `growLotBuildings` exposes blocks + lots (`LotPlanDebug`), the loader
+publishes them (`CityPlanDebug`), and the citysim bridge bakes both as ground
+outline layers — blocks magenta, lots amber — on the L key and Living City
+panel checkboxes. Suites 728/728 · 794/794.
+
 **Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
 (sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
 `GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship
