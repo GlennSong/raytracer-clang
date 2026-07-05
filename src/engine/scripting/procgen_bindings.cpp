@@ -570,6 +570,39 @@ int l_building_grow(lua_State* L) {
     return 1;
 }
 
+// building.grow_parts{ ... } -> { {mesh=, part="brick"|"glass"|...}, ... }
+// Like building.grow, but the parts keep their shape-grammar identity instead of
+// being flattened into one vertex-coloured mesh — so a recipe can bind REAL
+// materials per class (brick/concrete/stucco surfaces, reflective glass), the
+// same way the city pipeline does (building-grammar-plan.md P2, lab feedback:
+// "don't see materials on the surface of the building").
+int l_building_grow_parts(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
+    Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
+    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
+                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
+    BuildingMesh bm = growBuilding(scopeFromFootprint(foot, 0.0, 10.0), p);
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood"};
+    lua_newtable(L);
+    int n = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames)/sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 // building.height{...} -> number : the grown height in metres (no mesh). Cheap
 // query for layout code that places a building before committing geometry.
 int l_building_height(lua_State* L) {
@@ -2463,6 +2496,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kBuildingFns[] = {
         {"grow", l_building_grow},
+        {"grow_parts", l_building_grow_parts},
         {"height", l_building_height},
         {nullptr, nullptr},
     };

@@ -341,11 +341,16 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     Real fh = fr.height;
 
     Real sill, head, margin;
+    // The entrance face's non-door bays match the OTHER ground faces (retail
+    // storefronts when groundRetail) — the front used to wear small residential
+    // windows while the other three sides had tall shopfronts (device feedback).
+    const bool retailish = (mode == FacadeMode::Retail) ||
+                           (mode == FacadeMode::Entrance && p.groundRetail);
     if (mode == FacadeMode::Solid) {           // warehouse: small high clerestory
         sill = fh * 0.66; head = fh * 0.84; margin = std::min(bw * 0.36, Real(1.4));
     } else {
-        sill = (mode == FacadeMode::Retail) ? 0.4 : human::WINDOW_SILL;
-        head = std::min(fh - 0.4, (mode == FacadeMode::Retail) ? fh - 0.4 : human::WINDOW_HEAD);
+        sill = retailish ? 0.4 : human::WINDOW_SILL;
+        head = std::min(fh - 0.4, retailish ? fh - 0.4 : human::WINDOW_HEAD);
         // A CONSTANT window module across every face (the piers absorb the slack),
         // so a wide face and a narrow one show the same window size, not different
         // ones (ADR-0040). Width is the bay minus piers, clamped.
@@ -429,9 +434,9 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
         }
 
         if (entrance) {
-            // A recessed doorway, closed like the windows: jambs + lintel +
-            // threshold connect the wall opening back to the door leaf, so you
-            // can't see through the gap into the hollow shell (a unified mesh).
+            // The DOOR element: a recessed doorway, closed like the windows —
+            // jambs + lintel + threshold connect the wall opening back to the
+            // door leaf, so you can't see through the gap into the hollow shell.
             Vec3 in = fr.n * -0.18;
             Vec3 oBL = fr.at(wx0, 0), oBR = fr.at(wx1, 0);
             Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
@@ -443,6 +448,52 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
             emitQuad(wall, oBR, oTR, dTR, dBR, fr.h * -1, rev);   // right jamb
             emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
                      materialFor(PartId::Door, wallColor).albedo);   // the door leaf
+            // DOORFRAME (device feedback): painted stiles + head rail seated in
+            // the recess around the leaf — the same joinery the windows wear.
+            {
+                const Vec3 fp = fr.n * -0.09;
+                const Real dfw = 0.10;
+                auto dfQuad = [&](Real a0, Real b0, Real a1, Real b1) {
+                    if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
+                    emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
+                             fr.at(a1, b1) + fp, fr.at(a0, b1) + fp,
+                             fr.n, p.window.frameColor);
+                };
+                dfQuad(wx0, 0, wx0 + dfw, openHead);              // left stile
+                dfQuad(wx1 - dfw, 0, wx1, openHead);              // right stile
+                dfQuad(wx0 + dfw, openHead - dfw, wx1 - dfw, openHead);   // head rail
+            }
+            // ARCHITRAVE: a proud trim surround on the wall face around the
+            // opening — jamb casings + a head band.
+            {
+                RenderMesh& srd = surround;
+                auto caseQuad = [&](Real a0, Real b0, Real a1, Real b1) {
+                    Vec3 ov = fr.n * 0.05;
+                    emitQuad(srd, fr.at(a0, b0) + ov, fr.at(a1, b0) + ov,
+                             fr.at(a1, b1) + ov, fr.at(a0, b1) + ov, fr.n, p.trimColor);
+                };
+                const Real cw = 0.12;
+                caseQuad(wx0 - cw, 0, wx0, openHead + cw);        // left casing
+                caseQuad(wx1, 0, wx1 + cw, openHead + cw);        // right casing
+                caseQuad(wx0, openHead, wx1, openHead + cw);      // head band
+            }
+            // AWNING over the DOOR (device: it was centred on the face, not the
+            // door — it belongs to the door grammar): a projecting ledge just
+            // above the opening, spanning a little wider than the leaf.
+            if (p.awning) {
+                const Real aw = std::min((wx1 - wx0) + 1.2, fr.width - 0.4);
+                const Real ac = (wx0 + wx1) * 0.5;
+                Vec3 c0 = fr.at(ac - aw * 0.5, openHead + 0.22);
+                Vec3 across = normalize(fr.h);
+                Scope a;
+                a.axis[0] = across; a.axis[1] = Vec3(0, 1, 0); a.axis[2] = fr.n;
+                a.size = Vec3(aw, 0.16, 1.25);
+                a.origin = c0;
+                emitBox(out, a, PartId::Detail, p.trimColor);
+            }
+            // The entrance attach point sits at the DOOR's foot (not the face
+            // centre — off by half a bay on even bay counts).
+            out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n, "entrance"});
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
@@ -494,14 +545,23 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
                              fr.at(arc[k].x, arc[k].y) + fp, fr.n, st.frameColor);
                 }
             }
-            // Muntins: pane grid in the rectangular zone (an arch's lunette
-            // above the springline stays one clear light).
+            // Muntins: the pane grid. On an arch, a TRANSOM bar crosses at the
+            // springline (sash below, lunette above — the classic layout) and
+            // the vertical muntins CONTINUE into the lunette up to the arc
+            // itself (device: "the vertical doesn't reach the top of the arch").
             const Real mw = 0.032;
             const Real pz0 = openSill + fw;
             const Real pz1 = (rise > 0) ? ysp : ysp - fw;
+            if (rise > 0) frameQuad(wx0, ysp - 0.045, wx1, ysp + 0.02);   // transom
             for (int k = 1; k < st.lightsX; ++k) {
                 Real xk = wx0 + span * (Real(k) / st.lightsX);
                 frameQuad(xk - mw, pz0, xk + mw, pz1);
+                if (rise > 0) {
+                    // Up into the lunette: stop at the arc above this x.
+                    Real dx = xk - cx;
+                    Real yArc = Cy + std::sqrt(std::max(Real(0), R * R - dx * dx));
+                    frameQuad(xk - mw, ysp, xk + mw, yArc - 0.01);
+                }
             }
             for (int k = 1; k < st.lightsY; ++k) {
                 Real yk = pz0 + (pz1 - pz0) * (Real(k) / st.lightsY);
@@ -546,12 +606,14 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
                     const Real bw = 0.15, proud = 0.07;
                     const Vec3 hp = fr.n * proud;
                     const Real outerK = (R + bw) / R;
+                    auto outerAt = [&](int k) {
+                        return Vec2(cx + (arc[k].x - cx) * outerK,
+                                    Cy + (arc[k].y - Cy) * outerK);
+                    };
                     for (int k = 0; k < NARC; ++k) {
                         Vec3 A = fr.at(arc[k].x, arc[k].y);
                         Vec3 B = fr.at(arc[k + 1].x, arc[k + 1].y);
-                        Vec2 oA(cx + (arc[k].x - cx) * outerK, Cy + (arc[k].y - Cy) * outerK);
-                        Vec2 oB(cx + (arc[k + 1].x - cx) * outerK,
-                                Cy + (arc[k + 1].y - Cy) * outerK);
+                        Vec2 oA = outerAt(k), oB = outerAt(k + 1);
                         Vec3 OA = fr.at(oA.x, oA.y), OB = fr.at(oB.x, oB.y);
                         emitQuad(srd, A + hp, B + hp, OB + hp, OA + hp, fr.n, p.trimColor);
                         Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
@@ -559,6 +621,15 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
                         Vec3 dn = normalize(fr.h * (cx - mx) + fr.v * (Cy - my));
                         emitQuad(srd, A, B, B + hp, A + hp, dn, p.trimColor);      // intrados lip
                         emitQuad(srd, OA + hp, OB + hp, OB, OA, dn * -1, p.trimColor); // extrados
+                    }
+                    // End CAPS at the springers (device: "the arches ... are
+                    // missing the end caps"): close the band's cut face where it
+                    // dies onto the wall, on both sides.
+                    for (int e : {0, NARC}) {
+                        Vec3 A = fr.at(arc[e].x, arc[e].y);
+                        Vec2 oE = outerAt(e);
+                        Vec3 OE = fr.at(oE.x, oE.y);
+                        emitQuad(srd, A, OE, OE + hp, A + hp, fr.v * -1, p.trimColor);
                     }
                 }
             }
@@ -884,21 +955,9 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         }
         appendToPart(out, PartId::Trim, band);
     }
-    {
-        FaceRect ef = faceOf(ground, entranceSide);
-        out.attaches.push_back({ef.at(ef.width * 0.5, 0), ef.n, "entrance"});
-        // Awning: a projecting ledge over the entrance (ground floor).
-        if (params.awning) {
-            Real dw = std::min(human::DOOR_WIDTH + 1.6, ef.width * 0.5);
-            Vec3 c = ef.at(ef.width * 0.5, human::DOOR_HEIGHT + 0.15);
-            Vec3 across = ef.h, out_n = ef.n;
-            Scope a;
-            a.axis[0] = across; a.axis[1] = Vec3(0, 1, 0); a.axis[2] = out_n;
-            a.size = Vec3(dw, 0.18, 1.3);
-            a.origin = c - across * (dw * 0.5);
-            emitBox(out, a, PartId::Detail, params.trimColor);
-        }
-    }
+    // (The entrance attach point + awning + doorframe are emitted by the DOOR
+    // element inside emitFacade, so they sit on the actual door bay — a face-
+    // centred awning was off by half a bay on even bay counts.)
     // BASE CORNICE: a real stepped profile capping the base (device: "I don't
     // see a cornice at the top of the building's base" — the old single band
     // read as nothing). Three courses stepping outward — bed mould, corona,
