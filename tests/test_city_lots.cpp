@@ -39,6 +39,9 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
         CHECK(longSide <= shortSide * p.maxAspect + 1e-6);
         CHECK(lb.height > 0.0);                         // has mass (park = low pad)
         CHECK(isKnownType(lb.type));                    // a valid schedule tag
+        // A real building carries grown geometry (floors/windows/roof); only a
+        // park is a bare pad with no mesh.
+        if (lb.type != "park") CHECK(!lb.mesh.vertices.empty());
     }
 }
 

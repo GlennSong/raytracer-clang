@@ -1981,25 +1981,28 @@ bool LevelLoader::load(const std::string& path,
         }
         // Grow buildings on the ROAD NETWORK's blocks (ADR-0066): the Living City
         // path — real roads (a shape:"road" `generate` recipe, the tech grown.json
-        // uses) whose enclosed blocks become lots and box buildings, each tagged as
-        // a place agents start/end their schedules at. Runs on the RoadNet(s)
-        // already spawned in the world; no shape:"city" generator needed.
+        // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
+        // (floors/windows/roof, fitting the lot), each tagged as a place agents
+        // start/end their schedules at. Runs on the RoadNet(s) already in the world.
         if (cs.value("buildLots", false)) {
             std::vector<Poly2> blocks;
             world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
-                engine::RoadGraph rg = engine::navRoadGraph(net);
+                // Blocks from the raw planar road graph (net's own nodes/edges) —
+                // the sampled navRoadGraph loses faces, so build from the graph.
+                engine::RoadGraph rg;
+                for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
+                for (const auto& e : net.edges)
+                    rg.edges.push_back(engine::RoadEdge{e[0], e[1], 8, engine::RoadClass::Local, 0});
                 std::vector<Poly2> bs = engine::extractBlocks(rg);
                 blocks.insert(blocks.end(), bs.begin(), bs.end());
             });
             engine::LotParams lp;
             lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
-            lp.buildChance = cs.value("buildChance", 0.92);
-            lp.roadMargin = 6.0 + cs.value("sidewalk", 5.0);   // road half + sidewalk
+            lp.buildChance = cs.value("buildChance", 0.9);
+            lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
             lp.innerRadius = cs.value("downtownRadius", 55.0);
             lp.midRadius = cs.value("midtownRadius", 135.0);
-            // One shared unit-box mesh; each building is that box SCALED to its
-            // footprint (so hundreds of buildings cost one mesh, not hundreds).
-            MeshHandle box = assets.acquirePrimitive("box", Vec3(1, 1, 1));
+            MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             for (const engine::LotBuilding& lb : engine::growLotBuildings(blocks, lp)) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Tag it as a place the agents can route to.
@@ -2008,28 +2011,51 @@ bool LevelLoader::load(const std::string& path,
                 p.x = static_cast<float>(lb.site.x);
                 p.z = static_cast<float>(lb.site.y);
                 cfg.places.push_back(std::move(p));
-                // Spawn the box building: unit mesh scaled to WxHxD, yawed to its lot.
-                Entity b = world.create();
-                Transform t;
-                t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
-                t.scale = Vec3(lb.width, lb.height, lb.depth);
-                t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
-                world.add<Transform>(b, t);
-                world.add<PrevTransform>(b, PrevTransform{t});
+
+                if (lb.mesh.vertices.empty()) {
+                    // A park (or a building that failed to grow): a low coloured pad.
+                    Entity e = world.create();
+                    Transform t;
+                    t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
+                    t.scale = Vec3(lb.width, lb.height, lb.depth);
+                    t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    Renderable r;
+                    r.mesh = pad;
+                    r.material.albedo = lb.color;
+                    world.add<Renderable>(e, r);
+                    continue;
+                }
+                // A real building. The grown mesh is WORLD-SPACE, so it renders at
+                // an identity transform; vertex colours carry the facade, so the
+                // material is white (albedo × vertex colour).
+                Entity e = world.create();
+                Transform t;   // identity — the mesh already sits at the lot
+                world.add<Transform>(e, t);
+                world.add<PrevTransform>(e, PrevTransform{t});
                 Renderable r;
-                r.mesh = box;
-                r.material.albedo = lb.color;
+                r.mesh = assets.acquireMesh(lb.mesh, "");   // unkeyed: per-building
+                r.material.albedo = Vec3(1, 1, 1);
                 r.material.metallic = 0.0f;
-                r.material.roughness = 0.9f;
-                world.add<Renderable>(b, r);
-                Collider c;
-                c.shape = ColliderShape::Box;
-                c.halfExtent = Vec3(lb.width * 0.5, lb.height * 0.5, lb.depth * 0.5);
-                c.friction = 0.9;
-                world.add<Collider>(b, c);
+                r.material.roughness = 0.85f;
+                world.add<Renderable>(e, r);
+                // A separate static box collider at the lot (the mesh being
+                // world-space, its own transform can't also place a local collider).
+                Entity c = world.create();
+                Transform ct;
+                ct.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
+                ct.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                world.add<Transform>(c, ct);
+                world.add<PrevTransform>(c, PrevTransform{ct});
+                Collider col;
+                col.shape = ColliderShape::Box;
+                col.halfExtent = Vec3(lb.width * 0.5, lb.height * 0.5, lb.depth * 0.5);
+                col.friction = 0.9;
+                world.add<Collider>(c, col);
                 RigidBody rb;
                 rb.motion = BodyMotion::Static;
-                world.add<RigidBody>(b, rb);
+                world.add<RigidBody>(c, rb);
             }
         }
         // Real buildings become a living city (ADR-0066): when the level has a

@@ -3,6 +3,7 @@
 
 #include "polygon.h"        // Poly2, Vec2
 #include "../../../rt_math.h"   // Vec3
+#include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -22,12 +23,16 @@ namespace engine {
 
 struct LotBuilding {
     Vec2 site;              // footprint centroid (world XZ)
-    Real width = 0;         // extent along the lot's long axis (m)
-    Real depth = 0;         // extent along the short axis (m)
+    Real width = 0;         // OBB extent along the lot's long axis (m) — collider
+    Real depth = 0;         // OBB extent along the short axis (m) — collider
     Real height = 0;        // building height (m); a park is a low green pad
-    Real yaw = 0;           // rotation about +Y so the box aligns to its lot (rad)
+    Real yaw = 0;           // OBB rotation about +Y (rad) — collider orientation
     std::string type;       // "home" | "shop" | "office" | "civic" | "park"
     Vec3 color{0.72, 0.70, 0.64};
+    // The grown building geometry, already world-space and vertex-coloured (a real
+    // shape-grammar mass — floors, windows, roof — that FITS this lot), ready to
+    // upload. Empty only for a park (a low green pad the caller draws as a box).
+    RenderMesh mesh;
 };
 
 struct LotParams {

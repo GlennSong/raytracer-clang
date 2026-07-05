@@ -1,6 +1,7 @@
 #include "city_lots.h"
 
-#include "parcel.h"   // subdivideBlock, Lot, ParcelParams
+#include "parcel.h"          // subdivideBlock, Lot, ParcelParams
+#include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include <cmath>
 
 namespace engine {
@@ -45,13 +46,33 @@ const char* typeFor(Real dist, const LotParams& p, Hash& rng) {
     return "home";
 }
 
-Real heightFor(const std::string& t, Hash& rng) {
-    if (t == "office") return rng.range(18, 42);
-    if (t == "civic")  return rng.range(10, 18);
-    if (t == "shop")   return rng.range(5, 9);
-    if (t == "home")   return rng.range(6, 12);
-    if (t == "park")   return 0.3;               // a low green pad, not a building
-    return 8.0;
+// A shape-grammar building recipe per place type, scaled a little to the lot's
+// short side so a small lot doesn't sprout a tower. `wallColor` tints the facade.
+BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& color,
+                         Hash& rng) {
+    BuildingParams bp;
+    bp.seed = rng.next();
+    bp.wallColor = color;
+    bp.faceDir = Vec3(0, 0, 1);
+    const bool roomy = shortSide > 16.0;   // big enough to carry height
+    if (t == "office") {
+        bp.floors = roomy ? static_cast<int>(rng.range(6, 15)) : static_cast<int>(rng.range(4, 7));
+        bp.curtainWall = rng.unit() < 0.5;
+        bp.groundRetail = true;
+    } else if (t == "civic") {
+        bp.floors = static_cast<int>(rng.range(2, 5));
+        bp.groundRetail = false;
+        bp.pilasters = true;
+    } else if (t == "shop") {
+        bp.floors = static_cast<int>(rng.range(1, 3));
+        bp.groundRetail = true;
+        bp.awning = true;
+    } else {   // home
+        bp.floors = static_cast<int>(rng.range(1, roomy ? 4 : 3));
+        bp.groundRetail = false;
+        bp.baseCourse = true;
+    }
+    return bp;
 }
 
 Vec3 colorFor(const std::string& t) {
@@ -104,9 +125,21 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
             const Real dist = (b.site - p.center).length();
             b.type = typeFor(dist, p, rng);
-            b.height = heightFor(b.type, rng);
             b.color = colorFor(b.type);
-            out.push_back(b);
+            if (b.type == "park") {
+                b.height = 0.3;   // a low green pad; the caller draws it as a box
+                out.push_back(std::move(b));
+                continue;
+            }
+            // Grow a REAL building that FITS the lot: its oriented footprint IS the
+            // scope, so the mass is contained by the lot; height comes from floors.
+            BuildingParams bp = paramsFor(b.type, shortSide, b.color, rng);
+            Scope scope = scopeFromFootprint(site, 0.0, 10.0 /* height set by floors */);
+            BuildingMesh bm = growBuilding(scope, bp);
+            if (bm.parts.empty()) continue;
+            b.mesh = bm.merged();
+            b.height = bm.height > 0 ? bm.height : 8.0;
+            out.push_back(std::move(b));
         }
     }
     return out;
