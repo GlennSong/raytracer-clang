@@ -320,3 +320,44 @@ TEST_CASE(generate_recipe_enforces_min_road_length) {
     }
     for (int v = 0; v < n; ++v) CHECK(deg[v] <= 4);
 }
+
+// No hairpins mid-block (device: "sharp bends in the road ... creating some
+// really bad overlap"): a degree-2 corner sharper than the limit is relaxed
+// toward its chord until the road can actually be stroked without folding.
+// Junction and dead-end nodes never move.
+TEST_CASE(sharp_through_bends_are_relaxed) {
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(40, 0)}, {Vec2(42, 8)}, {Vec2(4, 12)} };
+    g.edges.push_back({0, 1, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 2, 7, RoadClass::Local, 0});   // ~150 deg hairpin at node 1
+    g.edges.push_back({2, 3, 7, RoadClass::Local, 0});
+    RoadGraph r = relaxSharpBends(g, 0.9, 48);
+    CHECK((r.nodes[0].pos - Vec2(0, 0)).length() < 1e-9);   // dead ends pinned
+    CHECK((r.nodes[3].pos - Vec2(4, 12)).length() < 1e-9);
+    for (int v = 1; v <= 2; ++v) {                          // through-nodes now gentle
+        Vec2 a = r.nodes[v - 1].pos, m = r.nodes[v].pos, b = r.nodes[v + 1].pos;
+        Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
+        CHECK(dot(d0, d1) >= std::cos(0.9) - 1e-6);
+    }
+}
+
+// The generate recipe applies the bend limit: no degree-2 node in a generated
+// district turns sharper than ~52 degrees, so the welded carriageway never folds.
+TEST_CASE(generate_recipe_has_no_hairpin_bends) {
+    RoadNet net;
+    net.width = 7;
+    nlohmann::json gen = {{"radius", 170.0}, {"arterials", 3}, {"artery_width", 13.0},
+                          {"street_width", 7.0}, {"block_size", 82.0},
+                          {"curviness", 0.22}, {"seed", 5}};
+    applyGenerateRecipe(net, gen);
+    const int n = static_cast<int>(net.nodes.size());
+    std::vector<std::vector<int>> adj(n);
+    for (const auto& e : net.edges) { adj[e[0]].push_back(e[1]); adj[e[1]].push_back(e[0]); }
+    for (int v = 0; v < n; ++v) {
+        if (adj[v].size() != 2) continue;
+        Vec2 a = net.nodes[adj[v][0]], m = net.nodes[v], b = net.nodes[adj[v][1]];
+        if ((m - a).length() < 1e-6 || (b - m).length() < 1e-6) continue;
+        Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
+        CHECK(dot(d0, d1) >= std::cos(0.95));   // limit + slack
+    }
+}

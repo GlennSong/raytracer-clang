@@ -4,6 +4,7 @@
 #include "polygon.h"
 #include "../../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -86,7 +87,12 @@ struct Scope {
 // becomes the box footprint, raised to `height` along +Y, sitting at ground
 // elevation `baseY`. The forward axis is the OBB's long edge so facades face the
 // long sides. This is `extrude` from a lot footprint (city-plan §3.4.2).
-Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height);
+// The box is shrunk about an interior anchor until its corners sit inside the
+// footprint; `cornerOk`, when set, is an EXTRA per-corner constraint folded into
+// that fit (the Living City passes "far enough from every road centreline", so a
+// building can never overhang the sidewalk — device feedback).
+Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height,
+                         const std::function<bool(const Vec2&)>& cornerOk = {});
 
 // The output of growing a building: geometry grouped by part (each part one
 // RenderMesh with its own material), plus attach points the composition layer

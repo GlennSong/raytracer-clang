@@ -28,6 +28,8 @@ struct LotBuilding {
     Real height = 0;        // building height (m); a park is a low green pad
     Real yaw = 0;           // OBB rotation about +Y (rad) — collider orientation
     std::string type;       // "home" | "shop" | "office" | "civic" | "park"
+                            // | "green" (an UNBUILT lot — the caller plants
+                            //   grass + trees on it; not a routable place)
     Vec3 color{0.72, 0.70, 0.64};
 };
 
@@ -62,10 +64,18 @@ struct LotPlanDebug {
 // binds the SAME PBR recipes (materialFor + baked surface maps) the shape:"city"
 // pipeline uses, and the whole district draws as a handful of textured meshes.
 // Each entry's materialIndex is set to its PartId.
+//
+// `roads` + `roadClearance` (device: "buildings overlapping sidewalks and poking
+// out onto the street"): when given, every building box is additionally kept at
+// least `edge width/2 + roadClearance` from every road centreline — pass the
+// sidewalk width (+ margin) so towers on wide arterials stay behind the curb.
+struct RoadGraph;   // road_network.h (kept light — see edgeBlocks below)
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& params,
                                           LotPlanDebug* debug = nullptr,
-                                          std::vector<RenderMesh>* outParts = nullptr);
+                                          std::vector<RenderMesh>* outParts = nullptr,
+                                          const RoadGraph* roads = nullptr,
+                                          Real roadClearance = 0.0);
 
 // EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
 // blocks, which leaves the town rim bare. Synthesize rectangular blocks on the

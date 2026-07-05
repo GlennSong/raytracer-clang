@@ -196,6 +196,11 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
     // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Vulkan.
     if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
     float3 deck = surfAsphalt(base, wu, wv);            // grained asphalt deck
+    // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
+    // internal same-direction lane boundary on multilane roads; 3 m of white
+    // paint every 7.5 m. Mirrors scene.cpp / WGSL / Vulkan.
+    if (mu > 3.5)
+        return (fract(mv / 7.5) < 0.4) ? float3(0.86, 0.86, 0.83) : deck;
     float lat = mu - 2.0;                            // [-1, 1], 0 = centreline
     float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
     float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));

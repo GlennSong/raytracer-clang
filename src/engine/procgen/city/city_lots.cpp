@@ -63,6 +63,10 @@ BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& /*tin
         bp.curtainWall = rng.unit() < 0.5;
         bp.groundRetail = true;
         style = bp.curtainWall ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
+        if (bp.floors > 8) {                      // tall: step the mass back in tiers
+            bp.setbackFloors = static_cast<int>(rng.range(4, 6));
+            bp.setbackEvery = rng.range(1.5, 3.0);
+        }
     } else if (t == "civic") {
         bp.floors = static_cast<int>(rng.range(2, 5));
         bp.groundRetail = false;
@@ -113,8 +117,30 @@ Vec3 colorFor(const std::string& t) {
 
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& p, LotPlanDebug* debug,
-                                          std::vector<RenderMesh>* outParts) {
+                                          std::vector<RenderMesh>* outParts,
+                                          const RoadGraph* roads, Real roadClearance) {
     std::vector<LotBuilding> out;
+    // Road-clearance corner test (device: buildings poking onto the street): a
+    // building box corner must stay `edge width/2 + roadClearance` from every
+    // road centreline. Checked against the SAMPLED graph the asphalt is meshed
+    // from, so a curvy road that bows into a straight-edged block still pushes
+    // the building back. Folded into scopeFromFootprint's shrink-to-fit below.
+    auto clearOfRoads = [&](const Vec2& c) {
+        if (!roads) return true;
+        for (const RoadEdge& e : roads->edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                e.b >= static_cast<int>(roads->nodes.size())) continue;
+            const Vec2& a = roads->nodes[e.a].pos;
+            const Vec2& b = roads->nodes[e.b].pos;
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            if ((c - q).length() < e.width * 0.5 + roadClearance) return false;
+        }
+        return true;
+    };
     if (outParts) {
         outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
         for (std::size_t i = 0; i < outParts->size(); ++i)
@@ -141,7 +167,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Lot& lot = lots[li];
             if (area(lot.footprint) < p.minLotArea) continue;
             Hash rng(mix(pp.seed, static_cast<uint32_t>(li) + 1));
-            if (rng.unit() > p.buildChance) continue;   // plaza / gap
+            // An unbuilt lot is reported as a GREEN (device: "empty lots had
+            // vegetation like trees and grass"), not silently dropped — the
+            // caller plants grass + trees on it. Same for lots the sliver /
+            // fill gates reject below.
+            auto emitGreen = [&]() {
+                OBB2 gb = orientedBoundingBox(lot.footprint);
+                LotBuilding g;
+                g.site = centroid(lot.footprint);
+                g.width = 2 * gb.half[0];
+                g.depth = 2 * gb.half[1];
+                g.height = 0.12;
+                g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                g.type = "green";
+                g.color = Vec3(0.32, 0.52, 0.30);
+                out.push_back(std::move(g));
+            };
+            if (rng.unit() > p.buildChance) { emitGreen(); continue; }   // plaza / gap
 
             // Building set back from its own lot lines.
             Poly2 site = inset(lot.footprint, p.lotSetback);
@@ -150,14 +192,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             OBB2 obb = orientedBoundingBox(site);
             const Real w = 2 * obb.half[0], d = 2 * obb.half[1];
             const Real shortSide = std::min(w, d), longSide = std::max(w, d);
-            if (shortSide < p.minShort) continue;              // sliver
-            if (longSide > shortSide * p.maxAspect) continue;  // knife blade
+            if (shortSide < p.minShort) { emitGreen(); continue; }              // sliver
+            if (longSide > shortSide * p.maxAspect) { emitGreen(); continue; }  // knife blade
             // The building FILLS the site's oriented bounding box (that is the
             // grammar's scope), so a triangular / L-shaped off-cut whose polygon
             // covers little of its OBB would grow a mass that OVERHANGS the lot —
             // the "completely malformed" buildings (device feedback). Require the
             // lot to actually fill its box before building on it.
-            if (area(site) < 0.72 * w * d) continue;
+            if (area(site) < 0.72 * w * d) { emitGreen(); continue; }
 
             LotBuilding b;
             b.site = centroid(site);
@@ -173,12 +215,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 continue;
             }
             // Grow a REAL building that FITS the lot: its oriented footprint IS the
-            // scope, so the mass is contained by the lot; height comes from floors.
-            // Parts keep their shape-grammar PartId (Wall/Glass/Brick/…), merged
+            // scope — shrunk until it sits inside the lot AND clear of every road
+            // corridor (clearOfRoads), so no mass overhangs a sidewalk. Height
+            // comes from floors. Parts keep their shape-grammar PartId, merged
             // into outParts so the caller binds the SAME PBR material recipes the
             // shape:"city" pipeline uses — not a flattened vertex-colour blob.
             BuildingParams bp = paramsFor(b.type, shortSide, b.color, rng);
-            Scope scope = scopeFromFootprint(site, 0.0, 10.0 /* height set by floors */);
+            Scope scope = scopeFromFootprint(site, 0.0, 10.0 /* height set by floors */,
+                                             clearOfRoads);
+            // The road clearance can shrink the box past usefulness: re-apply the
+            // sliver gate on the FITTED footprint, not just the raw OBB.
+            const Real fitShort = std::min(scope.size.x, scope.size.z);
+            if (fitShort < p.minShort * 0.75) { emitGreen(); continue; }
+            // The collider/record follows the fitted scope, not the raw OBB.
+            Vec3 sc = scope.center();
+            b.site = Vec2(sc.x, sc.z);
+            b.width = scope.size.x;
+            b.depth = scope.size.z;
+            b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
             BuildingMesh bm = growBuilding(scope, bp);
             if (bm.parts.empty()) continue;
             if (outParts)

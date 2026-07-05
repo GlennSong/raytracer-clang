@@ -240,12 +240,14 @@ Scope insetScope(const Scope& s, Real d) {
     return o;
 }
 
-Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height) {
+Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height,
+                         const std::function<bool(const Vec2&)>& cornerOk) {
     OBB2 obb = orientedBoundingBox(footprint);
     // Fit the box INSIDE the footprint: a non-rectangular lot (wedge/trapezoid or
     // corner piece) has an OBB that bulges past the polygon, which would seat the
     // building proud of its lot. Shrink about an interior anchor until all four
     // corners sit inside, so rectangular lots keep full size and skew lots pull in.
+    // `cornerOk` folds in the caller's extra constraint (road clearance).
     Vec2 anchor = pointInPolygon(footprint, obb.center) ? obb.center
                                                         : centroid(footprint);
     auto cornersInside = [&](Real s) {
@@ -254,6 +256,7 @@ Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height) {
                 Vec2 c = anchor + obb.axis[0] * (obb.half[0] * s * sx)
                                 + obb.axis[1] * (obb.half[1] * s * sy);
                 if (!pointInPolygon(footprint, c)) return false;
+                if (cornerOk && !cornerOk(c)) return false;
             }
         return true;
     };
@@ -330,7 +333,7 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     FaceRect fr = faceOf(storey, side);
     // Accumulate into locals, then append once each — never hold a part reference
     // across a partMesh() that could reallocate out.parts.
-    RenderMesh wall, glass, door;
+    RenderMesh wall, glass, door, surround;   // surround = sill/header trim courses
 
     int bays = std::max(1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
     Real bw = fr.width / bays;
@@ -406,6 +409,32 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
             emitQuad(wall, oBR, oTR, gTR, gBR, fr.h * -1, rev);   // right jamb
             emitQuad(glass, gBL, gBR, gTR, gTL, fr.n,
                      materialFor(PartId::Glass, wallColor).albedo);
+
+            // Projecting window surrounds (device: "window sills and trims"): a
+            // SILL ledge under the opening — oversailing the jambs, like a cast
+            // stone course — and a HEADER band (the flat lintel course) above.
+            // Traditional facades only: a curtain wall / warehouse keeps a clean
+            // skin. Emitted under Trim so they pick the trim material.
+            if (!p.curtainWall && mode != FacadeMode::Solid) {
+                RenderMesh& srd = surround;
+                auto ledge = [&](Real a0, Real b0, Real a1, Real b1, Real proud) {
+                    // A shallow box proud of the wall: front + top + bottom +
+                    // two end returns.
+                    Vec3 ov = fr.n * proud;
+                    Vec3 BL = fr.at(a0, b0), BR = fr.at(a1, b0);
+                    Vec3 TL = fr.at(a0, b1), TR = fr.at(a1, b1);
+                    emitQuad(srd, BL + ov, BR + ov, TR + ov, TL + ov, fr.n, p.trimColor);
+                    emitQuad(srd, TL, TR, TR + ov, TL + ov, fr.v, p.trimColor);        // top ledge
+                    emitQuad(srd, BL + ov, BR + ov, BR, BL, fr.v * -1, p.trimColor);   // underside
+                    emitQuad(srd, BL, BL + ov, TL + ov, TL, fr.h * -1, p.trimColor);   // left end
+                    emitQuad(srd, BR + ov, BR, TR, TR + ov, fr.h, p.trimColor);        // right end
+                };
+                const Real over = 0.08;                        // oversail past the jambs
+                ledge(std::max(x0, wx0 - over), openSill - 0.07,
+                      std::min(x1, wx1 + over), openSill, 0.10);        // sill course
+                ledge(std::max(x0, wx0 - over), openHead,
+                      std::min(x1, wx1 + over), openHead + 0.12, 0.06); // header band
+            }
         }
     }
 
@@ -438,6 +467,7 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Door, door);
+    appendToPart(out, PartId::Trim, surround);
 }
 
 }  // namespace

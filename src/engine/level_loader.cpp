@@ -1988,12 +1988,26 @@ bool LevelLoader::load(const std::string& path,
             // One combined raw planar graph across every RoadNet (the sampled
             // navRoadGraph loses faces, so build from the nets' own nodes/edges).
             engine::RoadGraph rg;
+            // The SAMPLED centrelines (what the asphalt is actually meshed from —
+            // a curvy road bows off its control chords) with real per-edge widths,
+            // for the building road-clearance check below.
+            engine::RoadGraph rgSampled;
             world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
                 const int base = static_cast<int>(rg.nodes.size());
                 for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
-                for (const auto& e : net.edges)
-                    rg.edges.push_back(engine::RoadEdge{base + e[0], base + e[1], 8,
+                for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+                    const auto& e = net.edges[ei];
+                    const float w = static_cast<float>(engine::roadNetEdgeWidth(
+                        net, static_cast<int>(ei)));
+                    rg.edges.push_back(engine::RoadEdge{base + e[0], base + e[1], w,
                                                         engine::RoadClass::Local, 0});
+                }
+                engine::RoadGraph s = engine::navRoadGraph(net);
+                const int sBase = static_cast<int>(rgSampled.nodes.size());
+                for (const auto& n : s.nodes) rgSampled.nodes.push_back(n);
+                for (const auto& e : s.edges)
+                    rgSampled.edges.push_back(engine::RoadEdge{sBase + e.a, sBase + e.b,
+                                                               e.width, e.klass, e.layer});
             });
             std::vector<Poly2> blocks = engine::extractBlocks(rg);
             // Edge blocks (device feedback): the town RIM has no enclosed faces —
@@ -2021,18 +2035,63 @@ bool LevelLoader::load(const std::string& path,
             // PBR recipes bind below. (Buildings stay visual-only: an oriented-box
             // collider spilled onto the streets — see the invisible-walls fix.)
             std::vector<RenderMesh> lotParts;
+            // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
+            // margin, so nothing overhangs the concrete or pokes into the street.
+            const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
+            // Street-tree kit for parks + unbuilt greens (device: "empty lots had
+            // vegetation like trees and grass"): a few shared varieties, one mesh
+            // upload each, reused across every planted lot.
+            struct TreeKit { MeshHandle bark, leaves;
+                             RenderMaterial barkMat, leafMat; };
+            std::vector<TreeKit> treeKits;
+            auto treeKit = [&](std::size_t variety) -> const TreeKit& {
+                while (treeKits.size() <= variety) {
+                    const std::size_t i = treeKits.size();
+                    const uint32_t seed = 0xF00Du + static_cast<uint32_t>(i) * 977u;
+                    TreeParams tp;
+                    tp.iterations = 4;              // modest street tree, light mesh
+                    tp.rootCount = 0;               // no buttress roots on a lawn
+                    TreeMesh tm = growTree(tp, seed);
+                    auto up = [&](const TextureData& td) -> TextureHandle {
+                        if (td.pixels.empty()) return TextureHandle{};
+                        return renderer.uploadTexture(td.width, td.height,
+                                                      td.channels, td.pixels.data());
+                    };
+                    TreeKit k;
+                    const std::string key = "lotTree:" + std::to_string(i);
+                    k.bark = assets.acquireMesh(tm.branches, key + ":bark");
+                    k.barkMat.albedo = Vec3(1, 1, 1);
+                    k.barkMat.roughness = 1.0f;
+                    BarkMaps bm = barkMaps(barkStyleFromName("oak"), 128, seed);
+                    k.barkMat.albedoMap = up(bm.albedo);
+                    k.barkMat.normalMap = up(bm.normal);
+                    if (!tm.leaves.vertices.empty()) {
+                        k.leaves = assets.acquireMesh(tm.leaves, key + ":leaves");
+                        k.leafMat.albedo = Vec3(1, 1, 1);
+                        k.leafMat.roughness = 0.7f;
+                        k.leafMat.albedoMap = up(leafTexture(128));
+                        k.leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+                    }
+                    treeKits.push_back(std::move(k));
+                }
+                return treeKits[variety];
+            };
             for (const engine::LotBuilding& lb :
-                 engine::growLotBuildings(blocks, lp, &plan, &lotParts)) {
+                 engine::growLotBuildings(blocks, lp, &plan, &lotParts,
+                                          &rgSampled, roadClear)) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
-                // Tag it as a place the agents can route to.
-                engine::AuthoredPlace p;
-                p.type = lb.type;
-                p.x = static_cast<float>(lb.site.x);
-                p.z = static_cast<float>(lb.site.y);
-                cfg.places.push_back(std::move(p));
+                // Tag it as a place the agents can route to. An unbuilt GREEN is
+                // scenery, not a schedule destination — no place tag.
+                if (lb.type != "green") {
+                    engine::AuthoredPlace p;
+                    p.type = lb.type;
+                    p.x = static_cast<float>(lb.site.x);
+                    p.z = static_cast<float>(lb.site.y);
+                    cfg.places.push_back(std::move(p));
+                }
 
-                if (lb.type == "park") {
-                    // A park: a low green pad, not a grown building.
+                if (lb.type == "park" || lb.type == "green") {
+                    // A grass pad plus a few trees, not a grown building.
                     Entity e = world.create();
                     Transform t;
                     t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
@@ -2043,7 +2102,46 @@ bool LevelLoader::load(const std::string& path,
                     Renderable r;
                     r.mesh = pad;
                     r.material.albedo = lb.color;
+                    r.material.roughness = 1.0f;
                     world.add<Renderable>(e, r);
+
+                    // Trees: deterministic count + spots from the lot position.
+                    const uint32_t h = static_cast<uint32_t>(
+                        std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) * 2654435761u;
+                    const int nTrees = (lb.type == "park" ? 2 : 1) + static_cast<int>(h % 2u);
+                    for (int ti = 0; ti < nTrees; ++ti) {
+                        const uint32_t th = h ^ (0x9e3779b9u * static_cast<uint32_t>(ti + 1));
+                        const double fx = ((th & 0xFFu) / 255.0 - 0.5) * 0.6;
+                        const double fz = (((th >> 8) & 0xFFu) / 255.0 - 0.5) * 0.6;
+                        const double cy = std::cos(lb.yaw), sy = std::sin(lb.yaw);
+                        const double lx = fx * lb.width, lz = fz * lb.depth;
+                        Vec3 tPos(lb.site.x + lx * cy - lz * sy, 0,
+                                  lb.site.y + lx * sy + lz * cy);
+                        tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;
+                        const TreeKit& kit = treeKit((th >> 16) % 3u);
+                        const double scale = 0.8 + ((th >> 24) & 0x3Fu) / 63.0 * 0.6;
+                        Transform tt;
+                        tt.position = tPos;
+                        tt.scale = Vec3(scale, scale, scale);
+                        tt.orientation = Quat::fromAxisAngle(
+                            Vec3(0, 1, 0), (th % 628u) / 100.0);
+                        Entity te = world.create();
+                        world.add<Transform>(te, tt);
+                        world.add<PrevTransform>(te, PrevTransform{tt});
+                        Renderable tr;
+                        tr.mesh = kit.bark;
+                        tr.material = kit.barkMat;
+                        world.add<Renderable>(te, tr);
+                        if (kit.leaves.index) {
+                            Entity le = world.create();
+                            world.add<Transform>(le, tt);
+                            world.add<PrevTransform>(le, PrevTransform{tt});
+                            Renderable lr;
+                            lr.mesh = kit.leaves;
+                            lr.material = kit.leafMat;
+                            world.add<Renderable>(le, lr);
+                        }
+                    }
                 }
             }
             // One entity per non-empty part class, with the shape-grammar's OWN

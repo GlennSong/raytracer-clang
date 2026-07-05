@@ -358,6 +358,13 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32, wu : f32, wv : f32) ->
   // UV the other surfaces tile by. Mirrors scene.cpp / Metal / Vulkan.
   if (mu < 0.98) { return surfPavement(base, wu, wv); }
   let deck = surfAsphalt(base, wu, wv);
+  // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
+  // internal same-direction lane boundary on multilane roads; 3 m of white
+  // paint every 7.5 m. Mirrors scene.cpp / Metal / Vulkan.
+  if (mu > 3.5) {
+    if (fract(mv / 7.5) < 0.4) { return vec3<f32>(0.86, 0.86, 0.83); }
+    return deck;
+  }
   let lat = mu - 2.0;
   let yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
   let yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -522,12 +529,18 @@ fn fs_main(in : VSOut) -> FsOut {
   // Mirrors Metal (common.metal) / Vulkan (mesh.frag).
   if (d.surfaceFlags.x == 11u) {
     let rx = in.worldPos.x; let rz = in.worldPos.z;
-    let b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.35 * vnoise2(rx * 11.0, rz * 11.0);
-    let bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.35 * vnoise2(rx * 11.0 + 1.7, rz * 11.0) - b0;
-    let bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.35 * vnoise2(rx * 11.0, rz * 11.0 + 1.7) - b0;
-    N = normalize(N + vec3<f32>(-bx, 0.0, -bz) * 0.55);
+    // Three octaves: metre-scale undulation, decimetre patching, and a
+    // near-aggregate grain — summed finite differences tilt the normal hard
+    // enough to read as bumpy asphalt (device: "no sense of bumpiness").
+    let b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.5 * vnoise2(rx * 11.0, rz * 11.0)
+           + 0.3 * vnoise2(rx * 37.0, rz * 37.0);
+    let bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.5 * vnoise2(rx * 11.0 + 1.7, rz * 11.0)
+           + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
+    let bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
+           + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
+    N = normalize(N + vec3<f32>(-bx, 0.0, -bz) * 1.3);
     let spk = vnoise2(rx * 23.0, rz * 23.0);
-    roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.5, 1.0);
+    roughness = clamp(roughness + (spk - 0.5) * 0.4, 0.45, 1.0);
   }
   let V = normalize(g.cameraPosition.xyz - in.worldPos);
   let gbufOut = vec4<f32>(N, roughness);   // material G-buffer (SSAO / SSR)

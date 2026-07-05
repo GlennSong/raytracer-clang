@@ -1,6 +1,7 @@
 #include "road_constraints.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -217,6 +218,40 @@ RoadGraph capDegree(const RoadGraph& in, const RoadRules& rules) {
             if (static_cast<int>(inc[v].size()) > rules.maxDegree) { over = v; break; }
         if (over < 0) break;
         splitOverNode(g, over, rules);
+    }
+    return g;
+}
+
+RoadGraph relaxSharpBends(const RoadGraph& in, Real maxTurn, int iterations) {
+    RoadGraph g = in;
+    const int n = static_cast<int>(g.nodes.size());
+    // Degree-2 adjacency (through-nodes only; junctions/dead-ends are pinned).
+    std::vector<std::array<int, 2>> nbr(n, {-1, -1});
+    std::vector<int> deg(n, 0);
+    for (const RoadEdge& e : g.edges) {
+        if (e.a == e.b) continue;
+        if (deg[e.a] < 2) nbr[e.a][deg[e.a]] = e.b;
+        if (deg[e.b] < 2) nbr[e.b][deg[e.b]] = e.a;
+        ++deg[e.a]; ++deg[e.b];
+    }
+    const Real cosLimit = std::cos(maxTurn);
+    for (int it = 0; it < iterations; ++it) {
+        bool any = false;
+        for (int v = 0; v < n; ++v) {
+            if (deg[v] != 2) continue;
+            const Vec2& a = g.nodes[nbr[v][0]].pos;
+            const Vec2& b = g.nodes[nbr[v][1]].pos;
+            Vec2 m = g.nodes[v].pos;
+            Vec2 d0 = m - a, d1 = b - m;
+            Real l0 = d0.length(), l1 = d1.length();
+            if (l0 < 1e-6 || l1 < 1e-6) continue;
+            if (dot(d0, d1) / (l0 * l1) >= cosLimit) continue;   // gentle enough
+            // Ease the corner toward the chord midpoint — each pass halves the
+            // deviation, so even a hairpin converges to a drivable bend.
+            g.nodes[v].pos = m * 0.5 + (a + b) * 0.25;
+            any = true;
+        }
+        if (!any) break;
     }
     return g;
 }

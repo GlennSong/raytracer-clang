@@ -24,7 +24,8 @@ std::vector<Poly2> squareBlocks() {
     return blocks;
 }
 bool isKnownType(const std::string& t) {
-    return t == "home" || t == "shop" || t == "office" || t == "civic" || t == "park";
+    return t == "home" || t == "shop" || t == "office" || t == "civic" ||
+           t == "park" || t == "green";
 }
 }  // namespace
 
@@ -131,5 +132,37 @@ TEST_CASE(edge_blocks_skip_covered_ground) {
     for (const Poly2& r : rim) {
         Vec2 lo, hi; bounds(r, lo, hi);
         CHECK(hi.y < 0);   // every rim block sits on the OPEN (-y) side
+    }
+}
+
+// Buildings keep clear of road corridors (device: "buildings overlapping
+// sidewalks and poking out onto the street"): with the sampled road graph +
+// clearance passed in, every grown box corner stays at least half the road
+// width + clearance from the centreline, even when the lot hugs the road.
+TEST_CASE(lot_buildings_keep_clear_of_roads) {
+    LotParams p;
+    p.seed = 3;
+    p.roadMargin = 6.0;   // deliberately TIGHT: the block reaches into the verge
+    RoadGraph roads;
+    roads.nodes.push_back({Vec2(-105, -200)});
+    roads.nodes.push_back({Vec2(-105, 200)});
+    roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // wide arterial
+    std::vector<Poly2> blocks = {
+        {{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};       // hugs the road
+    const Real clearance = 4.6;
+    std::vector<LotBuilding> b =
+        growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+    CHECK(!b.empty());
+    const Real minDist = 13.0 * 0.5 + clearance;                 // 11.1 m
+    for (const LotBuilding& lb : b) {
+        if (lb.type == "park") continue;
+        Vec2 a0(std::cos(lb.yaw), std::sin(lb.yaw));
+        Vec2 a1(-a0.y, a0.x);
+        for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2) {
+                Vec2 c = lb.site + a0 * (lb.width * 0.5 * sx)
+                                 + a1 * (lb.depth * 0.5 * sy);
+                CHECK(std::fabs(c.x + 105.0) >= minDist - 0.2);
+            }
     }
 }

@@ -66,6 +66,16 @@ bool nodeNeedsRoundabout(const RoadGraph& graph, int v, const RoadRules& rules);
 // node is within the cap. Pure + headless. A graph already within the cap is returned unchanged.
 RoadGraph capDegree(const RoadGraph& graph, const RoadRules& rules = {});
 
+// MAXIMUM bend at a through-node (device feedback: "sharp bends in the road ...
+// creating some really bad overlap"). A degree-2 node whose two legs turn more
+// than `maxTurn` (radians) folds the stroked carriageway over itself — roads do
+// not hairpin mid-block. Relax every such node toward its neighbours' chord
+// midpoint, repeatedly, until all through-bends are within the limit (or
+// `iterations` passes elapse). Junctions and dead ends never move; degree-2
+// geometry eases into a drivable curve. Deterministic and pure.
+RoadGraph relaxSharpBends(const RoadGraph& graph, Real maxTurn = 0.9,
+                          int iterations = 48);
+
 // MINIMUM road length (device feedback: "we end up with some really short roads").
 // Crossings that land close together (planarize) read as broken stubs — signals in
 // the middle of the street, cramped junction pads. Repeatedly take the shortest

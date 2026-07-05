@@ -571,3 +571,29 @@ TEST_CASE(weld_solid_junction_pad_fills_skewed_tee) {
     RenderMesh solid = weldSolid(sp, padded);
     for (const Vec2& p : wedge) CHECK(upCovered(solid, p));
 }
+
+// Multilane roads (device: "do we still have multilane roads?"): a 13 m arterial
+// (4 lanes) bakes dashed lane-DIVIDER strips at u = 4 between same-direction
+// lanes, with v carrying raw arc-length for the dash phase. A 7 m street (2
+// lanes, centre boundary only) bakes none — the double yellow is the only divide.
+TEST_CASE(weld_solid_bakes_lane_dividers_on_arterials) {
+    auto mk = [](Vec2 a, Vec2 b, double hw) {
+        UnionSpine s; s.halfWidth = hw;
+        for (int i = 0; i <= 20; ++i) s.points.push_back(a + (b - a) * (i / 20.0));
+        return s;
+    };
+    RenderMesh wide = weldSolid({mk(Vec2(-60, 0), Vec2(60, 0), 6.5)}, WeldSolidParams{});
+    int dividerVerts = 0;
+    float maxV = 0;
+    for (const Vertex& v : wide.vertices)
+        if (v.u > 3.5f) {
+            ++dividerVerts;
+            maxV = std::max(maxV, v.v);
+            CHECK(v.normal.y > 0.9);              // paint faces up
+        }
+    CHECK(dividerVerts > 0);                      // dividers exist on the arterial
+    CHECK(maxV > 100.0f);                         // v tracks raw arc-length (120 m road)
+
+    RenderMesh narrow = weldSolid({mk(Vec2(-60, 0), Vec2(60, 0), 3.5)}, WeldSolidParams{});
+    for (const Vertex& v : narrow.vertices) CHECK(v.u <= 3.5f);   // streets: none
+}

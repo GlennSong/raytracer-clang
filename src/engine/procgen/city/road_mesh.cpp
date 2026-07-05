@@ -1337,6 +1337,37 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                                        1.0f, v0, 3.0f, v0, 3.0f, v1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR1, mL1, Vec3(0, 1, 0), p.topColor,
                                        1.0f, v0, 3.0f, v1, 1.0f, v1);
+                // Multilane roads (device: "do we still have multilane roads?"):
+                // DASHED white dividers between same-direction lanes. One thin
+                // strip per internal lane boundary (the centre boundary is the
+                // double yellow), tagged u = 4 with v carrying RAW arc-length so
+                // the shader phases 3 m dashes. Suppressed through the crosswalk
+                // zone like the rest of the approach paint.
+                const int lanes = std::max(1, static_cast<int>(std::lround(2.0 * hw / 3.5)));
+                if (lanes >= 4) {
+                    const double laneW = 2.0 * hw / lanes;
+                    const bool nearCw = p.crosswalks && !pr.closed &&
+                                        std::min(v0, v1) < 4.0f;
+                    for (int lk = 1; lk < lanes && !nearCw; ++lk) {
+                        if (lk * 2 == lanes) continue;          // centre: double yellow
+                        const double lat = -hw + laneW * lk;    // boundary offset (m)
+                        const double halfStripe = 0.14;
+                        auto D = [&](const Vec2& c, const Vec2& o, double h, double off) {
+                            const double t = off / hw;          // rail-relative offset
+                            return Vec3(c.x + o.x * t, h + markLift, c.y + o.y * t);
+                        };
+                        Vec3 sL0 = D(c0, o0, h0, lat - halfStripe),
+                             sR0 = D(c0, o0, h0, lat + halfStripe),
+                             sL1 = D(c1, o1, h1, lat - halfStripe),
+                             sR1 = D(c1, o1, h1, lat + halfStripe);
+                        MeshBuilder::emitTriUV(mesh, sL0, sR0, sR1, Vec3(0, 1, 0),
+                                               p.topColor, 4.0f, (float)s0, 4.0f,
+                                               (float)s0, 4.0f, (float)s1);
+                        MeshBuilder::emitTriUV(mesh, sL0, sR1, sL1, Vec3(0, 1, 0),
+                                               p.topColor, 4.0f, (float)s0, 4.0f,
+                                               (float)s1, 4.0f, (float)s1);
+                    }
+                }
             }
         }
     }

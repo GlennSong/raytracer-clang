@@ -246,6 +246,13 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double 
     // paint. wu/wv is the world-planar UV the other surfaces tile by.
     if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
     Vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
+    // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): the mesher lays one
+    // thin strip per internal same-direction lane boundary on multilane roads;
+    // 3 m of white paint every 7.5 m. Mirrors WGSL/Metal/Vulkan.
+    if (mu > 3.5) {
+        double phase = mv / 7.5; phase -= std::floor(phase);
+        return phase < 0.4 ? Vec3(0.86, 0.86, 0.83) : deck;
+    }
     double lat = mu - 2.0;                            // [-1, 1], 0 = centreline, ±1 = curb
     auto band = [](double x, double c, double hw) {  // ~1 inside a line of half-width hw
         double d = std::fabs(x - c), t = std::clamp((d - hw) / 0.006, 0.0, 1.0);

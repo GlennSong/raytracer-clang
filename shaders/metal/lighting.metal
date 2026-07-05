@@ -317,12 +317,18 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // same world-planar noise the asphalt albedo tiles by. Mirrors WGSL/Vulkan.
     if (surfId == 11u) {
         float rx = geom.worldPosition.x, rz = geom.worldPosition.z;
-        float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.35 * vnoise2(rx * 11.0, rz * 11.0);
-        float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.35 * vnoise2(rx * 11.0 + 1.7, rz * 11.0) - b0;
-        float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.35 * vnoise2(rx * 11.0, rz * 11.0 + 1.7) - b0;
-        normal = normalize(normal + float3(-bx, 0.0, -bz) * 0.55);
+        // Three octaves: metre-scale undulation, decimetre patching, and a
+        // near-aggregate grain — summed finite differences tilt the normal hard
+        // enough to read as bumpy asphalt (device: "no sense of bumpiness").
+        float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.5 * vnoise2(rx * 11.0, rz * 11.0)
+                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0);
+        float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.5 * vnoise2(rx * 11.0 + 1.7, rz * 11.0)
+                 + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
+        float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
+                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
+        normal = normalize(normal + float3(-bx, 0.0, -bz) * 1.3);
         float spk = vnoise2(rx * 23.0, rz * 23.0);
-        rough = clamp(rough + (spk - 0.5) * 0.25, 0.5, 1.0);
+        rough = clamp(rough + (spk - 0.5) * 0.4, 0.45, 1.0);
     }
     float3 viewDir = normalize(camera.cameraPosition - geom.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);

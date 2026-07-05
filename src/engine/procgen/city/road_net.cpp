@@ -750,6 +750,10 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
     if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
     cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
+    // No hairpins (device: "sharp bends ... creating some really bad overlap"):
+    // a degree-2 corner sharper than ~52 deg folds the stroked carriageway over
+    // itself. Relax such through-nodes toward their chord until drivable.
+    cg = relaxSharpBends(cg);
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {

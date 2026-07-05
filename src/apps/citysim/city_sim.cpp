@@ -1467,6 +1467,24 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 consider(t.pos + t.vel * kPedAnticipation);
             }
             for (const Vec2& o : staticObstacles_) consider(o);   // signal poles
+            // Cars are bodies too (device: walkers pinned against a car): the
+            // walker considers the CLOSEST POINT on each car's rectangle — not
+            // its centre, which sits outside the short vision cone when you're
+            // up against a long body — so the lean routes around the car. Both
+            // driven and parked cars: vehicles_ carries every body's live pose.
+            for (const SimVehicle& v : vehicles_) {
+                const Real ve = (v.driver >= 0 &&
+                                 v.driver < static_cast<int>(agents_.size()))
+                                    ? agents_[v.driver].elevation : 0.0;
+                if (std::fabs(ve - a.elevation) > 2.0) continue;   // a deck away
+                const Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
+                const Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
+                const Real hl = v.length * 0.5, hw = v.width * 0.5;
+                const Real lx = std::max(-hl, std::min(hl, rel.x * f.x + rel.y * f.y));
+                const Real ly = std::max(-hw, std::min(hw, rel.x * r.x + rel.y * r.y));
+                consider(Vec2(v.pos.x + f.x * lx + r.x * ly,
+                              v.pos.y + f.y * lx + r.y * ly));
+            }
             a.leanTarget = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
             // Held at a signal (advance() parked us at the kerb, speed 0,
             // Waiting): keep the honest red ring rather than repainting Walking.
@@ -1535,6 +1553,31 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         };
         for (const Vec2& o : staticObstacles_) pushOut(o, kPoleClearance);
         for (const Vec2& o : externalObstacles_) pushOut(o, kPlayerClearance);
+        // ...and never stand INSIDE a car's footprint (device: walkers stuck
+        // bumping a car). The push resolves along the SHALLOWEST axis of the
+        // car-local box, so a walker pressed against a door is squeezed out
+        // sideways and SLIDES along the body until it clears the bumper —
+        // combined with the cone lean above, it walks around the car.
+        for (const SimVehicle& v : vehicles_) {
+            const Real ve = (v.driver >= 0 &&
+                             v.driver < static_cast<int>(agents_.size()))
+                                ? agents_[v.driver].elevation : 0.0;
+            if (std::fabs(ve - a.elevation) > 2.0) continue;
+            const Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
+            const Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
+            const Real cx = v.length * 0.5 + 0.35, cy = v.width * 0.5 + 0.35;
+            const Real lx = rel.x * f.x + rel.y * f.y;
+            const Real ly = rel.x * r.x + rel.y * r.y;
+            if (std::fabs(lx) >= cx || std::fabs(ly) >= cy) continue;
+            const Real px = cx - std::fabs(lx), py = cy - std::fabs(ly);
+            if (px < py) {
+                const Real s = lx >= 0 ? 1.0 : -1.0;
+                a.pos.x += f.x * s * px; a.pos.y += f.y * s * px;
+            } else {
+                const Real s = ly >= 0 ? 1.0 : -1.0;
+                a.pos.x += r.x * s * py; a.pos.y += r.y * s * py;
+            }
+        }
     }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.
