@@ -49,9 +49,19 @@ struct LotParams {
     uint32_t seed = 1;
 };
 
-// One box building per viable lot across every block. Deterministic in seed.
+// The intermediate planning geometry, exposed for debug visualization: the block
+// interiors the parcel pass actually subdivided (post road-margin inset) and every
+// lot it produced (built or not) — so "blocks → lots → buildings" can be SEEN.
+struct LotPlanDebug {
+    std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
+    std::vector<Poly2> lots;     // every parcelled lot
+};
+
+// One building per viable lot across every block. Deterministic in seed.
+// `debug`, when non-null, receives the intermediate blocks + lots.
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
-                                          const LotParams& params);
+                                          const LotParams& params,
+                                          LotPlanDebug* debug = nullptr);
 
 }  // namespace engine
 

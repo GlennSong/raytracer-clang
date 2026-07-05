@@ -71,6 +71,11 @@ struct Agent {
     // existing commute machinery routes the agent to REAL buildings.
     PlaceId homePlace = kNoPlace;
     PlaceId workPlace = kNoPlace;
+    // The assigned places' DOORSTEPS (entrance nudged toward the building), set
+    // by assignPlaces alongside the place ids. A resting walker stands here —
+    // semantically indoors — instead of at the road-corner idle pose, which
+    // could sit inside the traffic corridor and freeze every car that sensed it.
+    engine::Vec2 homeDoor, workDoor;
 
     // Daily schedule (hours, 0..24), per-agent jittered.
     int home = 0, work = 0;
@@ -92,6 +97,12 @@ struct Agent {
     Real crashTimer = 0;
     int crashCount = 0;              // consecutive freezes at this wreck
     engine::Vec2 crashAnchor;        // where the pile-up started
+    // Gridlock escape (ADR-0066 device fix): seconds this car has been pinned at
+    // a junction hold (yieldAtLine with ~zero speed). Past a few seconds, box
+    // occupancy stops counting occupants that are THEMSELVES stalled — a real
+    // driver inches through a gridlocked box — which breaks the circular wait a
+    // knot of overlapping junctions can otherwise form. Staggered per agent.
+    Real holdTimer = 0;
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when

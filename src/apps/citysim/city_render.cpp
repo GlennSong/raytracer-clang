@@ -429,6 +429,23 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             g.material = widgetMaterial(kNavTint);
             world.add<InstanceGroup>(navNodeGroup_, g);
         }
+        // City-plan outlines (ADR-0066): BLOCKS in magenta, LOTS in amber — the
+        // "blocks → lots → buildings" story drawn on the ground, same painted-
+        // outline style as the rest of the widgets.
+        blockGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(0.85, 0.30, 0.85));
+            world.add<InstanceGroup>(blockGroup_, g);
+        }
+        lotGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(0.95, 0.80, 0.25));
+            world.add<InstanceGroup>(lotGroup_, g);
+        }
     }
 
     // Bake the navgraph view ONCE — it depends only on nav_, so unlike the
@@ -461,6 +478,33 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         Vec2 p = nav_.nodes[n];
         navNodeBake_.push_back(Mat4::trs(
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
+    }
+
+    // Bake the CITY-PLAN outlines once (ADR-0066): every block interior and lot
+    // polygon (published by the loader as CityPlanDebug) becomes a loop of thin
+    // ground strips — one strip per polygon edge, the navgraph strip pattern.
+    blockBake_.clear();
+    lotBake_.clear();
+    {
+        auto outline = [&](const engine::Poly2& poly, Real width, Real lift,
+                           std::vector<Mat4>& out) {
+            const std::size_t n = poly.size();
+            if (n < 3) return;
+            for (std::size_t i = 0; i < n; ++i) {
+                Vec2 a = poly[i], b = poly[(i + 1) % n];
+                Vec2 d(b.x - a.x, b.y - a.y);
+                Real len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len < 1e-6) continue;
+                Real yaw = std::atan2(d.x, d.y);
+                out.push_back(Mat4::trs(
+                    Vec3(a.x, groundAt(a.x, a.y) + lift, a.y),
+                    Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(width, 1, len)));
+            }
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::Poly2& b : plan.blocks) outline(b, 0.35, 0.06, blockBake_);
+            for (const engine::Poly2& l : plan.lots) outline(l, 0.16, 0.05, lotBake_);
+        });
     }
 
     // Per-agent speed history for the brake-light hard-decel test (ADR-0065
@@ -692,6 +736,12 @@ void CityRenderSystem::syncGroups(World& world) {
         const bool showNav = debugWidgets_ && showNavGraph_;
         if (navL) navL->transforms = showNav ? navLinkBake_ : std::vector<Mat4>{};
         if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
+        // City-plan outlines (static bakes, same show-or-empty pattern).
+        const bool showPlan = debugWidgets_ && showPlan_;
+        InstanceGroup* blk = world.get<InstanceGroup>(blockGroup_);
+        InstanceGroup* lot = world.get<InstanceGroup>(lotGroup_);
+        if (blk) blk->transforms = showPlan ? blockBake_ : std::vector<Mat4>{};
+        if (lot) lot->transforms = showPlan ? lotBake_ : std::vector<Mat4>{};
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
@@ -778,6 +828,8 @@ void CityRenderSystem::syncGroups(World& world) {
         for (int mi = 0; mi < 2; ++mi) refreshBounds(cone[mi]);
         refreshBounds(navL);
         refreshBounds(navN);
+        refreshBounds(blk);
+        refreshBounds(lot);
     }
 
     // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
@@ -793,11 +845,18 @@ void CityRenderSystem::step(World& world, Real dt) {
 
 void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("agent_widgets", engine::KeyCode::J);   // toggle debug widgets
+    ctx.actions.bindButton("plan_widgets", engine::KeyCode::L);    // toggle block/lot plan
 }
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
+    // L flips the city-plan layer (blocks + lots) — and switches the master on
+    // when it was off, so the key works standalone on web (no ImGui panel there).
+    if (ctx.actions.pressed("plan_widgets")) {
+        showPlan_ = !showPlan_;
+        if (showPlan_) debugWidgets_ = true;
+    }
 }
 
 #ifdef RT_ENABLE_IMGUI
@@ -869,6 +928,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         ImGui::Checkbox("Agent rings + intent", &showAgentWidgets_);
         ImGui::Checkbox("Vision cones", &showVisionCones_);
         ImGui::Checkbox("Nav graph", &showNavGraph_);
+        ImGui::Checkbox("City plan: blocks + lots (L)", &showPlan_);
         ImGui::Unindent();
         ImGui::EndDisabled();
 

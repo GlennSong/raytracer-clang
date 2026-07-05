@@ -2003,7 +2003,8 @@ bool LevelLoader::load(const std::string& path,
             lp.innerRadius = cs.value("downtownRadius", 55.0);
             lp.midRadius = cs.value("midtownRadius", 135.0);
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
-            for (const engine::LotBuilding& lb : engine::growLotBuildings(blocks, lp)) {
+            engine::LotPlanDebug plan;   // blocks + lots, for the debug overlay
+            for (const engine::LotBuilding& lb : engine::growLotBuildings(blocks, lp, &plan)) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Tag it as a place the agents can route to.
                 engine::AuthoredPlace p;
@@ -2047,6 +2048,13 @@ bool LevelLoader::load(const std::string& path,
                 r.material.metallic = 0.0f;
                 r.material.roughness = 0.85f;
                 world.add<Renderable>(e, r);
+            }
+            // Publish the plan (blocks + lots) for the citysim debug overlay.
+            if (!plan.blocks.empty()) {
+                engine::CityPlanDebug dbg;
+                dbg.blocks = std::move(plan.blocks);
+                dbg.lots = std::move(plan.lots);
+                world.add<engine::CityPlanDebug>(world.create(), std::move(dbg));
             }
         }
         // Real buildings become a living city (ADR-0066): when the level has a

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace engine {
 
@@ -66,9 +67,97 @@ int NavGraph::nearestLink(const Vec2& p) const {
 }
 
 NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
+    // Knot merge (see NavBuildParams::junctionMergeRadius): collapse clusters of
+    // nearby JUNCTION nodes into one intersection before building links, so a
+    // generated crossing is one junction with real approach lengths instead of a
+    // gridlock-prone smear of car-length stubs. Pure index remapping — degree-2
+    // curve-sample nodes are untouched, so drawn road geometry is preserved.
+    std::vector<Vec2> pos;
+    pos.reserve(roads.nodes.size());
+    for (const RoadNode& rn : roads.nodes) pos.push_back(rn.pos);
+    std::vector<int> remap(pos.size());
+    for (std::size_t i = 0; i < remap.size(); ++i) remap[i] = static_cast<int>(i);
+
+    struct Edge { int a, b; RoadEdge e; };
+    std::vector<Edge> edges;
+    edges.reserve(roads.edges.size());
+    for (const RoadEdge& e : roads.edges) edges.push_back({e.a, e.b, e});
+
+    if (params.junctionMergeRadius > 0 && !pos.empty()) {
+        // Degree per node (distinct neighbours), on the raw graph.
+        std::vector<std::vector<int>> nb(pos.size());
+        for (const Edge& e : edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(pos.size()) ||
+                e.b >= static_cast<int>(pos.size()))
+                continue;
+            nb[e.a].push_back(e.b);
+            nb[e.b].push_back(e.a);
+        }
+        std::vector<int> deg(pos.size(), 0);
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            std::sort(nb[i].begin(), nb[i].end());
+            nb[i].erase(std::unique(nb[i].begin(), nb[i].end()), nb[i].end());
+            deg[i] = static_cast<int>(nb[i].size());
+        }
+        // Union-find over junction nodes within the merge radius.
+        std::vector<int> parent(pos.size());
+        for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = static_cast<int>(i);
+        std::function<int(int)> find = [&](int x) {
+            while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+            return x;
+        };
+        const Real r2 = params.junctionMergeRadius * params.junctionMergeRadius;
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            if (deg[i] < 3) continue;
+            for (std::size_t j = i + 1; j < pos.size(); ++j) {
+                if (deg[j] < 3) continue;
+                if ((pos[i] - pos[j]).lengthSquared() > r2) continue;
+                parent[find(static_cast<int>(i))] = find(static_cast<int>(j));
+            }
+        }
+        // Each cluster's representative moves to the member centroid.
+        std::vector<Vec2> sum(pos.size(), Vec2(0, 0));
+        std::vector<int> cnt(pos.size(), 0);
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            int r = find(static_cast<int>(i));
+            sum[r] = sum[r] + pos[i];
+            cnt[r]++;
+        }
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            remap[i] = find(static_cast<int>(i));
+            if (cnt[remap[i]] > 1)
+                pos[remap[i]] = sum[remap[i]] / static_cast<Real>(cnt[remap[i]]);
+        }
+        // Compact away the merged-off members (a stale orphan node would still be
+        // returned by nearestNode and strand trips), then remap edges through the
+        // compaction; drop intra-knot stubs and duplicate pairs (keep the first —
+        // insertion order keeps this deterministic).
+        std::vector<int> compact(pos.size(), -1);
+        std::vector<Vec2> packed;
+        packed.reserve(pos.size());
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            if (remap[i] != static_cast<int>(i)) continue;   // merged away
+            compact[i] = static_cast<int>(packed.size());
+            packed.push_back(pos[i]);
+        }
+        std::vector<Edge> kept;
+        kept.reserve(edges.size());
+        std::vector<std::pair<int, int>> seen;
+        for (Edge e : edges) {
+            e.a = compact[remap[e.a]];
+            e.b = compact[remap[e.b]];
+            if (e.a < 0 || e.b < 0 || e.a == e.b) continue;
+            std::pair<int, int> key{std::min(e.a, e.b), std::max(e.a, e.b)};
+            if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+            seen.push_back(key);
+            kept.push_back(e);
+        }
+        edges.swap(kept);
+        pos.swap(packed);
+    }
+
     NavGraph g;
-    g.nodes.reserve(roads.nodes.size());
-    for (const RoadNode& n : roads.nodes) g.nodes.push_back(n.pos);
+    g.nodes = pos;
     g.outLinks.resize(g.nodes.size());
 
     const int n = static_cast<int>(g.nodes.size());
@@ -89,10 +178,10 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         g.outLinks[a].push_back(idx);
     };
 
-    for (const RoadEdge& e : roads.edges) {
-        addLink(e.a, e.b, e);                                  // forward
-        if (!(params.oneWayRamps && e.klass == RoadClass::Ramp))
-            addLink(e.b, e.a, e);                              // reverse (two-way)
+    for (const Edge& e : edges) {
+        addLink(e.a, e.b, e.e);                                // forward
+        if (!(params.oneWayRamps && e.e.klass == RoadClass::Ramp))
+            addLink(e.b, e.a, e.e);                            // reverse (two-way)
     }
 
     // Flag intersections: a node with three or more distinct neighbours (counting

@@ -5,6 +5,7 @@
 #include "../renderer/renderer.h"
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "physics/physics_world.h"
+#include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/terrain.h"
 #include "world.h"
 #include <cstdint>
@@ -253,6 +254,16 @@ struct AgentDriver {
 // citysim bridge parses it (parsePlaceType) — so engine core stays free of
 // citysim types. `x`/`z` are the site (world XZ); the bridge snaps the entrance
 // onto the nearest sidewalk. Hours are in-world 0..24 (default = always open).
+// The city PLAN as data (Living City, ADR-0066): the block interiors the lot
+// pass subdivided and every lot it produced. One entity carries this when a
+// citysim level grew lot buildings; the citysim render bridge draws the
+// polygons as ground-outline debug layers ("show me the blocks and the lots").
+// Plain data — absent on levels that grew nothing.
+struct CityPlanDebug {
+    std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
+    std::vector<Poly2> lots;     // every parcelled lot inside them
+};
+
 struct AuthoredPlace {
     std::string type;      // "home" | "shop" | "office" | "park" | "civic"
     float x = 0, z = 0;    // building site (world XZ)

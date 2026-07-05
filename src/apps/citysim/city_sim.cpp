@@ -234,7 +234,19 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     nodeBoxRadius_.assign(n, 0.0);
     for (int v = 0; v < n; ++v) {
         Real r = 0;
-        for (int li : graph.outLinks[v]) r = std::max(r, graph.links[li].width * 0.5);
+        // The box must FIT its local geometry: a curvy crossing gets sampled into
+        // a KNOT of nodes a few metres apart, and a half-width-sized box there
+        // (arterial: 6.5 m vs 4.5 m links) swallows the neighbouring nodes' stop
+        // lines — every held car sits inside someone else's box, a circular wait,
+        // permanent gridlock (device: "cars all stuck at one intersection"). Cap
+        // the radius at 60% of the shortest incident link so adjacent boxes can
+        // never overlap; open grids (80 m links) are untouched.
+        Real shortestLink = 1e9;
+        for (int li : graph.outLinks[v]) {
+            r = std::max(r, graph.links[li].width * 0.5);
+            shortestLink = std::min(shortestLink, graph.links[li].length);
+        }
+        if (shortestLink < 1e9) r = std::min(r, std::max(Real(1.5), shortestLink * 0.6));
         nodeBoxRadius_[v] = r;
         if (graph.isJunction(v)) junctions_.push_back({graph.nodes[v], r});
     }
@@ -324,6 +336,13 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                engine::findRoute(graph, w, h).valid();
     };
 
+    // A place's DOORSTEP: its sidewalk entrance nudged toward the building site,
+    // so a resting body stands at the door — clearly off the carriageway.
+    auto doorOf = [&](PlaceId id) {
+        const Place& p = places[id];
+        return p.entrance + (p.site - p.entrance) * 0.4;
+    };
+
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng draw).
         PlaceId hp = homes[a.brain % homes.size()];
@@ -331,7 +350,11 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         a.homePlace = hp;
         a.home = hn;
         a.restNode = hn;
-        a.pos = idlePose(hn, a.mode, a.brain);
+        a.homeDoor = doorOf(hp);
+        // Walkers start the day at their door (indoors); cars stay parked on the
+        // verge (idlePose) — a car "at home" is a car parked outside it.
+        a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor
+                                                  : idlePose(hn, a.mode, a.brain);
         if (!graph.outLinks[hn].empty())
             a.heading = graph.direction(graph.outLinks[hn][0]);
 
@@ -351,6 +374,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.role = Agent::Role::Stroller;
                 a.work = nodeOf(pk);              // a daytime destination, not a job
                 a.workPlace = kNoPlace;
+                a.workDoor = doorOf(pk);          // rests at the park, not the kerb
                 a.departWork = 9.5 + 2.0 * unit(a.brain);         // late-morning out
                 a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
             }
@@ -366,6 +390,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             if (pick != kNoPlace) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
+                a.workDoor = doorOf(pick);
                 if (places[pick].type == PlaceType::Shop) {
                     // Shopkeeper: open the shop before it opens, close it after.
                     a.role = Agent::Role::Shopkeeper;
@@ -793,6 +818,11 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             Vec2 jc = nav_->nodes[toNode];
             Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
+            // Gridlock escape: held this long by nothing but STALLED occupants, a
+            // real driver inches through the box. Staggered per agent (brain bits)
+            // so a ring of mutual waiters releases one at a time, deterministic.
+            const bool gridlocked =
+                a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
             for (const Agent& b : agents_) {
                 if (&b == &a || b.mode != Agent::Mode::Driver) continue;
                 if (!b.moving || b.released) continue;
@@ -801,14 +831,23 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                 Real db2 = dx * dx + dy * dy;
                 if (db2 > range * range) continue;
                 Real along = b.heading.x * d0.x + b.heading.y * d0.y;
-                // 1: crossing-heading occupant INSIDE the box proper.
+                // 1: crossing-heading occupant INSIDE the box proper. A stalled
+                // occupant stops counting once this car is gridlocked — waiting
+                // on a car that is itself waiting is how the circular wait forms.
                 if (db2 < jr * jr && std::fabs(along) < 0.7) {
+                    if (gridlocked && b.speed < 0.3) continue;
                     yieldAtLine = true;
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
                 if (!turning || along >= -0.3) continue;
                 if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
+                // A gridlocked car stops waiting on anything STALLED — including
+                // the stopped-turner tie-break below, whose cross-junction chains
+                // (A waits on B waits on C...) were the 400-second holds. Only
+                // live moving traffic holds it now; the staggered release means
+                // opposing turners still don't sweep simultaneously.
+                if (gridlocked) continue;
                 if (&b < &a && b.leg + 1 < static_cast<int>(b.route.links.size())) {
                     int bli = b.route.links[b.leg];
                     if (nav_->links[bli].to == toNode) {
@@ -917,6 +956,31 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     Real slowZone = car ? kCarSlowZone : kPedSlowZone;
     target = followCap(target, gap, minGap, slowZone);
     a.speed = std::min(target, a.speed + accel * dt);
+
+    // Gridlock clock + escape. A jam's terminal form is a RING: cars pinned
+    // nose-to-nose across adjacent junctions by the follow gap (each behind the
+    // next stalled car), which no yield rule will ever release. So ANY car pinned
+    // to a standstill near a junction — by a yield or by a stalled leader, but
+    // never by a red (the light will change) — counts its hold; once gridlocked,
+    // it stops yielding to stalled traffic (junctionSpeedCap) and CREEPS, so the
+    // ring inches apart the way real drivers unpick a blocked box. If bodies
+    // brush during the creep, the fender-bender freeze-and-recover arbitrates.
+    if (car) {
+        const int toNode = nav_->links[li].to;
+        const bool redAhead = signals_.hasSignal(li) &&
+                              signals_.stateForLink(li) != SignalState::Green;
+        const bool nearJunc =
+            nav_->isJunction(toNode) &&
+            nav_->links[li].length - a.distOnLeg < kSignalApproach + 12.0;
+        if (a.speed < 0.05 && nearJunc && !redAhead && a.crashTimer <= 0)
+            a.holdTimer += dt;
+        else if (a.speed > 1.5)   // above creep: genuinely rolling again — a
+            a.holdTimer = 0;      // reset at creep speed sawtoothed the escape
+        const bool gridlocked =
+            a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
+        if (gridlocked && !redAhead && a.crashTimer <= 0 && a.speed < 0.7)
+            a.speed = 0.7;   // creep — the hard line clamp below still applies
+    }
 
     // Hard stop line at a red light: the smooth cap above slows the agent but
     // never to exactly zero, so without this the leftover motion would carry it
@@ -1063,6 +1127,17 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // A walker rests at the end of its sidewalk (continuous with the final
         // motion — not snapped across the node, which was the old visible jump).
         a.pos = nav_->sidewalkPoint(lastLink, 1.0);
+        // Living City: an arrival AT one of its places rests at THAT DOOR — the
+        // walker is semantically indoors. The corner pose could sit inside the
+        // traffic corridor (and, sensed, froze every approaching car — device).
+        const int node = nav_->links[lastLink].to;
+        const bool atHome = a.homePlace != kNoPlace && node == a.home;
+        const bool atWork =
+            node == a.work &&
+            (a.workPlace != kNoPlace ||
+             (a.role == Agent::Role::Stroller && a.work != a.home));
+        if (atHome) a.pos = a.homeDoor;
+        else if (atWork) a.pos = a.workDoor;
     }
     if (next >= 0) {
         a.goal = next;
@@ -1193,6 +1268,12 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     sensed_.clear();
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         const Agent& a = agents_[i];
+        // A RESTING pedestrian is INSIDE its place (home/shop/office) — not a
+        // body on the street. Sensing it anyway had cars braking forever for a
+        // person who is semantically indoors (a rest pose near the kerb sat in
+        // the sensed corridor and froze traffic for good — device jam).
+        if (a.mode == Agent::Mode::Pedestrian && !a.moving && !a.playerControlled)
+            continue;
         if (a.mode == Agent::Mode::Pedestrian || a.playerControlled) {
             // A tethered walker has a physical BODY (the tether anchor the
             // bridge feeds every step) that may trail its ghost by metres —

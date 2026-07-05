@@ -72,6 +72,11 @@ BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& color
         bp.groundRetail = false;
         bp.baseCourse = true;
     }
+    // Slenderness cap: total height stays under ~1.8x the footprint's short side,
+    // so a small lot can't sprout a pencil tower (device: "very tall skinny and
+    // completely malformed"). Floors ~3.2 m each; always at least one.
+    const int maxFloors = std::max(1, static_cast<int>(shortSide * 1.8 / 3.2) - 1);
+    bp.floors = std::min(bp.floors, maxFloors);
     return bp;
 }
 
@@ -86,7 +91,7 @@ Vec3 colorFor(const std::string& t) {
 }  // namespace
 
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
-                                          const LotParams& p) {
+                                          const LotParams& p, LotPlanDebug* debug) {
     std::vector<LotBuilding> out;
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
@@ -94,6 +99,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // Pull in from the road edge to the buildable interior (road + sidewalk).
         Poly2 foot = inset(block, p.roadMargin);
         if (foot.size() < 3 || area(foot) < p.minLotArea * 1.5) continue;
+        if (debug) debug->blocks.push_back(foot);
 
         ParcelParams pp;
         pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
@@ -101,6 +107,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         pp.minArea = p.minLotArea;
         pp.minEdge = p.minShort;
         std::vector<Lot> lots = subdivideBlock(foot, pp);
+        if (debug)
+            for (const Lot& lot : lots) debug->lots.push_back(lot.footprint);
 
         for (std::size_t li = 0; li < lots.size(); ++li) {
             const Lot& lot = lots[li];
@@ -117,6 +125,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Real shortSide = std::min(w, d), longSide = std::max(w, d);
             if (shortSide < p.minShort) continue;              // sliver
             if (longSide > shortSide * p.maxAspect) continue;  // knife blade
+            // The building FILLS the site's oriented bounding box (that is the
+            // grammar's scope), so a triangular / L-shaped off-cut whose polygon
+            // covers little of its OBB would grow a mass that OVERHANGS the lot —
+            // the "completely malformed" buildings (device feedback). Require the
+            // lot to actually fill its box before building on it.
+            if (area(site) < 0.72 * w * d) continue;
 
             LotBuilding b;
             b.site = centroid(site);

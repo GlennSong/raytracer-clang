@@ -1,10 +1,13 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/city.h"
+#include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/ai/nav_graph.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/apps/citysim/places.h"
+
+#include <nlohmann/json.hpp>
 
 using namespace engine;
 using namespace citysim;
@@ -82,6 +85,62 @@ TEST_CASE(district_city_composes_real_roads_lots_and_buildings) {
     for (const Agent& a : sim.agents())
         if (a.moving || a.speed > 0.05) ++moving;
     CHECK(moving > 0);                   // agents drive the district streets
+}
+
+TEST_CASE(living_city_traffic_never_gridlocks) {
+    // Regression for the device jam: living_city's curvy arterial crossing gets
+    // sampled into a KNOT of ~4.5 m links whose junction boxes (arterial
+    // half-width) used to overlap — every held car sat inside someone else's box,
+    // a circular wait, permanent standstill. Rebuild the exact level pipeline and
+    // assert traffic keeps flowing through the whole commute cycle. Fixed by (a)
+    // capping the box radius at 60% of the shortest incident link and (b) the
+    // gridlock escape (a car held >~6 s by only STALLED occupants creeps through).
+    RoadNet net;
+    net.width = 7.0;
+    net.sidewalk = 1.8;
+    nlohmann::json gen = {{"kind", "district"}, {"radius", 170}, {"arterials", 3},
+                          {"artery_width", 13}, {"street_width", 7},
+                          {"block_size", 82},   {"curviness", 0.22}, {"seed", 5}};
+    applyGenerateRecipe(net, gen);
+    NavGraph nav = buildNavGraph(navRoadGraph(net));
+    CHECK(nav.linkCount() > 0);
+
+    RoadGraph rg;
+    for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
+    for (const auto& e : net.edges)
+        rg.edges.push_back(RoadEdge{e[0], e[1], 8, RoadClass::Local, 0});
+    LotParams lp;
+    lp.seed = 5u ^ 0x10c5u;
+    lp.buildChance = 0.9;
+    lp.roadMargin = 8.0;
+    PlaceMap places;
+    for (const LotBuilding& lb : growLotBuildings(extractBlocks(rg), lp)) {
+        PlaceType t;
+        if (parsePlaceType(lb.type, t)) places.add(t, lb.site, nav);
+    }
+    CHECK(places.size() > 10);
+
+    CitySim sim;
+    sim.build(nav, 22, 26, 5);
+    sim.assignPlaces(places, nav);
+    for (int i = 0; i < 400; ++i) sim.step(0.1);   // the level's warm-up
+
+    // Run through the day. Track the longest streak where EVERY driving car is
+    // pinned at zero — before the fix this hit 328 sim-seconds (permanent).
+    long streak = 0, worst = 0;
+    for (int i = 0; i < 60 * 60 * 2 * 2; ++i) {
+        sim.step(0.25);
+        int driving = 0, stopped = 0;
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver) continue;
+            if (a.state == Agent::State::Resting || !a.moving) continue;
+            ++driving;
+            if (a.speed < 0.05) ++stopped;
+        }
+        streak = (driving >= 3 && stopped == driving) ? streak + 1 : 0;
+        worst = std::max(worst, streak);
+    }
+    CHECK(worst * 0.25 < 30.0);   // never fully stalled for half a minute
 }
 
 TEST_CASE(generated_city_buildings_snap_as_places) {
