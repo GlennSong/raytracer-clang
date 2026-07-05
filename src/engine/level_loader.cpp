@@ -2030,6 +2030,13 @@ bool LevelLoader::load(const std::string& path,
                 // A real building. The grown mesh is WORLD-SPACE, so it renders at
                 // an identity transform; vertex colours carry the facade, so the
                 // material is white (albedo × vertex colour).
+                //
+                // NO collider for now (visual only). A box collider sized to the
+                // lot's ORIENTED footprint became an axis-aligned "invisible wall"
+                // that spilled onto the street and jammed the physical cars/walkers
+                // at intersections (device feedback). Proper collision (an oriented
+                // box, or per-building convex from the mesh, set clear of the kerb)
+                // is a follow-up; the streets staying clear matters more here.
                 Entity e = world.create();
                 Transform t;   // identity — the mesh already sits at the lot
                 world.add<Transform>(e, t);
@@ -2040,22 +2047,6 @@ bool LevelLoader::load(const std::string& path,
                 r.material.metallic = 0.0f;
                 r.material.roughness = 0.85f;
                 world.add<Renderable>(e, r);
-                // A separate static box collider at the lot (the mesh being
-                // world-space, its own transform can't also place a local collider).
-                Entity c = world.create();
-                Transform ct;
-                ct.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
-                ct.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
-                world.add<Transform>(c, ct);
-                world.add<PrevTransform>(c, PrevTransform{ct});
-                Collider col;
-                col.shape = ColliderShape::Box;
-                col.halfExtent = Vec3(lb.width * 0.5, lb.height * 0.5, lb.depth * 0.5);
-                col.friction = 0.9;
-                world.add<Collider>(c, col);
-                RigidBody rb;
-                rb.motion = BodyMotion::Static;
-                world.add<RigidBody>(c, rb);
             }
         }
         // Real buildings become a living city (ADR-0066): when the level has a
