@@ -1,39 +1,40 @@
 {
   "version": 1,
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
-  "terrain": {
-    "seed": 21,
-    "size": 460,
-    "resolution": 220,
-    "heightScale": 9,
-    "noiseScale": 0.011,
-    "octaves": 5,
-    "warp": 0.25,
-    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
-  },
   "entities": [
     {
-      "name": "downtown",
-      "shape": "city",
-      "position": [0, 0, 0],
-      "city": {
-        "onTerrain": true,
-        "districtRoads": true,
-        "extent": 150,
-        "arterials": 3,
-        "blockSizeMin": 38,
-        "blockSizeMax": 64,
-        "arteryWidth": 13,
-        "streetWidth": 7,
-        "irregular": 0.22,
-        "roadJitter": 0.14,
-        "sidewalk": 5.0,
-        "downtownRadius": 70,
-        "midtownRadius": 150,
-        "parkFraction": 0.09,
-        "buildChance": 0.9,
-        "scatterTrees": true,
-        "seed": 4
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [0.0, -0.3, 0.0],
+      "size": [520.0, 0.4, 520.0],
+      "material": { "albedo": [0.34, 0.4, 0.29], "metallic": 0.0, "roughness": 1.0 },
+      "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 }
+    },
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [0.0, 0.0, 0.0],
+      "road": {
+        "generate": {
+          "kind": "district",
+          "radius": 170,
+          "arterials": 3,
+          "artery_width": 13,
+          "street_width": 7,
+          "block_size": 82,
+          "curviness": 0.22,
+          "seed": 5
+        },
+        "width": 7.0,
+        "sidewalk": 1.8,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.3,
+        "markings": true,
+        "crosswalks": true,
+        "color": [0.09, 0.09, 0.1]
       }
     }
   ],
@@ -45,10 +46,15 @@
     "perceptionReliability": 1.0,
     "debugWidgets": true,
     "wander": false,
-    "vehicles": "vehicles.lua"
+    "vehicles": "vehicles.lua",
+    "buildLots": true,
+    "sidewalk": 5.0,
+    "downtownRadius": 60,
+    "midtownRadius": 140,
+    "buildChance": 0.9
   },
   "player": {
-    "position": [0, 4, 165],
+    "position": [0, 1.2, 150],
     "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
     "friction": 0.5
   },

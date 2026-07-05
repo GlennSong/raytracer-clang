@@ -78,6 +78,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
+    src/engine/procgen/city/city_lots.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
     src/engine/level_loader.cpp
@@ -349,6 +350,7 @@ add_executable(run_tests
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
     tests/test_city_generated.cpp
+    tests/test_city_lots.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
