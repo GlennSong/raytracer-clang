@@ -1048,8 +1048,8 @@
     }
   ],
   "citysim": {
-    "cars": 45,
-    "pedestrians": 45,
+    "cars": 22,
+    "pedestrians": 26,
     "seed": 5,
     "hoursPerSecond": 0.05,
     "perceptionReliability": 1.0,
@@ -1057,7 +1057,7 @@
     "wander": false,
     "vehicles": "vehicles.lua",
     "buildLots": true,
-    "sidewalk": 5.0,
+    "sidewalk": 4.0,
     "downtownRadius": 60,
     "midtownRadius": 140,
     "buildChance": 0.9
