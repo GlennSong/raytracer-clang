@@ -203,6 +203,10 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);                          // white edge lines
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): the band ends at mv ~3.6, so the yellow fades in
+    // just past it. Without crosswalks mv is a large sentinel (full-length line).
+    y *= smoothstep(4.0, 4.8, mv);
     float3 c = mix(deck, float3(0.82, 0.68, 0.13), y);
     c = mix(c, float3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST

@@ -367,6 +367,25 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.topColor = net.color;
     wp.heightAt = net.heightAt;
     wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
+    // Junction pads (device: mesh holes at skewed T-junctions): chains end square
+    // to their own direction, so where a through-road BENDS at a junction the two
+    // arm caps disagree by the bend angle and a wedge of ground shows through. A
+    // disc per junction node, radius = the widest incident arm's half-width,
+    // fills every such wedge regardless of the arm angles.
+    {
+        std::vector<int> deg(g.nodes.size(), 0);
+        std::vector<double> jw(g.nodes.size(), 0.0);
+        for (const RoadEdge& e : g.edges) {
+            ++deg[e.a]; ++deg[e.b];
+            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
+            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
+        }
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v)
+            if (deg[v] >= 3) {
+                wp.padCenters.push_back(g.nodes[v].pos);
+                wp.padRadii.push_back(jw[v] * 0.5 * 1.02);
+            }
+    }
     return weldSolid(weldChainSpines(g), wp);
 }
 
@@ -722,6 +741,13 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     RoadRules rules;
     rules.autoRoundabout = false;
     RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
+    // Minimum road length (device: "really short roads ... should be merged"):
+    // fold crossings that landed close together into one junction, or stretch a
+    // stub that can't merge (a capDegree stagger link) out to a drivable length.
+    // Runs BEFORE the warp so it sees real junction-to-junction edges, not the
+    // curve samples warping introduces.
+    const double minRoadLen = g.value("min_road_len", 14.0);
+    if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
     if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
     cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();

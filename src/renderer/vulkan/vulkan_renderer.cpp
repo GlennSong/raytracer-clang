@@ -3623,6 +3623,8 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
             for (const DrawItem& item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m->indexCount == 0) continue;
+                // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
+                if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) continue;
                 ShadowPush push;
                 std::memcpy(push.lightViewProj, cpuGlobals.cascadeVP[c], sizeof(push.lightViewProj));
                 std::memcpy(push.model, item.push.model, sizeof(push.model));

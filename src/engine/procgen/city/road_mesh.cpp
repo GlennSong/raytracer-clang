@@ -1156,6 +1156,20 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             if (r.size() >= 3) ribbons.push_back(std::move(r));
         }
     }
+    // Junction pads: a disc per junction node joins the union, so the welded
+    // outline (walls + sidewalk) wraps the pad and no wedge of ground shows
+    // between off-square arm caps (see WeldSolidParams::padCenters).
+    for (std::size_t pi = 0; pi < p.padCenters.size() && pi < p.padRadii.size(); ++pi) {
+        const double r = p.padRadii[pi];
+        if (r <= 0.0) continue;
+        Poly2 disc;
+        const int segs = 20;
+        for (int i = 0; i < segs; ++i) {
+            double a = 2.0 * 3.14159265358979323846 * i / segs;
+            disc.push_back(p.padCenters[pi] + Vec2(std::cos(a), std::sin(a)) * r);
+        }
+        ribbons.push_back(std::move(disc));
+    }
     std::vector<Poly2> outers, holes;
     for (Poly2& L : polygonUnion(ribbons)) {
         Poly2 C = cleanPolygon(L, 0.01);              // snap-round + de-spike the welded boundary (1 cm)
@@ -1324,6 +1338,26 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 MeshBuilder::emitTriUV(mesh, mL0, mR1, mL1, Vec3(0, 1, 0), p.topColor,
                                        1.0f, v0, 3.0f, v1, 1.0f, v1);
             }
+        }
+    }
+    // Junction pad decks: a plain top + underside fan per pad, closing the wedge
+    // between off-square arm caps. Same colour/height as the strips it overlaps
+    // (coplanar same-material overdraw, like strips crossing at a junction); no
+    // markings — a junction reads as plain asphalt.
+    for (std::size_t pi = 0; pi < p.padCenters.size() && pi < p.padRadii.size(); ++pi) {
+        const double r = p.padRadii[pi];
+        if (r <= 0.0) continue;
+        const Vec2& c = p.padCenters[pi];
+        const int segs = 20;
+        Vec3 top = P3(c, 0), bot = P3(c, -p.thickness);
+        for (int i = 0; i < segs; ++i) {
+            double a0 = 2.0 * 3.14159265358979323846 * i / segs;
+            double a1 = 2.0 * 3.14159265358979323846 * (i + 1) / segs;
+            Vec2 e0 = c + Vec2(std::cos(a0), std::sin(a0)) * r;
+            Vec2 e1 = c + Vec2(std::cos(a1), std::sin(a1)) * r;
+            MeshBuilder::emitTri(mesh, top, P3(e0, 0), P3(e1, 0), Vec3(0, 1, 0), p.topColor);
+            MeshBuilder::emitTri(mesh, bot, P3(e1, -p.thickness), P3(e0, -p.thickness),
+                                 Vec3(0, -1, 0), p.bottomColor);
         }
     }
     return mesh;

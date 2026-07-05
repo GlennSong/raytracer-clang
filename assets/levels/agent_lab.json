@@ -44,7 +44,7 @@
         "sidewalk": 1.8,
         "curb": 0.16,
         "corner_radius": 3.0,
-        "lift": 0.3,
+        "lift": 0.08,
         "markings": true,
         "crosswalks": true,
         "color": [0.09, 0.09, 0.1]

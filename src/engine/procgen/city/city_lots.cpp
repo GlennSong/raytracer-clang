@@ -50,30 +50,48 @@ const char* typeFor(Real dist, const LotParams& p, Hash& rng) {
 }
 
 // A shape-grammar building recipe per place type, scaled a little to the lot's
-// short side so a small lot doesn't sprout a tower. `wallColor` tints the facade.
-BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& color,
+// short side so a small lot doesn't sprout a tower.
+BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& /*tint*/,
                          Hash& rng) {
     BuildingParams bp;
     bp.seed = rng.next();
-    bp.wallColor = color;
     bp.faceDir = Vec3(0, 0, 1);
     const bool roomy = shortSide > 16.0;   // big enough to carry height
+    FacadeStyle style;   // cladding — picks the wall's PBR surface material
     if (t == "office") {
         bp.floors = roomy ? static_cast<int>(rng.range(6, 15)) : static_cast<int>(rng.range(4, 7));
         bp.curtainWall = rng.unit() < 0.5;
         bp.groundRetail = true;
+        style = bp.curtainWall ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
     } else if (t == "civic") {
         bp.floors = static_cast<int>(rng.range(2, 5));
         bp.groundRetail = false;
         bp.pilasters = true;
+        style = rng.unit() < 0.6 ? FacadeStyle::Concrete : FacadeStyle::Stucco;
     } else if (t == "shop") {
         bp.floors = static_cast<int>(rng.range(1, 3));
         bp.groundRetail = true;
         bp.awning = true;
+        style = rng.unit() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco;
     } else {   // home
         bp.floors = static_cast<int>(rng.range(1, roomy ? 4 : 3));
         bp.groundRetail = false;
         bp.baseCourse = true;
+        const Real r = rng.unit();
+        style = r < 0.45 ? FacadeStyle::Brick
+              : r < 0.80 ? FacadeStyle::Stucco : FacadeStyle::Painted;
+    }
+    // Cladding drives the wall PART (Brick/Concrete/Stucco emit under the
+    // surfaced PartIds so materialFor binds the procedural PBR texture set —
+    // leaving wallPart at PartId::Wall is what made every facade a flat colour)
+    // and the wall colour comes from the style's palette, like paramsForDistrict.
+    bp.wallColor = facadeColor(style, bp.seed);
+    switch (style) {
+        case FacadeStyle::Brick:    bp.wallPart = PartId::Brick;    break;
+        case FacadeStyle::Concrete: bp.wallPart = PartId::Concrete; break;
+        case FacadeStyle::Stucco:   bp.wallPart = PartId::Stucco;   break;
+        case FacadeStyle::Metal:    bp.wallPart = PartId::Metal;    break;
+        default:                    bp.wallPart = PartId::Wall;     break;  // Painted/Glass
     }
     // Slenderness cap: total height stays under ~1.8x the footprint's short side,
     // so a small lot can't sprout a pencil tower (device: "very tall skinny and

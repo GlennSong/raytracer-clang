@@ -2266,6 +2266,9 @@ void MetalRenderer::endFrame() {
                     uint32_t runCount = 0;
                     for (size_t j = batchStart; j < bi; j++) {
                         if (shadowInstOffset >= SHADOW_MAX_INSTANCES) break;
+                        // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
+                        if (int(impl->opaqueDrawCalls[j].material.flags) &
+                            RenderMaterial::FLAG_OVERLAY) continue;
                         const Mat4& m = impl->opaqueDrawCalls[j].transform;
                         Vec3 wc = m.transformPoint(b.center);
                         Real maxScale = std::max(

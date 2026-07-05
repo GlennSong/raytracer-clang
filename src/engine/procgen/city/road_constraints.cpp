@@ -221,4 +221,89 @@ RoadGraph capDegree(const RoadGraph& in, const RoadRules& rules) {
     return g;
 }
 
+RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
+    RoadGraph g = in;
+    auto degreeOf = [&](int v) {
+        int d = 0;
+        for (const RoadEdge& e : g.edges)
+            if (e.a == v || e.b == v) ++d;
+        return d;
+    };
+    // Take the globally shortest offender each round (deterministic: ties fall to
+    // the lower edge index) so nearby short edges resolve in a stable order. Each
+    // round either removes an edge (merge) or brings one up to minLen (lengthen),
+    // so the loop terminates; the guard is a backstop for pathological graphs.
+    for (int guard = 0; guard < 512; ++guard) {
+        int shortest = -1;
+        Real shortestLen = minLen;
+        for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+            const RoadEdge& e = g.edges[ei];
+            if (e.a == e.b) continue;
+            Real len = (g.nodes[e.a].pos - g.nodes[e.b].pos).length();
+            if (len < shortestLen - 1e-9) { shortestLen = len; shortest = ei; }
+        }
+        if (shortest < 0) break;
+        const int a = g.edges[shortest].a, b = g.edges[shortest].b;
+
+        // Unique arms of the united node (neighbours of a or b, minus themselves).
+        std::vector<int> arms;
+        for (const RoadEdge& e : g.edges) {
+            for (int v : {e.a, e.b}) {
+                int other = (v == e.a) ? e.b : e.a;
+                if ((v == a || v == b) && other != a && other != b) {
+                    bool seen = false;
+                    for (int u : arms) if (u == other) seen = true;
+                    if (!seen) arms.push_back(other);
+                }
+            }
+        }
+
+        if (static_cast<int>(arms.size()) <= maxDegree) {
+            // MERGE b into a at the degree-weighted midpoint (the busier crossing
+            // moves less, so a T folding into a 4-way barely disturbs the through
+            // road). Then rewire, and drop self-loops + parallel duplicates.
+            const Real da = std::max(1, degreeOf(a)), db = std::max(1, degreeOf(b));
+            g.nodes[a].pos = (g.nodes[a].pos * da + g.nodes[b].pos * db) * (1.0 / (da + db));
+            for (RoadEdge& e : g.edges) {
+                if (e.a == b) e.a = a;
+                if (e.b == b) e.b = a;
+            }
+            std::vector<RoadEdge> kept;
+            kept.reserve(g.edges.size());
+            for (const RoadEdge& e : g.edges) {
+                if (e.a == e.b) continue;                       // the merged edge itself
+                bool dup = false;
+                for (RoadEdge& k : kept)
+                    if ((k.a == e.a && k.b == e.b) || (k.a == e.b && k.b == e.a)) {
+                        k.width = std::max(k.width, e.width);   // widest parallel wins
+                        dup = true;
+                        break;
+                    }
+                if (!dup) kept.push_back(e);
+            }
+            g.edges = std::move(kept);
+        } else {
+            // Can't merge without over-crowding the junction (e.g. the staggered
+            // link a capDegree split leaves): LENGTHEN instead — push the two
+            // junctions apart along the edge axis until the road is minLen.
+            Vec2 axis = g.nodes[b].pos - g.nodes[a].pos;
+            const Real len = axis.length();
+            axis = len > 1e-9 ? axis * (1.0 / len) : Vec2(1, 0);
+            const Real push = (minLen - len) * 0.5;
+            g.nodes[a].pos = g.nodes[a].pos - axis * push;
+            g.nodes[b].pos = g.nodes[b].pos + axis * push;
+        }
+    }
+    // Compact orphaned nodes (a merge leaves its absorbed node unreferenced).
+    std::vector<int> remap(g.nodes.size(), -1);
+    for (const RoadEdge& e : g.edges) { remap[e.a] = 0; remap[e.b] = 0; }
+    RoadGraph out;
+    for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i)
+        if (remap[i] == 0) { remap[i] = static_cast<int>(out.nodes.size()); out.nodes.push_back(g.nodes[i]); }
+    out.edges.reserve(g.edges.size());
+    for (const RoadEdge& e : g.edges)
+        out.edges.push_back(RoadEdge{remap[e.a], remap[e.b], e.width, e.klass, e.layer});
+    return out;
+}
+
 }  // namespace engine

@@ -2,6 +2,7 @@
 
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
 
 using namespace engine;
 
@@ -52,6 +53,13 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
         CHECK(parts[i].materialIndex == static_cast<int>(i));
     }
     CHECK(filled >= 2);   // at least walls + one more class (glass/roof/trim)
+    // Facades must land in the SURFACED wall parts (Brick/Concrete/Stucco/Metal
+    // carry the procedural PBR texture recipes) — leaving every wall in the flat
+    // PartId::Wall is the "buildings are colour-only" device bug.
+    std::size_t surfacedVerts = 0;
+    for (PartId id : {PartId::Brick, PartId::Concrete, PartId::Stucco, PartId::Metal})
+        surfacedVerts += parts[static_cast<std::size_t>(id)].vertices.size();
+    CHECK(surfacedVerts > 0);
 }
 
 TEST_CASE(lot_buildings_are_deterministic) {

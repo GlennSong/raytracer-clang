@@ -254,6 +254,14 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double 
     const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
     double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow centre
     double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): mv = metres past the junction mouth and the band
+    // ends at ~3.6, so the yellow fades in just past it. Without crosswalks mv
+    // is a large sentinel and the line runs the full segment as before.
+    {
+        double t = std::clamp((mv - 4.0) / 0.8, 0.0, 1.0);
+        y *= t * t * (3.0 - 2.0 * t);
+    }
     Vec3 c = deck * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST the

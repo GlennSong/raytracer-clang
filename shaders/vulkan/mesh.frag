@@ -251,6 +251,10 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv, float wu, float wv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): the band ends at mv ~3.6, so the yellow fades in
+    // just past it. Without crosswalks mv is a large sentinel (full-length line).
+    y *= smoothstep(4.0, 4.8, mv);
     vec3 c = mix(deck, vec3(0.82, 0.68, 0.13), y);
     c = mix(c, vec3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
@@ -420,6 +424,19 @@ void main() {
     if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
     uint surfaceId = pc.surfaceFlags.x;
     if (surfaceId != 0u) albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord);
+    // Road micro-relief (device: roads "don't look like a PBR texture"): the road
+    // carries no baked normal/roughness maps (its mesh UV is road-local paint
+    // space), so perturb the normal and vary the roughness procedurally from the
+    // same world-planar noise the asphalt albedo tiles by. Mirrors WGSL/Metal.
+    if (surfaceId == 11u) {
+        float rx = inWorldPos.x, rz = inWorldPos.z;
+        float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.35 * vnoise2(rx * 11.0, rz * 11.0);
+        float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.35 * vnoise2(rx * 11.0 + 1.7, rz * 11.0) - b0;
+        float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.35 * vnoise2(rx * 11.0, rz * 11.0 + 1.7) - b0;
+        N = normalize(N + vec3(-bx, 0.0, -bz) * 0.55);
+        float spk = vnoise2(rx * 23.0, rz * 23.0);
+        roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.5, 1.0);
+    }
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);

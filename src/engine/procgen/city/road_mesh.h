@@ -258,6 +258,14 @@ struct WeldSolidParams {
     // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
     // When false, mv is a large sentinel so no band is painted (ADR-0062).
     bool   crosswalks = false;
+    // Junction pads (device: mesh holes at skewed junctions): every chain ENDS
+    // square to its own direction at a junction node, so where the arms meet
+    // off-square (a bent through-road at a T, arms at 170°) the caps disagree and
+    // a knife-wedge of ground shows through between them. A disc of the widest
+    // incident arm's half-width per junction node — unioned into the outline and
+    // laid as a plain deck fan — covers every such wedge at any arm angle.
+    std::vector<Vec2>   padCenters;
+    std::vector<double> padRadii;
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
 

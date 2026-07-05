@@ -63,7 +63,7 @@
           "seed": 5,
           "street_width": 7
         },
-        "lift": 0.3,
+        "lift": 0.08,
         "markings": true,
         "sidewalk": 1.8,
         "width": 7.0

@@ -275,6 +275,7 @@ public:
         if (globalBuf_) { wgpuBufferRelease(globalBuf_); globalBuf_ = nullptr; }
         if (drawBuf_)   { wgpuBufferRelease(drawBuf_);   drawBuf_ = nullptr; }
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
+        if (overlayPipeline_) { wgpuRenderPipelineRelease(overlayPipeline_); overlayPipeline_ = nullptr; }
         if (instancedPipeline_) { wgpuRenderPipelineRelease(instancedPipeline_); instancedPipeline_ = nullptr; }
         if (instancedShadowPipeline_) { wgpuRenderPipelineRelease(instancedShadowPipeline_); instancedShadowPipeline_ = nullptr; }
         if (terrainPipeline_) { wgpuRenderPipelineRelease(terrainPipeline_); terrainPipeline_ = nullptr; }
@@ -971,6 +972,8 @@ private:
                 for (size_t i = 0; i < draws_.size(); ++i) {
                     const GpuMesh& m = meshes_[draws_[i].mesh];
                     if (!m.vertexBuffer) continue;   // removed mid-frame
+                    // Debug-gizmo overlays never cast shadows.
+                    if (draws_[i].data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) continue;
                     ++plan.shadowConsidered;
                     if (!casterVisible(draws_[i].wCenter, draws_[i].wRadius)) {
                         ++plan.shadowCulled;
@@ -1085,9 +1088,15 @@ private:
             ++matBinds;
         };
 
+        bool anyOverlay = false;
         for (size_t i = 0; i < draws_.size(); ++i) {
             const GpuMesh& m = meshes_[draws_[i].mesh];
             if (!m.vertexBuffer) continue;   // removed mid-frame
+            // FLAG_OVERLAY gizmos draw LAST with the depth-off pipeline (below).
+            if (draws_[i].data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) {
+                anyOverlay = true;
+                continue;
+            }
             uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
             wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
             bindMaterial(draws_[i].mat);
@@ -1141,6 +1150,31 @@ private:
                 wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
                 wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
                                                     0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
+                stats_.drawCalls++;
+                stats_.trianglesDrawn += m.indexCount / 3;
+            }
+        }
+
+        // Debug-gizmo overlay (FLAG_OVERLAY): drawn after everything with depth
+        // test Always / no write, so agent widgets and plan outlines stay
+        // visible through the road solid and buildings (Vulkan/Metal parity).
+        if (anyOverlay && overlayPipeline_) {
+            wgpuRenderPassEncoderSetPipeline(pass, overlayPipeline_);
+            lastMesh = UINT32_MAX;
+            for (size_t i = 0; i < draws_.size(); ++i) {
+                if (!(draws_[i].data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY)) continue;
+                const GpuMesh& m = meshes_[draws_[i].mesh];
+                if (!m.vertexBuffer) continue;
+                uint32_t dynOffset = static_cast<uint32_t>(i * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+                bindMaterial(draws_[i].mat);
+                if (draws_[i].mesh != lastMesh) {
+                    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                    wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                        0, WGPU_WHOLE_SIZE);
+                    lastMesh = draws_[i].mesh;
+                }
                 wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
                 stats_.drawCalls++;
                 stats_.trianglesDrawn += m.indexCount / 3;
@@ -1664,6 +1698,16 @@ private:
         desc.multisample.mask = 0xFFFFFFFF;
 
         pipeline_ = wgpuDeviceCreateRenderPipeline(device_, &desc);
+
+        // Overlay variant (RenderMaterial::FLAG_OVERLAY — debug gizmos): same
+        // shader/layout, but depth test Always + no depth write, drawn LAST in
+        // the main pass so gizmos sit on top of world geometry (Vulkan/Metal
+        // parity: overlayPipeline / depthStateOverlay).
+        depthState.depthWriteEnabled = WGPUOptionalBool_False;
+        depthState.depthCompare = WGPUCompareFunction_Always;
+        overlayPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &desc);
+        depthState.depthWriteEnabled = WGPUOptionalBool_True;
+        depthState.depthCompare = WGPUCompareFunction_LessEqual;
         wgpuPipelineLayoutRelease(pipelineLayout);
 
         // Shadow pipeline: depth-only (no fragment), vs_shadow. Group 0 = globals
@@ -2573,6 +2617,7 @@ private:
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
+    WGPURenderPipeline overlayPipeline_ = nullptr;   // FLAG_OVERLAY: depth Always, no write, drawn last
     WGPUBindGroupLayout skyLayout_ = nullptr;     // group 0 (globals only)
     WGPURenderPipeline skyPipeline_ = nullptr;    // fullscreen procedural sky
     WGPUBindGroup skyBindGroup_ = nullptr;

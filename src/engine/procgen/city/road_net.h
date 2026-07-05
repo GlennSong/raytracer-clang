@@ -37,7 +37,9 @@ struct RoadNet {
     double sidewalk = 2.5;                      // raised sidewalk width per verge (m)
     double curb = 0.16;                         // curb height (m)
     double cornerRadius = 3.0;                  // rounded kerb-return radius (m)
-    double lift = 0.3;                          // raise above the ground (m)
+    double lift = 0.08;                         // raise above the ground (m) — just
+                                                // enough to clear z-fighting; the road
+                                                // should hug the ground (device feedback)
     bool   markings = true;
     bool   crosswalks = true;
     Vec3   color{0.09, 0.09, 0.10};

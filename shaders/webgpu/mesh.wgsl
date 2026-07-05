@@ -361,10 +361,14 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32, wu : f32, wv : f32) ->
   let lat = mu - 2.0;
   let yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
   let yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
-  let y = max(yL, yR);
+  var y = max(yL, yR);
   let wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
   let wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
   let w = max(wL, wR);
+  // The centreline ENDS before a crosswalk (device: the double yellow cut
+  // through the zebra bars): the band ends at mv ~3.6, so the yellow fades in
+  // just past it. Without crosswalks mv is a large sentinel (full-length line).
+  y = y * smoothstep(4.0, 4.8, mv);
   var c = mix(deck, vec3<f32>(0.82, 0.68, 0.13), y);
   c = mix(c, vec3<f32>(0.86, 0.86, 0.83), w);
   // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
@@ -500,7 +504,7 @@ fn fs_main(in : VSOut) -> FsOut {
 
   var albedo    = d.albedoMetallic.rgb * in.color * albedoSample.rgb;
   let metallic  = clamp(d.albedoMetallic.a * mrSample.b, 0.0, 1.0);   // glTF: B=metal
-  let roughness = clamp(d.emissionRough.a * mrSample.g, 0.04, 1.0);   //       G=rough
+  var roughness = clamp(d.emissionRough.a * mrSample.g, 0.04, 1.0);   //       G=rough
   let emission  = d.emissionRough.rgb * emSample;
 
   var N = normalize(in.worldNormal);
@@ -509,6 +513,21 @@ fn fs_main(in : VSOut) -> FsOut {
     let T = normalize(in.worldTangent - N * dot(in.worldTangent, N));
     let B = cross(N, T);
     N = normalize(T * nmap.x + B * nmap.y + N * nmap.z);
+  }
+  // Road micro-relief (device: roads "don't look like a PBR texture"): the road
+  // carries no baked normal/roughness maps (its mesh UV is road-local paint
+  // space), so perturb the normal and vary the roughness procedurally from the
+  // same world-planar noise the asphalt albedo tiles by. Subtle undulation +
+  // sparkle-scale roughness break the uniform specular sheet the flat deck had.
+  // Mirrors Metal (common.metal) / Vulkan (mesh.frag).
+  if (d.surfaceFlags.x == 11u) {
+    let rx = in.worldPos.x; let rz = in.worldPos.z;
+    let b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.35 * vnoise2(rx * 11.0, rz * 11.0);
+    let bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.35 * vnoise2(rx * 11.0 + 1.7, rz * 11.0) - b0;
+    let bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.35 * vnoise2(rx * 11.0, rz * 11.0 + 1.7) - b0;
+    N = normalize(N + vec3<f32>(-bx, 0.0, -bz) * 0.55);
+    let spk = vnoise2(rx * 23.0, rz * 23.0);
+    roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.5, 1.0);
   }
   let V = normalize(g.cameraPosition.xyz - in.worldPos);
   let gbufOut = vec4<f32>(N, roughness);   // material G-buffer (SSAO / SSR)
