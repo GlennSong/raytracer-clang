@@ -189,8 +189,13 @@ float3 surfWood(float3 base, float u, float v) {
 // scene.cpp surfRoadMarkings. mu = lateral (1 left / 2 centre / 3 right; < 0.5 =
 // not carriageway -> plain). Constant AA band (not fwidth) so it is legal in any
 // shader stage; MSAA/TAA cleans up the rest.
-float3 surfRoadMarkings(float3 base, float mu, float mv) {
-    if (mu < 0.5) return base;                       // not carriageway: no paint
+float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
+    // One surface id covers the welded road, split by road-local mu: the
+    // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
+    // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
+    // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Vulkan.
+    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    float3 deck = surfAsphalt(base, wu, wv);            // grained asphalt deck
     float lat = mu - 2.0;                            // [-1, 1], 0 = centreline
     float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
     float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -198,7 +203,7 @@ float3 surfRoadMarkings(float3 base, float mu, float mv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);                          // white edge lines
-    float3 c = mix(base, float3(0.82, 0.68, 0.13), y);
+    float3 c = mix(deck, float3(0.82, 0.68, 0.13), y);
     c = mix(c, float3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
     // the junction mouth (baked by the road mesher), so the band sits set back on
@@ -226,7 +231,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 mesh
         case 8u:  c = surfPavement(base, uv.x, uv.y); break;
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
-        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y); break;
+        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
         default:  return base;
     }
     return saturate(c);   // keep albedo energy-conserving (see scene.cpp)

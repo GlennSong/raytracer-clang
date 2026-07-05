@@ -238,8 +238,14 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
 // sidewalk or junction pad — so it stays plain). Normalised across the width, so it
 // tracks any road width and conforms to terrain for free. `mv` (arc-length) is baked
 // for future dashed dividers; v1 paints a double-yellow centreline + white edge lines.
-Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
-    if (mu < 0.5) return base;                        // not carriageway: no paint
+Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double wv) {
+    // The welded road wears ONE surface id, split by its road-local mu: the
+    // carriageway sits at mu in [1,3] (lat = mu-2); the raised sidewalk/curb band
+    // carries mu in [0,1]. Texture BOTH (device: roads/sidewalks were flat
+    // colour): concrete pavement on the band, asphalt grain under the lane
+    // paint. wu/wv is the world-planar UV the other surfaces tile by.
+    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    Vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
     double lat = mu - 2.0;                            // [-1, 1], 0 = centreline, ±1 = curb
     auto band = [](double x, double c, double hw) {  // ~1 inside a line of half-width hw
         double d = std::fabs(x - c), t = std::clamp((d - hw) / 0.006, 0.0, 1.0);
@@ -248,7 +254,7 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
     const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
     double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow centre
     double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
-    Vec3 c = base * (1.0 - y) + yellow * y;
+    Vec3 c = deck * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST the
     // junction mouth (baked by the road mesher), so the band sits set back on the
@@ -282,7 +288,7 @@ Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n,
         case 8:  c = surfPavement(base, u, v); break;
         case 9:  c = surfCobble(base, u, v); break;
         case 10: c = surfWood(base, u, v); break;
-        case 11: c = surfRoadMarkings(base, mu, mv); break;
+        case 11: c = surfRoadMarkings(base, mu, mv, u, v); break;
         default: return base;
     }
     return Vec3(std::clamp(c.x, 0.0, 1.0), std::clamp(c.y, 0.0, 1.0),

@@ -237,8 +237,13 @@ vec3 surfWood(vec3 base, float u, float v) {
     float shadow = smoothstep(0.0, 0.02, fy);
     return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
-vec3 surfRoadMarkings(vec3 base, float mu, float mv) {
-    if (mu < 0.5) return base;
+vec3 surfRoadMarkings(vec3 base, float mu, float mv, float wu, float wv) {
+    // One surface id covers the welded road, split by road-local mu: the
+    // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
+    // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
+    // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Metal.
+    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
     float lat = mu - 2.0;
     float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
     float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -246,7 +251,7 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);
-    vec3 c = mix(base, vec3(0.82, 0.68, 0.13), y);
+    vec3 c = mix(deck, vec3(0.82, 0.68, 0.13), y);
     c = mix(c, vec3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
     // the junction mouth (baked by the road mesher), so the band sits set back on
@@ -273,7 +278,7 @@ vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV) {
         case 8u:  c = surfPavement(base, uv.x, uv.y); break;
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
-        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y); break;
+        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
         default:  return base;
     }
     return clamp(c, 0.0, 1.0);

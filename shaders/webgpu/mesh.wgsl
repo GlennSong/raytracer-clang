@@ -351,8 +351,13 @@ fn surfWood(base : vec3<f32>, u : f32, v : f32) -> vec3<f32> {
   let shadow = smoothstep(0.0, 0.02, fy);
   return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
-fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32) -> vec3<f32> {
-  if (mu < 0.5) { return base; }
+fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32, wu : f32, wv : f32) -> vec3<f32> {
+  // One surface id covers the whole welded road, split by road-local mu: the
+  // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
+  // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
+  // UV the other surfaces tile by. Mirrors scene.cpp / Metal / Vulkan.
+  if (mu < 0.98) { return surfPavement(base, wu, wv); }
+  let deck = surfAsphalt(base, wu, wv);
   let lat = mu - 2.0;
   let yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
   let yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -360,7 +365,7 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32) -> vec3<f32> {
   let wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
   let wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
   let w = max(wL, wR);
-  var c = mix(base, vec3<f32>(0.82, 0.68, 0.13), y);
+  var c = mix(deck, vec3<f32>(0.82, 0.68, 0.13), y);
   c = mix(c, vec3<f32>(0.86, 0.86, 0.83), w);
   // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
   // the junction mouth (baked by the road mesher), so the band sits set back on
@@ -386,7 +391,7 @@ fn applySurface(id : u32, base : vec3<f32>, worldPos : vec3<f32>, n : vec3<f32>,
   else if (id == 8u)  { c = surfPavement(base, uv.x, uv.y); }
   else if (id == 9u)  { c = surfCobble(base, uv.x, uv.y); }
   else if (id == 10u) { c = surfWood(base, uv.x, uv.y); }
-  else if (id == 11u) { c = surfRoadMarkings(base, meshUV.x, meshUV.y); }
+  else if (id == 11u) { c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); }
   else { return base; }
   return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
