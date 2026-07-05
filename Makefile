@@ -186,6 +186,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/camera_store.cpp \
 	$(SRC_DIR)/engine/level_writer.cpp \
 	$(SRC_DIR)/renderer/hosted_window.cpp \
+	$(SRC_DIR)/renderer/settings.cpp \
 	$(SRC_DIR)/engine/editor_bridge.cpp \
 	$(SRC_DIR)/engine/properties.cpp \
 	$(SRC_DIR)/engine/component_registry.cpp \
