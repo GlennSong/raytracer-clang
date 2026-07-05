@@ -149,7 +149,7 @@ float3 surfCorrugated(float3 base, float u, float v) {
 }
 float3 surfAsphalt(float3 base, float u, float v) {
     float spk = vnoise2(u * 30.0, v * 30.0), patch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (patch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 float3 surfPavement(float3 base, float u, float v) {
@@ -194,7 +194,20 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
     // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
     // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
     // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Vulkan.
-    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain + scoring joints that FOLLOW the curb
+        // (slab tops bake u = -(metres along the kerb loop)). Curb faces (u = 0)
+        // stay plain. Mirrors scene.cpp / WGSL / Vulkan.
+        float spk = vnoise2(wu * 26.0, wv * 26.0);
+        float3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        float su = -mu;
+        if (su > 0.02) {
+            float t = tile1(su, 1.5);
+            float jd = min(t, 1.5 - t);
+            c = c * (0.68 + 0.32 * smoothstep(0.02, 0.06, jd));
+        }
+        return c;
+    }
     float3 deck = surfAsphalt(base, wu, wv);            // grained asphalt deck
     // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
     // internal same-direction lane boundary on multilane roads; 3 m of white

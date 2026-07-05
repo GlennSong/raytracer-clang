@@ -351,6 +351,36 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
                     Vec2 o0 = a + nrm * side * (p.margin + p.depth);
                     Poly2 rect{i0, i1, o1, o0};
                     ensureCCW(rect);
+                    // Rim blocks from DIFFERENT chains can land on the same open
+                    // ground near a corner — two overlapping blocks grew two
+                    // buildings through each other (device: "buildings
+                    // intersecting with one another"). First-come wins; a rect
+                    // overlapping an accepted one (SAT on the convex quads) is
+                    // dropped.
+                    bool overlaps = false;
+                    const Poly2& rectRef = rect;
+                    for (const Poly2& q : out) {
+                        bool separated = false;
+                        for (const Poly2* poly : {&rectRef, &q}) {
+                            for (std::size_t ei = 0; ei < poly->size() && !separated; ++ei) {
+                                Vec2 ed = (*poly)[(ei + 1) % poly->size()] - (*poly)[ei];
+                                Vec2 ax(-ed.y, ed.x);
+                                Real lo0 = 1e30, hi0 = -1e30, lo1 = 1e30, hi1 = -1e30;
+                                for (const Vec2& v : rect) {
+                                    Real t = dot(ax, v);
+                                    lo0 = std::min(lo0, t); hi0 = std::max(hi0, t);
+                                }
+                                for (const Vec2& v : q) {
+                                    Real t = dot(ax, v);
+                                    lo1 = std::min(lo1, t); hi1 = std::max(hi1, t);
+                                }
+                                if (hi0 < lo1 || hi1 < lo0) separated = true;
+                            }
+                            if (separated) break;
+                        }
+                        if (!separated) { overlaps = true; break; }
+                    }
+                    if (overlaps) continue;
                     out.push_back(std::move(rect));
                 }
             }

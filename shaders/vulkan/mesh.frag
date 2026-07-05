@@ -202,7 +202,7 @@ vec3 surfCorrugated(vec3 base, float u, float v) {
 }
 vec3 surfAsphalt(vec3 base, float u, float v) {
     float spk = vnoise2(u * 30.0, v * 30.0), blotch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (blotch - 0.5), 0.5, 1.4);
+    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (blotch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 vec3 surfPavement(vec3 base, float u, float v) {
@@ -242,7 +242,20 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv, float wu, float wv) {
     // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
     // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
     // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Metal.
-    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain + scoring joints that FOLLOW the curb
+        // (slab tops bake u = -(metres along the kerb loop)). Curb faces (u = 0)
+        // stay plain. Mirrors scene.cpp / WGSL / Metal.
+        float spk = vnoise2(wu * 26.0, wv * 26.0);
+        vec3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        float su = -mu;
+        if (su > 0.02) {
+            float t = tile1(su, 1.5);
+            float jd = min(t, 1.5 - t);
+            c = c * (0.68 + 0.32 * smoothstep(0.02, 0.06, jd));
+        }
+        return c;
+    }
     vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
     // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
     // internal same-direction lane boundary on multilane roads; 3 m of white
@@ -444,9 +457,9 @@ void main() {
                  + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
         float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
                  + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
-        N = normalize(N + vec3(-bx, 0.0, -bz) * 1.3);
+        N = normalize(N + vec3(-bx, 0.0, -bz) * 0.6);
         float spk = vnoise2(rx * 23.0, rz * 23.0);
-        roughness = clamp(roughness + (spk - 0.5) * 0.4, 0.45, 1.0);
+        roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.55, 1.0);
     }
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);

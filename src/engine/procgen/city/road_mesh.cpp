@@ -1225,6 +1225,14 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 off[i] = mm * (p.sidewalkWidth / cosH);
             }
             const double ch = p.curbHeight;
+            // Arc length along the loop, baked (negated) into the slab-top UV so
+            // the shader scores joints PERPENDICULAR to the curb, following its
+            // curvature (device: world-aligned plaza slabs looked wrong on a
+            // sidewalk). Negative u keeps the band inside the shader's existing
+            // "mu < 0.98 = sidewalk" gate; sArc[m] closes the wrap-around edge.
+            std::vector<double> sArc(m + 1, 0.0);
+            for (int i = 0; i < m; ++i)
+                sArc[i + 1] = sArc[i] + (loop[(i + 1) % m] - loop[i]).length();
             for (int i = 0; i < m; ++i) {
                 int j = (i + 1) % m;
                 const Vec2& a = loop[i]; const Vec2& b = loop[j];
@@ -1235,7 +1243,12 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 Vec3 aoT = P3(ao, ch), boT = P3(bo, ch),
                      aoB = P3(ao, -p.thickness), boB = P3(bo, -p.thickness);
                 MeshBuilder::emitQuad(mesh, aR, bR, bT, aT, eo3 * -1.0, p.curbColor);     // curb lip (road-facing)
-                MeshBuilder::emitQuad(mesh, aT, bT, boT, aoT, Vec3(0, 1, 0), p.sidewalkColor); // slab top
+                const float ua = static_cast<float>(-sArc[i]);
+                const float ub = static_cast<float>(-sArc[i + 1]);
+                MeshBuilder::emitTriUV(mesh, aT, bT, boT, Vec3(0, 1, 0), p.sidewalkColor,
+                                       ua, 0.0f, ub, 0.0f, ub, 1.0f);      // slab top
+                MeshBuilder::emitTriUV(mesh, aT, boT, aoT, Vec3(0, 1, 0), p.sidewalkColor,
+                                       ua, 0.0f, ub, 1.0f, ua, 1.0f);
                 MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, p.curbColor);        // outer face
             }
         };

@@ -34,7 +34,8 @@ struct RoadNet {
     // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
     // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
     std::vector<int> edgeLayers;
-    double sidewalk = 2.5;                      // raised sidewalk width per verge (m)
+    double sidewalk = 3.5;                      // raised sidewalk width per verge (m)
+                                                // (device: "sidewalks should be wider")
     double curb = 0.16;                         // curb height (m)
     double cornerRadius = 3.0;                  // rounded kerb-return radius (m)
     double lift = 0.08;                         // raise above the ground (m) — just

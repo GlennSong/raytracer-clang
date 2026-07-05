@@ -190,8 +190,10 @@ Vec3 surfCorrugated(const Vec3& base, double u, double v) {
     return base * shade * (1 - rmask) + rustCol * rmask;
 }
 Vec3 surfAsphalt(const Vec3& base, double u, double v) {
+    // Kept SUBTLE and dark (device: "the road doesn't look dark anymore ...
+    // dialed back and allow more of the black to show through").
     double spk = surfVNoise(u * 30.0, v * 30.0), patch = surfFbm(u * 0.4, v * 0.4);
-    double shade = std::clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    double shade = std::clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (patch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 Vec3 surfPavement(const Vec3& base, double u, double v) {
@@ -244,7 +246,22 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double 
     // carries mu in [0,1]. Texture BOTH (device: roads/sidewalks were flat
     // colour): concrete pavement on the band, asphalt grain under the lane
     // paint. wu/wv is the world-planar UV the other surfaces tile by.
-    if (mu < 0.98) return surfPavement(base, wu, wv);   // sidewalk / curb band
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain with scoring joints that FOLLOW the
+        // curb (device: world-aligned plaza slabs looked wrong): slab tops bake
+        // u = -(metres along the kerb loop), so joints run perpendicular to the
+        // curb and turn with it. Curb faces / junction decks (u = 0) stay plain.
+        double spk = surfVNoise(wu * 26.0, wv * 26.0);
+        Vec3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        double su = -mu;
+        if (su > 0.02) {
+            double t = su - 1.5 * std::floor(su / 1.5);   // a joint every 1.5 m
+            double jd = std::min(t, 1.5 - t);
+            double jt = std::clamp((jd - 0.02) / 0.04, 0.0, 1.0);
+            c = c * (0.68 + 0.32 * (jt * jt * (3.0 - 2.0 * jt)));
+        }
+        return c;
+    }
     Vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
     // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): the mesher lays one
     // thin strip per internal same-direction lane boundary on multilane roads;

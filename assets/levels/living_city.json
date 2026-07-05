@@ -28,7 +28,7 @@
           "seed": 5
         },
         "width": 7.0,
-        "sidewalk": 1.8,
+        "sidewalk": 3.5,
         "curb": 0.16,
         "corner_radius": 3.0,
         "lift": 0.08,

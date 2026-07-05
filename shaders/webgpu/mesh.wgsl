@@ -315,7 +315,7 @@ fn surfCorrugated(base : vec3<f32>, u : f32, v : f32) -> vec3<f32> {
 }
 fn surfAsphalt(base : vec3<f32>, u : f32, v : f32) -> vec3<f32> {
   let spk = vnoise2(u * 30.0, v * 30.0); let blotch = fbm2(u * 0.4, v * 0.4);
-  let shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (blotch - 0.5), 0.5, 1.4);
+  let shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (blotch - 0.5), 0.6, 1.02);
   return base * shade;
 }
 fn surfPavement(base : vec3<f32>, u : f32, v : f32) -> vec3<f32> {
@@ -356,7 +356,20 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32, wu : f32, wv : f32) ->
   // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
   // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
   // UV the other surfaces tile by. Mirrors scene.cpp / Metal / Vulkan.
-  if (mu < 0.98) { return surfPavement(base, wu, wv); }
+  if (mu < 0.98) {
+    // Sidewalk band: concrete grain + scoring joints that FOLLOW the curb (slab
+    // tops bake u = -(metres along the kerb loop)). Curb faces (u = 0) stay
+    // plain. Mirrors scene.cpp / Metal / Vulkan.
+    let spk = vnoise2(wu * 26.0, wv * 26.0);
+    var c = base * (0.92 + 0.10 * (spk - 0.5));
+    let su = -mu;
+    if (su > 0.02) {
+      let t = tile1(su, 1.5);
+      let jd = min(t, 1.5 - t);
+      c = c * (0.68 + 0.32 * smoothstep(0.02, 0.06, jd));
+    }
+    return c;
+  }
   let deck = surfAsphalt(base, wu, wv);
   // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
   // internal same-direction lane boundary on multilane roads; 3 m of white
@@ -538,9 +551,9 @@ fn fs_main(in : VSOut) -> FsOut {
            + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
     let bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
            + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
-    N = normalize(N + vec3<f32>(-bx, 0.0, -bz) * 1.3);
+    N = normalize(N + vec3<f32>(-bx, 0.0, -bz) * 0.6);
     let spk = vnoise2(rx * 23.0, rz * 23.0);
-    roughness = clamp(roughness + (spk - 0.5) * 0.4, 0.45, 1.0);
+    roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.55, 1.0);
   }
   let V = normalize(g.cameraPosition.xyz - in.worldPos);
   let gbufOut = vec4<f32>(N, roughness);   // material G-buffer (SSAO / SSR)
