@@ -116,6 +116,28 @@ struct BuildingMesh {
 
 // Parameters for the mid-rise mixed-use hero (ADR-0038 §7) and its variants. All
 // lengths in metres. A skyscraper is just this with a big `floors` and setbacks.
+// An OPENING design (building-grammar-plan.md P2) — the first ELEMENT: a
+// parametric window/door assembly the facade splitter stamps once per bay.
+// The opening's real shape is cut into the wall (an arched head is a
+// tessellated arc, not a square hole), a FRAME sits in the reveal, and the
+// glass sits inside the frame — with optional partitioned lights (muntins),
+// a projecting sill, and a hood (flat header band, or a voussoir band that
+// FOLLOWS the arch). Archetype tables pick styles; the geometry emitter is
+// shared. More elements (cornices, quoins, balconies, storefronts) join the
+// same pattern.
+struct OpeningStyle {
+    enum class Head : uint8_t { Flat, Segmental, Round };
+    enum class Hood : uint8_t { None, Band, Arch };
+    Head head = Head::Flat;
+    Real archRise = 0.30;      // segmental arch rise as a fraction of the span
+    Real frameWidth = 0.09;    // face width of the frame border (m)
+    int  lightsX = 1;          // pane columns (muntin partitions)
+    int  lightsY = 1;          // pane rows (below the springline on an arch)
+    bool sill = true;          // projecting sill course under the opening
+    Hood hood = Hood::Band;    // Band = flat header; Arch = follows the arc
+    Vec3 frameColor{0.93, 0.91, 0.86};   // painted timber / metal frame
+};
+
 struct BuildingParams {
     int   floors = 5;            // residential floors above the ground floor
     bool  groundRetail = true;   // taller, glassier ground floor with an entrance
@@ -145,6 +167,12 @@ struct BuildingParams {
     bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
     bool  pilasters = false;     // vertical piers framing each bay (run full height)
     bool  awning = true;         // a projecting ledge over the entrance
+    // The upper-storey window ELEMENT (OpeningStyle above): head shape, frame,
+    // lights, sill/hood. Ground retail keeps flat storefront openings.
+    OpeningStyle window;
+    // Quoins: alternating corner masonry blocks up every building arris —
+    // traditional on brick/stucco, and they hide the thin-texture corner edge.
+    bool  quoins = false;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
     int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)

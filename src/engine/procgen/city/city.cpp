@@ -113,6 +113,33 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
         p.sides = 36;
     }
 
+    // Window ELEMENT + quoins by cladding (building-grammar-plan.md P2): brick
+    // walk-ups get segmental-arched sashes with voussoir hoods and 2x2 lights;
+    // stucco mixes round arches in; concrete/precast keeps flat heads with a
+    // header band; glass/metal stays a clean skin.
+    switch (style) {
+        case FacadeStyle::Brick:
+            p.window.head = OpeningStyle::Head::Segmental;
+            p.window.hood = OpeningStyle::Hood::Arch;
+            p.window.lightsX = 2; p.window.lightsY = 2;
+            p.quoins = (rng.unit() < 0.6);
+            break;
+        case FacadeStyle::Stucco:
+            p.window.head = (rng.unit() < 0.4) ? OpeningStyle::Head::Round
+                                               : OpeningStyle::Head::Flat;
+            p.window.hood = (p.window.head == OpeningStyle::Head::Round)
+                                ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
+            p.window.lightsX = 2; p.window.lightsY = 1;
+            p.quoins = (rng.unit() < 0.5);
+            break;
+        case FacadeStyle::Concrete:
+            p.window.head = OpeningStyle::Head::Flat;
+            p.window.hood = OpeningStyle::Hood::Band;
+            p.window.lightsX = 1; p.window.lightsY = 2;
+            break;
+        default: break;   // painted/glass/metal keep the plain defaults
+    }
+
     // Ornamentation by archetype: a glass curtain wall and a metal shed stay
     // clean; traditional masonry gets a base course, a ground-floor cornice, an
     // awning, and — on shorter masonry buildings — base piers (pilasters live on

@@ -97,6 +97,29 @@ BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& /*tin
         case FacadeStyle::Metal:    bp.wallPart = PartId::Metal;    break;
         default:                    bp.wallPart = PartId::Wall;     break;  // Painted/Glass
     }
+    // Window ELEMENT + quoins by cladding (P2) — same table as paramsForDistrict.
+    switch (style) {
+        case FacadeStyle::Brick:
+            bp.window.head = OpeningStyle::Head::Segmental;
+            bp.window.hood = OpeningStyle::Hood::Arch;
+            bp.window.lightsX = 2; bp.window.lightsY = 2;
+            bp.quoins = (rng.unit() < 0.6);
+            break;
+        case FacadeStyle::Stucco:
+            bp.window.head = (rng.unit() < 0.4) ? OpeningStyle::Head::Round
+                                                : OpeningStyle::Head::Flat;
+            bp.window.hood = (bp.window.head == OpeningStyle::Head::Round)
+                                 ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
+            bp.window.lightsX = 2; bp.window.lightsY = 1;
+            bp.quoins = (rng.unit() < 0.5);
+            break;
+        case FacadeStyle::Concrete:
+            bp.window.head = OpeningStyle::Head::Flat;
+            bp.window.hood = OpeningStyle::Hood::Band;
+            bp.window.lightsX = 1; bp.window.lightsY = 2;
+            break;
+        default: break;
+    }
     // Slenderness cap: total height stays under ~1.8x the footprint's short side,
     // so a small lot can't sprout a pencil tower (device: "very tall skinny and
     // completely malformed"). Floors ~3.2 m each; always at least one.

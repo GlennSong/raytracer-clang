@@ -518,6 +518,39 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     else if (style == "painted")    p.wallColor = facadeColor(FacadeStyle::Painted, seed);
     p.curtainWall = optBoolField(L, idx, "curtain_wall", p.curtainWall);
     p.wallColor = optVec3Field(L, idx, "wall_color", p.wallColor);
+
+    // Window ELEMENT knobs (building-grammar-plan.md P2) — the lab's dials:
+    //   window_head = "flat" | "segmental" | "round"
+    //   window_hood = "none" | "band" | "arch"
+    //   lights_x / lights_y = pane grid; arch_rise; frame_width; quoins; sill
+    // Defaults follow the style table (brick -> segmental arch + voussoirs...).
+    if (style == "brick") {
+        p.window.head = OpeningStyle::Head::Segmental;
+        p.window.hood = OpeningStyle::Hood::Arch;
+        p.window.lightsX = 2; p.window.lightsY = 2;
+        p.quoins = true;
+    } else if (style == "stucco") {
+        p.window.head = OpeningStyle::Head::Round;
+        p.window.hood = OpeningStyle::Hood::Arch;
+        p.window.lightsX = 2; p.window.lightsY = 1;
+        p.quoins = true;
+    } else if (style == "concrete") {
+        p.window.lightsX = 1; p.window.lightsY = 2;
+    }
+    std::string head = optStrField(L, idx, "window_head", "");
+    if (head == "flat")           p.window.head = OpeningStyle::Head::Flat;
+    else if (head == "segmental") p.window.head = OpeningStyle::Head::Segmental;
+    else if (head == "round")     p.window.head = OpeningStyle::Head::Round;
+    std::string hood = optStrField(L, idx, "window_hood", "");
+    if (hood == "none")      p.window.hood = OpeningStyle::Hood::None;
+    else if (hood == "band") p.window.hood = OpeningStyle::Hood::Band;
+    else if (hood == "arch") p.window.hood = OpeningStyle::Hood::Arch;
+    p.window.lightsX = static_cast<int>(optField(L, idx, "lights_x", p.window.lightsX));
+    p.window.lightsY = static_cast<int>(optField(L, idx, "lights_y", p.window.lightsY));
+    p.window.archRise = static_cast<Real>(optField(L, idx, "arch_rise", p.window.archRise));
+    p.window.frameWidth = static_cast<Real>(optField(L, idx, "frame_width", p.window.frameWidth));
+    p.quoins = optBoolField(L, idx, "quoins", p.quoins);
+    p.window.sill = optBoolField(L, idx, "sill", p.window.sill);
     return p;
 }
 

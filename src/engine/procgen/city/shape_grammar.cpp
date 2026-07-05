@@ -333,7 +333,8 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     FaceRect fr = faceOf(storey, side);
     // Accumulate into locals, then append once each — never hold a part reference
     // across a partMesh() that could reallocate out.parts.
-    RenderMesh wall, glass, door, surround;   // surround = sill/header trim courses
+    // surround = sill/hood trim courses; frame = window frames + muntin lights.
+    RenderMesh wall, glass, door, surround, frame;
 
     int bays = std::max(1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
     Real bw = fr.width / bays;
@@ -373,10 +374,59 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
             emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1), fr.at(a0, b1),
                      fr.n, wallColor);
         };
+        // The opening ELEMENT (building-grammar-plan.md P2): its head may be an
+        // ARCH — a real arc cut into the wall, not a square hole. Arches apply
+        // to punched residential windows only (storefronts, clerestories and
+        // doors stay flat) and only when the opening can carry the rise.
+        OpeningStyle st = p.window;
+        if (entrance || mode != FacadeMode::Residential)
+            st.head = OpeningStyle::Head::Flat;
+        const Real span = wx1 - wx0;
+        Real rise = 0;
+        if (st.head == OpeningStyle::Head::Round) rise = span * 0.5;
+        else if (st.head == OpeningStyle::Head::Segmental)
+            rise = span * std::min(Real(0.5), std::max(Real(0.12), st.archRise));
+        if (rise > 0 && openHead - rise < openSill + 0.35) rise = 0;   // too squat
+        const Real ysp = openHead - rise;                    // springline
+        const Real cx = (wx0 + wx1) * 0.5;
+        // Arc samples, left springer -> right springer (face space).
+        const int NARC = 8;
+        Real R = 0, Cy = 0;
+        Vec2 arc[NARC + 1];
+        if (rise > 0) {
+            R = (rise * rise + span * span * 0.25) / (2 * rise);
+            Cy = openHead - R;
+            const Real thL = std::atan2(ysp - Cy, wx0 - cx);
+            const Real thR = std::atan2(ysp - Cy, wx1 - cx);
+            for (int k = 0; k <= NARC; ++k) {
+                Real th = thL + (thR - thL) * (Real(k) / NARC);
+                arc[k] = Vec2(cx + R * std::cos(th), Cy + R * std::sin(th));
+            }
+        }
+
+        // Wall surround: below, piers to the springline, above the apex — and
+        // for an arch, the SPANDRELS between the arc and the apex line.
         wallQuad(x0, x1, 0, openSill);                       // below opening
-        wallQuad(x0, x1, openHead, fh);                      // above opening
-        wallQuad(x0, wx0, openSill, openHead);               // left pier
-        wallQuad(wx1, x1, openSill, openHead);               // right pier
+        wallQuad(x0, x1, openHead, fh);                      // above apex
+        wallQuad(x0, wx0, openSill, ysp);                    // left pier
+        wallQuad(wx1, x1, openSill, ysp);                    // right pier
+        if (rise > 0) {
+            wallQuad(x0, wx0, ysp, openHead);                // pier strips beside the arch
+            wallQuad(wx1, x1, ysp, openHead);
+            for (int k = 0; k < NARC; ++k) {                 // spandrel fill over the arc
+                // At the APEX one arc point touches the openHead line — a quad
+                // there has a degenerate first triangle, which breaks emitQuad's
+                // winding pick (the zero-area cross can't vote). Emit the
+                // surviving piece as a triangle instead.
+                const Real h0 = openHead - arc[k].y, h1 = openHead - arc[k + 1].y;
+                Vec3 A = fr.at(arc[k].x, arc[k].y), B = fr.at(arc[k + 1].x, arc[k + 1].y);
+                Vec3 TB = fr.at(arc[k + 1].x, openHead), TA = fr.at(arc[k].x, openHead);
+                if (h0 < 1e-4 && h1 < 1e-4) continue;
+                if (h1 < 1e-4)      MeshBuilder::emitTri(wall, A, B, TA, fr.n, wallColor);
+                else if (h0 < 1e-4) MeshBuilder::emitTri(wall, A, B, TB, fr.n, wallColor);
+                else                emitQuad(wall, A, B, TB, TA, fr.n, wallColor);
+            }
+        }
 
         if (entrance) {
             // A recessed doorway, closed like the windows: jambs + lintel +
@@ -394,32 +444,87 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
             emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
                      materialFor(PartId::Door, wallColor).albedo);   // the door leaf
         } else {
-            Vec3 in = fr.n * (-p.windowInset);
-            // Window reveals (jambs/sill/lintel): close the recess between the wall
-            // opening and the inset glass, so you don't see straight through the
-            // (hollow) building around the glass. Four quads from the opening edge
-            // back to the glass, normals facing into the recess.
+            const Vec3 in = fr.n * (-p.windowInset);
+            const Vec3 rev = wallColor * 0.82;
+            const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
+            // Reveals: close the recess between the wall opening and the inset
+            // glass — sill, jambs to the springline, then a flat lintel or the
+            // arc SOFFIT (per-segment quads whose normals point at the arc
+            // centre, so the underside of the arch shades correctly).
             Vec3 oBL = fr.at(wx0, openSill), oBR = fr.at(wx1, openSill);
-            Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
-            Vec3 gBL = oBL + in, gBR = oBR + in, gTL = oTL + in, gTR = oTR + in;
-            Vec3 rev = wallColor * 0.82;
-            emitQuad(wall, oTL, oTR, gTR, gTL, fr.v * -1, rev);   // lintel (faces down)
-            emitQuad(wall, oBL, oBR, gBR, gBL, fr.v,      rev);   // sill   (faces up)
-            emitQuad(wall, oBL, oTL, gTL, gBL, fr.h,      rev);   // left jamb (faces +h)
-            emitQuad(wall, oBR, oTR, gTR, gBR, fr.h * -1, rev);   // right jamb
-            emitQuad(glass, gBL, gBR, gTR, gTL, fr.n,
-                     materialFor(PartId::Glass, wallColor).albedo);
+            Vec3 oTL = fr.at(wx0, ysp), oTR = fr.at(wx1, ysp);
+            emitQuad(wall, oBL, oBR, oBR + in, oBL + in, fr.v, rev);      // sill reveal
+            emitQuad(wall, oBL, oTL, oTL + in, oBL + in, fr.h, rev);      // left jamb
+            emitQuad(wall, oBR, oTR, oTR + in, oBR + in, fr.h * -1, rev); // right jamb
+            if (rise <= 0) {
+                emitQuad(wall, oTL, oTR, oTR + in, oTL + in, fr.v * -1, rev);   // lintel
+            } else {
+                for (int k = 0; k < NARC; ++k) {
+                    Vec3 A = fr.at(arc[k].x, arc[k].y), B = fr.at(arc[k + 1].x, arc[k + 1].y);
+                    Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
+                    Real my = (arc[k].y + arc[k + 1].y) * 0.5;
+                    Vec3 nrm = normalize(fr.h * (cx - mx) + fr.v * (Cy - my));
+                    emitQuad(wall, A, B, B + in, A + in, nrm, rev);       // arc soffit
+                }
+            }
 
-            // Projecting window surrounds (device: "window sills and trims"): a
-            // SILL ledge under the opening — oversailing the jambs, like a cast
-            // stone course — and a HEADER band (the flat lintel course) above.
-            // Traditional facades only: a curtain wall / warehouse keeps a clean
-            // skin. Emitted under Trim so they pick the trim material.
+            // FRAME: a painted border seated partway into the reveal — the glass
+            // sits INSIDE it (device: "a frame around it and then in that frame
+            // sits the actual window"). Rails + stiles, and on an arch a curved
+            // head rail following the arc. Muntins split the frame into lights.
+            const Vec3 fp = fr.n * (-p.windowInset * 0.45);
+            const Real fw = std::max(Real(0.04), st.frameWidth);
+            auto frameQuad = [&](Real a0, Real b0, Real a1, Real b1) {
+                if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
+                emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
+                         fr.at(a1, b1) + fp, fr.at(a0, b1) + fp, fr.n, st.frameColor);
+            };
+            frameQuad(wx0, openSill, wx1, openSill + fw);                 // bottom rail
+            frameQuad(wx0, openSill + fw, wx0 + fw, ysp);                 // left stile
+            frameQuad(wx1 - fw, openSill + fw, wx1, ysp);                 // right stile
+            if (rise <= 0) {
+                frameQuad(wx0 + fw, ysp - fw, wx1 - fw, ysp);             // top rail
+            } else {
+                const Real innerK = (R - fw) / R;
+                for (int k = 0; k < NARC; ++k) {                          // curved head rail
+                    Vec2 iA(cx + (arc[k].x - cx) * innerK, Cy + (arc[k].y - Cy) * innerK);
+                    Vec2 iB(cx + (arc[k + 1].x - cx) * innerK, Cy + (arc[k + 1].y - Cy) * innerK);
+                    emitQuad(frame, fr.at(iA.x, iA.y) + fp, fr.at(iB.x, iB.y) + fp,
+                             fr.at(arc[k + 1].x, arc[k + 1].y) + fp,
+                             fr.at(arc[k].x, arc[k].y) + fp, fr.n, st.frameColor);
+                }
+            }
+            // Muntins: pane grid in the rectangular zone (an arch's lunette
+            // above the springline stays one clear light).
+            const Real mw = 0.032;
+            const Real pz0 = openSill + fw;
+            const Real pz1 = (rise > 0) ? ysp : ysp - fw;
+            for (int k = 1; k < st.lightsX; ++k) {
+                Real xk = wx0 + span * (Real(k) / st.lightsX);
+                frameQuad(xk - mw, pz0, xk + mw, pz1);
+            }
+            for (int k = 1; k < st.lightsY; ++k) {
+                Real yk = pz0 + (pz1 - pz0) * (Real(k) / st.lightsY);
+                frameQuad(wx0 + fw, yk - mw, wx1 - fw, yk + mw);
+            }
+
+            // GLASS: the full opening behind the frame — a rectangle to the
+            // springline plus (for an arch) a lunette fan to the arc.
+            emitQuad(glass, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, gcol);
+            if (rise > 0) {
+                Vec3 S = fr.at(cx, ysp) + in;
+                for (int k = 0; k < NARC; ++k)
+                    MeshBuilder::emitTri(glass, S, fr.at(arc[k].x, arc[k].y) + in,
+                                         fr.at(arc[k + 1].x, arc[k + 1].y) + in,
+                                         fr.n, gcol);
+            }
+
+            // Surrounds (Trim): the projecting SILL course, and a HOOD — a flat
+            // header band, or a voussoir band that FOLLOWS the arch (device:
+            // "window arches ... should follow the arch to look natural").
             if (!p.curtainWall && mode != FacadeMode::Solid) {
                 RenderMesh& srd = surround;
                 auto ledge = [&](Real a0, Real b0, Real a1, Real b1, Real proud) {
-                    // A shallow box proud of the wall: front + top + bottom +
-                    // two end returns.
                     Vec3 ov = fr.n * proud;
                     Vec3 BL = fr.at(a0, b0), BR = fr.at(a1, b0);
                     Vec3 TL = fr.at(a0, b1), TR = fr.at(a1, b1);
@@ -430,10 +535,32 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
                     emitQuad(srd, BR + ov, BR, TR, TR + ov, fr.h, p.trimColor);        // right end
                 };
                 const Real over = 0.08;                        // oversail past the jambs
-                ledge(std::max(x0, wx0 - over), openSill - 0.07,
-                      std::min(x1, wx1 + over), openSill, 0.10);        // sill course
-                ledge(std::max(x0, wx0 - over), openHead,
-                      std::min(x1, wx1 + over), openHead + 0.12, 0.06); // header band
+                if (st.sill)
+                    ledge(std::max(x0, wx0 - over), openSill - 0.07,
+                          std::min(x1, wx1 + over), openSill, 0.10);      // sill course
+                if (st.hood == OpeningStyle::Hood::Band && rise <= 0)
+                    ledge(std::max(x0, wx0 - over), openHead,
+                          std::min(x1, wx1 + over), openHead + 0.12, 0.06);   // header
+                if (st.hood == OpeningStyle::Hood::Arch && rise > 0) {
+                    // Voussoir band: a proud arc course from the extrados out.
+                    const Real bw = 0.15, proud = 0.07;
+                    const Vec3 hp = fr.n * proud;
+                    const Real outerK = (R + bw) / R;
+                    for (int k = 0; k < NARC; ++k) {
+                        Vec3 A = fr.at(arc[k].x, arc[k].y);
+                        Vec3 B = fr.at(arc[k + 1].x, arc[k + 1].y);
+                        Vec2 oA(cx + (arc[k].x - cx) * outerK, Cy + (arc[k].y - Cy) * outerK);
+                        Vec2 oB(cx + (arc[k + 1].x - cx) * outerK,
+                                Cy + (arc[k + 1].y - Cy) * outerK);
+                        Vec3 OA = fr.at(oA.x, oA.y), OB = fr.at(oB.x, oB.y);
+                        emitQuad(srd, A + hp, B + hp, OB + hp, OA + hp, fr.n, p.trimColor);
+                        Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
+                        Real my = (arc[k].y + arc[k + 1].y) * 0.5;
+                        Vec3 dn = normalize(fr.h * (cx - mx) + fr.v * (Cy - my));
+                        emitQuad(srd, A, B, B + hp, A + hp, dn, p.trimColor);      // intrados lip
+                        emitQuad(srd, OA + hp, OB + hp, OB, OA, dn * -1, p.trimColor); // extrados
+                    }
+                }
             }
         }
     }
@@ -468,6 +595,7 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Door, door);
     appendToPart(out, PartId::Trim, surround);
+    appendToPart(out, PartId::Detail, frame);   // frames/muntins read as joinery
 }
 
 }  // namespace
@@ -771,15 +899,23 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
             emitBox(out, a, PartId::Detail, params.trimColor);
         }
     }
-    // String course / cornice: a prominent oversailing band capping the base
-    // (separates the taller retail/lobby base from the shaft, and caps the base
-    // piers). Wraps the whole perimeter — a cornice runs over the entrance.
-    if (params.stringCourse) {
-        Real grow = 0.20, h = 0.45, yb = y - 0.22;
-        Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * grow - f * grow,
-                 {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * grow, h, depth + 2 * grow)};
-        emitBox(out, sc, PartId::Trim, params.trimColor);
-    }
+    // BASE CORNICE: a real stepped profile capping the base (device: "I don't
+    // see a cornice at the top of the building's base" — the old single band
+    // read as nothing). Three courses stepping outward — bed mould, corona,
+    // and a thin cap slab — wrapped around the whole perimeter.
+    auto emitCornice = [&](Real yTop, Real scale) {
+        struct Tier { Real grow, h; };
+        const Tier tiers[3] = {{0.10, 0.16}, {0.24, 0.18}, {0.34, 0.08}};
+        Real yb = yTop;
+        for (const Tier& t : tiers) {
+            Real g2 = t.grow * scale, h2 = t.h * scale;
+            Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * g2 - f * g2,
+                     {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * g2, h2, depth + 2 * g2)};
+            emitBox(out, sc, PartId::Trim, params.trimColor);
+            yb += h2;
+        }
+    };
+    if (params.stringCourse) emitCornice(y - 0.32, 1.0);
     y += gh;
 
     // Upper floors carry no pilasters — base piers belong to the base only
@@ -788,11 +924,13 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
     upper.pilasters = false;
 
     // Upper residential floors, with optional setbacks.
+    bool didSetback = false;
     for (int i = 0; i < params.floors; ++i) {
         if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
             i % params.setbackFloors == 0 &&
             width - 2 * params.setbackEvery >= 8.0 &&
             depth - 2 * params.setbackEvery >= 8.0) {
+            didSetback = true;
             Real d = params.setbackEvery;
             Real dx = std::min(d, width * 0.4), dz = std::min(d, depth * 0.4);
             // Cap the lower (wider) mass with a roof slab so the exposed setback
@@ -823,15 +961,37 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params) {
         y += fh;
     }
 
-    // Top cornice: a projecting band capping the shaft (mirrors the base course),
-    // so the shaft reads as framed between base and crown — the tripartite line a
-    // masonry building always has. Glass towers get a clean cap instead.
-    if (params.stringCourse && !params.curtainWall) {
-        Real grow = 0.22, h = 0.5, yb = y - 0.5;
-        Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * grow - f * grow,
-                 {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * grow, h, depth + 2 * grow)};
-        emitBox(out, sc, PartId::Trim, params.trimColor);
+    // QUOINS (element, P2): alternating cast-stone blocks up every corner
+    // arris — the masonry corner treatment (and it hides the thin-texture edge
+    // where two brick faces meet, device feedback). Skipped on stepped towers
+    // (the corners move) and clean-skin facades.
+    if (params.quoins && !params.curtainWall && !params.solidFacade && !didSetback) {
+        const Real qh = 0.42, gap = 0.03, proud = 0.045;
+        const Real longL = 0.62, shortL = 0.30;
+        const Vec3 qcol = params.trimColor;
+        for (int cxi = 0; cxi <= 1; ++cxi)
+            for (int czi = 0; czi <= 1; ++czi) {
+                int k = 0;
+                for (Real qy = baseY + 0.06; qy + qh <= y - 0.45; qy += qh, ++k) {
+                    const bool alongR = ((k + cxi + czi) & 1) == 0;
+                    const Real lr = alongR ? longL : shortL;    // extent along r
+                    const Real lf = alongR ? shortL : longL;    // extent along f
+                    const Real x0q = cxi ? width - lr : -proud;
+                    const Real z0q = czi ? depth - lf : -proud;
+                    Vec3 o = footOrigin + r * x0q + f * z0q;
+                    o.y = qy;
+                    emitBox(out, Scope{o, {r, Vec3(0, 1, 0), f},
+                                       Vec3(lr + proud, qh - gap, lf + proud)},
+                            PartId::Trim, qcol);
+                }
+            }
     }
+
+    // Top cornice: the stepped crown capping the shaft (mirrors the base
+    // cornice, a touch larger), so the shaft reads as framed between base and
+    // crown — the tripartite base/shaft/capital line a masonry building always
+    // has. Glass towers get a clean cap instead.
+    if (params.stringCourse && !params.curtainWall) emitCornice(y - 0.45, 1.25);
     // Roof: a flat slab + a parapet railing around the perimeter (ADR-0038 §4).
     emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
                        {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
