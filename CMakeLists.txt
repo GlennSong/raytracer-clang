@@ -413,6 +413,27 @@ enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
 
 # ============================================================
+# Headless demos (tools/): small programs that show the engine systems in
+# action without a GPU or an audio device — the path tracer renders the
+# DebugDraw ribbons to a PNG, and Manual-mode audio mixes a spatial scene to
+# a WAV. Handy on CI/remote machines; also fine on a dev box.
+# ============================================================
+option(RT_BUILD_DEMOS "Build the headless demo tools" ON)
+if(RT_BUILD_DEMOS)
+    add_executable(debug_draw_demo tools/debug_draw_demo.cpp ${CORE_SOURCES})
+    target_include_directories(debug_draw_demo PRIVATE src)
+    target_compile_options(debug_draw_demo PRIVATE -Wall -Wextra)
+    target_link_libraries(debug_draw_demo PRIVATE engine_core)
+
+    if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+        add_executable(audio_demo tools/audio_demo.cpp)
+        target_include_directories(audio_demo PRIVATE src)
+        target_compile_options(audio_demo PRIVATE -Wall -Wextra)
+        target_link_libraries(audio_demo PRIVATE engine_core)
+    endif()
+endif()
+
+# ============================================================
 # Physics (Jolt) — cross-platform C++, builds and runs headless (ADR-0012).
 # Jolt's PUBLIC compile definitions propagate to anything linking the `Jolt`
 # target, so the JPH_* config stays consistent automatically.
