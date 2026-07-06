@@ -506,6 +506,8 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
     p.tiers     = static_cast<int>(optField(L, idx, "tiers", p.tiers));
     p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
+    p.solidFacade = optBoolField(L, idx, "solid_facade", p.solidFacade);
+    p.groundRetail = optBoolField(L, idx, "ground_retail", p.groundRetail);
 
     // Facade style: a named look picks the wall material + a seeded colour
     // (brick reds, concrete greys, glass curtain, ...). Fine knobs override it.
