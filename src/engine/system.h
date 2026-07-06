@@ -3,6 +3,7 @@
 
 #include "world.h"
 #include "clock.h"
+#include "event_bus.h"
 #include "input/input_map.h"
 #include "input/player_input.h"
 #include "../renderer/renderer.h"
@@ -54,6 +55,8 @@ struct FrameContext {
     SimClock& clock;
     Settings& settings;
     JobSystem& jobs;           // shared thread pool (ADR-0014): physics today
+    EventBus& events;          // typed pub/sub (ADR-0066): publish now, or
+                               // enqueue for the post-fixed-step dispatch
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)

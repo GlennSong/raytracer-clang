@@ -65,6 +65,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
+        eventBus,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -147,6 +148,10 @@ void Application::runFrame() {
         for (int i = 0; i < steps; i++)
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
     }
+
+    // Deliver everything enqueued during update/fixedUpdate before the frame
+    // renders, so reactions land in the same frame as their cause (ADR-0066).
+    eventBus.dispatchQueued();
 
     auto frameStart = std::chrono::steady_clock::now();
     renderFrame();

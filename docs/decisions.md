@@ -4686,6 +4686,50 @@ headless with null meshes (`test_city_render.cpp` — night headlights, brake on
 hold, turn-signal flash, externally-owned cars draw none). The emissive GPU draw
 is viewer-gated and UNVERIFIED on device (register row updated). Suite 698/698.
 
+## ADR-0066 — A typed EventBus: the engine's decoupling seam for cross-system signals
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** Upcoming systems need "system A announces, system B reacts"
+without coupling: audio cues (a shot fired, a body landing → a sound), UI
+notifications, achievement-style triggers, script callbacks. Today such
+signals travel as direct method calls between systems (tight coupling), as
+components written by one system and polled by another (a frame of latency,
+plus pool churn for one-shot facts), or not at all. The audio system
+(ADR-0069) is the first concrete consumer: gameplay systems must be able to
+fire a sound without knowing an audio engine exists.
+
+**Decision.** A minimal typed publish/subscribe bus, `engine::EventBus`
+(`src/engine/event_bus.{h,cpp}`), owned by `Application` and handed to every
+system as `FrameContext::events`. An event is any copyable struct; subscribers
+register a `std::function<void(const E&)>` per event type
+(`std::type_index`-keyed). Two delivery modes: `publish` (synchronous,
+handlers run in subscription order — deterministic, fits ADR-0002) and
+`enqueue` + `dispatchQueued` (deferred; the Application dispatches once per
+frame after the fixed steps, so reactions land in the same frame as their
+cause). Reentrancy is defined and tested: unsubscribe-during-dispatch nulls
+the slot and sweeps later; subscribe-during-dispatch sees the next publish;
+enqueue-during-dispatch lands in the next frame's batch (no unbounded
+cascades). Not thread-safe by design — same main-thread rule as `World`;
+cross-thread producers stage their own queue and hand over on the main thread.
+
+**Alternatives.** (a) Signals/slots per emitter (`Signal<T>` members) — no
+central bus, but consumers must know each emitter, which is the coupling we
+are removing. (b) An ECS event-component pattern (events as short-lived
+entities) — uniform with the data model but pays entity churn per signal and
+a fixed one-frame latency everywhere. (c) A string-keyed dispatcher — no
+compile-time typing; misspelled topics fail silently. The typed bus is ~100
+lines, std-only (AGENTS.md), and headless-tested (`tests/test_event_bus.cpp`).
+
+**Consequences.** Systems gain a decoupled signal path today; the audio
+system's `PlaySound` events ride it (ADR-0069). Handlers run synchronously on
+the sim thread, so a slow handler stalls the frame — handlers must stay cheap
+(fire-and-forget, not workloads). Subscription order is implicit dispatch
+order; systems that need a strict ordering should not encode it across the
+bus. **Revisit trigger:** if profiling shows event volume mattering (bullet
+storms, per-instance signals), add a small-vector/arena path; if scripts need
+to subscribe (Lua callbacks), add a `ScriptVM` binding surface over the same
+bus rather than a second dispatcher.
+
 ---
 
 ## Interim seams & tech-debt register

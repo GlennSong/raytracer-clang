@@ -37,6 +37,7 @@ add_library(engine_core STATIC
     src/renderer/settings.cpp
     src/renderer/hosted_window.cpp
     src/engine/clock.cpp
+    src/engine/event_bus.cpp
     src/engine/world.cpp
     src/engine/components.cpp
     src/engine/application.cpp
@@ -241,6 +242,7 @@ add_executable(run_tests
     tests/test_sparse_set.cpp
     tests/test_world.cpp
     tests/test_clock.cpp
+    tests/test_event_bus.cpp
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
