@@ -883,17 +883,40 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
 // footOrigin/width/depth/r/f describe the (possibly set-back) roof footprint.
 static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                       Real depth, const Vec3& r, const Vec3& f, Real roofY,
-                      const BuildingParams& p, Rng& rng) {
+                      const BuildingParams& p, Rng& rng,
+                      const Poly2* topPlan = nullptr) {
     const Vec3 up(0, 1, 0);
-    // Mechanical penthouse: a smaller set-back box (elevator overrun + plant).
+    // The roof may be an L / U / courtyard PLAN, not its oriented box — a crown
+    // element seated by box coordinates alone can hang over the notch (device:
+    // "a giant block that doesn't fit properly with the rooftop"). When the
+    // caller passes the top plan, every element proves its corners are ON it.
+    auto onRoof = [&](const Vec3& o, Real w2, Real d2) {
+        if (!topPlan) return true;
+        for (int cx = 0; cx <= 1; ++cx)
+            for (int cz = 0; cz <= 1; ++cz) {
+                Vec3 q = o + r * (w2 * cx) + f * (d2 * cz);
+                if (!pointInPolygon(*topPlan, Vec2(q.x, q.z))) return false;
+            }
+        return true;
+    };
+    // Mechanical penthouse: a smaller set-back box (elevator overrun + plant),
+    // capped in absolute size so a big roof doesn't grow a second building.
     if (p.floors >= 4 && width > 5 && depth > 5) {
-        Real pw = width * rng.range(0.35, 0.55);
-        Real pd = depth * rng.range(0.35, 0.55);
+        Real pw = std::min(width * rng.range(0.35, 0.55), Real(12.0));
+        Real pd = std::min(depth * rng.range(0.35, 0.55), Real(12.0));
         Real ph = rng.range(2.5, 4.0);
-        Vec3 po = footOrigin + r * ((width - pw) * rng.range(0.15, 0.6)) +
-                  f * ((depth - pd) * rng.range(0.15, 0.6));
-        emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(pw, ph, pd)},
-                PartId::Trim, p.trimColor * 0.85);
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            Vec3 po = footOrigin + r * ((width - pw) * rng.range(0.15, 0.6)) +
+                      f * ((depth - pd) * rng.range(0.15, 0.6));
+            if (onRoof(po, pw, pd)) {
+                emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
+                                   Vec3(pw, ph, pd)},
+                        PartId::Trim, p.trimColor * 0.85);
+                break;
+            }
+            pw *= 0.75; pd *= 0.75;   // shrink toward a seat; give up quietly
+            if (pw < 2.5 || pd < 2.5) break;
+        }
     }
     // Timber water tank: a tube on four legs with a flat top — the NYC rooftop
     // tank, on masonry mid-rises. The wood surface makes it read as timber.
@@ -905,6 +928,14 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         Vec3 tc = footOrigin + r * (ix + (width - 2 * ix) * rng.unit()) +
                   f * (iz + (depth - 2 * iz) * rng.unit());
         tc.y = 0;
+        for (int attempt = 0;
+             attempt < 3 && !onRoof(tc - r * tr - f * tr, 2 * tr, 2 * tr);
+             ++attempt) {
+            tc = footOrigin + r * (ix + (width - 2 * ix) * rng.unit()) +
+                 f * (iz + (depth - 2 * iz) * rng.unit());
+            tc.y = 0;
+        }
+        if (!onRoof(tc - r * tr - f * tr, 2 * tr, 2 * tr)) return;
         Real tankBase = roofY + legH;
         Vec3 woodCol = materialFor(PartId::Wood, p.wallColor).albedo;
         for (int lx = -1; lx <= 1; lx += 2)
@@ -1433,7 +1464,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         Vec3 fo = Vec3(topObb.center.x, 0, topObb.center.y) -
                   r3 * topObb.half[0] - f3 * topObb.half[1];
         emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                  y + 0.05, params, rng);
+                  y + 0.05, params, rng, &cur);
     }
     out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),
                             Vec3(0, 1, 0), "roof"});

@@ -2115,14 +2115,23 @@ bool LevelLoader::load(const std::string& path,
                     r.material.roughness = 1.0f;
                     world.add<Renderable>(e, r);
 
-                    // Trees: deterministic count + spots from the lot position.
+                    // Trees: deterministic count + spots from the lot position,
+                    // scaled by the pad's real area so a block-sized park reads
+                    // as a park (device: "scatter more trees around it").
                     const uint32_t h = static_cast<uint32_t>(
                         std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) * 2654435761u;
-                    const int nTrees = (lb.type == "park" ? 2 : 1) + static_cast<int>(h % 2u);
+                    const double padArea = lb.pad.empty()
+                        ? static_cast<double>(lb.width * lb.depth)
+                        : engine::area(lb.pad);
+                    const int nTrees = lb.type == "park"
+                        ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
+                        : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
                     for (int ti = 0; ti < nTrees; ++ti) {
                         const uint32_t th = h ^ (0x9e3779b9u * static_cast<uint32_t>(ti + 1));
-                        const double fx = ((th & 0xFFu) / 255.0 - 0.5) * 0.6;
-                        const double fz = (((th >> 8) & 0xFFu) / 255.0 - 0.5) * 0.6;
+                        // Spread across ~90% of the pad; the point-in-polygon
+                        // shrink below pulls strays back onto the grass.
+                        const double fx = ((th & 0xFFu) / 255.0 - 0.5) * 0.9;
+                        const double fz = (((th >> 8) & 0xFFu) / 255.0 - 0.5) * 0.9;
                         const double cy = std::cos(lb.yaw), sy = std::sin(lb.yaw);
                         double lx = fx * lb.width, lz = fz * lb.depth;
                         // Keep the tree on the pad: shrink toward the centroid

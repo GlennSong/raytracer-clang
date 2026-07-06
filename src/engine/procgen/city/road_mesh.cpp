@@ -1365,9 +1365,14 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                         if (lk * 2 == lanes) continue;          // centre: double yellow
                         const double lat = -hw + laneW * lk;    // boundary offset (m)
                         const double halfStripe = 0.14;
+                        // A hair ABOVE the full-width marking quad (device:
+                        // "markings z-fight"): the divider strips are separate
+                        // geometry — coplanar with the paint quad they overlay —
+                        // until the road gains a second UV channel and all the
+                        // paint moves into the surface shader.
                         auto D = [&](const Vec2& c, const Vec2& o, double h, double off) {
                             const double t = off / hw;          // rail-relative offset
-                            return Vec3(c.x + o.x * t, h + markLift, c.y + o.y * t);
+                            return Vec3(c.x + o.x * t, h + markLift + 0.012, c.y + o.y * t);
                         };
                         Vec3 sL0 = D(c0, o0, h0, lat - halfStripe),
                              sR0 = D(c0, o0, h0, lat + halfStripe),

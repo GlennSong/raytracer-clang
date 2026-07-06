@@ -137,6 +137,30 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             case DistrictTag::Residential:
                 pp.targetArea = 400; break;
         }
+        // Sometimes a WHOLE small block is a park (device: "the green space
+        // doesn't conform to the city block"): the pad is the block's own
+        // road-inset interior, so its edges follow the surrounding streets
+        // exactly — a real city square, not a leftover parcel.
+        if ((blockTag == DistrictTag::Commercial ||
+             blockTag == DistrictTag::Residential) &&
+            area(foot) < 2600.0) {
+            Hash blockRng(mix(pp.seed, 0xB10Cu));
+            if (blockRng.unit() < 0.10) {
+                OBB2 gb = orientedBoundingBox(foot);
+                LotBuilding g;
+                g.site = centroid(foot);
+                g.width = 2 * gb.half[0];
+                g.depth = 2 * gb.half[1];
+                g.height = 0.25;
+                g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                g.type = "park";
+                g.color = colorFor("park");
+                g.pad = foot;
+                g.padMesh = padMeshFor(foot, g.height);
+                out.push_back(std::move(g));
+                continue;
+            }
+        }
         std::vector<Lot> lots = subdivideBlock(foot, pp);
         if (debug)
             for (const Lot& lot : lots) debug->lots.push_back(lot.footprint);
@@ -279,18 +303,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     s2.push_back(m2);
                 }
                 // FLATIRON prows: a very acute corner would grow a knife-edge
-                // facade — truncate it into a short nose face instead, the
-                // classic flatiron front (wedge lots at skewed junctions).
+                // facade — ROUND it into a short chord arc instead (device:
+                // "rounded at the ends ... rather than becoming a perfect
+                // corner"), the classic flatiron nose. Quadratic bezier
+                // through the cut points with the sharp corner as control.
                 Poly2 s3;
                 for (std::size_t vi = 0; vi < s2.size(); ++vi) {
                     Vec2 a = s2[(vi + s2.size() - 1) % s2.size()], m2 = s2[vi],
                          c2 = s2[(vi + 1) % s2.size()];
                     Vec2 d0 = normalize(m2 - a), d1 = normalize(c2 - m2);
-                    const Real cut = 2.2;
+                    const Real cut = 3.0;
                     if (dot(d0, d1) < -0.45 && (m2 - a).length() > cut * 2 &&
                         (c2 - m2).length() > cut * 2) {
-                        s3.push_back(m2 - d0 * cut);
-                        s3.push_back(m2 + d1 * cut);
+                        Vec2 p0 = m2 - d0 * cut, p1 = m2 + d1 * cut;
+                        for (int k = 0; k <= 4; ++k) {
+                            Real t = k / 4.0, mt = 1 - t;
+                            s3.push_back(p0 * (mt * mt) + m2 * (2 * mt * t) +
+                                         p1 * (t * t));
+                        }
                     } else {
                         s3.push_back(m2);
                     }
@@ -413,6 +443,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     for (const Vec2& v : circ)
                         if (!clearOfRoads(v)) { clear = false; break; }
                 if (clear) plan = circ;
+            }
+
+            // PLAN QUALITY (device: "a really degenerate triangle with sharp
+            // edges and barely no space"): the OBB short side overestimates a
+            // wedge's usable width, so gauge the finished plan by its
+            // inradius-ish 4*area/perimeter. Too pinched → green; merely
+            // wedge-shaped → the recipe shrinks to what the floor plate can
+            // actually carry (no skyscraper on a knife of a lot).
+            if (planOk) {
+                Real per = 0;
+                for (std::size_t vi = 0; vi < plan.size(); ++vi)
+                    per += (plan[(vi + 1) % plan.size()] - plan[vi]).length();
+                const Real effShort = std::min(
+                    shortSide, 4 * area(plan) / std::max(per, Real(1e-6)));
+                if (effShort < 5.5) {
+                    if (debug) debug->rejFill++;
+                    emitGreen(); continue;
+                }
+                const Real qq = effShort / std::max(shortSide, Real(1e-6));
+                if (qq < 0.8)
+                    bp.floors = std::max(1, static_cast<int>(bp.floors * qq));
             }
 
             BuildingMesh bm;

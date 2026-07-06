@@ -29,8 +29,10 @@ namespace engine {
 namespace human {
 constexpr Real FLOOR_HEIGHT      = 3.2;   // residential floor-to-floor
 constexpr Real GROUND_HEIGHT     = 4.5;   // taller ground-floor (retail/lobby)
-constexpr Real DOOR_HEIGHT       = 2.1;   // clear opening
-constexpr Real DOOR_WIDTH        = 1.6;   // double-leaf entrance
+constexpr Real DOOR_HEIGHT       = 2.7;   // clear opening — reads as an ENTRANCE
+                                          // against 4.5 m retail ground floors
+                                          // (device: "front doors are very short")
+constexpr Real DOOR_WIDTH        = 2.0;   // double-leaf entrance
 constexpr Real WINDOW_SILL       = 0.9;
 constexpr Real WINDOW_HEAD       = 2.4;   // top of window above its floor
 constexpr Real PARAPET           = 1.1;   // roof-edge railing height

@@ -84,12 +84,203 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
 }
 
 // Slenderness cap shared by every table (device: no pencil towers). Real
-// towers ARE slender — the financial table passes a higher ratio so the
+// towers ARE slender — the tower recipes ask for a higher ratio so the
 // skyscraper cluster can actually rise; everything else keeps the squat cap.
 void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
     const int maxFloors =
         std::max(1, static_cast<int>(shortSide * slender / 3.2) - 1);
     p.floors = std::min(p.floors, maxFloors);
+}
+
+// ---- NAMED RECIPES -----------------------------------------------------------
+// Each archetype is its OWN recipe (device: "other building recipes ...
+// government buildings, skyscrapers, european style houses, suburban houses,
+// schools, hospitals ... rather than one monolithic building recipe"). They
+// share the element vocabulary — dress(), the window/door grammar, roofs,
+// setback tiers — but each uses it its own way. The district tables below are
+// weighted lists over these functions, so a new archetype (school, hospital,
+// fire station) is one recipe + a table entry, and its place type is whatever
+// the schedule sim understands.
+struct RecipeCtx {
+    Real shortSide = 0, area = 0, coreness = 0;
+    bool roomy = false;
+    Real slender = 1.8;   // the capFloors ratio this recipe wants
+};
+
+// The SKYSCRAPER: glass curtain, setback tiers, heights that climb hard with
+// coreness — 30+ floors dead-centre, shoulders toward the ring. The lift does
+// NOT need a roomy lot (downtown blocks are small pie slices where the
+// arterials converge; real towers stand on small plates) — the coreness-scaled
+// slender cap is what keeps them believable.
+void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    const int lift = static_cast<int>(cx.coreness * 26);
+    p.floors = rng.irange(cx.roomy ? 10 : 6, cx.roomy ? 16 : 9) + lift;
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
+                        p.setbackEvery = rng.range(1.2, 1.8); }
+    if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
+    cx.slender = 3.0 + cx.coreness * 4.5;
+    // Roomy square-ish lots sometimes go ROUND (a drum tower).
+    if (cx.roomy && rng.unit() < 0.35)
+        out.massing = BuildingRecipe::Massing::Circle;
+    out.placeType = "office";
+}
+
+// Concrete office slab: the downtown workhorse, modest coreness lift.
+void recipeOfficeSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(6, 12) +
+               static_cast<int>(cx.coreness * (cx.roomy ? 8 : 3));
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Concrete, rng);
+    if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
+                        p.setbackEvery = rng.range(1.1, 1.6); }
+    cx.slender = 2.4 + cx.coreness * 0.8;
+    out.placeType = "office";
+}
+
+// Downtown brick commercial block with setback tiers and ground retail.
+void recipeCommercialBlock(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(5, 9);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Brick, rng);
+    if (p.floors > 6) { p.setbackFloors = rng.irange(3, 4);
+                        p.setbackEvery = rng.range(1.1, 1.5); }
+    out.placeType = "shop";
+}
+
+// GOVERNMENT / civic hall: low, pilastered, formal — never retail.
+void recipeCivicHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 5);
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, FacadeStyle::Concrete, rng);
+    out.placeType = "civic";
+}
+
+// Midtown civic variant: smaller, sometimes stucco.
+void recipeCivicMidtown(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 4);
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    out.placeType = "civic";
+}
+
+// Main-street brick shop rows; low blocks sometimes carry a gable.
+void recipeBrickShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 6);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Brick, rng);
+    if (p.floors <= 3 && rng.unit() < 0.3) {
+        p.roofStyle = BuildingParams::RoofStyle::Gable;
+        p.roofPitch = rng.range(0.35, 0.5);
+    }
+    out.placeType = "shop";
+}
+
+// Midtown concrete office mid-rise.
+void recipeOfficeMidrise(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(4, 8);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Concrete, rng);
+    out.placeType = "office";
+}
+
+// Stucco / painted walk-up homes over midtown streets.
+void recipeWalkupHomes(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 5);
+    p.groundRetail = false;
+    dress(p, rng.unit() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    out.placeType = "home";
+}
+
+// The EUROPEAN old-town house: dense, low, stucco/brick, round arches, quoins,
+// hip roofs — one coherent look, half the ground floors are shops.
+void recipeOldTownHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundRetail = (rng.unit() < 0.5);
+    dress(p, rng.unit() < 0.7 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.quoins = true;
+    p.roofStyle = BuildingParams::RoofStyle::Hip;
+    p.roofPitch = rng.range(0.5, 0.7);
+    out.placeType = p.groundRetail ? "shop" : "home";
+}
+
+// Wide solid metal shed with a tall ground floor — the industrial workplace.
+void recipeMetalShed(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = 1;
+    p.groundHeight = rng.range(6.0, 9.0);
+    p.solidFacade = true;
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Metal, rng);
+    out.placeType = "office";   // a workplace agents commute to
+}
+
+// Plain concrete office block up front of the yards.
+void recipeIndustrialOffice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Concrete, rng);
+    out.placeType = "office";
+}
+
+// The SUBURBAN house: a small centred rectangle so the lot keeps its yard,
+// painted/stucco/brick, gable or hip roof.
+void recipeYardHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(1, 2);
+    p.groundRetail = false;
+    p.baseCourse = true;
+    const Real r2 = rng.unit();
+    dress(p, r2 < 0.4 ? FacadeStyle::Painted
+            : r2 < 0.75 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    p.roofStyle = rng.unit() < 0.65 ? BuildingParams::RoofStyle::Gable
+                                    : BuildingParams::RoofStyle::Hip;
+    p.roofPitch = rng.range(0.45, 0.7);
+    out.massing = BuildingRecipe::Massing::RectYard;
+    out.placeType = "home";
+}
+
+// Low walk-up apartments on the outskirts; the low ones sometimes gabled.
+void recipeApartments(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 4);
+    p.groundRetail = false;
+    dress(p, rng.unit() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    if (p.floors <= 3 && rng.unit() < 0.4) {
+        p.roofStyle = BuildingParams::RoofStyle::Gable;
+        p.roofPitch = rng.range(0.4, 0.6);
+    }
+    out.placeType = "home";
+}
+
+// The residential corner shop.
+void recipeCornerShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(1, 2);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Brick, rng);
+    out.placeType = "shop";
+}
+
+// A pocket park: no building, the lot becomes a green with trees.
+void recipePocketPark(BuildingRecipe& out, Hash&, RecipeCtx&) {
+    out.massing = BuildingRecipe::Massing::Park;
+    out.placeType = "park";
 }
 }  // namespace
 
@@ -136,164 +327,45 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     // branch weights for neighbouring lots.
     Hash rng(seed * 2654435761u ^ 0x9e3779b9u);
     BuildingRecipe out;
-    BuildingParams& p = out.params;
-    p.seed = rng.next();
-    p.retailStreetOnly = true;      // every city building has a FRONT
-    const bool roomy = shortSide > 16.0;
+    out.params.seed = rng.next();
+    out.params.retailStreetOnly = true;   // every city building has a FRONT
+    RecipeCtx cx;
+    cx.shortSide = shortSide;
+    cx.area = area;
+    cx.coreness = coreness;
+    cx.roomy = shortSide > 16.0;
     const Real roll = rng.unit();
-    Real slender = 1.8;   // capFloors ratio; tower branches raise it
 
+    // The district ARCHETYPE TABLES: weighted picks over the named recipes.
     switch (tag) {
-        case DistrictTag::Financial: {
-            // Towers and slabs; the occasional civic hall; ground retail.
-            if (roll < 0.42) {                       // glass curtain tower
-                // Deep in the core (coreness → 1) this is the SKYSCRAPER
-                // cluster: heights climb hard with how central the lot is —
-                // 30+ floors downtown, shouldering off toward the ring. The
-                // lift does NOT need a roomy lot: downtown blocks are small
-                // pie slices where the arterials converge, and real towers
-                // stand on small plates — the coreness-scaled slender cap is
-                // what keeps them believable.
-                const int lift = static_cast<int>(coreness * 22);
-                p.floors = rng.irange(roomy ? 10 : 6, roomy ? 16 : 9) + lift;
-                p.groundRetail = true;
-                dress(p, FacadeStyle::GlassCurtain, rng);
-                if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
-                                    p.setbackEvery = rng.range(1.2, 1.8); }
-                if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
-                slender = 3.0 + coreness * 4.0;
-                // Roomy square-ish lots sometimes go ROUND (a drum tower).
-                if (roomy && rng.unit() < 0.35)
-                    out.massing = BuildingRecipe::Massing::Circle;
-                out.placeType = "office";
-            } else if (roll < 0.75) {                // concrete office slab
-                p.floors = rng.irange(6, 12) +
-                           static_cast<int>(coreness * (roomy ? 8 : 3));
-                p.groundRetail = true;
-                dress(p, FacadeStyle::Concrete, rng);
-                if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
-                                    p.setbackEvery = rng.range(1.1, 1.6); }
-                slender = 2.4 + coreness * 0.8;
-                out.placeType = "office";
-            } else if (roll < 0.90) {                // brick commercial block
-                p.floors = rng.irange(5, 9);
-                p.groundRetail = true;
-                dress(p, FacadeStyle::Brick, rng);
-                if (p.floors > 6) { p.setbackFloors = rng.irange(3, 4);
-                                    p.setbackEvery = rng.range(1.1, 1.5); }
-                out.placeType = "shop";
-            } else {                                 // civic hall
-                p.floors = rng.irange(3, 5);
-                p.groundRetail = false;
-                p.pilasters = true;
-                dress(p, FacadeStyle::Concrete, rng);
-                out.placeType = "civic";
-            }
+        case DistrictTag::Financial:
+            if (roll < 0.42)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.75) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.90) recipeCommercialBlock(out, rng, cx);
+            else                  recipeCivicHall(out, rng, cx);
             break;
-        }
-        case DistrictTag::Commercial: {
-            if (roll < 0.05) { out.massing = BuildingRecipe::Massing::Park;
-                               out.placeType = "park"; break; }
-            if (roll < 0.45) {                       // brick shop/mixed midrise
-                p.floors = rng.irange(3, 6);
-                p.groundRetail = true;
-                dress(p, FacadeStyle::Brick, rng);
-                // Low shop blocks sometimes carry a gable — main-street
-                // silhouettes instead of one flat cornice line everywhere.
-                if (p.floors <= 3 && rng.unit() < 0.3) {
-                    p.roofStyle = BuildingParams::RoofStyle::Gable;
-                    p.roofPitch = rng.range(0.35, 0.5);
-                }
-                out.placeType = "shop";
-            } else if (roll < 0.70) {                // concrete office midrise
-                p.floors = rng.irange(4, 8);
-                p.groundRetail = true;
-                dress(p, FacadeStyle::Concrete, rng);
-                out.placeType = "office";
-            } else if (roll < 0.82) {                // civic
-                p.floors = rng.irange(2, 4);
-                p.groundRetail = false;
-                p.pilasters = true;
-                dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete
-                                          : FacadeStyle::Stucco, rng);
-                out.placeType = "civic";
-            } else {                                 // stucco/painted walk-ups
-                p.floors = rng.irange(3, 5);
-                p.groundRetail = false;
-                dress(p, rng.unit() < 0.3 ? FacadeStyle::Painted
-                                          : FacadeStyle::Stucco, rng);
-                out.placeType = "home";
-            }
+        case DistrictTag::Commercial:
+            if (roll < 0.05)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.45) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.70) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.82) recipeCivicMidtown(out, rng, cx);
+            else                  recipeWalkupHomes(out, rng, cx);
             break;
-        }
-        case DistrictTag::OldTown: {
-            // Dense, low, stucco/brick, round arches, hip roofs — one look.
-            p.floors = rng.irange(2, 3);
-            p.groundRetail = (rng.unit() < 0.5);
-            dress(p, rng.unit() < 0.7 ? FacadeStyle::Stucco : FacadeStyle::Brick,
-                  rng);
-            p.window.head = OpeningStyle::Head::Round;
-            p.window.hood = OpeningStyle::Hood::Arch;
-            p.quoins = true;
-            p.roofStyle = BuildingParams::RoofStyle::Hip;
-            p.roofPitch = rng.range(0.5, 0.7);
-            out.placeType = p.groundRetail ? "shop" : "home";
+        case DistrictTag::OldTown:
+            recipeOldTownHouse(out, rng, cx);
             break;
-        }
-        case DistrictTag::Industrial: {
-            // Wide metal sheds; a plain concrete office up front now and then.
-            if (roll < 0.8) {
-                p.floors = 1;
-                p.groundHeight = rng.range(6.0, 9.0);
-                p.solidFacade = true;
-                p.groundRetail = false;
-                dress(p, FacadeStyle::Metal, rng);
-                out.placeType = "office";     // a workplace agents commute to
-            } else {
-                p.floors = rng.irange(2, 3);
-                p.groundRetail = false;
-                dress(p, FacadeStyle::Concrete, rng);
-                out.placeType = "office";
-            }
+        case DistrictTag::Industrial:
+            if (roll < 0.8)       recipeMetalShed(out, rng, cx);
+            else                  recipeIndustrialOffice(out, rng, cx);
             break;
-        }
-        case DistrictTag::Residential: {
-            if (roll < 0.08) { out.massing = BuildingRecipe::Massing::Park;
-                               out.placeType = "park"; break; }
-            if (roll < 0.60) {                       // a HOUSE with a yard
-                p.floors = rng.irange(1, 2);
-                p.groundRetail = false;
-                p.baseCourse = true;
-                const Real r2 = rng.unit();
-                dress(p, r2 < 0.4 ? FacadeStyle::Painted
-                        : r2 < 0.75 ? FacadeStyle::Stucco : FacadeStyle::Brick,
-                      rng);
-                p.roofStyle = rng.unit() < 0.65 ? BuildingParams::RoofStyle::Gable
-                                                : BuildingParams::RoofStyle::Hip;
-                p.roofPitch = rng.range(0.45, 0.7);
-                out.massing = BuildingRecipe::Massing::RectYard;
-                out.placeType = "home";
-            } else if (roll < 0.85) {                // low walk-up apartments
-                p.floors = rng.irange(2, 4);
-                p.groundRetail = false;
-                dress(p, rng.unit() < 0.55 ? FacadeStyle::Brick
-                                           : FacadeStyle::Stucco, rng);
-                if (p.floors <= 3 && rng.unit() < 0.4) {
-                    p.roofStyle = BuildingParams::RoofStyle::Gable;
-                    p.roofPitch = rng.range(0.4, 0.6);
-                }
-                out.placeType = "home";
-            } else {                                 // corner shop
-                p.floors = rng.irange(1, 2);
-                p.groundRetail = true;
-                dress(p, FacadeStyle::Brick, rng);
-                out.placeType = "shop";
-            }
+        case DistrictTag::Residential:
+            if (roll < 0.08)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.60) recipeYardHouse(out, rng, cx);
+            else if (roll < 0.85) recipeApartments(out, rng, cx);
+            else                  recipeCornerShop(out, rng, cx);
             break;
-        }
     }
-    (void)area;
-    capFloors(p, shortSide, slender);
+    capFloors(out.params, shortSide, cx.slender);
     return out;
 }
 

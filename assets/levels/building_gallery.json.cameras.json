@@ -42,16 +42,16 @@
       "name": "Eaves",
       "position": [
         -19,
-        1.0,
-        64.8
+        1.7,
+        73
       ],
       "forward": [
         0,
-        0.92,
-        -0.39
+        0.02,
+        -1.0
       ],
       "lens": {
-        "focalLength": 16,
+        "focalLength": 26,
         "sensorHeight": 24,
         "fStop": 0,
         "focusDistance": 14.0
