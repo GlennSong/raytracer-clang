@@ -1180,6 +1180,12 @@
     "ambientMultiplier": 0.6
   }
 }
+{ "cameras": [
+  { "name": "City", "position": [170, 110, 230], "forward": [-0.52, -0.42, -0.74],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 280.0 } },
+  { "name": "Street", "position": [40, 8, 60], "forward": [-0.55, -0.12, -0.83],
+    "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 60.0 } }
+] }
 {
   "version": 1,
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
@@ -2258,8 +2264,8 @@ local SPECS = {
                                       setback_floors = 5, setback_every = 1.2 } },
   { plan = cruciformPlan(22, 22), p = { floors = 10, style = "concrete",
                                         setback_floors = 4, setback_every = 1.2 } },
-  { plan = rectPlan(10, 11), p = { floors = 2, style = "painted",
-                                   ground_retail = false } },
+  { plan = rectPlan(10, 13), p = { floors = 2, style = "painted",
+                                   ground_retail = false, roof = "gable" } },
   { plan = rectPlan(20, 14), p = { floors = 3, style = "concrete",
                                    pilasters = true, ground_retail = false } },
   { plan = rectPlan(20, 16), p = { floors = 9, style = "brick",
@@ -2267,8 +2273,9 @@ local SPECS = {
   { plan = uPlan(22, 18),    p = { floors = 3, style = "stucco" } },
   { plan = chamferPlan(18, 18, 4), p = { floors = 11, style = "glass",
                                          setback_floors = 4, setback_every = 1.3 } },
-  { plan = rectPlan(16, 12), p = { floors = 5, style = "stucco",
-                                   window_head = "round" } },
+  { plan = rectPlan(16, 12), p = { floors = 2, style = "brick",
+                                   ground_retail = false, roof = "hip",
+                                   window_head = "flat" } },
   { plan = hPlan(24, 20),    p = { floors = 4, style = "brick" } },
   { plan = octagonPlan(9),   p = { floors = 3, style = "concrete",
                                    pilasters = true, ground_retail = false } },
