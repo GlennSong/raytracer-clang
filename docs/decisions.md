@@ -4782,6 +4782,48 @@ profiling shows the bake/upload mattering, or a consumer needs millions of
 lines (voxel debug), add the per-backend line-pass behind the same
 `DebugDrawSystem`.
 
+## ADR-0068 — Tracy as the profiler, permanently instrumented, off by default
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** Design principle #3 — "measure before optimizing" — gates several
+queued decisions (custom allocators ADR-0008, LOD/spatial indexing Tier 5,
+parallel ECS execution ADR-0014) on profiling evidence the project has no tool
+to produce. Ad-hoc `chrono` timings answer one question and rot; the engine
+needs frame-shaped evidence: zones per system per frame, worker-thread
+utilization, spikes across the fixed-step boundary.
+
+**Decision.** Vendor **Tracy** (v0.13.1, `third_party/tracy` submodule) behind
+a CMake option `RT_ENABLE_PROFILER` (OFF) and a macro seam `src/profile.h`:
+`RT_PROFILE_ZONE / _ZONE_NAMED / _FRAME / _THREAD` compile to Tracy client
+zones when the option is ON and to *nothing* otherwise — so instrumentation is
+written once, lives in the code permanently, and costs zero in normal builds
+(the same inert-when-off pattern as the ImGui hooks, ADR-0011). No Tracy type
+or header appears outside `profile.h`. First instrumentation: the frame loop's
+update / fixedUpdate / render phases + the frame mark (`application.cpp`), and
+the JobSystem (worker thread names, `parallelFor` zones). Capture is remote
+(the Tracy UI connects to the running process over the network) and
+`TRACY_ON_DEMAND` is set, so an instrumented build only records while a UI is
+attached. Works headless — a Linux capture of the offline tracer's job system
+is as valid as a macOS viewer capture.
+
+**Alternatives.** (a) Platform profilers (Instruments / perf) — no
+instrumented frame semantics, no cross-platform story, nothing persists in the
+code. (b) Hand-rolled zone timers + ImGui plot — weeks of building a worse
+Tracy (server, history, threads, plots), against the "use the technology you
+already have" ethos once vendoring is on the table. (c) A heavier
+vendor (Optick/Superluminal) — commercial or less active; Tracy is BSD-3,
+maintained, and the de-facto standard for exactly this engine shape.
+
+**Consequences.** One new submodule (AGENTS.md exception recorded here — like
+Jolt/ImGui/Lua, it is vendored, permissively licensed, and sealed behind a
+seam). The client build was compile-verified here (Linux, `RT_ENABLE_PROFILER=ON`);
+an actual capture needs the Tracy UI on a dev machine — unverified in this
+environment. Zone macros only exist where someone wrote them: coverage grows
+with need (renderer backends, procgen generators, physics step are the obvious
+next zones). **Revisit trigger:** if the macro surface needs GPU zones
+(Metal/Vulkan timestamps), adopt Tracy's GPU contexts behind the same
+`profile.h` seam rather than backend-local timers.
+
 ---
 
 ## Interim seams & tech-debt register

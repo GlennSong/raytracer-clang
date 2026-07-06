@@ -211,6 +211,38 @@ if(RT_ENABLE_SCRIPTING)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
 endif()
 
+# ============================================================
+# Tracy profiler (ADR-0068) — off by default. When ON: compile the Tracy
+# client into engine_core and define RT_ENABLE_PROFILER, which turns the
+# RT_PROFILE_* macros (src/profile.h) into real zones. Capture by connecting
+# the Tracy UI to the running process (works headless, over the network).
+# ============================================================
+option(RT_ENABLE_PROFILER "Build with the Tracy profiler client" OFF)
+if(RT_ENABLE_PROFILER)
+    set(TRACY_DIR ${CMAKE_SOURCE_DIR}/third_party/tracy)
+    if(NOT EXISTS ${TRACY_DIR}/CMakeLists.txt)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "Tracy submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init third_party/tracy
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${TRACY_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR
+            "Tracy submodule not found at third_party/tracy.\n"
+            "Fetch it with:  git submodule update --init third_party/tracy\n"
+            "or configure with -DRT_ENABLE_PROFILER=OFF.")
+    endif()
+    # Record only while a profiler UI is connected, so an instrumented build
+    # left running doesn't grow an unbounded event buffer.
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/tracy ${CMAKE_BINARY_DIR}/tracy)
+    target_link_libraries(engine_core PUBLIC TracyClient)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_PROFILER=1)
+endif()
+
 # Offline path-tracer sources (the tracer's own scene/camera/image stack).
 set(CORE_SOURCES
     src/image.cpp

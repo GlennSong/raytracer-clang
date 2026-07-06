@@ -1,5 +1,6 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "../profile.h"
 #include <thread>
 #include <chrono>
 
@@ -84,6 +85,7 @@ void Application::reconcileFramebuffer() {
 }
 
 void Application::renderFrame() {
+    RT_PROFILE_ZONE_NAMED("render");
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
     rendererPtr->beginFrame();
@@ -113,6 +115,7 @@ void Application::runFrame() {
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     {
+        RT_PROFILE_ZONE_NAMED("update");
         FrameContext ctx = makeContext();
         inputMap.beginFrame();
         playerInputs.beginFrame();
@@ -145,6 +148,7 @@ void Application::runFrame() {
     int steps = clock.advance(frameDelta);
     interpolation = clock.interpolationAlpha();
     {
+        RT_PROFILE_ZONE_NAMED("fixedUpdate");
         FrameContext ctx = makeContext();
         for (int i = 0; i < steps; i++)
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
@@ -181,6 +185,7 @@ void Application::runFrame() {
             stateStack.applyPending(ctx);
         }
     }
+    RT_PROFILE_FRAME();
 }
 
 void Application::end() {
