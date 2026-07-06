@@ -1,6 +1,7 @@
 build/
 build-cmake/
 build-imgui/
+build-profiler/
 build-native/
 build-web/
 build-web-oz/

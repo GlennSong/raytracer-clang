@@ -103,6 +103,8 @@ add_library(engine_core STATIC
     src/engine/systems/camera_panel_system.cpp
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
+    src/engine/audio/audio_engine.cpp
+    src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -209,6 +211,42 @@ if(RT_ENABLE_SCRIPTING)
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
+endif()
+
+# ============================================================
+# Audio (ADR-0069) — miniaudio, vendored single-header C (like nlohmann/
+# tinygltf), sealed behind AudioEngine. Cross-platform and device-optional
+# (null-device fallback, or Manual mode with no device at all), so it builds
+# and tests headless. OFF leaves the AudioEngine stub in place (silence) —
+# audio_engine.cpp compiles either way, so the engine API is always present.
+# Skipped under Emscripten until the web audio path is designed.
+# ============================================================
+option(RT_ENABLE_AUDIO "Build the miniaudio-backed audio engine" ON)
+if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+    set(MINIAUDIO_DIR ${CMAKE_SOURCE_DIR}/third_party/miniaudio)
+    if(NOT EXISTS ${MINIAUDIO_DIR}/miniaudio.h)
+        message(FATAL_ERROR
+            "miniaudio not found at third_party/miniaudio/miniaudio.h (it is "
+            "vendored in-tree; check the checkout), or configure with "
+            "-DRT_ENABLE_AUDIO=OFF.")
+    endif()
+    # The single implementation TU, compiled as C with warnings off (the Lua
+    # pattern). dl/pthread/m are miniaudio's documented Linux link deps.
+    add_library(miniaudio_static STATIC src/engine/audio/miniaudio_impl.c)
+    target_include_directories(miniaudio_static SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+    target_compile_options(miniaudio_static PRIVATE -w)
+    target_link_libraries(miniaudio_static PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+    if(NOT APPLE AND NOT WIN32)
+        target_link_libraries(miniaudio_static PUBLIC m)
+    endif()
+    if(APPLE)
+        target_link_libraries(miniaudio_static PUBLIC
+            "-framework CoreFoundation" "-framework CoreAudio"
+            "-framework AudioToolbox")
+    endif()
+
+    target_link_libraries(engine_core PUBLIC miniaudio_static)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_AUDIO=1)
 endif()
 
 # ============================================================
@@ -366,6 +404,10 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_vehicle_body.cpp)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+endif()
+if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+    # Headless audio tests: Manual mode (no device), the mix pumped by hand.
+    target_sources(run_tests PRIVATE tests/test_audio.cpp)
 endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)

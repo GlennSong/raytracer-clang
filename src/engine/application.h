@@ -6,6 +6,7 @@
 #include "world.h"
 #include "clock.h"
 #include "asset_manager.h"
+#include "audio/audio_engine.h"
 #include "mesh_uploader.h"
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
@@ -64,6 +65,7 @@ public:
     Settings& settings() { return settingsStore; }
     EventBus& events() { return eventBus; }
     DebugDraw& debugDraw() { return debugLines; }
+    AudioEngine& audio() { return audioEngine; }
     // The simulation clock, exposed so an editor shell can drive pause /
     // single-step transport controls during play (same switch Space toggles).
     SimClock& simClock() { return clock; }
@@ -96,6 +98,7 @@ private:
 #endif
     EventBus eventBus;
     DebugDraw debugLines;
+    AudioEngine audioEngine;
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;

@@ -49,6 +49,10 @@ bool Application::initialize(const Config& config,
     rendererPtr->initDebugUi(window->nativeWindowHandle());
     window->initDebugUi();
 
+    // Audio is best-effort: a build without RT_ENABLE_AUDIO, or a machine
+    // with no device, degrades to silence (ADR-0069) — never a failed boot.
+    audioEngine.initialize(AudioBackendMode::Auto);
+
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
     return true;
 }
@@ -66,7 +70,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus, debugLines,
+        eventBus, debugLines, audioEngine,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -201,6 +205,7 @@ void Application::end() {
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
+    audioEngine.shutdown();
     window->shutdownDebugUi();
     rendererPtr->shutdownDebugUi();
     rendererPtr->shutdown();

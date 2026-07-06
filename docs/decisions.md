@@ -4824,6 +4824,67 @@ next zones). **Revisit trigger:** if the macro surface needs GPU zones
 (Metal/Vulkan timestamps), adopt Tracy's GPU contexts behind the same
 `profile.h` seam rather than backend-local timers.
 
+## ADR-0069 — Audio: miniaudio sealed behind AudioEngine, device-optional, event-driven
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** The engine had no audio at all — no device output, no asset path,
+no way for gameplay to make a sound. Requirements, in project terms: cross-
+platform (macOS today, Linux/Windows/web per the backend roadmap), buildable
+and *testable* headless in CI like Jolt/Lua, procgen-first (synthesized sound
+is a first-class source, not just files on disk — design principle #1), and
+sealed behind a seam so no vendor type leaks (the ADR-0012 pattern).
+
+**Decision.** **miniaudio** (v0.11.25, vendored single-header C at
+`third_party/miniaudio` — the nlohmann/tinygltf pattern, one impl TU compiled
+as C like Lua), sealed behind `engine::AudioEngine`
+(`src/engine/audio/audio_engine.{h,cpp}`, pimpl, no `ma_*` in the header).
+Why miniaudio: zero dependencies, public-domain/MIT-0, backends for
+CoreAudio/ALSA/PulseAudio/WASAPI, and — decisively — it runs **without a
+device**: `AudioBackendMode::Manual` mixes into a caller-pumped buffer, which
+is what makes audio *deterministically testable* (assert actual pan/
+attenuation/loop behavior on rendered frames, not just "no crash"); `Auto`
+falls back to the null device on headless machines so boot never fails.
+The engine API: clips (decoded files via `loadClip`, or raw PCM via
+`createClip` — the procgen path), voices (2D `play` with pan, 3D `playAt` with
+linear falloff to a range), one listener, master + 3 bus volumes (Sfx/Music/
+Ambient), handle-based via `Handle`/`SlotMap` (ADR-0007; stale voice handles
+report not-playing, never alias).
+
+ECS integration follows the physics template: `AudioListener` / `AudioSource`
+components, an `AudioSystem` whose System hooks wrap World-level core methods
+(`step`/`syncListener` — unit-tested without a FrameContext). The listener
+follows the `AudioListener` entity, else the render camera, so audio works
+before any entity opts in. Sources autoplay or `trigger`; spatial voices track
+their entity's Transform; a destroyed entity's voice is stopped (no looping
+leaks). Fire-and-forget cues ride the EventBus (ADR-0066): any system
+publishes `PlaySound{clip, position…}` without knowing audio exists —
+decoupling was the point of building the bus first. `Application` owns the
+`AudioEngine` (exposed as `FrameContext::audio`), initializes it best-effort,
+and shuts it down with the other subsystems. Build: `RT_ENABLE_AUDIO` (ON;
+skipped under Emscripten). OFF compiles an inert stub with the same API — the
+ImGui-hooks pattern — so the Makefile targets and web build need no miniaudio.
+
+**Alternatives.** OpenAL Soft — LGPL, a heavier integration, and its context
+model is clumsier to test headless. SoLoud — pleasant API but sparsely
+maintained (and can itself sit on miniaudio). FMOD/Wwise — closed/commercial,
+against the vendored-source model. Raw platform APIs behind our own mixer —
+weeks of DSP plumbing miniaudio already does well.
+
+**Consequences.** Audio is real end-to-end (device out on hardware, pumped mix
+under test) — `tests/test_audio.cpp` covers init/modes, PCM + WAV clips,
+one-shot reclaim, looping, pan left/right, distance attenuation + out-of-range
+silence, clip-destroy stopping voices, bus/master volume, and the AudioSystem
+core (autoplay, trigger, dead-entity stop, listener source, PlaySound events).
+Real *device* output is UNVERIFIED in this environment (no audio hardware) —
+needs a laptop run, like the Metal/gamepad work before it (register row
+added). Not yet built, by choice: level-JSON authoring of AudioSource (loader/
+writer/inspector), Lua bindings (a `PlaySound` emit + procedural-PCM surface
+belongs in the gameplay VM, ADR-0024), music streaming (clips decode fully in
+memory — fine for SFX, wasteful for long music), doppler (velocity is plumbed,
+unused), and any DSP-graph effects. **Revisit trigger:** when a level wants
+authored ambience, add the loader/inspector path; when music lands, add a
+streamed clip type behind the same handle.
+
 ---
 
 ## Interim seams & tech-debt register
