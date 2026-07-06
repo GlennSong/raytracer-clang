@@ -1301,13 +1301,36 @@ void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
     appendToPart(out, part, m);
 }
 
-// A parapet ring along the plan outline: a low wall standing on the roof.
+// A real LIP around the roof (device: "the roof tops don't really have a lip
+// around them"): an upstand RING following the plan outline — outer face on
+// the plan line, 0.24 m thick, usually in the facade's own material — capped
+// by a slightly oversailing darker coping so the edge reads from the street.
+// Each edge's boxes extend half a thickness past their corners, closing the
+// ring without mitring (convex corners butt, concave overlap harmlessly).
 void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
-                     const Vec3& col) {
-    if (h <= 0) return;
-    Poly2 inner = offsetPlan(pl, 0.24);
-    emitPlanSlab(out, pl, roofY + h, h, PartId::Trim, col);
-    (void)inner;   // v1: a solid ring slab reads correctly from the street
+                     const Vec3& wallCol, PartId wallPart,
+                     const Vec3& copingCol) {
+    if (h <= 0 || pl.size() < 3) return;
+    const Vec3 up(0, 1, 0);
+    const Real th = 0.24;    // upstand thickness
+    const Real lip = 0.05;   // coping oversail, in and out
+    for (std::size_t i = 0; i < pl.size(); ++i) {
+        Vec2 a = pl[i], b = pl[(i + 1) % pl.size()];
+        Vec2 dv = b - a;
+        const Real len = dv.length();
+        if (len < 1e-6) continue;
+        Vec2 d = dv * (1.0 / len);
+        Vec2 nOut(d.y, -d.x);   // outward for a CCW plan
+        Vec3 d3(d.x, 0, d.y), n3(nOut.x, 0, nOut.y);
+        Vec3 o = Vec3(a.x, roofY, a.y) - n3 * th - d3 * (th * 0.5);
+        emitBox(out, Scope{o, {d3, up, n3}, Vec3(len + th, h, th)},
+                wallPart, wallCol);
+        Vec3 co = Vec3(a.x, roofY + h, a.y) - n3 * (th + lip) -
+                  d3 * (th * 0.5 + lip);
+        emitBox(out, Scope{co, {d3, up, n3},
+                           Vec3(len + th + 2 * lip, 0.09, th + 2 * lip)},
+                PartId::Trim, copingCol);
+    }
 }
 
 }  // namespace
@@ -1466,7 +1489,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     sweptCornice(cur, y - 0.4, 1.0);
                 cornerPosts(cur, tierY0, y - tierY0);
                 emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
-                                materialFor(PartId::Trim, wallColor).albedo);
+                                materialFor(PartId::Trim, wallColor).albedo,
+                                PartId::Trim,
+                                materialFor(PartId::Trim, wallColor).albedo * 0.9);
                 cur = next;
                 tierY0 = y;
             }
@@ -1551,9 +1576,17 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
         emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
                      materialFor(PartId::Roof, wallColor).albedo);
-        if (params.parapet > 0)
+        if (params.parapet > 0) {
+            // The lip continues the FACADE material (a brick building has a
+            // brick parapet) with a trim coping; glass/solid facades keep the
+            // whole lip in trim so the ring doesn't read as floating cladding.
+            const bool plainLip = params.curtainWall || params.solidFacade;
             emitPlanParapet(out, cur, y + 0.05, params.parapet,
-                            materialFor(PartId::Trim, wallColor).albedo);
+                            plainLip ? materialFor(PartId::Trim, wallColor).albedo
+                                     : wallColor,
+                            plainLip ? PartId::Trim : params.wallPart,
+                            materialFor(PartId::Trim, wallColor).albedo * 0.9);
+        }
         // Crown (penthouse + tank) seated on the top tier's oriented frame.
         Vec3 r3(topObb.axis[0].x, 0, topObb.axis[0].y);
         Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
