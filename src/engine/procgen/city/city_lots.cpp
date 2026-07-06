@@ -2,6 +2,7 @@
 
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
+#include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
@@ -28,113 +29,6 @@ uint32_t mix(uint32_t a, uint32_t b) {
     return h;
 }
 
-// Radial zoning + weighted pick — downtown skews commercial, the edge residential.
-const char* typeFor(Real dist, const LotParams& p, Hash& rng) {
-    const Real r = rng.unit();
-    if (dist < p.innerRadius) {                 // downtown
-        if (r < 0.45) return "office";
-        if (r < 0.75) return "shop";
-        if (r < 0.90) return "civic";
-        return "home";
-    }
-    if (dist < p.midRadius) {                    // midtown, mixed
-        if (r < 0.06) return "park";
-        if (r < 0.28) return "shop";
-        if (r < 0.48) return "office";
-        if (r < 0.55) return "civic";
-        return "home";
-    }
-    if (r < 0.10) return "park";                 // outskirts, residential
-    if (r < 0.20) return "shop";
-    return "home";
-}
-
-// A shape-grammar building recipe per place type, scaled a little to the lot's
-// short side so a small lot doesn't sprout a tower.
-BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& /*tint*/,
-                         Hash& rng) {
-    BuildingParams bp;
-    bp.seed = rng.next();
-    bp.faceDir = Vec3(0, 0, 1);
-    const bool roomy = shortSide > 16.0;   // big enough to carry height
-    FacadeStyle style;   // cladding — picks the wall's PBR surface material
-    if (t == "office") {
-        bp.floors = roomy ? static_cast<int>(rng.range(6, 15)) : static_cast<int>(rng.range(4, 7));
-        bp.curtainWall = rng.unit() < 0.5;
-        bp.groundRetail = true;
-        style = bp.curtainWall ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete;
-        if (bp.floors > 8) {                      // tall: step the mass back in tiers
-            bp.setbackFloors = static_cast<int>(rng.range(4, 6));
-            bp.setbackEvery = rng.range(1.5, 3.0);
-        }
-    } else if (t == "civic") {
-        bp.floors = static_cast<int>(rng.range(2, 5));
-        bp.groundRetail = false;
-        bp.pilasters = true;
-        style = rng.unit() < 0.6 ? FacadeStyle::Concrete : FacadeStyle::Stucco;
-    } else if (t == "shop") {
-        bp.floors = static_cast<int>(rng.range(1, 3));
-        bp.groundRetail = true;
-        bp.awning = true;
-        style = rng.unit() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco;
-    } else {   // home
-        bp.floors = static_cast<int>(rng.range(1, roomy ? 4 : 3));
-        bp.groundRetail = false;
-        bp.baseCourse = true;
-        const Real r = rng.unit();
-        style = r < 0.45 ? FacadeStyle::Brick
-              : r < 0.80 ? FacadeStyle::Stucco : FacadeStyle::Painted;
-        // Low homes wear PITCHED roofs (P3.c): gable mostly, hip sometimes —
-        // the residential silhouette. Taller walk-ups keep the flat parapet.
-        if (bp.floors <= 3) {
-            bp.roofStyle = rng.unit() < 0.65 ? BuildingParams::RoofStyle::Gable
-                                             : BuildingParams::RoofStyle::Hip;
-            bp.roofPitch = rng.range(0.45, 0.7);
-        }
-    }
-    // Cladding drives the wall PART (Brick/Concrete/Stucco emit under the
-    // surfaced PartIds so materialFor binds the procedural PBR texture set —
-    // leaving wallPart at PartId::Wall is what made every facade a flat colour)
-    // and the wall colour comes from the style's palette, like paramsForDistrict.
-    bp.wallColor = facadeColor(style, bp.seed);
-    switch (style) {
-        case FacadeStyle::Brick:    bp.wallPart = PartId::Brick;    break;
-        case FacadeStyle::Concrete: bp.wallPart = PartId::Concrete; break;
-        case FacadeStyle::Stucco:   bp.wallPart = PartId::Stucco;   break;
-        case FacadeStyle::Metal:    bp.wallPart = PartId::Metal;    break;
-        default:                    bp.wallPart = PartId::Wall;     break;  // Painted/Glass
-    }
-    // Window ELEMENT + quoins by cladding (P2) — same table as paramsForDistrict.
-    switch (style) {
-        case FacadeStyle::Brick:
-            bp.window.head = OpeningStyle::Head::Segmental;
-            bp.window.hood = OpeningStyle::Hood::Arch;
-            bp.window.lightsX = 2; bp.window.lightsY = 2;
-            bp.quoins = (rng.unit() < 0.6);
-            break;
-        case FacadeStyle::Stucco:
-            bp.window.head = (rng.unit() < 0.4) ? OpeningStyle::Head::Round
-                                                : OpeningStyle::Head::Flat;
-            bp.window.hood = (bp.window.head == OpeningStyle::Head::Round)
-                                 ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
-            bp.window.lightsX = 2; bp.window.lightsY = 1;
-            bp.quoins = (rng.unit() < 0.5);
-            break;
-        case FacadeStyle::Concrete:
-            bp.window.head = OpeningStyle::Head::Flat;
-            bp.window.hood = OpeningStyle::Hood::Band;
-            bp.window.lightsX = 1; bp.window.lightsY = 2;
-            break;
-        default: break;
-    }
-    // Slenderness cap: total height stays under ~1.8x the footprint's short side,
-    // so a small lot can't sprout a pencil tower (device: "very tall skinny and
-    // completely malformed"). Floors ~3.2 m each; always at least one.
-    const int maxFloors = std::max(1, static_cast<int>(shortSide * 1.8 / 3.2) - 1);
-    bp.floors = std::min(bp.floors, maxFloors);
-    return bp;
-}
-
 Vec3 colorFor(const std::string& t) {
     if (t == "home")   return {0.72, 0.55, 0.45};
     if (t == "shop")   return {0.82, 0.70, 0.42};
@@ -150,6 +44,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           std::vector<RenderMesh>* outParts,
                                           const RoadGraph* roads, Real roadClearance) {
     std::vector<LotBuilding> out;
+    // The ARCHITECT's district map (P5): radial rings + seeded old-town and
+    // industrial quarters. Every lot asks the architect what belongs here.
+    DistrictMap districts;
+    districts.center = p.center;
+    districts.innerRadius = p.innerRadius;
+    districts.midRadius = p.midRadius;
+    districts.seed = p.seed;
     // Road-clearance corner test (device: buildings poking onto the street): a
     // building box corner must stay `edge width/2 + roadClearance` from every
     // road centreline. Checked against the SAMPLED graph the asphalt is meshed
@@ -236,10 +137,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.width = w;
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
-            const Real dist = (b.site - p.center).length();
-            b.type = typeFor(dist, p, rng);
+            const DistrictTag tag = districts.tagAt(b.site);
+            BuildingRecipe rec =
+                architectPick(tag, shortSide, area(site),
+                              mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u));
+            b.type = rec.placeType;
             b.color = colorFor(b.type);
-            if (b.type == "park") {
+            if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.3;   // a low green pad; the caller draws it as a box
                 out.push_back(std::move(b));
                 continue;
@@ -250,8 +154,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // comes from floors. Parts keep their shape-grammar PartId, merged
             // into outParts so the caller binds the SAME PBR material recipes the
             // shape:"city" pipeline uses — not a flattened vertex-colour blob.
-            BuildingParams bp = paramsFor(b.type, shortSide, b.color, rng);
-            bp.retailStreetOnly = true;   // a city building has a FRONT
+            BuildingParams bp = rec.params;   // the architect's recipe
             // The door (and the retail front) faces the nearest STREET, not a
             // fixed +Z: aim faceDir at the closest point on the road network.
             if (roads) {
@@ -313,9 +216,28 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
                 planOk = fit;
             }
-            // Big roomy curtain-wall offices occasionally go ROUND: a chord-
-            // tessellated circle plan inscribed in the lot (a real drum tower).
-            if (planOk && bp.curtainWall && shortSide > 19 && rng.unit() < 0.3) {
+            // A HOUSE sits on a small centred rectangle, not the whole lot —
+            // the rest of the parcel reads as its yard (residential realism).
+            if (planOk && rec.massing == BuildingRecipe::Massing::RectYard) {
+                const Real hw2 = std::min(obb.half[0] - 1.6, Real(7.0));
+                const Real hd2 = std::min(obb.half[1] - 1.6, Real(6.0));
+                if (hw2 > 3.2 && hd2 > 3.2) {
+                    Vec2 c = obb.center;
+                    Poly2 house{c - obb.axis[0] * hw2 - obb.axis[1] * hd2,
+                                c + obb.axis[0] * hw2 - obb.axis[1] * hd2,
+                                c + obb.axis[0] * hw2 + obb.axis[1] * hd2,
+                                c - obb.axis[0] * hw2 + obb.axis[1] * hd2};
+                    bool clear = true;
+                    if (roads)
+                        for (const Vec2& v : house)
+                            if (!clearOfRoads(v)) { clear = false; break; }
+                    if (clear) plan = house;
+                }
+            }
+            // The architect's ROUND towers: a chord-tessellated circle plan
+            // inscribed in the lot (a real drum, cornices and tiers included).
+            if (planOk && rec.massing == BuildingRecipe::Massing::Circle &&
+                shortSide > 17) {
                 const Real rad = shortSide * 0.5 - 1.6;
                 Poly2 circ;
                 for (int k = 0; k < 16; ++k) {
