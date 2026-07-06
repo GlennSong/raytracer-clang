@@ -1,0 +1,6 @@
+{ "cameras": [
+  { "name": "City", "position": [170, 110, 230], "forward": [-0.52, -0.42, -0.74],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 280.0 } },
+  { "name": "Street", "position": [40, 8, 60], "forward": [-0.55, -0.12, -0.83],
+    "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 60.0 } }
+] }

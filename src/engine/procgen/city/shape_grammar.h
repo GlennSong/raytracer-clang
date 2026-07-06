@@ -173,6 +173,17 @@ struct BuildingParams {
     // Quoins: alternating corner masonry blocks up every building arris —
     // traditional on brick/stucco, and they hide the thin-texture corner edge.
     bool  quoins = false;
+    // Roof form (P3.c): Flat keeps the parapet deck; Gable/Hip raise a pitched
+    // roof over the top plan (rect-ish plans only — an odd plan falls back to
+    // Flat until a straight-skeleton pass exists). Residential vocabulary.
+    enum class RoofStyle : uint8_t { Flat, Gable, Hip };
+    RoofStyle roofStyle = RoofStyle::Flat;
+    Real  roofPitch = 0.55;      // rise/run of the pitched roof
+    // Street-aware facades (P3.c): when true, ground-floor RETAIL storefronts
+    // appear only on edges whose outward normal faces the street (faceDir);
+    // side/rear edges wear plain residential ground walls — a building has a
+    // FRONT (living-city realism).
+    bool  retailStreetOnly = false;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
     int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)

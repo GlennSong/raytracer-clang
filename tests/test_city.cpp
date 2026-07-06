@@ -959,3 +959,34 @@ TEST_CASE(plan_building_setbacks_stack_tiers) {
     CHECK(maxR > 1.0);            // the top tier exists
     CHECK(maxR < 10.0 - 1.0);     // and is set back inside the base (2 tiers in)
 }
+
+TEST_CASE(plan_building_grows_pitched_roofs) {
+    // Gable: sloped roof faces (normals tilted, not flat-up) + gable-end wall
+    // triangles rising above the eaves; Hip: sloped ends instead of walls.
+    Poly2 sq = {{-8, -6}, {8, -6}, {8, 6}, {-8, 6}};
+    BuildingParams p;
+    p.floors = 2;
+    p.seed = 3;
+    p.roofStyle = BuildingParams::RoofStyle::Gable;
+    p.roofPitch = 0.6;
+    BuildingMesh gable = growPlanBuilding(sq, p);
+    int sloped = 0;
+    Real maxY = 0;
+    RenderMesh gm = gable.merged();
+    for (std::size_t i = 0; i + 2 < gm.indices.size(); i += 3) {
+        const Vec3& n = gm.vertices[gm.indices[i]].normal;
+        if (n.y > 0.25 && n.y < 0.93) ++sloped;
+    }
+    for (const Vertex& v : gm.vertices) maxY = std::max(maxY, (Real)v.position.y);
+    CHECK(sloped >= 2);                     // the two roof slopes exist
+    CHECK(maxY > gable.height - 0.1);       // height includes the ridge
+    p.roofStyle = BuildingParams::RoofStyle::Hip;
+    BuildingMesh hip = growPlanBuilding(sq, p);
+    int hipSloped = 0;
+    RenderMesh hm = hip.merged();
+    for (std::size_t i = 0; i + 2 < hm.indices.size(); i += 3) {
+        const Vec3& n = hm.vertices[hm.indices[i]].normal;
+        if (n.y > 0.25 && n.y < 0.93) ++hipSloped;
+    }
+    CHECK(hipSloped > sloped);              // hips slope the ends too
+}

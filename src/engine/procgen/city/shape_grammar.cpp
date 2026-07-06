@@ -1283,9 +1283,18 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                           : params.groundRetail ? FacadeMode::Retail
                                                 : FacadeMode::Residential;
     // Ground storey: one facade rect per plan edge; the door on the street edge.
+    // retailStreetOnly (P3.c): storefronts only where the edge FACES the street
+    // (normal within ~70 deg of faceDir); side/rear edges wear plain walls.
     for (std::size_t i = 0; i < plan.size(); ++i) {
         FacadeMode mode = (i == entranceEdge && params.walkableGround)
                               ? FacadeMode::Entrance : groundMode;
+        if (mode == FacadeMode::Retail && params.retailStreetOnly) {
+            Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
+            Vec2 d = normalize(b - a);
+            Vec2 nrm(d.y, -d.x);
+            if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35)
+                mode = FacadeMode::Residential;
+        }
         if (params.curtainWall && mode != FacadeMode::Entrance)
             emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor);
         else
@@ -1352,24 +1361,71 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         y += fh;
     }
     cornerPosts(cur, tierY0, y - tierY0);
-    if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
-    emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
-                 materialFor(PartId::Roof, wallColor).albedo);
-    if (params.parapet > 0)
-        emitPlanParapet(out, cur, y + 0.05, params.parapet,
-                        materialFor(PartId::Trim, wallColor).albedo);
 
-    // Crown (penthouse + tank) seated on the top tier's oriented frame.
-    {
-        OBB2 obb = orientedBoundingBox(cur);
-        Vec3 r3(obb.axis[0].x, 0, obb.axis[0].y), f3(obb.axis[1].x, 0, obb.axis[1].y);
-        Vec3 fo = Vec3(obb.center.x, 0, obb.center.y) - r3 * obb.half[0] - f3 * obb.half[1];
-        emitCrown(out, fo, obb.half[0] * 2, obb.half[1] * 2, r3, f3,
+    // ROOF (P3.c): a Gable/Hip pitched roof over a rect-ish top plan — the
+    // residential silhouette — else the flat deck + parapet + crown.
+    OBB2 topObb = orientedBoundingBox(cur);
+    const bool pitched =
+        params.roofStyle != BuildingParams::RoofStyle::Flat &&
+        area(cur) > 0.85 * (4 * topObb.half[0] * topObb.half[1]);
+    Real roofRise = 0;
+    if (pitched) {
+        const bool hip = params.roofStyle == BuildingParams::RoofStyle::Hip;
+        const int la = topObb.longAxis(), sa = 1 - la;
+        Vec3 r3(topObb.axis[la].x, 0, topObb.axis[la].y);
+        Vec3 f3(topObb.axis[sa].x, 0, topObb.axis[sa].y);
+        const Real ov = 0.45;                            // eaves overhang
+        const Real hw = topObb.half[la] + (hip ? ov : Real(0));
+        const Real hd = topObb.half[sa] + ov;
+        const Real rise = std::max(Real(0.8), params.roofPitch * hd);
+        roofRise = rise + 0.03;
+        // A modest eaves cornice band, then a thin ceiling deck under the roof.
+        if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.30, 0.7);
+        emitPlanSlab(out, cur, y + 0.03, 0.15, PartId::Roof,
+                     materialFor(PartId::Roof, wallColor).albedo);
+        Vec3 C(topObb.center.x, y + 0.03, topObb.center.y);
+        const Real rh = hip ? std::max(Real(0.6), hw - hd) : hw;   // ridge half-length
+        Vec3 A0 = C - r3 * hw - f3 * hd, A1 = C + r3 * hw - f3 * hd;
+        Vec3 B0 = C - r3 * hw + f3 * hd, B1 = C + r3 * hw + f3 * hd;
+        Vec3 up(0, 1, 0);
+        Vec3 Rg0 = C - r3 * rh + up * rise, Rg1 = C + r3 * rh + up * rise;
+        RenderMesh roof, gableW;
+        const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
+        Vec3 nNear = normalize(f3 * (-rise) + up * hd);
+        Vec3 nFar = normalize(f3 * rise + up * hd);
+        emitQuad(roof, A0, A1, Rg1, Rg0, nNear, roofCol);   // near slope
+        emitQuad(roof, B1, B0, Rg0, Rg1, nFar, roofCol);    // far slope
+        if (hip) {
+            const Real run = std::max(Real(0.2), hw - rh);
+            MeshBuilder::emitTri(roof, A0, B0, Rg0,
+                                 normalize(r3 * (-rise) + up * run), roofCol);
+            MeshBuilder::emitTri(roof, A1, B1, Rg1,
+                                 normalize(r3 * rise + up * run), roofCol);
+        } else {
+            // Gable END walls rise to the ridge in the wall material.
+            MeshBuilder::emitTri(gableW, A0, B0, Rg0, r3 * -1, wallColor);
+            MeshBuilder::emitTri(gableW, A1, B1, Rg1, r3, wallColor);
+        }
+        appendToPart(out, PartId::Roof, roof);
+        appendToPart(out, params.wallPart, gableW);
+    } else {
+        if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
+        emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
+                     materialFor(PartId::Roof, wallColor).albedo);
+        if (params.parapet > 0)
+            emitPlanParapet(out, cur, y + 0.05, params.parapet,
+                            materialFor(PartId::Trim, wallColor).albedo);
+        // Crown (penthouse + tank) seated on the top tier's oriented frame.
+        Vec3 r3(topObb.axis[0].x, 0, topObb.axis[0].y);
+        Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
+        Vec3 fo = Vec3(topObb.center.x, 0, topObb.center.y) -
+                  r3 * topObb.half[0] - f3 * topObb.half[1];
+        emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
                   y + 0.05, params, rng);
     }
-    out.attaches.push_back({Vec3(centroid(cur).x, y, centroid(cur).y),
+    out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),
                             Vec3(0, 1, 0), "roof"});
-    out.height = (y + params.parapet) - baseY;
+    out.height = (y + (pitched ? roofRise : params.parapet)) - baseY;
 
     // Coarse HLOD proxy: the plan's oriented box, ground to roof.
     {

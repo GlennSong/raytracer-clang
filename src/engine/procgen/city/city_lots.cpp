@@ -84,6 +84,13 @@ BuildingParams paramsFor(const std::string& t, Real shortSide, const Vec3& /*tin
         const Real r = rng.unit();
         style = r < 0.45 ? FacadeStyle::Brick
               : r < 0.80 ? FacadeStyle::Stucco : FacadeStyle::Painted;
+        // Low homes wear PITCHED roofs (P3.c): gable mostly, hip sometimes —
+        // the residential silhouette. Taller walk-ups keep the flat parapet.
+        if (bp.floors <= 3) {
+            bp.roofStyle = rng.unit() < 0.65 ? BuildingParams::RoofStyle::Gable
+                                             : BuildingParams::RoofStyle::Hip;
+            bp.roofPitch = rng.range(0.45, 0.7);
+        }
     }
     // Cladding drives the wall PART (Brick/Concrete/Stucco emit under the
     // surfaced PartIds so materialFor binds the procedural PBR texture set —
@@ -244,19 +251,103 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // into outParts so the caller binds the SAME PBR material recipes the
             // shape:"city" pipeline uses — not a flattened vertex-colour blob.
             BuildingParams bp = paramsFor(b.type, shortSide, b.color, rng);
-            Scope scope = scopeFromFootprint(site, 0.0, 10.0 /* height set by floors */,
-                                             clearOfRoads);
-            // The road clearance can shrink the box past usefulness: re-apply the
-            // sliver gate on the FITTED footprint, not just the raw OBB.
-            const Real fitShort = std::min(scope.size.x, scope.size.z);
-            if (fitShort < p.minShort * 0.75) { emitGreen(); continue; }
-            // The collider/record follows the fitted scope, not the raw OBB.
-            Vec3 sc = scope.center();
-            b.site = Vec2(sc.x, sc.z);
-            b.width = scope.size.x;
-            b.depth = scope.size.z;
-            b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
-            BuildingMesh bm = growBuilding(scope, bp);
+            bp.retailStreetOnly = true;   // a city building has a FRONT
+            // The door (and the retail front) faces the nearest STREET, not a
+            // fixed +Z: aim faceDir at the closest point on the road network.
+            if (roads) {
+                Real best = 1e30;
+                Vec2 q = b.site;
+                for (const RoadEdge& e : roads->edges) {
+                    if (e.a < 0 || e.b < 0 ||
+                        e.a >= static_cast<int>(roads->nodes.size()) ||
+                        e.b >= static_cast<int>(roads->nodes.size())) continue;
+                    const Vec2& ra = roads->nodes[e.a].pos;
+                    const Vec2& rb = roads->nodes[e.b].pos;
+                    Vec2 ab = rb - ra;
+                    Real len2 = ab.lengthSquared();
+                    Real t = len2 > 1e-12 ? dot(b.site - ra, ab) / len2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    Vec2 cp(ra.x + ab.x * t, ra.y + ab.y * t);
+                    Real dd = (cp - b.site).length();
+                    if (dd < best) { best = dd; q = cp; }
+                }
+                Vec2 dir = q - b.site;
+                if (dir.length() > 1e-6) {
+                    dir = normalize(dir);
+                    bp.faceDir = Vec3(dir.x, 0, dir.y);
+                }
+            }
+
+            // PLAN massing (P3.c): the building takes the LOT'S OWN SHAPE — the
+            // simplified site polygon (short edges merged so no micro-facades),
+            // inset progressively until every vertex clears the road corridors.
+            // Falls back to the shrink-fit box when the plan can't clear.
+            Poly2 plan = site;
+            {   // merge sub-2.5 m edges + drop near-collinear vertices
+                Poly2 s;
+                for (std::size_t vi = 0; vi < plan.size(); ++vi) {
+                    const Vec2& prev = s.empty() ? plan.back() : s.back();
+                    if ((plan[vi] - prev).length() < 2.5 && !s.empty()) continue;
+                    s.push_back(plan[vi]);
+                }
+                Poly2 s2;
+                for (std::size_t vi = 0; vi < s.size(); ++vi) {
+                    Vec2 a = s[(vi + s.size() - 1) % s.size()], m2 = s[vi],
+                         c2 = s[(vi + 1) % s.size()];
+                    if (std::fabs(cross(normalize(m2 - a), normalize(c2 - m2))) < 0.03)
+                        continue;
+                    s2.push_back(m2);
+                }
+                if (s2.size() >= 3) plan = s2;
+            }
+            bool planOk = plan.size() >= 3 && area(plan) > p.minLotArea * 0.5;
+            if (planOk && roads) {
+                bool fit = false;
+                for (Real t : {Real(0), Real(0.8), Real(1.6)}) {
+                    Poly2 cand = t > 0 ? inset(plan, t) : plan;
+                    if (cand.size() < 3 || area(cand) < 40) break;
+                    bool clear = true;
+                    for (const Vec2& v : cand)
+                        if (!clearOfRoads(v)) { clear = false; break; }
+                    if (clear) { plan = cand; fit = true; break; }
+                }
+                planOk = fit;
+            }
+            // Big roomy curtain-wall offices occasionally go ROUND: a chord-
+            // tessellated circle plan inscribed in the lot (a real drum tower).
+            if (planOk && bp.curtainWall && shortSide > 19 && rng.unit() < 0.3) {
+                const Real rad = shortSide * 0.5 - 1.6;
+                Poly2 circ;
+                for (int k = 0; k < 16; ++k) {
+                    Real a2 = 2.0 * 3.14159265358979323846 * k / 16;
+                    circ.push_back(b.site + Vec2(std::cos(a2), std::sin(a2)) * rad);
+                }
+                bool clear = true;
+                if (roads)
+                    for (const Vec2& v : circ)
+                        if (!clearOfRoads(v)) { clear = false; break; }
+                if (clear) plan = circ;
+            }
+
+            BuildingMesh bm;
+            if (planOk) {
+                bm = growPlanBuilding(plan, bp);
+                OBB2 pb = orientedBoundingBox(plan);
+                b.site = pb.center;
+                b.width = 2 * pb.half[0];
+                b.depth = 2 * pb.half[1];
+                b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
+            } else {
+                Scope scope = scopeFromFootprint(site, 0.0, 10.0, clearOfRoads);
+                const Real fitShort = std::min(scope.size.x, scope.size.z);
+                if (fitShort < p.minShort * 0.75) { emitGreen(); continue; }
+                Vec3 sc = scope.center();
+                b.site = Vec2(sc.x, sc.z);
+                b.width = scope.size.x;
+                b.depth = scope.size.z;
+                b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
+                bm = growBuilding(scope, bp);
+            }
             if (bm.parts.empty()) continue;
             if (outParts)
                 for (const RenderMesh& part : bm.parts) {
