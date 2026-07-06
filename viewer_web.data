@@ -407,17 +407,17 @@
     {
       "name": "Eaves",
       "position": [
-        19,
-        38,
-        90
+        -19,
+        3.0,
+        5
       ],
       "forward": [
-        -0.02,
-        -0.35,
-        -0.94
+        0,
+        0.0,
+        -1.0
       ],
       "lens": {
-        "focalLength": 40,
+        "focalLength": 24,
         "sensorHeight": 24,
         "fStop": 0,
         "focusDistance": 14.0
@@ -2313,7 +2313,8 @@ local SPECS = {
                                    setback_floors = 5, setback_every = 1.6 } },
   { plan = roundedFlatiron(20, 14), p = { floors = 6, style = "brick" } },
   { plan = rectPlan(22, 16), p = { floors = 1, style = "metal",
-                                   solid_facade = true, ground_height = 7 } },
+                                   solid_facade = true, ground_height = 7,
+                                   ground_bays = 3 } },
   { plan = circlePlan(9.5, 20), p = { floors = 12, style = "glass",
                                       setback_floors = 5, setback_every = 1.2 } },
   { plan = cruciformPlan(22, 22), p = { floors = 10, style = "concrete",
