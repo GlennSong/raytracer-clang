@@ -18,6 +18,7 @@
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
+#include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/camera_panel_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
@@ -107,6 +108,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif
     addSystem<RenderSystem>();
+    addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     addSystem<CameraPanelSystem>(camSys);
 }
 

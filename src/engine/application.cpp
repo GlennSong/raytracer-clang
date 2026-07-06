@@ -65,7 +65,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus,
+        eventBus, debugLines,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -110,6 +110,7 @@ void Application::runFrame() {
     window->pollEvents();
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
+    debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     {
         FrameContext ctx = makeContext();
@@ -155,6 +156,11 @@ void Application::runFrame() {
 
     auto frameStart = std::chrono::steady_clock::now();
     renderFrame();
+    // Drop expired debug shapes now that they've been drawn; one-frame shapes
+    // (the immediate-mode default) live exactly this long. The modal-resize
+    // draw callback renders without expiring, so paused frames keep their
+    // overlay.
+    debugLines.endFrame();
 
     if (rendererPtr->targetFps > 0) {
         auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);

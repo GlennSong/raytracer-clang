@@ -38,6 +38,7 @@ add_library(engine_core STATIC
     src/renderer/hosted_window.cpp
     src/engine/clock.cpp
     src/engine/event_bus.cpp
+    src/engine/debug_draw.cpp
     src/engine/world.cpp
     src/engine/components.cpp
     src/engine/application.cpp
@@ -103,6 +104,7 @@ add_library(engine_core STATIC
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
@@ -243,6 +245,7 @@ add_executable(run_tests
     tests/test_world.cpp
     tests/test_clock.cpp
     tests/test_event_bus.cpp
+    tests/test_debug_draw.cpp
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp

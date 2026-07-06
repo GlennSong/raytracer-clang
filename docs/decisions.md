@@ -4730,6 +4730,58 @@ storms, per-instance signals), add a small-vector/arena path; if scripts need
 to subscribe (Lua callbacks), add a `ScriptVM` binding surface over the same
 bus rather than a second dispatcher.
 
+## ADR-0067 — Debug draw: immediate-mode lines baked to camera-facing ribbons, no backend pass
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** The roadmap has owed a line/debug-draw primitive since the Jolt
+integration ("debug visualization of colliders — needs a line/debug-draw
+primitive; deferred"), and design principle #2 says debug visualization
+outranks game UI in this engine. Consumers are queued up: collider wireframes,
+nav/path traces, procgen inspection (L-system skeletons, road centerlines,
+scatter bounds), camera frusta. The blocker was always the backend: a real GPU
+line pass means per-backend pipeline work on Metal, Vulkan, *and* WebGPU — and
+the register already carries one overlay-flag defect ("FLAG_OVERLAY broken on
+the Metal instanced path") from the last time gizmos went device-side first.
+
+**Decision.** Split the model from the drawing, and make the drawing use only
+machinery that already exists. `engine::DebugDraw`
+(`src/engine/debug_draw.{h,cpp}`) is an immediate-mode line accumulator owned
+by `Application` and handed to systems as `FrameContext::debug` — `line`,
+`arrow`, `aabb`, oriented `box`, wire `sphere`, `circle`, `axes`, each with an
+optional time-to-live (default = this frame; fixed-step producers pass the
+fixed step so shapes survive between sim ticks; `Application` ages and expires
+entries around the render). `buildDebugLineMesh` bakes the list into
+camera-facing ribbon quads — width scaled by camera distance for a roughly
+constant on-screen thickness, wound through `MeshBuilder::emitQuad` per the
+clockwise convention, line color in `Vertex::color`. `DebugDrawSystem`
+(registered after `RenderSystem`) uploads that mesh through the ordinary
+`AssetManager` path and submits ONE `drawMesh` with `FLAG_OVERLAY` — so debug
+lines work on Metal, Vulkan, WebGPU, and Null **today**, with zero per-backend
+code. GPU meshes are retired two frames late so in-flight command buffers
+never reference a freed mesh.
+
+**Alternatives.** (a) A `Renderer::drawLines` virtual + per-backend line
+pipelines — the "proper" GPU path, but three backends of unverifiable-here
+work for line volumes that don't need it, and it would repeat the
+FLAG_OVERLAY-style device-drift story. The seam can still be added later
+*behind* `DebugDrawSystem` without touching any call site — callers only ever
+see `ctx.debug`. (b) ImGui's background draw list (project to screen space) —
+ties world-space debug to RT_ENABLE_IMGUI builds and clips at the window, and
+ImGui is OFF by default. (c) Reusing `wireframe` mode — global, per-mesh, not
+shape-addressable.
+
+**Consequences.** Model + bake are pure data, headless-tested
+(`tests/test_debug_draw.cpp`); the per-frame mesh upload is real but debug-
+scale (thousands of lines, not millions — and `measure before optimizing`).
+Ribbons are flat quads, so a line nearly parallel to the view ray thins out
+(the degenerate case falls back to any perpendicular; it stays visible).
+FLAG_OVERLAY on the NON-instanced path is what this rides; the register notes
+the instanced overlay defect — if the non-instanced path shows the same
+on-device, lines still draw, just depth-tested. **Revisit trigger:** if
+profiling shows the bake/upload mattering, or a consumer needs millions of
+lines (voxel debug), add the per-backend line-pass behind the same
+`DebugDrawSystem`.
+
 ---
 
 ## Interim seams & tech-debt register

@@ -3,6 +3,7 @@
 
 #include "world.h"
 #include "clock.h"
+#include "debug_draw.h"
 #include "event_bus.h"
 #include "input/input_map.h"
 #include "input/player_input.h"
@@ -57,6 +58,8 @@ struct FrameContext {
     JobSystem& jobs;           // shared thread pool (ADR-0014): physics today
     EventBus& events;          // typed pub/sub (ADR-0066): publish now, or
                                // enqueue for the post-fixed-step dispatch
+    DebugDraw& debug;          // immediate-mode debug lines (ADR-0067),
+                               // drawn on top by DebugDrawSystem
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)

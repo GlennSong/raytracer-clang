@@ -63,6 +63,7 @@ public:
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
     EventBus& events() { return eventBus; }
+    DebugDraw& debugDraw() { return debugLines; }
     // The simulation clock, exposed so an editor shell can drive pause /
     // single-step transport controls during play (same switch Space toggles).
     SimClock& simClock() { return clock; }
@@ -94,6 +95,7 @@ private:
     JobSystem jobs;
 #endif
     EventBus eventBus;
+    DebugDraw debugLines;
     InputMap inputMap;
     PlayerInputs playerInputs;
     RenderView view;
