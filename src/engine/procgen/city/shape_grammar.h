@@ -175,6 +175,10 @@ struct BuildingParams {
     // Quoins: alternating corner masonry blocks up every building arris —
     // traditional on brick/stucco, and they hide the thin-texture corner edge.
     bool  quoins = false;
+    // VEHICLE BAYS on the street face (>0): the ground floor's entrance edge
+    // becomes a bay-door front — wide segmented roller doors with reveals and
+    // a lintel band. Fire stations, loading docks, parking entries.
+    int   groundBays = 0;
     // Roof form (P3.c): Flat keeps the parapet deck; Gable/Hip raise a pitched
     // roof over the top plan (rect-ish plans only — an odd plan falls back to
     // Flat until a straight-skeleton pass exists). Residential vocabulary.

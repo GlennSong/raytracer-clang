@@ -49,7 +49,28 @@ struct BuildingRecipe {
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
     std::string placeType;      // "home" | "shop" | "office" | "civic" | "park"
+    std::string name;           // the RECIPE that made it ("school", "hotel",
+                                // "glass_tower", ...) — debug + tests
+    // RectYard massing caps (a house keeps a small pad; a school a big one).
+    Real yardHalfWMax = 7.0;
+    Real yardHalfDMax = 6.0;
 };
+
+// LANDMARK archetypes: placed by the PLANNER (best-lot picks with quotas —
+// one courthouse per city, one school per residential quarter), never rolled
+// per lot. A city has civic anchors, not a 6% chance of one per parcel.
+enum class LandmarkKind : uint8_t {
+    School,        // 2-3 fl masonry, classroom window grid, a real schoolyard
+    Hospital,      // near-white concrete slab, wings, roof plant
+    Courthouse,    // the government hall: pilasters, tall ground, quoins
+    Police,        // squat concrete, dark trim
+    Fire,          // brick, VEHICLE BAY doors on the street face
+    Market,        // one tall arched masonry hall (shop anchor)
+    Count
+};
+const char* landmarkName(LandmarkKind k);
+BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
+                                 uint32_t seed);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no

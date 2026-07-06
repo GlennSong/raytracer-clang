@@ -553,6 +553,8 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.window.frameWidth = static_cast<Real>(optField(L, idx, "frame_width", p.window.frameWidth));
     p.quoins = optBoolField(L, idx, "quoins", p.quoins);
     p.window.sill = optBoolField(L, idx, "sill", p.window.sill);
+    // Vehicle bays on the street face (fire stations, loading docks).
+    p.groundBays = static_cast<int>(optField(L, idx, "ground_bays", p.groundBays));
     // Roof form + street-aware retail (P3.c).
     std::string roof = optStrField(L, idx, "roof", "");
     if (roof == "flat")       p.roofStyle = BuildingParams::RoofStyle::Flat;

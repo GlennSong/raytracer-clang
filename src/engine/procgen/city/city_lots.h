@@ -30,6 +30,8 @@ struct LotBuilding {
     std::string type;       // "home" | "shop" | "office" | "civic" | "park"
                             // | "green" (an UNBUILT lot — the caller plants
                             //   grass + trees on it; not a routable place)
+    std::string recipe;     // the architect RECIPE that built it ("school",
+                            // "glass_tower", "fire_station", ...) — debug/UI
     Vec3 color{0.72, 0.70, 0.64};
     // Park / "green" lots only (device: "square green lots don't fit the
     // blocks"): the lot's OWN polygon (world XZ) and a low slab mesh built

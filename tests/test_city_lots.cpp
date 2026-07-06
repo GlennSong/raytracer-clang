@@ -255,3 +255,62 @@ TEST_CASE(architect_tables_are_coherent) {
     }
     CHECK(core18 >= 8);
 }
+
+TEST_CASE(landmark_recipes_are_coherent) {
+    // Each civic archetype keeps its signature across seeds: a school is low
+    // with a schoolyard, a fire station has vehicle bays, the market is one
+    // tall arched hall, the courthouse is formal (pilasters + tall ground).
+    for (uint32_t s = 1; s <= 12; ++s) {
+        BuildingRecipe school =
+            architectLandmark(LandmarkKind::School, 18, 420, s);
+        CHECK(school.params.floors <= 3);
+        CHECK(school.massing == BuildingRecipe::Massing::RectYard);
+        CHECK(school.yardHalfWMax > 8.0);            // a real yard, not a lawn
+        CHECK(school.name == "school");
+        BuildingRecipe fire = architectLandmark(LandmarkKind::Fire, 16, 300, s);
+        CHECK(fire.params.groundBays >= 2);
+        CHECK(fire.params.floors <= 2);
+        BuildingRecipe market =
+            architectLandmark(LandmarkKind::Market, 14, 260, s);
+        CHECK(market.params.floors == 0);            // one tall hall
+        CHECK(market.params.window.head == OpeningStyle::Head::Round);
+        CHECK(market.params.roofStyle == BuildingParams::RoofStyle::Gable);
+        BuildingRecipe court =
+            architectLandmark(LandmarkKind::Courthouse, 18, 400, s);
+        CHECK(court.params.pilasters);
+        CHECK(court.params.groundHeight > 5.0);
+        CHECK(court.placeType == "civic");
+    }
+}
+
+TEST_CASE(landmarks_are_planned_not_rolled) {
+    // The planner fills civic quotas on the BEST lots: a city grown over real
+    // blocks gets exactly one courthouse (on the most central financial lot),
+    // at most the quota of schools, and every landmark name is recorded.
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 11;
+    // 3x3 grid of blocks spanning core -> outskirts so every district exists.
+    std::vector<Poly2> blocks;
+    for (int gx = -1; gx <= 1; ++gx)
+        for (int gz = -1; gz <= 1; ++gz) {
+            Real cx = gx * 110.0, cz = gz * 110.0, h = 48.0;
+            blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                              {cx + h, cz + h}, {cx - h, cz + h}});
+        }
+    std::vector<LotBuilding> b = growLotBuildings(blocks, p);
+    int courthouse = 0, schools = 0, named = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.recipe == "courthouse") ++courthouse;
+        if (lb.recipe == "school") ++schools;
+        if (!lb.recipe.empty()) ++named;
+    }
+    CHECK(courthouse == 1);       // one per city, never rolled
+    CHECK(schools >= 1);          // the residential ring got its school
+    CHECK(schools <= 3);          // ...but not one per parcel
+    CHECK(named == static_cast<int>(b.size()));   // every lot knows its recipe
+    // Determinism holds through the planner.
+    std::vector<LotBuilding> c = growLotBuildings(blocks, p);
+    CHECK(b.size() == c.size());
+    for (std::size_t i = 0; i < b.size(); ++i) CHECK(b[i].recipe == c[i].recipe);
+}

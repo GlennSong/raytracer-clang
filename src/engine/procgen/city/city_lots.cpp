@@ -103,6 +103,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (std::size_t i = 0; i < outParts->size(); ++i)
             (*outParts)[i].materialIndex = static_cast<int>(i);
     }
+    // ---- PASS A: parcel every block and COLLECT the viable lots ------------
+    // The landmark planner (pass B) needs to see the whole city before any lot
+    // builds — a courthouse goes on the BEST financial lot, not the first one.
+    struct BlockInfo {
+        ParcelParams pp;
+        DistrictTag tag;
+        Real lotSetback, buildChance;
+    };
+    struct LotCand {
+        std::size_t li;      // lot index within its block (the rng stream id)
+        int block;           // index into binfos
+        Lot lot;
+        int landmark = -1;   // LandmarkKind once the planner assigns one
+    };
+    std::vector<BlockInfo> binfos;
+    std::vector<LotCand> cands;
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
@@ -111,40 +127,41 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if (foot.size() < 3 || area(foot) < p.minLotArea * 1.5) continue;
         if (debug) debug->blocks.push_back(foot);
 
-        ParcelParams pp;
-        pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
-        pp.targetArea = 480;
-        pp.minArea = p.minLotArea;
-        pp.minEdge = p.minShort;
+        BlockInfo bf;
+        bf.pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
+        bf.pp.targetArea = 480;
+        bf.pp.minArea = p.minLotArea;
+        bf.pp.minEdge = p.minShort;
         // DENSITY is a district decision too (device: "feels like a small
         // town"): urban quarters parcel small and build nearly wall-to-wall;
         // the financial core keeps big tower plates; suburbs keep their yards.
-        const DistrictTag blockTag = districts.tagAt(centroid(foot));
-        Real lotSetback = p.lotSetback;
-        Real buildChance = p.buildChance;
-        switch (blockTag) {
+        bf.tag = districts.tagAt(centroid(foot));
+        bf.lotSetback = p.lotSetback;
+        bf.buildChance = p.buildChance;
+        switch (bf.tag) {
             case DistrictTag::Financial:
-                pp.targetArea = 560; lotSetback = 1.0;
-                buildChance = std::min(Real(1), p.buildChance + 0.06); break;
+                bf.pp.targetArea = 560; bf.lotSetback = 1.0;
+                bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
             case DistrictTag::Commercial:
-                pp.targetArea = 300; lotSetback = 0.7;
-                buildChance = std::min(Real(1), p.buildChance + 0.06); break;
+                bf.pp.targetArea = 300; bf.lotSetback = 0.7;
+                bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
             case DistrictTag::OldTown:
-                pp.targetArea = 210; pp.minArea = std::min(p.minLotArea, Real(80));
-                lotSetback = 0.5; buildChance = 0.98; break;
+                bf.pp.targetArea = 210;
+                bf.pp.minArea = std::min(p.minLotArea, Real(80));
+                bf.lotSetback = 0.5; bf.buildChance = 0.98; break;
             case DistrictTag::Industrial:
-                pp.targetArea = 700; lotSetback = 1.2; break;
+                bf.pp.targetArea = 700; bf.lotSetback = 1.2; break;
             case DistrictTag::Residential:
-                pp.targetArea = 400; break;
+                bf.pp.targetArea = 400; break;
         }
         // Sometimes a WHOLE small block is a park (device: "the green space
         // doesn't conform to the city block"): the pad is the block's own
         // road-inset interior, so its edges follow the surrounding streets
         // exactly — a real city square, not a leftover parcel.
-        if ((blockTag == DistrictTag::Commercial ||
-             blockTag == DistrictTag::Residential) &&
+        if ((bf.tag == DistrictTag::Commercial ||
+             bf.tag == DistrictTag::Residential) &&
             area(foot) < 2600.0) {
-            Hash blockRng(mix(pp.seed, 0xB10Cu));
+            Hash blockRng(mix(bf.pp.seed, 0xB10Cu));
             if (blockRng.unit() < 0.10) {
                 OBB2 gb = orientedBoundingBox(foot);
                 LotBuilding g;
@@ -154,6 +171,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.height = 0.25;
                 g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
                 g.type = "park";
+                g.recipe = "park_block";
                 g.color = colorFor("park");
                 g.pad = foot;
                 g.padMesh = padMeshFor(foot, g.height);
@@ -161,13 +179,106 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 continue;
             }
         }
-        std::vector<Lot> lots = subdivideBlock(foot, pp);
+        std::vector<Lot> lots = subdivideBlock(foot, bf.pp);
         if (debug)
             for (const Lot& lot : lots) debug->lots.push_back(lot.footprint);
-
+        binfos.push_back(bf);
         for (std::size_t li = 0; li < lots.size(); ++li) {
-            const Lot& lot = lots[li];
-            if (area(lot.footprint) < pp.minArea) continue;
+            if (area(lots[li].footprint) < bf.pp.minArea) continue;
+            cands.push_back({li, static_cast<int>(binfos.size()) - 1,
+                             lots[li], -1});
+        }
+    }
+
+    // ---- PASS B: the LANDMARK planner ---------------------------------------
+    // Civic anchors are PLACED, never rolled: quotas per city (one courthouse,
+    // one hospital, a school per residential quarter...) filled by the best-
+    // scoring eligible lot — biggest, and for the courthouse most central.
+    {
+        int nRes = 0, nCom = 0, nFin = 0, nOld = 0, nInd = 0;
+        for (const LotCand& c : cands) {
+            switch (binfos[c.block].tag) {
+                case DistrictTag::Residential: ++nRes; break;
+                case DistrictTag::Commercial:  ++nCom; break;
+                case DistrictTag::Financial:   ++nFin; break;
+                case DistrictTag::OldTown:     ++nOld; break;
+                case DistrictTag::Industrial:  ++nInd; break;
+            }
+        }
+        struct Want {
+            LandmarkKind kind;
+            int count;
+            Real minShort, minArea;
+            bool wantCore;   // score by centrality too (the courthouse)
+            DistrictTag tagA, tagB;   // eligible districts (B may repeat A)
+        };
+        const int total = static_cast<int>(cands.size());
+        const Want wants[] = {
+            {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
+             DistrictTag::Financial, DistrictTag::Financial},
+            {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
+             DistrictTag::Commercial, DistrictTag::Commercial},
+            {LandmarkKind::School, nRes >= 6 ? 1 + nRes / 50 : 0, 13.0, 320.0,
+             false, DistrictTag::Residential, DistrictTag::Residential},
+            {LandmarkKind::Police, nCom >= 4 ? 1 : 0, 9.0, 140.0, false,
+             DistrictTag::Commercial, DistrictTag::Commercial},
+            {LandmarkKind::Fire, (nCom + nInd) >= 8 ? 1 + total / 150 : 0,
+             11.0, 220.0, false, DistrictTag::Commercial,
+             DistrictTag::Industrial},
+            {LandmarkKind::Market, nOld >= 3 ? 1 : (nCom >= 8 ? 1 : 0),
+             10.0, 180.0, false,
+             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
+             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
+        };
+        for (const Want& w : wants) {
+            for (int k = 0; k < w.count; ++k) {
+                int best = -1;
+                Real bestScore = -1;
+                // Preferred thresholds first; if no lot in the district can
+                // carry them (small towns parcel small), relax once — the
+                // quarter still gets its school, just a modest one.
+                for (Real relax : {Real(1.0), Real(0.72)}) {
+                    for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+                        const LotCand& c = cands[ci];
+                        if (c.landmark >= 0) continue;
+                        const DistrictTag t = binfos[c.block].tag;
+                        if (t != w.tagA && t != w.tagB) continue;
+                        OBB2 ob = orientedBoundingBox(c.lot.footprint);
+                        const Real shortS = 2 * std::min(ob.half[0], ob.half[1]);
+                        const Real ar = area(c.lot.footprint);
+                        if (shortS < w.minShort * relax || ar < w.minArea * relax)
+                            continue;
+                        Real score = ar;
+                        if (w.wantCore) {
+                            const Real r =
+                                (centroid(c.lot.footprint) - p.center).length();
+                            score *= 0.4 + std::max(
+                                Real(0),
+                                1.0 - r / std::max(Real(1), p.innerRadius));
+                        }
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = static_cast<int>(ci);
+                        }
+                    }
+                    if (best >= 0) break;
+                }
+                if (best < 0) break;   // no lot can carry it: skip the quota
+                cands[best].landmark = static_cast<int>(w.kind);
+            }
+        }
+    }
+
+    // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
+    for (const LotCand& cand : cands) {
+        {
+            const BlockInfo& bf = binfos[cand.block];
+            const ParcelParams& pp = bf.pp;
+            const DistrictTag blockTag = bf.tag;
+            const Real lotSetback = bf.lotSetback;
+            const Real buildChance = bf.buildChance;
+            const std::size_t li = cand.li;
+            const Lot& lot = cand.lot;
             Hash rng(mix(pp.seed, static_cast<uint32_t>(li) + 1));
             // An unbuilt lot is reported as a GREEN (device: "empty lots had
             // vegetation like trees and grass"), not silently dropped — the
@@ -182,14 +293,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.height = 0.12;
                 g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
                 g.type = "green";
+                g.recipe = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
                 g.pad = lot.footprint;
                 g.padMesh = padMeshFor(g.pad, g.height);
                 out.push_back(std::move(g));
             };
-            if (rng.unit() > buildChance) {
+            if (cand.landmark < 0 && rng.unit() > buildChance) {
                 if (debug) debug->rejChance++;
-                emitGreen(); continue;   // plaza / gap
+                emitGreen(); continue;   // plaza / gap (landmarks always build)
             }
 
             // Building set back from its own lot lines (district-tuned).
@@ -237,10 +349,17 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 Real(0), 1.0 - (b.site - p.center).length() /
                                    std::max(Real(1), p.innerRadius)));
             BuildingRecipe rec =
-                architectPick(tag, shortSide, area(site),
-                              mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u),
-                              coreness);
+                cand.landmark >= 0
+                    ? architectLandmark(static_cast<LandmarkKind>(cand.landmark),
+                                        shortSide, area(site),
+                                        mix(pp.seed,
+                                            static_cast<uint32_t>(li) * 7u + 3u))
+                    : architectPick(tag, shortSide, area(site),
+                                    mix(pp.seed,
+                                        static_cast<uint32_t>(li) * 7u + 3u),
+                                    coreness);
             b.type = rec.placeType;
+            b.recipe = rec.name;
             b.color = colorFor(b.type);
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.3;   // a low green pad in the lot's own shape
@@ -411,8 +530,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // A HOUSE sits on a small centred rectangle, not the whole lot —
             // the rest of the parcel reads as its yard (residential realism).
             if (planOk && rec.massing == BuildingRecipe::Massing::RectYard) {
-                const Real hw2 = std::min(obb.half[0] - 1.6, Real(7.0));
-                const Real hd2 = std::min(obb.half[1] - 1.6, Real(6.0));
+                const Real hw2 = std::min(obb.half[0] - 1.6, rec.yardHalfWMax);
+                const Real hd2 = std::min(obb.half[1] - 1.6, rec.yardHalfDMax);
                 if (hw2 > 3.2 && hd2 > 3.2) {
                     Vec2 c = obb.center;
                     Poly2 house{c - obb.axis[0] * hw2 - obb.axis[1] * hd2,

@@ -126,6 +126,7 @@ void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     if (cx.roomy && rng.unit() < 0.35)
         out.massing = BuildingRecipe::Massing::Circle;
     out.placeType = "office";
+    out.name = "glass_tower";
 }
 
 // Concrete office slab: the downtown workhorse, modest coreness lift.
@@ -139,6 +140,7 @@ void recipeOfficeSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
                         p.setbackEvery = rng.range(1.1, 1.6); }
     cx.slender = 2.4 + cx.coreness * 0.8;
     out.placeType = "office";
+    out.name = "office_slab";
 }
 
 // Downtown brick commercial block with setback tiers and ground retail.
@@ -150,6 +152,7 @@ void recipeCommercialBlock(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     if (p.floors > 6) { p.setbackFloors = rng.irange(3, 4);
                         p.setbackEvery = rng.range(1.1, 1.5); }
     out.placeType = "shop";
+    out.name = "commercial_block";
 }
 
 // GOVERNMENT / civic hall: low, pilastered, formal — never retail.
@@ -160,6 +163,7 @@ void recipeCivicHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.pilasters = true;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "civic";
+    out.name = "civic_hall";
 }
 
 // Midtown civic variant: smaller, sometimes stucco.
@@ -170,6 +174,7 @@ void recipeCivicMidtown(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.pilasters = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
     out.placeType = "civic";
+    out.name = "civic_midtown";
 }
 
 // Main-street brick shop rows; low blocks sometimes carry a gable.
@@ -183,6 +188,7 @@ void recipeBrickShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
         p.roofPitch = rng.range(0.35, 0.5);
     }
     out.placeType = "shop";
+    out.name = "brick_shop";
 }
 
 // Midtown concrete office mid-rise.
@@ -192,6 +198,7 @@ void recipeOfficeMidrise(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.groundRetail = true;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "office";
+    out.name = "office_midrise";
 }
 
 // Stucco / painted walk-up homes over midtown streets.
@@ -201,6 +208,7 @@ void recipeWalkupHomes(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.groundRetail = false;
     dress(p, rng.unit() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     out.placeType = "home";
+    out.name = "walkup_homes";
 }
 
 // The EUROPEAN old-town house: dense, low, stucco/brick, round arches, quoins,
@@ -216,6 +224,7 @@ void recipeOldTownHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.roofStyle = BuildingParams::RoofStyle::Hip;
     p.roofPitch = rng.range(0.5, 0.7);
     out.placeType = p.groundRetail ? "shop" : "home";
+    out.name = "oldtown_house";
 }
 
 // Wide solid metal shed with a tall ground floor — the industrial workplace.
@@ -226,7 +235,9 @@ void recipeMetalShed(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.solidFacade = true;
     p.groundRetail = false;
     dress(p, FacadeStyle::Metal, rng);
+    p.groundBays = rng.irange(1, 3);   // loading docks on the street face
     out.placeType = "office";   // a workplace agents commute to
+    out.name = "metal_shed";
 }
 
 // Plain concrete office block up front of the yards.
@@ -236,6 +247,7 @@ void recipeIndustrialOffice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.groundRetail = false;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "office";
+    out.name = "industrial_office";
 }
 
 // The SUBURBAN house: a small centred rectangle so the lot keeps its yard,
@@ -253,6 +265,7 @@ void recipeYardHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.roofPitch = rng.range(0.45, 0.7);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.placeType = "home";
+    out.name = "yard_house";
 }
 
 // Low walk-up apartments on the outskirts; the low ones sometimes gabled.
@@ -266,6 +279,7 @@ void recipeApartments(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
         p.roofPitch = rng.range(0.4, 0.6);
     }
     out.placeType = "home";
+    out.name = "apartments";
 }
 
 // The residential corner shop.
@@ -275,12 +289,126 @@ void recipeCornerShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.groundRetail = true;
     dress(p, FacadeStyle::Brick, rng);
     out.placeType = "shop";
+    out.name = "corner_shop";
 }
 
 // A pocket park: no building, the lot becomes a green with trees.
 void recipePocketPark(BuildingRecipe& out, Hash&, RecipeCtx&) {
     out.massing = BuildingRecipe::Massing::Park;
     out.placeType = "park";
+    out.name = "pocket_park";
+}
+
+// The HOTEL: masonry mid-rise, awninged entrance, tiers when tall — fabric,
+// but distinct from offices by proportion and ornament.
+void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(5, 8);
+    p.groundRetail = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    if (p.floors > 6) { p.setbackFloors = rng.irange(3, 5);
+                        p.setbackEvery = rng.range(1.0, 1.4); }
+    cx.slender = 2.2;
+    out.placeType = "shop";
+    out.name = "hotel";
+}
+
+// ---- LANDMARK recipes: the planner places these on the BEST lots -----------
+
+// The SCHOOL: 2-3 floor masonry with the tall classroom window grid, a formal
+// pilastered face, and a real SCHOOLYARD (RectYard massing, generous caps).
+void recipeSchool(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.window.lightsX = 2;
+    p.window.lightsY = 2;
+    p.quoins = false;
+    out.massing = BuildingRecipe::Massing::RectYard;   // the schoolyard
+    out.yardHalfWMax = 12.0;
+    out.yardHalfDMax = 9.0;
+    out.placeType = "civic";
+    out.name = "school";
+}
+
+// The HOSPITAL: a near-white concrete slab; the courtyard carve gives wings.
+void recipeHospital(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(4, 6);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Concrete, rng);
+    p.wallColor = Vec3(0.87, 0.88, 0.87);   // clinical near-white
+    p.window.lightsY = 2;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.awning = true;                         // entrance canopy
+    out.placeType = "civic";
+    out.name = "hospital";
+}
+
+// The COURTHOUSE / city hall: the government face of the core — pilasters
+// full height, a tall ground floor, quoins, a heavy parapet.
+void recipeCourthouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 4);
+    p.groundHeight = 5.5;
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.quoins = true;
+    p.parapet = 1.25;
+    p.trimColor = Vec3(0.88, 0.86, 0.80);
+    out.placeType = "civic";
+    out.name = "courthouse";
+}
+
+// The POLICE STATION: squat concrete, dark trim — institutional.
+void recipePolice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Concrete, rng);
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.trimColor = Vec3(0.32, 0.33, 0.36);
+    p.baseCourse = true;
+    out.placeType = "civic";
+    out.name = "police";
+}
+
+// The FIRE STATION: brick, VEHICLE BAY doors on the street face.
+void recipeFire(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(1, 2);
+    p.groundHeight = 5.0;                    // room for the engines
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.groundBays = cx.shortSide > 15 ? 3 : 2;
+    out.placeType = "civic";
+    out.name = "fire_station";
+}
+
+// The MARKET HALL: one tall arched masonry volume under a gable — the
+// shopping anchor of an old town or a commercial quarter.
+void recipeMarketHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = 0;                            // one tall hall, no upper storeys
+    p.groundHeight = rng.range(6.0, 7.5);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.quoins = true;
+    p.roofStyle = BuildingParams::RoofStyle::Gable;
+    p.roofPitch = rng.range(0.35, 0.5);
+    out.placeType = "shop";
+    out.name = "market_hall";
 }
 }  // namespace
 
@@ -346,8 +474,9 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             break;
         case DistrictTag::Commercial:
             if (roll < 0.05)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.45) recipeBrickShop(out, rng, cx);
-            else if (roll < 0.70) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.40) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.60) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.70) recipeHotel(out, rng, cx);
             else if (roll < 0.82) recipeCivicMidtown(out, rng, cx);
             else                  recipeWalkupHomes(out, rng, cx);
             break;
@@ -364,6 +493,41 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.85) recipeApartments(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
             break;
+    }
+    capFloors(out.params, shortSide, cx.slender);
+    return out;
+}
+
+const char* landmarkName(LandmarkKind k) {
+    switch (k) {
+        case LandmarkKind::School:     return "school";
+        case LandmarkKind::Hospital:   return "hospital";
+        case LandmarkKind::Courthouse: return "courthouse";
+        case LandmarkKind::Police:     return "police";
+        case LandmarkKind::Fire:       return "fire_station";
+        case LandmarkKind::Market:     return "market_hall";
+        default:                       return "?";
+    }
+}
+
+BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
+                                 uint32_t seed) {
+    Hash rng(seed * 2654435761u ^ 0x51ED2A9Bu);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    out.params.retailStreetOnly = true;
+    RecipeCtx cx;
+    cx.shortSide = shortSide;
+    cx.area = area;
+    cx.roomy = shortSide > 16.0;
+    switch (kind) {
+        case LandmarkKind::School:     recipeSchool(out, rng, cx); break;
+        case LandmarkKind::Hospital:   recipeHospital(out, rng, cx); break;
+        case LandmarkKind::Courthouse: recipeCourthouse(out, rng, cx); break;
+        case LandmarkKind::Police:     recipePolice(out, rng, cx); break;
+        case LandmarkKind::Fire:       recipeFire(out, rng, cx); break;
+        case LandmarkKind::Market:     recipeMarketHall(out, rng, cx); break;
+        default: break;
     }
     capFloors(out.params, shortSide, cx.slender);
     return out;

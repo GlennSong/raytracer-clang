@@ -1333,6 +1333,72 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
     }
 }
 
+// The VEHICLE BAY front (fire stations, loading docks, parking entries): the
+// entrance edge's ground floor as a row of wide segmented roller doors. Each
+// bay is a real recessed opening — jamb + head reveals connect the wall plane
+// back to the door plane — and the door panel carries horizontal SLATS so it
+// reads as a roller door, with a lintel band across the whole front.
+void emitBayFront(BuildingMesh& out, const FaceRect& fr,
+                  const BuildingParams& p, const Vec3& wallColor) {
+    RenderMesh wall, detail, trim;
+    const Real W = fr.width, H = fr.height;
+    int n = std::max(1, p.groundBays);
+    Real margin = 1.0;
+    const Real gap = 0.8;
+    Real bayW = (W - 2 * margin - (n - 1) * gap) / n;
+    while (n > 1 && bayW < 3.2) {   // cramped front: fewer, proper-width bays
+        --n;
+        bayW = (W - 2 * margin - (n - 1) * gap) / n;
+    }
+    bayW = std::min(bayW, Real(4.8));
+    if (bayW < 2.6) {   // no room for even one bay: plain wall face
+        emitQuad(wall, fr.at(0, 0), fr.at(W, 0), fr.at(W, H), fr.at(0, H),
+                 fr.n, wallColor);
+        appendToPart(out, p.wallPart, wall);
+        return;
+    }
+    margin = (W - (n * bayW + (n - 1) * gap)) * 0.5;
+    const Real bayH = std::min(H - 0.8, Real(3.8));
+    auto wallQuad = [&](Real a0, Real a1, Real b0, Real b1) {
+        if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
+        emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1),
+                 fr.at(a0, b1), fr.n, wallColor);
+    };
+    wallQuad(0, margin, 0, H);                 // end piers
+    wallQuad(W - margin, W, 0, H);
+    wallQuad(margin, W - margin, bayH, H);     // over the doors
+    const Vec3 in = fr.n * -0.35;              // door plane, well recessed
+    const Vec3 panel(0.36, 0.37, 0.39), slat(0.28, 0.29, 0.31);
+    for (int b = 0; b < n; ++b) {
+        const Real x0 = margin + b * (bayW + gap), x1 = x0 + bayW;
+        if (b + 1 < n) wallQuad(x1, x1 + gap, 0, bayH);   // pier between bays
+        Vec3 tL = fr.at(x0, bayH), tR = fr.at(x1, bayH);
+        Vec3 bL = fr.at(x0, 0), bR = fr.at(x1, 0);
+        emitQuad(wall, bL, bL + in, tL + in, tL, fr.h, wallColor);        // jamb
+        emitQuad(wall, bR + in, bR, tR, tR + in, fr.h * -1, wallColor);   // jamb
+        emitQuad(wall, tL, tL + in, tR + in, tR, fr.v * -1, wallColor);   // head
+        emitQuad(detail, bL + in, bR + in, tR + in, tL + in, fr.n, panel);
+        const Vec3 proud = fr.n * 0.03;
+        for (Real sy = 0.5; sy < bayH - 0.3; sy += 0.55) {
+            Vec3 sL = fr.at(x0 + 0.12, sy) + in + proud;
+            Vec3 sR = fr.at(x1 - 0.12, sy) + in + proud;
+            emitQuad(detail, sL, sR, sR + fr.v * 0.16, sL + fr.v * 0.16,
+                     fr.n, slat);
+        }
+    }
+    // Lintel band across the whole front above the doors.
+    const Vec3 ov = fr.n * 0.10;
+    const Real ly0 = bayH + 0.05, ly1 = std::min(H - 0.1, bayH + 0.5);
+    if (ly1 > ly0)
+        emitQuad(trim, fr.at(margin * 0.4, ly0) + ov,
+                 fr.at(W - margin * 0.4, ly0) + ov,
+                 fr.at(W - margin * 0.4, ly1) + ov,
+                 fr.at(margin * 0.4, ly1) + ov, fr.n, p.trimColor);
+    appendToPart(out, p.wallPart, wall);
+    appendToPart(out, PartId::Detail, detail);
+    appendToPart(out, PartId::Trim, trim);
+}
+
 }  // namespace
 
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
@@ -1417,6 +1483,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // retailStreetOnly (P3.c): storefronts only where the edge FACES the street
     // (normal within ~70 deg of faceDir); side/rear edges wear plain walls.
     for (std::size_t i = 0; i < plan.size(); ++i) {
+        // VEHICLE BAYS claim the street edge outright (fire station, depot).
+        if (i == entranceEdge && params.groundBays > 0) {
+            emitBayFront(out, planEdgeRect(plan, i, y, gh), params, wallColor);
+            continue;
+        }
         FacadeMode mode = (i == entranceEdge && params.walkableGround)
                               ? FacadeMode::Entrance : groundMode;
         if (mode == FacadeMode::Retail && params.retailStreetOnly) {
