@@ -304,22 +304,46 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     Vec3 mullCol(0.34, 0.36, 0.40);              // steel mullions
     Real spandrelH = std::min(Real(0.9), fh * 0.30);
 
-    emitQuad(glass, fr.at(0, 0), fr.at(W, 0), fr.at(W, spandrelH), fr.at(0, spandrelH),
+    // Glass sits INSET behind the frame plane; the mullion grid is SOLID
+    // geometry — front face + side returns back to the glass — so up close it
+    // reads as a frame the panes sit in, not a decal (device feedback).
+    const Real glassIn = 0.10;                   // glass plane behind the grid
+    Vec3 gin = fr.n * (-glassIn);
+    emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
+             fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
-    emitQuad(glass, fr.at(0, spandrelH), fr.at(W, spandrelH), fr.at(W, fh), fr.at(0, fh),
-             fr.n, glassCol);                     // vision glass
+    emitQuad(glass, fr.at(0, spandrelH) + gin, fr.at(W, spandrelH) + gin,
+             fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, glassCol);   // vision glass
 
-    Vec3 outv = fr.n * 0.06;
-    const Real mw = 0.08;
+    const Real proud = 0.06;                     // grid stands proud of the wall
+    Vec3 outv = fr.n * proud;
+    const Real mw = 0.09;
+    // A solid BAR on the facade: front face + both side returns down to the
+    // glass plane (vertical bars get left/right cheeks, horizontal get top/
+    // bottom), so the lattice has real depth from any angle.
+    auto bar = [&](Real a0, Real b0, Real a1, Real b1, bool vertical) {
+        emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
+                 fr.at(a1, b1) + outv, fr.at(a0, b1) + outv, fr.n, mullCol);
+        if (vertical) {
+            emitQuad(mull, fr.at(a0, b0) + gin, fr.at(a0, b0) + outv,
+                     fr.at(a0, b1) + outv, fr.at(a0, b1) + gin, fr.h * -1, mullCol);
+            emitQuad(mull, fr.at(a1, b0) + gin, fr.at(a1, b0) + outv,
+                     fr.at(a1, b1) + outv, fr.at(a1, b1) + gin, fr.h, mullCol);
+        } else {
+            emitQuad(mull, fr.at(a0, b1) + gin, fr.at(a1, b1) + gin,
+                     fr.at(a1, b1) + outv, fr.at(a0, b1) + outv, fr.v, mullCol);
+            emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
+                     fr.at(a1, b0) + gin, fr.at(a0, b0) + gin, fr.v * -1, mullCol);
+        }
+    };
     int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
     for (int b = 0; b <= bays; ++b) {            // vertical mullions
         Real x = std::min(std::max(b * W / bays, mw * 0.5), W - mw * 0.5);
-        emitQuad(mull, fr.at(x - mw * 0.5, 0) + outv, fr.at(x + mw * 0.5, 0) + outv,
-                 fr.at(x + mw * 0.5, fh) + outv, fr.at(x - mw * 0.5, fh) + outv, fr.n, mullCol);
+        bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
     }
     for (Real ty : {spandrelH, fh - 0.04}) {     // transoms (spandrel line + head)
-        emitQuad(mull, fr.at(0, ty - mw * 0.5) + outv, fr.at(W, ty - mw * 0.5) + outv,
-                 fr.at(W, ty + mw * 0.5) + outv, fr.at(0, ty + mw * 0.5) + outv, fr.n, mullCol);
+        Real t0 = std::max(Real(0), ty - mw * 0.5), t1 = std::min(fh, ty + mw * 0.5);
+        bar(0, t0, W, t1, false);
     }
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
@@ -599,10 +623,10 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                     emitQuad(srd, BL, BL + ov, TL + ov, TL, fr.h * -1, p.trimColor);   // left end
                     emitQuad(srd, BR + ov, BR, TR, TR + ov, fr.h, p.trimColor);        // right end
                 };
-                const Real over = 0.08;                        // oversail past the jambs
+                const Real over = 0.14;                        // oversail past the jambs
                 if (st.sill)
-                    ledge(std::max(x0, wx0 - over), openSill - 0.07,
-                          std::min(x1, wx1 + over), openSill, 0.10);      // sill course
+                    ledge(std::max(x0, wx0 - over), openSill - 0.13,
+                          std::min(x1, wx1 + over), openSill, 0.16);      // sill course
                 if (st.hood == OpeningStyle::Hood::Band && rise <= 0)
                     ledge(std::max(x0, wx0 - over), openHead,
                           std::min(x1, wx1 + over), openHead + 0.12, 0.06);   // header
@@ -1228,7 +1252,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             Vec2 bis = n0 + n1;
             Real bl = bis.length();
             if (bl < 1e-6) continue;                       // straight-through vertex
-            if (std::fabs(cross(d0, d1)) < 0.05) continue; // nearly collinear: no post
+            // Only REAL corners get a post: chord joints of a tessellated
+            // CURVED plan edge (turn < ~33 deg) stay smooth, so a round tower
+            // reads as a curve, not a ribbed drum.
+            if (std::fabs(cross(d0, d1)) < 0.55) continue;
             bis = bis * (1.0 / bl);
             Vec2 side(-bis.y, bis.x);
             const Real half = 0.20, proud = 0.05;
