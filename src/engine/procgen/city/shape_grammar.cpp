@@ -899,23 +899,94 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             }
         return true;
     };
-    // Mechanical penthouse: a smaller set-back box (elevator overrun + plant),
-    // capped in absolute size so a big roof doesn't grow a second building.
+    // ROOF PLANT subgrammar (device: "what is that gray block supposed to
+    // represent? ... it would help if it had some definition"). The old mute
+    // penthouse box is two readable pieces of equipment now:
+    //  - a roof-access BULKHEAD — the stair/elevator overrun: human-scaled,
+    //    a capped lid slab, and a dark door facing the open roof;
+    //  - a louvred HVAC unit — metal casing, intake bands, fan discs on top.
+    // Every element proves its seat is ON the roof polygon before emitting.
+    const Vec3 darkPanel(0.16, 0.17, 0.18);
+    Real bu = -1, bv = 0, bw = 0, bd = 0;   // bulkhead seat (HVAC keeps clear)
     if (p.floors >= 4 && width > 5 && depth > 5) {
-        Real pw = std::min(width * rng.range(0.35, 0.55), Real(12.0));
-        Real pd = std::min(depth * rng.range(0.35, 0.55), Real(12.0));
-        Real ph = rng.range(2.5, 4.0);
+        bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
+        bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
+        const Real bh = rng.range(2.8, 3.3);
         for (int attempt = 0; attempt < 4; ++attempt) {
-            Vec3 po = footOrigin + r * ((width - pw) * rng.range(0.15, 0.6)) +
-                      f * ((depth - pd) * rng.range(0.15, 0.6));
-            if (onRoof(po, pw, pd)) {
-                emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
-                                   Vec3(pw, ph, pd)},
-                        PartId::Trim, p.trimColor * 0.85);
-                break;
+            const Real u = (width - bw) * rng.range(0.15, 0.6);
+            const Real v = (depth - bd) * rng.range(0.15, 0.6);
+            Vec3 po = footOrigin + r * u + f * v;
+            if (!onRoof(po, bw, bd)) {
+                bw *= 0.8; bd *= 0.8;   // shrink toward a seat; give up quietly
+                if (bw < 2.4 || bd < 2.0) break;
+                continue;
             }
-            pw *= 0.75; pd *= 0.75;   // shrink toward a seat; give up quietly
-            if (pw < 2.5 || pd < 2.5) break;
+            bu = u; bv = v;
+            emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
+                               Vec3(bw, bh, bd)},
+                    PartId::Trim, p.trimColor * 0.85);
+            // The lid: a slightly oversailing cap slab, darker — a roof on
+            // the roof, so the box stops reading as an unfinished block.
+            emitBox(out, Scope{Vec3(po.x, roofY + bh, po.z) - r * 0.15 - f * 0.15,
+                               {r, up, f}, Vec3(bw + 0.3, 0.14, bd + 0.3)},
+                    PartId::Trim, p.trimColor * 0.6);
+            // The access DOOR faces the open roof centre.
+            Vec3 bc = po + r * (bw * 0.5) + f * (bd * 0.5);
+            Vec3 rc = footOrigin + r * (width * 0.5) + f * (depth * 0.5);
+            Vec3 to = rc - bc;
+            const Real dr = dot(to, r), df = dot(to, f);
+            const bool alongR = std::fabs(dr) >= std::fabs(df);
+            Vec3 n2 = alongR ? r * (dr > 0 ? 1.0 : -1.0)
+                             : f * (df > 0 ? 1.0 : -1.0);
+            Vec3 tang = alongR ? f : r;
+            Vec3 fc = bc + n2 * ((alongR ? bw : bd) * 0.5);
+            Vec3 doorO = fc - tang * 0.5;
+            emitBox(out, Scope{Vec3(doorO.x, roofY, doorO.z), {tang, up, n2},
+                               Vec3(1.0, 2.1, 0.06)},
+                    PartId::Detail, darkPanel);
+            break;
+        }
+    }
+    // The HVAC unit: lower and wider than the bulkhead, kept clear of it.
+    if (p.floors >= 4 && width > 6 && depth > 5 && rng.unit() < 0.85) {
+        const Real aw = std::min(std::max(width * 0.30, Real(2.6)), Real(6.0));
+        const Real ad = std::min(std::max(depth * 0.22, Real(2.0)), Real(3.4));
+        const Real ah = rng.range(1.5, 2.1);
+        const Vec3 casing = materialFor(PartId::Metal, p.wallColor).albedo;
+        const Vec3 louvre(0.30, 0.31, 0.33);
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            const Real u = (width - aw) * rng.range(0.1, 0.9);
+            const Real v = (depth - ad) * rng.range(0.1, 0.9);
+            if (bu >= 0 && u < bu + bw + 0.6 && u + aw + 0.6 > bu &&
+                v < bv + bd + 0.6 && v + ad + 0.6 > bv) continue;
+            Vec3 po = footOrigin + r * u + f * v;
+            if (!onRoof(po, aw, ad)) continue;
+            emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
+                               Vec3(aw, ah, ad)},
+                    PartId::Metal, casing);
+            // Intake louvres: three dark bands along both long faces.
+            for (int band = 0; band < 3; ++band) {
+                const Real ly = roofY + ah * (0.22 + 0.24 * band);
+                for (int side = 0; side < 2; ++side) {
+                    Vec3 lo = po + r * 0.2 + f * (side ? ad : Real(-0.05));
+                    emitBox(out, Scope{Vec3(lo.x, ly, lo.z), {r, up, f},
+                                       Vec3(aw - 0.4, 0.12, 0.05)},
+                            PartId::Detail, louvre);
+                }
+            }
+            // Fan cowls + dark blade discs on top.
+            const int nf = aw > 4.2 ? 2 : 1;
+            for (int k2 = 0; k2 < nf; ++k2) {
+                const Real fu = aw * (nf == 1 ? 0.5 : (k2 == 0 ? 0.3 : 0.7));
+                Vec3 fcen = po + r * fu + f * (ad * 0.5);
+                fcen.y = 0;
+                const Real frad = std::min(Real(0.6), std::min(aw, ad) * 0.22);
+                emitTube(out, fcen, frad, roofY + ah, roofY + ah + 0.22, 12,
+                         PartId::Metal, casing * 0.9);
+                emitDisc(out, fcen, frad, roofY + ah + 0.22, 12,
+                         PartId::Detail, darkPanel, true);
+            }
+            break;
         }
     }
     // Timber water tank: a tube on four legs with a flat top — the NYC rooftop
@@ -1182,7 +1253,13 @@ Poly2 offsetPlan(const Poly2& poly, Real d) {
         Real denom = cross(l0.dir, l1.dir);
         if (std::abs(denom) < 1e-9) { out[i] = l1.pt; continue; }
         Real t = cross(l1.pt - l0.pt, l1.dir) / denom;
-        out[i] = l0.pt + l0.dir * t;
+        Vec2 q = l0.pt + l0.dir * t;
+        // MITER LIMIT: at a near-parallel joint (an arc prow's chords) the
+        // line intersection flies arbitrarily far and the ring grows spikes
+        // (device: the haywire tower top). Fall back to a bevel-ish offset —
+        // the vertex translated by its own edge normal.
+        if ((q - p[i]).length() > std::fabs(d) * 4.0 + 0.5) q = l1.pt;
+        out[i] = q;
     }
     return out;
 }
@@ -1362,8 +1439,27 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     for (int i = 0; i < params.floors; ++i) {
         if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
             i % params.setbackFloors == 0) {
+            // A tier inset that EXPLODES must not become the next tier: on an
+            // acute prow the line intersections fly off, or the ring self-
+            // crosses, while still passing an area check (device: "one of the
+            // triangle skyscrapers went haywire when building the top"). The
+            // tier is valid only if it truly shrank, every vertex stayed
+            // inside the tier below, and no edge flipped direction. An
+            // invalid inset just means the tower rises straight instead.
+            auto insetOk = [](const Poly2& outer, const Poly2& inner) {
+                if (inner.size() != outer.size()) return false;
+                const Real ai = area(inner);
+                if (ai < 60.0 || ai >= area(outer)) return false;
+                for (std::size_t k = 0; k < inner.size(); ++k) {
+                    if (!pointInPolygon(outer, inner[k])) return false;
+                    Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
+                    Vec2 d1 = inner[(k + 1) % inner.size()] - inner[k];
+                    if (dot(d0, d1) <= 0) return false;   // edge flipped
+                }
+                return true;
+            };
             Poly2 next = offsetPlan(cur, params.setbackEvery);
-            if (area(next) > 60.0 && next.size() == cur.size()) {
+            if (insetOk(cur, next)) {
                 emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
                              materialFor(PartId::Roof, wallColor).albedo);
                 if (params.stringCourse && !params.curtainWall)

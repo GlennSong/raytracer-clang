@@ -1009,3 +1009,33 @@ TEST_CASE(plan_building_grows_pitched_roofs) {
     CHECK(soffitReach(gm, 6.0) > 0.2);
     CHECK(soffitReach(hm, 6.0) > 0.2);
 }
+
+TEST_CASE(plan_building_prow_tiers_stay_bounded) {
+    // A rounded flatiron PROW with aggressive setback tiers: the tier insets
+    // used to explode at the near-parallel arc chords — the line intersection
+    // flies off and the ring grows spikes (device: "one of the triangle
+    // skyscrapers went haywire when building the top"). Every emitted vertex
+    // must stay within the ground plan's bounds (+ cornice/eave slack).
+    Poly2 prow = {{-10, -7}, {6, -6}};
+    for (int k = 0; k <= 4; ++k) {   // the arc nose: near-parallel chords
+        Real t = k / 4.0, a = -0.6 + t * 1.9;
+        prow.push_back(Vec2(6 + 3.0 * std::cos(a), -2 + 3.0 * std::sin(a)));
+    }
+    prow.push_back({-9, 7});
+    BuildingParams p;
+    p.floors = 12;
+    p.setbackFloors = 3;
+    p.setbackEvery = 1.5;
+    p.curtainWall = true;
+    p.seed = 4;
+    BuildingMesh bm = growPlanBuilding(prow, p);
+    Vec2 lo, hi;
+    bounds(prow, lo, hi);
+    RenderMesh m = bm.merged();
+    for (const Vertex& v : m.vertices) {
+        CHECK(v.position.x > lo.x - 2.0);
+        CHECK(v.position.x < hi.x + 2.0);
+        CHECK(v.position.z > lo.y - 2.0);
+        CHECK(v.position.z < hi.y + 2.0);
+    }
+}
