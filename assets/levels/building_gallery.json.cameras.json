@@ -1,6 +1,61 @@
-{ "cameras": [
-  { "name": "Overview", "position": [80, 95, 150], "forward": [-0.42, -0.52, -0.74],
-    "lens": { "focalLength": 28, "sensorHeight": 24, "fStop": 0, "focusDistance": 170.0 } },
-  { "name": "Front", "position": [0, 10, 90], "forward": [0, -0.10, -1.0],
-    "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 90.0 } }
-] }
+{
+  "cameras": [
+    {
+      "name": "Overview",
+      "position": [
+        80,
+        95,
+        150
+      ],
+      "forward": [
+        -0.42,
+        -0.52,
+        -0.74
+      ],
+      "lens": {
+        "focalLength": 28,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 170.0
+      }
+    },
+    {
+      "name": "Front",
+      "position": [
+        0,
+        10,
+        90
+      ],
+      "forward": [
+        0,
+        -0.1,
+        -1.0
+      ],
+      "lens": {
+        "focalLength": 35,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 90.0
+      }
+    },
+    {
+      "name": "Eaves",
+      "position": [
+        -19,
+        1.0,
+        64.8
+      ],
+      "forward": [
+        0,
+        0.92,
+        -0.39
+      ],
+      "lens": {
+        "focalLength": 16,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 14.0
+      }
+    }
+  ]
+}

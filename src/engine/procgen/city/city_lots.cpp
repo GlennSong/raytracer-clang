@@ -4,8 +4,10 @@
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
+#include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace engine {
@@ -27,6 +29,30 @@ uint32_t mix(uint32_t a, uint32_t b) {
     uint32_t h = a * 0x85ebca6bu ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2));
     h ^= h >> 15; h *= 0xc2b2ae35u; h ^= h >> 13;
     return h;
+}
+
+// A slab in the lot's OWN shape (device: "square green lots don't fit the
+// blocks"): triangulated top + a side skirt, world-space, ground at y=0.
+// Vertices stay white so the caller tints the whole pad via material albedo.
+RenderMesh padMeshFor(const Poly2& poly, Real h) {
+    RenderMesh m;
+    const Vec3 white(1, 1, 1);
+    for (const std::array<int, 3>& t : triangulatePolygon(poly))
+        MeshBuilder::emitTri(m, Vec3(poly[t[0]].x, h, poly[t[0]].y),
+                             Vec3(poly[t[1]].x, h, poly[t[1]].y),
+                             Vec3(poly[t[2]].x, h, poly[t[2]].y),
+                             Vec3(0, 1, 0), white);
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Vec2& a = poly[i];
+        const Vec2& b = poly[(i + 1) % poly.size()];
+        Vec2 d = b - a;
+        if (d.length() < 1e-6) continue;
+        Vec2 n = normalize(Vec2(d.y, -d.x));   // CCW plan: outward
+        MeshBuilder::emitQuad(m, Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y),
+                              Vec3(b.x, h, b.y), Vec3(a.x, h, a.y),
+                              Vec3(n.x, 0, n.y), white);
+    }
+    return m;
 }
 
 Vec3 colorFor(const std::string& t) {
@@ -112,6 +138,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
                 g.type = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
+                g.pad = lot.footprint;
+                g.padMesh = padMeshFor(g.pad, g.height);
                 out.push_back(std::move(g));
             };
             if (rng.unit() > p.buildChance) { emitGreen(); continue; }   // plaza / gap
@@ -125,12 +153,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Real shortSide = std::min(w, d), longSide = std::max(w, d);
             if (shortSide < p.minShort) { emitGreen(); continue; }              // sliver
             if (longSide > shortSide * p.maxAspect) { emitGreen(); continue; }  // knife blade
-            // The building FILLS the site's oriented bounding box (that is the
-            // grammar's scope), so a triangular / L-shaped off-cut whose polygon
-            // covers little of its OBB would grow a mass that OVERHANGS the lot —
-            // the "completely malformed" buildings (device feedback). Require the
-            // lot to actually fill its box before building on it.
-            if (area(site) < 0.72 * w * d) { emitGreen(); continue; }
+            // How much of its oriented box the lot actually fills. PLAN massing
+            // takes the polygon itself, so off-cut lots (L / triangle /
+            // flatiron wedges) are buildable now — the very shapes that make
+            // interesting buildings (device: "take advantage of the weirder
+            // lots"). Only truly degenerate slivers go green here; the BOX
+            // fallback below still demands the old 0.72 fill, since a box on a
+            // low-fill lot is the "malformed overhanging mass" bug.
+            const Real fill = area(site) / std::max(Real(1e-6), w * d);
+            if (fill < 0.45) { emitGreen(); continue; }
 
             LotBuilding b;
             b.site = centroid(site);
@@ -138,13 +169,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
             const DistrictTag tag = districts.tagAt(b.site);
+            // Coreness peaks the skyline: 1 at the city centre, 0 at the
+            // financial district's rim — the architect grows the skyscraper
+            // cluster from it.
+            const Real coreness = std::max(
+                Real(0), 1.0 - (b.site - p.center).length() /
+                                   std::max(Real(1), p.innerRadius));
             BuildingRecipe rec =
                 architectPick(tag, shortSide, area(site),
-                              mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u));
+                              mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u),
+                              coreness);
             b.type = rec.placeType;
             b.color = colorFor(b.type);
             if (rec.massing == BuildingRecipe::Massing::Park) {
-                b.height = 0.3;   // a low green pad; the caller draws it as a box
+                b.height = 0.3;   // a low green pad in the lot's own shape
+                b.pad = lot.footprint;
+                b.padMesh = padMeshFor(b.pad, b.height);
                 out.push_back(std::move(b));
                 continue;
             }
@@ -201,7 +241,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         continue;
                     s2.push_back(m2);
                 }
-                if (s2.size() >= 3) plan = s2;
+                // FLATIRON prows: a very acute corner would grow a knife-edge
+                // facade — truncate it into a short nose face instead, the
+                // classic flatiron front (wedge lots at skewed junctions).
+                Poly2 s3;
+                for (std::size_t vi = 0; vi < s2.size(); ++vi) {
+                    Vec2 a = s2[(vi + s2.size() - 1) % s2.size()], m2 = s2[vi],
+                         c2 = s2[(vi + 1) % s2.size()];
+                    Vec2 d0 = normalize(m2 - a), d1 = normalize(c2 - m2);
+                    const Real cut = 2.2;
+                    if (dot(d0, d1) < -0.45 && (m2 - a).length() > cut * 2 &&
+                        (c2 - m2).length() > cut * 2) {
+                        s3.push_back(m2 - d0 * cut);
+                        s3.push_back(m2 + d1 * cut);
+                    } else {
+                        s3.push_back(m2);
+                    }
+                }
+                if (s3.size() >= 3) plan = s3;
             }
             bool planOk = plan.size() >= 3 && area(plan) > p.minLotArea * 0.5;
             if (planOk && roads) {
@@ -227,10 +284,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                 c + obb.axis[0] * hw2 - obb.axis[1] * hd2,
                                 c + obb.axis[0] * hw2 + obb.axis[1] * hd2,
                                 c - obb.axis[0] * hw2 + obb.axis[1] * hd2};
+                    // The house must sit ON its own lot (a low-fill off-cut's
+                    // OBB centre can be outside the polygon) and off the road.
                     bool clear = true;
-                    if (roads)
-                        for (const Vec2& v : house)
-                            if (!clearOfRoads(v)) { clear = false; break; }
+                    for (const Vec2& v : house)
+                        if (!pointInPolygon(site, v) ||
+                            (roads && !clearOfRoads(v))) { clear = false; break; }
                     if (clear) plan = house;
                 }
             }
@@ -260,6 +319,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.depth = 2 * pb.half[1];
                 b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
             } else {
+                // The box fallback fills the OBB: on a low-fill lot that IS
+                // the overhanging-mass bug, so those go green instead.
+                if (fill < 0.72) { emitGreen(); continue; }
                 Scope scope = scopeFromFootprint(site, 0.0, 10.0, clearOfRoads);
                 const Real fitShort = std::min(scope.size.x, scope.size.z);
                 if (fitShort < p.minShort * 0.75) { emitGreen(); continue; }

@@ -31,6 +31,13 @@ struct LotBuilding {
                             // | "green" (an UNBUILT lot — the caller plants
                             //   grass + trees on it; not a routable place)
     Vec3 color{0.72, 0.70, 0.64};
+    // Park / "green" lots only (device: "square green lots don't fit the
+    // blocks"): the lot's OWN polygon (world XZ) and a low slab mesh built
+    // from it, so the pad follows the parcel instead of its bounding box.
+    // padMesh vertices are white — the caller tints via material albedo —
+    // and world-space with ground at y=0. Empty for real buildings.
+    Poly2 pad;
+    RenderMesh padMesh;
 };
 
 struct LotParams {

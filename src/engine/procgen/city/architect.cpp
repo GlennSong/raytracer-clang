@@ -64,10 +64,12 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
                                                : Vec3(0.78, 0.77, 0.73));
 }
 
-// Slenderness cap shared by every table (device: no pencil towers).
-void capFloors(BuildingParams& p, Real shortSide) {
+// Slenderness cap shared by every table (device: no pencil towers). Real
+// towers ARE slender — the financial table passes a higher ratio so the
+// skyscraper cluster can actually rise; everything else keeps the squat cap.
+void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
     const int maxFloors =
-        std::max(1, static_cast<int>(shortSide * 1.8 / 3.2) - 1);
+        std::max(1, static_cast<int>(shortSide * slender / 3.2) - 1);
     p.floors = std::min(p.floors, maxFloors);
 }
 }  // namespace
@@ -109,7 +111,7 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
 }
 
 BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
-                             uint32_t seed) {
+                             uint32_t seed, Real coreness) {
     // Decorrelate the caller's seed before drawing: xorshift's first outputs
     // stay correlated across sequential seeds, which would skew the tables'
     // branch weights for neighbouring lots.
@@ -120,26 +122,35 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     p.retailStreetOnly = true;      // every city building has a FRONT
     const bool roomy = shortSide > 16.0;
     const Real roll = rng.unit();
+    Real slender = 1.8;   // capFloors ratio; tower branches raise it
 
     switch (tag) {
         case DistrictTag::Financial: {
             // Towers and slabs; the occasional civic hall; ground retail.
             if (roll < 0.42) {                       // glass curtain tower
-                p.floors = rng.irange(roomy ? 10 : 6, roomy ? 16 : 9);
+                // Deep in the core (coreness → 1) this is the SKYSCRAPER
+                // cluster: heights climb with how central the lot is, so the
+                // skyline peaks downtown and shoulders off toward the ring.
+                const int lift = static_cast<int>(coreness * (roomy ? 14 : 5));
+                p.floors = rng.irange(roomy ? 10 : 6, roomy ? 16 : 9) + lift;
                 p.groundRetail = true;
                 dress(p, FacadeStyle::GlassCurtain, rng);
                 if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
                                     p.setbackEvery = rng.range(1.2, 1.8); }
+                if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
+                slender = 3.4;
                 // Roomy square-ish lots sometimes go ROUND (a drum tower).
                 if (roomy && rng.unit() < 0.35)
                     out.massing = BuildingRecipe::Massing::Circle;
                 out.placeType = "office";
             } else if (roll < 0.75) {                // concrete office slab
-                p.floors = rng.irange(6, 12);
+                p.floors = rng.irange(6, 12) +
+                           static_cast<int>(coreness * (roomy ? 6 : 2));
                 p.groundRetail = true;
                 dress(p, FacadeStyle::Concrete, rng);
                 if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
                                     p.setbackEvery = rng.range(1.1, 1.6); }
+                slender = 2.4;
                 out.placeType = "office";
             } else if (roll < 0.90) {                // brick commercial block
                 p.floors = rng.irange(5, 9);
@@ -252,7 +263,7 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
         }
     }
     (void)area;
-    capFloors(p, shortSide);
+    capFloors(p, shortSide, slender);
     return out;
 }
 

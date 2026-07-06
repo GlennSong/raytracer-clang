@@ -44,6 +44,14 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
         CHECK(longSide <= shortSide * p.maxAspect + 1e-6);
         CHECK(lb.height > 0.0);                         // has mass (park = low pad)
         CHECK(isKnownType(lb.type));                    // a valid schedule tag
+        // Unbuilt lots carry their OWN polygon + a slab mesh in its shape
+        // (device: "square green lots don't fit the blocks they're in").
+        if (lb.type == "park" || lb.type == "green") {
+            CHECK(lb.pad.size() >= 3u);
+            CHECK(!lb.padMesh.vertices.empty());
+        } else {
+            CHECK(lb.pad.empty());
+        }
     }
     // The buildings' geometry lands in the per-PartId meshes with the part id set
     // (the loader binds the shape-grammar PBR recipes onto exactly these).
@@ -225,4 +233,16 @@ TEST_CASE(architect_tables_are_coherent) {
     CHECK(resLow >= 30);
     CHECK(resPitched >= 12);   // pitched roofs are common out there
     CHECK(indSolid >= 20);     // the wedge is mostly sheds
+
+    // The CORE is a SKYSCRAPER cluster: full coreness lifts the glass towers
+    // well past the ring's 10-16 floors (the relaxed slender cap lets them
+    // stand), while the district rim (coreness 0) keeps its old heights.
+    int core18 = 0;
+    for (uint32_t s = 1; s <= 40; ++s) {
+        BuildingRecipe c = architectPick(DistrictTag::Financial, 24, 520, s, 1.0);
+        if (c.params.floors >= 18) ++core18;
+        BuildingRecipe rim = architectPick(DistrictTag::Financial, 24, 520, s, 0.0);
+        CHECK(rim.params.floors <= 16);
+    }
+    CHECK(core18 >= 8);
 }

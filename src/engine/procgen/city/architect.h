@@ -53,9 +53,12 @@ struct BuildingRecipe {
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no
-// tower on a cottage lot). Deterministic in `seed`.
+// tower on a cottage lot). `coreness` is how deep into the city centre the
+// lot sits (0 = at the district rim, 1 = dead centre): the financial table
+// uses it to peak the skyline — a SKYSCRAPER cluster downtown, shoulders
+// around it. Deterministic in `seed`.
 BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
-                             uint32_t seed);
+                             uint32_t seed, Real coreness = 0);
 
 }  // namespace engine
 

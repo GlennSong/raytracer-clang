@@ -1406,6 +1406,18 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             MeshBuilder::emitTri(gableW, A0, B0, Rg0, r3 * -1, wallColor);
             MeshBuilder::emitTri(gableW, A1, B1, Rg1, r3, wallColor);
         }
+        // SOFFIT: a down-facing deck across the whole eave rectangle. The
+        // slopes are single-sided, so wherever they overhang the walls the
+        // roof was see-through from below (device: "you can see through the
+        // bottom of them"). Sits a hair under the slope base so it never
+        // fights the ceiling slab.
+        {
+            RenderMesh soffit;
+            const Vec3 dn(0, -1, 0), sc = materialFor(PartId::Trim, wallColor).albedo;
+            Vec3 drop = up * -0.01;
+            emitQuad(soffit, A0 + drop, B0 + drop, B1 + drop, A1 + drop, dn, sc);
+            appendToPart(out, PartId::Trim, soffit);
+        }
         appendToPart(out, PartId::Roof, roof);
         appendToPart(out, params.wallPart, gableW);
     } else {

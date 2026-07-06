@@ -2091,16 +2091,26 @@ bool LevelLoader::load(const std::string& path,
                 }
 
                 if (lb.type == "park" || lb.type == "green") {
-                    // A grass pad plus a few trees, not a grown building.
+                    // A grass pad plus a few trees, not a grown building. The
+                    // pad is the LOT'S OWN polygon when the pass provides one
+                    // (device: "square green lots don't fit the blocks"); the
+                    // oriented box is only the legacy fallback.
                     Entity e = world.create();
                     Transform t;
-                    t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
-                    t.scale = Vec3(lb.width, lb.height, lb.depth);
-                    t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                    Renderable r;
+                    if (!lb.padMesh.vertices.empty()) {
+                        t.position = Vec3(0, gy, 0);   // mesh is world-space XZ
+                        r.mesh = assets.acquireMesh(
+                            lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
+                                        ":" + std::to_string(lb.site.y));
+                    } else {
+                        t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
+                        t.scale = Vec3(lb.width, lb.height, lb.depth);
+                        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                        r.mesh = pad;
+                    }
                     world.add<Transform>(e, t);
                     world.add<PrevTransform>(e, PrevTransform{t});
-                    Renderable r;
-                    r.mesh = pad;
                     r.material.albedo = lb.color;
                     r.material.roughness = 1.0f;
                     world.add<Renderable>(e, r);
@@ -2114,7 +2124,17 @@ bool LevelLoader::load(const std::string& path,
                         const double fx = ((th & 0xFFu) / 255.0 - 0.5) * 0.6;
                         const double fz = (((th >> 8) & 0xFFu) / 255.0 - 0.5) * 0.6;
                         const double cy = std::cos(lb.yaw), sy = std::sin(lb.yaw);
-                        const double lx = fx * lb.width, lz = fz * lb.depth;
+                        double lx = fx * lb.width, lz = fz * lb.depth;
+                        // Keep the tree on the pad: shrink toward the centroid
+                        // until the spot is inside the lot polygon.
+                        if (!lb.pad.empty())
+                            for (double f = 1.0; f > 0.1; f *= 0.55) {
+                                engine::Vec2 spot(lb.site.x + (lx * cy - lz * sy) * f,
+                                                  lb.site.y + (lx * sy + lz * cy) * f);
+                                if (engine::pointInPolygon(lb.pad, spot) || f * 0.55 <= 0.1) {
+                                    lx *= f; lz *= f; break;
+                                }
+                            }
                         Vec3 tPos(lb.site.x + lx * cy - lz * sy, 0,
                                   lb.site.y + lx * sy + lz * cy);
                         tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;

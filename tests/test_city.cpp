@@ -989,4 +989,23 @@ TEST_CASE(plan_building_grows_pitched_roofs) {
         if (n.y > 0.25 && n.y < 0.93) ++hipSloped;
     }
     CHECK(hipSloped > sloped);              // hips slope the ends too
+
+    // SOFFIT (device: "you can see through the bottom of them if they
+    // overhang"): the roof volume is CLOSED underneath — down-facing faces at
+    // the eave plane reach past the wall line to the overhang's outer edge.
+    auto soffitReach = [](const RenderMesh& m, Real wallHalfDepth) {
+        Real reach = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vec3& n = m.vertices[m.indices[i]].normal;
+            if (n.y > -0.99) continue;                       // not a soffit face
+            for (int k = 0; k < 3; ++k) {
+                const Vec3& q = m.vertices[m.indices[i + k]].position;
+                if (q.y < 1.0) continue;                     // ground slab, not eaves
+                reach = std::max(reach, std::fabs((Real)q.z));
+            }
+        }
+        return reach - wallHalfDepth;   // > 0: covers the overhang
+    };
+    CHECK(soffitReach(gm, 6.0) > 0.2);
+    CHECK(soffitReach(hm, 6.0) > 0.2);
 }
