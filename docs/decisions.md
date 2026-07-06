@@ -4885,6 +4885,47 @@ unused), and any DSP-graph effects. **Revisit trigger:** when a level wants
 authored ambience, add the loader/inspector path; when music lands, add a
 streamed clip type behind the same handle.
 
+## ADR-0070 — Game UI: three tiers; RmlUi is the chosen kit, deferred until a demo needs menus
+**Status:** Deferred (decision made, build postponed) · **Date:** 2026-07-06
+
+**Context.** "GUI" in this engine is three different problems that keep
+getting conflated. (1) *Tooling/debug UI* — solved: Dear ImGui (ADR-0011).
+(2) *Editor shell* — decided: Qt 6 (docs/editor-app-plan.md). (3) *Game UI* —
+HUD, menus, settings screens the player sees. The editor-app plan explicitly
+kicked (3) down the road ("a custom game UI kit for HUD/menus remains a
+separate, worthwhile runtime item"), and design principle #2 ranks debug
+visualization above polished player UI for this project.
+
+**Decision.** When a playable demo actually needs menus, the game UI kit is
+**RmlUi**: MIT-licensed C++, vendorable as a submodule behind an
+`RT_ENABLE_GAME_UI` flag (the Jolt/ImGui/Lua pattern), renderer-agnostic — its
+`RenderInterface` (textured triangles + scissor) maps onto the existing
+`Renderer` seam exactly the way the ImGui backends did, so one integration
+serves Metal/Vulkan/WebGPU. UI is authored as HTML/CSS-like documents with
+data binding, and RmlUi ships Lua bindings that can open onto the same
+gameplay VM (ADR-0023/0024) — menus as scripts, consistent with everything
+else being data. **Not built now, on purpose:** the current games-as-tests
+(forest, city) need debug overlays and the spectate HUD, all served by ImGui
+(1) — and the recent ground-projected HUD work (ADR-0061) shows in-world debug
+UI beats screen-space widgets for this engine's needs. Building a UI kit
+before a game demands one is inventory, not progress.
+
+**Alternatives.** Nuklear — immediate-mode C, overlaps what ImGui already
+provides in tier (1). Noesis/Coherent — commercial. Growing ImGui into the
+game UI — possible for a HUD but styling/skinning fights it; keep ImGui as the
+tool it is. A hand-rolled kit — layout + text shaping + styling is years of
+toolkit work the editor plan already rejected once (its Qt reasoning).
+
+**Consequences.** No code lands with this ADR; it exists so the next "add a
+menu" impulse doesn't relitigate the survey or grab a mismatched kit. Interim
+rule: player-visible text/HUD in the games-as-tests stays on ImGui behind the
+debug flag, or in-world (the ADR-0061 ground projection). **Revisit trigger:**
+a demo that ships to anyone other than us needs a main menu / settings screen
+— vendor RmlUi then, behind the seam described here; or if by then the
+engine's own vector/text stack (SVG import, ADR-0031 Phase 3 + the curve
+kernel) has grown far enough that a native kit is a small step, reopen the
+build-vs-vendor half only.
+
 ---
 
 ## Interim seams & tech-debt register
@@ -4947,6 +4988,9 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
 | Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0061/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
+| DebugDraw ribbons UNVERIFIED on device | `engine/debug_draw.{h,cpp}`, `engine/systems/debug_draw_system.cpp` (ADR-0067) | The model + ribbon bake are headless-tested, but the drawn result (FLAG_OVERLAY on the NON-instanced path, per-frame mesh churn, on-screen line thickness) has never been seen on a Metal/Vulkan build — and the register row above says the *instanced* overlay path is already broken on Metal, so the non-instanced path needs eyes. If overlay is broken there too, lines still draw, just depth-tested. | Viewer check on device; tune `pixelScale`; consider the per-backend line pass if volume grows (ADR-0067 trigger) |
+| Audio device output UNVERIFIED (CI runs null/manual) | `engine/audio/audio_engine.cpp` (ADR-0069) | Everything testable headless is tested (Manual-mode mix: pan, attenuation, loops, buses). Actual device playback — CoreAudio on macOS, ALSA/Pulse on desktop Linux — has never produced sound in this environment (no audio hardware; Auto falls back to the null backend). Same class as the Metal/gamepad verifications before it. | Run the viewer on a laptop; confirm device selection, volume scale, and that spatialization sounds right, not just measures right |
+| Audio has no authoring or scripting surface yet | `engine/components.h` (`AudioSource`), `engine/level_loader.cpp`, `engine/scripting/gameplay_bindings.cpp` (ADR-0069) | AudioSource/AudioListener exist as components + a PlaySound event, but no level-JSON block loads them, the editor inspector doesn't show them, and Lua can't emit PlaySound or synthesize PCM (the procgen `createClip` path is C++-only) — so sounds are only placeable from C++ today | Level "audio" block + LevelWriter round-trip + inspector registration; a `sound.play`/`sound.clip` gameplay-VM binding surface (ADR-0024 pattern) |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 | Parking is an informal verge, homes are abstract nodes | `apps/citysim/city_sim.cpp` (`idlePose`, arrival parking) (ADR-0062/0062) | An idle car parks on the grass beside its home/work NODE (off the carriageway so it can't roadblock — correct, but it reads as "failed to be placed" until you know it's an agent at home). Homes/works are raw graph nodes, not the buildings the generator already produces. | Buildings as stops (assign home/work to a parcel; park at its frontage), a painted parking-lane band on residential links (the mesher already does surface bands — same technique as the crosswalk paint), and/or despawn-at-home with the schedule persisting (hybrid: keep parked bodies near the player, cull distant ones) |

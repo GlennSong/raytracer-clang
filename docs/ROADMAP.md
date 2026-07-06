@@ -84,6 +84,31 @@ A `tests/` target is the safety net before bigger refactors.
 
 **Depends on:** Nothing. Can parallel with 1.1 and 1.2.
 
+### 1.4 Event bus
+**Status:** Done (ADR-0066) — `engine::EventBus` in `src/engine/event_bus.*`,
+exposed as `ctx.events`, covered by `tests/test_event_bus.cpp`.
+**Why:** The decoupling seam for cross-system signals — sound cues (2.5), UI
+notifications, script callbacks — without direct system-to-system calls.
+Synchronous typed publish (subscription order, deterministic) + a per-frame
+queued dispatch after the fixed steps; reentrancy defined and tested.
+
+### 1.5 Debug draw
+**Status:** Engine-side done (ADR-0067) — `DebugDraw` (`ctx.debug`: lines,
+arrows, boxes, spheres, circles, axes, TTLs) baked to camera-facing ribbon
+quads and drawn by `DebugDrawSystem` through the ordinary asset/renderer path
+with `FLAG_OVERLAY` — every backend, no line pipeline. Headless-tested;
+**on-device look unverified** (register row).
+**Why:** Collider wireframes, path traces, procgen skeletons, camera frusta —
+design principle #2. Pays down the 2.3 "needs a line primitive" debt.
+
+### 1.6 Profiling (Tracy)
+**Status:** Done, opt-in (ADR-0068) — `third_party/tracy` (v0.13.1) behind
+`-DRT_ENABLE_PROFILER=ON`; permanent `RT_PROFILE_*` macros (`src/profile.h`)
+compile to nothing when off. Frame loop + JobSystem instrumented; add zones
+where questions arise.
+**Why:** "Measure before optimizing" (principle #3) needs a measurer; gates
+the allocator/LOD/parallel-ECS decisions.
+
 ---
 
 ## Tier 2 — 3D Interaction Infrastructure
@@ -177,8 +202,9 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
   spinning on MotionSystem.
 - ⏳ More shapes (capsule/mesh), materials (friction/restitution), contact
   events, Jolt kinematic bodies (script-driven motion that pushes dynamics).
-- ⏳ Debug visualization of colliders — needs a line/debug-draw primitive
-  (macOS/Metal); deferred / minimal.
+- ⏳ Debug visualization of colliders — the line primitive now exists
+  (DebugDraw, ADR-0067 / roadmap 1.5); remaining work is emitting each
+  collider's wire shape into `ctx.debug` behind a toggle.
 
 **Depends on:** ECS (done), quaternion math (done). Benefits from ImGui (1.1)
 for physics debug viz.
@@ -218,6 +244,25 @@ and ECS keep the door open.
 demo, to exercise split-screen / multi-pad control end to end.
 
 **Depends on:** Input-action mapping (2.1).
+
+### 2.5 Audio system
+**Status:** Foundation done (ADR-0069) — miniaudio (v0.11.25, vendored) sealed
+behind `AudioEngine` (pimpl, `ctx.audio`); `AudioListener`/`AudioSource`
+components + `AudioSystem`; `PlaySound` cues over the event bus (1.4). Clips
+from files (wav/flac/mp3) or raw PCM — the procgen path. Deterministically
+tested headless (Manual mode mixes into a caller-pumped buffer:
+`tests/test_audio.cpp` asserts pan, attenuation, looping, buses). **Device
+output unverified** (no audio hardware here — register row).
+**Why:** The engine's first output channel besides pixels; ambience for the
+generated worlds (wind in the forest, traffic in the city) and feedback for
+gameplay (shots, impacts) — all synthesizable, fitting procgen-first.
+
+**Remaining:** level-JSON authoring + inspector for AudioSource; Lua surface
+(`sound.play`, procedural PCM) in the gameplay VM (ADR-0024); streamed music;
+a real device pass on hardware.
+
+**Depends on:** Event bus (1.4). Physics contact events (2.3) become natural
+emitters later.
 
 ---
 
@@ -369,6 +414,14 @@ which immediately gives `growTree` continuous curved branches (ADR-0029 §3.5).
 AnimCurve and SVG follow when their domains need them.
 
 **Depends on:** Nothing. First consumer is the tree branch sweep (Tier 4 / B.1).
+
+### 3.9 Game UI (HUD / menus)
+**Status:** Deferred by decision (ADR-0070). The three UI tiers are settled:
+ImGui for tooling (1.1), Qt for the editor shell (3.6), and — when a demo
+actually needs menus — **RmlUi** as the game UI kit (MIT, renderer-agnostic
+`RenderInterface` onto our `Renderer` seam, Lua bindings onto the gameplay
+VM). Until then, player-visible text in the games-as-tests stays on ImGui or
+in-world (ADR-0061 ground projection). Don't build it before a game needs it.
 
 ---
 
