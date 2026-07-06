@@ -40,8 +40,15 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
     for (const LotBuilding& lb : b) {
         const Real shortSide = std::min(lb.width, lb.depth);
         const Real longSide = std::max(lb.width, lb.depth);
-        CHECK(shortSide >= p.minShort - 1e-6);          // no knife blades
-        CHECK(longSide <= shortSide * p.maxAspect + 1e-6);
+        // The no-sliver guarantee is about BUILDINGS: parks and greens are
+        // ground scenery shaped by the lot itself (dense districts parcel
+        // small, so a leftover green can be a narrow lawn strip — fine).
+        // Dense districts (OldTown/Commercial) build down to minShortUrban:
+        // an 8 m rowhouse plan is correct there, not a knife blade.
+        if (lb.type != "park" && lb.type != "green") {
+            CHECK(shortSide >= std::min(p.minShort, p.minShortUrban) - 1e-6);
+            CHECK(longSide <= shortSide * p.maxAspect + 1e-6);
+        }
         CHECK(lb.height > 0.0);                         // has mass (park = low pad)
         CHECK(isKnownType(lb.type));                    // a valid schedule tag
         // Unbuilt lots carry their OWN polygon + a slab mesh in its shape
@@ -146,8 +153,10 @@ TEST_CASE(edge_blocks_skip_covered_ground) {
 
 // Buildings keep clear of road corridors (device: "buildings overlapping
 // sidewalks and poking out onto the street"): with the sampled road graph +
-// clearance passed in, every grown box corner stays at least half the road
-// width + clearance from the centreline, even when the lot hugs the road.
+// clearance passed in, every vertex of the grown building MESHES stays at
+// least half the road width + clearance from the centreline, even when the
+// lot hugs the road. (The mesh is the guarantee — lot buildings are visual-
+// only since the invisible-walls fix, so there is no collider to test.)
 TEST_CASE(lot_buildings_keep_clear_of_roads) {
     LotParams p;
     p.seed = 3;
@@ -159,21 +168,21 @@ TEST_CASE(lot_buildings_keep_clear_of_roads) {
     std::vector<Poly2> blocks = {
         {{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};       // hugs the road
     const Real clearance = 4.6;
+    std::vector<RenderMesh> parts;
     std::vector<LotBuilding> b =
-        growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+        growLotBuildings(blocks, p, nullptr, &parts, &roads, clearance);
     CHECK(!b.empty());
+    int built = 0;
+    for (const LotBuilding& lb : b)
+        if (lb.type != "park" && lb.type != "green") ++built;
+    CHECK(built > 0);
     const Real minDist = 13.0 * 0.5 + clearance;                 // 11.1 m
-    for (const LotBuilding& lb : b) {
-        if (lb.type == "park") continue;
-        Vec2 a0(std::cos(lb.yaw), std::sin(lb.yaw));
-        Vec2 a1(-a0.y, a0.x);
-        for (int sx = -1; sx <= 1; sx += 2)
-            for (int sy = -1; sy <= 1; sy += 2) {
-                Vec2 c = lb.site + a0 * (lb.width * 0.5 * sx)
-                                 + a1 * (lb.depth * 0.5 * sy);
-                CHECK(std::fabs(c.x + 105.0) >= minDist - 0.2);
-            }
-    }
+    // Every building vertex — walls, trim, roofs — stays behind the corridor.
+    // Facade elements protrude from the plan (awnings ~0.9 m, hood bands), so
+    // the tolerance is the element depth, not a rounding epsilon.
+    for (const RenderMesh& pm : parts)
+        for (const Vertex& v : pm.vertices)
+            CHECK(std::fabs(v.position.x + 105.0) >= minDist - 1.2);
 }
 
 // --- The ARCHITECT pass (building-grammar-plan.md P5) ------------------------

@@ -27,10 +27,19 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
     switch (style) {
         case FacadeStyle::Brick:
             p.wallPart = PartId::Brick;
-            p.window.head = OpeningStyle::Head::Segmental;
-            p.window.hood = OpeningStyle::Hood::Arch;
-            p.window.lightsX = 2; p.window.lightsY = 2;
-            p.quoins = rng.unit() < 0.6;
+            // Several brick looks, not one (device: "same-y"): arched heads
+            // with hood moulds, or plain flat heads with a band or bare.
+            if (rng.unit() < 0.55) {
+                p.window.head = OpeningStyle::Head::Segmental;
+                p.window.hood = OpeningStyle::Hood::Arch;
+            } else {
+                p.window.head = OpeningStyle::Head::Flat;
+                p.window.hood = rng.unit() < 0.6 ? OpeningStyle::Hood::Band
+                                                 : OpeningStyle::Hood::None;
+            }
+            p.window.lightsX = rng.irange(1, 2);
+            p.window.lightsY = rng.irange(1, 2);
+            p.quoins = rng.unit() < 0.5;
             break;
         case FacadeStyle::Stucco:
             p.wallPart = PartId::Stucco;
@@ -38,14 +47,17 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
                                                 : OpeningStyle::Head::Flat;
             p.window.hood = (p.window.head == OpeningStyle::Head::Round)
                                 ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
-            p.window.lightsX = 2; p.window.lightsY = 1;
+            p.window.lightsX = rng.irange(1, 2);
+            p.window.lightsY = 1;
             p.quoins = rng.unit() < 0.5;
             break;
         case FacadeStyle::Concrete:
             p.wallPart = PartId::Concrete;
             p.window.head = OpeningStyle::Head::Flat;
-            p.window.hood = OpeningStyle::Hood::Band;
-            p.window.lightsX = 1; p.window.lightsY = 2;
+            p.window.hood = rng.unit() < 0.7 ? OpeningStyle::Hood::Band
+                                             : OpeningStyle::Hood::None;
+            p.window.lightsX = 1;
+            p.window.lightsY = rng.irange(1, 2);
             break;
         case FacadeStyle::Metal:
             p.wallPart = PartId::Metal;
@@ -59,9 +71,16 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
     p.baseCourse = !p.solidFacade;
     p.stringCourse = !plain;
     p.awning = !plain;
+    // Trim varies per building (warm stone / cool limestone / painted dark),
+    // so identical recipes still don't read as the SAME building.
+    const Real tj = rng.range(-0.05, 0.04);
     p.trimColor = plain ? Vec3(0.50, 0.52, 0.55)
                 : (style == FacadeStyle::Brick ? Vec3(0.84, 0.82, 0.76)
                                                : Vec3(0.78, 0.77, 0.73));
+    if (!plain) {
+        p.trimColor = p.trimColor + Vec3(tj, tj, tj);
+        if (rng.unit() < 0.15) p.trimColor = Vec3(0.34, 0.33, 0.32);  // dark trim
+    }
 }
 
 // Slenderness cap shared by every table (device: no pencil towers). Real
@@ -129,28 +148,32 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             // Towers and slabs; the occasional civic hall; ground retail.
             if (roll < 0.42) {                       // glass curtain tower
                 // Deep in the core (coreness → 1) this is the SKYSCRAPER
-                // cluster: heights climb with how central the lot is, so the
-                // skyline peaks downtown and shoulders off toward the ring.
-                const int lift = static_cast<int>(coreness * (roomy ? 14 : 5));
+                // cluster: heights climb hard with how central the lot is —
+                // 30+ floors downtown, shouldering off toward the ring. The
+                // lift does NOT need a roomy lot: downtown blocks are small
+                // pie slices where the arterials converge, and real towers
+                // stand on small plates — the coreness-scaled slender cap is
+                // what keeps them believable.
+                const int lift = static_cast<int>(coreness * 22);
                 p.floors = rng.irange(roomy ? 10 : 6, roomy ? 16 : 9) + lift;
                 p.groundRetail = true;
                 dress(p, FacadeStyle::GlassCurtain, rng);
                 if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
                                     p.setbackEvery = rng.range(1.2, 1.8); }
                 if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
-                slender = 3.4;
+                slender = 3.0 + coreness * 4.0;
                 // Roomy square-ish lots sometimes go ROUND (a drum tower).
                 if (roomy && rng.unit() < 0.35)
                     out.massing = BuildingRecipe::Massing::Circle;
                 out.placeType = "office";
             } else if (roll < 0.75) {                // concrete office slab
                 p.floors = rng.irange(6, 12) +
-                           static_cast<int>(coreness * (roomy ? 6 : 2));
+                           static_cast<int>(coreness * (roomy ? 8 : 3));
                 p.groundRetail = true;
                 dress(p, FacadeStyle::Concrete, rng);
                 if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
                                     p.setbackEvery = rng.range(1.1, 1.6); }
-                slender = 2.4;
+                slender = 2.4 + coreness * 0.8;
                 out.placeType = "office";
             } else if (roll < 0.90) {                // brick commercial block
                 p.floors = rng.irange(5, 9);
@@ -175,6 +198,12 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
                 p.floors = rng.irange(3, 6);
                 p.groundRetail = true;
                 dress(p, FacadeStyle::Brick, rng);
+                // Low shop blocks sometimes carry a gable — main-street
+                // silhouettes instead of one flat cornice line everywhere.
+                if (p.floors <= 3 && rng.unit() < 0.3) {
+                    p.roofStyle = BuildingParams::RoofStyle::Gable;
+                    p.roofPitch = rng.range(0.35, 0.5);
+                }
                 out.placeType = "shop";
             } else if (roll < 0.70) {                // concrete office midrise
                 p.floors = rng.irange(4, 8);
@@ -188,10 +217,11 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
                 dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete
                                           : FacadeStyle::Stucco, rng);
                 out.placeType = "civic";
-            } else {                                 // stucco walk-up homes
+            } else {                                 // stucco/painted walk-ups
                 p.floors = rng.irange(3, 5);
                 p.groundRetail = false;
-                dress(p, FacadeStyle::Stucco, rng);
+                dress(p, rng.unit() < 0.3 ? FacadeStyle::Painted
+                                          : FacadeStyle::Stucco, rng);
                 out.placeType = "home";
             }
             break;

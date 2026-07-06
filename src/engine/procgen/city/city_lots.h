@@ -45,6 +45,8 @@ struct LotParams {
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines
     Real minShort = 9.0;      // reject a building whose short side is under this (m)
+    Real minShortUrban = 7.0; // ...relaxed in DENSE districts (OldTown/Commercial
+                              // parcel small — an 8 m rowhouse plan is correct there)
     Real maxAspect = 3.5;     // ...or whose long/short exceeds this (no knife blades)
     Real minLotArea = 90.0;   // skip tiny leftover lots
     Real buildChance = 0.92;  // per-lot occupancy (rest become plazas/gaps)
@@ -60,6 +62,14 @@ struct LotParams {
 struct LotPlanDebug {
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
     std::vector<Poly2> lots;     // every parcelled lot
+    // Why lots did NOT build (each one became a green) — the density tuning
+    // dials. A "small town" city is usually one of these counters running hot.
+    int rejChance = 0;   // lost the occupancy roll (plaza / gap)
+    int rejSliver = 0;   // site's OBB short side under minShort
+    int rejAspect = 0;   // long/short over maxAspect (knife blade)
+    int rejFill = 0;     // polygon fills too little of its OBB
+    int rejClear = 0;    // no inset of the plan cleared the road corridors
+    int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
 };
 
 // One building per viable lot across every block. Deterministic in seed.
