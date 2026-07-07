@@ -269,6 +269,14 @@ struct WeldSolidParams {
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
 
+// The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
+// an endpoint agree on its height) — weldSolid rides these, and the terrain
+// conform pass carves to the same surface. heightAt null = flat topY.
+std::vector<std::vector<double>> weldChainProfiles(
+    const std::vector<UnionSpine>& spines,
+    const std::function<double(double, double)>& heightAt, double topY,
+    double maxGrade);
+
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},
 // sidewalk is {0<=sdf<sidewalkWidth}, with a curb step between, all from one distance

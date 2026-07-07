@@ -393,27 +393,60 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
                                                   double falloff, double maxGrade) {
     std::vector<TerrainFlatten> out;
     if (!net.heightAt) return out;                       // flat road: nothing to carve
+    // Mirror the DECK's own profile computation EXACTLY — the same constrained
+    // graph, the same weldChainSpines decomposition (curve-sampled points,
+    // per-chain widths), the same roadProfile smoothing at the weld's grade —
+    // so the carve grades the ground to where the deck actually is. The old
+    // independently-densified profile diverged by metres on slopes: the
+    // grade-limited deck cut through hills the carve never lowered (device:
+    // "the road is being buried by the terrain — it's not conforming").
     RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
-    double hw = net.width * 0.5;
-    for (const std::vector<Vec2>& chain : traceChains(g)) {
-        if (chain.size() < 2) continue;
-        // Densify to a fixed step so even a straight road (2 graph nodes) has enough
-        // samples for roadProfile to smooth and grade-limit along its length.
-        const double step = 4.0;
-        std::vector<Vec2> dense;
-        for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
-            Vec2 a = chain[i], b = chain[i + 1];
-            int sub = std::max(1, static_cast<int>(std::ceil((b - a).length() / step)));
-            for (int k = 0; k < sub; ++k) dense.push_back(a + (b - a) * (double(k) / sub));
+    (void)maxGrade;   // superseded: the carve must use the deck's own grade
+    std::vector<UnionSpine> spines = weldChainSpines(g);
+    std::vector<std::vector<double>> profiles = weldChainProfiles(
+        spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade);
+    // Where corridors OVERLAP (junction interiors), the decks of the crossing
+    // chains can still disagree mid-span even after endpoint reconciliation —
+    // the ground must sit under the LOWEST of them, or the lower deck reads
+    // buried. Pull each carve sample down to the minimum overlapping profile.
+    auto minOverlapping = [&](std::size_t si, const Vec2& q, double h) {
+        for (std::size_t sj = 0; sj < spines.size(); ++sj) {
+            if (sj == si || profiles[sj].size() < 2) continue;
+            const auto& pts = spines[sj].points;
+            const double reach = spines[sj].halfWidth + net.sidewalk + 1.0;
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                Vec2 ab = pts[i + 1] - pts[i];
+                double L2 = ab.lengthSquared();
+                double t = L2 < 1e-12
+                               ? 0.0
+                               : std::max(0.0, std::min(1.0, dot(q - pts[i], ab) / L2));
+                if ((q - (pts[i] + ab * t)).length() > reach) continue;
+                h = std::min(h, profiles[sj][i] +
+                                    (profiles[sj][i + 1] - profiles[sj][i]) * t);
+            }
         }
-        dense.push_back(chain.back());
-        int n = static_cast<int>(dense.size());
-        std::vector<double> ground(n), s(n);
-        for (int i = 0; i < n; ++i) ground[i] = net.heightAt(dense[i].x, dense[i].y);
-        s[0] = 0.0;
-        for (int i = 1; i < n; ++i) s[i] = s[i - 1] + (dense[i] - dense[i - 1]).length();
-        std::vector<double> profile = roadProfile(ground, s, maxGrade);
-        std::vector<TerrainFlatten> r = roadConformRegions(dense, profile, hw, shoulder, falloff);
+        return h;
+    };
+    for (std::size_t si = 0; si < spines.size(); ++si) {
+        const UnionSpine& sp = spines[si];
+        if (profiles[si].size() < 2) continue;
+        std::vector<double> profile = profiles[si];
+        for (std::size_t k = 0; k < profile.size(); ++k)
+            profile[k] = minOverlapping(si, sp.points[k], profile[k]);
+        // Carve a step BELOW the drivable profile, not exactly to it: the
+        // terrain grid interpolates between its samples and can overshoot the
+        // carve target past the road's small lift, patchily swallowing the
+        // deck. 0.22 m keeps the deck proud; the curb skirt hides the step.
+        for (double& hh : profile) hh -= 0.22;
+        // Flatten out to the SIDEWALK's outer edge, not just the carriageway —
+        // the sidewalk band rides the same smoothed profile and needs ground
+        // graded under it too.
+        // +2 m margin past the sidewalk's outer edge: corner bevels and the
+        // curb skirt reach slightly beyond the band, and the flatten's full
+        // strength must cover them before its falloff starts.
+        std::vector<TerrainFlatten> r = roadConformRegions(
+            sp.points, profile, sp.halfWidth + net.sidewalk + 2.0, shoulder,
+            falloff);
         out.insert(out.end(), r.begin(), r.end());
     }
     return out;

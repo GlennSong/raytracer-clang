@@ -34,22 +34,28 @@ uint32_t mix(uint32_t a, uint32_t b) {
 // A slab in the lot's OWN shape (device: "square green lots don't fit the
 // blocks"): triangulated top + a side skirt, world-space, ground at y=0.
 // Vertices stay white so the caller tints the whole pad via material albedo.
-RenderMesh padMeshFor(const Poly2& poly, Real h) {
+RenderMesh padMeshFor(const Poly2& poly, Real h,
+                      const std::function<Real(Real, Real)>& ground) {
     RenderMesh m;
     const Vec3 white(1, 1, 1);
+    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
     for (const std::array<int, 3>& t : triangulatePolygon(poly))
-        MeshBuilder::emitTri(m, Vec3(poly[t[0]].x, h, poly[t[0]].y),
-                             Vec3(poly[t[1]].x, h, poly[t[1]].y),
-                             Vec3(poly[t[2]].x, h, poly[t[2]].y),
-                             Vec3(0, 1, 0), white);
+        MeshBuilder::emitTri(
+            m, Vec3(poly[t[0]].x, gy(poly[t[0]]) + h, poly[t[0]].y),
+            Vec3(poly[t[1]].x, gy(poly[t[1]]) + h, poly[t[1]].y),
+            Vec3(poly[t[2]].x, gy(poly[t[2]]) + h, poly[t[2]].y),
+            Vec3(0, 1, 0), white);
     for (std::size_t i = 0; i < poly.size(); ++i) {
         const Vec2& a = poly[i];
         const Vec2& b = poly[(i + 1) % poly.size()];
         Vec2 d = b - a;
         if (d.length() < 1e-6) continue;
         Vec2 n = normalize(Vec2(d.y, -d.x));   // CCW plan: outward
-        MeshBuilder::emitQuad(m, Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y),
-                              Vec3(b.x, h, b.y), Vec3(a.x, h, a.y),
+        // Skirt from the draped top down past the terrain surface.
+        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
+                              Vec3(b.x, gy(b) - 0.4, b.y),
+                              Vec3(b.x, gy(b) + h, b.y),
+                              Vec3(a.x, gy(a) + h, a.y),
                               Vec3(n.x, 0, n.y), white);
     }
     return m;
@@ -97,6 +103,19 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if ((c - q).length() < e.width * 0.5 + roadClearance) return false;
         }
         return true;
+    };
+    // TERRAIN base for a plan: the LOWEST ground under its vertices so the
+    // downhill corner never floats, embedded slightly on real slopes so the
+    // uphill side beds in instead of hovering behind a knife-edge gap.
+    auto baseYFor = [&](const Poly2& pl) -> Real {
+        if (!p.ground || pl.empty()) return 0;
+        Real lo = 1e30, hi = -1e30;
+        for (const Vec2& v : pl) {
+            const Real g = p.ground(v.x, v.y);
+            lo = std::min(lo, g);
+            hi = std::max(hi, g);
+        }
+        return lo - ((hi - lo) > 0.05 ? Real(0.25) : Real(0));
     };
     if (outParts) {
         outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
@@ -174,7 +193,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.recipe = "park_block";
                 g.color = colorFor("park");
                 g.pad = foot;
-                g.padMesh = padMeshFor(foot, g.height);
+                g.padMesh = padMeshFor(foot, g.height, p.ground);
                 out.push_back(std::move(g));
                 continue;
             }
@@ -300,7 +319,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.recipe = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
                 g.pad = lot.footprint;
-                g.padMesh = padMeshFor(g.pad, g.height);
+                g.padMesh = padMeshFor(g.pad, g.height, p.ground);
                 out.push_back(std::move(g));
             };
             if (cand.landmark < 0 && rng.unit() > buildChance) {
@@ -368,7 +387,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.3;   // a low green pad in the lot's own shape
                 b.pad = lot.footprint;
-                b.padMesh = padMeshFor(b.pad, b.height);
+                b.padMesh = padMeshFor(b.pad, b.height, p.ground);
                 out.push_back(std::move(b));
                 continue;
             }
@@ -603,7 +622,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             bp.floors);
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
-                        BuildingMesh um = growPlanBuilding(up4, upar);
+                        BuildingMesh um = growPlanBuilding(up4, upar, baseYFor(up4));
                         if (outParts)
                             for (const RenderMesh& part : um.parts) {
                                 const int mi = part.materialIndex;
@@ -614,6 +633,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         b.height = std::max(b.height, um.height);
                     }
                     b.site = sb.center;
+                    b.baseY = baseYFor(plan);
                     b.width = 2 * sb.half[0];
                     b.depth = 2 * sb.half[1];
                     b.yaw = std::atan2(sb.axis[0].y, sb.axis[0].x);
@@ -649,8 +669,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
 
             BuildingMesh bm;
+            b.baseY = baseYFor(planOk ? plan : site);
             if (planOk) {
-                bm = growPlanBuilding(plan, bp);
+                bm = growPlanBuilding(plan, bp, b.baseY);
                 OBB2 pb = orientedBoundingBox(plan);
                 b.site = pb.center;
                 b.width = 2 * pb.half[0];
@@ -661,7 +682,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // The box fallback fills the OBB: on a low-fill lot that IS
                 // the overhanging-mass bug, so those go green instead.
                 if (fill < 0.72) { if (debug) debug->rejBox++; emitGreen(); continue; }
-                Scope scope = scopeFromFootprint(site, 0.0, 10.0, clearOfRoads);
+                Scope scope = scopeFromFootprint(site, b.baseY, 10.0, clearOfRoads);
                 const Real fitShort = std::min(scope.size.x, scope.size.z);
                 if (fitShort < p.minShort * 0.75) {
                     if (debug) debug->rejBox++;

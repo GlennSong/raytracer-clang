@@ -1835,8 +1835,15 @@ bool LevelLoader::load(const std::string& path,
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
-                RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"]
-                                                                   : json::object());
+                const json roadBlock =
+                    ent.contains("road") ? ent["road"] : json::object();
+                RoadNet net = roadNetFromJson(roadBlock);
+                // A GENERATED road has no baked nodes — run its recipe here
+                // exactly like the real build below does, or this pre-pass
+                // sees an empty net and carves NOTHING (device: "the road is
+                // being buried by the terrain — it's not conforming").
+                if (roadBlock.contains("generate"))
+                    applyGenerateRecipe(net, roadBlock["generate"]);
                 net.heightAt = levelGround;
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
@@ -2028,6 +2035,13 @@ bool LevelLoader::load(const std::string& path,
             lp.buildChance = cs.value("buildChance", 0.9);
             lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
             lp.innerRadius = cs.value("downtownRadius", 55.0);
+            // TERRAIN: buildings grow from the lowest ground under their plan,
+            // pads drape per-vertex (city-on-terrain; roads conform separately
+            // via net.heightAt + the flatten ramps carved above).
+            if (entityGround)
+                lp.ground = [&entityGround](engine::Real x, engine::Real z) {
+                    return static_cast<engine::Real>(entityGround(x, z));
+                };
             // The STYLE BOOK (the architect's Lua DATA layer): per-recipe
             // look overrides from assets/scripts/style_book.lua. The C++
             // architect decides what stands where; the book restyles it.
@@ -2109,7 +2123,7 @@ bool LevelLoader::load(const std::string& path,
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 if (lb.type != "park" && lb.type != "green" &&
                     lb.plan.size() >= 3) {
-                    const double base = gy - 0.5, top = gy + lb.height;
+                    const double base = lb.baseY - 0.5, top = lb.baseY + lb.height;
                     const uint32_t s0 =
                         static_cast<uint32_t>(buildingsMc.vertices.size());
                     const uint32_t n = static_cast<uint32_t>(lb.plan.size());
@@ -2153,7 +2167,7 @@ bool LevelLoader::load(const std::string& path,
                     Transform t;
                     Renderable r;
                     if (!lb.padMesh.vertices.empty()) {
-                        t.position = Vec3(0, gy, 0);   // mesh is world-space XZ
+                        t.position = Vec3(0, 0, 0);   // heights baked (draped)
                         r.mesh = assets.acquireMesh(
                             lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
                                         ":" + std::to_string(lb.site.y));

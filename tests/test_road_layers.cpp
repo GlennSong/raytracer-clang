@@ -454,12 +454,18 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
         if (v.u > 0.5) sawStrip = true;                          // painted marking strip
     }
     CHECK(sawBottom && sawWall && sawStrip);                     // underside, walls, and paint strip
-    CHECK(std::fabs(deckY - 1.0) < 1e-6);                       // plain deck at topY
+    // The plain deck rides topY plus a sub-mm per-spine LAYER bias (device:
+    // "roads overlap and z-fight" — overlapping fringes resolve to a
+    // deterministic upper surface instead of flickering).
+    CHECK(deckY > 1.0 - 1e-6);
+    CHECK(deckY < 1.0 + 0.005);
     CHECK(std::fabs(botY - 0.5) < 1e-6);                        // underside thickness below
 
-    // The plain (unpainted) deck is laid as per-spine strips that overlap at the junction, so the
-    // cross's two 20x4 = 80 strips sum to 160 (the 16 overlap counted by both); the marking strips
-    // ride above and aren't part of this count.
+    // EXCLUSIVE junction ownership: strips used to overlap at the crossing
+    // (two 20x4 strips summing to 160, the 16 m2 junction counted by BOTH —
+    // the z-fight). Deck quads fully inside a lower-index spine's corridor are
+    // skipped now, so the total is strictly under the double-counted 160 but
+    // still covers the union (>= 144: no holes torn in the crossing).
     double deckArea = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         const Vertex& A = m.vertices[m.indices[i]];
@@ -468,7 +474,8 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
                     &c = m.vertices[m.indices[i + 2]].position;
         deckArea += std::fabs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) * 0.5;
     }
-    CHECK(std::fabs(deckArea - 160.0) < 0.5);
+    CHECK(deckArea >= 144.0 - 0.5);
+    CHECK(deckArea <= 158.0);
 }
 
 // With a terrain function the deck rides a smoothed profile: a road over a single sharp bump

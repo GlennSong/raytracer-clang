@@ -34,6 +34,8 @@ struct LotBuilding {
                             //   grass + trees on it; not a routable place)
     std::string recipe;     // the architect RECIPE that built it ("school",
                             // "glass_tower", "fire_station", ...) — debug/UI
+    Real baseY = 0;         // world Y the building grows from (terrain-sampled
+                            // when LotParams::ground is set; 0 on flat ground)
     // The building's grown PLAN polygon (world XZ) — the caller extrudes it
     // into a prism collider that matches the massing exactly, where an
     // oriented box would spill onto the sidewalk on L / courtyard / prow
@@ -63,6 +65,11 @@ struct LotParams {
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
     uint32_t seed = 1;
+    // TERRAIN sampler (world y at x,z): buildings grow from the LOWEST ground
+    // under their plan (minus a small embed on slopes, so the downhill corner
+    // never floats), park/green pads drape per-vertex, and LotBuilding::baseY
+    // records the result. Unset = flat ground at y 0.
+    std::function<Real(Real, Real)> ground;
     // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
     // so the host can overlay look overrides (cladding, windows, colours)
     // from assets/scripts/style_book.lua. The architect decides WHAT + WHERE

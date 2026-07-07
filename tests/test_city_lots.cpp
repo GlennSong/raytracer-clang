@@ -348,6 +348,37 @@ TEST_CASE(style_book_hook_overlays_looks) {
     }
 }
 
+TEST_CASE(buildings_grow_from_terrain_base) {
+    // City-on-terrain: with a ground sampler set, every building's baseY is
+    // the LOWEST ground under its plan (minus a small embed on real slopes,
+    // so the downhill corner never floats), and pads bake draped heights.
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 3;
+    p.ground = [](Real x, Real z) { return 0.04 * x + 0.02 * z; };
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p);
+    CHECK(!b.empty());
+    int sloped = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.type == "park" || lb.type == "green") {
+            // Draped pads: vertex heights track the sampler, not a flat 0.
+            for (const Vertex& v : lb.padMesh.vertices)
+                CHECK(std::fabs(v.position.y -
+                                (0.04 * v.position.x + 0.02 * v.position.z)) <
+                      1.5);
+            continue;
+        }
+        if (lb.plan.size() < 3) continue;
+        Real lo = 1e30;
+        for (const Vec2& v : lb.plan)
+            lo = std::min(lo, 0.04 * v.x + 0.02 * v.y);
+        CHECK(lb.baseY <= lo + 1e-6);          // never floats above the ground
+        CHECK(lb.baseY >= lo - 0.3);           // embeds at most the slope allowance
+        if (std::fabs(lb.baseY) > 0.5) ++sloped;
+    }
+    CHECK(sloped > 0);   // the slope actually moved buildings off y=0
+}
+
 TEST_CASE(landmarks_are_planned_not_rolled) {
     // The planner fills civic quotas on the BEST lots: a city grown over real
     // blocks gets exactly one courthouse (on the most central financial lot),

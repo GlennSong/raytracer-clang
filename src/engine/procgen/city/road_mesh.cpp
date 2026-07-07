@@ -4,6 +4,7 @@
 #include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
 #include "street_kit.h"           // roundPolygonCorners (the unified corner-fillet pass)
 #include <algorithm>
+#include <map>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -1088,26 +1089,90 @@ static Poly2 cleanPolygon(const Poly2& in, double grid) {
     return s;
 }
 
+// Per-spine smoothed deck profiles with junction RECONCILIATION: each chain's
+// profile is grade-limited independently (roadProfile), then chains sharing an
+// endpoint AGREE on its height (the average of their independent ends, blended
+// back linearly along each chain) — so decks meet flush at junctions on 3D
+// terrain, and the terrain-conform pass can carve to exactly this surface
+// (device: "the road is being buried by the terrain — it's not conforming").
+std::vector<std::vector<double>> weldChainProfiles(
+    const std::vector<UnionSpine>& spines,
+    const std::function<double(double, double)>& heightAt, double topY,
+    double maxGrade) {
+    std::vector<std::vector<double>> out(spines.size());
+    std::vector<std::vector<double>> arcs(spines.size());
+    for (std::size_t si = 0; si < spines.size(); ++si) {
+        const UnionSpine& sp = spines[si];
+        const int n = static_cast<int>(sp.points.size());
+        if (n < 2) continue;
+        std::vector<double> sArc(n, 0.0);
+        for (int i = 1; i < n; ++i)
+            sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
+        arcs[si] = sArc;
+        if (!heightAt) { out[si].assign(n, 0.0); continue; }   // += topY below
+        std::vector<double> ground(n);
+        for (int i = 0; i < n; ++i)
+            ground[i] = heightAt(sp.points[i].x, sp.points[i].y);
+        out[si] = roadProfile(ground, sArc, maxGrade);
+    }
+    if (heightAt) {
+        // Junction endpoints: average the incident chains' independent ends.
+        auto key = [](const Vec2& v) {
+            return std::make_pair(static_cast<long long>(std::llround(v.x * 8)),
+                                  static_cast<long long>(std::llround(v.y * 8)));
+        };
+        std::map<std::pair<long long, long long>, std::pair<double, int>> nodes;
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            if (out[si].empty() || spines[si].closed) continue;
+            const auto& pts = spines[si].points;
+            if ((pts.front() - pts.back()).length() < 1e-6) continue;   // ring
+            auto& a = nodes[key(pts.front())];
+            a.first += out[si].front(); a.second += 1;
+            auto& b = nodes[key(pts.back())];
+            b.first += out[si].back(); b.second += 1;
+        }
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            if (out[si].empty() || spines[si].closed) continue;
+            const auto& pts = spines[si].points;
+            if ((pts.front() - pts.back()).length() < 1e-6) continue;
+            const auto& a = nodes[key(pts.front())];
+            const auto& b = nodes[key(pts.back())];
+            const double dA = a.first / a.second - out[si].front();
+            const double dB = b.first / b.second - out[si].back();
+            const double L = std::max(1e-6, arcs[si].back());
+            for (std::size_t i = 0; i < out[si].size(); ++i) {
+                const double t = arcs[si][i] / L;
+                out[si][i] += dA * (1.0 - t) + dB * t;   // linear blend to agree
+            }
+        }
+    }
+    for (auto& h : out)
+        for (double& v : h) v += topY;
+    return out;
+}
+
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p) {
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
     struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; };
     std::vector<Prof> profs;
-    for (const UnionSpine& sp : spines) {
-        const int n = static_cast<int>(sp.points.size());
-        if (n < 2) continue;
-        std::vector<double> sArc(n, 0.0), h(n, p.topY);
-        for (int i = 1; i < n; ++i) sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
-        if (p.heightAt) {
-            std::vector<double> ground(n);
-            for (int i = 0; i < n; ++i) ground[i] = p.heightAt(sp.points[i].x, sp.points[i].y);
-            h = roadProfile(ground, sArc, p.maxGrade);
-            for (double& v : h) v += p.topY;            // topY lifts the deck above the terrain
+    {
+        // Junction-RECONCILED deck profiles (shared with the terrain-conform
+        // pass, so the ground is carved to the same surface the deck rides).
+        std::vector<std::vector<double>> hs =
+            weldChainProfiles(spines, p.heightAt, p.topY, p.maxGrade);
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            const UnionSpine& sp = spines[si];
+            const int n = static_cast<int>(sp.points.size());
+            if (n < 2) continue;
+            std::vector<double> sArc(n, 0.0);
+            for (int i = 1; i < n; ++i)
+                sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
+            bool closed = sp.closed ||
+                (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
+            profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed});
         }
-        bool closed = sp.closed ||
-            (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
-        profs.push_back({sp.points, sArc, h, sp.halfWidth, closed});
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
     // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
@@ -1215,14 +1280,28 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         auto sidewalk = [&](const Poly2& loop) {
             const int m = static_cast<int>(loop.size());
             if (m < 3) return;
-            std::vector<Vec2> off(m);                       // per-vertex outward mitered offset
+            // Per-vertex OUTER offset: one mitered point on gentle corners; on
+            // sharp ones the clamped miter used to land SHORT of the true
+            // intersection, folding adjacent band quads over each other
+            // (device: "sidewalks don't miter together at the corners — they
+            // overlap and z-fight"). Sharp corners now BEVEL instead: two
+            // per-edge offset points and a corner fan, so the band turns every
+            // junction corner as one continuous non-overlapping piece.
+            struct Corner { Vec2 prevPt, nextPt; bool bevel; };
+            std::vector<Corner> oc(m);
             for (int i = 0; i < m; ++i) {
                 Vec2 n0 = rnorm(loop[i] - loop[(i + m - 1) % m]);
                 Vec2 n1 = rnorm(loop[(i + 1) % m] - loop[i]);
                 Vec2 bis = n0 + n1; double bl = bis.length();
                 Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
-                double cosH = std::max(0.25, dot(mm, n1));   // clamp miter <= 4*width at sharp corners
-                off[i] = mm * (p.sidewalkWidth / cosH);
+                double cosH = dot(mm, n1);
+                if (cosH >= 0.5) {
+                    Vec2 q = loop[i] + mm * (p.sidewalkWidth / std::max(0.5, cosH));
+                    oc[i] = {q, q, false};
+                } else {
+                    oc[i] = {loop[i] + n0 * p.sidewalkWidth,
+                             loop[i] + n1 * p.sidewalkWidth, true};
+                }
             }
             const double ch = p.curbHeight;
             // Arc length along the loop, baked (negated) into the slab-top UV so
@@ -1237,7 +1316,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 int j = (i + 1) % m;
                 const Vec2& a = loop[i]; const Vec2& b = loop[j];
                 if ((b - a).length() < 1e-9) continue;
-                Vec2 ao = a + off[i], bo = b + off[j];
+                Vec2 ao = oc[i].nextPt, bo = oc[j].prevPt;
                 Vec3 eo3(rnorm(b - a).x, 0, rnorm(b - a).y);  // outward (per edge)
                 Vec3 aT = P3(a, ch), bT = P3(b, ch), aR = P3(a, 0), bR = P3(b, 0);
                 Vec3 aoT = P3(ao, ch), boT = P3(bo, ch),
@@ -1250,6 +1329,23 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 MeshBuilder::emitTriUV(mesh, aT, boT, aoT, Vec3(0, 1, 0), p.sidewalkColor,
                                        ua, 0.0f, ub, 1.0f, ua, 1.0f);
                 MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, p.curbColor);        // outer face
+                // Bevel corner at j: the fan tri closing the band around the
+                // corner, plus its outer face — no fold, no overlap.
+                if (oc[j].bevel) {
+                    Vec3 jT = P3(b, ch);
+                    Vec3 p0T = P3(oc[j].prevPt, ch), p1T = P3(oc[j].nextPt, ch);
+                    MeshBuilder::emitTriUV(mesh, jT, p0T, p1T, Vec3(0, 1, 0),
+                                           p.sidewalkColor, ub, 0.0f, ub, 1.0f,
+                                           ub, 1.0f);
+                    Vec2 bev = oc[j].nextPt - oc[j].prevPt;
+                    if (bev.length() > 1e-9) {
+                        Vec2 bn = rnorm(bev);
+                        Vec3 p0B = P3(oc[j].prevPt, -p.thickness),
+                             p1B = P3(oc[j].nextPt, -p.thickness);
+                        MeshBuilder::emitQuad(mesh, p0T, p1T, p1B, p0B,
+                                              Vec3(bn.x, 0, bn.y), p.curbColor);
+                    }
+                }
             }
         };
         for (const Poly2& outer : outers) sidewalk(outer);
@@ -1318,6 +1414,36 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 auto P = [&](const Vec2& c, const Vec2& o, double h, int side) {
                     return Vec3(c.x + side * o.x, h, c.y + side * o.y);
                 };
+                // EXCLUSIVE ownership at junctions (device: "roads overlap and
+                // z-fight ... modify the mesh geometry at the intersection"):
+                // a deck quad fully inside a LOWER-index spine's corridor, or
+                // inside a junction pad's disc, is that surface's ground — skip
+                // it. Remaining partial-overlap fringes get a sub-mm per-spine
+                // layer bias so whichever surface is upper wins deterministically
+                // instead of flickering; the steps are far below visibility.
+                {
+                    Vec2 q[4] = {c0 + o0, c0 - o0, c1 + o1, c1 - o1};
+                    bool covered = false;
+                    for (std::size_t pj = 0; pj < pi && !covered; ++pj) {
+                        covered = true;
+                        for (int ci = 0; ci < 4 && covered; ++ci)
+                            if (distToSpine(q[ci], profs[pj]) > profs[pj].hw - 0.05)
+                                covered = false;
+                    }
+                    for (std::size_t di = 0;
+                         di < p.padCenters.size() && di < p.padRadii.size() && !covered;
+                         ++di) {
+                        covered = true;
+                        for (int ci = 0; ci < 4 && covered; ++ci)
+                            if ((q[ci] - p.padCenters[di]).length() >
+                                p.padRadii[di] - 0.05)
+                                covered = false;
+                    }
+                    if (covered) continue;
+                }
+                const double bias = 0.0005 * (1.0 + static_cast<double>(pi % 6));
+                h0 += bias;
+                h1 += bias;
                 // Plain deck (up) and underside (down).
                 Vec3 dL0 = P(c0, o0, h0, +1), dR0 = P(c0, o0, h0, -1),
                      dL1 = P(c1, o1, h1, +1), dR1 = P(c1, o1, h1, -1);
@@ -1390,21 +1516,31 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         }
     }
     // Junction pad decks: a plain top + underside fan per pad, closing the wedge
-    // between off-square arm caps. Same colour/height as the strips it overlaps
-    // (coplanar same-material overdraw, like strips crossing at a junction); no
-    // markings — a junction reads as plain asphalt.
+    // between off-square arm caps. The pad OWNS the junction interior (strips
+    // fully inside its disc are skipped above), and its top rides a few mm over
+    // the strip layer biases so partial-overlap fringes at the disc edge resolve
+    // to the pad, never flicker; no markings — a junction reads as plain asphalt.
+    const double padLift = 0.005;
     for (std::size_t pi = 0; pi < p.padCenters.size() && pi < p.padRadii.size(); ++pi) {
         const double r = p.padRadii[pi];
         if (r <= 0.0) continue;
         const Vec2& c = p.padCenters[pi];
         const int segs = 20;
-        Vec3 top = P3(c, 0), bot = P3(c, -p.thickness);
+        Vec3 top = P3(c, padLift), bot = P3(c, -p.thickness);
         for (int i = 0; i < segs; ++i) {
             double a0 = 2.0 * 3.14159265358979323846 * i / segs;
             double a1 = 2.0 * 3.14159265358979323846 * (i + 1) / segs;
             Vec2 e0 = c + Vec2(std::cos(a0), std::sin(a0)) * r;
             Vec2 e1 = c + Vec2(std::cos(a1), std::sin(a1)) * r;
-            MeshBuilder::emitTri(mesh, top, P3(e0, 0), P3(e1, 0), Vec3(0, 1, 0), p.topColor);
+            MeshBuilder::emitTri(mesh, top, P3(e0, padLift), P3(e1, padLift),
+                                 Vec3(0, 1, 0), p.topColor);
+            // A skirt from the lifted rim back down to the strip layer, so the
+            // pad edge shows no knife-thin side gap at grazing angles.
+            MeshBuilder::emitQuad(mesh, P3(e0, padLift), P3(e1, padLift),
+                                  P3(e1, -0.002), P3(e0, -0.002),
+                                  Vec3(std::cos((a0 + a1) * 0.5), 0,
+                                       std::sin((a0 + a1) * 0.5)),
+                                  p.topColor);
             MeshBuilder::emitTri(mesh, bot, P3(e1, -p.thickness), P3(e0, -p.thickness),
                                  Vec3(0, -1, 0), p.bottomColor);
         }

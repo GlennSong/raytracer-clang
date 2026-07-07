@@ -654,10 +654,25 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
 #endif
 
     // Procedural terrain (top-level block, regenerated from its recipe), graded
-    // flat under the city/script cut-fill footprints.
+    // flat under the city/script cut-fill footprints — and CARVED to every
+    // shape:"road" net (mirroring the viewer's road pre-pass; without this the
+    // offline ground buries the draped roads — device: "the road is being
+    // buried by the terrain").
     if (root.contains("terrain")) {
         std::vector<TerrainFlatten> allFlatten = cityFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
+        if (levelGround)
+            for (const auto& ent : root.value("entities", json::array())) {
+                if (ent.value("shape", std::string()) != "road") continue;
+                const json roadBlock =
+                    ent.contains("road") ? ent["road"] : json::object();
+                RoadNet net = roadNetFromJson(roadBlock);
+                if (roadBlock.contains("generate"))
+                    applyGenerateRecipe(net, roadBlock["generate"]);
+                net.heightAt = levelGround;
+                std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+                allFlatten.insert(allFlatten.end(), r.begin(), r.end());
+            }
         addTerrain(root["terrain"], scene, materials, allFlatten);
     }
 

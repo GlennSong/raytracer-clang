@@ -59,25 +59,33 @@ double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
                     double z, double base) {
     double result = base;
     double bestW = 0.0;
+    // Inside OVERLAPPING footprints — every junction interior — the ground
+    // takes the LOWEST plane, not the first region in list order: two roads
+    // crossing on a slope disagree about the junction's height, and only the
+    // lower target keeps both decks proud of the ground (device: "the road
+    // is being buried by the terrain — it's not conforming").
+    bool insideAny = false;
+    double insideMin = std::numeric_limits<double>::max();
     for (const TerrainFlatten& r : regions) {
         if (r.polygon.size() < 3) continue;
         if (x < r.minX - r.falloff || x > r.maxX + r.falloff ||
             z < r.minZ - r.falloff || z > r.maxZ + r.falloff)
             continue;
-        double w;
         if (pointInFootprint(r.polygon, x, z)) {
-            w = 1.0;
-        } else {
-            double d = distanceToFootprint(r.polygon, x, z);
-            if (d >= r.falloff) continue;
-            w = 1.0 - smoothstep(0.0, r.falloff, d);
+            insideAny = true;
+            insideMin = std::min(insideMin, r.planeY(x, z));
+            continue;
         }
+        if (insideAny) continue;   // an inside hit already owns this point
+        double d = distanceToFootprint(r.polygon, x, z);
+        if (d >= r.falloff) continue;
+        double w = 1.0 - smoothstep(0.0, r.falloff, d);
         if (w > bestW) {
             bestW = w;
             result = base + (r.planeY(x, z) - base) * w;
-            if (bestW >= 1.0) break;   // fully inside — nothing can beat it
         }
     }
+    if (insideAny) return insideMin;
     return result;
 }
 
