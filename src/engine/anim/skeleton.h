@@ -51,6 +51,13 @@ public:
     void finalize();
     const std::vector<Mat4>& inverseBind() const { return inverseBinds; }
 
+    // Adopt authored inverse binds (the glTF skin accessor, P2) instead of
+    // computing them — the file's matrices are authoritative for imported
+    // rigs. Must be one per joint, in this skeleton's joint order.
+    void setInverseBinds(std::vector<Mat4> matrices) {
+        inverseBinds = std::move(matrices);
+    }
+
 private:
     std::vector<Joint> joints;
     std::vector<Mat4> inverseBinds;

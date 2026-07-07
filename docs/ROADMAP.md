@@ -435,10 +435,13 @@ VM). Until then, player-visible text in the games-as-tests stays on ImGui or
 in-world (ADR-0061 ground projection). Don't build it before a game needs it.
 
 ### 3.10 Character posing & comics pipeline
-**Status:** P0 done (ADR-0072) — `engine::anim` Skeleton/Pose substrate + the
-17-joint posable mannequin, headless-tested in both suites;
-`tools/pose_demo.cpp` path-traces three poses (T-pose / wave / stride) to a
-still. Next: P1 pose editing. Full plan: `docs/character-posing-plan.md`
+**Status:** P0 + P2 core done (ADR-0072/0073) — `engine::anim` Skeleton/Pose
+substrate, the 17-joint posable mannequin, glTF skin import
+(`loadSkinnedModel`) and CPU linear-blend skinning (`skinMesh`), all
+headless-tested in both suites. Demos: `pose_demo` (three path-traced poses),
+`skin_demo` (rigid vs skinned bend). Next: P1 pose editing in the editor (an
+on-Mac task) and the `SkinnedCharacter` component/system that stamps skinned
+meshes into Renderables. Full plan: `docs/character-posing-plan.md`
 (interview-shaped, 2026-07-07). Skeleton substrate + posable mannequin first (P0, headless), pose
 editing on the existing gizmo/undo stack (P1), glTF skins + CPU skinning so
 characters render in the viewer *and* the offline tracer (P2), panel/still

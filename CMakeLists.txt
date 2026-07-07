@@ -105,6 +105,8 @@ add_library(engine_core STATIC
     src/engine/systems/motion_system.cpp
     src/engine/anim/skeleton.cpp
     src/engine/anim/mannequin.cpp
+    src/engine/anim/skinned_mesh.cpp
+    src/engine/anim/skin_import.cpp
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
     src/engine/systems/audio_system.cpp
@@ -320,6 +322,7 @@ add_executable(run_tests
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
     tests/test_skeleton.cpp
+    tests/test_skin.cpp
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
@@ -434,6 +437,12 @@ if(RT_BUILD_DEMOS)
     target_include_directories(pose_demo PRIVATE src)
     target_compile_options(pose_demo PRIVATE -Wall -Wextra)
     target_link_libraries(pose_demo PRIVATE engine_core)
+
+    # Rigid vs CPU-skinned bend, side by side (character-posing-plan P2).
+    add_executable(skin_demo tools/skin_demo.cpp ${CORE_SOURCES})
+    target_include_directories(skin_demo PRIVATE src)
+    target_compile_options(skin_demo PRIVATE -Wall -Wextra)
+    target_link_libraries(skin_demo PRIVATE engine_core)
 
     if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
         add_executable(audio_demo tools/audio_demo.cpp)

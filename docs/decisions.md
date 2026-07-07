@@ -5042,6 +5042,56 @@ moves only that arm). **Revisit trigger:** P2 import lands — if glTF rigs
 need features the substrate lacks (non-uniform joint scale inheritance,
 morph targets), extend here before bolting onto the importer.
 
+## ADR-0073 — glTF skins → anim::Skeleton, CPU linear-blend skinning first
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** P2 of the posing plan: real rigged characters (Blender, bought,
+Mixamo-converted) must flow into the same `anim::Skeleton` the mannequin
+fills, and their meshes must deform with poses. tinygltf (vendored) already
+parses skins; the engine consumed only static meshes.
+
+**Decision.**
+
+- **Import** (`anim::loadSkinnedModel`, `src/engine/anim/skin_import.{h,cpp}`):
+  the file's first skin becomes a Skeleton. glTF joint order is arbitrary, so
+  joints are re-ordered **parent-before-child** by a DFS from the root joints
+  (the substrate's invariant), with vertex `JOINTS_0` values remapped to
+  skeleton indices at import — downstream never sees glTF numbering. The
+  accessor's **inverse bind matrices are adopted verbatim** (authoritative for
+  authored rigs; computing our own would silently disagree with files whose
+  bind ≠ node pose). Weights renormalize to sum 1 (guards sloppy exports);
+  ubyte/ushort/float attribute encodings all handled; triangle winding flips
+  CCW→CW like ModelImporter. **P2 scope, explicit:** node transforms above the
+  skeleton's root joints and on the mesh node are ignored (character exporters
+  bake these); materials contribute `baseColorFactor` only (textures ride the
+  existing ModelImporter path when needed); first-skin-only (one character per
+  file).
+- **Deformation** (`anim::SkinnedMesh` + `skinMesh`,
+  `src/engine/anim/skinned_mesh.{h,cpp}`): classic 4-influence linear-blend
+  skinning on the **CPU** — positions as points, normals/tangents as
+  directions, unweighted vertices stay at bind. CPU on purpose: ONE
+  implementation feeds the ordinary mesh upload path *and* the offline path
+  tracer, so a skinned character renders everywhere the engine renders with
+  zero per-backend shader work — the property the comics pipeline (P3 stills)
+  actually needs. GPU skinning is a perf move behind the same data, gated on
+  profiler evidence (ADR-0068) or crowd-scale characters.
+
+**Alternatives.** GPU skinning first — three backends of shader/buffer work
+before one character renders, and the tracer would still need the CPU path.
+Trusting glTF joint order — breaks the substrate's one-pass world composition.
+Recomputing inverse binds — see above.
+
+**Consequences.** The synthetic-rig test (`tests/test_skin.cpp` writes a
+minimal 2-joint glTF + buffer from scratch) pins hierarchy import, influence
+remapping, blend math (a 50/50 vertex lands exactly between its two joints'
+motions), bind-pose identity, and rejection paths. `tools/skin_demo.cpp`
+renders rigid-vs-skinned side by side. Not yet: a `SkinnedCharacter`
+component + system stamping skinned meshes into Renderables per frame (the
+P1/P2 editor wiring), animations (P4 reads glTF channels through the same
+file), morph targets. **Revisit trigger:** the first real Blender/Mixamo
+export that violates the ignored-transform scope — handle its shape then,
+with the file in hand, rather than speculating now.
+
 ---
 
 ## Interim seams & tech-debt register

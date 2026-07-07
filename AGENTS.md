@@ -60,6 +60,8 @@ src/
       skeleton.h / .cpp       — anim::Skeleton/Pose joint hierarchy (ADR-0072;
                                 NOT the procgen L-system Skeleton)
       mannequin.h / .cpp      — procedural 17-joint posable biped (ADR-0072)
+      skinned_mesh.h / .cpp   — SkinnedMesh + CPU linear-blend skinMesh (ADR-0073)
+      skin_import.h / .cpp    — glTF skin -> Skeleton/SkinnedMesh (ADR-0073)
     audio/
       audio_engine.h / .cpp   — miniaudio wrapper (pimpl, ma_*-free header, ADR-0069)
     input/

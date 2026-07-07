@@ -94,6 +94,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_event_bus.cpp \
 	$(TEST_DIR)/test_debug_draw.cpp \
 	$(TEST_DIR)/test_skeleton.cpp \
+	$(TEST_DIR)/test_skin.cpp \
 	$(TEST_DIR)/test_input_map.cpp \
 	$(TEST_DIR)/test_player_input.cpp \
 	$(TEST_DIR)/test_camera.cpp \
@@ -174,6 +175,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/debug_draw.cpp \
 	$(SRC_DIR)/engine/anim/skeleton.cpp \
 	$(SRC_DIR)/engine/anim/mannequin.cpp \
+	$(SRC_DIR)/engine/anim/skinned_mesh.cpp \
+	$(SRC_DIR)/engine/anim/skin_import.cpp \
 	$(SRC_DIR)/engine/world.cpp \
 	$(SRC_DIR)/engine/components.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
