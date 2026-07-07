@@ -7,6 +7,7 @@
 #include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
+#include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -2076,10 +2077,44 @@ bool LevelLoader::load(const std::string& path,
                 }
                 return treeKits[variety];
             };
+            // Building PHYSICS (device: "I can shoot through them"): one
+            // static mesh collider of PLAN PRISMS — each building's grown
+            // plan polygon extruded to its height. The prism follows the
+            // massing exactly, so L / courtyard / prow buildings collide
+            // where their walls are, with nothing spilling onto the sidewalk
+            // (the failure that got box colliders removed).
+            engine::MeshCollider buildingsMc;
             for (const engine::LotBuilding& lb :
                  engine::growLotBuildings(blocks, lp, &plan, &lotParts,
                                           &rgSampled, roadClear)) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
+                if (lb.type != "park" && lb.type != "green" &&
+                    lb.plan.size() >= 3) {
+                    const double base = gy - 0.5, top = gy + lb.height;
+                    const uint32_t s0 =
+                        static_cast<uint32_t>(buildingsMc.vertices.size());
+                    const uint32_t n = static_cast<uint32_t>(lb.plan.size());
+                    for (const engine::Vec2& v : lb.plan) {
+                        buildingsMc.vertices.push_back(Vec3(v.x, base, v.y));
+                        buildingsMc.vertices.push_back(Vec3(v.x, top, v.y));
+                    }
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const uint32_t j = (i + 1) % n;
+                        const uint32_t a0 = s0 + i * 2, a1 = a0 + 1;
+                        const uint32_t b0 = s0 + j * 2, b1 = b0 + 1;
+                        buildingsMc.indices.insert(buildingsMc.indices.end(),
+                                                   {a0, b0, b1, a0, b1, a1});
+                    }
+                    for (const auto& tri : engine::triangulatePolygon(lb.plan)) {
+                        const uint32_t rb =
+                            static_cast<uint32_t>(buildingsMc.vertices.size());
+                        for (int k = 0; k < 3; ++k)
+                            buildingsMc.vertices.push_back(Vec3(
+                                lb.plan[tri[k]].x, top, lb.plan[tri[k]].y));
+                        buildingsMc.indices.insert(buildingsMc.indices.end(),
+                                                   {rb, rb + 1, rb + 2});
+                    }
+                }
                 // Tag it as a place the agents can route to. An unbuilt GREEN is
                 // scenery, not a schedule destination — no place tag.
                 if (lb.type != "green") {
@@ -2172,6 +2207,14 @@ bool LevelLoader::load(const std::string& path,
                         }
                     }
                 }
+            }
+            if (!buildingsMc.indices.empty()) {
+                Entity ce = world.create();
+                Transform ct;
+                world.add<Transform>(ce, ct);
+                world.add<PrevTransform>(ce, PrevTransform{ct});
+                buildingsMc.friction = 0.85;
+                world.add<engine::MeshCollider>(ce, std::move(buildingsMc));
             }
             // One entity per non-empty part class, with the shape-grammar's OWN
             // material recipes: materialFor(PartId) names the procedural surface
@@ -2291,6 +2334,13 @@ bool LevelLoader::load(const std::string& path,
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
         }
+        // Reset FIRST: only a successful HDR load below may raise this. It is
+        // the flag DayNightSystem uses to yield to a baked HDR sun — leaving a
+        // previous level's value in the reused renderer silently disabled the
+        // day/night cycle on every level loaded after an HDR one (device:
+        // "the day/night cycle is broken in Metal" — really "after an HDR
+        // level", which a fresh single-level web session never hits).
+        renderer.environmentAvgLuminance = 0.0f;
         if (env.contains("hdr")) {
             std::string envPath = env["hdr"].get<std::string>();
             if (!envPath.empty() && envPath[0] != '/')
@@ -2308,7 +2358,9 @@ bool LevelLoader::load(const std::string& path,
             renderer.setEnvironmentMap(TextureHandle{});
         }
     } else {
-        // No "environment" object at all — also clear any stale env map.
+        // No "environment" object at all — also clear any stale env map (and
+        // the avg-luminance flag, or the day/night cycle stays disabled).
+        renderer.environmentAvgLuminance = 0.0f;
         renderer.setEnvironmentMap(TextureHandle{});
     }
 

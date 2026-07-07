@@ -1304,33 +1304,60 @@ void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
 // A real LIP around the roof (device: "the roof tops don't really have a lip
 // around them"): an upstand RING following the plan outline — outer face on
 // the plan line, 0.24 m thick, usually in the facade's own material — capped
-// by a slightly oversailing darker coping so the edge reads from the street.
-// Each edge's boxes extend half a thickness past their corners, closing the
-// ring without mitring (convex corners butt, concave overlap harmlessly).
+// by a slightly oversailing darker coping. Built as MITERED rings (the same
+// offset construction the road ribbons use — device: "reuse ... to miter the
+// ends together") so the lip is one continuous piece of geometry that turns
+// every corner cleanly, instead of overlapping per-edge boxes.
 void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
                      const Vec3& wallCol, PartId wallPart,
                      const Vec3& copingCol) {
     if (h <= 0 || pl.size() < 3) return;
-    const Vec3 up(0, 1, 0);
     const Real th = 0.24;    // upstand thickness
     const Real lip = 0.05;   // coping oversail, in and out
-    for (std::size_t i = 0; i < pl.size(); ++i) {
-        Vec2 a = pl[i], b = pl[(i + 1) % pl.size()];
-        Vec2 dv = b - a;
-        const Real len = dv.length();
-        if (len < 1e-6) continue;
-        Vec2 d = dv * (1.0 / len);
-        Vec2 nOut(d.y, -d.x);   // outward for a CCW plan
-        Vec3 d3(d.x, 0, d.y), n3(nOut.x, 0, nOut.y);
-        Vec3 o = Vec3(a.x, roofY, a.y) - n3 * th - d3 * (th * 0.5);
-        emitBox(out, Scope{o, {d3, up, n3}, Vec3(len + th, h, th)},
-                wallPart, wallCol);
-        Vec3 co = Vec3(a.x, roofY + h, a.y) - n3 * (th + lip) -
-                  d3 * (th * 0.5 + lip);
-        emitBox(out, Scope{co, {d3, up, n3},
-                           Vec3(len + th + 2 * lip, 0.09, th + 2 * lip)},
-                PartId::Trim, copingCol);
-    }
+    const Real ch = 0.09;    // coping height
+    Poly2 O = pl;            // upstand outer ring: ON the plan line
+    ensureCCW(O);
+    const Poly2 I = offsetPlan(O, th);             // upstand inner ring
+    const Poly2 Oc = offsetPlan(O, -lip);          // coping outer ring
+    const Poly2 Ic = offsetPlan(O, th + lip);      // coping inner ring
+    const std::size_t n = O.size();
+    if (I.size() != n || Oc.size() != n || Ic.size() != n) return;
+    RenderMesh wall, cop;
+    auto ringBand = [](RenderMesh& m, const Poly2& ring, Real y0, Real y1,
+                       bool outward, const Vec3& col) {
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            const Vec2& a = ring[i];
+            const Vec2& b = ring[(i + 1) % ring.size()];
+            Vec2 d = b - a;
+            if (d.length() < 1e-6) continue;
+            d = normalize(d);
+            Vec2 nrm = outward ? Vec2(d.y, -d.x) : Vec2(-d.y, d.x);
+            emitQuad(m, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y),
+                     Vec3(b.x, y1, b.y), Vec3(a.x, y1, a.y),
+                     Vec3(nrm.x, 0, nrm.y), col);
+        }
+    };
+    auto ringCap = [&](RenderMesh& m, const Poly2& oRing, const Poly2& iRing,
+                       Real y, bool up2, const Vec3& col) {
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t j = (i + 1) % n;
+            emitQuad(m, Vec3(oRing[i].x, y, oRing[i].y),
+                     Vec3(oRing[j].x, y, oRing[j].y),
+                     Vec3(iRing[j].x, y, iRing[j].y),
+                     Vec3(iRing[i].x, y, iRing[i].y),
+                     Vec3(0, up2 ? 1 : -1, 0), col);
+        }
+    };
+    // Upstand: outer + inner faces (the coping's underside closes the top).
+    ringBand(wall, O, roofY, roofY + h, true, wallCol);
+    ringBand(wall, I, roofY, roofY + h, false, wallCol);
+    // Coping: oversailing ring with its own faces, top and underside.
+    ringBand(cop, Oc, roofY + h, roofY + h + ch, true, copingCol);
+    ringBand(cop, Ic, roofY + h, roofY + h + ch, false, copingCol);
+    ringCap(cop, Oc, Ic, roofY + h + ch, true, copingCol);
+    ringCap(cop, Oc, Ic, roofY + h, false, copingCol);
+    appendToPart(out, wallPart, wall);
+    appendToPart(out, PartId::Trim, cop);
 }
 
 // The VEHICLE BAY front (fire stations, loading docks, parking entries): the
@@ -1439,7 +1466,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // (the floorplan counterpart of the box path's quoined arris). With quoins
     // on, the post alternates block heights like a quoin stack.
     auto cornerPosts = [&](const Poly2& pl, Real y0, Real h) {
-        if (params.curtainWall || params.solidFacade) return;
+        if (params.solidFacade) return;
         for (std::size_t i = 0; i < pl.size(); ++i) {
             Vec2 P = pl[i];
             Vec2 pPrev = pl[(i + pl.size() - 1) % pl.size()];
@@ -1452,11 +1479,23 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // Only REAL corners get a post: chord joints of a tessellated
             // CURVED plan edge (turn < ~33 deg) stay smooth, so a round tower
             // reads as a curve, not a ribbed drum.
-            if (std::fabs(cross(d0, d1)) < 0.55) continue;
+            if (std::fabs(cross(d0, d1)) < (params.curtainWall ? 0.45 : 0.55))
+                continue;
             bis = bis * (1.0 / bl);
             Vec2 side(-bis.y, bis.x);
             const Real half = 0.20, proud = 0.05;
             Vec3 r3(side.x, 0, side.y), f3(bis.x, 0, bis.y);
+            if (params.curtainWall) {
+                // A CORNER MULLION: the glass planes are inset 0.10 from each
+                // face, so at a kinked vertex they don't meet — an open slit
+                // into the hollow shell (device: "cutting holes into the
+                // sides"). A metal post centred on the vertex closes the gap
+                // and is what real curtain walls put there anyway.
+                Scope s{Vec3(P.x, y0, P.y) - r3 * half - f3 * (half + 0.06),
+                        {r3, Vec3(0, 1, 0), f3}, Vec3(half * 2, h, half * 2)};
+                emitBox(out, s, PartId::Metal, Vec3(0.30, 0.31, 0.33));
+                continue;
+            }
             if (params.quoins) {
                 const Real qh = 0.42, gap = 0.03;
                 int k = 0;

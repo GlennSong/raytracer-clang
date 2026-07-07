@@ -593,6 +593,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.width = 2 * pb.half[0];
                 b.depth = 2 * pb.half[1];
                 b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
+                b.plan = plan;   // the collider prism follows the massing
             } else {
                 // The box fallback fills the OBB: on a low-fill lot that IS
                 // the overhanging-mass bug, so those go green instead.
@@ -609,6 +610,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.depth = scope.size.z;
                 b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
                 bm = growBuilding(scope, bp);
+                // The box scope IS the plan here (shrunk-fit inside the lot).
+                Vec2 r2(scope.axis[0].x, scope.axis[0].z);
+                Vec2 f2(scope.axis[2].x, scope.axis[2].z);
+                Vec2 o2(scope.origin.x, scope.origin.z);
+                b.plan = {o2, o2 + r2 * scope.size.x,
+                          o2 + r2 * scope.size.x + f2 * scope.size.z,
+                          o2 + f2 * scope.size.z};
             }
             if (bm.parts.empty()) continue;
             if (outParts)
