@@ -1165,22 +1165,41 @@
 }
 {
   "version": 1,
-  "environment": { "skyColor": [0.55, 0.68, 0.86] },
-  "entities": [
-    {
-      "id": 1,
-      "name": "ground",
-      "shape": "box",
-      "position": [0.0, -0.3, 0.0],
-      "size": [520.0, 0.4, 520.0],
-      "material": { "albedo": [0.34, 0.4, 0.29], "metallic": 0.0, "roughness": 1.0 },
-      "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 }
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "terrain": {
+    "seed": 7,
+    "size": 620,
+    "resolution": 380,
+    "heightScale": 11,
+    "noiseScale": 0.008,
+    "octaves": 4,
+    "warp": 0.25,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
     },
+    "cdlod": true
+  },
+  "entities": [
     {
       "id": 2,
       "name": "streets",
       "shape": "road",
-      "position": [0.0, 0.0, 0.0],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
       "road": {
         "generate": {
           "kind": "district",
@@ -1199,7 +1218,11 @@
         "lift": 0.08,
         "markings": true,
         "crosswalks": true,
-        "color": [0.09, 0.09, 0.1]
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
       }
     }
   ],
@@ -1219,28 +1242,97 @@
     "buildChance": 0.9
   },
   "player": {
-    "position": [0, 1.2, 150],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "position": [
+      0,
+      1.2,
+      150
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.8
+    },
     "friction": 0.5
   },
   "lighting": {
     "sun": {
-      "direction": [0.42, 0.52, -0.5],
-      "color": [1.0, 0.96, 0.86],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
       "intensity": 8.0,
       "castsShadow": true
     },
     "exposure": 0.5,
     "ambientMultiplier": 0.6
   }
-}
-{ "cameras": [
-  { "name": "City", "position": [170, 110, 230], "forward": [-0.52, -0.42, -0.74],
-    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 280.0 } },
-  { "name": "Street", "position": [40, 8, 60], "forward": [-0.55, -0.12, -0.83],
-    "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 60.0 } }
-] }
-{
+}{
+  "cameras": [
+    {
+      "name": "City",
+      "position": [
+        170,
+        110,
+        230
+      ],
+      "forward": [
+        -0.52,
+        -0.42,
+        -0.74
+      ],
+      "lens": {
+        "focalLength": 30,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 280.0
+      }
+    },
+    {
+      "name": "Street",
+      "position": [
+        40,
+        8,
+        60
+      ],
+      "forward": [
+        -0.55,
+        -0.12,
+        -0.83
+      ],
+      "lens": {
+        "focalLength": 32,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 60.0
+      }
+    },
+    {
+      "name": "Top",
+      "position": [
+        0,
+        420,
+        40
+      ],
+      "forward": [
+        0,
+        -0.995,
+        -0.1
+      ],
+      "lens": {
+        "focalLength": 30,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 420.0
+      }
+    }
+  ]
+}{
   "version": 1,
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "entities": [
