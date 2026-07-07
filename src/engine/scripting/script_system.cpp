@@ -72,14 +72,15 @@ ScriptSystem::ScriptSystem() {
 }
 
 void ScriptSystem::setServices(InputMap* input, const CameraState* camera,
-                               AssetManager* assets) {
+                               AssetManager* assets, EventBus* events) {
     input_ = input;
     camera_ = camera;
     assets_ = assets;
+    events_ = events;
 }
 
 void ScriptSystem::update(FrameContext& ctx) {
-    setServices(&ctx.actions, &ctx.view.camera, &ctx.assets);
+    setServices(&ctx.actions, &ctx.view.camera, &ctx.assets, &ctx.events);
     tick(ctx.world, ctx.frameDelta);
 }
 
@@ -92,6 +93,7 @@ void ScriptSystem::tick(World& world, double dt) {
     gctx.input = input_;
     gctx.camera = camera_;
     gctx.spawns = &spawns;
+    gctx.events = events_;
     setGameplayContext(vm_, &gctx);
 
     // Mutating ScriptBehaviour's own fields (refs/flags) is allowed inside each;

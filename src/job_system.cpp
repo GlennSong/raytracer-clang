@@ -1,4 +1,5 @@
 #include "job_system.h"
+#include "profile.h"
 
 #include <algorithm>
 
@@ -30,6 +31,7 @@ JobSystem::~JobSystem() {
 }
 
 void JobSystem::workerLoop() {
+    RT_PROFILE_THREAD("JobSystem worker");
     std::unique_lock<std::mutex> lock(queueMutex);
     while (true) {
         taskAvailable.wait(lock, [this] { return stopping || !tasks.empty(); });
@@ -100,6 +102,7 @@ void JobSystem::wait(std::atomic<int>* counter) {
 void JobSystem::parallelFor(std::size_t begin, std::size_t end,
                             const std::function<void(std::size_t)>& body,
                             std::size_t grainSize) {
+    RT_PROFILE_ZONE_NAMED("JobSystem::parallelFor");
     if (begin >= end) {
         return;
     }

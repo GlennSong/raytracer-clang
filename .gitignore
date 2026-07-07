@@ -1,6 +1,7 @@
 build/
 build-cmake/
 build-imgui/
+build-profiler/
 build-native/
 build-web/
 build-web-oz/
@@ -11,6 +12,9 @@ run_tests.d
 *.dSYM/
 *.ppm
 *.png
+# headless demo artifacts (tools/audio_demo.cpp)
+audio_demo.wav
+audio_demo_ping.wav
 # baked scene-gallery thumbnails are committed assets (WebP; see tools/bake-thumbs.sh)
 !web/thumbs/*.webp
 settings.json

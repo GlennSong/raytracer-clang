@@ -384,3 +384,44 @@ TEST_CASE(character_teleport_zeroes_velocity) {
     CHECK(world.characterPosition(c).y > 1.9);
     world.shutdown();
 }
+
+TEST_CASE(physics_contact_events_fire_on_impact) {
+    PhysicsWorld world;
+    world.initialize();
+    PhysicsBodyId floor = addFloor(world);
+    PhysicsBodyId sphere =
+        world.addSphere(0.5, Vec3(0, 4, 0), Quat::identity(), BodyMotion::Dynamic);
+    world.optimizeBroadPhase();
+
+    CHECK(world.drainContactEvents().empty());   // nothing has touched yet
+
+    std::vector<ContactEvent> contacts;
+    for (int i = 0; i < 180 && contacts.empty(); i++) {
+        world.update(1.0 / 60.0);
+        std::vector<ContactEvent> batch = world.drainContactEvents();
+        contacts.insert(contacts.end(), batch.begin(), batch.end());
+    }
+    CHECK(!contacts.empty());
+    if (contacts.empty()) return;
+
+    const ContactEvent& hit = contacts.front();
+    bool pairMatches = (hit.bodyA == floor && hit.bodyB == sphere) ||
+                       (hit.bodyA == sphere && hit.bodyB == floor);
+    CHECK(pairMatches);
+    CHECK(hit.approachSpeed > 4.0);            // ~8 m/s after a 3.5 m fall
+    CHECK(std::fabs(hit.position.y) < 0.25);   // at the floor top (y = 0)
+}
+
+TEST_CASE(physics_resting_contact_does_not_respam_events) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    world.addSphere(0.5, Vec3(0, 2, 0), Quat::identity(), BodyMotion::Dynamic);
+    world.optimizeBroadPhase();
+
+    step(world, 240);              // fall, land, settle, fall asleep
+    world.drainContactEvents();    // discard the landing burst
+    step(world, 60);
+    // Resting on the floor is a persisted contact — no new ContactEvents.
+    CHECK(world.drainContactEvents().empty());
+}

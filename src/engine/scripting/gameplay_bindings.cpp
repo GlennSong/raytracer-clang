@@ -2,6 +2,8 @@
 
 #include "lua_state.h"
 #include "procgen_mesh.h"           // luaToMesh
+#include "../audio/audio_engine.h"  // PlaySound (the sound.play cue)
+#include "../event_bus.h"
 #include "../world.h"
 #include "../components.h"          // Transform, PrevTransform
 #include "../input/input_map.h"
@@ -249,6 +251,45 @@ int l_spawn_model(lua_State* L) {
     return 0;
 }
 
+// --- sound.* (cues on the EventBus; AudioSystem plays them, ADR-0069/0071) ---
+
+int l_sound_play(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || g->events == nullptr) {
+        return luaL_error(L, "sound unavailable outside a gameplay tick");
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+
+    PlaySound cue;
+    lua_getfield(L, 1, "clip");
+    if (!lua_isstring(L, -1)) {
+        return luaL_error(L, "sound.play: 'clip' (path or registered name) required");
+    }
+    cue.clip = lua_tostring(L, -1);
+    lua_pop(L, 1);
+
+    cue.volume = static_cast<float>(optField(L, 1, "volume", cue.volume));
+    cue.pitch = static_cast<float>(optField(L, 1, "pitch", cue.pitch));
+    cue.range = optField(L, 1, "range", cue.range);
+
+    // A position makes the cue spatial; without one it plays flat (UI, the
+    // player's own gun).
+    lua_getfield(L, 1, "position");
+    if (!lua_isnoneornil(L, -1)) {
+        cue.position = checkVec3(L, -1);
+        cue.spatial = true;
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "music");
+    if (lua_toboolean(L, -1)) cue.bus = AudioBus::Music;
+    lua_pop(L, 1);
+
+    // Deferred like spawns: delivered at the frame's queued dispatch.
+    g->events->enqueue(cue);
+    return 0;
+}
+
 }  // namespace
 
 void openGameplayLibrary(ScriptVM& vm) {
@@ -287,6 +328,13 @@ void openGameplayLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kCameraFns);
     lua_setglobal(L, "camera");
+
+    static const luaL_Reg kSoundFns[] = {
+        {"play", l_sound_play},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kSoundFns);
+    lua_setglobal(L, "sound");
 
     static const luaL_Reg kSpawnFns[] = {
         {"block", l_spawn_block},

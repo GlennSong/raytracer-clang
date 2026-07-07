@@ -30,6 +30,20 @@ constexpr CharacterId INVALID_CHARACTER = 0xFFFFFFFFu;
 // Mirrors Jolt's CharacterBase::EGroundState through the Jolt-free seal.
 enum class GroundState { OnGround, OnSteepGround, NotSupported, InAir };
 
+// A NEW touch between two bodies, captured from Jolt's ContactListener during
+// update() (ADR-0071). Edge-triggered by construction (Jolt's OnContactAdded —
+// persisted/resting contacts don't refire), so it is the natural trigger for
+// impact reactions: sound cues, hit decals, gameplay damage. `approachSpeed`
+// is the closing speed along the contact normal at the touch (m/s) — the
+// severity knob.
+struct ContactEvent {
+    PhysicsBodyId bodyA = INVALID_PHYSICS_BODY;
+    PhysicsBodyId bodyB = INVALID_PHYSICS_BODY;
+    Vec3 position;       // world-space contact point
+    Vec3 normal;         // world-space contact normal
+    Real approachSpeed = 0;
+};
+
 class JobSystem;   // our thread pool (src/job_system.h)
 
 class PhysicsWorld {
@@ -156,6 +170,12 @@ public:
     // The chassis rigid-body handle (so the body's transform can be read like any
     // other, and the player can be parented/seated relative to it).
     PhysicsBodyId vehicleBody(VehicleId id) const;
+
+    // Contacts recorded since the last drain (thread-safe internally: Jolt's
+    // ContactListener fires on physics worker threads mid-step). Call after
+    // update(); PhysicsSystem maps these to entities and publishes them on the
+    // EventBus (ADR-0071).
+    std::vector<ContactEvent> drainContactEvents();
 
     // Call once after the initial static bodies are added.
     void optimizeBroadPhase();

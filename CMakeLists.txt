@@ -37,6 +37,8 @@ add_library(engine_core STATIC
     src/renderer/settings.cpp
     src/renderer/hosted_window.cpp
     src/engine/clock.cpp
+    src/engine/event_bus.cpp
+    src/engine/debug_draw.cpp
     src/engine/world.cpp
     src/engine/components.cpp
     src/engine/application.cpp
@@ -101,7 +103,15 @@ add_library(engine_core STATIC
     src/engine/systems/camera_panel_system.cpp
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
+    src/engine/anim/skeleton.cpp
+    src/engine/anim/mannequin.cpp
+    src/engine/anim/skinned_mesh.cpp
+    src/engine/anim/skin_import.cpp
+    src/engine/audio/audio_engine.cpp
+    src/engine/audio/sfx.cpp
+    src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
@@ -208,6 +218,83 @@ if(RT_ENABLE_SCRIPTING)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
 endif()
 
+# ============================================================
+# Audio (ADR-0069) — miniaudio, a single-header C submodule pinned at a
+# release tag, sealed behind AudioEngine. Cross-platform and device-optional
+# (null-device fallback, or Manual mode with no device at all), so it builds
+# and tests headless. OFF leaves the AudioEngine stub in place (silence) —
+# audio_engine.cpp compiles either way, so the engine API is always present.
+# Skipped under Emscripten until the web audio path is designed.
+# ============================================================
+option(RT_ENABLE_AUDIO "Build the miniaudio-backed audio engine" ON)
+if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+    set(MINIAUDIO_DIR ${CMAKE_SOURCE_DIR}/third_party/miniaudio)
+    if(NOT EXISTS ${MINIAUDIO_DIR}/miniaudio.h)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "miniaudio submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init third_party/miniaudio
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${MINIAUDIO_DIR}/miniaudio.h)
+        message(FATAL_ERROR
+            "miniaudio submodule not found at third_party/miniaudio.\n"
+            "Fetch it with:  git submodule update --init third_party/miniaudio\n"
+            "or configure with -DRT_ENABLE_AUDIO=OFF to build without audio.")
+    endif()
+    # The single implementation TU, compiled as C with warnings off (the Lua
+    # pattern). dl/pthread/m are miniaudio's documented Linux link deps.
+    add_library(miniaudio_static STATIC src/engine/audio/miniaudio_impl.c)
+    target_include_directories(miniaudio_static SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+    target_compile_options(miniaudio_static PRIVATE -w)
+    target_link_libraries(miniaudio_static PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+    if(NOT APPLE AND NOT WIN32)
+        target_link_libraries(miniaudio_static PUBLIC m)
+    endif()
+    if(APPLE)
+        target_link_libraries(miniaudio_static PUBLIC
+            "-framework CoreFoundation" "-framework CoreAudio"
+            "-framework AudioToolbox")
+    endif()
+
+    target_link_libraries(engine_core PUBLIC miniaudio_static)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_AUDIO=1)
+endif()
+
+# ============================================================
+# Tracy profiler (ADR-0068) — off by default. When ON: compile the Tracy
+# client into engine_core and define RT_ENABLE_PROFILER, which turns the
+# RT_PROFILE_* macros (src/profile.h) into real zones. Capture by connecting
+# the Tracy UI to the running process (works headless, over the network).
+# ============================================================
+option(RT_ENABLE_PROFILER "Build with the Tracy profiler client" OFF)
+if(RT_ENABLE_PROFILER)
+    set(TRACY_DIR ${CMAKE_SOURCE_DIR}/third_party/tracy)
+    if(NOT EXISTS ${TRACY_DIR}/CMakeLists.txt)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "Tracy submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init third_party/tracy
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${TRACY_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR
+            "Tracy submodule not found at third_party/tracy.\n"
+            "Fetch it with:  git submodule update --init third_party/tracy\n"
+            "or configure with -DRT_ENABLE_PROFILER=OFF.")
+    endif()
+    # Record only while a profiler UI is connected, so an instrumented build
+    # left running doesn't grow an unbounded event buffer.
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/tracy ${CMAKE_BINARY_DIR}/tracy)
+    target_link_libraries(engine_core PUBLIC TracyClient)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_PROFILER=1)
+endif()
+
 # Offline path-tracer sources (the tracer's own scene/camera/image stack).
 set(CORE_SOURCES
     src/image.cpp
@@ -241,6 +328,10 @@ add_executable(run_tests
     tests/test_sparse_set.cpp
     tests/test_world.cpp
     tests/test_clock.cpp
+    tests/test_event_bus.cpp
+    tests/test_debug_draw.cpp
+    tests/test_skeleton.cpp
+    tests/test_skin.cpp
     tests/test_input_map.cpp
     tests/test_player_input.cpp
     tests/test_camera.cpp
@@ -330,8 +421,49 @@ if(RT_ENABLE_SCRIPTING)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
+if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+    # Headless audio tests: Manual mode (no device), the mix pumped by hand.
+    target_sources(run_tests PRIVATE tests/test_audio.cpp)
+endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
+
+# ============================================================
+# Headless demos (tools/): small programs that show the engine systems in
+# action without a GPU or an audio device — the path tracer renders the
+# DebugDraw ribbons to a PNG, and Manual-mode audio mixes a spatial scene to
+# a WAV. Handy on CI/remote machines; also fine on a dev box.
+# ============================================================
+option(RT_BUILD_DEMOS "Build the headless demo tools" ON)
+if(RT_BUILD_DEMOS)
+    add_executable(debug_draw_demo tools/debug_draw_demo.cpp ${CORE_SOURCES})
+    target_include_directories(debug_draw_demo PRIVATE src)
+    target_compile_options(debug_draw_demo PRIVATE -Wall -Wextra)
+    target_link_libraries(debug_draw_demo PRIVATE engine_core)
+
+    # Three posed mannequins path-traced to a still (character-posing-plan P0).
+    add_executable(pose_demo tools/pose_demo.cpp ${CORE_SOURCES})
+    target_include_directories(pose_demo PRIVATE src)
+    target_compile_options(pose_demo PRIVATE -Wall -Wextra)
+    target_link_libraries(pose_demo PRIVATE engine_core)
+
+    # Rigid vs CPU-skinned bend, side by side (character-posing-plan P2).
+    add_executable(skin_demo tools/skin_demo.cpp ${CORE_SOURCES})
+    target_include_directories(skin_demo PRIVATE src)
+    target_compile_options(skin_demo PRIVATE -Wall -Wextra)
+    target_link_libraries(skin_demo PRIVATE engine_core)
+
+    if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+        add_executable(audio_demo tools/audio_demo.cpp)
+        target_include_directories(audio_demo PRIVATE src)
+        target_compile_options(audio_demo PRIVATE -Wall -Wextra)
+        target_link_libraries(audio_demo PRIVATE engine_core)
+    endif()
+endif()
+
+# The physics->sound chain, audible (ADR-0071): Jolt contacts -> EventBus ->
+# procedural impact cues -> a WAV. Needs both physics and audio, so it is
+# declared with the physics block below (after the Jolt target exists).
 
 # ============================================================
 # Physics (Jolt) — cross-platform C++, builds and runs headless (ADR-0012).
@@ -398,6 +530,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/motion_system.cpp
+        src/engine/event_bus.cpp
         src/engine/world.cpp
         src/engine/components.cpp
         src/job_system.cpp
@@ -406,6 +539,19 @@ if(RT_ENABLE_PHYSICS)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
     target_link_libraries(physics_tests PRIVATE Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
+
+    # The audible physics demo (see the demos block above for the rationale).
+    if(RT_BUILD_DEMOS AND RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+        add_executable(impact_demo
+            tools/impact_demo.cpp
+            src/engine/physics/physics_world.cpp
+            src/engine/physics/jolt_job_adapter.cpp
+            src/engine/systems/physics_system.cpp
+        )
+        target_include_directories(impact_demo PRIVATE src)
+        target_compile_options(impact_demo PRIVATE -Wall -Wextra)
+        target_link_libraries(impact_demo PRIVATE engine_core Jolt Threads::Threads)
+    endif()
 endif()
 
 # ============================================================

@@ -3,6 +3,9 @@
 
 #include "world.h"
 #include "clock.h"
+#include "audio/audio_engine.h"
+#include "debug_draw.h"
+#include "event_bus.h"
 #include "input/input_map.h"
 #include "input/player_input.h"
 #include "../renderer/renderer.h"
@@ -54,6 +57,12 @@ struct FrameContext {
     SimClock& clock;
     Settings& settings;
     JobSystem& jobs;           // shared thread pool (ADR-0014): physics today
+    EventBus& events;          // typed pub/sub (ADR-0066): publish now, or
+                               // enqueue for the post-fixed-step dispatch
+    DebugDraw& debug;          // immediate-mode debug lines (ADR-0067),
+                               // drawn on top by DebugDrawSystem
+    AudioEngine& audio;        // sealed miniaudio engine (ADR-0069); prefer
+                               // PlaySound events over direct play() calls
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)

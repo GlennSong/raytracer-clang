@@ -84,6 +84,31 @@ A `tests/` target is the safety net before bigger refactors.
 
 **Depends on:** Nothing. Can parallel with 1.1 and 1.2.
 
+### 1.4 Event bus
+**Status:** Done (ADR-0066) — `engine::EventBus` in `src/engine/event_bus.*`,
+exposed as `ctx.events`, covered by `tests/test_event_bus.cpp`.
+**Why:** The decoupling seam for cross-system signals — sound cues (2.5), UI
+notifications, script callbacks — without direct system-to-system calls.
+Synchronous typed publish (subscription order, deterministic) + a per-frame
+queued dispatch after the fixed steps; reentrancy defined and tested.
+
+### 1.5 Debug draw
+**Status:** Engine-side done (ADR-0067) — `DebugDraw` (`ctx.debug`: lines,
+arrows, boxes, spheres, circles, axes, TTLs) baked to camera-facing ribbon
+quads and drawn by `DebugDrawSystem` through the ordinary asset/renderer path
+with `FLAG_OVERLAY` — every backend, no line pipeline. Headless-tested;
+**on-device look unverified** (register row).
+**Why:** Collider wireframes, path traces, procgen skeletons, camera frusta —
+design principle #2. Pays down the 2.3 "needs a line primitive" debt.
+
+### 1.6 Profiling (Tracy)
+**Status:** Done, opt-in (ADR-0068) — `third_party/tracy` (v0.13.1) behind
+`-DRT_ENABLE_PROFILER=ON`; permanent `RT_PROFILE_*` macros (`src/profile.h`)
+compile to nothing when off. Frame loop + JobSystem instrumented; add zones
+where questions arise.
+**Why:** "Measure before optimizing" (principle #3) needs a measurer; gates
+the allocator/LOD/parallel-ECS decisions.
+
 ---
 
 ## Tier 2 — 3D Interaction Infrastructure
@@ -175,10 +200,16 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
   collision-free scripted motion) and yields any entity that also has a
   `RigidBody`. Viewer demo: a sphere falls onto the floor while the box keeps
   spinning on MotionSystem.
-- ⏳ More shapes (capsule/mesh), materials (friction/restitution), contact
-  events, Jolt kinematic bodies (script-driven motion that pushes dynamics).
-- ⏳ Debug visualization of colliders — needs a line/debug-draw primitive
-  (macOS/Metal); deferred / minimal.
+- ✅ Contact events (ADR-0071): Jolt's `ContactListener` sealed as
+  `ContactEvent`s (thread-safe buffer, drained post-step);
+  `PhysicsSystem::publishContacts` maps bodies to entities and publishes
+  `Collision` on the event bus (1.4). First consumer: impact sounds (2.5).
+- ⏳ More shapes beyond box/sphere/capsule/mesh as needed, materials
+  (friction/restitution done per-body), Jolt kinematic bodies (script-driven
+  motion that pushes dynamics).
+- ⏳ Debug visualization of colliders — the line primitive now exists
+  (DebugDraw, ADR-0067 / roadmap 1.5); remaining work is emitting each
+  collider's wire shape into `ctx.debug` behind a toggle.
 
 **Depends on:** ECS (done), quaternion math (done). Benefits from ImGui (1.1)
 for physics debug viz.
@@ -218,6 +249,31 @@ and ECS keep the door open.
 demo, to exercise split-screen / multi-pad control end to end.
 
 **Depends on:** Input-action mapping (2.1).
+
+### 2.5 Audio system
+**Status:** Foundation done (ADR-0069) — miniaudio (v0.11.25, vendored) sealed
+behind `AudioEngine` (pimpl, `ctx.audio`); `AudioListener`/`AudioSource`
+components + `AudioSystem`; `PlaySound` cues over the event bus (1.4). Clips
+from files (wav/flac/mp3) or raw PCM — the procgen path. Deterministically
+tested headless (Manual mode mixes into a caller-pumped buffer:
+`tests/test_audio.cpp` asserts pan, attenuation, looping, buses). **Device
+output unverified** (no audio hardware here — register row).
+**Why:** The engine's first output channel besides pixels; ambience for the
+generated worlds (wind in the forest, traffic in the city) and feedback for
+gameplay (shots, impacts) — all synthesizable, fitting procgen-first.
+
+**Landed since (ADR-0071):** the reaction chain is live in the arena — Jolt
+contact events (2.3) publish `Collision` on the bus; procedural SFX
+(`engine::sfx`, seeded gunshot/impact generators) register as named clips;
+`sound.play{}` in the gameplay VM lets `gun.lua` crack on fire; hits knock,
+scaled by closing speed. `impact_demo` renders the whole chain to a WAV.
+
+**Remaining:** level-JSON authoring + inspector for AudioSource; a Lua
+binding for *synthesizing* PCM; streamed music; a real device pass on
+hardware.
+
+**Depends on:** Event bus (1.4); physics contact events (2.3) are its first
+emitters.
 
 ---
 
@@ -369,6 +425,29 @@ which immediately gives `growTree` continuous curved branches (ADR-0029 §3.5).
 AnimCurve and SVG follow when their domains need them.
 
 **Depends on:** Nothing. First consumer is the tree branch sweep (Tier 4 / B.1).
+
+### 3.9 Game UI (HUD / menus)
+**Status:** Deferred by decision (ADR-0070). The three UI tiers are settled:
+ImGui for tooling (1.1), Qt for the editor shell (3.6), and — when a demo
+actually needs menus — **RmlUi** as the game UI kit (MIT, renderer-agnostic
+`RenderInterface` onto our `Renderer` seam, Lua bindings onto the gameplay
+VM). Until then, player-visible text in the games-as-tests stays on ImGui or
+in-world (ADR-0061 ground projection). Don't build it before a game needs it.
+
+### 3.10 Character posing & comics pipeline
+**Status:** P0 + P2 core done (ADR-0072/0073) — `engine::anim` Skeleton/Pose
+substrate, the 17-joint posable mannequin, glTF skin import
+(`loadSkinnedModel`) and CPU linear-blend skinning (`skinMesh`), all
+headless-tested in both suites. Demos: `pose_demo` (three path-traced poses),
+`skin_demo` (rigid vs skinned bend). Next: P1 pose editing in the editor (an
+on-Mac task) and the `SkinnedCharacter` component/system that stamps skinned
+meshes into Renderables. Full plan: `docs/character-posing-plan.md`
+(interview-shaped, 2026-07-07). Skeleton substrate + posable mannequin first (P0, headless), pose
+editing on the existing gizmo/undo stack (P1), glTF skins + CPU skinning so
+characters render in the viewer *and* the offline tracer (P2), panel/still
+batch renders (P3), then timeline animation over the AnimCurve substrate (P4).
+In-house through P4; ozz-animation only if blending/retargeting/production IK
+demand it (ADR trigger recorded in the plan).
 
 ---
 

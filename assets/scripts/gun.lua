@@ -3,8 +3,10 @@
 -- port of the C++ ShootingSystem). On start it ALSO generates a gun viewmodel
 -- with the procgen builders and spawns it as its own camera-following entity.
 --
--- `camera`/`input`/`spawn` are the gameplay surface; `mesh.*` are the procgen
--- builders — both open in the ScriptSystem VM (ADR-0023/0024).
+-- `camera`/`input`/`spawn`/`sound` are the gameplay surface; `mesh.*` are the
+-- procgen builders — both open in the ScriptSystem VM (ADR-0023/0024). The
+-- muzzle sound is the PROCEDURAL "sfx/shot" clip the arena registers at start
+-- (sfx.gunshot -> AudioSystem::registerClip, ADR-0071) — no sound file exists.
 
 local M = {}
 
@@ -93,6 +95,13 @@ function M:update(e, dt)
         friction    = 0.3,
         color       = { 1.0, 0.85, 0.1 },
         emission    = { 0.5, 0.3, 0.0 },
+    }
+    -- Muzzle crack: flat (it's the player's own gun), pitch jittered so rapid
+    -- fire doesn't sound machine-stamped.
+    sound.play{
+        clip   = "sfx/shot",
+        volume = 0.9,
+        pitch  = 0.95 + 0.1 * math.random(),
     }
     self.fired = self.fired + 1
 end

@@ -18,7 +18,11 @@
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
+#include "../engine/systems/debug_draw_system.h"
+#include "../engine/systems/audio_system.h"
+#include "../engine/audio/sfx.h"
 #include "../engine/systems/camera_panel_system.h"
+#include <algorithm>
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
@@ -47,6 +51,62 @@ std::string readTextFile(const std::string& path) {
 }
 }  // namespace
 #endif
+
+namespace {
+
+// The arena's sound content (ADR-0071): synthesizes the procedural clips
+// (sfx.*, no sound files) and registers them by name, then turns physics
+// Collision events into spatial impact cues — the full chain
+// Jolt ContactListener -> EventBus -> PlaySound -> AudioEngine. Register
+// after AudioSystem so the clips exist before the first cue resolves.
+class ArenaSoundSystem : public System {
+public:
+    explicit ArenaSoundSystem(AudioSystem& audioSystem)
+        : audioSystem(audioSystem) {}
+
+    void onStart(FrameContext& ctx) override {
+        if (!ctx.audio.ready()) return;
+        uint32_t rate = ctx.audio.sampleRate();
+        auto shot = sfx::gunshot(rate, 7);
+        audioSystem.registerClip(
+            "sfx/shot", ctx.audio.createClip(shot.data(), shot.size(), 1, rate));
+        auto knock = sfx::impact(rate, 11);
+        audioSystem.registerClip(
+            "sfx/impact",
+            ctx.audio.createClip(knock.data(), knock.size(), 1, rate));
+
+#ifdef RT_ENABLE_PHYSICS
+        EventBus* events = &ctx.events;
+        collisionSub = ctx.events.subscribe<Collision>(
+            [events](const Collision& hit) {
+                // Gentle/resting touches stay silent; harder hits get louder
+                // and slightly brighter. The cue is deferred to the frame
+                // dispatch like every other reaction.
+                if (hit.speed < 2.0) return;
+                PlaySound cue;
+                cue.clip = "sfx/impact";
+                cue.spatial = true;
+                cue.position = hit.position;
+                cue.range = 45.0;
+                double severity = std::min(hit.speed / 14.0, 1.0);
+                cue.volume = static_cast<float>(0.25 + 0.75 * severity);
+                cue.pitch = static_cast<float>(0.85 + 0.35 * severity);
+                events->enqueue(cue);
+            });
+#endif
+    }
+
+    void onStop(FrameContext& ctx) override {
+        ctx.events.unsubscribe(collisionSub);
+        collisionSub = EventBus::INVALID_SUBSCRIPTION;
+    }
+
+private:
+    AudioSystem& audioSystem;
+    EventBus::SubscriptionId collisionSub = EventBus::INVALID_SUBSCRIPTION;
+};
+
+}  // namespace
 
 ArenaState::ArenaState(Window& window, Renderer& renderer,
                        const std::string& levelFile,
@@ -107,6 +167,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif
     addSystem<RenderSystem>();
+    addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
+    // After the camera systems so the listener follows this frame's view.
+    auto& audioSys = addSystem<AudioSystem>();   // AudioSource/PlaySound -> AudioEngine (ADR-0069)
+    // Procedural clips + Collision -> impact cues (ADR-0071).
+    addSystem<ArenaSoundSystem>(audioSys);
     addSystem<CameraPanelSystem>(camSys);
 }
 

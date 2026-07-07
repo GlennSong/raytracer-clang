@@ -1,6 +1,7 @@
 #include "physics_system.h"
 
 #include "../components.h"
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -95,6 +96,34 @@ void PhysicsSystem::step(World& world, Real dt) {
         });
 }
 
+void PhysicsSystem::publishContacts(World& world, EventBus& events) {
+    std::vector<ContactEvent> contacts = physics.drainContactEvents();
+    if (contacts.empty()) return;
+
+    // Body id -> entity, for the bodies the ECS knows about. Rebuilt per call:
+    // contacts are bursty (usually zero), so an always-maintained map would
+    // cost more than this occasional sweep.
+    std::unordered_map<PhysicsBodyId, Entity> byBody;
+    world.each<RigidBody>([&](Entity e, RigidBody& rb) {
+        if (rb.bodyId != INVALID_PHYSICS_BODY) byBody[rb.bodyId] = e;
+    });
+    world.each<MeshCollider>([&](Entity e, MeshCollider& mc) {
+        if (mc.bodyId != INVALID_PHYSICS_BODY) byBody[mc.bodyId] = e;
+    });
+
+    for (const ContactEvent& contact : contacts) {
+        Collision collision;
+        auto a = byBody.find(contact.bodyA);
+        auto b = byBody.find(contact.bodyB);
+        if (a != byBody.end()) collision.a = a->second;
+        if (b != byBody.end()) collision.b = b->second;
+        collision.position = contact.position;
+        collision.normal = contact.normal;
+        collision.speed = contact.approachSpeed;
+        events.publish(collision);
+    }
+}
+
 void PhysicsSystem::onStart(FrameContext& ctx) {
     initialize(&ctx.jobs);   // run Jolt's step on the engine's shared pool
     createBodies(ctx.world);
@@ -103,6 +132,7 @@ void PhysicsSystem::onStart(FrameContext& ctx) {
 void PhysicsSystem::fixedUpdate(FrameContext& ctx) {
     createBodies(ctx.world);
     step(ctx.world, ctx.clock.fixedStep());
+    publishContacts(ctx.world, ctx.events);
 }
 
 void PhysicsSystem::onStop(FrameContext&) { shutdown(); }
