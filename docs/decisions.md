@@ -4686,6 +4686,447 @@ headless with null meshes (`test_city_render.cpp` — night headlights, brake on
 hold, turn-signal flash, externally-owned cars draw none). The emissive GPU draw
 is viewer-gated and UNVERIFIED on device (register row updated). Suite 698/698.
 
+## ADR-0066 — A typed EventBus: the engine's decoupling seam for cross-system signals
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** Upcoming systems need "system A announces, system B reacts"
+without coupling: audio cues (a shot fired, a body landing → a sound), UI
+notifications, achievement-style triggers, script callbacks. Today such
+signals travel as direct method calls between systems (tight coupling), as
+components written by one system and polled by another (a frame of latency,
+plus pool churn for one-shot facts), or not at all. The audio system
+(ADR-0069) is the first concrete consumer: gameplay systems must be able to
+fire a sound without knowing an audio engine exists.
+
+**Decision.** A minimal typed publish/subscribe bus, `engine::EventBus`
+(`src/engine/event_bus.{h,cpp}`), owned by `Application` and handed to every
+system as `FrameContext::events`. An event is any copyable struct; subscribers
+register a `std::function<void(const E&)>` per event type
+(`std::type_index`-keyed). Two delivery modes: `publish` (synchronous,
+handlers run in subscription order — deterministic, fits ADR-0002) and
+`enqueue` + `dispatchQueued` (deferred; the Application dispatches once per
+frame after the fixed steps, so reactions land in the same frame as their
+cause). Reentrancy is defined and tested: unsubscribe-during-dispatch nulls
+the slot and sweeps later; subscribe-during-dispatch sees the next publish;
+enqueue-during-dispatch lands in the next frame's batch (no unbounded
+cascades). Not thread-safe by design — same main-thread rule as `World`;
+cross-thread producers stage their own queue and hand over on the main thread.
+
+**Alternatives.** (a) Signals/slots per emitter (`Signal<T>` members) — no
+central bus, but consumers must know each emitter, which is the coupling we
+are removing. (b) An ECS event-component pattern (events as short-lived
+entities) — uniform with the data model but pays entity churn per signal and
+a fixed one-frame latency everywhere. (c) A string-keyed dispatcher — no
+compile-time typing; misspelled topics fail silently. The typed bus is ~100
+lines, std-only (AGENTS.md), and headless-tested (`tests/test_event_bus.cpp`).
+
+**Consequences.** Systems gain a decoupled signal path today; the audio
+system's `PlaySound` events ride it (ADR-0069). Handlers run synchronously on
+the sim thread, so a slow handler stalls the frame — handlers must stay cheap
+(fire-and-forget, not workloads). Subscription order is implicit dispatch
+order; systems that need a strict ordering should not encode it across the
+bus. **Revisit trigger:** if profiling shows event volume mattering (bullet
+storms, per-instance signals), add a small-vector/arena path; if scripts need
+to subscribe (Lua callbacks), add a `ScriptVM` binding surface over the same
+bus rather than a second dispatcher.
+
+## ADR-0067 — Debug draw: immediate-mode lines baked to camera-facing ribbons, no backend pass
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** The roadmap has owed a line/debug-draw primitive since the Jolt
+integration ("debug visualization of colliders — needs a line/debug-draw
+primitive; deferred"), and design principle #2 says debug visualization
+outranks game UI in this engine. Consumers are queued up: collider wireframes,
+nav/path traces, procgen inspection (L-system skeletons, road centerlines,
+scatter bounds), camera frusta. The blocker was always the backend: a real GPU
+line pass means per-backend pipeline work on Metal, Vulkan, *and* WebGPU — and
+the register already carries one overlay-flag defect ("FLAG_OVERLAY broken on
+the Metal instanced path") from the last time gizmos went device-side first.
+
+**Decision.** Split the model from the drawing, and make the drawing use only
+machinery that already exists. `engine::DebugDraw`
+(`src/engine/debug_draw.{h,cpp}`) is an immediate-mode line accumulator owned
+by `Application` and handed to systems as `FrameContext::debug` — `line`,
+`arrow`, `aabb`, oriented `box`, wire `sphere`, `circle`, `axes`, each with an
+optional time-to-live (default = this frame; fixed-step producers pass the
+fixed step so shapes survive between sim ticks; `Application` ages and expires
+entries around the render). `buildDebugLineMesh` bakes the list into
+camera-facing ribbon quads — width scaled by camera distance for a roughly
+constant on-screen thickness, wound through `MeshBuilder::emitQuad` per the
+clockwise convention, line color in `Vertex::color`. `DebugDrawSystem`
+(registered after `RenderSystem`) uploads that mesh through the ordinary
+`AssetManager` path and submits ONE `drawMesh` with `FLAG_OVERLAY` — so debug
+lines work on Metal, Vulkan, WebGPU, and Null **today**, with zero per-backend
+code. GPU meshes are retired two frames late so in-flight command buffers
+never reference a freed mesh.
+
+**Alternatives.** (a) A `Renderer::drawLines` virtual + per-backend line
+pipelines — the "proper" GPU path, but three backends of unverifiable-here
+work for line volumes that don't need it, and it would repeat the
+FLAG_OVERLAY-style device-drift story. The seam can still be added later
+*behind* `DebugDrawSystem` without touching any call site — callers only ever
+see `ctx.debug`. (b) ImGui's background draw list (project to screen space) —
+ties world-space debug to RT_ENABLE_IMGUI builds and clips at the window, and
+ImGui is OFF by default. (c) Reusing `wireframe` mode — global, per-mesh, not
+shape-addressable.
+
+**Consequences.** Model + bake are pure data, headless-tested
+(`tests/test_debug_draw.cpp`); the per-frame mesh upload is real but debug-
+scale (thousands of lines, not millions — and `measure before optimizing`).
+Ribbons are flat quads, so a line nearly parallel to the view ray thins out
+(the degenerate case falls back to any perpendicular; it stays visible).
+FLAG_OVERLAY on the NON-instanced path is what this rides; the register notes
+the instanced overlay defect — if the non-instanced path shows the same
+on-device, lines still draw, just depth-tested. **Revisit trigger:** if
+profiling shows the bake/upload mattering, or a consumer needs millions of
+lines (voxel debug), add the per-backend line-pass behind the same
+`DebugDrawSystem`.
+
+## ADR-0068 — Tracy as the profiler, permanently instrumented, off by default
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** Design principle #3 — "measure before optimizing" — gates several
+queued decisions (custom allocators ADR-0008, LOD/spatial indexing Tier 5,
+parallel ECS execution ADR-0014) on profiling evidence the project has no tool
+to produce. Ad-hoc `chrono` timings answer one question and rot; the engine
+needs frame-shaped evidence: zones per system per frame, worker-thread
+utilization, spikes across the fixed-step boundary.
+
+**Decision.** Vendor **Tracy** (v0.13.1, `third_party/tracy` submodule) behind
+a CMake option `RT_ENABLE_PROFILER` (OFF) and a macro seam `src/profile.h`:
+`RT_PROFILE_ZONE / _ZONE_NAMED / _FRAME / _THREAD` compile to Tracy client
+zones when the option is ON and to *nothing* otherwise — so instrumentation is
+written once, lives in the code permanently, and costs zero in normal builds
+(the same inert-when-off pattern as the ImGui hooks, ADR-0011). No Tracy type
+or header appears outside `profile.h`. First instrumentation: the frame loop's
+update / fixedUpdate / render phases + the frame mark (`application.cpp`), and
+the JobSystem (worker thread names, `parallelFor` zones). Capture is remote
+(the Tracy UI connects to the running process over the network) and
+`TRACY_ON_DEMAND` is set, so an instrumented build only records while a UI is
+attached. Works headless — a Linux capture of the offline tracer's job system
+is as valid as a macOS viewer capture.
+
+**Alternatives.** (a) Platform profilers (Instruments / perf) — no
+instrumented frame semantics, no cross-platform story, nothing persists in the
+code. (b) Hand-rolled zone timers + ImGui plot — weeks of building a worse
+Tracy (server, history, threads, plots), against the "use the technology you
+already have" ethos once vendoring is on the table. (c) A heavier
+vendor (Optick/Superluminal) — commercial or less active; Tracy is BSD-3,
+maintained, and the de-facto standard for exactly this engine shape.
+
+**Consequences.** One new submodule (AGENTS.md exception recorded here — like
+Jolt/ImGui/Lua, it is vendored, permissively licensed, and sealed behind a
+seam). The client build was compile-verified here (Linux, `RT_ENABLE_PROFILER=ON`);
+an actual capture needs the Tracy UI on a dev machine — unverified in this
+environment. Zone macros only exist where someone wrote them: coverage grows
+with need (renderer backends, procgen generators, physics step are the obvious
+next zones). **Revisit trigger:** if the macro surface needs GPU zones
+(Metal/Vulkan timestamps), adopt Tracy's GPU contexts behind the same
+`profile.h` seam rather than backend-local timers.
+
+## ADR-0069 — Audio: miniaudio sealed behind AudioEngine, device-optional, event-driven
+**Status:** Accepted · **Date:** 2026-07-06
+
+**Context.** The engine had no audio at all — no device output, no asset path,
+no way for gameplay to make a sound. Requirements, in project terms: cross-
+platform (macOS today, Linux/Windows/web per the backend roadmap), buildable
+and *testable* headless in CI like Jolt/Lua, procgen-first (synthesized sound
+is a first-class source, not just files on disk — design principle #1), and
+sealed behind a seam so no vendor type leaks (the ADR-0012 pattern).
+
+**Decision.** **miniaudio** (v0.11.25, single-header C at
+`third_party/miniaudio` — originally vendored in-tree, converted to a
+submodule pinned at the release tag once its 96k lines dominated the branch
+diff; one impl TU compiled as C like Lua), sealed behind `engine::AudioEngine`
+(`src/engine/audio/audio_engine.{h,cpp}`, pimpl, no `ma_*` in the header).
+Why miniaudio: zero dependencies, public-domain/MIT-0, backends for
+CoreAudio/ALSA/PulseAudio/WASAPI, and — decisively — it runs **without a
+device**: `AudioBackendMode::Manual` mixes into a caller-pumped buffer, which
+is what makes audio *deterministically testable* (assert actual pan/
+attenuation/loop behavior on rendered frames, not just "no crash"); `Auto`
+falls back to the null device on headless machines so boot never fails.
+The engine API: clips (decoded files via `loadClip`, or raw PCM via
+`createClip` — the procgen path), voices (2D `play` with pan, 3D `playAt` with
+linear falloff to a range), one listener, master + 3 bus volumes (Sfx/Music/
+Ambient), handle-based via `Handle`/`SlotMap` (ADR-0007; stale voice handles
+report not-playing, never alias).
+
+ECS integration follows the physics template: `AudioListener` / `AudioSource`
+components, an `AudioSystem` whose System hooks wrap World-level core methods
+(`step`/`syncListener` — unit-tested without a FrameContext). The listener
+follows the `AudioListener` entity, else the render camera, so audio works
+before any entity opts in. Sources autoplay or `trigger`; spatial voices track
+their entity's Transform; a destroyed entity's voice is stopped (no looping
+leaks). Fire-and-forget cues ride the EventBus (ADR-0066): any system
+publishes `PlaySound{clip, position…}` without knowing audio exists —
+decoupling was the point of building the bus first. `Application` owns the
+`AudioEngine` (exposed as `FrameContext::audio`), initializes it best-effort,
+and shuts it down with the other subsystems. Build: `RT_ENABLE_AUDIO` (ON;
+skipped under Emscripten). OFF compiles an inert stub with the same API — the
+ImGui-hooks pattern — so the Makefile targets and web build need no miniaudio.
+
+**Alternatives.** OpenAL Soft — LGPL, a heavier integration, and its context
+model is clumsier to test headless. SoLoud — pleasant API but sparsely
+maintained (and can itself sit on miniaudio). FMOD/Wwise — closed/commercial,
+against the vendored-source model. Raw platform APIs behind our own mixer —
+weeks of DSP plumbing miniaudio already does well.
+
+**Consequences.** Audio is real end-to-end (device out on hardware, pumped mix
+under test) — `tests/test_audio.cpp` covers init/modes, PCM + WAV clips,
+one-shot reclaim, looping, pan left/right, distance attenuation + out-of-range
+silence, clip-destroy stopping voices, bus/master volume, and the AudioSystem
+core (autoplay, trigger, dead-entity stop, listener source, PlaySound events).
+Real *device* output is UNVERIFIED in this environment (no audio hardware) —
+needs a laptop run, like the Metal/gamepad work before it (register row
+added). Not yet built, by choice: level-JSON authoring of AudioSource (loader/
+writer/inspector), Lua bindings (a `PlaySound` emit + procedural-PCM surface
+belongs in the gameplay VM, ADR-0024), music streaming (clips decode fully in
+memory — fine for SFX, wasteful for long music), doppler (velocity is plumbed,
+unused), and any DSP-graph effects. **Revisit trigger:** when a level wants
+authored ambience, add the loader/inspector path; when music lands, add a
+streamed clip type behind the same handle.
+
+## ADR-0070 — Game UI: three tiers; RmlUi is the chosen kit, deferred until a demo needs menus
+**Status:** Deferred (decision made, build postponed) · **Date:** 2026-07-06
+
+**Context.** "GUI" in this engine is three different problems that keep
+getting conflated. (1) *Tooling/debug UI* — solved: Dear ImGui (ADR-0011).
+(2) *Editor shell* — decided: Qt 6 (docs/editor-app-plan.md). (3) *Game UI* —
+HUD, menus, settings screens the player sees. The editor-app plan explicitly
+kicked (3) down the road ("a custom game UI kit for HUD/menus remains a
+separate, worthwhile runtime item"), and design principle #2 ranks debug
+visualization above polished player UI for this project.
+
+**Decision.** When a playable demo actually needs menus, the game UI kit is
+**RmlUi**: MIT-licensed C++, vendorable as a submodule behind an
+`RT_ENABLE_GAME_UI` flag (the Jolt/ImGui/Lua pattern), renderer-agnostic — its
+`RenderInterface` (textured triangles + scissor) maps onto the existing
+`Renderer` seam exactly the way the ImGui backends did, so one integration
+serves Metal/Vulkan/WebGPU. UI is authored as HTML/CSS-like documents with
+data binding, and RmlUi ships Lua bindings that can open onto the same
+gameplay VM (ADR-0023/0024) — menus as scripts, consistent with everything
+else being data. **Not built now, on purpose:** the current games-as-tests
+(forest, city) need debug overlays and the spectate HUD, all served by ImGui
+(1) — and the recent ground-projected HUD work (ADR-0061) shows in-world debug
+UI beats screen-space widgets for this engine's needs. Building a UI kit
+before a game demands one is inventory, not progress.
+
+**Alternatives.** Nuklear — immediate-mode C, overlaps what ImGui already
+provides in tier (1). Noesis/Coherent — commercial. Growing ImGui into the
+game UI — possible for a HUD but styling/skinning fights it; keep ImGui as the
+tool it is. A hand-rolled kit — layout + text shaping + styling is years of
+toolkit work the editor plan already rejected once (its Qt reasoning).
+
+**Consequences.** No code lands with this ADR; it exists so the next "add a
+menu" impulse doesn't relitigate the survey or grab a mismatched kit. Interim
+rule: player-visible text/HUD in the games-as-tests stays on ImGui behind the
+debug flag, or in-world (the ADR-0061 ground projection). **Revisit trigger:**
+a demo that ships to anyone other than us needs a main menu / settings screen
+— vendor RmlUi then, behind the seam described here; or if by then the
+engine's own vector/text stack (SVG import, ADR-0031 Phase 3 + the curve
+kernel) has grown far enough that a native kit is a small step, reopen the
+build-vs-vendor half only.
+
+## ADR-0071 — The reaction chain: Jolt contacts → EventBus → procedural sound in the arena
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** ADR-0069 built the instrument; nothing in the game played it. The
+missing pieces were causes (when did something *happen*?) and content (what
+does it sound like?). ADR-0012 had explicitly deferred Jolt's contact events;
+the register flagged that Lua couldn't emit sound; and per procgen-first the
+first sounds should be synthesized, not shipped as .wav assets.
+
+**Decision.** Wire the full reaction chain once, as the pattern every future
+reaction (decals, damage, rumble) reuses:
+
+- **Contacts (the cause).** `PhysicsWorld` registers a Jolt `ContactListener`
+  sealed as `ContactEvent{bodyA, bodyB, position, normal, approachSpeed}`.
+  Only `OnContactAdded` is recorded — edge-triggered impacts, no resting-
+  contact spam (pinned by test). The listener fires on physics worker threads
+  mid-step, so events buffer under a mutex and `drainContactEvents()` hands
+  the batch to the main thread after the step. `PhysicsSystem::publishContacts`
+  (called from `fixedUpdate`, unit-tested headless) maps body ids to entities
+  (RigidBody/MeshCollider pools) and publishes ECS-level
+  `Collision{a, b, position, normal, speed}` on the EventBus — subscribers
+  never see physics types; an invalid Entity means a non-ECS body (character
+  proxy, AI-car kinematic).
+- **Cues (the reaction).** `PlaySound.clip` now accepts a *registered name* as
+  well as a path: `AudioSystem::registerClip(name, handle)` puts procedural
+  clips in the same cache files decode into — one addressing scheme for both.
+  `PlaySound` gains `pitch` for variation.
+- **Content (procedural SFX).** `engine::sfx` (`src/engine/audio/sfx.{h,cpp}`):
+  `gunshot(rate, seed)` (noise crack through a closing low-pass over a 150→55 Hz
+  thump, soft-clipped) and `impact(rate, seed)` (damped inharmonic partials +
+  contact scuff; seed varies the strike pitch). Pure `(params, seed) → PCM`,
+  deterministic, [-1,1]-bounded — the audio face of ADR-0021.
+- **Scripts (the author).** The gameplay VM gains `sound.play{clip=, volume=,
+  pitch=, position=, range=, music=}` — enqueues a `PlaySound` (deferred like
+  `spawn.*`); a `position` makes it spatial. `GameplayContext` carries the
+  EventBus. `gun.lua` fires `sfx/shot` with jittered pitch on every shot; the
+  C++ `ShootingSystem` (non-scripting builds) enqueues the same cue.
+- **The arena (the wiring).** `ArenaSoundSystem` (game layer, in
+  `arena_state.cpp`): synthesizes + registers `sfx/shot` / `sfx/impact` at
+  start, subscribes to `Collision`, and cues spatial impacts — silent below
+  2 m/s, louder and brighter with closing speed.
+
+**Alternatives.** (a) Poll body velocities for "sudden stops" — misses
+glancing hits, fires on teleports, and re-derives what Jolt already knows.
+(b) AudioSystem subscribing to `Collision` directly — bakes game policy (which
+clip, what thresholds) into an engine system; the arena owns its own sound
+design instead. (c) Shipping .wav assets — against procgen-first, and the
+generators are ~80 lines.
+
+**Consequences.** Shooting cracks, hits knock, bounces drum-roll — all
+verified headless (`impact_demo` renders the chain to a WAV; suite green:
+contact edge-trigger, entity mapping, cue emission from the real gun.lua,
+seed determinism). Contact volume is unbounded in pathological piles (every
+new touch is an event) — if a rubble scene floods the bus, add a per-step cap
+or severity floor at the `publishContacts` seam. Characters/vehicles map to
+invalid entities today; give their owners a body-registry hook when gameplay
+needs "who did I hit". Lua still can't *synthesize* PCM (`createClip` is
+C++-only) — that binding belongs with the gameplay-VM audio surface when a
+recipe needs it. **Revisit trigger:** the first non-audio contact consumer
+(decals, damage) — if it needs contact *persistence* (begin/end pairs), extend
+the listener to `OnContactRemoved` rather than bolting state onto subscribers.
+
+## ADR-0072 — The animation skeleton: engine::anim, source-agnostic, mannequin-first
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** The character posing & comics pipeline
+(`docs/character-posing-plan.md`, P0) needs a joint-hierarchy substrate that
+three producers will eventually fill — a procedural mannequin now, glTF skins
+in P2, generated characters someday — and that everything downstream (posing
+UI, pose library, timeline, skinning, the panel renderer) consumes without
+knowing the source.
+
+**Decision.** `engine::anim` (`src/engine/anim/skeleton.{h,cpp}`,
+`mannequin.{h,cpp}`):
+
+- **`anim::Skeleton`** — joints (name, parent index, bind-local `Transform`),
+  stored parent-before-child (enforced at `addJoint`) so world matrices
+  compose in one forward pass, `parentWorld * local` exactly like the document
+  hierarchy. `finalize()` caches inverse bind matrices. The `anim` namespace
+  is load-bearing: `engine::Skeleton` was already the procgen L-system branch
+  skeleton, and the name collision produced a real ODR crash before the
+  namespace split — two meanings, two names. (The tree skeleton may one day
+  *feed* this one: a branch graph is a natural rig, ADR-0026.)
+- **`anim::Pose`** — the full set of joint-local transforms: one keyframe of
+  the whole body. A static pose IS a one-key clip by construction (the
+  interview decision: posing before playback, without a data-model rewrite
+  later). `lerpPose` (lerp + slerp per joint, ADR-0006) is the seed of
+  timeline interpolation. `skinningMatrices` (world × inverseBind — identity
+  at bind, pinned by test) is what P2's vertex skinning consumes;
+  `debugDrawSkeleton` overlays bone lines via ctx.debug (ADR-0067).
+- **The mannequin** — `buildMannequin(height)`: a 17-joint T-pose biped
+  (pelvis-rooted core, mirrored .L/.R limbs) with one rigid MeshBuilder part
+  per bone, authored in the joint's local frame — posing a part is just its
+  joint's world matrix, the honest P0 stand-in for skinning.
+  `bakeMannequinMesh` emits one world-space mesh both renderers consume, so a
+  posed character renders in the viewer and the offline tracer today
+  (`tools/pose_demo.cpp`: three poses, path-traced).
+
+**Alternatives.** Skipping to glTF import first — starts the pipeline at its
+riskiest edge (asset variance) with no in-engine ground truth to debug
+against; the mannequin is that ground truth. Vendoring ozz-animation now —
+rejected in the plan; sampling/hierarchy sits on the existing math kernel, and
+the ADR trigger (blending, retargeting, production IK) is recorded there.
+
+**Consequences.** Pose editing (P1) needs only gizmos + serialization on top
+of `Pose`; glTF skins (P2) fill `Skeleton` + weights and reuse
+`skinningMatrices` unchanged. Rigid parts interpenetrate at bent joints
+(elbows/knees) — acceptable for a mannequin, solved by real skinned meshes in
+P2, not worth patching before then. Headless-covered in both test tiers
+(`tests/test_skeleton.cpp`): hierarchy composition, parent-order enforcement,
+bind-identity skinning, pose lerp endpoints, mannequin plausibility (upright,
+symmetric, feet grounded, height scaling), and pose-locality (raising one arm
+moves only that arm). **Revisit trigger:** P2 import lands — if glTF rigs
+need features the substrate lacks (non-uniform joint scale inheritance,
+morph targets), extend here before bolting onto the importer.
+
+## ADR-0073 — glTF skins → anim::Skeleton, CPU linear-blend skinning first
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** P2 of the posing plan: real rigged characters (Blender, bought,
+Mixamo-converted) must flow into the same `anim::Skeleton` the mannequin
+fills, and their meshes must deform with poses. tinygltf (vendored) already
+parses skins; the engine consumed only static meshes.
+
+**Decision.**
+
+- **Import** (`anim::loadSkinnedModel`, `src/engine/anim/skin_import.{h,cpp}`):
+  the file's first skin becomes a Skeleton. glTF joint order is arbitrary, so
+  joints are re-ordered **parent-before-child** by a DFS from the root joints
+  (the substrate's invariant), with vertex `JOINTS_0` values remapped to
+  skeleton indices at import — downstream never sees glTF numbering. The
+  accessor's **inverse bind matrices are adopted verbatim** (authoritative for
+  authored rigs; computing our own would silently disagree with files whose
+  bind ≠ node pose). Weights renormalize to sum 1 (guards sloppy exports);
+  ubyte/ushort/float attribute encodings all handled; triangle winding flips
+  CCW→CW like ModelImporter. **P2 scope, explicit:** node transforms above the
+  skeleton's root joints and on the mesh node are ignored (character exporters
+  bake these); materials contribute `baseColorFactor` only (textures ride the
+  existing ModelImporter path when needed); first-skin-only (one character per
+  file).
+- **Deformation** (`anim::SkinnedMesh` + `skinMesh`,
+  `src/engine/anim/skinned_mesh.{h,cpp}`): classic 4-influence linear-blend
+  skinning on the **CPU** — positions as points, normals/tangents as
+  directions, unweighted vertices stay at bind. CPU on purpose: ONE
+  implementation feeds the ordinary mesh upload path *and* the offline path
+  tracer, so a skinned character renders everywhere the engine renders with
+  zero per-backend shader work — the property the comics pipeline (P3 stills)
+  actually needs. GPU skinning is a perf move behind the same data, gated on
+  profiler evidence (ADR-0068) or crowd-scale characters.
+
+**Alternatives.** GPU skinning first — three backends of shader/buffer work
+before one character renders, and the tracer would still need the CPU path.
+Trusting glTF joint order — breaks the substrate's one-pass world composition.
+Recomputing inverse binds — see above.
+
+**Consequences.** The synthetic-rig test (`tests/test_skin.cpp` writes a
+minimal 2-joint glTF + buffer from scratch) pins hierarchy import, influence
+remapping, blend math (a 50/50 vertex lands exactly between its two joints'
+motions), bind-pose identity, and rejection paths. `tools/skin_demo.cpp`
+renders rigid-vs-skinned side by side. Not yet: a `SkinnedCharacter`
+component + system stamping skinned meshes into Renderables per frame (the
+P1/P2 editor wiring), animations (P4 reads glTF channels through the same
+file), morph targets. **Revisit trigger:** the first real Blender/Mixamo
+export that violates the ignored-transform scope — handle its shape then,
+with the file in hand, rather than speculating now.
+
+## ADR-0074 — Dependency policy: pull from upstream repos (pinned submodules), never merge source in-tree
+**Status:** Accepted (owner decision) · **Date:** 2026-07-07
+
+**Context.** The repo had two dependency patterns: big libraries as submodules
+(Jolt, ImGui, Lua, Tracy) and single-header libraries copied in-tree
+(tinygltf, nlohmann/json, stb). ADR-0069 initially followed the second pattern
+for miniaudio — and its 96k-line header became 95% of a feature branch's diff,
+obscuring ~5k lines of authored work. The owner's call: dependencies come
+FROM their repos; they don't become part of this one.
+
+**Decision.** Every third-party library lives as a **git submodule under
+`third_party/`, pinned to a release tag** — single-header libraries included.
+A pinned submodule gives the same reproducibility as vendoring (an exact
+commit SHA) while keeping upstream's code out of this repo's history, diffs,
+and review surface. Each submodule keeps the established CMake shape:
+auto-init at configure when missing, else a FATAL_ERROR naming the exact
+`git submodule update --init` command and the option that disables the
+feature. miniaudio was converted the day the rule landed (same tag, same
+include path). **Grandfathered:** tinygltf (+ bundled stb headers) and
+nlohmann/json remain in-tree until migrated — migration notes: tinygltf's
+upstream repo keeps `tiny_gltf.h` and the stb headers at its root, so a
+submodule at `third_party/tinygltf` preserves every include path; nlohmann's
+upstream history is enormous, so use a shallow submodule
+(`shallow = true` in .gitmodules) and the `single_include/` layout needs an
+include-dir tweak or the smaller `nlohmann/json` release-asset mirror.
+
+**Consequences.** Fresh clones need `git submodule update --init --recursive`
+before full builds — already true since Jolt, and CMake self-heals when it
+can. Offline/air-gapped builds must pre-fetch submodules (they already did for
+physics). `.gitattributes` keeps `third_party/` marked linguist-vendored for
+anything grandfathered. **Revisit trigger:** if a dependency's upstream
+disappears or force-pushes over its tags, mirror it (a fork we control)
+rather than reverting to vendoring.
+
 ---
 
 ## ADR-0066 — The Living City: places, pedestrian routing, and agent identity
@@ -5000,6 +5441,10 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
 | Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0061/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
+| tinygltf + nlohmann/json still vendored in-tree | `third_party/tinygltf/`, `third_party/nlohmann/` (ADR-0074) | The dependency policy is now pull-don't-merge (pinned submodules); these two predate it and remain checked-in files. Harmless day to day (`.gitattributes` hides them from PR diffs) but they're the last exceptions to the rule. Migration notes live in ADR-0074. | Convert each to a pinned submodule in its own small PR (tinygltf keeps its include paths; nlohmann needs a shallow clone + include-dir tweak) |
+| DebugDraw ribbons UNVERIFIED on device | `engine/debug_draw.{h,cpp}`, `engine/systems/debug_draw_system.cpp` (ADR-0067) | The model + ribbon bake are headless-tested, but the drawn result (FLAG_OVERLAY on the NON-instanced path, per-frame mesh churn, on-screen line thickness) has never been seen on a Metal/Vulkan build — and the register row above says the *instanced* overlay path is already broken on Metal, so the non-instanced path needs eyes. If overlay is broken there too, lines still draw, just depth-tested. | Viewer check on device; tune `pixelScale`; consider the per-backend line pass if volume grows (ADR-0067 trigger) |
+| Audio device output UNVERIFIED (CI runs null/manual) | `engine/audio/audio_engine.cpp` (ADR-0069) | Everything testable headless is tested (Manual-mode mix: pan, attenuation, loops, buses). Actual device playback — CoreAudio on macOS, ALSA/Pulse on desktop Linux — has never produced sound in this environment (no audio hardware; Auto falls back to the null backend). Same class as the Metal/gamepad verifications before it. | Run the viewer on a laptop; confirm device selection, volume scale, and that spatialization sounds right, not just measures right |
+| Audio has no level authoring surface yet | `engine/components.h` (`AudioSource`), `engine/level_loader.cpp` (ADR-0069/0071) | *Partially resolved (ADR-0071): Lua can now fire cues — `sound.play{}` in the gameplay VM — and procedural clips register by name (`AudioSystem::registerClip`).* Still missing: a level-JSON "audio" block for placed `AudioSource`s (ambience), LevelWriter round-trip, inspector registration, and a Lua surface for *synthesizing* PCM (`createClip` is C++-only). | Level "audio" block + writer + inspector; a `sound.clip(samples)` gameplay-VM binding when a recipe needs synthesized sound |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 | Parking is an informal verge, homes are abstract nodes | `apps/citysim/city_sim.cpp` (`idlePose`, arrival parking) (ADR-0062/0062) | An idle car parks on the grass beside its home/work NODE (off the carriageway so it can't roadblock — correct, but it reads as "failed to be placed" until you know it's an agent at home). Homes/works are raw graph nodes, not the buildings the generator already produces. | Buildings as stops (assign home/work to a parcel; park at its frontage), a painted parking-lane band on residential links (the mesher already does surface bands — same technique as the crosswalk paint), and/or despawn-at-home with the schedule persisting (hybrid: keep parked bodies near the player, cull distant ones) |

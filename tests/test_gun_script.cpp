@@ -4,6 +4,8 @@
 #include "../src/engine/scripting/script_behaviour.h"
 #include "../src/engine/world.h"
 #include "../src/engine/components.h"
+#include "../src/engine/event_bus.h"
+#include "../src/engine/audio/audio_engine.h"   // PlaySound
 #include "../src/engine/input/input_map.h"
 #include "../src/renderer/renderer.h"   // CameraState
 #include "../src/renderer/event.h"
@@ -97,8 +99,9 @@ TEST_CASE(gun_fires_a_physics_block_along_camera_aim) {
     bindSlots(input);
     CameraState cam = forwardCamera();   // forward = +Z
 
+    EventBus events;
     ScriptSystem sys;
-    sys.setServices(&input, &cam, nullptr);
+    sys.setServices(&input, &cam, nullptr, &events);
 
     // Draw the gun (Num2) AND press fire this frame; M:update equips before it checks fire.
     input.beginFrame();
@@ -178,8 +181,9 @@ TEST_CASE(gun_fires_once_per_press_not_while_held) {
     bindSlots(input);
     CameraState cam = forwardCamera();
 
+    EventBus events;
     ScriptSystem sys;
-    sys.setServices(&input, &cam, nullptr);
+    sys.setServices(&input, &cam, nullptr, &events);
 
     auto countBullets = [&]() {
         int n = 0;
@@ -213,4 +217,38 @@ TEST_CASE(gun_fires_once_per_press_not_while_held) {
     input.processEvent(click);
     sys.tick(world, 0.016);
     CHECK(countBullets() == 2);
+}
+
+TEST_CASE(gun_fire_emits_a_shot_sound_cue) {
+    World world;
+    makePlayer(world, gunSource());
+    InputMap input;
+    input.bindButton("fire", MouseButton::Left);
+    bindSlots(input);
+    CameraState cam = forwardCamera();
+
+    EventBus events;
+    std::vector<PlaySound> cues;
+    events.subscribe<PlaySound>([&](const PlaySound& c) { cues.push_back(c); });
+
+    ScriptSystem sys;
+    sys.setServices(&input, &cam, nullptr, &events);
+
+    input.beginFrame();
+    pressKey(input, KeyCode::Num2);
+    Event click(EventType::MouseButtonPressed);
+    click.button = MouseButton::Left;
+    input.processEvent(click);
+    sys.tick(world, 0.016);
+
+    // The cue is deferred (enqueue), delivered at the frame dispatch.
+    CHECK(cues.empty());
+    events.dispatchQueued();
+    CHECK(cues.size() == 1);
+    if (!cues.empty()) {
+        CHECK(cues[0].clip == "sfx/shot");
+        CHECK(!cues[0].spatial);              // the player's own gun plays flat
+        CHECK(cues[0].pitch >= 0.95f);
+        CHECK(cues[0].pitch <= 1.05f);
+    }
 }

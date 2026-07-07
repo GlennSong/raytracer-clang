@@ -1,0 +1,2 @@
+# Vendored third-party code: collapse in PR diffs, exclude from language stats.
+third_party/** linguist-vendored

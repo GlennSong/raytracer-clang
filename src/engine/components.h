@@ -4,6 +4,7 @@
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
+#include "audio/audio_engine.h"
 #include "physics/physics_world.h"
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/terrain.h"
@@ -99,6 +100,32 @@ struct TerrainLodConfig {
     // Bumped whenever `params` changes at runtime (a re-conform). TerrainLodSystem
     // watches it and rebuilds its tile cache + collider window when it changes.
     uint32_t revision = 0;
+};
+
+// The ears of the scene (ADR-0069): AudioSystem drives the AudioEngine
+// listener from this entity's Transform (position + forward). At most one per
+// world; with none, the listener follows the render camera, so audio "just
+// works" before any entity opts in.
+struct AudioListener {};
+
+// A sound attached to an entity (ADR-0069). AudioSystem loads `clip` through
+// its path cache, starts it (immediately when `autoplay`, or when `trigger` is
+// set), and — for spatial sources — feeds the entity's Transform position to
+// the voice every frame. One-shot voices clear `voice` when they finish;
+// destroying the entity stops its voice.
+struct AudioSource {
+    std::string clip;          // audio file path (wav/flac/mp3)
+    float volume = 1.0f;
+    float pitch = 1.0f;
+    Real range = 25.0;         // audible radius (world units, spatial only)
+    bool loop = false;
+    bool spatial = true;
+    bool autoplay = true;      // start as soon as the system sees the source
+    bool trigger = false;      // set true to (re)start manually; system clears
+    AudioBus bus = AudioBus::Sfx;
+
+    AudioClipHandle clipHandle;   // filled by AudioSystem (cache)
+    AudioVoiceHandle voice;       // live voice while playing
 };
 
 // Associates an entity with a local player slot (ADR-0010). This is the only

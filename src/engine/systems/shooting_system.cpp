@@ -71,6 +71,13 @@ void ShootingSystem::spawnBullet(FrameContext& ctx) {
                     + Vec3(0, -0.15, 0);
     Vec3 velocity = camera.forward() * bulletSpeed;
 
+    // Muzzle crack (ADR-0071) — same cue the Lua gun fires, so scripting and
+    // non-scripting builds sound alike.
+    PlaySound shot;
+    shot.clip = "sfx/shot";
+    shot.volume = 0.9f;
+    ctx.events.enqueue(shot);
+
     Entity e = ctx.world.create();
     Transform t;
     t.position = spawnPos;

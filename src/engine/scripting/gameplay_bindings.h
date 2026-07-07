@@ -11,6 +11,7 @@ namespace engine {
 class ScriptVM;
 class World;
 class InputMap;
+class EventBus;
 struct CameraState;
 struct RenderMesh;
 
@@ -50,6 +51,9 @@ struct GameplayContext {
     InputMap* input = nullptr;
     const CameraState* camera = nullptr;
     std::vector<SpawnCommand>* spawns = nullptr;
+    // Sound cues (ADR-0069/0071): sound.play enqueues a PlaySound on the bus,
+    // delivered at the frame's queued dispatch — deferred, like spawns.
+    EventBus* events = nullptr;
 };
 
 // The gameplay (effectful) binding surface (ADR-0024): the API a ScriptBehaviour
@@ -63,6 +67,10 @@ struct GameplayContext {
 //               color=, emission=}                       -- a dynamic physics cube
 //   spawn.model{mesh=, position=, color=, metallic=, roughness=, script=}
 //                                                        -- a procgen mesh entity
+//   sound.play{clip=, volume=, pitch=, position=, range=, music=}
+//     -- fire a sound cue (PlaySound on the EventBus). `clip` is a file path
+//        or a name registered via AudioSystem::registerClip (procedural PCM).
+//        A `position` makes it spatial; without one it plays flat (UI/gun).
 // `mesh` is a value built with the procgen builders (also open in this VM, so a
 // gameplay script can generate geometry). Vectors are 3-element Lua arrays; `e`
 // is the packed-Handle id start/update get.

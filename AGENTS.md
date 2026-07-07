@@ -3,12 +3,19 @@
 ## Project Overview
 
 A portable C++ raytracer built from scratch using only standard libraries.
-Compiled with clang++ targeting C++17. **No *new* third-party dependencies** —
-single-header/vendored libraries already in `third_party/` and built (Jolt, Dear
-ImGui, tinygltf, the `stb_image`/`stb_image_write` headers it bundles, and Lua —
-the scripting VM, ADR-0023) are accepted; prefer them over hand-rolling
-equivalents (ADR-0016). Do not add new submodules or external libraries without
-an ADR.
+Compiled with clang++ targeting C++17. **No *new* third-party dependencies**
+without an ADR; the accepted set (Jolt, Dear ImGui + ImGuizmo, Lua — the
+scripting VM, ADR-0023 — miniaudio — the audio backend, ADR-0069 — Tracy —
+the opt-in profiler, ADR-0068 — tinygltf and the `stb` headers it bundles,
+and nlohmann/json) is preferred over hand-rolling equivalents (ADR-0016).
+
+**Dependencies are pulled, never merged (owner decision, ADR-0074).** A
+third-party library arrives as a **git submodule under `third_party/`, pinned
+to a release tag** — its source is never copied into this repo's history.
+This applies regardless of size, single-header libraries included. tinygltf,
+nlohmann/json, and the bundled stb headers predate the rule and are
+grandfathered as in-tree files until someone migrates them; do not add new
+vendored files alongside them.
 
 Significant architectural decisions — with their alternatives, trade-offs, and
 revisit triggers — are recorded in `docs/decisions.md`. Add an ADR there when a
@@ -46,12 +53,23 @@ src/
     settings.h / settings.cpp — Persisted viewer settings
     metal/metal_renderer.mm   — Metal backend implementation (macOS)
     vulkan/vulkan_renderer.cpp — Vulkan backend (Linux/Windows, in progress; ADR-0057)
+  profile.h                   — RT_PROFILE_* zone macros (Tracy when RT_ENABLE_PROFILER; else no-ops)
   engine/
     clock.h / clock.cpp       — Fixed-timestep simulation clock
     world.h / world.cpp       — Entity / Transform world model (sparse-set ECS)
     components.h / .cpp       — ECS components (Transform, Renderable, Velocity, etc.)
     application.h / .cpp      — Application spine + system scheduler
     system.h                  — System base class + FrameContext
+    event_bus.h / .cpp        — Typed pub/sub (ctx.events, ADR-0066)
+    debug_draw.h / .cpp       — Immediate-mode debug lines (ctx.debug, ADR-0067)
+    anim/
+      skeleton.h / .cpp       — anim::Skeleton/Pose joint hierarchy (ADR-0072;
+                                NOT the procgen L-system Skeleton)
+      mannequin.h / .cpp      — procedural 17-joint posable biped (ADR-0072)
+      skinned_mesh.h / .cpp   — SkinnedMesh + CPU linear-blend skinMesh (ADR-0073)
+      skin_import.h / .cpp    — glTF skin -> Skeleton/SkinnedMesh (ADR-0073)
+    audio/
+      audio_engine.h / .cpp   — miniaudio wrapper (pimpl, ma_*-free header, ADR-0069)
     input/
       input_map.h / .cpp      — Named-action input mapping layer
       player_input.h / .cpp   — Per-player input routing + device assignment
@@ -67,6 +85,8 @@ src/
       motion_system.h / .cpp  — Kinematic mover (Velocity-driven)
       physics_system.h / .cpp — Jolt-driven rigid body simulation
       render_system.h / .cpp  — ECS → RenderView bridge
+      debug_draw_system.h / .cpp — ctx.debug lines → ribbon mesh → overlay draw
+      audio_system.h / .cpp   — AudioSource/AudioListener/PlaySound → AudioEngine
       debug_overlay_system.h / .cpp — ImGui overlays (inert without RT_ENABLE_IMGUI)
   viewer_main.cpp             — Interactive viewer entry point
 ```

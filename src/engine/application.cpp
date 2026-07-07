@@ -1,5 +1,6 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "../profile.h"
 #include <thread>
 #include <chrono>
 
@@ -48,6 +49,10 @@ bool Application::initialize(const Config& config,
     rendererPtr->initDebugUi(window->nativeWindowHandle());
     window->initDebugUi();
 
+    // Audio is best-effort: a build without RT_ENABLE_AUDIO, or a machine
+    // with no device, degrades to silence (ADR-0069) — never a failed boot.
+    audioEngine.initialize(AudioBackendMode::Auto);
+
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
     return true;
 }
@@ -65,6 +70,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
+        eventBus, debugLines, audioEngine,
         window->getInput(), inputMap, playerInputs,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -83,6 +89,7 @@ void Application::reconcileFramebuffer() {
 }
 
 void Application::renderFrame() {
+    RT_PROFILE_ZONE_NAMED("render");
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
     rendererPtr->beginFrame();
@@ -109,8 +116,10 @@ void Application::runFrame() {
     window->pollEvents();
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
+    debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     {
+        RT_PROFILE_ZONE_NAMED("update");
         FrameContext ctx = makeContext();
         inputMap.beginFrame();
         playerInputs.beginFrame();
@@ -143,13 +152,23 @@ void Application::runFrame() {
     int steps = clock.advance(frameDelta);
     interpolation = clock.interpolationAlpha();
     {
+        RT_PROFILE_ZONE_NAMED("fixedUpdate");
         FrameContext ctx = makeContext();
         for (int i = 0; i < steps; i++)
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
     }
 
+    // Deliver everything enqueued during update/fixedUpdate before the frame
+    // renders, so reactions land in the same frame as their cause (ADR-0066).
+    eventBus.dispatchQueued();
+
     auto frameStart = std::chrono::steady_clock::now();
     renderFrame();
+    // Drop expired debug shapes now that they've been drawn; one-frame shapes
+    // (the immediate-mode default) live exactly this long. The modal-resize
+    // draw callback renders without expiring, so paused frames keep their
+    // overlay.
+    debugLines.endFrame();
 
     if (rendererPtr->targetFps > 0) {
         auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
@@ -170,6 +189,7 @@ void Application::runFrame() {
             stateStack.applyPending(ctx);
         }
     }
+    RT_PROFILE_FRAME();
 }
 
 void Application::end() {
@@ -185,6 +205,7 @@ void Application::end() {
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
+    audioEngine.shutdown();
     window->shutdownDebugUi();
     rendererPtr->shutdownDebugUi();
     rendererPtr->shutdown();
