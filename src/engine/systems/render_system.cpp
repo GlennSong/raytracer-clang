@@ -63,6 +63,7 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.world.each<Transform, PrevTransform, Renderable>(
         [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
             if (entity == ctx.view.activeCameraEntity) return;
+            if (r.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             // Interpolated local matrix, then composed through any parent
             // chain (editor only — PLAY flattens parenting at load, so there
             // parentId is 0 and this is just the interpolated local).
@@ -90,6 +91,7 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.world.each<InstanceGroup>(
         [&](Entity, InstanceGroup& g) {
             if (g.transforms.empty()) return;
+            if (g.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
             // Live override (slider) wins over the level's per-group value; 0 = use
             // the level value. Lets draw distance be balanced against fog at runtime.

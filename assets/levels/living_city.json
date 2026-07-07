@@ -11,10 +11,10 @@
     "seed": 7,
     "size": 620,
     "resolution": 380,
-    "heightScale": 11,
+    "heightScale": 13,
     "noiseScale": 0.008,
     "octaves": 4,
-    "warp": 0.25,
+    "warp": 0.3,
     "material": {
       "albedo": [
         1.0,
@@ -23,7 +23,33 @@
       ],
       "roughness": 1.0
     },
-    "cdlod": true
+    "cdlod": true,
+    "rangeSpine": [
+      [
+        -300,
+        -255
+      ],
+      [
+        -150,
+        -288
+      ],
+      [
+        20,
+        -284
+      ],
+      [
+        190,
+        -268
+      ],
+      [
+        310,
+        -244
+      ]
+    ],
+    "rangeWidth": 135,
+    "rangeHeight": 76,
+    "rangeVariation": 0.6,
+    "mountainScale": 0.01
   },
   "entities": [
     {

@@ -141,6 +141,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // Agent-based city: drivers + pedestrians with acceleration, signals,
     // perception, and bounded-radius steering over the road network (ADR-0060).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
+    citySys_ = &citySys;   // polled in update() for the rebuild-roads button
     // Spectate camera (ADR-0064 follow-up): K cycles the view through the city's
     // agents and follows one (drive/walk their life with ring + cone lit). Reads
     // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
@@ -246,6 +247,30 @@ static bool patchLabOpts(const std::string& levelFile,
     return false;
 }
 
+// Reseed the road recipe on disk (the "rebuild road graph" button): bump the
+// seed of every shape:"road" entity's generate recipe, so a reload regrows the
+// whole city — roads, terrain grading, and buildings — from a fresh graph.
+static bool patchRoadSeed(const std::string& levelFile) {
+    std::ifstream f(levelFile);
+    if (!f) return false;
+    nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
+    if (!root.is_object() || !root.contains("entities")) return false;
+    bool patched = false;
+    for (auto& ent : root["entities"]) {
+        if (ent.value("shape", std::string()) != "road") continue;
+        if (!ent.contains("road") || !ent["road"].contains("generate")) continue;
+        auto& gen = ent["road"]["generate"];
+        const long long s = gen.value("seed", 5);
+        gen["seed"] = static_cast<int>((s * 1103515245LL + 12345LL) % 99991LL) + 1;
+        patched = true;
+    }
+    if (!patched) return false;
+    std::ofstream o(levelFile);
+    if (!o) return false;
+    o << root.dump(2) << "\n";
+    return true;
+}
+
 bool ArenaState::watchedFilesChanged() {
     bool changed = false;
     for (WatchedFile& w : watchFiles) {
@@ -259,6 +284,16 @@ void ArenaState::update(FrameContext& ctx) {
     PlayingState::update(ctx);
     if (makeEditorState && ctx.actions.pressed("quit"))
         ctx.transition.replaceWith(makeEditorState());
+    // Rebuild-road-graph button (device ask): reseed every generated road on
+    // disk and reload — roads, terrain conform, and buildings all regrow from
+    // the fresh graph, the same clean reset the editor→play loop uses. Works on
+    // any level with a shape:"road" generate recipe (the living city).
+    if (citySys_ && citySys_->consumeRebuildRoadsRequest()) {
+        if (patchRoadSeed(levelFile))
+            ctx.transition.replaceWith(std::make_unique<ArenaState>(
+                window, arenaRenderer, levelFile, makeEditorState, bridge));
+        return;
+    }
     // A watched recipe changed on disk: replace this state with a fresh one on
     // the same level — the identical clean reset the editor→play loop uses
     // (systems, physics, and assets all rebuilt), so a saved Lua edit shows up

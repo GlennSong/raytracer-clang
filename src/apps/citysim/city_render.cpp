@@ -290,17 +290,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             InstanceGroup g;
             g.mesh = mh;
             g.material = carMaterial();
+            g.renderLayer = engine::LayerSim;   // debug layer toggle
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
         }
     }
     pedGroup_ = world.create();
-    { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial(); world.add<InstanceGroup>(pedGroup_, g); }
+    { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(pedGroup_, g); }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
         g.mesh = lensMesh;
         g.material = signalMaterial(static_cast<SignalState>(s));
+        g.renderLayer = engine::LayerSim;   // debug layer toggle
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
 
@@ -313,13 +316,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                                        "city:carlamp");
     headlightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
-      world.add<InstanceGroup>(headlightGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(headlightGroup_, g); }
     brakeLightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
-      world.add<InstanceGroup>(brakeLightGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(brakeLightGroup_, g); }
     turnSignalGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
-      world.add<InstanceGroup>(turnSignalGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -338,6 +341,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         InstanceGroup g;
         g.mesh = postMesh;
         g.material = signalPostMaterial();
+        g.renderLayer = engine::LayerSim;   // debug layer toggle
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
@@ -1012,6 +1016,32 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         ImGui::Checkbox("Building colliders (prisms)", &showColliders_);
         ImGui::Unindent();
         ImGui::EndDisabled();
+
+        // Render LAYERS (device: "layers for roads, buildings, simulation ...
+        // turn them on or off ... so we can visually debug the terrain
+        // underneath"). Each unchecked box hides that whole class of world
+        // geometry via the renderer's hidden-layer mask; the terrain, sky and
+        // props (layer 0) always draw, so unchecking all three bares the ground.
+        ImGui::Separator();
+        ImGui::TextUnformatted("Render layers");
+        auto layerToggle = [&](const char* label, uint32_t bit) {
+            bool shown = !(ctx.renderer.hiddenLayers & bit);
+            if (ImGui::Checkbox(label, &shown)) {
+                if (shown) ctx.renderer.hiddenLayers &= ~bit;
+                else       ctx.renderer.hiddenLayers |= bit;
+            }
+        };
+        ImGui::Indent();
+        layerToggle("Roads", engine::LayerRoads);
+        layerToggle("Buildings", engine::LayerBuildings);
+        layerToggle("Simulation (cars, peds, signals)", engine::LayerSim);
+        ImGui::Unindent();
+
+        // Rebuild the road graph (device ask): reseed the road recipe and reload
+        // the level, so roads, terrain grading, and buildings all regrow from the
+        // fresh graph. The host (ArenaState) does the reseed+reload on the poll.
+        if (ImGui::Button("Rebuild road graph (new seed)"))
+            rebuildRoadsRequested_ = true;
 
         // Places (ADR-0066): the level-authored destinations + their type counts.
         ImGui::Separator();

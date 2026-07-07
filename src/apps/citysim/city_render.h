@@ -78,6 +78,17 @@ public:
     void setDebugWidgets(bool on) { debugWidgets_ = on; }
     bool debugWidgets() const { return debugWidgets_; }
 
+    // Rebuild-road-graph button (device: "a button to rebuild the road graph on
+    // the terrain"). The panel sets a request; the host (ArenaState) polls this
+    // each frame and, when true, reseeds the road recipe on disk and reloads the
+    // level — so roads, terrain conform, and buildings all regrow consistently
+    // from the new graph. Returns true once, then clears.
+    bool consumeRebuildRoadsRequest() {
+        bool r = rebuildRoadsRequested_;
+        rebuildRoadsRequested_ = false;
+        return r;
+    }
+
     // Agent `agentId`'s current WORLD pose for spectating: the real external body
     // pose when one is reported (cars/peds owned by the physics bridges), else the
     // sim ghost (pos + groundAt + elevation). `outPos` is the body ORIGIN on the
@@ -261,6 +272,7 @@ private:
     bool showNavGraph_ = true;       // lane strips + junction-node rings
     bool showPlan_ = true;           // city-plan outlines: blocks + lots (L key)
     bool showColliders_ = false;     // building physics prisms (rims + posts)
+    bool rebuildRoadsRequested_ = false;   // panel button → host reseeds + reloads
     int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)
     // Places (ADR-0066): the level-authored destinations, and the routable
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).

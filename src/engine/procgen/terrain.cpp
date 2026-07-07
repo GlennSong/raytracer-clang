@@ -158,29 +158,42 @@ TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double y
 }
 
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    // Richer, more saturated palette with a green -> olive -> earth gradient on
-    // flat ground, warm-grey rock on slopes, and snow on high gentle ground.
-    const Vec3 grass(0.13, 0.30, 0.07);    // deep green
-    const Vec3 dryGrass(0.34, 0.36, 0.12); // olive / dry meadow
-    const Vec3 dirt(0.30, 0.20, 0.10);     // rich earth brown
-    const Vec3 rock(0.29, 0.27, 0.25);     // warm grey
-    const Vec3 snow(0.90, 0.92, 0.96);
+    // A layered natural palette: lush lowland grass dries to upland meadow and
+    // bare earth, warm-grey rock and pale scree take the slopes and high
+    // benches, snow caps the peaks — banded by DRYNESS (noise + altitude) and
+    // SLOPE, with the noise term breaking every boundary so nothing reads as a
+    // hard contour line (device: "a better terrain shader with more realistic
+    // colors").
+    const Vec3 grass (0.16, 0.32, 0.09);   // lush lowland green
+    const Vec3 meadow(0.34, 0.40, 0.16);   // upland dry meadow
+    const Vec3 dirt  (0.34, 0.25, 0.15);   // earth brown
+    const Vec3 rock  (0.34, 0.31, 0.28);   // warm grey stone
+    const Vec3 scree (0.56, 0.53, 0.49);   // pale talus / gravel
+    const Vec3 snow  (0.92, 0.94, 0.98);
 
-    double slope = 1.0 - clamp01(normalUp);                 // 0 flat .. 1 vertical
-    double rockFactor = smoothstep(0.30, 0.62, slope);
+    const double n = noiseValue;                    // ~[-1, 1]
+    const double slope = 1.0 - clamp01(normalUp);   // 0 flat .. 1 vertical
+    // Altitude 0..1 across the playable relief, jittered so the treeline and
+    // snowline meander instead of ringing the hill at one exact height.
+    const double alt = clamp01((height + 4.0) / 60.0 + 0.06 * n);
 
-    // Two-stop gradient over the noise term: green -> dry meadow -> earth, so the
-    // ground varies richly instead of a flat green/brown lerp.
-    double t = clamp01(noiseValue * 0.5 + 0.5);
-    Vec3 ground = t < 0.5 ? mixv(grass, dryGrass, t * 2.0)
-                          : mixv(dryGrass, dirt, (t - 0.5) * 2.0);
-    Vec3 c = mixv(ground, rock, rockFactor);
+    // Flat-ground colour by DRYNESS: green -> meadow -> earth. Noise dominates
+    // near sea level (grass and dirt patches on the plain), altitude adds the
+    // dry upland drift — so high-noise lowland still reads brown as before.
+    const double dry = clamp01(0.5 + 0.5 * n + 0.4 * alt);
+    Vec3 ground = dry < 0.5 ? mixv(grass, meadow, dry * 2.0)
+                            : mixv(meadow, dirt, (dry - 0.5) * 2.0);
 
-    // Snow on high, non-steep ground (absolute altitude — a no-op on low terrain,
-    // caps mountains). Snow doesn't cling to cliffs.
-    double snowFactor = smoothstep(74.0, 108.0, height) *
-                        (1.0 - smoothstep(0.42, 0.68, slope));
-    c = mixv(c, snow, snowFactor);
+    // Slope exposes rock; the higher, steeper benches shed pale scree.
+    double rockF = smoothstep(0.34, 0.60, slope + 0.10 * n);
+    Vec3 c = mixv(ground, rock, rockF);
+    double screeF = smoothstep(0.45, 0.75, alt) * smoothstep(0.18, 0.48, slope);
+    c = mixv(c, scree, clamp01(screeF));
+
+    // Snow on high, gentle ground; a jittered snowline, none on cliffs.
+    double snowF = smoothstep(0.74, 0.96, alt + 0.05 * n) *
+                   (1.0 - smoothstep(0.42, 0.66, slope));
+    c = mixv(c, snow, snowF);
 
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }

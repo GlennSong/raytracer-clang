@@ -291,6 +291,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     world.add<RoadNet>(e, net);                      // the editable source of truth
 
     Renderable r;
+    r.renderLayer = engine::LayerRoads;              // debug layer toggle
     r.material.albedo = Vec3(1, 1, 1);               // hue carried in vertex colour
     r.material.roughness = 0.93f;
     if (net.markings)                                // lane paint via the surface shader
@@ -2073,6 +2074,7 @@ bool LevelLoader::load(const std::string& path,
                     r.material.albedo = p.buildingColor;
                     r.material.metallic = 0.0f;
                     r.material.roughness = 0.9f;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
                     world.add<Renderable>(b, r);
                     Collider c;
                     c.shape = ColliderShape::Box;
@@ -2217,6 +2219,7 @@ bool LevelLoader::load(const std::string& path,
                     world.add<PrevTransform>(e, PrevTransform{t});
                     r.material.albedo = lb.color;
                     r.material.roughness = 1.0f;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
                     world.add<Renderable>(e, r);
 
                     // Trees: deterministic count + spots from the lot position,
@@ -2310,6 +2313,7 @@ bool LevelLoader::load(const std::string& path,
                     RenderMesh& pm = lotParts[pi];
                     if (pm.vertices.empty()) continue;
                     Renderable r;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
                     r.material = materialFor(static_cast<PartId>(pi),
                                              Vec3(0.80, 0.78, 0.75));
                     const Surface surf = r.material.surface();

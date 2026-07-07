@@ -49,10 +49,22 @@ struct Velocity {
     Vec3 angular;
 };
 
+// Debug render layers (device: "layers for roads, buildings, simulation ... so
+// we can turn them on or off"). A bit set on Renderable::renderLayer /
+// InstanceGroup::renderLayer; RenderSystem skips the draw when the same bit is
+// set in Renderer::hiddenLayers. 0 = untagged (terrain, sky, props) — always
+// drawn, so hiding roads/buildings/sim reveals the ground underneath.
+enum RenderLayer : uint32_t {
+    LayerRoads     = 1u << 0,
+    LayerBuildings = 1u << 1,
+    LayerSim       = 1u << 2,
+};
+
 // What to draw for an entity.
 struct Renderable {
     MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
+    uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -72,6 +84,7 @@ struct InstanceGroup {
     // the camera are not drawn. Distant L-system trees/rocks dominate the triangle
     // budget, so a finite radius is the cheapest large fps win in a big world.
     Real drawDistance = 0;
+    uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a

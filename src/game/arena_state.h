@@ -10,6 +10,7 @@ namespace engine {
 class Renderer;
 class EditorBridge;
 }
+namespace citysim { class CityRenderSystem; }
 
 class ArenaState : public engine::PlayingState {
 public:
@@ -45,6 +46,10 @@ private:
     double watchTimer = 0.0;
     void collectWatchFiles();
     bool watchedFilesChanged();
+
+    // The living-city render bridge (owned by the system list): polled each frame
+    // for its "rebuild road graph" button so update() can reseed + reload.
+    citysim::CityRenderSystem* citySys_ = nullptr;
 };
 
 #endif
