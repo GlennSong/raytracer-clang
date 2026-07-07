@@ -2338,9 +2338,22 @@ bool LevelLoader::load(const std::string& path,
     // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so
     // the first-person gun viewmodel and a settling capsule don't intrude on an overhead frame dump.
     if (!std::getenv("RT_NO_PLAYER")) {
-        if (root.contains("player"))
-            (editorMode ? loadPlayerSpawn(root["player"], world, assets)
-                        : loadPlayer(root["player"], world));
+        if (root.contains("player")) {
+            json pj = root["player"];
+            // Terrain levels: never spawn under a hill — authored spawns
+            // assume flat ground, so lift the point to the surface when the
+            // terrain there is higher.
+            if (entityGround && pj.contains("position") &&
+                pj["position"].is_array() && pj["position"].size() >= 3) {
+                const double px = pj["position"][0].get<double>();
+                const double py = pj["position"][1].get<double>();
+                const double pz = pj["position"][2].get<double>();
+                const double gy = entityGround(px, pz);
+                if (py < gy + 1.2) pj["position"][1] = gy + 1.2;
+            }
+            (editorMode ? loadPlayerSpawn(pj, world, assets)
+                        : loadPlayer(pj, world));
+        }
         else if (!editorMode) {
             // Every playable level gets a player. With no authored spawn, drop one in from above so
             // the character settles onto the (collidable) ground rather than the level having no actor.
