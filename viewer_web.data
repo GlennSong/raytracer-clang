@@ -407,17 +407,17 @@
     {
       "name": "Eaves",
       "position": [
-        19,
-        38,
-        90
+        -46,
+        14,
+        138
       ],
       "forward": [
-        -0.02,
-        -0.35,
-        -0.94
+        -0.18,
+        -0.16,
+        -0.97
       ],
       "lens": {
-        "focalLength": 40,
+        "focalLength": 30,
         "sensorHeight": 24,
         "fStop": 0,
         "focusDistance": 14.0
@@ -2334,6 +2334,25 @@ local SPECS = {
   { plan = hPlan(24, 20),    p = { floors = 4, style = "brick" } },
   { plan = octagonPlan(9),   p = { floors = 3, style = "concrete",
                                    pilasters = true, ground_retail = false } },
+  -- Row 5: the CLASSICAL kit (mesh-op library: lathe columns, steps, dome).
+  { plan = rectPlan(26, 18), p = { floors = 2, style = "stucco",
+                                   wall_color = {0.88, 0.87, 0.82},
+                                   ground_height = 6, floor_height = 4.2,
+                                   pilasters = true, ground_retail = false,
+                                   window_head = "round", quoins = true,
+                                   portico = 6, entrance_steps = true,
+                                   dome = true } },          -- the capitol
+  { plan = rectPlan(24, 15), p = { floors = 3, style = "brick",
+                                   ground_retail = false, quoins = true,
+                                   window_head = "flat", lights_x = 2,
+                                   lights_y = 2, portico = 4,
+                                   entrance_steps = true } }, -- university hall
+  { plan = rectPlan(6.4, 10), p = { floors = 3, style = "painted",
+                                    ground_retail = false, bay_width = 2.9,
+                                    entrance_steps = true,
+                                    roof = "gable" } },       -- one rowhouse unit
+  { plan = rectPlan(18, 13), p = { floors = 4, style = "brick",
+                                   ground_retail = true } },  -- mixed use
 }
 
 local COLS, SPACING = 4, 38
@@ -3617,6 +3636,39 @@ end
 -- Default recipe entry point: a representative lamp (so runProcgenMesh on this
 -- file yields a mesh for preview / spawning).
 return sf.lamp()
+-- style_book.lua — the architect's DATA layer (building-grammar-plan P5).
+--
+-- SEPARATION OF DUTY: the C++ architect decides WHAT stands WHERE — district
+-- tables, landmark quotas, massing, floor counts — deterministic and pinned by
+-- tests. This book owns HOW EACH RECIPE LOOKS: any entry here overlays its
+-- fields onto the named recipe's BuildingParams just before the building
+-- grows, using the same keys the building lab uses. Fields you don't mention
+-- keep the recipe's built-in look, so entries stay tiny.
+--
+-- Available keys (see readBuildingParams): style ("brick"|"stucco"|"concrete"|
+-- "metal"|"glass"|"painted"), wall_color = {r,g,b}, trim_color, window_head
+-- ("flat"|"segmental"|"round"), window_hood ("none"|"band"|"arch"), lights_x,
+-- lights_y, quoins, sill, roof ("flat"|"gable"|"hip"), roof_pitch, parapet,
+-- awning, pilasters, portico (column count), entrance_steps, dome,
+-- ground_bays, floor_height, ground_height, bay_width ...
+--
+-- Recipe names: glass_tower, office_slab, commercial_block, civic_hall,
+-- civic_midtown, brick_shop, mixed_use, office_midrise, hotel, walkup_homes,
+-- oldtown_house, metal_shed, industrial_office, yard_house, duplex,
+-- rowhouses (the strip's fallback), rowhouse_unit (each townhome),
+-- apartments, corner_shop, school, hospital, courthouse, capitol, police,
+-- fire_station, market_hall, university.
+
+style_book = {
+  -- The capitol in marble-white — the one active override, proving the pipe.
+  capitol = { wall_color = { 0.90, 0.885, 0.85 } },
+
+  -- Examples (uncomment + save; the city restyles on the next level load):
+  -- market_hall   = { style = "stucco", roof_pitch = 0.45 },
+  -- rowhouse_unit = { roof = "gable" },
+  -- hotel         = { style = "painted", trim_color = { 0.30, 0.28, 0.26 } },
+  -- oldtown_house = { wall_color = { 0.85, 0.72, 0.55 } },
+}
 -- terrain_demo.lua — terrain composed from primitives (ADR-0043), not a preset:
 -- rolling fbm hills with ridged mountains lifted in, domain-warped so the
 -- ridgelines read organic instead of banded. Baked to a mesh and returned as a
