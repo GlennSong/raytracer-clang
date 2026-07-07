@@ -5093,6 +5093,40 @@ file), morph targets. **Revisit trigger:** the first real Blender/Mixamo
 export that violates the ignored-transform scope — handle its shape then,
 with the file in hand, rather than speculating now.
 
+## ADR-0074 — Dependency policy: pull from upstream repos (pinned submodules), never merge source in-tree
+**Status:** Accepted (owner decision) · **Date:** 2026-07-07
+
+**Context.** The repo had two dependency patterns: big libraries as submodules
+(Jolt, ImGui, Lua, Tracy) and single-header libraries copied in-tree
+(tinygltf, nlohmann/json, stb). ADR-0069 initially followed the second pattern
+for miniaudio — and its 96k-line header became 95% of a feature branch's diff,
+obscuring ~5k lines of authored work. The owner's call: dependencies come
+FROM their repos; they don't become part of this one.
+
+**Decision.** Every third-party library lives as a **git submodule under
+`third_party/`, pinned to a release tag** — single-header libraries included.
+A pinned submodule gives the same reproducibility as vendoring (an exact
+commit SHA) while keeping upstream's code out of this repo's history, diffs,
+and review surface. Each submodule keeps the established CMake shape:
+auto-init at configure when missing, else a FATAL_ERROR naming the exact
+`git submodule update --init` command and the option that disables the
+feature. miniaudio was converted the day the rule landed (same tag, same
+include path). **Grandfathered:** tinygltf (+ bundled stb headers) and
+nlohmann/json remain in-tree until migrated — migration notes: tinygltf's
+upstream repo keeps `tiny_gltf.h` and the stb headers at its root, so a
+submodule at `third_party/tinygltf` preserves every include path; nlohmann's
+upstream history is enormous, so use a shallow submodule
+(`shallow = true` in .gitmodules) and the `single_include/` layout needs an
+include-dir tweak or the smaller `nlohmann/json` release-asset mirror.
+
+**Consequences.** Fresh clones need `git submodule update --init --recursive`
+before full builds — already true since Jolt, and CMake self-heals when it
+can. Offline/air-gapped builds must pre-fetch submodules (they already did for
+physics). `.gitattributes` keeps `third_party/` marked linguist-vendored for
+anything grandfathered. **Revisit trigger:** if a dependency's upstream
+disappears or force-pushes over its tags, mirror it (a fork we control)
+rather than reverting to vendoring.
+
 ---
 
 ## Interim seams & tech-debt register
@@ -5155,6 +5189,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | ~~Cosmetic gun model dropped in the Lua port~~ | ~~`src/game/arena_state.cpp`~~ | *Resolved (ADR-0024): `gun.lua` now **generates** the viewmodel with the procgen builders (open in the gameplay VM) and spawns it via `spawn.model` as its own camera-following ScriptBehaviour entity. Covered by `tests/test_gun_script.cpp`.* | — |
 | Distant-terrain LOD rings crack at seams | `engine/procgen/terrain.cpp` (`generateTerrainRing`/`generateTerrainLOD`) | Concentric coarsening rings extend terrain to the horizon cheaply (mountains/hills), but adjacent rings differ in resolution, so T-junctions leave hairline cracks at ring boundaries | Vertical skirts at ring edges, or stitch the boundary rows to the finer ring |
 | Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0061/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
+| tinygltf + nlohmann/json still vendored in-tree | `third_party/tinygltf/`, `third_party/nlohmann/` (ADR-0074) | The dependency policy is now pull-don't-merge (pinned submodules); these two predate it and remain checked-in files. Harmless day to day (`.gitattributes` hides them from PR diffs) but they're the last exceptions to the rule. Migration notes live in ADR-0074. | Convert each to a pinned submodule in its own small PR (tinygltf keeps its include paths; nlohmann needs a shallow clone + include-dir tweak) |
 | DebugDraw ribbons UNVERIFIED on device | `engine/debug_draw.{h,cpp}`, `engine/systems/debug_draw_system.cpp` (ADR-0067) | The model + ribbon bake are headless-tested, but the drawn result (FLAG_OVERLAY on the NON-instanced path, per-frame mesh churn, on-screen line thickness) has never been seen on a Metal/Vulkan build — and the register row above says the *instanced* overlay path is already broken on Metal, so the non-instanced path needs eyes. If overlay is broken there too, lines still draw, just depth-tested. | Viewer check on device; tune `pixelScale`; consider the per-backend line pass if volume grows (ADR-0067 trigger) |
 | Audio device output UNVERIFIED (CI runs null/manual) | `engine/audio/audio_engine.cpp` (ADR-0069) | Everything testable headless is tested (Manual-mode mix: pan, attenuation, loops, buses). Actual device playback — CoreAudio on macOS, ALSA/Pulse on desktop Linux — has never produced sound in this environment (no audio hardware; Auto falls back to the null backend). Same class as the Metal/gamepad verifications before it. | Run the viewer on a laptop; confirm device selection, volume scale, and that spatialization sounds right, not just measures right |
 | Audio has no level authoring surface yet | `engine/components.h` (`AudioSource`), `engine/level_loader.cpp` (ADR-0069/0071) | *Partially resolved (ADR-0071): Lua can now fire cues — `sound.play{}` in the gameplay VM — and procedural clips register by name (`AudioSystem::registerClip`).* Still missing: a level-JSON "audio" block for placed `AudioSource`s (ambience), LevelWriter round-trip, inspector registration, and a Lua surface for *synthesizing* PCM (`createClip` is C++-only). | Level "audio" block + writer + inspector; a `sound.clip(samples)` gameplay-VM binding when a recipe needs synthesized sound |

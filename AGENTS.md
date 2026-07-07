@@ -3,13 +3,19 @@
 ## Project Overview
 
 A portable C++ raytracer built from scratch using only standard libraries.
-Compiled with clang++ targeting C++17. **No *new* third-party dependencies** —
-single-header/vendored libraries already in `third_party/` and built (Jolt, Dear
-ImGui, tinygltf, the `stb_image`/`stb_image_write` headers it bundles, Lua —
-the scripting VM, ADR-0023 — miniaudio — the audio backend (submodule),
-ADR-0069 — and Tracy — the opt-in profiler, ADR-0068) are accepted; prefer them over
-hand-rolling equivalents (ADR-0016). Do not add new submodules or external
-libraries without an ADR.
+Compiled with clang++ targeting C++17. **No *new* third-party dependencies**
+without an ADR; the accepted set (Jolt, Dear ImGui + ImGuizmo, Lua — the
+scripting VM, ADR-0023 — miniaudio — the audio backend, ADR-0069 — Tracy —
+the opt-in profiler, ADR-0068 — tinygltf and the `stb` headers it bundles,
+and nlohmann/json) is preferred over hand-rolling equivalents (ADR-0016).
+
+**Dependencies are pulled, never merged (owner decision, ADR-0074).** A
+third-party library arrives as a **git submodule under `third_party/`, pinned
+to a release tag** — its source is never copied into this repo's history.
+This applies regardless of size, single-header libraries included. tinygltf,
+nlohmann/json, and the bundled stb headers predate the rule and are
+grandfathered as in-tree files until someone migrates them; do not add new
+vendored files alongside them.
 
 Significant architectural decisions — with their alternatives, trade-offs, and
 revisit triggers — are recorded in `docs/decisions.md`. Add an ADR there when a
