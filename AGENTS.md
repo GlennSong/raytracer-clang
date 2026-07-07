@@ -56,6 +56,10 @@ src/
     system.h                  — System base class + FrameContext
     event_bus.h / .cpp        — Typed pub/sub (ctx.events, ADR-0066)
     debug_draw.h / .cpp       — Immediate-mode debug lines (ctx.debug, ADR-0067)
+    anim/
+      skeleton.h / .cpp       — anim::Skeleton/Pose joint hierarchy (ADR-0072;
+                                NOT the procgen L-system Skeleton)
+      mannequin.h / .cpp      — procedural 17-joint posable biped (ADR-0072)
     audio/
       audio_engine.h / .cpp   — miniaudio wrapper (pimpl, ma_*-free header, ADR-0069)
     input/

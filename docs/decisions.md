@@ -4988,6 +4988,60 @@ recipe needs it. **Revisit trigger:** the first non-audio contact consumer
 (decals, damage) — if it needs contact *persistence* (begin/end pairs), extend
 the listener to `OnContactRemoved` rather than bolting state onto subscribers.
 
+## ADR-0072 — The animation skeleton: engine::anim, source-agnostic, mannequin-first
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** The character posing & comics pipeline
+(`docs/character-posing-plan.md`, P0) needs a joint-hierarchy substrate that
+three producers will eventually fill — a procedural mannequin now, glTF skins
+in P2, generated characters someday — and that everything downstream (posing
+UI, pose library, timeline, skinning, the panel renderer) consumes without
+knowing the source.
+
+**Decision.** `engine::anim` (`src/engine/anim/skeleton.{h,cpp}`,
+`mannequin.{h,cpp}`):
+
+- **`anim::Skeleton`** — joints (name, parent index, bind-local `Transform`),
+  stored parent-before-child (enforced at `addJoint`) so world matrices
+  compose in one forward pass, `parentWorld * local` exactly like the document
+  hierarchy. `finalize()` caches inverse bind matrices. The `anim` namespace
+  is load-bearing: `engine::Skeleton` was already the procgen L-system branch
+  skeleton, and the name collision produced a real ODR crash before the
+  namespace split — two meanings, two names. (The tree skeleton may one day
+  *feed* this one: a branch graph is a natural rig, ADR-0026.)
+- **`anim::Pose`** — the full set of joint-local transforms: one keyframe of
+  the whole body. A static pose IS a one-key clip by construction (the
+  interview decision: posing before playback, without a data-model rewrite
+  later). `lerpPose` (lerp + slerp per joint, ADR-0006) is the seed of
+  timeline interpolation. `skinningMatrices` (world × inverseBind — identity
+  at bind, pinned by test) is what P2's vertex skinning consumes;
+  `debugDrawSkeleton` overlays bone lines via ctx.debug (ADR-0067).
+- **The mannequin** — `buildMannequin(height)`: a 17-joint T-pose biped
+  (pelvis-rooted core, mirrored .L/.R limbs) with one rigid MeshBuilder part
+  per bone, authored in the joint's local frame — posing a part is just its
+  joint's world matrix, the honest P0 stand-in for skinning.
+  `bakeMannequinMesh` emits one world-space mesh both renderers consume, so a
+  posed character renders in the viewer and the offline tracer today
+  (`tools/pose_demo.cpp`: three poses, path-traced).
+
+**Alternatives.** Skipping to glTF import first — starts the pipeline at its
+riskiest edge (asset variance) with no in-engine ground truth to debug
+against; the mannequin is that ground truth. Vendoring ozz-animation now —
+rejected in the plan; sampling/hierarchy sits on the existing math kernel, and
+the ADR trigger (blending, retargeting, production IK) is recorded there.
+
+**Consequences.** Pose editing (P1) needs only gizmos + serialization on top
+of `Pose`; glTF skins (P2) fill `Skeleton` + weights and reuse
+`skinningMatrices` unchanged. Rigid parts interpenetrate at bent joints
+(elbows/knees) — acceptable for a mannequin, solved by real skinned meshes in
+P2, not worth patching before then. Headless-covered in both test tiers
+(`tests/test_skeleton.cpp`): hierarchy composition, parent-order enforcement,
+bind-identity skinning, pose lerp endpoints, mannequin plausibility (upright,
+symmetric, feet grounded, height scaling), and pose-locality (raising one arm
+moves only that arm). **Revisit trigger:** P2 import lands — if glTF rigs
+need features the substrate lacks (non-uniform joint scale inheritance,
+morph targets), extend here before bolting onto the importer.
+
 ---
 
 ## Interim seams & tech-debt register
