@@ -363,6 +363,8 @@ void recipeCourthouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.quoins = true;
     p.parapet = 1.25;
     p.trimColor = Vec3(0.88, 0.86, 0.80);
+    p.portico = 4;
+    p.entranceSteps = true;
     out.placeType = "civic";
     out.name = "courthouse";
 }
@@ -409,6 +411,95 @@ void recipeMarketHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.roofPitch = rng.range(0.35, 0.5);
     out.placeType = "shop";
     out.name = "market_hall";
+}
+
+// The CAPITOL / town hall: the city's grandest civic front — a full portico
+// (lathe colonnade + pediment) over broad steps, and a drum + colonnade +
+// dome ROTUNDA crowning the roof. Placed dead centre by the planner.
+void recipeCapitol(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundHeight = 6.0;
+    p.floorHeight = 4.2;
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, FacadeStyle::Stucco, rng);
+    p.wallColor = Vec3(0.88, 0.87, 0.82);   // civic limestone
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.quoins = true;
+    p.parapet = 1.2;
+    p.trimColor = Vec3(0.90, 0.88, 0.82);
+    p.portico = 6;
+    p.entranceSteps = true;
+    p.dome = true;
+    out.placeType = "civic";
+    out.name = "capitol";
+}
+
+// The UNIVERSITY hall: collegiate brick, a smaller portico over steps, and a
+// campus GREEN via generous RectYard caps.
+void recipeUniversity(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = 3;
+    p.groundRetail = false;
+    p.pilasters = false;
+    dress(p, FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.window.lightsX = 2;
+    p.window.lightsY = 2;
+    p.quoins = true;
+    p.portico = 4;
+    p.entranceSteps = true;
+    out.massing = BuildingRecipe::Massing::RectYard;   // the campus green
+    out.yardHalfWMax = 13.0;
+    out.yardHalfDMax = 10.0;
+    out.placeType = "civic";
+    out.name = "university";
+}
+
+// ROWHOUSES: the lot packs side-by-side townhome units (the lot pass splits
+// the strip; architectRowUnit dresses each unit). Dense residential streets.
+void recipeRowhouses(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(2, 3);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::Brick, rng);   // fallback look if the strip can't split
+    out.massing = BuildingRecipe::Massing::RowStrip;
+    out.placeType = "home";
+    out.name = "rowhouses";
+}
+
+// The DUPLEX: a wider two-family house on its yard — two awninged bays.
+void recipeDuplex(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = 2;
+    p.groundRetail = false;
+    p.baseCourse = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    p.roofStyle = rng.unit() < 0.5 ? BuildingParams::RoofStyle::Gable
+                                   : BuildingParams::RoofStyle::Hip;
+    p.roofPitch = rng.range(0.4, 0.6);
+    out.massing = BuildingRecipe::Massing::RectYard;
+    out.yardHalfWMax = 9.0;   // wider than a single-family house
+    out.yardHalfDMax = 6.5;
+    out.placeType = "home";
+    out.name = "duplex";
+}
+
+// MIXED USE: shops below, homes above — the classic main-street block. The
+// grammar already splits ground (Retail) from upper (Residential) storeys;
+// this recipe leans into it with awnings + warm masonry.
+void recipeMixedUse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 5);
+    p.groundRetail = true;
+    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Painted, rng);
+    p.awning = true;
+    p.stringCourse = true;
+    out.placeType = "shop";
+    out.name = "mixed_use";
 }
 }  // namespace
 
@@ -474,10 +565,11 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             break;
         case DistrictTag::Commercial:
             if (roll < 0.05)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.40) recipeBrickShop(out, rng, cx);
-            else if (roll < 0.60) recipeOfficeMidrise(out, rng, cx);
-            else if (roll < 0.70) recipeHotel(out, rng, cx);
-            else if (roll < 0.82) recipeCivicMidtown(out, rng, cx);
+            else if (roll < 0.32) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.48) recipeMixedUse(out, rng, cx);
+            else if (roll < 0.63) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.72) recipeHotel(out, rng, cx);
+            else if (roll < 0.83) recipeCivicMidtown(out, rng, cx);
             else                  recipeWalkupHomes(out, rng, cx);
             break;
         case DistrictTag::OldTown:
@@ -489,8 +581,10 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             break;
         case DistrictTag::Residential:
             if (roll < 0.08)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.60) recipeYardHouse(out, rng, cx);
-            else if (roll < 0.85) recipeApartments(out, rng, cx);
+            else if (roll < 0.44) recipeYardHouse(out, rng, cx);
+            else if (roll < 0.56) recipeDuplex(out, rng, cx);
+            else if (roll < 0.72) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.90) recipeApartments(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
             break;
     }
@@ -506,6 +600,8 @@ const char* landmarkName(LandmarkKind k) {
         case LandmarkKind::Police:     return "police";
         case LandmarkKind::Fire:       return "fire_station";
         case LandmarkKind::Market:     return "market_hall";
+        case LandmarkKind::Capitol:    return "capitol";
+        case LandmarkKind::University: return "university";
         default:                       return "?";
     }
 }
@@ -527,10 +623,33 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
         case LandmarkKind::Police:     recipePolice(out, rng, cx); break;
         case LandmarkKind::Fire:       recipeFire(out, rng, cx); break;
         case LandmarkKind::Market:     recipeMarketHall(out, rng, cx); break;
+        case LandmarkKind::Capitol:    recipeCapitol(out, rng, cx); break;
+        case LandmarkKind::University: recipeUniversity(out, rng, cx); break;
         default: break;
     }
     capFloors(out.params, shortSide, cx.slender);
     return out;
+}
+
+BuildingParams architectRowUnit(uint32_t seed, int floors) {
+    Hash rng(seed * 2654435761u ^ 0x0BADCAFEu);
+    BuildingParams p;
+    p.seed = rng.next();
+    p.floors = floors;
+    p.groundRetail = false;
+    p.retailStreetOnly = true;
+    p.bayWidth = 2.9;               // townhome rhythm: narrow bays
+    const Real r = rng.unit();
+    dress(p, r < 0.40 ? FacadeStyle::Brick
+            : r < 0.70 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    p.quoins = false;               // shared party walls, no corner masonry
+    p.awning = false;
+    p.entranceSteps = true;         // the stoop
+    if (rng.unit() < 0.4) {
+        p.roofStyle = BuildingParams::RoofStyle::Gable;
+        p.roofPitch = rng.range(0.35, 0.55);
+    }
+    return p;
 }
 
 }  // namespace engine

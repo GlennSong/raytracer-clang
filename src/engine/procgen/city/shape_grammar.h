@@ -179,6 +179,15 @@ struct BuildingParams {
     // becomes a bay-door front — wide segmented roller doors with reveals and
     // a lintel band. Fire stations, loading docks, parking entries.
     int   groundBays = 0;
+    // CLASSICAL entrance elements (the mesh-op vocabulary: lathe/array/steps).
+    // portico (>0): a colonnade of that many lathe-turned columns carrying an
+    // entablature + pediment in front of the entrance; entranceSteps: a porch
+    // platform with descending steps under the door; dome: a drum + colonnade
+    // + dome ROTUNDA crowns the flat roof (capitols, town halls) instead of
+    // the mechanical penthouse.
+    int   portico = 0;
+    bool  entranceSteps = false;
+    bool  dome = false;
     // Roof form (P3.c): Flat keeps the parapet deck; Gable/Hip raise a pitched
     // roof over the top plan (rect-ish plans only — an odd plan falls back to
     // Flat until a straight-skeleton pass exists). Residential vocabulary.
@@ -215,6 +224,13 @@ BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
 
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);
+
+// LATHE op (the mesh-op library's Lua face too, as mesh.lathe): revolve a 2D
+// profile of (radius, height) rows around the +Y axis at `center` (center.y =
+// the profile's y origin). Low-poly faceted normals; rows with radius ~0
+// close into fans. Columns, domes, finials, balusters are all this one op.
+RenderMesh latheMesh(const Vec3& center, const std::vector<Vec2>& profile,
+                     int segments, const Vec3& color);
 
 // --- The op vocabulary, exposed so Lua/C++ recipes compose buildings directly
 // (city-plan §4.3). Each appends geometry to `out` under a part id. ----------

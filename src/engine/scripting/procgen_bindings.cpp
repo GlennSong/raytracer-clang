@@ -330,6 +330,60 @@ int l_mesh_merge(lua_State* L) {
     pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::merged(parts)));
     return 1;
 }
+}  // namespace
+
+BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p);
+
+std::function<void(const std::string&, BuildingParams&)>
+makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
+    if (!vm.doString(code, error)) return {};
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "style_book");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        if (error) *error = "style_book.lua did not set a `style_book` table";
+        return {};
+    }
+    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);   // pops + pins the table
+    ScriptVM* vmp = &vm;
+    return [vmp, ref](const std::string& recipe, BuildingParams& p) {
+        lua_State* L2 = luaState(*vmp);
+        lua_rawgeti(L2, LUA_REGISTRYINDEX, ref);
+        lua_getfield(L2, -1, recipe.c_str());
+        if (lua_istable(L2, -1)) p = readBuildingParamsOnto(L2, -1, p);
+        lua_pop(L2, 2);
+    };
+}
+
+namespace {
+
+// mesh.lathe{profile={{r,y},...}, segments=16} -> mesh : revolve a 2D profile
+// around +Y at the origin. Columns, domes, finials, vases — the op library's
+// Lua face (the C++ grammar composes the same latheMesh).
+int l_mesh_lathe(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<Vec2> prof;
+    lua_getfield(L, 1, "profile");
+    if (lua_istable(L, -1)) {
+        lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                lua_geti(L, -1, 1);
+                lua_geti(L, -2, 2);
+                prof.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)));
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    const int segs = static_cast<int>(optField(L, 1, "segments", 16.0));
+    if (prof.size() < 2) return luaL_error(L, "mesh.lathe: profile needs >= 2 rows");
+    pushMesh(L, std::make_shared<RenderMesh>(
+                    latheMesh(Vec3(0, 0, 0), prof, segs, Vec3(1, 1, 1))));
+    return 1;
+}
 int l_mesh_translate(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
     Vec3 t = checkVec3(L, 2);
@@ -481,8 +535,12 @@ bool optBoolField(lua_State* L, int idx, const char* key, bool fallback) {
 Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback);
 std::string optStrField(lua_State* L, int idx, const char* key, const char* def);
 
-BuildingParams readBuildingParams(lua_State* L, int idx) {
-    BuildingParams p;
+}  // namespace
+
+// Overlay variant: reads the table's fields ONTO `p`, leaving everything the
+// table doesn't mention untouched — the style book applies recipe overrides
+// through this, so a book entry of { roof = "hip" } changes only the roof.
+BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     if (lua_isnoneornil(L, idx)) return p;
     luaL_checktype(L, idx, LUA_TTABLE);
     p.floors        = static_cast<int>(optField(L, idx, "floors", p.floors));
@@ -555,6 +613,10 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.window.sill = optBoolField(L, idx, "sill", p.window.sill);
     // Vehicle bays on the street face (fire stations, loading docks).
     p.groundBays = static_cast<int>(optField(L, idx, "ground_bays", p.groundBays));
+    // Classical entrance elements + the dome rotunda (mesh-op vocabulary).
+    p.portico = static_cast<int>(optField(L, idx, "portico", p.portico));
+    p.entranceSteps = optBoolField(L, idx, "entrance_steps", p.entranceSteps);
+    p.dome = optBoolField(L, idx, "dome", p.dome);
     // Roof form + street-aware retail (P3.c).
     std::string roof = optStrField(L, idx, "roof", "");
     if (roof == "flat")       p.roofStyle = BuildingParams::RoofStyle::Flat;
@@ -564,6 +626,12 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.retailStreetOnly = optBoolField(L, idx, "retail_street_only", p.retailStreetOnly);
     return p;
 }
+
+BuildingParams readBuildingParams(lua_State* L, int idx) {
+    return readBuildingParamsOnto(L, idx, BuildingParams{});
+}
+
+namespace {
 
 // building.grow{ floors=, width=, depth=, seed=, ... } -> mesh
 // Grows the split/shape-grammar building over a rectangular footprint and returns
@@ -2513,6 +2581,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"capsule", l_mesh_capsule},
         {"car_shell", l_mesh_car_shell},
         {"merge", l_mesh_merge},
+        {"lathe", l_mesh_lathe},
         {"translate", l_mesh_translate},
         {"place", l_mesh_place},
         {"scale", l_mesh_scale},

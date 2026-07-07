@@ -1360,6 +1360,176 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
     appendToPart(out, PartId::Trim, cop);
 }
 
+}  // namespace
+
+// ---- MESH OPS (the small op library: lathe / steps / array-composed) -------
+// The classical vocabulary is lathe-and-array shaped: a column is a lathe
+// profile, a colonnade is an array of columns, a dome is a lathe, a rotunda
+// is a drum + a radial array + a dome. These ops live here (and mesh.lathe in
+// Lua) so recipes COMPOSE them instead of hand-emitting quads.
+
+RenderMesh latheMesh(const Vec3& c, const std::vector<Vec2>& prof, int segs,
+                     const Vec3& col) {
+    RenderMesh m;
+    if (prof.size() < 2 || segs < 3) return m;
+    const Real tau = 6.283185307179586;
+    for (std::size_t i = 0; i + 1 < prof.size(); ++i) {
+        const Real r0 = prof[i].x, y0 = c.y + prof[i].y;
+        const Real r1 = prof[i + 1].x, y1 = c.y + prof[i + 1].y;
+        if (r0 < 1e-5 && r1 < 1e-5) continue;
+        for (int k = 0; k < segs; ++k) {
+            const Real a0 = tau * k / segs, a1 = tau * (k + 1) / segs;
+            const Vec2 d0(std::cos(a0), std::sin(a0)), d1(std::cos(a1), std::sin(a1));
+            Vec3 p00(c.x + d0.x * r0, y0, c.z + d0.y * r0);
+            Vec3 p10(c.x + d1.x * r0, y0, c.z + d1.y * r0);
+            Vec3 p01(c.x + d0.x * r1, y1, c.z + d0.y * r1);
+            Vec3 p11(c.x + d1.x * r1, y1, c.z + d1.y * r1);
+            // Outward facet normal: radial mid-direction tilted by the
+            // profile slope (dr/dy), with pure caps falling back to +/-Y.
+            Vec2 mid = normalize(d0 + d1);
+            Vec3 n(mid.x * (y1 - y0), r0 - r1, mid.y * (y1 - y0));
+            if (n.length() < 1e-9) n = Vec3(mid.x, 0, mid.y);
+            n = normalize(n);
+            if (r0 < 1e-5)      MeshBuilder::emitTri(m, p00, p11, p01, n, col);
+            else if (r1 < 1e-5) MeshBuilder::emitTri(m, p00, p10, p01, n, col);
+            else                emitQuad(m, p00, p10, p11, p01, n, col);
+        }
+    }
+    return m;
+}
+
+namespace {
+
+static void emitLathe(BuildingMesh& out, PartId part, const Vec3& c,
+                      const std::vector<Vec2>& prof, int segs, const Vec3& col) {
+    appendToPart(out, part, latheMesh(c, prof, segs, col));
+}
+
+// A CLASSICAL COLUMN: square plinth, lathe-turned shaft with base rings,
+// entasis taper and a flared capital, square abacus. `r3/f3` orient the
+// square caps with the facade so rotated buildings stay coherent.
+static void emitColumn(BuildingMesh& out, const Vec3& base, Real h, Real r,
+                       const Vec3& r3, const Vec3& f3, PartId part,
+                       const Vec3& col) {
+    if (h < 1.2) return;
+    const Vec3 up(0, 1, 0);
+    emitBox(out, Scope{base - r3 * (r * 1.35) - f3 * (r * 1.35), {r3, up, f3},
+                       Vec3(r * 2.7, 0.16, r * 2.7)}, part, col);
+    std::vector<Vec2> prof = {
+        {r * 1.20, 0.16},          {r * 1.20, 0.30},
+        {r * 1.00, 0.42},          {r * 0.98, h * 0.55},
+        {r * 0.84, h - 0.34},      {r * 1.10, h - 0.22},
+        {r * 1.14, h - 0.12}};
+    emitLathe(out, part, base, prof, 10, col);
+    emitBox(out, Scope{base + Vec3(0, h - 0.12, 0) - r3 * (r * 1.3) - f3 * (r * 1.3),
+                       {r3, up, f3}, Vec3(r * 2.6, 0.12, r * 2.6)}, part, col);
+}
+
+// ENTRANCE STEPS: a porch platform under the door with descending steps —
+// centred on `cx` along the face, growing outward from the wall plane.
+static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
+                              Real w, Real platformH, Real platformD,
+                              PartId part, const Vec3& col) {
+    const Vec3 up(0, 1, 0);
+    const int n = std::max(1, static_cast<int>(platformH / 0.16));
+    const Real rise = platformH / n, run = 0.34;
+    Vec3 o = fr.at(cx - w * 0.5, 0);
+    // The platform itself (its top hides the door's lowest strip — the
+    // threshold reads at platform height).
+    emitBox(out, Scope{o, {fr.h, up, fr.n}, Vec3(w, platformH, platformD)},
+            part, col);
+    // Steps descend outward: box i tops out one rise lower than the last.
+    for (int i = 0; i + 1 < n; ++i) {
+        Vec3 so = fr.at(cx - w * 0.5, 0) + fr.n * (platformD + i * run);
+        emitBox(out, Scope{so, {fr.h, up, fr.n},
+                           Vec3(w, platformH - rise * (i + 1), run)},
+                part, col);
+    }
+}
+
+// PORTICO: the columned porch — steps + platform, a colonnade, an
+// entablature beam and a triangular pediment. The classical civic front.
+static void emitPortico(BuildingMesh& out, const FaceRect& fr,
+                        const BuildingParams& p, int nCols, const Vec3& col) {
+    const Vec3 up(0, 1, 0);
+    nCols = std::max(2, nCols);
+    const Real depth = std::min(Real(3.4), std::max(Real(2.2), fr.width * 0.16));
+    Real span = std::min(fr.width * 0.72, (nCols - 1) * 3.4 + 1.0);
+    const Real x0 = (fr.width - span) * 0.5;
+    const Real platformH = 0.45;
+    const Real colH = std::min(fr.height - 1.2, fr.height * 0.82) - platformH;
+    if (colH < 2.0) return;
+    // Porch platform + steps across the whole colonnade span.
+    emitEntranceSteps(out, fr, fr.width * 0.5, span + 1.2, platformH,
+                      depth + 0.4, PartId::Concrete, col * 0.92);
+    // The colonnade (a linear ARRAY of lathe columns).
+    const Real r = std::min(Real(0.30), 0.02 * colH + 0.16);
+    for (int i = 0; i < nCols; ++i) {
+        const Real x = x0 + span * (Real(i) / (nCols - 1));
+        Vec3 cb = fr.at(x, platformH) + fr.n * (depth - r * 1.6);
+        emitColumn(out, cb, colH, r, fr.h, fr.n, PartId::Trim, col);
+    }
+    // Entablature: the beam the columns carry, back to the wall.
+    const Real eb = platformH + colH;
+    Vec3 eo = fr.at(x0 - 0.5, eb);
+    emitBox(out, Scope{eo, {fr.h, up, fr.n}, Vec3(span + 1.0, 0.5, depth + 0.15)},
+            PartId::Trim, col);
+    // Pediment: a triangular prism — front/back tympanum triangles + two
+    // raking roof slopes over the entablature.
+    const Real pw = span + 1.0, ph = pw * 0.16, pd = depth + 0.15;
+    Vec3 A = fr.at(x0 - 0.5, eb + 0.5), B = A + fr.h * pw;
+    Vec3 Af = A + fr.n * pd, Bf = B + fr.n * pd;
+    Vec3 apex = A + fr.h * (pw * 0.5) + up * ph;
+    Vec3 apexF = apex + fr.n * pd;
+    RenderMesh ped;
+    MeshBuilder::emitTri(ped, Af, Bf, apexF, fr.n, col);            // front face
+    MeshBuilder::emitTri(ped, B, A, apex, fr.n * -1, col);          // back face
+    Vec3 nL = normalize(cross(fr.n * -1, apex - A));
+    Vec3 nR = normalize(cross(Bf - B, apex - B));
+    emitQuad(ped, A, Af, apexF, apex, nL, col * 0.96);              // left slope
+    emitQuad(ped, Bf, B, apex, apexF, nR, col * 0.96);              // right slope
+    appendToPart(out, PartId::Trim, ped);
+}
+
+// ROTUNDA: drum + radial colonnade + entablature ring + dome + cupola — the
+// capitol crown, all lathe-and-array.
+static void emitRotunda(BuildingMesh& out, const Vec3& c, Real R, Real roofY,
+                        const Vec3& r3, const Vec3& f3, const Vec3& wallCol,
+                        const Vec3& trimCol) {
+    const Real drumH = std::max(Real(2.6), R * 0.85);
+    Vec3 cc(c.x, 0, c.z);
+    // Solid inner drum.
+    emitTube(out, cc, R * 0.82, roofY, roofY + drumH, 20, PartId::Stucco, wallCol);
+    emitDisc(out, cc, R * 0.82, roofY + drumH, 20, PartId::Stucco, wallCol, true);
+    // The colonnade ring (a RADIAL array of columns).
+    const int nCols = std::max(8, static_cast<int>(R * 4));
+    const Real tau = 6.283185307179586;
+    for (int i = 0; i < nCols; ++i) {
+        const Real a = tau * i / nCols;
+        Vec3 cb(c.x + std::cos(a) * R, roofY, c.z + std::sin(a) * R);
+        emitColumn(out, cb, drumH - 0.5, std::min(Real(0.24), R * 0.09),
+                   r3, f3, PartId::Trim, trimCol);
+    }
+    // Entablature ring over the columns, then the dome + cupola + finial.
+    emitTube(out, cc, R + 0.35, roofY + drumH - 0.5, roofY + drumH + 0.1, 20,
+             PartId::Trim, trimCol);
+    emitDisc(out, cc, R + 0.35, roofY + drumH + 0.1, 20, PartId::Trim, trimCol, true);
+    std::vector<Vec2> dome;
+    const int DN = 6;
+    for (int i = 0; i <= DN; ++i) {
+        const Real t = Real(i) / DN * 1.5707963;
+        dome.push_back(Vec2(R * 0.86 * std::cos(t),
+                            drumH + 0.1 + R * 0.62 * std::sin(t)));
+    }
+    emitLathe(out, PartId::Roof, Vec3(c.x, roofY, c.z), dome, 20,
+              trimCol * 0.9);
+    std::vector<Vec2> cupola = {{R * 0.14, drumH + 0.1 + R * 0.60},
+                                {R * 0.14, drumH + 0.1 + R * 0.62 + 0.9},
+                                {R * 0.02, drumH + 0.1 + R * 0.62 + 1.4},
+                                {0.0, drumH + 0.1 + R * 0.62 + 1.6}};
+    emitLathe(out, PartId::Trim, Vec3(c.x, roofY, c.z), cupola, 10, trimCol);
+}
+
 // The VEHICLE BAY front (fire stations, loading docks, parking entries): the
 // entrance edge's ground floor as a row of wide segmented roller doors. Each
 // bay is a real recessed opening — jamb + head reveals connect the wall plane
@@ -1541,6 +1711,17 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         else
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
     }
+    // CLASSICAL entrance elements on the street face: a portico (colonnade +
+    // entablature + pediment over porch steps) or bare entrance steps.
+    if (params.portico > 0 || params.entranceSteps) {
+        FaceRect efr = planEdgeRect(plan, entranceEdge, y, gh);
+        if (params.portico > 0 && efr.width > 7.0)
+            emitPortico(out, efr, params, params.portico, params.trimColor);
+        else
+            emitEntranceSteps(out, efr, efr.width * 0.5,
+                              std::min(efr.width * 0.5, Real(5.0)), 0.4, 1.4,
+                              PartId::Concrete, params.trimColor * 0.92);
+    }
     emitPlanSlab(out, plan, y + 0.05, 0.1, PartId::Ground,
                  materialFor(PartId::Ground, wallColor).albedo);
     // Base course wraps the plan (skipping the door edge).
@@ -1697,17 +1878,30 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                             plainLip ? PartId::Trim : params.wallPart,
                             materialFor(PartId::Trim, wallColor).albedo * 0.9);
         }
-        // Crown (penthouse + tank) seated on the top tier's oriented frame.
+        // Crown seated on the top tier's oriented frame: a DOME rotunda for
+        // capitols/town halls, else the mechanical penthouse + tank.
         Vec3 r3(topObb.axis[0].x, 0, topObb.axis[0].y);
         Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
         Vec3 fo = Vec3(topObb.center.x, 0, topObb.center.y) -
                   r3 * topObb.half[0] - f3 * topObb.half[1];
-        emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                  y + 0.05, params, rng, &cur);
+        if (params.dome) {
+            const Real R = std::min(
+                Real(6.0), std::max(Real(2.6),
+                                    std::min(topObb.half[0], topObb.half[1]) *
+                                        0.55));
+            emitRotunda(out, Vec3(topObb.center.x, 0, topObb.center.y), R,
+                        y + 0.05, r3, f3, wallColor, params.trimColor);
+            roofRise = R * 0.62 + std::max(Real(2.6), R * 0.85) + 1.7;
+        } else {
+            emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
+                      y + 0.05, params, rng, &cur);
+        }
     }
     out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),
                             Vec3(0, 1, 0), "roof"});
-    out.height = (y + (pitched ? roofRise : params.parapet)) - baseY;
+    // roofRise carries the pitched ridge OR the dome rotunda's height.
+    out.height = (y + (pitched ? roofRise : std::max(params.parapet, roofRise))) -
+                 baseY;
 
     // Coarse HLOD proxy: the plan's oriented box, ground to roof.
     {

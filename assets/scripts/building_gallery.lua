@@ -121,6 +121,25 @@ local SPECS = {
   { plan = hPlan(24, 20),    p = { floors = 4, style = "brick" } },
   { plan = octagonPlan(9),   p = { floors = 3, style = "concrete",
                                    pilasters = true, ground_retail = false } },
+  -- Row 5: the CLASSICAL kit (mesh-op library: lathe columns, steps, dome).
+  { plan = rectPlan(26, 18), p = { floors = 2, style = "stucco",
+                                   wall_color = {0.88, 0.87, 0.82},
+                                   ground_height = 6, floor_height = 4.2,
+                                   pilasters = true, ground_retail = false,
+                                   window_head = "round", quoins = true,
+                                   portico = 6, entrance_steps = true,
+                                   dome = true } },          -- the capitol
+  { plan = rectPlan(24, 15), p = { floors = 3, style = "brick",
+                                   ground_retail = false, quoins = true,
+                                   window_head = "flat", lights_x = 2,
+                                   lights_y = 2, portico = 4,
+                                   entrance_steps = true } }, -- university hall
+  { plan = rectPlan(6.4, 10), p = { floors = 3, style = "painted",
+                                    ground_retail = false, bay_width = 2.9,
+                                    entrance_steps = true,
+                                    roof = "gable" } },       -- one rowhouse unit
+  { plan = rectPlan(18, 13), p = { floors = 4, style = "brick",
+                                   ground_retail = true } },  -- mixed use
 }
 
 local COLS, SPACING = 4, 38

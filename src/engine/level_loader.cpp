@@ -2028,6 +2028,25 @@ bool LevelLoader::load(const std::string& path,
             lp.buildChance = cs.value("buildChance", 0.9);
             lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
             lp.innerRadius = cs.value("downtownRadius", 55.0);
+            // The STYLE BOOK (the architect's Lua DATA layer): per-recipe
+            // look overrides from assets/scripts/style_book.lua. The C++
+            // architect decides what stands where; the book restyles it.
+            // The vm must outlive growLotBuildings below (the hook holds it).
+#ifdef RT_ENABLE_SCRIPTING
+            std::unique_ptr<ScriptVM> styleVm;
+            {
+                std::string sb = loadScriptCode("style_book.lua", levelDir);
+                if (!sb.empty()) {
+                    styleVm = std::make_unique<ScriptVM>();
+                    openProcgenLibrary(*styleVm);
+                    std::string err;
+                    auto hook = engine::makeStyleBook(*styleVm, sb, &err);
+                    if (hook) lp.styleHook = std::move(hook);
+                    else if (!err.empty())
+                        LOG_WARN << "style_book.lua: " << err;
+                }
+            }
+#endif
             lp.midRadius = cs.value("midtownRadius", 135.0);
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             engine::LotPlanDebug plan;   // blocks + lots, for the debug overlay

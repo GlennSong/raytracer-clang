@@ -2,9 +2,11 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 
 #include "polygon.h"        // Poly2, Vec2
+#include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -61,6 +63,13 @@ struct LotParams {
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
     uint32_t seed = 1;
+    // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
+    // so the host can overlay look overrides (cladding, windows, colours)
+    // from assets/scripts/style_book.lua. The architect decides WHAT + WHERE
+    // (C++, deterministic, tested); the style book owns HOW IT LOOKS (data,
+    // hot-reloadable). Empty = the built-in looks. Row units get
+    // "rowhouse_unit". Overrides must stay deterministic (pure data).
+    std::function<void(const std::string& recipe, BuildingParams&)> styleHook;
 };
 
 // The intermediate planning geometry, exposed for debug visualization: the block

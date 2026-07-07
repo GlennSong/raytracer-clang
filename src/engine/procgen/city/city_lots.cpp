@@ -214,6 +214,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         };
         const int total = static_cast<int>(cands.size());
         const Want wants[] = {
+            {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
+             true, DistrictTag::Financial, DistrictTag::Commercial},
+            {LandmarkKind::University, total >= 60 ? 1 : 0, 15.0, 380.0, false,
+             DistrictTag::Residential, DistrictTag::Commercial},
             {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
              DistrictTag::Financial, DistrictTag::Financial},
             {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
@@ -375,6 +379,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // into outParts so the caller binds the SAME PBR material recipes the
             // shape:"city" pipeline uses — not a flattened vertex-colour blob.
             BuildingParams bp = rec.params;   // the architect's recipe
+            // The STYLE BOOK (Lua data layer) overlays look overrides by
+            // recipe name — cladding, windows, colours — before growth.
+            if (p.styleHook) p.styleHook(rec.name, bp);
             // The door (and the retail front) faces the nearest STREET, not a
             // fixed +Z: aim faceDir at the closest point on the road network.
             if (roads) {
@@ -562,6 +569,62 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     for (const Vec2& v : circ)
                         if (!clearOfRoads(v)) { clear = false; break; }
                 if (clear) plan = circ;
+            }
+            // ROWHOUSES (device: "town homes ... packed side by side"): the
+            // lot becomes a terrace of narrow townhome UNITS sharing party
+            // walls — each its own plan building (door, stoop, cladding,
+            // sometimes its own gable) grown side by side with zero gaps.
+            if (planOk && rec.massing == BuildingRecipe::Massing::RowStrip) {
+                OBB2 sb = orientedBoundingBox(plan);
+                const int la = sb.longAxis(), sa2 = 1 - la;
+                const Real len = 2 * sb.half[la];
+                const Real dep = std::min(2 * sb.half[sa2], Real(11.0));
+                const int units =
+                    static_cast<int>(len / rng.range(5.6, 7.0));
+                Vec2 u = sb.axis[la], v = sb.axis[sa2];
+                bool stripOk = units >= 3 && dep > 6.5;
+                if (stripOk && roads)
+                    for (int sx = -1; sx <= 1 && stripOk; sx += 2)
+                        for (int sy = -1; sy <= 1; sy += 2) {
+                            Vec2 corner = sb.center + u * (len * 0.5 * sx) +
+                                          v * (dep * 0.5 * sy);
+                            if (!clearOfRoads(corner)) { stripOk = false; break; }
+                        }
+                if (stripOk) {
+                    const Real uw = len / units;
+                    const Vec2 c0 = sb.center - u * (len * 0.5);
+                    for (int k = 0; k < units; ++k) {
+                        Poly2 up4{c0 + u * (uw * k) - v * (dep * 0.5),
+                                  c0 + u * (uw * (k + 1)) - v * (dep * 0.5),
+                                  c0 + u * (uw * (k + 1)) + v * (dep * 0.5),
+                                  c0 + u * (uw * k) + v * (dep * 0.5)};
+                        BuildingParams upar = architectRowUnit(
+                            mix(bp.seed, static_cast<uint32_t>(k) * 31u + 7u),
+                            bp.floors);
+                        upar.faceDir = bp.faceDir;
+                        if (p.styleHook) p.styleHook("rowhouse_unit", upar);
+                        BuildingMesh um = growPlanBuilding(up4, upar);
+                        if (outParts)
+                            for (const RenderMesh& part : um.parts) {
+                                const int mi = part.materialIndex;
+                                if (mi >= 0 &&
+                                    mi < static_cast<int>(outParts->size()))
+                                    MeshBuilder::append((*outParts)[mi], part);
+                            }
+                        b.height = std::max(b.height, um.height);
+                    }
+                    b.site = sb.center;
+                    b.width = 2 * sb.half[0];
+                    b.depth = 2 * sb.half[1];
+                    b.yaw = std::atan2(sb.axis[0].y, sb.axis[0].x);
+                    b.plan = {sb.center - u * (len * 0.5) - v * (dep * 0.5),
+                              sb.center + u * (len * 0.5) - v * (dep * 0.5),
+                              sb.center + u * (len * 0.5) + v * (dep * 0.5),
+                              sb.center - u * (len * 0.5) + v * (dep * 0.5)};
+                    out.push_back(std::move(b));
+                    continue;
+                }
+                // Too short/shallow for a terrace: build as one plan building.
             }
 
             // PLAN QUALITY (device: "a really degenerate triangle with sharp

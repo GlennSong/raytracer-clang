@@ -45,6 +45,7 @@ struct BuildingRecipe {
         RectYard,    // a small centred rectangle — a house with a YARD
         Circle,      // a chord-tessellated drum (roomy curtain-wall lots)
         Park,        // no building: a green with trees
+        RowStrip,    // the lot packed with side-by-side ROWHOUSE units
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -66,11 +67,18 @@ enum class LandmarkKind : uint8_t {
     Police,        // squat concrete, dark trim
     Fire,          // brick, VEHICLE BAY doors on the street face
     Market,        // one tall arched masonry hall (shop anchor)
+    Capitol,       // THE town hall: portico + steps + dome rotunda, dead centre
+    University,    // the campus hall: brick, portico, a real green (RectYard)
     Count
 };
 const char* landmarkName(LandmarkKind k);
 BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
                                  uint32_t seed);
+
+// One ROWHOUSE unit's dressed params for the RowStrip massing: the lot pass
+// splits the strip and calls this per unit, so neighbours vary in cladding
+// and colour while sharing the strip's floor count and eave line.
+BuildingParams architectRowUnit(uint32_t seed, int floors);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no

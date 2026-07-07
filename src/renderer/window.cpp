@@ -571,7 +571,15 @@ void GlfwWindow::pollEvents() {
 
 #ifdef RT_ENABLE_IMGUI
     // After the UI new-frame so hover/drag state is current for this frame.
-    impl->input.uiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+    // A DISABLED cursor can never hover UI: once mouse-look recaptures the
+    // pointer, ImGui stops receiving cursor positions, so WantCaptureMouse
+    // can stay latched on whatever was hovered when the overlay closed —
+    // which silently killed mouse-look until the overlay was reopened
+    // (device: "the mouse loses the ability to look around after I open and
+    // then close the imgui window").
+    impl->input.uiWantsMouse =
+        ImGui::GetIO().WantCaptureMouse &&
+        glfwGetInputMode(impl->window, GLFW_CURSOR) != GLFW_CURSOR_DISABLED;
 #endif
 }
 

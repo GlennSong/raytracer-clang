@@ -283,6 +283,71 @@ TEST_CASE(landmark_recipes_are_coherent) {
     }
 }
 
+TEST_CASE(capitol_university_and_rowhouses_are_coherent) {
+    // The capitol carries the full classical kit; the university keeps a
+    // campus green; rowhouse strips pack Residential lots; mixed-use fills
+    // commercial streets with shops-below-homes-above.
+    for (uint32_t s = 1; s <= 10; ++s) {
+        BuildingRecipe cap = architectLandmark(LandmarkKind::Capitol, 22, 480, s);
+        CHECK(cap.params.dome);
+        CHECK(cap.params.portico >= 6);
+        CHECK(cap.params.entranceSteps);
+        CHECK(cap.placeType == "civic");
+        BuildingRecipe uni =
+            architectLandmark(LandmarkKind::University, 20, 440, s);
+        CHECK(uni.massing == BuildingRecipe::Massing::RectYard);
+        CHECK(uni.yardHalfWMax > 10.0);   // the campus green
+        CHECK(uni.params.portico >= 4);
+        BuildingParams unit = architectRowUnit(s * 977u, 3);
+        CHECK(unit.floors == 3);
+        CHECK(unit.entranceSteps);        // the stoop
+        CHECK(!unit.quoins);              // party walls, no corner masonry
+    }
+    int rowhouses = 0, mixed = 0;
+    for (uint32_t s = 1; s <= 60; ++s) {
+        BuildingRecipe r = architectPick(DistrictTag::Residential, 14, 300, s);
+        if (r.massing == BuildingRecipe::Massing::RowStrip) ++rowhouses;
+        BuildingRecipe c = architectPick(DistrictTag::Commercial, 12, 220, s);
+        if (c.name == "mixed_use") ++mixed;
+    }
+    CHECK(rowhouses >= 4);   // the terrace archetype exists in the table
+    CHECK(mixed >= 4);
+}
+
+TEST_CASE(style_book_hook_overlays_looks) {
+    // The styleHook (the Lua data layer's engine-side seam) restyles by
+    // recipe name without touching structure: force every yard house to a
+    // hip roof and check the massing/floors survive untouched.
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 11;
+    p.styleHook = [](const std::string& recipe, BuildingParams& bp) {
+        if (recipe == "yard_house") {
+            bp.roofStyle = BuildingParams::RoofStyle::Hip;
+            bp.roofPitch = 0.5;
+        }
+    };
+    std::vector<Poly2> blocks;
+    for (int gx = -1; gx <= 1; ++gx)
+        for (int gz = -1; gz <= 1; ++gz) {
+            Real cx = gx * 110.0, cz = gz * 110.0, h = 48.0;
+            blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                              {cx + h, cz + h}, {cx - h, cz + h}});
+        }
+    std::vector<LotBuilding> b = growLotBuildings(blocks, p);
+    std::vector<LotBuilding> plainB;
+    {
+        LotParams q = p;
+        q.styleHook = nullptr;
+        plainB = growLotBuildings(blocks, q);
+    }
+    CHECK(b.size() == plainB.size());   // looks changed, structure identical
+    for (std::size_t i = 0; i < b.size(); ++i) {
+        CHECK(b[i].recipe == plainB[i].recipe);
+        CHECK(b[i].type == plainB[i].type);
+    }
+}
+
 TEST_CASE(landmarks_are_planned_not_rolled) {
     // The planner fills civic quotas on the BEST lots: a city grown over real
     // blocks gets exactly one courthouse (on the most central financial lot),
