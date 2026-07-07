@@ -219,8 +219,8 @@ if(RT_ENABLE_SCRIPTING)
 endif()
 
 # ============================================================
-# Audio (ADR-0069) — miniaudio, vendored single-header C (like nlohmann/
-# tinygltf), sealed behind AudioEngine. Cross-platform and device-optional
+# Audio (ADR-0069) — miniaudio, a single-header C submodule pinned at a
+# release tag, sealed behind AudioEngine. Cross-platform and device-optional
 # (null-device fallback, or Manual mode with no device at all), so it builds
 # and tests headless. OFF leaves the AudioEngine stub in place (silence) —
 # audio_engine.cpp compiles either way, so the engine API is always present.
@@ -230,10 +230,19 @@ option(RT_ENABLE_AUDIO "Build the miniaudio-backed audio engine" ON)
 if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
     set(MINIAUDIO_DIR ${CMAKE_SOURCE_DIR}/third_party/miniaudio)
     if(NOT EXISTS ${MINIAUDIO_DIR}/miniaudio.h)
+        find_package(Git QUIET)
+        if(GIT_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+            message(STATUS "miniaudio submodule missing — running 'git submodule update --init'")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} submodule update --init third_party/miniaudio
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endif()
+    if(NOT EXISTS ${MINIAUDIO_DIR}/miniaudio.h)
         message(FATAL_ERROR
-            "miniaudio not found at third_party/miniaudio/miniaudio.h (it is "
-            "vendored in-tree; check the checkout), or configure with "
-            "-DRT_ENABLE_AUDIO=OFF.")
+            "miniaudio submodule not found at third_party/miniaudio.\n"
+            "Fetch it with:  git submodule update --init third_party/miniaudio\n"
+            "or configure with -DRT_ENABLE_AUDIO=OFF to build without audio.")
     endif()
     # The single implementation TU, compiled as C with warnings off (the Lua
     # pattern). dl/pthread/m are miniaudio's documented Linux link deps.

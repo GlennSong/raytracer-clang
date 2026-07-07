@@ -6,8 +6,8 @@ A portable C++ raytracer built from scratch using only standard libraries.
 Compiled with clang++ targeting C++17. **No *new* third-party dependencies** —
 single-header/vendored libraries already in `third_party/` and built (Jolt, Dear
 ImGui, tinygltf, the `stb_image`/`stb_image_write` headers it bundles, Lua —
-the scripting VM, ADR-0023 — miniaudio — the audio backend, ADR-0069 — and
-Tracy — the opt-in profiler, ADR-0068) are accepted; prefer them over
+the scripting VM, ADR-0023 — miniaudio — the audio backend (submodule),
+ADR-0069 — and Tracy — the opt-in profiler, ADR-0068) are accepted; prefer them over
 hand-rolling equivalents (ADR-0016). Do not add new submodules or external
 libraries without an ADR.
 

@@ -10,12 +10,12 @@ make clean      # remove build artifacts
 make test       # Jolt-free unit tests (math, ECS, input, camera)
 ```
 
-The interactive viewer and physics build via CMake. Jolt, Dear ImGui, Lua, and
-Tracy are git submodules — fetch them first (re-run after pulling commits that
+The interactive viewer and physics build via CMake. Jolt, Dear ImGui, Lua,
+Tracy, and miniaudio are git submodules — fetch them first (re-run after pulling commits that
 add a new submodule; CMake also tries to auto-init them):
 
 ```bash
-git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui,lua,tracy}
+git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui,lua,tracy,miniaudio}
 cmake -S . -B build && cmake --build build
 ctest --test-dir build                      # runs unit + physics tests
 ./build/viewer                              # the game (boots into play; --edit for edit mode)
@@ -27,7 +27,7 @@ Add `-DRT_ENABLE_IMGUI=ON` to enable the Dear ImGui debug overlay. The Lua
 scripting layer (`-DRT_ENABLE_SCRIPTING=ON`, default) is pure C — cross-platform,
 builds/tests headless — sealed behind `ScriptVM` (ADR-0023); the procgen binding
 surface is covered by `tests/test_script_vm.cpp`. Audio
-(`-DRT_ENABLE_AUDIO=ON`, default) is miniaudio (vendored header) sealed behind
+(`-DRT_ENABLE_AUDIO=ON`, default) is miniaudio (submodule) sealed behind
 `AudioEngine` (ADR-0069) — device-optional, tested headless via a pumped mix
 (`tests/test_audio.cpp`). `-DRT_ENABLE_PROFILER=ON` compiles the Tracy client
 (ADR-0068); the `RT_PROFILE_*` macros in `src/profile.h` are no-ops without it.

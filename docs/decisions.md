@@ -4834,9 +4834,10 @@ and *testable* headless in CI like Jolt/Lua, procgen-first (synthesized sound
 is a first-class source, not just files on disk — design principle #1), and
 sealed behind a seam so no vendor type leaks (the ADR-0012 pattern).
 
-**Decision.** **miniaudio** (v0.11.25, vendored single-header C at
-`third_party/miniaudio` — the nlohmann/tinygltf pattern, one impl TU compiled
-as C like Lua), sealed behind `engine::AudioEngine`
+**Decision.** **miniaudio** (v0.11.25, single-header C at
+`third_party/miniaudio` — originally vendored in-tree, converted to a
+submodule pinned at the release tag once its 96k lines dominated the branch
+diff; one impl TU compiled as C like Lua), sealed behind `engine::AudioEngine`
 (`src/engine/audio/audio_engine.{h,cpp}`, pimpl, no `ma_*` in the header).
 Why miniaudio: zero dependencies, public-domain/MIT-0, backends for
 CoreAudio/ALSA/PulseAudio/WASAPI, and — decisively — it runs **without a
