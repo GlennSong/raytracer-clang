@@ -4926,6 +4926,68 @@ engine's own vector/text stack (SVG import, ADR-0031 Phase 3 + the curve
 kernel) has grown far enough that a native kit is a small step, reopen the
 build-vs-vendor half only.
 
+## ADR-0071 — The reaction chain: Jolt contacts → EventBus → procedural sound in the arena
+**Status:** Accepted · **Date:** 2026-07-07
+
+**Context.** ADR-0069 built the instrument; nothing in the game played it. The
+missing pieces were causes (when did something *happen*?) and content (what
+does it sound like?). ADR-0012 had explicitly deferred Jolt's contact events;
+the register flagged that Lua couldn't emit sound; and per procgen-first the
+first sounds should be synthesized, not shipped as .wav assets.
+
+**Decision.** Wire the full reaction chain once, as the pattern every future
+reaction (decals, damage, rumble) reuses:
+
+- **Contacts (the cause).** `PhysicsWorld` registers a Jolt `ContactListener`
+  sealed as `ContactEvent{bodyA, bodyB, position, normal, approachSpeed}`.
+  Only `OnContactAdded` is recorded — edge-triggered impacts, no resting-
+  contact spam (pinned by test). The listener fires on physics worker threads
+  mid-step, so events buffer under a mutex and `drainContactEvents()` hands
+  the batch to the main thread after the step. `PhysicsSystem::publishContacts`
+  (called from `fixedUpdate`, unit-tested headless) maps body ids to entities
+  (RigidBody/MeshCollider pools) and publishes ECS-level
+  `Collision{a, b, position, normal, speed}` on the EventBus — subscribers
+  never see physics types; an invalid Entity means a non-ECS body (character
+  proxy, AI-car kinematic).
+- **Cues (the reaction).** `PlaySound.clip` now accepts a *registered name* as
+  well as a path: `AudioSystem::registerClip(name, handle)` puts procedural
+  clips in the same cache files decode into — one addressing scheme for both.
+  `PlaySound` gains `pitch` for variation.
+- **Content (procedural SFX).** `engine::sfx` (`src/engine/audio/sfx.{h,cpp}`):
+  `gunshot(rate, seed)` (noise crack through a closing low-pass over a 150→55 Hz
+  thump, soft-clipped) and `impact(rate, seed)` (damped inharmonic partials +
+  contact scuff; seed varies the strike pitch). Pure `(params, seed) → PCM`,
+  deterministic, [-1,1]-bounded — the audio face of ADR-0021.
+- **Scripts (the author).** The gameplay VM gains `sound.play{clip=, volume=,
+  pitch=, position=, range=, music=}` — enqueues a `PlaySound` (deferred like
+  `spawn.*`); a `position` makes it spatial. `GameplayContext` carries the
+  EventBus. `gun.lua` fires `sfx/shot` with jittered pitch on every shot; the
+  C++ `ShootingSystem` (non-scripting builds) enqueues the same cue.
+- **The arena (the wiring).** `ArenaSoundSystem` (game layer, in
+  `arena_state.cpp`): synthesizes + registers `sfx/shot` / `sfx/impact` at
+  start, subscribes to `Collision`, and cues spatial impacts — silent below
+  2 m/s, louder and brighter with closing speed.
+
+**Alternatives.** (a) Poll body velocities for "sudden stops" — misses
+glancing hits, fires on teleports, and re-derives what Jolt already knows.
+(b) AudioSystem subscribing to `Collision` directly — bakes game policy (which
+clip, what thresholds) into an engine system; the arena owns its own sound
+design instead. (c) Shipping .wav assets — against procgen-first, and the
+generators are ~80 lines.
+
+**Consequences.** Shooting cracks, hits knock, bounces drum-roll — all
+verified headless (`impact_demo` renders the chain to a WAV; suite green:
+contact edge-trigger, entity mapping, cue emission from the real gun.lua,
+seed determinism). Contact volume is unbounded in pathological piles (every
+new touch is an event) — if a rubble scene floods the bus, add a per-step cap
+or severity floor at the `publishContacts` seam. Characters/vehicles map to
+invalid entities today; give their owners a body-registry hook when gameplay
+needs "who did I hit". Lua still can't *synthesize* PCM (`createClip` is
+C++-only) — that binding belongs with the gameplay-VM audio surface when a
+recipe needs it. **Revisit trigger:** the first non-audio contact consumer
+(decals, damage) — if it needs contact *persistence* (begin/end pairs), extend
+the listener to `OnContactRemoved` rather than bolting state onto subscribers.
+
 ---
 
 ## Interim seams & tech-debt register
@@ -4990,7 +5052,7 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Debug-gizmo overlay draw is BROKEN-ON-DEVICE (Metal), unverified (Vulkan) | `renderer/renderer.h` (`RenderMaterial::FLAG_OVERLAY`), `renderer/metal/metal_renderer.mm` (`depthStateOverlay`), `renderer/vulkan/vulkan_renderer.cpp` (`overlayPipeline`) (ADR-0061/0061) | `FLAG_OVERLAY` should draw marked materials on top with depth test/write OFF (Metal per-batch `depthStateOverlay`; Vulkan `overlayPipeline`). Device evidence says the Metal INSTANCED path doesn't apply it: waist-height overlay hoops were hidden inside body geometry ("visible only peering through geometry"). The debug widgets no longer depend on it (they ground-project with regular depth, like road paint); nothing else uses the flag today. | Debug the Metal instanced depth-state selection (encoder state ordering / pass), verify Vulkan, or replace both with a real line-primitive debug pass |
 | DebugDraw ribbons UNVERIFIED on device | `engine/debug_draw.{h,cpp}`, `engine/systems/debug_draw_system.cpp` (ADR-0067) | The model + ribbon bake are headless-tested, but the drawn result (FLAG_OVERLAY on the NON-instanced path, per-frame mesh churn, on-screen line thickness) has never been seen on a Metal/Vulkan build — and the register row above says the *instanced* overlay path is already broken on Metal, so the non-instanced path needs eyes. If overlay is broken there too, lines still draw, just depth-tested. | Viewer check on device; tune `pixelScale`; consider the per-backend line pass if volume grows (ADR-0067 trigger) |
 | Audio device output UNVERIFIED (CI runs null/manual) | `engine/audio/audio_engine.cpp` (ADR-0069) | Everything testable headless is tested (Manual-mode mix: pan, attenuation, loops, buses). Actual device playback — CoreAudio on macOS, ALSA/Pulse on desktop Linux — has never produced sound in this environment (no audio hardware; Auto falls back to the null backend). Same class as the Metal/gamepad verifications before it. | Run the viewer on a laptop; confirm device selection, volume scale, and that spatialization sounds right, not just measures right |
-| Audio has no authoring or scripting surface yet | `engine/components.h` (`AudioSource`), `engine/level_loader.cpp`, `engine/scripting/gameplay_bindings.cpp` (ADR-0069) | AudioSource/AudioListener exist as components + a PlaySound event, but no level-JSON block loads them, the editor inspector doesn't show them, and Lua can't emit PlaySound or synthesize PCM (the procgen `createClip` path is C++-only) — so sounds are only placeable from C++ today | Level "audio" block + LevelWriter round-trip + inspector registration; a `sound.play`/`sound.clip` gameplay-VM binding surface (ADR-0024 pattern) |
+| Audio has no level authoring surface yet | `engine/components.h` (`AudioSource`), `engine/level_loader.cpp` (ADR-0069/0071) | *Partially resolved (ADR-0071): Lua can now fire cues — `sound.play{}` in the gameplay VM — and procedural clips register by name (`AudioSystem::registerClip`).* Still missing: a level-JSON "audio" block for placed `AudioSource`s (ambience), LevelWriter round-trip, inspector registration, and a Lua surface for *synthesizing* PCM (`createClip` is C++-only). | Level "audio" block + writer + inspector; a `sound.clip(samples)` gameplay-VM binding when a recipe needs synthesized sound |
 | Wind sway is height-weighted + instanced-only | `shaders/metal/lighting.metal` (`vertexMainInstanced`), `metal_renderer.mm`, `RenderMaterial::FLAG_WIND` | Cosmetic foliage sway: a vertex displacement weighted by height above the instance origin, self-timed off the wall clock. Only the **instanced** draw path sways (scattered grass + forest trees), so the non-instanced hero `shape:"tree"` leaves don't; it's a uniform field sway, not a per-branch tree rig (ADR-0026). Metal-only — **unverified on Linux/CI**; needs a macOS viewer check. | A real per-branch wind rig for trees; wind on the single-mesh path; expose/author wind params |
 | Procedural bark relief is normal-map only | `engine/procgen/tree.cpp` (`barkMaps`), level loaders | Per-species bark (oak furrows / birch lenticels / pine plates) generates an albedo value pattern + a tangent-space **normal map** (no true displacement — silhouette stays smooth). The relief look is **Metal-only, unverified offline** (the path tracer doesn't normal-map). | Parallax-occlusion mapping or tessellated displacement for silhouette; verify in viewer |
 | Parking is an informal verge, homes are abstract nodes | `apps/citysim/city_sim.cpp` (`idlePose`, arrival parking) (ADR-0062/0062) | An idle car parks on the grass beside its home/work NODE (off the carriageway so it can't roadblock — correct, but it reads as "failed to be placed" until you know it's an agent at home). Homes/works are raw graph nodes, not the buildings the generator already produces. | Buildings as stops (assign home/work to a parcel; park at its frontage), a painted parking-lane band on residential links (the mesher already does surface bands — same technique as the crosswalk paint), and/or despawn-at-home with the schedule persisting (hybrid: keep parked bodies near the player, cull distant ones) |

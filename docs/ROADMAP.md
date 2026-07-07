@@ -200,8 +200,13 @@ tag (latest stable v5.5.0); GitHub reachable from this environment.
   collision-free scripted motion) and yields any entity that also has a
   `RigidBody`. Viewer demo: a sphere falls onto the floor while the box keeps
   spinning on MotionSystem.
-- ⏳ More shapes (capsule/mesh), materials (friction/restitution), contact
-  events, Jolt kinematic bodies (script-driven motion that pushes dynamics).
+- ✅ Contact events (ADR-0071): Jolt's `ContactListener` sealed as
+  `ContactEvent`s (thread-safe buffer, drained post-step);
+  `PhysicsSystem::publishContacts` maps bodies to entities and publishes
+  `Collision` on the event bus (1.4). First consumer: impact sounds (2.5).
+- ⏳ More shapes beyond box/sphere/capsule/mesh as needed, materials
+  (friction/restitution done per-body), Jolt kinematic bodies (script-driven
+  motion that pushes dynamics).
 - ⏳ Debug visualization of colliders — the line primitive now exists
   (DebugDraw, ADR-0067 / roadmap 1.5); remaining work is emitting each
   collider's wire shape into `ctx.debug` behind a toggle.
@@ -257,12 +262,18 @@ output unverified** (no audio hardware here — register row).
 generated worlds (wind in the forest, traffic in the city) and feedback for
 gameplay (shots, impacts) — all synthesizable, fitting procgen-first.
 
-**Remaining:** level-JSON authoring + inspector for AudioSource; Lua surface
-(`sound.play`, procedural PCM) in the gameplay VM (ADR-0024); streamed music;
-a real device pass on hardware.
+**Landed since (ADR-0071):** the reaction chain is live in the arena — Jolt
+contact events (2.3) publish `Collision` on the bus; procedural SFX
+(`engine::sfx`, seeded gunshot/impact generators) register as named clips;
+`sound.play{}` in the gameplay VM lets `gun.lua` crack on fire; hits knock,
+scaled by closing speed. `impact_demo` renders the whole chain to a WAV.
 
-**Depends on:** Event bus (1.4). Physics contact events (2.3) become natural
-emitters later.
+**Remaining:** level-JSON authoring + inspector for AudioSource; a Lua
+binding for *synthesizing* PCM; streamed music; a real device pass on
+hardware.
+
+**Depends on:** Event bus (1.4); physics contact events (2.3) are its first
+emitters.
 
 ---
 

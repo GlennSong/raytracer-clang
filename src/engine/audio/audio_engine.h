@@ -52,11 +52,14 @@ struct AudioPlayParams {
 // systems emit these without knowing an audio engine exists; AudioSystem
 // subscribes and plays them. `clip` is a path, resolved through AudioSystem's
 // clip cache.
+// `clip` is a file path OR a name registered via AudioSystem::registerClip
+// (how procedural clips are addressed).
 struct PlaySound {
     std::string clip;
     Vec3 position;             // used when spatial
     bool spatial = false;
     float volume = 1.0f;
+    float pitch = 1.0f;        // playback-rate multiplier (variation)
     Real range = 25.0;         // audible radius (world units) when spatial
     AudioBus bus = AudioBus::Sfx;
 };

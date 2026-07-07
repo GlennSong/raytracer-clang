@@ -99,11 +99,16 @@ void AudioSystem::step(World& world, AudioEngine& audio) {
     audio.update();   // reclaim finished one-shot voices
 }
 
+void AudioSystem::registerClip(const std::string& name, AudioClipHandle clip) {
+    if (!name.empty() && clip.valid()) clipCache[name] = clip;
+}
+
 void AudioSystem::onPlaySound(const PlaySound& event, AudioEngine& audio) {
     AudioClipHandle clip = resolveClip(audio, event.clip);
     if (!clip.valid()) return;
     AudioPlayParams params;
     params.volume = event.volume;
+    params.pitch = event.pitch;
     params.bus = event.bus;
     if (event.spatial)
         audio.playAt(clip, event.position, event.range, params);

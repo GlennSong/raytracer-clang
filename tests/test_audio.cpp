@@ -369,3 +369,44 @@ TEST_CASE(audio_system_play_sound_event_fires_a_voice) {
     system.onPlaySound(missing, audio);   // must not crash or add a voice
     CHECK(audio.activeVoiceCount() == 1);
 }
+
+#include "../src/engine/audio/sfx.h"
+
+TEST_CASE(sfx_generators_produce_bounded_deterministic_pcm) {
+    auto shotA = sfx::gunshot(48000, 7);
+    auto shotB = sfx::gunshot(48000, 7);
+    auto shotC = sfx::gunshot(48000, 8);
+    CHECK(!shotA.empty());
+    CHECK(shotA == shotB);        // same seed -> identical (ADR-0021 ethos)
+    CHECK(shotA != shotC);        // different seed -> different crack
+
+    auto hit = sfx::impact(48000, 3);
+    CHECK(!hit.empty());
+    double energy = 0;
+    for (float f : shotA) {
+        CHECK(std::fabs(f) <= 1.0f);
+        energy += std::fabs(f);
+    }
+    for (float f : hit) CHECK(std::fabs(f) <= 1.0f);
+    CHECK(energy / shotA.size() > 0.005);   // audible, not near-silence
+}
+
+TEST_CASE(audio_system_registered_procedural_clip_plays_by_name) {
+    AudioEngine audio;
+    audio.initialize(AudioBackendMode::Manual);
+    AudioSystem system;
+
+    auto pcm = sfx::impact(48000, 5);
+    AudioClipHandle clip = audio.createClip(pcm.data(), pcm.size(), 1, 48000);
+    system.registerClip("sfx/impact", clip);
+    CHECK(system.cachedClipCount() == 1);
+
+    PlaySound cue;
+    cue.clip = "sfx/impact";      // resolved from the registry, not a file
+    cue.spatial = true;
+    cue.position = Vec3(1, 0, -2);
+    cue.pitch = 1.2f;
+    system.onPlaySound(cue, audio);
+    CHECK(audio.activeVoiceCount() == 1);
+    CHECK(pump(audio, 2048).total() > 0.001);
+}

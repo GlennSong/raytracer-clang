@@ -21,11 +21,14 @@
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <mutex>
 
 namespace engine {
 
@@ -155,6 +158,42 @@ constexpr JPH::uint MAX_CONTACT_CONSTRAINTS = 10240;
 
 }  // namespace
 
+// Records every NEW contact Jolt reports (ADR-0071). OnContactAdded fires on
+// physics worker threads during PhysicsSystem::Update, so the buffer is
+// mutex-guarded; drain() hands the batch to the main thread after the step.
+// Only added contacts are recorded — persisted (resting) contacts don't
+// refire, so the stream is edge-triggered impacts, not per-step spam.
+class ContactCollector final : public JPH::ContactListener {
+public:
+    void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2,
+                        const JPH::ContactManifold& manifold,
+                        JPH::ContactSettings&) override {
+        JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
+        // Closing speed along the normal at the touch — the impact severity.
+        JPH::Vec3 relVel = body2.GetPointVelocity(point) -
+                           body1.GetPointVelocity(point);
+        ContactEvent event;
+        event.bodyA = body1.GetID().GetIndexAndSequenceNumber();
+        event.bodyB = body2.GetID().GetIndexAndSequenceNumber();
+        event.position = fromJolt(point);
+        event.normal = fromJolt(JPH::RVec3(manifold.mWorldSpaceNormal));
+        event.approachSpeed = std::fabs(relVel.Dot(manifold.mWorldSpaceNormal));
+        std::lock_guard<std::mutex> lock(mutex);
+        events.push_back(event);
+    }
+
+    std::vector<ContactEvent> drain() {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::vector<ContactEvent> out;
+        out.swap(events);
+        return out;
+    }
+
+private:
+    std::mutex mutex;
+    std::vector<ContactEvent> events;
+};
+
 struct PhysicsWorld::Impl {
     // Declared before physicsSystem so they outlive it (members destruct in
     // reverse order — physicsSystem references these interfaces).
@@ -165,6 +204,7 @@ struct PhysicsWorld::Impl {
     BPLayerInterfaceImpl broadPhaseLayers;
     ObjectVsBroadPhaseLayerFilterImpl objectVsBroadPhase;
     ObjectLayerPairFilterImpl objectVsObject;
+    ContactCollector contacts;
     JPH::PhysicsSystem physicsSystem;
 
     // Virtual characters live outside the body simulation, so we own them here.
@@ -209,7 +249,13 @@ bool PhysicsWorld::initialize(engine::JobSystem* jobSystem) {
     impl->physicsSystem.Init(MAX_BODIES, 0, MAX_BODY_PAIRS, MAX_CONTACT_CONSTRAINTS,
                              impl->broadPhaseLayers, impl->objectVsBroadPhase,
                              impl->objectVsObject);
+    impl->physicsSystem.SetContactListener(&impl->contacts);
     return true;
+}
+
+std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {
+    if (!impl) return {};
+    return impl->contacts.drain();
 }
 
 void PhysicsWorld::shutdown() {

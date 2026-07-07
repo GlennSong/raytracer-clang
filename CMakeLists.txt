@@ -104,6 +104,7 @@ add_library(engine_core STATIC
     src/engine/systems/editor_system.cpp
     src/engine/systems/motion_system.cpp
     src/engine/audio/audio_engine.cpp
+    src/engine/audio/sfx.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/debug_draw_system.cpp
@@ -433,6 +434,10 @@ if(RT_BUILD_DEMOS)
     endif()
 endif()
 
+# The physics->sound chain, audible (ADR-0071): Jolt contacts -> EventBus ->
+# procedural impact cues -> a WAV. Needs both physics and audio, so it is
+# declared with the physics block below (after the Jolt target exists).
+
 # ============================================================
 # Physics (Jolt) — cross-platform C++, builds and runs headless (ADR-0012).
 # Jolt's PUBLIC compile definitions propagate to anything linking the `Jolt`
@@ -498,6 +503,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/motion_system.cpp
+        src/engine/event_bus.cpp
         src/engine/world.cpp
         src/engine/components.cpp
         src/job_system.cpp
@@ -506,6 +512,19 @@ if(RT_ENABLE_PHYSICS)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
     target_link_libraries(physics_tests PRIVATE Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
+
+    # The audible physics demo (see the demos block above for the rationale).
+    if(RT_BUILD_DEMOS AND RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
+        add_executable(impact_demo
+            tools/impact_demo.cpp
+            src/engine/physics/physics_world.cpp
+            src/engine/physics/jolt_job_adapter.cpp
+            src/engine/systems/physics_system.cpp
+        )
+        target_include_directories(impact_demo PRIVATE src)
+        target_compile_options(impact_demo PRIVATE -Wall -Wextra)
+        target_link_libraries(impact_demo PRIVATE engine_core Jolt Threads::Threads)
+    endif()
 endif()
 
 # ============================================================

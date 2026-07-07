@@ -31,7 +31,9 @@ public:
     // Services the gameplay surface reads each tick. update() fills these from
     // FrameContext; tests set only what they exercise. `assets` may be null —
     // then spawned entities get physics components but no Renderable (headless).
-    void setServices(InputMap* input, const CameraState* camera, AssetManager* assets);
+    // `events` may be null — then sound.play errors if a script calls it.
+    void setServices(InputMap* input, const CameraState* camera,
+                     AssetManager* assets, EventBus* events = nullptr);
 
     // Headless-testable core: run start/update for every ScriptBehaviour in
     // `world`, advancing by `dt`, then apply any deferred spawns. update()
@@ -43,6 +45,7 @@ private:
     InputMap* input_ = nullptr;
     const CameraState* camera_ = nullptr;
     AssetManager* assets_ = nullptr;
+    EventBus* events_ = nullptr;
 };
 
 }  // namespace engine

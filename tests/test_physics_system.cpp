@@ -134,3 +134,31 @@ TEST_CASE(motion_system_yields_to_physics) {
     motion.integrate(world, 1.0);
     CHECK_APPROX(world.get<Transform>(e)->position.x, 0.0, 1e-9);
 }
+
+TEST_CASE(physics_system_publishes_collision_events_with_entities) {
+    World world;
+    Entity floor = addFloor(world);
+    Entity ball = addDynamicSphere(world, Vec3(0, 4, 0));
+
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.createBodies(world);
+
+    EventBus events;
+    std::vector<Collision> hits;
+    events.subscribe<Collision>([&](const Collision& c) { hits.push_back(c); });
+
+    for (int i = 0; i < 180 && hits.empty(); i++) {
+        physics.step(world, 1.0 / 60.0);
+        physics.publishContacts(world, events);
+    }
+    CHECK(!hits.empty());
+    if (!hits.empty()) {
+        // Both bodies are ECS-known, so the event names the actual entities.
+        bool mapped = (hits[0].a == floor && hits[0].b == ball) ||
+                      (hits[0].a == ball && hits[0].b == floor);
+        CHECK(mapped);
+        CHECK(hits[0].speed > 4.0);
+    }
+    physics.shutdown();
+}

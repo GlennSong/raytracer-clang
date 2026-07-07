@@ -37,6 +37,11 @@ public:
     // The PlaySound handler (public so tests can invoke it directly).
     void onPlaySound(const PlaySound& event, AudioEngine& audio);
 
+    // Register an already-created clip (procedural PCM, ADR-0069) under a
+    // name, so AudioSource.clip and PlaySound.clip can reference it exactly
+    // like a file path — e.g. registerClip("sfx/shot", engine.createClip(...)).
+    void registerClip(const std::string& name, AudioClipHandle clip);
+
     std::size_t cachedClipCount() const { return clipCache.size(); }
 
 private:
