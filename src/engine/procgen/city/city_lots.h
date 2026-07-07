@@ -69,11 +69,15 @@ struct LotParams {
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
     uint32_t seed = 1;
-    // TERRAIN sampler (world y at x,z): buildings grow from the LOWEST ground
-    // under their plan (minus a small embed on slopes, so the downhill corner
-    // never floats), park/green pads drape per-vertex, and LotBuilding::baseY
-    // records the result. Unset = flat ground at y 0.
+    // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
+    // plane (the ENTRANCE-side grade, so the front door sits level with the
+    // sidewalk it faces), park/green pads drape per-vertex, and
+    // LotBuilding::groundY/baseY record the result. Unset = flat ground at y 0.
     std::function<Real(Real, Real)> ground;
+    // Plinth height (terrain levels): how far the wall base rises above the
+    // graded pad, on a concrete foundation course — the knob for "how tall the
+    // base is" (device feedback). Ignored on flat ground.
+    Real plinth = 0.15;
     // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
     // so the host can overlay look overrides (cladding, windows, colours)
     // from assets/scripts/style_book.lua. The architect decides WHAT + WHERE

@@ -239,10 +239,14 @@ private:
     engine::Entity visionGroups_[2]{};       // debug sensing wedges, indexed by Agent::Mode
     engine::Entity blockGroup_{};            // debug city-BLOCK outlines (static bake)
     engine::Entity lotGroup_{};              // debug LOT outlines (static bake)
+    engine::Entity colliderStripGroup_{};    // debug collider-prism rim outlines
+    engine::Entity colliderPostGroup_{};     // debug collider-prism corner posts
     std::vector<engine::Mat4> navLinkBake_;  // cached navgraph transforms (built once)
     std::vector<engine::Mat4> navNodeBake_;
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
+    std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
+    std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
@@ -256,6 +260,7 @@ private:
     bool showVisionCones_ = true;    // per-agent sensing wedges
     bool showNavGraph_ = true;       // lane strips + junction-node rings
     bool showPlan_ = true;           // city-plan outlines: blocks + lots (L key)
+    bool showColliders_ = false;     // building physics prisms (rims + posts)
     int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)
     // Places (ADR-0066): the level-authored destinations, and the routable
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).

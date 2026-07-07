@@ -376,8 +376,11 @@ TEST_CASE(buildings_grow_from_terrain_base) {
             lo = std::min(lo, g);
             hi = std::max(hi, g);
         }
-        CHECK(lb.groundY >= lo - 1e-6);   // the pad plane cuts and fills...
-        CHECK(lb.groundY <= hi + 1e-6);   // ...within the plan's own grades
+        // The pad plane is the ENTRANCE-side grade (sampled a couple of metres
+        // toward the street), so it stays within the plan's own grades plus a
+        // small slope allowance for that overstep.
+        CHECK(lb.groundY >= lo - 0.5);
+        CHECK(lb.groundY <= hi + 0.5);
         CHECK(lb.baseY > lb.groundY);             // walls sit proud of the pad
         CHECK(lb.baseY <= lb.groundY + 0.3);      // ...by a small plinth only
         if (std::fabs(lb.baseY) > 0.5) ++sloped;

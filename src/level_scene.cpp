@@ -697,6 +697,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);
             lp.innerRadius = cs.value("downtownRadius", 55.0);
             lp.midRadius = cs.value("midtownRadius", 135.0);
+            lp.plinth = cs.value("plinth", lp.plinth);
             lp.ground = [&ctp, &cnoise](engine::Real x, engine::Real z) {
                 return static_cast<engine::Real>(terrainHeight(ctp, cnoise, x, z));
             };

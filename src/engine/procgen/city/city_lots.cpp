@@ -119,19 +119,44 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         return lo - ((hi - lo) > 0.05 ? Real(0.25) : Real(0));
     };
     // TERRAIN pad plane (device: "the terrain should be flat under the
-    // building"): the mid-slope grade — the average ground under the plan's
-    // vertices — balancing cut against fill. The host stamps a flatten pad at
-    // this plane, so the walls meet FLAT graded earth, not raw slope.
-    auto padPlaneFor = [&](const Poly2& pl) -> Real {
+    // building" + "the entrance should be as level as possible with the
+    // sidewalk it's next to"): the grade at the ENTRANCE side — cast a ray
+    // from the plan centroid along the face direction to the boundary, step a
+    // couple of metres toward the street (onto the road-conformed apron, i.e.
+    // the sidewalk's own grade), and sample there. The host stamps a flatten
+    // pad at this plane, so the walls meet FLAT graded earth and the front
+    // door meets the sidewalk. Falls back to the vertex average when the ray
+    // finds no boundary (degenerate plans).
+    auto padPlaneFor = [&](const Poly2& pl, const Vec2& face) -> Real {
         if (!p.ground || pl.empty()) return 0;
+        const Vec2 c = centroid(pl);
+        Real tExit = -1;
+        if (face.length() > Real(1e-6)) {
+            const Vec2 f = normalize(face);
+            const std::size_t n = pl.size();
+            for (std::size_t i = 0; i < n; ++i) {
+                const Vec2& a = pl[i];
+                const Vec2& b = pl[(i + 1) % n];
+                const Vec2 e = b - a;
+                const Real den = cross(f, e);
+                if (std::fabs(den) < Real(1e-9)) continue;
+                const Real t = cross(a - c, e) / den;       // along the ray
+                const Real u = cross(a - c, f) / den;       // along the edge
+                if (t > 0 && u >= 0 && u <= 1) tExit = std::max(tExit, t);
+            }
+            if (tExit > 0) {
+                const Vec2 E = c + f * (tExit + Real(2.0));
+                return p.ground(E.x, E.y);
+            }
+        }
         Real sum = 0;
         for (const Vec2& v : pl) sum += p.ground(v.x, v.y);
         return sum / static_cast<Real>(pl.size());
     };
     // Plinth reveal: walls start this far above the graded pad, on a visible
     // FOUNDATION course (device: "there should be some kind of a base for the
-    // building and steps to get up to the front door").
-    const Real plinth = p.ground ? Real(0.15) : Real(0);
+    // building and steps to get up to the front door"). Host-tunable.
+    const Real plinth = p.ground ? std::max(Real(0), p.plinth) : Real(0);
     // The foundation course: the plan outset slightly, extruded from below the
     // pad up to the wall base — a concrete band that grounds the massing and
     // hides the terrain seam. Emitted into the Concrete part like any other
@@ -676,7 +701,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     // One shared pad plane for the whole terrace: the strip is
                     // graded flat as ONE pad, so the party-wall units sit flush
                     // on it instead of staggering into the cut.
-                    b.groundY = padPlaneFor(plan);
+                    b.groundY = padPlaneFor(plan, Vec2(bp.faceDir.x, bp.faceDir.z));
                     const Real stripBase =
                         p.ground ? b.groundY + plinth : baseYFor(plan);
                     for (int k = 0; k < units; ++k) {
@@ -740,7 +765,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // On terrain the building rises from its graded pad plane (plus the
             // plinth reveal); every walk-up entrance earns steps to the door —
             // porticos and bay-door fronts already bring their own.
-            b.groundY = padPlaneFor(planOk ? plan : site);
+            b.groundY = padPlaneFor(planOk ? plan : site,
+                                    Vec2(bp.faceDir.x, bp.faceDir.z));
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
             if (p.ground && !bp.entranceSteps && bp.portico == 0 &&

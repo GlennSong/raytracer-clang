@@ -711,7 +711,7 @@ static RoadGraph deAcute(const RoadGraph& in, double minAngle) {
         double cs = std::cos(ang), sn = std::sin(ang);
         g.nodes[far].pos = c + Vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
     };
-    for (int pass = 0; pass < 6; ++pass) {
+    for (int pass = 0; pass < 10; ++pass) {
         std::vector<std::vector<int>> inc(g.nodes.size());
         for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
             inc[g.edges[e].a].push_back(e);
@@ -746,6 +746,53 @@ static RoadGraph deAcute(const RoadGraph& in, double minAngle) {
         if (!changed) break;
     }
     return g;
+}
+
+// The HARD angle constraint behind deAcute (device: "we should have more rules
+// in the road graph that disallow sharp angles"): relaxation rotates arms
+// apart, but a hemmed-in junction can be un-relaxable — two arms stay nearly
+// parallel and the sidewalk crotch between them is a razor no corner math can
+// weld. Any arm pair still tighter than `hardMin` after relaxation loses its
+// SHORTER edge: a clean cul-de-sac beats a broken junction.
+static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
+    const double kTwoPi = 6.283185307179586;
+    RoadGraph g = in;
+    std::vector<char> drop(g.edges.size(), 0);
+    std::vector<std::vector<int>> inc(g.nodes.size());
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[g.edges[e].a].push_back(e);
+        inc[g.edges[e].b].push_back(e);
+    }
+    for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+        if (static_cast<int>(inc[v].size()) < 3) continue;
+        struct Arm { int edge; double ang, len; };
+        std::vector<Arm> arms;
+        for (int e : inc[v]) {
+            if (drop[e]) continue;
+            int far = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
+            Vec2 d = g.nodes[far].pos - g.nodes[v].pos;
+            if (d.lengthSquared() > 1e-9)
+                arms.push_back({e, std::atan2(d.y, d.x), d.length()});
+        }
+        int n = static_cast<int>(arms.size());
+        if (n < 3) continue;
+        std::sort(arms.begin(), arms.end(),
+                  [](const Arm& a, const Arm& b) { return a.ang < b.ang; });
+        for (int k = 0; k < n; ++k) {
+            const Arm& a0 = arms[k];
+            const Arm& a1 = arms[(k + 1) % n];
+            if (drop[a0.edge] || drop[a1.edge]) continue;
+            double gap = a1.ang - a0.ang;
+            if (gap <= 0) gap += kTwoPi;
+            if (gap >= hardMin || gap < 1e-3) continue;
+            drop[a0.len <= a1.len ? a0.edge : a1.edge] = 1;
+        }
+    }
+    RoadGraph out;
+    out.nodes = g.nodes;
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e)
+        if (!drop[e]) out.edges.push_back(g.edges[e]);
+    return out;
 }
 
 void applyGenerateRecipe(RoadNet& net, const json& g) {
@@ -783,6 +830,12 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
     if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
     cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
+    // Hard floor (device: "disallow sharp angles like that ... some
+    // constraints"): drop the shorter arm of any junction pair relaxation
+    // couldn't open past ~20 deg, so no razor sidewalk crotch survives. Opt-out
+    // via "prune_acute_deg": 0.
+    const double pruneDeg = g.value("prune_acute_deg", 20.0);
+    if (pruneDeg > 0.0) cg = pruneAcuteArms(cg, pruneDeg * 3.14159265358979323846 / 180.0);
     // No hairpins (device: "sharp bends ... creating some really bad overlap"):
     // a degree-2 corner sharper than ~52 deg folds the stroked carriageway over
     // itself. Relax such through-nodes toward their chord until drivable.

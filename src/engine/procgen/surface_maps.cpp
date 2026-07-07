@@ -179,12 +179,19 @@ SurfSample evalAsphalt(double u, double v, uint32_t seed) {
 }
 SurfSample evalPavement(double u, double v, uint32_t seed) {
     SurfSample s;
-    CellHit c = gridCell(u, v, 3, 3, false, 0.05);
-    double spk = wrapNoise(u, v, 70, seed) - 0.5;
-    double slabV = 0.9 + 0.12 * (ihash(c.cu, c.cv, seed) - 0.5) + 0.06 * spk;
-    s.h = mixd(0.45, 0.85 + 0.1 * spk, c.joint);
-    s.albedo = Vec3(0.60, 0.59, 0.57) * slabV * mixd(0.75, 1.0, c.joint);
-    s.rough = 0.9;
+    // Slabs at ~1.2 m (3 per 3.6 m tile). Two device notes drive this:
+    // (1) "the pbr texture ... is too noisy" — the old high-freq speckle
+    //     (wrapNoise at freq 70) is gone; only a gentle low-frequency mottle
+    //     and a faint per-slab value shift remain, so the concrete reads calm.
+    // (2) "the concrete divides ... aren't emphasized with a bump" — the joint
+    //     is a crisp, DEEP height groove (0.12 vs a flat 0.9 face) so the baked
+    //     normal map shows a real scored line, not a hairline colour change.
+    CellHit c = gridCell(u, v, 3, 3, false, 0.06);
+    double mott = wrapFbm(u, v, 5, 3, seed) - 0.5;          // slow mottle, not speckle
+    double slabV = 0.95 + 0.045 * (ihash(c.cu, c.cv, seed) - 0.5) + 0.03 * mott;
+    s.h = mixd(0.12, 0.9, c.joint);                         // deep scored groove
+    s.albedo = Vec3(0.63, 0.62, 0.60) * slabV * mixd(0.70, 1.0, c.joint);
+    s.rough = 0.92;
     return s;
 }
 SurfSample evalCobble(double u, double v, uint32_t seed) {

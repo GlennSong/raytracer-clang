@@ -446,6 +446,24 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             g.material = widgetMaterial(Vec3(0.95, 0.80, 0.25));
             world.add<InstanceGroup>(lotGroup_, g);
         }
+        // Collider prisms (device: "a physics hull visualizer"): each building's
+        // plan-prism collider drawn as its EXACT volume — a rim loop at the
+        // prism base and top (ground strips at explicit heights) plus vertical
+        // corner posts. Hot orange so a missing/short prism reads instantly.
+        colliderStripGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(1.0, 0.45, 0.10));
+            world.add<InstanceGroup>(colliderStripGroup_, g);
+        }
+        colliderPostGroup_ = world.create();
+        {
+            InstanceGroup g;
+            if (assets) g.mesh = assets->acquirePrimitive("box", Vec3(1, 1, 1));
+            g.material = widgetMaterial(Vec3(1.0, 0.45, 0.10));
+            world.add<InstanceGroup>(colliderPostGroup_, g);
+        }
     }
 
     // Bake the navgraph view ONCE — it depends only on nav_, so unlike the
@@ -504,6 +522,41 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
             for (const engine::Poly2& b : plan.blocks) outline(b, 0.35, 0.06, blockBake_);
             for (const engine::Poly2& l : plan.lots) outline(l, 0.16, 0.05, lotBake_);
+        });
+    }
+
+    // Bake the COLLIDER-PRISM outlines once (device: "a physics hull
+    // visualizer"): the exact Jolt volumes — a rim loop at each prism's world
+    // base and top plus vertical corner posts. Heights are ABSOLUTE (they're
+    // the collider's own), not ground-sampled.
+    colliderStripBake_.clear();
+    colliderPostBake_.clear();
+    {
+        auto rimLoop = [&](const engine::Poly2& poly, Real y) {
+            const std::size_t n = poly.size();
+            for (std::size_t i = 0; i < n; ++i) {
+                Vec2 a = poly[i], b = poly[(i + 1) % n];
+                Vec2 d(b.x - a.x, b.y - a.y);
+                Real len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len < 1e-6) continue;
+                Real yaw = std::atan2(d.x, d.y);
+                colliderStripBake_.push_back(Mat4::trs(
+                    Vec3(a.x, y, a.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                    Vec3(0.14, 1, len)));
+            }
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::CityPlanDebug::Prism& pr : plan.prisms) {
+                if (pr.plan.size() < 3) continue;
+                rimLoop(pr.plan, pr.y0);
+                rimLoop(pr.plan, pr.y1);
+                const Real h = pr.y1 - pr.y0;
+                if (h <= 0) continue;
+                for (const Vec2& v : pr.plan)
+                    colliderPostBake_.push_back(Mat4::trs(
+                        Vec3(v.x, pr.y0 + h * 0.5, v.y), Quat(),
+                        Vec3(0.12, h, 0.12)));
+            }
         });
     }
 
@@ -748,6 +801,12 @@ void CityRenderSystem::syncGroups(World& world) {
         InstanceGroup* lot = world.get<InstanceGroup>(lotGroup_);
         if (blk) blk->transforms = showPlan ? blockBake_ : std::vector<Mat4>{};
         if (lot) lot->transforms = showPlan ? lotBake_ : std::vector<Mat4>{};
+        // Collider prisms (static bake, same pattern).
+        const bool showCol = debugWidgets_ && showColliders_;
+        InstanceGroup* colS = world.get<InstanceGroup>(colliderStripGroup_);
+        InstanceGroup* colP = world.get<InstanceGroup>(colliderPostGroup_);
+        if (colS) colS->transforms = showCol ? colliderStripBake_ : std::vector<Mat4>{};
+        if (colP) colP->transforms = showCol ? colliderPostBake_ : std::vector<Mat4>{};
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
@@ -950,6 +1009,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         ImGui::Checkbox("Vision cones", &showVisionCones_);
         ImGui::Checkbox("Nav graph", &showNavGraph_);
         ImGui::Checkbox("City plan: blocks + lots (L)", &showPlan_);
+        ImGui::Checkbox("Building colliders (prisms)", &showColliders_);
         ImGui::Unindent();
         ImGui::EndDisabled();
 

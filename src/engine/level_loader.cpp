@@ -1776,6 +1776,7 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
     lp.innerRadius = cs.value("downtownRadius", 55.0);
     lp.midRadius = cs.value("midtownRadius", 135.0);
+    lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // net.heightAt + the flatten ramps the loader carves).
@@ -2151,6 +2152,7 @@ bool LevelLoader::load(const std::string& path,
             // where their walls are, with nothing spilling onto the sidewalk
             // (the failure that got box colliders removed).
             engine::MeshCollider buildingsMc;
+            std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 if (lb.type != "park" && lb.type != "green" &&
@@ -2179,6 +2181,8 @@ bool LevelLoader::load(const std::string& path,
                         buildingsMc.indices.insert(buildingsMc.indices.end(),
                                                    {rb, rb + 1, rb + 2});
                     }
+                    // Record the exact prism for the collider debug layer.
+                    colliderPrisms.push_back({lb.plan, base, top});
                 }
                 // Tag it as a place the agents can route to. An unbuilt GREEN is
                 // scenery, not a schedule destination — no place tag.
@@ -2322,11 +2326,13 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Renderable>(e, r);
                 }
             }
-            // Publish the plan (blocks + lots) for the citysim debug overlay.
-            if (!plan.blocks.empty()) {
+            // Publish the plan (blocks + lots + collider prisms) for the
+            // citysim debug overlay.
+            if (!plan.blocks.empty() || !colliderPrisms.empty()) {
                 engine::CityPlanDebug dbg;
                 dbg.blocks = std::move(plan.blocks);
                 dbg.lots = std::move(plan.lots);
+                dbg.prisms = std::move(colliderPrisms);
                 world.add<engine::CityPlanDebug>(world.create(), std::move(dbg));
             }
         }

@@ -277,6 +277,7 @@ public:
         if (pipeline_)  { wgpuRenderPipelineRelease(pipeline_); pipeline_ = nullptr; }
         if (overlayPipeline_) { wgpuRenderPipelineRelease(overlayPipeline_); overlayPipeline_ = nullptr; }
         if (instancedPipeline_) { wgpuRenderPipelineRelease(instancedPipeline_); instancedPipeline_ = nullptr; }
+        if (instancedOverlayPipeline_) { wgpuRenderPipelineRelease(instancedOverlayPipeline_); instancedOverlayPipeline_ = nullptr; }
         if (instancedShadowPipeline_) { wgpuRenderPipelineRelease(instancedShadowPipeline_); instancedShadowPipeline_ = nullptr; }
         if (terrainPipeline_) { wgpuRenderPipelineRelease(terrainPipeline_); terrainPipeline_ = nullptr; }
         if (terrainShadowPipeline_) { wgpuRenderPipelineRelease(terrainShadowPipeline_); terrainShadowPipeline_ = nullptr; }
@@ -989,11 +990,14 @@ private:
                     }
                     wgpuRenderPassEncoderDrawIndexed(spass, m.indexCount, 1, 0, 0, 0);
                 }
-                // Instanced groups cast shadows too.
+                // Instanced groups cast shadows too — except FLAG_OVERLAY
+                // gizmos, which never cast (Metal/Vulkan parity).
                 if (!instancedGroups_.empty()) {
                     wgpuRenderPassEncoderSetPipeline(spass, instancedShadowPipeline_);
                     for (size_t i = 0; i < instancedGroups_.size(); ++i) {
                         const InstancedGroup& g = instancedGroups_[i];
+                        if (g.data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY)
+                            continue;
                         const GpuMesh& m = meshes_[g.mesh];
                         if (!m.vertexBuffer) continue;   // removed mid-frame
                         uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
@@ -1121,6 +1125,9 @@ private:
             lastMesh = UINT32_MAX;
             for (size_t i = 0; i < instancedGroups_.size(); ++i) {
                 const InstancedGroup& g = instancedGroups_[i];
+                // FLAG_OVERLAY gizmo groups draw LAST, depth-off (below).
+                if (g.data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY)
+                    continue;
                 const GpuMesh& m = meshes_[g.mesh];
                 if (!m.vertexBuffer) continue;   // removed mid-frame
                 uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
@@ -1178,6 +1185,36 @@ private:
                 wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, 1, 0, 0, 0);
                 stats_.drawCalls++;
                 stats_.trianglesDrawn += m.indexCount / 3;
+            }
+        }
+
+        // Instanced FLAG_OVERLAY gizmos (citysim widgets — rings, arrows, plan
+        // outlines): drawn after everything, depth Always / no write, so they
+        // stay visible over the CDLOD terrain and the road solid.
+        if (instancedOverlayPipeline_) {
+            bool bound = false;
+            for (size_t i = 0; i < instancedGroups_.size(); ++i) {
+                const InstancedGroup& g = instancedGroups_[i];
+                if (!(g.data.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY))
+                    continue;
+                const GpuMesh& m = meshes_[g.mesh];
+                if (!m.vertexBuffer) continue;
+                if (!bound) {
+                    wgpuRenderPassEncoderSetPipeline(pass, instancedOverlayPipeline_);
+                    bound = true;
+                }
+                uint32_t dynOffset = static_cast<uint32_t>((draws_.size() + i) * kDrawStride);
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup_, 1, &dynOffset);
+                bindMaterial(g.mat);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, m.vertexBuffer, 0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetVertexBuffer(pass, 1, instanceBuf_,
+                                                     static_cast<uint64_t>(g.instanceOffset) * 64, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderSetIndexBuffer(pass, m.indexBuffer, WGPUIndexFormat_Uint32,
+                                                    0, WGPU_WHOLE_SIZE);
+                wgpuRenderPassEncoderDrawIndexed(pass, m.indexCount, g.instanceCount, 0, 0, 0);
+                stats_.instancedDrawCalls++;
+                stats_.totalInstances += g.instanceCount;
+                stats_.trianglesDrawn += (m.indexCount / 3) * g.instanceCount;
             }
         }
 
@@ -1772,6 +1809,17 @@ private:
         idesc.vertex.bufferCount = 2;
         idesc.vertex.buffers = instMainBufs;
         instancedPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &idesc);
+        // Instanced OVERLAY variant (FLAG_OVERLAY debug widgets — the citysim
+        // rings/arrows/plan outlines are InstanceGroups): depth Always + no
+        // write, drawn last. Without it the instanced pass depth-tested the
+        // gizmos, and the CDLOD terrain (whose drawn surface morphs above the
+        // analytic ground the widgets are baked on) swallowed every ground
+        // strip (device: "the living city visualization doesn't show up").
+        depthState.depthWriteEnabled = WGPUOptionalBool_False;
+        depthState.depthCompare = WGPUCompareFunction_Always;
+        instancedOverlayPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &idesc);
+        depthState.depthWriteEnabled = WGPUOptionalBool_True;
+        depthState.depthCompare = WGPUCompareFunction_LessEqual;
         wgpuPipelineLayoutRelease(iPipeLayout);
 
         WGPUBindGroupLayout shadowGroups2[2] = {bindLayout_, shadowVsLayout_};
@@ -2618,6 +2666,7 @@ private:
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;
     WGPURenderPipeline overlayPipeline_ = nullptr;   // FLAG_OVERLAY: depth Always, no write, drawn last
+    WGPURenderPipeline instancedOverlayPipeline_ = nullptr;   // FLAG_OVERLAY InstanceGroups (citysim gizmos)
     WGPUBindGroupLayout skyLayout_ = nullptr;     // group 0 (globals only)
     WGPURenderPipeline skyPipeline_ = nullptr;    // fullscreen procedural sky
     WGPUBindGroup skyBindGroup_ = nullptr;

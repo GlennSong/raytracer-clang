@@ -262,6 +262,14 @@ struct AgentDriver {
 struct CityPlanDebug {
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
     std::vector<Poly2> lots;     // every parcelled lot inside them
+    // Physics-collider outlines (device: "maybe we need a physics hull
+    // visualizer"): every building's plan-prism collider footprint with its
+    // world base/top, so the debug layer can draw the exact volumes Jolt sees.
+    struct Prism {
+        Poly2 plan;      // world-XZ footprint (the collider's side walls)
+        Real y0 = 0, y1 = 0;   // world base/top of the extrusion
+    };
+    std::vector<Prism> prisms;
 };
 
 struct AuthoredPlace {
