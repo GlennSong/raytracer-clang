@@ -36,6 +36,10 @@ struct LotBuilding {
                             // "glass_tower", "fire_station", ...) — debug/UI
     Real baseY = 0;         // world Y the building grows from (terrain-sampled
                             // when LotParams::ground is set; 0 on flat ground)
+    Real groundY = 0;       // the building's graded PAD plane (terrain levels):
+                            // the plan-centred grade the terrain is flattened to
+                            // under the footprint. baseY sits a small plinth
+                            // reveal above it. 0 on flat ground.
     // The building's grown PLAN polygon (world XZ) — the caller extrudes it
     // into a prism collider that matches the massing exactly, where an
     // oriented box would spill onto the sidewalk on L / courtyard / prow
@@ -134,6 +138,22 @@ struct RoadGraph;   // road_network.h (forward-declared to keep this header ligh
 std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
                               const std::vector<Poly2>& closedBlocks,
                               const EdgeBlockParams& params);
+
+// The whole "road nets → blocks (+ rim) → lots → buildings" pass in one call,
+// shared by the viewer's loader and the offline tracer so both grow the SAME
+// city: combines every net into one planar graph, extracts the enclosed blocks,
+// synthesizes rim blocks on the open sides, and grows the lot buildings against
+// the SAMPLED centrelines (road clearance).
+struct RoadNet;   // road_net.h
+struct NetLotResult {
+    std::vector<LotBuilding> lots;
+    LotPlanDebug plan;               // blocks + lots, for debug overlays
+    std::vector<RenderMesh> parts;   // grown geometry merged by PartId
+};
+NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
+                                    const LotParams& params,
+                                    const EdgeBlockParams& edgeParams,
+                                    Real roadClearance);
 
 }  // namespace engine
 

@@ -349,9 +349,10 @@ TEST_CASE(style_book_hook_overlays_looks) {
 }
 
 TEST_CASE(buildings_grow_from_terrain_base) {
-    // City-on-terrain: with a ground sampler set, every building's baseY is
-    // the LOWEST ground under its plan (minus a small embed on real slopes,
-    // so the downhill corner never floats), and pads bake draped heights.
+    // City-on-terrain: with a ground sampler set, every building records its
+    // graded PAD PLANE (groundY — the mid-slope average under the plan, which
+    // the host flattens the terrain to) and grows from a small plinth reveal
+    // above it. Park/green pads still drape per-vertex.
     LotParams p;
     p.center = {0, 0};
     p.seed = 3;
@@ -369,11 +370,16 @@ TEST_CASE(buildings_grow_from_terrain_base) {
             continue;
         }
         if (lb.plan.size() < 3) continue;
-        Real lo = 1e30;
-        for (const Vec2& v : lb.plan)
-            lo = std::min(lo, 0.04 * v.x + 0.02 * v.y);
-        CHECK(lb.baseY <= lo + 1e-6);          // never floats above the ground
-        CHECK(lb.baseY >= lo - 0.3);           // embeds at most the slope allowance
+        Real lo = 1e30, hi = -1e30;
+        for (const Vec2& v : lb.plan) {
+            const Real g = 0.04 * v.x + 0.02 * v.y;
+            lo = std::min(lo, g);
+            hi = std::max(hi, g);
+        }
+        CHECK(lb.groundY >= lo - 1e-6);   // the pad plane cuts and fills...
+        CHECK(lb.groundY <= hi + 1e-6);   // ...within the plan's own grades
+        CHECK(lb.baseY > lb.groundY);             // walls sit proud of the pad
+        CHECK(lb.baseY <= lb.groundY + 0.3);      // ...by a small plinth only
         if (std::fabs(lb.baseY) > 0.5) ++sloped;
     }
     CHECK(sloped > 0);   // the slope actually moved buildings off y=0

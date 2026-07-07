@@ -1746,6 +1746,75 @@ static void loadVehicles(const json& vehicles, World& world, AssetManager& asset
 }
 #endif
 
+// Living-city lot growth (ADR-0066), shared by the TERRAIN PRE-PASS and the
+// citysim build: the blocks' buildings must be grown BEFORE the terrain is
+// meshed — every building stamps a flat graded pad into the ground (device:
+// "the terrain should be flat under the building") — and the citysim section
+// then spawns the exact same lots rather than growing them twice.
+struct GrownLots {
+    std::vector<engine::LotBuilding> lots;
+    engine::LotPlanDebug plan;           // blocks + lots, for the debug overlay
+    std::vector<RenderMesh> parts;       // grown geometry merged by PartId
+    bool grown = false;
+};
+
+static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
+                              const json& cs, const std::string& levelDir,
+                              const HeightField& ground) {
+    GrownLots g;
+    // Edge blocks (device feedback): the town RIM has no enclosed faces —
+    // synthesize rectangular blocks on boundary roads' open sides so the
+    // outskirts build up too. Sized by min/max length + depth knobs.
+    engine::EdgeBlockParams ep;
+    ep.depth = cs.value("edgeBlockDepth", ep.depth);
+    ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
+    ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
+    ep.margin = 4.0 + cs.value("sidewalk", 4.0);
+    engine::LotParams lp;
+    lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
+    lp.buildChance = cs.value("buildChance", 0.9);
+    lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
+    lp.innerRadius = cs.value("downtownRadius", 55.0);
+    lp.midRadius = cs.value("midtownRadius", 135.0);
+    // TERRAIN: buildings grow from their graded pad plane, park/green pads
+    // drape per-vertex (city-on-terrain; roads conform separately via
+    // net.heightAt + the flatten ramps the loader carves).
+    if (ground)
+        lp.ground = [&ground](engine::Real x, engine::Real z) {
+            return static_cast<engine::Real>(ground(x, z));
+        };
+    // The STYLE BOOK (the architect's Lua DATA layer): per-recipe look
+    // overrides from assets/scripts/style_book.lua. The C++ architect decides
+    // what stands where; the book restyles it. The vm must outlive
+    // growLotBuildings below (the hook holds it).
+#ifdef RT_ENABLE_SCRIPTING
+    std::unique_ptr<ScriptVM> styleVm;
+    {
+        std::string sb = loadScriptCode("style_book.lua", levelDir);
+        if (!sb.empty()) {
+            styleVm = std::make_unique<ScriptVM>();
+            openProcgenLibrary(*styleVm);
+            std::string err;
+            auto hook = engine::makeStyleBook(*styleVm, sb, &err);
+            if (hook) lp.styleHook = std::move(hook);
+            else if (!err.empty())
+                LOG_WARN << "style_book.lua: " << err;
+        }
+    }
+#else
+    (void)levelDir;
+#endif
+    // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
+    // margin, so nothing overhangs the concrete or pokes into the street.
+    const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
+    engine::NetLotResult r = engine::growLotBuildingsOnNets(nets, lp, ep, roadClear);
+    g.lots = std::move(r.lots);
+    g.plan = std::move(r.plan);
+    g.parts = std::move(r.parts);
+    g.grown = true;
+    return g;
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
@@ -1832,6 +1901,7 @@ bool LevelLoader::load(const std::string& path,
     // road (shape:"road") BEFORE it builds, mirroring the script pre-pass, so the ground
     // meets the road's drivable profile and no terrain pokes through.
     std::vector<TerrainFlatten> roadFlatten;
+    std::vector<engine::RoadNet> preNets;   // parsed nets, for the lot pre-pass
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
@@ -1847,6 +1917,7 @@ bool LevelLoader::load(const std::string& path,
                 net.heightAt = levelGround;
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
+                preNets.push_back(std::move(net));
             }
         }
     }
@@ -1854,6 +1925,7 @@ bool LevelLoader::load(const std::string& path,
 
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
+    GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
     if (root.contains("terrain")) {
         TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
         terrainParams.flatten = cityFlatten;   // grade flat under the city
@@ -1864,6 +1936,31 @@ bool LevelLoader::load(const std::string& path,
                                      roadFlatten.begin(), roadFlatten.end());   // carve to roads
         unsigned terrainSeed = root["terrain"].value("seed", 0u);
         Noise terrainNoise(terrainSeed);
+        // LOT PRE-PASS (device: "some of the buildings are sunk into the
+        // terrain"): grow the living city's lots on the road-carved ground
+        // BEFORE the terrain is meshed, so every building stamps a FLAT graded
+        // pad (at its own plane) into the flatten set. The citysim build below
+        // reuses these exact lots.
+        if (root.contains("citysim") &&
+            root["citysim"].value("buildLots", false) && !preNets.empty()) {
+            auto lotTp = std::make_shared<TerrainParams>(terrainParams);
+            auto lotNoise = std::make_shared<Noise>(terrainSeed);
+            HeightField lotGround = [lotTp, lotNoise](double x, double z) {
+                return terrainHeight(*lotTp, *lotNoise, x, z);
+            };
+            preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround);
+            for (const engine::LotBuilding& lb : preLots.lots) {
+                if (lb.type == "park" || lb.type == "green" ||
+                    lb.plan.size() < 3) continue;
+                std::vector<Vec3> poly;
+                poly.reserve(lb.plan.size());
+                for (const engine::Vec2& v : lb.plan)
+                    poly.push_back(Vec3(v.x, 0, v.y));
+                TerrainFlatten f = makeFlattenPad(std::move(poly), lb.groundY, 5.0);
+                terrainParams.flatten.push_back(f);
+                baseFlatten.push_back(std::move(f));   // non-road grading
+            }
+        }
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         // Hand the CDLOD config its non-road base so the editor's re-conform action can
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
@@ -1993,85 +2090,22 @@ bool LevelLoader::load(const std::string& path,
         // (floors/windows/roof, fitting the lot), each tagged as a place agents
         // start/end their schedules at. Runs on the RoadNet(s) already in the world.
         if (cs.value("buildLots", false)) {
-            // One combined raw planar graph across every RoadNet (the sampled
-            // navRoadGraph loses faces, so build from the nets' own nodes/edges).
-            engine::RoadGraph rg;
-            // The SAMPLED centrelines (what the asphalt is actually meshed from —
-            // a curvy road bows off its control chords) with real per-edge widths,
-            // for the building road-clearance check below.
-            engine::RoadGraph rgSampled;
-            world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
-                const int base = static_cast<int>(rg.nodes.size());
-                for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
-                for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-                    const auto& e = net.edges[ei];
-                    const float w = static_cast<float>(engine::roadNetEdgeWidth(
-                        net, static_cast<int>(ei)));
-                    rg.edges.push_back(engine::RoadEdge{base + e[0], base + e[1], w,
-                                                        engine::RoadClass::Local, 0});
-                }
-                engine::RoadGraph s = engine::navRoadGraph(net);
-                const int sBase = static_cast<int>(rgSampled.nodes.size());
-                for (const auto& n : s.nodes) rgSampled.nodes.push_back(n);
-                for (const auto& e : s.edges)
-                    rgSampled.edges.push_back(engine::RoadEdge{sBase + e.a, sBase + e.b,
-                                                               e.width, e.klass, e.layer});
-            });
-            std::vector<Poly2> blocks = engine::extractBlocks(rg);
-            // Edge blocks (device feedback): the town RIM has no enclosed faces —
-            // synthesize rectangular blocks on boundary roads' open sides so the
-            // outskirts build up too. Sized by min/max length + depth knobs.
-            {
-                engine::EdgeBlockParams ep;
-                ep.depth = cs.value("edgeBlockDepth", ep.depth);
-                ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
-                ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
-                ep.margin = 4.0 + cs.value("sidewalk", 4.0);
-                std::vector<Poly2> rim = engine::edgeBlocks(rg, blocks, ep);
-                blocks.insert(blocks.end(), rim.begin(), rim.end());
+            // The lots: grown by the terrain pre-pass (city-on-terrain — their
+            // graded pads are already baked into the ground), or grown here for
+            // a flat city. Same helper, same deterministic result.
+            GrownLots grown = std::move(preLots);
+            if (!grown.grown) {
+                std::vector<engine::RoadNet> nets;
+                world.each<engine::RoadNet>(
+                    [&](Entity, engine::RoadNet& net) { nets.push_back(net); });
+                grown = growCityLots(nets, cs, levelDir, entityGround);
             }
-            engine::LotParams lp;
-            lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
-            lp.buildChance = cs.value("buildChance", 0.9);
-            lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
-            lp.innerRadius = cs.value("downtownRadius", 55.0);
-            // TERRAIN: buildings grow from the lowest ground under their plan,
-            // pads drape per-vertex (city-on-terrain; roads conform separately
-            // via net.heightAt + the flatten ramps carved above).
-            if (entityGround)
-                lp.ground = [&entityGround](engine::Real x, engine::Real z) {
-                    return static_cast<engine::Real>(entityGround(x, z));
-                };
-            // The STYLE BOOK (the architect's Lua DATA layer): per-recipe
-            // look overrides from assets/scripts/style_book.lua. The C++
-            // architect decides what stands where; the book restyles it.
-            // The vm must outlive growLotBuildings below (the hook holds it).
-#ifdef RT_ENABLE_SCRIPTING
-            std::unique_ptr<ScriptVM> styleVm;
-            {
-                std::string sb = loadScriptCode("style_book.lua", levelDir);
-                if (!sb.empty()) {
-                    styleVm = std::make_unique<ScriptVM>();
-                    openProcgenLibrary(*styleVm);
-                    std::string err;
-                    auto hook = engine::makeStyleBook(*styleVm, sb, &err);
-                    if (hook) lp.styleHook = std::move(hook);
-                    else if (!err.empty())
-                        LOG_WARN << "style_book.lua: " << err;
-                }
-            }
-#endif
-            lp.midRadius = cs.value("midtownRadius", 135.0);
-            MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
-            engine::LotPlanDebug plan;   // blocks + lots, for the debug overlay
+            engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
             // The buildings' geometry, merged by shape-grammar PartId across the
             // whole district — the SAME structure as CityModel::parts, so the same
-            // PBR recipes bind below. (Buildings stay visual-only: an oriented-box
-            // collider spilled onto the streets — see the invisible-walls fix.)
-            std::vector<RenderMesh> lotParts;
-            // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
-            // margin, so nothing overhangs the concrete or pokes into the street.
-            const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
+            // PBR recipes bind below.
+            std::vector<RenderMesh>& lotParts = grown.parts;
+            MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
             // upload each, reused across every planted lot.
@@ -2117,9 +2151,7 @@ bool LevelLoader::load(const std::string& path,
             // where their walls are, with nothing spilling onto the sidewalk
             // (the failure that got box colliders removed).
             engine::MeshCollider buildingsMc;
-            for (const engine::LotBuilding& lb :
-                 engine::growLotBuildings(blocks, lp, &plan, &lotParts,
-                                          &rgSampled, roadClear)) {
+            for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 if (lb.type != "park" && lb.type != "green" &&
                     lb.plan.size() >= 3) {
@@ -2242,6 +2274,19 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
             if (!buildingsMc.indices.empty()) {
+                // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
+                // arrive with mixed winding (offset/prow/courtyard plans flip
+                // orientation) — a wrong-way wall lets bullets sail through
+                // from outside (device: "I can shoot through them at certain
+                // angles"). Emit every triangle both ways so the prism is
+                // solid regardless of plan winding.
+                const std::size_t oneSided = buildingsMc.indices.size();
+                buildingsMc.indices.reserve(oneSided * 2);
+                for (std::size_t i = 0; i + 2 < oneSided; i += 3) {
+                    buildingsMc.indices.push_back(buildingsMc.indices[i]);
+                    buildingsMc.indices.push_back(buildingsMc.indices[i + 2]);
+                    buildingsMc.indices.push_back(buildingsMc.indices[i + 1]);
+                }
                 Entity ce = world.create();
                 Transform ct;
                 world.add<Transform>(ce, ct);

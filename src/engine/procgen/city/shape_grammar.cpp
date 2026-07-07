@@ -1450,7 +1450,7 @@ static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
 // PORTICO: the columned porch — steps + platform, a colonnade, an
 // entablature beam and a triangular pediment. The classical civic front.
 static void emitPortico(BuildingMesh& out, const FaceRect& fr,
-                        const BuildingParams& p, int nCols, const Vec3& col) {
+                        const BuildingParams&, int nCols, const Vec3& col) {
     const Vec3 up(0, 1, 0);
     nCols = std::max(2, nCols);
     const Real depth = std::min(Real(3.4), std::max(Real(2.2), fr.width * 0.16));

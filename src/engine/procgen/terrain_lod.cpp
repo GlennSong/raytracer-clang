@@ -103,6 +103,11 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
     mesh.vertices.reserve(static_cast<size_t>(n) * n);
 
     // First pass: positions/normals/colors + the raw height grid (for morph targets).
+    // The cut/fill footprints are sampled DILATED by ~half this node's cell: a
+    // road corridor narrower than the grid spacing would otherwise slip between
+    // two samples and the triangle spanning it would lift natural ground across
+    // the carriageway (device: "the terrain poked through in some places").
+    const double flattenDilate = static_cast<double>(step) * 0.75;
     std::vector<float> H(static_cast<size_t>(n) * n);
     float minY = std::numeric_limits<float>::max();
     float maxY = std::numeric_limits<float>::lowest();
@@ -110,7 +115,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
         for (int i = 0; i < n; i++) {
             double x = node.minX + i * step;
             double z = node.minZ + j * step;
-            double y = terrainHeight(params, noise, x, z);
+            double y = terrainHeight(params, noise, x, z, flattenDilate);
             H[static_cast<size_t>(j) * n + i] = static_cast<float>(y);
             minY = std::min(minY, static_cast<float>(y));
             maxY = std::max(maxY, static_cast<float>(y));

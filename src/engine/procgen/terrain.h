@@ -45,6 +45,11 @@ TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double y
 // noise terrain and the composable HeightField (terrain.conform) cut/fill with.
 double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
                     double z, double base);
+// Dilated variant: every footprint is grown by `dilate` metres for this query.
+// Coarse samplers (a distant CDLOD node) pass ~half their cell size so a grid
+// triangle can never straddle a narrow corridor and lift natural ground over it.
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base, double dilate);
 
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
@@ -106,6 +111,10 @@ std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
 // directly (height, and slope via finite differences) without needing the mesh.
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ);
+// Coarse-sampler variant: `flattenDilate` grows the cut/fill footprints for
+// this query (see applyFlatten's dilated overload). 0 = exact footprints.
+double terrainHeight(const TerrainParams& params, const Noise& noise,
+                     double worldX, double worldZ, double flattenDilate);
 
 // Sample a smooth spine polyline from authored control points (Catmull-Rom) for
 // TerrainParams::rangeSpine. Points are (x, 0, z).

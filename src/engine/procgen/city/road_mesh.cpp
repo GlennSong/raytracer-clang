@@ -1290,13 +1290,25 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             struct Corner { Vec2 prevPt, nextPt; bool bevel; };
             std::vector<Corner> oc(m);
             for (int i = 0; i < m; ++i) {
-                Vec2 n0 = rnorm(loop[i] - loop[(i + m - 1) % m]);
-                Vec2 n1 = rnorm(loop[(i + 1) % m] - loop[i]);
+                Vec2 e0 = loop[i] - loop[(i + m - 1) % m];
+                Vec2 e1 = loop[(i + 1) % m] - loop[i];
+                Vec2 n0 = rnorm(e0), n1 = rnorm(e1);
                 Vec2 bis = n0 + n1; double bl = bis.length();
                 Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
                 double cosH = dot(mm, n1);
-                if (cosH >= 0.5) {
-                    Vec2 q = loop[i] + mm * (p.sidewalkWidth / std::max(0.5, cosH));
+                // The band rides the RIGHT of travel, so the turn direction
+                // decides the corner's kind: a LEFT turn OPENS the band (fan /
+                // bevel closes the gap), a RIGHT turn PINCHES it (the two band
+                // edges meet at the offset lines' true intersection — a
+                // junction crotch, a block frame's inner corner). Beveling or
+                // clamping a pinch folds the segments over each other (device:
+                // "parts of the sidewalk aren't being welded together").
+                const bool opens = cross(e0, e1) > 0.0;
+                if (!opens) {
+                    Vec2 q = loop[i] + mm * (p.sidewalkWidth / std::max(0.2, cosH));
+                    oc[i] = {q, q, false};
+                } else if (cosH >= 0.5) {
+                    Vec2 q = loop[i] + mm * (p.sidewalkWidth / cosH);
                     oc[i] = {q, q, false};
                 } else {
                     oc[i] = {loop[i] + n0 * p.sidewalkWidth,

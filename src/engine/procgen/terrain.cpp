@@ -55,8 +55,12 @@ double distanceToFootprint(const std::vector<Vec3>& poly, double x, double z) {
 // Blend the flatten footprints over a natural height. The strongest (closest)
 // footprint wins, so overlapping road/block stamps don't fight; inside a
 // footprint the weight is 1 (fully levelled), easing to 0 across `falloff`.
+// `dilate` grows every footprint by that many metres for THIS query — a coarse
+// CDLOD node samples with dilate ≈ half its cell so a triangle whose corners
+// both land outside a narrow road corridor can't interpolate natural ground
+// straight across the carriageway (device: "terrain poked through in places").
 double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
-                    double z, double base) {
+                    double z, double base, double dilate) {
     double result = base;
     double bestW = 0.0;
     // Inside OVERLAPPING footprints — every junction interior — the ground
@@ -68,16 +72,23 @@ double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
     double insideMin = std::numeric_limits<double>::max();
     for (const TerrainFlatten& r : regions) {
         if (r.polygon.size() < 3) continue;
-        if (x < r.minX - r.falloff || x > r.maxX + r.falloff ||
-            z < r.minZ - r.falloff || z > r.maxZ + r.falloff)
+        const double reach = r.falloff + dilate;
+        if (x < r.minX - reach || x > r.maxX + reach ||
+            z < r.minZ - reach || z > r.maxZ + reach)
             continue;
         if (pointInFootprint(r.polygon, x, z)) {
             insideAny = true;
             insideMin = std::min(insideMin, r.planeY(x, z));
             continue;
         }
-        if (insideAny) continue;   // an inside hit already owns this point
         double d = distanceToFootprint(r.polygon, x, z);
+        if (dilate > 0.0 && d <= dilate) {   // inside the grown footprint
+            insideAny = true;
+            insideMin = std::min(insideMin, r.planeY(x, z));
+            continue;
+        }
+        if (insideAny) continue;   // an inside hit already owns this point
+        d -= dilate;
         if (d >= r.falloff) continue;
         double w = 1.0 - smoothstep(0.0, r.falloff, d);
         if (w > bestW) {
@@ -87,6 +98,11 @@ double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
     }
     if (insideAny) return insideMin;
     return result;
+}
+
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base) {
+    return applyFlatten(regions, x, z, base, 0.0);
 }
 
 static void footprintBounds(TerrainFlatten& f) {
@@ -261,6 +277,11 @@ std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
+    return terrainHeight(params, noise, worldX, worldZ, 0.0);
+}
+
+double terrainHeight(const TerrainParams& params, const Noise& noise,
+                     double worldX, double worldZ, double flattenDilate) {
     double nx = worldX * params.noiseScale;
     double nz = worldZ * params.noiseScale;
     double h = params.warp > 0.0
@@ -336,7 +357,7 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     // City cut/fill: grade the ground flat under roads and blocks (applied last so
     // it overrides every relief layer there).
     if (!params.flatten.empty())
-        h = applyFlatten(params.flatten, worldX, worldZ, h);
+        h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
     return h;
 }
 

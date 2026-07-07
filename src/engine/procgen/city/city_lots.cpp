@@ -1,6 +1,7 @@
 #include "city_lots.h"
 
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
+#include "road_net.h"        // RoadNet + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
@@ -116,6 +117,66 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             hi = std::max(hi, g);
         }
         return lo - ((hi - lo) > 0.05 ? Real(0.25) : Real(0));
+    };
+    // TERRAIN pad plane (device: "the terrain should be flat under the
+    // building"): the mid-slope grade — the average ground under the plan's
+    // vertices — balancing cut against fill. The host stamps a flatten pad at
+    // this plane, so the walls meet FLAT graded earth, not raw slope.
+    auto padPlaneFor = [&](const Poly2& pl) -> Real {
+        if (!p.ground || pl.empty()) return 0;
+        Real sum = 0;
+        for (const Vec2& v : pl) sum += p.ground(v.x, v.y);
+        return sum / static_cast<Real>(pl.size());
+    };
+    // Plinth reveal: walls start this far above the graded pad, on a visible
+    // FOUNDATION course (device: "there should be some kind of a base for the
+    // building and steps to get up to the front door").
+    const Real plinth = p.ground ? Real(0.15) : Real(0);
+    // The foundation course: the plan outset slightly, extruded from below the
+    // pad up to the wall base — a concrete band that grounds the massing and
+    // hides the terrain seam. Emitted into the Concrete part like any other
+    // grammar element.
+    auto emitFoundation = [&](const Poly2& plIn, Real planeY, Real topY) {
+        if (!outParts || plIn.size() < 3 || !p.ground) return;
+        Poly2 pl = plIn;
+        if (area(pl) < 0) std::reverse(pl.begin(), pl.end());   // CCW: right normal = outward
+        const std::size_t nv = pl.size();
+        Poly2 o(nv);
+        for (std::size_t i = 0; i < nv; ++i) {
+            const Vec2& a = pl[(i + nv - 1) % nv];
+            const Vec2& b = pl[i];
+            const Vec2& c = pl[(i + 1) % nv];
+            Vec2 e0 = b - a, e1 = c - b;
+            auto rn = [](Vec2 e) {
+                Vec2 n(e.y, -e.x); Real l = n.length();
+                return l < Real(1e-9) ? Vec2(0, 0) : n * (1 / l);
+            };
+            Vec2 n0 = rn(e0), n1 = rn(e1);
+            Vec2 bis = n0 + n1; Real bl = bis.length();
+            Vec2 mm = bl < Real(1e-9) ? n1 : bis * (1 / bl);
+            const Real cosH = std::max(Real(0.35), dot(mm, n1));
+            o[i] = b + mm * (Real(0.14) / cosH);
+        }
+        RenderMesh& m = (*outParts)[static_cast<std::size_t>(PartId::Concrete)];
+        const Vec3 col(1, 1, 1);   // Concrete's surface maps carry the look
+        const Real botY = planeY - Real(0.6);   // skirt below the graded pad
+        for (std::size_t i = 0; i < nv; ++i) {
+            const std::size_t j = (i + 1) % nv;
+            Vec2 e = o[j] - o[i];
+            if (e.length() < Real(1e-9)) continue;
+            Vec2 n = normalize(Vec2(e.y, -e.x));
+            MeshBuilder::emitQuad(m, Vec3(o[i].x, botY, o[i].y),
+                                  Vec3(o[j].x, botY, o[j].y),
+                                  Vec3(o[j].x, topY, o[j].y),
+                                  Vec3(o[i].x, topY, o[i].y),
+                                  Vec3(n.x, 0, n.y), col);
+            // The exposed ledge between the foundation's outer lip and the wall.
+            MeshBuilder::emitQuad(m, Vec3(o[i].x, topY, o[i].y),
+                                  Vec3(o[j].x, topY, o[j].y),
+                                  Vec3(pl[j].x, topY, pl[j].y),
+                                  Vec3(pl[i].x, topY, pl[i].y),
+                                  Vec3(0, 1, 0), col);
+        }
     };
     if (outParts) {
         outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
@@ -612,6 +673,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (stripOk) {
                     const Real uw = len / units;
                     const Vec2 c0 = sb.center - u * (len * 0.5);
+                    // One shared pad plane for the whole terrace: the strip is
+                    // graded flat as ONE pad, so the party-wall units sit flush
+                    // on it instead of staggering into the cut.
+                    b.groundY = padPlaneFor(plan);
+                    const Real stripBase =
+                        p.ground ? b.groundY + plinth : baseYFor(plan);
                     for (int k = 0; k < units; ++k) {
                         Poly2 up4{c0 + u * (uw * k) - v * (dep * 0.5),
                                   c0 + u * (uw * (k + 1)) - v * (dep * 0.5),
@@ -622,7 +689,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             bp.floors);
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
-                        BuildingMesh um = growPlanBuilding(up4, upar, baseYFor(up4));
+                        BuildingMesh um = growPlanBuilding(up4, upar, stripBase);
                         if (outParts)
                             for (const RenderMesh& part : um.parts) {
                                 const int mi = part.materialIndex;
@@ -633,7 +700,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         b.height = std::max(b.height, um.height);
                     }
                     b.site = sb.center;
-                    b.baseY = baseYFor(plan);
+                    b.baseY = stripBase;
                     b.width = 2 * sb.half[0];
                     b.depth = 2 * sb.half[1];
                     b.yaw = std::atan2(sb.axis[0].y, sb.axis[0].x);
@@ -641,6 +708,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                               sb.center + u * (len * 0.5) - v * (dep * 0.5),
                               sb.center + u * (len * 0.5) + v * (dep * 0.5),
                               sb.center - u * (len * 0.5) + v * (dep * 0.5)};
+                    emitFoundation(b.plan, b.groundY, b.baseY);
                     out.push_back(std::move(b));
                     continue;
                 }
@@ -669,7 +737,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
 
             BuildingMesh bm;
-            b.baseY = baseYFor(planOk ? plan : site);
+            // On terrain the building rises from its graded pad plane (plus the
+            // plinth reveal); every walk-up entrance earns steps to the door —
+            // porticos and bay-door fronts already bring their own.
+            b.groundY = padPlaneFor(planOk ? plan : site);
+            b.baseY = p.ground ? b.groundY + plinth
+                               : baseYFor(planOk ? plan : site);
+            if (p.ground && !bp.entranceSteps && bp.portico == 0 &&
+                bp.groundBays == 0 && bp.floors > 0)
+                bp.entranceSteps = true;
             if (planOk) {
                 bm = growPlanBuilding(plan, bp, b.baseY);
                 OBB2 pb = orientedBoundingBox(plan);
@@ -710,6 +786,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         MeshBuilder::append((*outParts)[mi], part);
                 }
             b.height = bm.height > 0 ? bm.height : 8.0;
+            emitFoundation(b.plan, b.groundY, b.baseY);
             out.push_back(std::move(b));
         }
     }
@@ -855,6 +932,44 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
         }
     }
     return out;
+}
+
+NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
+                                    const LotParams& params,
+                                    const EdgeBlockParams& edgeParams,
+                                    Real roadClearance) {
+    NetLotResult r;
+    // One combined raw planar graph across every net (the sampled navRoadGraph
+    // loses faces, so the block extraction uses the nets' own nodes/edges) —
+    // plus the SAMPLED centrelines (what the asphalt is actually meshed from;
+    // a curvy road bows off its control chords) with real per-edge widths, for
+    // the building road-clearance check.
+    RoadGraph rg, rgSampled;
+    for (const RoadNet& net : nets) {
+        const int base = static_cast<int>(rg.nodes.size());
+        for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
+        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+            const auto& e = net.edges[ei];
+            const float w = static_cast<float>(
+                roadNetEdgeWidth(net, static_cast<int>(ei)));
+            rg.edges.push_back(RoadEdge{base + e[0], base + e[1], w,
+                                        RoadClass::Local, 0});
+        }
+        RoadGraph s = navRoadGraph(net);
+        const int sBase = static_cast<int>(rgSampled.nodes.size());
+        for (const auto& n : s.nodes) rgSampled.nodes.push_back(n);
+        for (const auto& e : s.edges)
+            rgSampled.edges.push_back(RoadEdge{sBase + e.a, sBase + e.b,
+                                               e.width, e.klass, e.layer});
+    }
+    std::vector<Poly2> blocks = extractBlocks(rg);
+    // Rim blocks: the town edge has no enclosed faces — synthesize rectangles
+    // on the boundary roads' open sides so the outskirts build up too.
+    std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
+    blocks.insert(blocks.end(), rim.begin(), rim.end());
+    r.lots = growLotBuildings(blocks, params, &r.plan, &r.parts, &rgSampled,
+                              roadClearance);
+    return r;
 }
 
 }  // namespace engine
