@@ -434,6 +434,15 @@ actually needs menus — **RmlUi** as the game UI kit (MIT, renderer-agnostic
 VM). Until then, player-visible text in the games-as-tests stays on ImGui or
 in-world (ADR-0061 ground projection). Don't build it before a game needs it.
 
+### 3.10 Character posing & comics pipeline
+**Status:** Planned — see `docs/character-posing-plan.md` (interview-shaped,
+2026-07-07). Skeleton substrate + posable mannequin first (P0, headless), pose
+editing on the existing gizmo/undo stack (P1), glTF skins + CPU skinning so
+characters render in the viewer *and* the offline tracer (P2), panel/still
+batch renders (P3), then timeline animation over the AnimCurve substrate (P4).
+In-house through P4; ozz-animation only if blending/retargeting/production IK
+demand it (ADR trigger recorded in the plan).
+
 ---
 
 ## Tier 4 — Procedural Generation
