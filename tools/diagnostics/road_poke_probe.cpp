@@ -57,6 +57,8 @@ int main(int argc, char** argv) {
     int deck = 0, pokeExact = 0, pokeCdlod = 0;
     double worstExact = 0, worstCdlod = 0;
     double wx = 0, wz = 0;
+    int proudN[4] = {0,0,0,0};                 // <0.45 | 0.45-0.7 | 0.7-1.0 | >1.0 m
+    double worstProud = 0, px = 0, pz = 0;
     // buckets by distance to junction
     int bJ[3] = {0,0,0}, bJn[3] = {0,0,0};   // <8m, 8-20m, >20m : poke count / total
     // buckets by cross-slope (natural gradient magnitude)
@@ -79,12 +81,23 @@ int main(int argc, char** argv) {
         if (dE > 0.02) { ++pokeExact; ++bJ[jb]; ++bS[sb];
             if (dE > worstExact) { worstExact = dE; wx = x; wz = z; } }
         if (dC > 0.02) { ++pokeCdlod; if (dC > worstCdlod) worstCdlod = dC; }
+        // PROUD (plinth): how far the CDLOD terrain sits BELOW this deck/sidewalk
+        // vertex. Normal curb+carve ~0.38 m; a big value = an exposed skirt cliff.
+        double proud = -dC;   // deck - terrain
+        if (proud > 0.0) {
+            ++proudN[proud < 0.45 ? 0 : (proud < 0.7 ? 1 : (proud < 1.0 ? 2 : 3))];
+            if (proud > worstProud) { worstProud = proud; px = x; pz = z; }
+        }
     }
     printf("# POKE-THROUGH — living_city. deck verts=%d  (dilate=%.1f)\n", deck, dilate);
     printf("EXACT carved terrain : poke verts=%d (%.2f%%)  worst=%.2f m @ (%.0f,%.0f)\n",
            pokeExact, 100.0*pokeExact/deck, worstExact, wx, wz);
     printf("CDLOD-sampled        : poke verts=%d (%.2f%%)  worst=%.2f m\n",
            pokeCdlod, 100.0*pokeCdlod/deck, worstCdlod);
+    printf("# PROUD (apron above CDLOD terrain — exposed skirt): worst=%.2f m @ (%.0f,%.0f)\n",
+           worstProud, px, pz);
+    printf("  0.00-0.45m: %d   0.45-0.70m: %d   0.70-1.0m: %d   >1.0m: %d  (of %d top verts)\n",
+           proudN[0], proudN[1], proudN[2], proudN[3], deck);
     printf("# poke rate by distance-to-junction:\n");
     const char* jl[3] = {"<8m (in junction)","8-20m","  >20m (mid-span)"};
     for (int b = 0; b < 3; ++b)
