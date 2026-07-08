@@ -73,6 +73,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/road_mesh.cpp
+    src/engine/procgen/city/triangulate.cpp
     src/engine/procgen/city/road_net.cpp
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_rules.cpp

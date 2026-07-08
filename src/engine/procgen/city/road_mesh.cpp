@@ -3,6 +3,8 @@
 #include "../../mesh_builder.h"
 #include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
 #include "street_kit.h"           // roundPolygonCorners (the unified corner-fillet pass)
+#include "triangulate.h"          // triangulateWithHoles (robust hole-aware ear clip)
+#include "polygon.h"              // pointInPolygon, centroid
 #include <algorithm>
 #include <map>
 #include <array>
@@ -1364,12 +1366,34 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         for (const Poly2& hole : holes) sidewalk(hole);
     }
 
-    // The road SURFACE as per-spine ribbon strips, resampled to short quads. Each quad lays a plain
-    // deck (up) + underside (down); open blocks fall out for free (no strip lies over them) and
-    // strips overlapping at a junction are coplanar same-colour asphalt, so they read as one
-    // surface. Lane MARKINGS ride a third quad just above, with road-local UV (left rail u=1, right
-    // u=3, v = arc-length) so the paint interpolates exactly — crisp double-yellow, dashed lane
-    // dividers, edges. A quad over ANOTHER road's corridor is a junction: it stays plain (no paint).
+    // The road SURFACE as ONE welded sheet: triangulate the union interior (each
+    // exterior loop minus the block/island holes) with a robust hole-aware ear
+    // clip. This replaces the old overlapping per-spine strips, whose exclusive-
+    // ownership skip deferred coverage to corridors that were never surfaced
+    // (weld gaps between junctions) and whose sub-mm per-spine layer biases still
+    // z-fought where sharp arms overlapped ("two ribbons z-fighting"). One sheet:
+    // no gaps, no overlap, no z-fight. Every deck vertex takes its height from the
+    // same heightOf() the walls/sidewalk use — the boundary is shared exactly, so
+    // deck, skirt and curb weld watertight. Markings ride a separate overlay pass
+    // below (they need per-road UV, which the flat sheet does not carry).
+    for (const Poly2& outer : outers) {
+        std::vector<Poly2> deckHoles;
+        for (const Poly2& h : holes)
+            if (h.size() >= 3 && pointInPolygon(outer, centroid(h)))
+                deckHoles.push_back(h);
+        for (const std::array<Vec2, 3>& t : triangulateWithHoles(outer, deckHoles)) {
+            Vec3 a = P3(t[0], 0.0), b = P3(t[1], 0.0), c = P3(t[2], 0.0);
+            MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.topColor);        // deck up
+            Vec3 aB = P3(t[0], -p.thickness), bB = P3(t[1], -p.thickness),
+                 cB = P3(t[2], -p.thickness);
+            MeshBuilder::emitTri(mesh, aB, bB, cB, Vec3(0, -1, 0), p.bottomColor);  // underside
+        }
+    }
+
+    // Lane MARKINGS as a thin overlay just above the welded deck, laid per-spine so
+    // each quad carries road-local UV (left rail u=1, right u=3, v = arc-length) for
+    // crisp double-yellow, dashed dividers and edges. A quad straddling ANOTHER
+    // road's corridor is a junction and stays unpainted.
     const double markLift = 0.03, stripStep = 3.0;
     auto distToSpine = [&](const Vec2& q, const Prof& pr) {
         double best = 1e30;
@@ -1426,46 +1450,9 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 auto P = [&](const Vec2& c, const Vec2& o, double h, int side) {
                     return Vec3(c.x + side * o.x, h, c.y + side * o.y);
                 };
-                // EXCLUSIVE ownership at junctions (device: "roads overlap and
-                // z-fight ... modify the mesh geometry at the intersection"):
-                // a deck quad fully inside a LOWER-index spine's corridor, or
-                // inside a junction pad's disc, is that surface's ground — skip
-                // it. Remaining partial-overlap fringes get a sub-mm per-spine
-                // layer bias so whichever surface is upper wins deterministically
-                // instead of flickering; the steps are far below visibility.
-                {
-                    Vec2 q[4] = {c0 + o0, c0 - o0, c1 + o1, c1 - o1};
-                    bool covered = false;
-                    for (std::size_t pj = 0; pj < pi && !covered; ++pj) {
-                        covered = true;
-                        for (int ci = 0; ci < 4 && covered; ++ci)
-                            if (distToSpine(q[ci], profs[pj]) > profs[pj].hw - 0.05)
-                                covered = false;
-                    }
-                    for (std::size_t di = 0;
-                         di < p.padCenters.size() && di < p.padRadii.size() && !covered;
-                         ++di) {
-                        covered = true;
-                        for (int ci = 0; ci < 4 && covered; ++ci)
-                            if ((q[ci] - p.padCenters[di]).length() >
-                                p.padRadii[di] - 0.05)
-                                covered = false;
-                    }
-                    if (covered) continue;
-                }
-                const double bias = 0.0005 * (1.0 + static_cast<double>(pi % 6));
-                h0 += bias;
-                h1 += bias;
-                // Plain deck (up) and underside (down).
-                Vec3 dL0 = P(c0, o0, h0, +1), dR0 = P(c0, o0, h0, -1),
-                     dL1 = P(c1, o1, h1, +1), dR1 = P(c1, o1, h1, -1);
-                MeshBuilder::emitTri(mesh, dL0, dR0, dR1, Vec3(0, 1, 0), p.topColor);
-                MeshBuilder::emitTri(mesh, dL0, dR1, dL1, Vec3(0, 1, 0), p.topColor);
-                Vec3 bL0 = P(c0, o0, h0 - p.thickness, +1), bR0 = P(c0, o0, h0 - p.thickness, -1),
-                     bL1 = P(c1, o1, h1 - p.thickness, +1), bR1 = P(c1, o1, h1 - p.thickness, -1);
-                MeshBuilder::emitTri(mesh, bL0, bR0, bR1, Vec3(0, -1, 0), p.bottomColor);
-                MeshBuilder::emitTri(mesh, bL0, bR1, bL1, Vec3(0, -1, 0), p.bottomColor);
-                // Markings on top, unless this quad straddles another road (a junction).
+                // Markings only — the welded deck above already surfaces the
+                // asphalt. Paint the overlay unless this quad straddles another
+                // road (a junction), which stays plain.
                 Vec2 mid = (c0 + c1) * 0.5;
                 bool junction = false;
                 for (std::size_t pj = 0; pj < profs.size() && !junction; ++pj)
@@ -1527,36 +1514,9 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             }
         }
     }
-    // Junction pad decks: a plain top + underside fan per pad, closing the wedge
-    // between off-square arm caps. The pad OWNS the junction interior (strips
-    // fully inside its disc are skipped above), and its top rides a few mm over
-    // the strip layer biases so partial-overlap fringes at the disc edge resolve
-    // to the pad, never flicker; no markings — a junction reads as plain asphalt.
-    const double padLift = 0.005;
-    for (std::size_t pi = 0; pi < p.padCenters.size() && pi < p.padRadii.size(); ++pi) {
-        const double r = p.padRadii[pi];
-        if (r <= 0.0) continue;
-        const Vec2& c = p.padCenters[pi];
-        const int segs = 20;
-        Vec3 top = P3(c, padLift), bot = P3(c, -p.thickness);
-        for (int i = 0; i < segs; ++i) {
-            double a0 = 2.0 * 3.14159265358979323846 * i / segs;
-            double a1 = 2.0 * 3.14159265358979323846 * (i + 1) / segs;
-            Vec2 e0 = c + Vec2(std::cos(a0), std::sin(a0)) * r;
-            Vec2 e1 = c + Vec2(std::cos(a1), std::sin(a1)) * r;
-            MeshBuilder::emitTri(mesh, top, P3(e0, padLift), P3(e1, padLift),
-                                 Vec3(0, 1, 0), p.topColor);
-            // A skirt from the lifted rim back down to the strip layer, so the
-            // pad edge shows no knife-thin side gap at grazing angles.
-            MeshBuilder::emitQuad(mesh, P3(e0, padLift), P3(e1, padLift),
-                                  P3(e1, -0.002), P3(e0, -0.002),
-                                  Vec3(std::cos((a0 + a1) * 0.5), 0,
-                                       std::sin((a0 + a1) * 0.5)),
-                                  p.topColor);
-            MeshBuilder::emitTri(mesh, bot, P3(e1, -p.thickness), P3(e0, -p.thickness),
-                                 Vec3(0, -1, 0), p.bottomColor);
-        }
-    }
+    // (Junction pad interiors are part of the welded union boundary, so the
+    // triangulated deck above already surfaces them as one sheet with the arms —
+    // no separate pad fan is needed, and none is emitted to overlap it.)
     return mesh;
 }
 
