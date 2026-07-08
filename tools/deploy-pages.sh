@@ -32,7 +32,8 @@ git worktree add "$WT" gh-pages -q
 trap 'cd "$REPO"; git worktree remove "$WT" --force 2>/dev/null || true; git worktree prune' EXIT
 
 cp build-web/index.html build-web/viewer.html build-web/about.html \
-   build-web/city-sim.html build-web/scenes.json \
+   build-web/city-sim.html build-web/city-build.html build-web/buildings.html \
+   build-web/procgen.html build-web/scenes.json \
    build-web/viewer_web.js build-web/viewer_web.wasm build-web/viewer_web.data "$WT"/
 mkdir -p "$WT/thumbs"
 rm -f "$WT"/thumbs/*.png "$WT"/thumbs/*.webp   # drop stale formats before recopying
