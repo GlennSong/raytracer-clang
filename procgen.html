@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<!--
+  "The Procedural Toolkit" — a tour of the engine's generation building blocks
+  that the city (and everything else) is built from: L-systems, the mesh-op
+  library, noise + terrain, SDF fusion, and the analytic material library.
+  Companion to city-build.html, buildings.html, city-sim.html. Self-contained:
+  no external scripts or fonts. Facts come from docs/decisions.md
+  ADR-0021/0022/0029/0030/0033/0039/0043 and src/engine/procgen — keep in sync.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Procedural Toolkit — Raytracer Engine</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    a { color: #8ec5ff; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h2 { font-size: 19px; margin: 34px 0 10px; color: #bcd; }
+    .lede { color: #9fb4c9; font-size: 15px; margin: 0; }
+    .nav { margin-bottom: 8px; font-size: 14px; }
+    p, li { color: #c6d4e2; font-size: 15px; }
+    code { background: #131c27; border: 1px solid #22303f; border-radius: 5px;
+      padding: 1px 5px; font: 13px ui-monospace, monospace; color: #b9e0ff; }
+    .diagram { margin: 20px 0 8px; background: #0a0e14; border: 1px solid #1f2a37;
+      border-radius: 12px; padding: 12px; overflow-x: auto; }
+    .cap { color: #7f93a8; font-size: 13px; margin: 0 0 4px; }
+    .feat { margin: 18px 0 6px; }
+    .feat .f { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 12px; }
+    .feat .f h3 { margin: 0 0 6px; font-size: 16px; color: #cfe4ff; }
+    .feat .f h3 .adr { font-size: 11px; font-weight: 700; letter-spacing: .5px;
+      color: #8ec5ff; background: #0c2036; border: 1px solid #235a7a;
+      border-radius: 5px; padding: 2px 7px; margin-left: 8px; vertical-align: 2px; }
+    .feat .f p { margin: 0 0 8px; font-size: 14px; color: #9db0c4; }
+    .feat .f p:last-child { margin-bottom: 0; }
+    .feat .f b { color: #b9cde2; }
+    .powers { display: inline-block; font-size: 12px; color: #7fb0d8;
+      background: #0a1622; border: 1px solid #244; border-radius: 6px;
+      padding: 2px 8px; margin-top: 4px; }
+    footer { margin-top: 40px; color: #64768a; font-size: 13px; }
+    .try { margin: 22px 0 6px; padding: 16px 18px; border-radius: 12px;
+      background: linear-gradient(135deg, #10233a, #14182a); border: 1px solid #2f6a86; }
+    .try p { margin: 0; color: #d8e6f5; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="index.html">← all scenes</a> ·
+      <a href="city-build.html">how the city is built</a> ·
+      <a href="buildings.html">how buildings are grown</a> ·
+      <a href="city-sim.html">how the city thinks</a></div>
+    <h1>The Procedural Toolkit</h1>
+    <p class="lede">The city is the showpiece, but it's assembled from a handful
+      of general-purpose generators that run throughout the engine. Trees, rocks,
+      terrain, buildings, and materials all come from the same idea: a
+      <b>generator is data</b>, and complexity is grown by composing small
+      operations rather than authoring assets by hand (ADR-0022). Here's the
+      toolkit.</p>
+
+    <h2>L-systems — grammars that grow structure</h2>
+    <div class="feat"><div class="f">
+      <h3>Parametric L-systems<span class="adr">ADR-0030 · 0033</span></h3>
+      <p>An <b>L-system</b> is a rewriting grammar: start from an axiom string
+        and repeatedly replace symbols by their productions. This engine's is
+        <em>parametric</em> — each symbol carries numeric parameters and
+        productions compute the successors' parameters with real expressions
+        (branch length falls off, angles jitter), so one compact ruleset yields
+        endlessly varied, non-repeating structure.</p>
+      <p>A turtle interpreter walks the rewritten string — <code>F</code> draws
+        forward, <code>+ −</code> turn, <code>[ ]</code> push/pop a branch — and
+        emits a <b>Skeleton</b>: a shared value type (a tree of segments with
+        radii) that different consumers attach meaning to. The grammar doesn't
+        know whether it's growing an oak or a mountain.</p>
+      <p class="powers">powers → trees &amp; foliage · branching mountain ridge networks</p>
+    </div></div>
+
+    <h2>Botany — from skeleton to a leafy tree</h2>
+    <div class="feat"><div class="f">
+      <h3>Generalized-cylinder branches + alpha leaf cards<span class="adr">ADR-0029</span></h3>
+      <p>The tree generator grows an L-system skeleton, then <b>skins</b> it: each
+        branch becomes a generalized cylinder tapering from trunk to twig, and
+        where branches meet, an <a href="#sdf">SDF</a> pass fuses the joints into
+        one continuous surface instead of intersecting tubes. Leaves are
+        alpha-cut cards clustered at the twig tips; bark and leaf textures are
+        generated procedurally too. The result is a single mesh (bark) plus a
+        cutout-foliage mesh, collidable and instanced across a forest.</p>
+      <p class="powers">powers → the hero trees · street trees on every green lot</p>
+    </div></div>
+
+    <h2 id="sdf">SDF — the modeling kernel</h2>
+    <div class="feat"><div class="f">
+      <h3>Signed distance fields<span class="adr">ADR-0021 · 0029</span></h3>
+      <p>A signed distance field is just a function of position: negative inside,
+        positive outside, zero on the surface. Because it's a function, fields
+        <b>compose by composing functions</b> — union is a <code>min</code>,
+        intersection a <code>max</code>, and a <em>smooth-min</em> blends two
+        shapes into one seamless surface. It's the in-house, robust analog of a
+        B-rep modeling kernel: self-intersecting parts fuse instead of leaving
+        cracks, which is exactly what welded L-system branches (and blobby rocks)
+        need. Surfaces are polygonized to a mesh when a solid is required.</p>
+      <p class="powers">powers → branch fusion · procedural rocks · blended organic forms</p>
+    </div></div>
+
+    <h2>The mesh-op library — modeling ops as code</h2>
+    <div class="feat"><div class="f">
+      <h3>lathe · column · steps · portico · rotunda</h3>
+      <p>On top of the base mesh builder (boxes, cylinders, cones, quads,
+        triangle-soup append) sits a small library of higher-level operations —
+        the same primitives a modeling package gives you, callable from C++ and
+        from Lua as <code>mesh.lathe</code>. The keystone is <b>lathe</b>: revolve
+        a 2-D profile around an axis to make any turned form. From it:</p>
+      <ul>
+        <li><b>column</b> — plinth, base rings, an entasis (subtly bulged) shaft, capital, and abacus.</li>
+        <li><b>entranceSteps</b> — a porch platform with descending treads.</li>
+        <li><b>portico</b> — steps + a linear <em>array</em> of columns + an entablature beam + a pediment.</li>
+        <li><b>rotunda</b> — a drum + a <em>radial array</em> of columns + an entablature ring + a lathed dome and cupola.</li>
+      </ul>
+      <p>A civic portico isn't a bespoke model — it's steps, an array of lathed
+        columns, a beam, and a triangle. The city's capitol dome is one
+        <code>rotunda</code> call.</p>
+      <p class="powers">powers → civic landmarks · classical building elements · <a href="buildings.html">the shape grammar</a></p>
+    </div></div>
+
+    <h2>Noise — the texture of nature</h2>
+    <div class="feat"><div class="f">
+      <h3>Gradient noise, fBm, and domain warp</h3>
+      <p>A seeded, deterministic gradient-noise field (improved Perlin)
+        underlies anything that needs organic variation. Octaves sum into
+        <b>fractal Brownian motion</b> for rolling hills; a <b>domain warp</b>
+        (feeding noise back into its own coordinates) bends regular patterns
+        into meandering ones. On top of this, the terrain builds a
+        <b>ridged-multifractal</b> mountain layer — concentrating detail on
+        sharp crests while valleys stay smooth, the difference between uniform
+        bumps and real peaks. Same seed, same field, every run.</p>
+      <p class="powers">powers → terrain relief · material mottle · scatter placement · street curviness</p>
+    </div></div>
+
+    <h2>Terrain — heightfield, LOD, erosion, conforming</h2>
+    <div class="feat"><div class="f">
+      <h3>Analytic heightfield with CDLOD morphing<span class="adr">ADR-0036 · 0044</span></h3>
+      <p>The ground is a single analytic height function — the mesh, the physics
+        collider, and every placement query all read the same surface, so nothing
+        ever disagrees about where the ground is. A mountain layer (masked
+        ridged-multifractal, or a spine-driven range compiled from an L-system
+        ridge network) adds relief. <b>CDLOD</b> streams it as a camera-relative
+        quadtree with vertex morphing so distant tiles coarsen without popping,
+        and an optional droplet <b>erosion</b> pass carves drainage detail.</p>
+      <p>Crucially, terrain takes <b>cut/fill footprints</b> back from the city:
+        roads carve a graded corridor and buildings stamp flat pads, so the town
+        meets the ground instead of poking through it (see
+        <a href="city-build.html">how the city is built</a>).</p>
+      <p class="powers">powers → the world the city stands on · open-terrain scenes</p>
+    </div></div>
+
+    <h2>Procedural materials — analytic PBR surfaces</h2>
+    <div class="feat"><div class="f">
+      <h3>A surface library baked to tiling textures<span class="adr">ADR-0039 · 0043</span></h3>
+      <p>Every surface — brick, concrete, stucco, roof tile, shingle, corrugated
+        metal, asphalt, pavement, cobblestone, wood siding — is an <b>analytic
+        function</b> composed from a small 2-D field vocabulary (grids, mortar
+        bands, mottle, speckle). Each one yields albedo, height, and roughness at
+        any point; the height gradient bakes a normal map. These are rendered
+        once per surface class into shared, world-tiling PBR texture sets, so a
+        whole district of a thousand buildings draws as a handful of textured
+        meshes, lit as real physically-based materials rather than flat colour.
+        Road lane paint is composited straight from the carriageway's own mesh
+        UVs — no z-fighting, crisp at any distance.</p>
+      <p class="powers">powers → every building facade · roads &amp; sidewalks · roofs</p>
+    </div></div>
+
+    <h2>How it all composes</h2>
+    <p>None of these stands alone — the city is what happens when they run
+      together. Noise shapes the terrain; L-systems grow the trees on it and the
+      ridges behind it; the road grammar and the building shape grammar (mesh-ops
+      + the material library) fill the streets; SDF fuses the organic joints; and
+      the whole thing conforms to the ground it sits on. Every piece is
+      deterministic and unit-tested headless, so the same seed always rebuilds
+      the same world.</p>
+
+    <div class="try">
+      <p><b>Explore.</b> Read <a href="city-build.html">how the city is built</a>
+        for the road→block→lot pipeline, <a href="buildings.html">how buildings
+        are grown</a> for the shape grammar in depth, or open
+        <a href="viewer.html?level=grown">the grown city</a> and toggle its
+        render layers to see each generator's output on its own.</p>
+    </div>
+
+    <footer>
+      Source and the full decision log:
+      <a href="https://github.com/glennsong/raytracer-clang">glennsong/raytracer-clang</a>
+      — see <code>docs/decisions.md</code> ADR-0022 (generators as data),
+      ADR-0030/0033 (parametric L-systems + the shared Skeleton), ADR-0029 (branch
+      skinning &amp; SDF fusion), ADR-0036/0044 (terrain + conforming), and
+      ADR-0039/0043 (procedural materials).
+    </footer>
+  </div>
+</body>
+</html>
