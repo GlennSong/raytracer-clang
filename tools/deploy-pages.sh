@@ -11,7 +11,8 @@ MSG="${1:-Pages: update}"
 WT="$(mktemp -d)/ghp"
 
 cd "$REPO"
-for f in index.html viewer.html about.html city-sim.html scenes.json \
+for f in index.html viewer.html about.html city-sim.html city-build.html \
+         buildings.html procgen.html scenes.json \
          viewer_web.js viewer_web.wasm viewer_web.data; do
     [ -f "build-web/$f" ] || { echo "missing build-web/$f — build first (docs/web-build.md)"; exit 1; }
 done

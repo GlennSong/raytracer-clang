@@ -951,6 +951,15 @@ if(EMSCRIPTEN)
                 ${CMAKE_SOURCE_DIR}/web/city-sim.html
                 $<TARGET_FILE_DIR:viewer_web>/city-sim.html
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/city-build.html
+                $<TARGET_FILE_DIR:viewer_web>/city-build.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/buildings.html
+                $<TARGET_FILE_DIR:viewer_web>/buildings.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/procgen.html
+                $<TARGET_FILE_DIR:viewer_web>/procgen.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/scenes.json
                 $<TARGET_FILE_DIR:viewer_web>/scenes.json
         COMMAND ${CMAKE_COMMAND} -E copy_directory
