@@ -19,6 +19,27 @@
     header { padding: 28px 24px 8px; max-width: 1200px; margin: 0 auto; }
     header h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: .2px; }
     header p { margin: 0; color: #8fa6bd; font-size: 14px; }
+    header p a { color: #8ec5ff; }
+    /* "Learn how it works" — prominent doc cards between the header and the
+       demo grid (the demo gallery below is unchanged). */
+    .learn { max-width: 1200px; margin: 20px auto 0; padding: 0 24px; }
+    .learn-head { display: flex; align-items: baseline; justify-content: space-between;
+      gap: 12px; margin-bottom: 12px; }
+    .learn-head h2 { margin: 0; font-size: 12.5px; font-weight: 800; letter-spacing: 1px;
+      text-transform: uppercase; color: #7f97ad; }
+    .learn-head a { color: #8ec5ff; font-size: 13px; text-decoration: none; white-space: nowrap; }
+    .learn-head a:hover { text-decoration: underline; }
+    .learn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+    .lc { display: flex; gap: 13px; align-items: center; text-decoration: none; color: inherit;
+      background: linear-gradient(135deg, #14202f, #131a24); border: 1px solid #22303f;
+      border-radius: 12px; padding: 13px 15px;
+      transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease; }
+    .lc:hover { transform: translateY(-3px); border-color: #3b82f6; box-shadow: 0 8px 24px #0007; }
+    .lc .ic { flex: 0 0 auto; width: 40px; height: 40px; display: grid; place-items: center;
+      font-size: 21px; background: #0c2036; border: 1px solid #23415f; border-radius: 10px; }
+    .lc .tx { display: flex; flex-direction: column; min-width: 0; }
+    .lc .tx b { font-size: 14.5px; font-weight: 650; color: #e6eef7; }
+    .lc .tx i { font-style: normal; font-size: 12.5px; color: #8ba0b6; line-height: 1.35; margin-top: 2px; }
     .filters { max-width: 1200px; margin: 16px auto 0; padding: 0 24px;
       display: flex; flex-wrap: wrap; gap: 8px; }
     .filters button { border: 1px solid #2a3a4c; background: #141c26; color: #bcd;
@@ -54,15 +75,39 @@
 
   <header>
     <h1>Raytracer Engine — Scenes</h1>
-    <p>Procedural levels rendered live in the browser (WebGPU). Pick a scene to explore it.
-       Thumbnails are path-traced offline by the same engine.
-       <a href="about.html" style="white-space:nowrap">How it works →</a></p>
-    <p style="margin-top:6px">Deep dives:
-       <a href="city-build.html" style="white-space:nowrap">how the city is built</a> ·
-       <a href="buildings.html" style="white-space:nowrap">how buildings are grown</a> ·
-       <a href="city-sim.html" style="white-space:nowrap">how the city thinks</a> ·
-       <a href="procgen.html" style="white-space:nowrap">the procedural toolkit</a></p>
+    <p>Procedural levels rendered live in the browser (WebGPU). Pick a scene to explore it —
+       thumbnails are path-traced offline by the same engine.</p>
   </header>
+
+  <section class="learn">
+    <div class="learn-head">
+      <h2>Learn how it works</h2>
+      <a href="about.html">About the engine →</a>
+    </div>
+    <div class="learn-grid">
+      <a class="lc" href="city-build.html">
+        <span class="ic">🏙️</span>
+        <span class="tx"><b>How the city is built</b>
+          <i>Recipe → roads → blocks → lots → a whole town on terrain</i></span>
+      </a>
+      <a class="lc" href="buildings.html">
+        <span class="ic">🏛️</span>
+        <span class="tx"><b>How buildings are grown</b>
+          <i>A shape grammar turns a lot into floors, windows, and roofs</i></span>
+      </a>
+      <a class="lc" href="city-sim.html">
+        <span class="ic">🚦</span>
+        <span class="tx"><b>How the city thinks</b>
+          <i>Cars and pedestrians that perceive, remember, and yield</i></span>
+      </a>
+      <a class="lc" href="procgen.html">
+        <span class="ic">🌱</span>
+        <span class="tx"><b>The procedural toolkit</b>
+          <i>L-systems, mesh ops, noise, SDF, and materials</i></span>
+      </a>
+    </div>
+  </section>
+
   <div class="filters" id="filters"></div>
   <main id="grid"></main>
   <footer>
