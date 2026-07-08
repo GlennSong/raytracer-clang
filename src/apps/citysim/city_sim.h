@@ -4,7 +4,10 @@
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
+#include "agent_id.h"
 #include "city_goals.h"
+#include "places.h"
+#include "relationships.h"
 #include "traffic_signal.h"
 #include <cstdint>
 #include <utility>
@@ -40,6 +43,20 @@ struct Agent {
         Count
     };
 
+    // Stable identity (Living City, ADR-0066 Phase 1). Assigned once at build in
+    // agent order and never reused for a different agent this run, so relationship
+    // tables / per-agent memory / job assignment key on THIS, not the array slot.
+    // Distinct from the array index by design (indices churn on rebuild/recycle).
+    AgentId uid = kNoAgent;
+
+    // What KIND of life this agent leads (Living City, ADR-0066 Phase 4). A role
+    // is not new machinery — it just flavours the existing home↔work schedule:
+    // a Commuter keeps office hours; a Shopkeeper opens their shop before it opens
+    // and closes it after; a Stroller has no job and spends the day at a park.
+    // Assigned in assignPlaces from the agent's workplace + its own brain bits.
+    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Count };
+    Role role = Role::Commuter;
+
     Mode mode = Mode::Driver;
     State state = State::Resting;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
@@ -47,6 +64,18 @@ struct Agent {
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
     int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
+
+    // Where this agent lives and works (Living City, ADR-0066 Phase 3): the
+    // PlaceMap UIDs assigned at build, or kNoPlace when the city authored none.
+    // `home`/`work` NODES below are derived from these places' entrances, so the
+    // existing commute machinery routes the agent to REAL buildings.
+    PlaceId homePlace = kNoPlace;
+    PlaceId workPlace = kNoPlace;
+    // The assigned places' DOORSTEPS (entrance nudged toward the building), set
+    // by assignPlaces alongside the place ids. A resting walker stands here —
+    // semantically indoors — instead of at the road-corner idle pose, which
+    // could sit inside the traffic corridor and freeze every car that sensed it.
+    engine::Vec2 homeDoor, workDoor;
 
     // Daily schedule (hours, 0..24), per-agent jittered.
     int home = 0, work = 0;
@@ -68,6 +97,12 @@ struct Agent {
     Real crashTimer = 0;
     int crashCount = 0;              // consecutive freezes at this wreck
     engine::Vec2 crashAnchor;        // where the pile-up started
+    // Gridlock escape (ADR-0066 device fix): seconds this car has been pinned at
+    // a junction hold (yieldAtLine with ~zero speed). Past a few seconds, box
+    // occupancy stops counting occupants that are THEMSELVES stalled — a real
+    // driver inches through a gridlocked box — which breaks the circular wait a
+    // knot of overlapping junctions can otherwise form. Staggered per agent.
+    Real holdTimer = 0;
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -250,6 +285,16 @@ public:
         return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
 
+    // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
+    // (a Home place) and a job (a routable Shop/Office/Civic place), pin its
+    // home/work commute NODES to those places' sidewalk entrances, and seed the
+    // surface-level relationship table (same workplace → coworker, same home →
+    // neighbor). Deterministic (draws from each agent's `brain`, not the rng, so
+    // the build stream is unchanged). Call AFTER build()/setWander with the same
+    // graph; a no-op when `places` has no homes. `graph` must be the built one.
+    void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    const RelationshipTable& relationships() const { return relationships_; }
+
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
     // thinks it commits to the last decision and just acts on it. Default 0.35 s.
     void setThinkPeriod(Real seconds) { thinkPeriod_ = seconds > 0.05 ? seconds : 0.05; }
@@ -335,12 +380,17 @@ private:
     // scripting builds may replace them at load via setGoalTables.
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable goalDriver_ = defaultScheduleGoals();
+    RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;
     Real clockHours_ = 6.0;
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     uint32_t rng_ = 1;
+    // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
+    // order. Separate from rng_ so identity allocation never perturbs the sim's
+    // deterministic draw stream.
+    AgentIdAllocator ids_;
 };
 
 }  // namespace citysim

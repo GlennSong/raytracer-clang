@@ -38,6 +38,14 @@
 #endif
 #include "../log.h"
 
+// Recipe hot-reload (watch_scripts) file plumbing — unconditional: the watcher
+// compiles in every build and simply no-ops on the web (baked assets).
+#include <nlohmann/json.hpp>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <system_error>
+
 using namespace engine;
 
 #if defined(RT_ENABLE_PHYSICS) && defined(RT_ENABLE_SCRIPTING)
@@ -133,6 +141,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // Agent-based city: drivers + pedestrians with acceleration, signals,
     // perception, and bounded-radius steering over the road network (ADR-0060).
     auto& citySys = addSystem<citysim::CityRenderSystem>();
+    citySys_ = &citySys;   // polled in update() for the rebuild-roads button
     // Spectate camera (ADR-0064 follow-up): K cycles the view through the city's
     // agents and follows one (drive/walk their life with ring + cone lit). Reads
     // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
@@ -175,10 +184,153 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<CameraPanelSystem>(camSys);
 }
 
+// --- recipe hot-reload (the BUILDING LAB loop, building-grammar-plan.md P1) ---
+
+// mtime as an opaque tick count; 0 = missing/unreadable (treated as unchanged,
+// so a mid-save window never triggers a reload of a half-written file).
+static long long fileStamp(const std::string& path) {
+    std::error_code ec;
+    auto t = std::filesystem::last_write_time(path, ec);
+    if (ec) return 0;
+    return static_cast<long long>(t.time_since_epoch().count());
+}
+
+void ArenaState::collectWatchFiles() {
+    watchFiles.clear();
+#ifndef __EMSCRIPTEN__
+    std::ifstream f(levelFile);
+    if (!f) return;
+    nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
+    if (!root.is_object() || !root.value("watch_scripts", false)) return;
+    const std::string levelDir =
+        std::filesystem::path(levelFile).parent_path().string();
+    auto add = [&](const std::string& path) {
+        long long s = fileStamp(path);
+        if (s != 0) watchFiles.push_back({path, s});
+    };
+    add(levelFile);   // level edits (opts/knobs) reload too
+    for (const auto& ent : root.value("entities", nlohmann::json::array())) {
+        if (ent.value("shape", std::string()) != "script") continue;
+        const std::string file = ent.value("file", std::string());
+        if (file.empty()) continue;
+        // The same candidate paths the loader tries (loadScriptCode).
+        for (const std::string& path :
+             {file, std::string("assets/scripts/") + file, levelDir + "/" + file})
+            if (fileStamp(path) != 0) { add(path); break; }
+    }
+    if (!watchFiles.empty())
+        LOG_INFO << "watch_scripts: reloading on changes to "
+                 << watchFiles.size() << " file(s)";
+#endif
+}
+
+// Patch the lab level's script-entity `opts` on disk — the regenerate
+// "button": mutate via fn, write back; the caller reloads. The panel/editor
+// route goes through the same file, so keys, Lua edits, and (later) an
+// inspector all share one source of truth.
+static bool patchLabOpts(const std::string& levelFile,
+                         const std::function<void(nlohmann::json&)>& fn) {
+    std::ifstream f(levelFile);
+    if (!f) return false;
+    nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
+    if (!root.is_object() || !root.contains("entities")) return false;
+    for (auto& ent : root["entities"]) {
+        if (ent.value("shape", std::string()) != "script") continue;
+        if (!ent["opts"].is_object()) ent["opts"] = nlohmann::json::object();
+        fn(ent["opts"]);
+        if (ent["opts"].contains("seed")) ent["seed"] = ent["opts"]["seed"];
+        std::ofstream o(levelFile);
+        if (!o) return false;
+        o << root.dump(2) << "\n";
+        return true;
+    }
+    return false;
+}
+
+// Reseed the road recipe on disk (the "rebuild road graph" button): bump the
+// seed of every shape:"road" entity's generate recipe, so a reload regrows the
+// whole city — roads, terrain grading, and buildings — from a fresh graph.
+static bool patchRoadSeed(const std::string& levelFile) {
+    std::ifstream f(levelFile);
+    if (!f) return false;
+    nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
+    if (!root.is_object() || !root.contains("entities")) return false;
+    bool patched = false;
+    for (auto& ent : root["entities"]) {
+        if (ent.value("shape", std::string()) != "road") continue;
+        if (!ent.contains("road") || !ent["road"].contains("generate")) continue;
+        auto& gen = ent["road"]["generate"];
+        const long long s = gen.value("seed", 5);
+        gen["seed"] = static_cast<int>((s * 1103515245LL + 12345LL) % 99991LL) + 1;
+        patched = true;
+    }
+    if (!patched) return false;
+    std::ofstream o(levelFile);
+    if (!o) return false;
+    o << root.dump(2) << "\n";
+    return true;
+}
+
+bool ArenaState::watchedFilesChanged() {
+    bool changed = false;
+    for (WatchedFile& w : watchFiles) {
+        long long s = fileStamp(w.path);
+        if (s != 0 && s != w.stamp) { w.stamp = s; changed = true; }
+    }
+    return changed;
+}
+
 void ArenaState::update(FrameContext& ctx) {
     PlayingState::update(ctx);
     if (makeEditorState && ctx.actions.pressed("quit"))
         ctx.transition.replaceWith(makeEditorState());
+    // Rebuild-road-graph button (device ask): reseed every generated road on
+    // disk and reload — roads, terrain conform, and buildings all regrow from
+    // the fresh graph, the same clean reset the editor→play loop uses. Works on
+    // any level with a shape:"road" generate recipe (the living city).
+    if (citySys_ && citySys_->consumeRebuildRoadsRequest()) {
+        if (patchRoadSeed(levelFile))
+            ctx.transition.replaceWith(std::make_unique<ArenaState>(
+                window, arenaRenderer, levelFile, makeEditorState, bridge));
+        return;
+    }
+    // A watched recipe changed on disk: replace this state with a fresh one on
+    // the same level — the identical clean reset the editor→play loop uses
+    // (systems, physics, and assets all rebuilt), so a saved Lua edit shows up
+    // in seconds without touching the app.
+    if (!watchFiles.empty()) {
+        // Lab regenerate keys (the "button to see different styles"): U bumps
+        // the seed, O cycles the cladding style. Both PATCH the level file's
+        // opts (persisting the pick) and reload straight away.
+        bool patched = false;
+        if (ctx.actions.pressed("lab_reseed"))
+            patched = patchLabOpts(levelFile, [](nlohmann::json& o) {
+                const long long s = o.value("seed", 7);
+                o["seed"] = static_cast<int>((s * 1103515245LL + 12345LL) % 99991LL) + 1;
+            });
+        if (ctx.actions.pressed("lab_style"))
+            patched = patchLabOpts(levelFile, [](nlohmann::json& o) {
+                static const char* kStyles[] = {"brick",  "stucco", "concrete",
+                                                "metal",  "glass",  "painted"};
+                const std::string cur = o.value("style", "brick");
+                int idx = 0;
+                for (int i = 0; i < 6; ++i)
+                    if (cur == kStyles[i]) idx = i;
+                o["style"] = kStyles[(idx + 1) % 6];
+            }) || patched;
+        if (patched) {
+            ctx.transition.replaceWith(std::make_unique<ArenaState>(
+                window, arenaRenderer, levelFile, makeEditorState, bridge));
+            return;
+        }
+        watchTimer += 1.0;                 // frames; ~every half second at 60 fps
+        if (watchTimer >= 30.0) {
+            watchTimer = 0.0;
+            if (watchedFilesChanged())
+                ctx.transition.replaceWith(std::make_unique<ArenaState>(
+                    window, arenaRenderer, levelFile, makeEditorState, bridge));
+        }
+    }
 }
 
 void ArenaState::onEnter(FrameContext& ctx) {
@@ -187,6 +339,11 @@ void ArenaState::onEnter(FrameContext& ctx) {
     ctx.assets.clear();   // free the previous level's deduped GPU meshes
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", true);
+    collectWatchFiles();   // recipe hot-reload, when the level opts in
+    if (!watchFiles.empty()) {
+        ctx.actions.bindButton("lab_reseed", KeyCode::U);   // new seed, same style
+        ctx.actions.bindButton("lab_style", KeyCode::O);    // cycle cladding style
+    }
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view, ctx.assets)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
     }

@@ -3,9 +3,11 @@
 #include "asset_manager.h"
 #include "procgen/terrain.h"
 #include "procgen/city/city.h"
+#include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
+#include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -289,6 +291,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     world.add<RoadNet>(e, net);                      // the editable source of truth
 
     Renderable r;
+    r.renderLayer = engine::LayerRoads;              // debug layer toggle
     r.material.albedo = Vec3(1, 1, 1);               // hue carried in vertex colour
     r.material.roughness = 0.93f;
     if (net.markings)                                // lane paint via the surface shader
@@ -446,6 +449,15 @@ static CityModel cityModelFromEntity(const json& ent, const json& root) {
         cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
         cp.seed           = j.value("seed", cp.seed);
         onTerrain         = j.value("onTerrain", false);
+        // District road tech (ADR-0066): real arterials + irregular streets whose
+        // blocks feed the lot/building pipeline, instead of the regular grid.
+        cp.districtRoads  = j.value("districtRoads", cp.districtRoads);
+        cp.arterials      = j.value("arterials", cp.arterials);
+        cp.blockSizeMin   = j.value("blockSizeMin", cp.blockSizeMin);
+        cp.blockSizeMax   = j.value("blockSizeMax", cp.blockSizeMax);
+        cp.arteryWidth    = j.value("arteryWidth", cp.arteryWidth);
+        cp.streetWidth    = j.value("streetWidth", cp.streetWidth);
+        cp.irregular      = j.value("irregular", cp.irregular);
     }
     if (onTerrain && root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
@@ -1735,6 +1747,76 @@ static void loadVehicles(const json& vehicles, World& world, AssetManager& asset
 }
 #endif
 
+// Living-city lot growth (ADR-0066), shared by the TERRAIN PRE-PASS and the
+// citysim build: the blocks' buildings must be grown BEFORE the terrain is
+// meshed — every building stamps a flat graded pad into the ground (device:
+// "the terrain should be flat under the building") — and the citysim section
+// then spawns the exact same lots rather than growing them twice.
+struct GrownLots {
+    std::vector<engine::LotBuilding> lots;
+    engine::LotPlanDebug plan;           // blocks + lots, for the debug overlay
+    std::vector<RenderMesh> parts;       // grown geometry merged by PartId
+    bool grown = false;
+};
+
+static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
+                              const json& cs, const std::string& levelDir,
+                              const HeightField& ground) {
+    GrownLots g;
+    // Edge blocks (device feedback): the town RIM has no enclosed faces —
+    // synthesize rectangular blocks on boundary roads' open sides so the
+    // outskirts build up too. Sized by min/max length + depth knobs.
+    engine::EdgeBlockParams ep;
+    ep.depth = cs.value("edgeBlockDepth", ep.depth);
+    ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
+    ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
+    ep.margin = 4.0 + cs.value("sidewalk", 4.0);
+    engine::LotParams lp;
+    lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
+    lp.buildChance = cs.value("buildChance", 0.9);
+    lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
+    lp.innerRadius = cs.value("downtownRadius", 55.0);
+    lp.midRadius = cs.value("midtownRadius", 135.0);
+    lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    // TERRAIN: buildings grow from their graded pad plane, park/green pads
+    // drape per-vertex (city-on-terrain; roads conform separately via
+    // net.heightAt + the flatten ramps the loader carves).
+    if (ground)
+        lp.ground = [&ground](engine::Real x, engine::Real z) {
+            return static_cast<engine::Real>(ground(x, z));
+        };
+    // The STYLE BOOK (the architect's Lua DATA layer): per-recipe look
+    // overrides from assets/scripts/style_book.lua. The C++ architect decides
+    // what stands where; the book restyles it. The vm must outlive
+    // growLotBuildings below (the hook holds it).
+#ifdef RT_ENABLE_SCRIPTING
+    std::unique_ptr<ScriptVM> styleVm;
+    {
+        std::string sb = loadScriptCode("style_book.lua", levelDir);
+        if (!sb.empty()) {
+            styleVm = std::make_unique<ScriptVM>();
+            openProcgenLibrary(*styleVm);
+            std::string err;
+            auto hook = engine::makeStyleBook(*styleVm, sb, &err);
+            if (hook) lp.styleHook = std::move(hook);
+            else if (!err.empty())
+                LOG_WARN << "style_book.lua: " << err;
+        }
+    }
+#else
+    (void)levelDir;
+#endif
+    // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
+    // margin, so nothing overhangs the concrete or pokes into the street.
+    const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
+    engine::NetLotResult r = engine::growLotBuildingsOnNets(nets, lp, ep, roadClear);
+    g.lots = std::move(r.lots);
+    g.plan = std::move(r.plan);
+    g.parts = std::move(r.parts);
+    g.grown = true;
+    return g;
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
@@ -1821,14 +1903,23 @@ bool LevelLoader::load(const std::string& path,
     // road (shape:"road") BEFORE it builds, mirroring the script pre-pass, so the ground
     // meets the road's drivable profile and no terrain pokes through.
     std::vector<TerrainFlatten> roadFlatten;
+    std::vector<engine::RoadNet> preNets;   // parsed nets, for the lot pre-pass
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
-                RoadNet net = roadNetFromJson(ent.contains("road") ? ent["road"]
-                                                                   : json::object());
+                const json roadBlock =
+                    ent.contains("road") ? ent["road"] : json::object();
+                RoadNet net = roadNetFromJson(roadBlock);
+                // A GENERATED road has no baked nodes — run its recipe here
+                // exactly like the real build below does, or this pre-pass
+                // sees an empty net and carves NOTHING (device: "the road is
+                // being buried by the terrain — it's not conforming").
+                if (roadBlock.contains("generate"))
+                    applyGenerateRecipe(net, roadBlock["generate"]);
                 net.heightAt = levelGround;
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
+                preNets.push_back(std::move(net));
             }
         }
     }
@@ -1836,6 +1927,7 @@ bool LevelLoader::load(const std::string& path,
 
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
+    GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
     if (root.contains("terrain")) {
         TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
         terrainParams.flatten = cityFlatten;   // grade flat under the city
@@ -1846,6 +1938,31 @@ bool LevelLoader::load(const std::string& path,
                                      roadFlatten.begin(), roadFlatten.end());   // carve to roads
         unsigned terrainSeed = root["terrain"].value("seed", 0u);
         Noise terrainNoise(terrainSeed);
+        // LOT PRE-PASS (device: "some of the buildings are sunk into the
+        // terrain"): grow the living city's lots on the road-carved ground
+        // BEFORE the terrain is meshed, so every building stamps a FLAT graded
+        // pad (at its own plane) into the flatten set. The citysim build below
+        // reuses these exact lots.
+        if (root.contains("citysim") &&
+            root["citysim"].value("buildLots", false) && !preNets.empty()) {
+            auto lotTp = std::make_shared<TerrainParams>(terrainParams);
+            auto lotNoise = std::make_shared<Noise>(terrainSeed);
+            HeightField lotGround = [lotTp, lotNoise](double x, double z) {
+                return terrainHeight(*lotTp, *lotNoise, x, z);
+            };
+            preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround);
+            for (const engine::LotBuilding& lb : preLots.lots) {
+                if (lb.type == "park" || lb.type == "green" ||
+                    lb.plan.size() < 3) continue;
+                std::vector<Vec3> poly;
+                poly.reserve(lb.plan.size());
+                for (const engine::Vec2& v : lb.plan)
+                    poly.push_back(Vec3(v.x, 0, v.y));
+                TerrainFlatten f = makeFlattenPad(std::move(poly), lb.groundY, 5.0);
+                terrainParams.flatten.push_back(f);
+                baseFlatten.push_back(std::move(f));   // non-road grading
+            }
+        }
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         // Hand the CDLOD config its non-road base so the editor's re-conform action can
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
@@ -1919,15 +2036,379 @@ bool LevelLoader::load(const std::string& path,
                 LOG_WARN << "citysim: vehicles script '" << vehiclesFile
                          << "' not found — using built-in fleet meshes";
         }
+        // Authored places (ADR-0066): a `"places"` array of labelled destinations
+        // the citysim bridge snaps onto the sidewalk network and turns into a
+        // PlaceMap. Each: {type, position:[x,y,z] (y ignored), name?, open?, close?}.
+        if (cs.contains("places") && cs["places"].is_array()) {
+            for (const auto& pj : cs["places"]) {
+                engine::AuthoredPlace p;
+                p.type = pj.value("type", std::string());
+                Vec3 pos = parseVec3(pj.value("position", json()));
+                p.x = static_cast<float>(pos.x);
+                p.z = static_cast<float>(pos.z);
+                p.name = pj.value("name", std::string());
+                p.openHour = pj.value("open", 0.0f);
+                p.closeHour = pj.value("close", 24.0f);
+                // Optional building footprint [w, h, d] + colour: a place that
+                // names a `"building"` size becomes a real solid structure.
+                Vec3 bs = parseVec3(pj.value("building", json()), Vec3(0, 0, 0));
+                p.buildingW = static_cast<float>(bs.x);
+                p.buildingH = static_cast<float>(bs.y);
+                p.buildingD = static_cast<float>(bs.z);
+                p.buildingColor = parseVec3(pj.value("color", json()),
+                                            Vec3(0.72, 0.70, 0.64));
+                cfg.places.push_back(p);
+
+                // Spawn the building STRUCTURE (Living City Phase 4): a static box
+                // resting on the ground at the site, so the labelled place is an
+                // actual structure the player and agents collide with. Regenerated
+                // from the recipe each load (no SourceSpec), like the road meshes.
+                if (bs.x > 0 && bs.y > 0 && bs.z > 0) {
+                    Entity b = world.create();
+                    Transform t;
+                    t.position = Vec3(pos.x, pos.y + bs.y * 0.5, pos.z);
+                    world.add<Transform>(b, t);
+                    world.add<PrevTransform>(b, PrevTransform{t});
+                    Renderable r;
+                    r.mesh = assets.acquirePrimitive("box", bs);
+                    r.material.albedo = p.buildingColor;
+                    r.material.metallic = 0.0f;
+                    r.material.roughness = 0.9f;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                    world.add<Renderable>(b, r);
+                    Collider c;
+                    c.shape = ColliderShape::Box;
+                    c.halfExtent = bs * 0.5;
+                    c.friction = 0.9;
+                    world.add<Collider>(b, c);
+                    RigidBody rb;
+                    rb.motion = BodyMotion::Static;
+                    world.add<RigidBody>(b, rb);
+                }
+            }
+        }
+        // Grow buildings on the ROAD NETWORK's blocks (ADR-0066): the Living City
+        // path — real roads (a shape:"road" `generate` recipe, the tech grown.json
+        // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
+        // (floors/windows/roof, fitting the lot), each tagged as a place agents
+        // start/end their schedules at. Runs on the RoadNet(s) already in the world.
+        if (cs.value("buildLots", false)) {
+            // The lots: grown by the terrain pre-pass (city-on-terrain — their
+            // graded pads are already baked into the ground), or grown here for
+            // a flat city. Same helper, same deterministic result.
+            GrownLots grown = std::move(preLots);
+            if (!grown.grown) {
+                std::vector<engine::RoadNet> nets;
+                world.each<engine::RoadNet>(
+                    [&](Entity, engine::RoadNet& net) { nets.push_back(net); });
+                grown = growCityLots(nets, cs, levelDir, entityGround);
+            }
+            engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
+            // The buildings' geometry, merged by shape-grammar PartId across the
+            // whole district — the SAME structure as CityModel::parts, so the same
+            // PBR recipes bind below.
+            std::vector<RenderMesh>& lotParts = grown.parts;
+            MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
+            // Street-tree kit for parks + unbuilt greens (device: "empty lots had
+            // vegetation like trees and grass"): a few shared varieties, one mesh
+            // upload each, reused across every planted lot.
+            struct TreeKit { MeshHandle bark, leaves;
+                             RenderMaterial barkMat, leafMat; };
+            std::vector<TreeKit> treeKits;
+            auto treeKit = [&](std::size_t variety) -> const TreeKit& {
+                while (treeKits.size() <= variety) {
+                    const std::size_t i = treeKits.size();
+                    const uint32_t seed = 0xF00Du + static_cast<uint32_t>(i) * 977u;
+                    TreeParams tp;
+                    tp.iterations = 4;              // modest street tree, light mesh
+                    tp.rootCount = 0;               // no buttress roots on a lawn
+                    TreeMesh tm = growTree(tp, seed);
+                    auto up = [&](const TextureData& td) -> TextureHandle {
+                        if (td.pixels.empty()) return TextureHandle{};
+                        return renderer.uploadTexture(td.width, td.height,
+                                                      td.channels, td.pixels.data());
+                    };
+                    TreeKit k;
+                    const std::string key = "lotTree:" + std::to_string(i);
+                    k.bark = assets.acquireMesh(tm.branches, key + ":bark");
+                    k.barkMat.albedo = Vec3(1, 1, 1);
+                    k.barkMat.roughness = 1.0f;
+                    BarkMaps bm = barkMaps(barkStyleFromName("oak"), 128, seed);
+                    k.barkMat.albedoMap = up(bm.albedo);
+                    k.barkMat.normalMap = up(bm.normal);
+                    if (!tm.leaves.vertices.empty()) {
+                        k.leaves = assets.acquireMesh(tm.leaves, key + ":leaves");
+                        k.leafMat.albedo = Vec3(1, 1, 1);
+                        k.leafMat.roughness = 0.7f;
+                        k.leafMat.albedoMap = up(leafTexture(128));
+                        k.leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+                    }
+                    treeKits.push_back(std::move(k));
+                }
+                return treeKits[variety];
+            };
+            // Building PHYSICS (device: "I can shoot through them"): one
+            // static mesh collider of PLAN PRISMS — each building's grown
+            // plan polygon extruded to its height. The prism follows the
+            // massing exactly, so L / courtyard / prow buildings collide
+            // where their walls are, with nothing spilling onto the sidewalk
+            // (the failure that got box colliders removed).
+            engine::MeshCollider buildingsMc;
+            std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
+            for (const engine::LotBuilding& lb : grown.lots) {
+                const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
+                if (lb.type != "park" && lb.type != "green" &&
+                    lb.plan.size() >= 3) {
+                    const double base = lb.baseY - 0.5, top = lb.baseY + lb.height;
+                    const uint32_t s0 =
+                        static_cast<uint32_t>(buildingsMc.vertices.size());
+                    const uint32_t n = static_cast<uint32_t>(lb.plan.size());
+                    for (const engine::Vec2& v : lb.plan) {
+                        buildingsMc.vertices.push_back(Vec3(v.x, base, v.y));
+                        buildingsMc.vertices.push_back(Vec3(v.x, top, v.y));
+                    }
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const uint32_t j = (i + 1) % n;
+                        const uint32_t a0 = s0 + i * 2, a1 = a0 + 1;
+                        const uint32_t b0 = s0 + j * 2, b1 = b0 + 1;
+                        buildingsMc.indices.insert(buildingsMc.indices.end(),
+                                                   {a0, b0, b1, a0, b1, a1});
+                    }
+                    for (const auto& tri : engine::triangulatePolygon(lb.plan)) {
+                        const uint32_t rb =
+                            static_cast<uint32_t>(buildingsMc.vertices.size());
+                        for (int k = 0; k < 3; ++k)
+                            buildingsMc.vertices.push_back(Vec3(
+                                lb.plan[tri[k]].x, top, lb.plan[tri[k]].y));
+                        buildingsMc.indices.insert(buildingsMc.indices.end(),
+                                                   {rb, rb + 1, rb + 2});
+                    }
+                    // Record the exact prism for the collider debug layer.
+                    colliderPrisms.push_back({lb.plan, base, top});
+                }
+                // Tag it as a place the agents can route to. An unbuilt GREEN is
+                // scenery, not a schedule destination — no place tag.
+                if (lb.type != "green") {
+                    engine::AuthoredPlace p;
+                    p.type = lb.type;
+                    p.x = static_cast<float>(lb.site.x);
+                    p.z = static_cast<float>(lb.site.y);
+                    cfg.places.push_back(std::move(p));
+                }
+
+                if (lb.type == "park" || lb.type == "green") {
+                    // A grass pad plus a few trees, not a grown building. The
+                    // pad is the LOT'S OWN polygon when the pass provides one
+                    // (device: "square green lots don't fit the blocks"); the
+                    // oriented box is only the legacy fallback.
+                    Entity e = world.create();
+                    Transform t;
+                    Renderable r;
+                    if (!lb.padMesh.vertices.empty()) {
+                        t.position = Vec3(0, 0, 0);   // heights baked (draped)
+                        r.mesh = assets.acquireMesh(
+                            lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
+                                        ":" + std::to_string(lb.site.y));
+                    } else {
+                        t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
+                        t.scale = Vec3(lb.width, lb.height, lb.depth);
+                        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                        r.mesh = pad;
+                    }
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    r.material.albedo = lb.color;
+                    r.material.roughness = 1.0f;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                    world.add<Renderable>(e, r);
+
+                    // Trees: deterministic count + spots from the lot position,
+                    // scaled by the pad's real area so a block-sized park reads
+                    // as a park (device: "scatter more trees around it").
+                    const uint32_t h = static_cast<uint32_t>(
+                        std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) * 2654435761u;
+                    const double padArea = lb.pad.empty()
+                        ? static_cast<double>(lb.width * lb.depth)
+                        : engine::area(lb.pad);
+                    const int nTrees = lb.type == "park"
+                        ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
+                        : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
+                    for (int ti = 0; ti < nTrees; ++ti) {
+                        const uint32_t th = h ^ (0x9e3779b9u * static_cast<uint32_t>(ti + 1));
+                        // Spread across ~90% of the pad; the point-in-polygon
+                        // shrink below pulls strays back onto the grass.
+                        const double fx = ((th & 0xFFu) / 255.0 - 0.5) * 0.9;
+                        const double fz = (((th >> 8) & 0xFFu) / 255.0 - 0.5) * 0.9;
+                        const double cy = std::cos(lb.yaw), sy = std::sin(lb.yaw);
+                        double lx = fx * lb.width, lz = fz * lb.depth;
+                        // Keep the tree on the pad: shrink toward the centroid
+                        // until the spot is inside the lot polygon.
+                        if (!lb.pad.empty())
+                            for (double f = 1.0; f > 0.1; f *= 0.55) {
+                                engine::Vec2 spot(lb.site.x + (lx * cy - lz * sy) * f,
+                                                  lb.site.y + (lx * sy + lz * cy) * f);
+                                if (engine::pointInPolygon(lb.pad, spot) || f * 0.55 <= 0.1) {
+                                    lx *= f; lz *= f; break;
+                                }
+                            }
+                        Vec3 tPos(lb.site.x + lx * cy - lz * sy, 0,
+                                  lb.site.y + lx * sy + lz * cy);
+                        tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;
+                        const TreeKit& kit = treeKit((th >> 16) % 3u);
+                        const double scale = 0.8 + ((th >> 24) & 0x3Fu) / 63.0 * 0.6;
+                        Transform tt;
+                        tt.position = tPos;
+                        tt.scale = Vec3(scale, scale, scale);
+                        tt.orientation = Quat::fromAxisAngle(
+                            Vec3(0, 1, 0), (th % 628u) / 100.0);
+                        Entity te = world.create();
+                        world.add<Transform>(te, tt);
+                        world.add<PrevTransform>(te, PrevTransform{tt});
+                        Renderable tr;
+                        tr.mesh = kit.bark;
+                        tr.material = kit.barkMat;
+                        world.add<Renderable>(te, tr);
+                        if (kit.leaves.index) {
+                            Entity le = world.create();
+                            world.add<Transform>(le, tt);
+                            world.add<PrevTransform>(le, PrevTransform{tt});
+                            Renderable lr;
+                            lr.mesh = kit.leaves;
+                            lr.material = kit.leafMat;
+                            world.add<Renderable>(le, lr);
+                        }
+                    }
+                }
+            }
+            if (!buildingsMc.indices.empty()) {
+                // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
+                // arrive with mixed winding (offset/prow/courtyard plans flip
+                // orientation) — a wrong-way wall lets bullets sail through
+                // from outside (device: "I can shoot through them at certain
+                // angles"). Emit every triangle both ways so the prism is
+                // solid regardless of plan winding.
+                const std::size_t oneSided = buildingsMc.indices.size();
+                buildingsMc.indices.reserve(oneSided * 2);
+                for (std::size_t i = 0; i + 2 < oneSided; i += 3) {
+                    buildingsMc.indices.push_back(buildingsMc.indices[i]);
+                    buildingsMc.indices.push_back(buildingsMc.indices[i + 2]);
+                    buildingsMc.indices.push_back(buildingsMc.indices[i + 1]);
+                }
+                Entity ce = world.create();
+                Transform ct;
+                world.add<Transform>(ce, ct);
+                world.add<PrevTransform>(ce, PrevTransform{ct});
+                buildingsMc.friction = 0.85;
+                world.add<engine::MeshCollider>(ce, std::move(buildingsMc));
+            }
+            // One entity per non-empty part class, with the shape-grammar's OWN
+            // material recipes: materialFor(PartId) names the procedural surface
+            // (brick/concrete/stucco/metal), which gets world-scaled UVs + the
+            // baked PBR texture set — identical to the shape:"city" pipeline
+            // (user: "we absolutely should be using the pre-existing recipes").
+            {
+                using Surface = RenderMaterial::Surface;
+                SurfaceTexCache lotTex;   // one bake+upload per surface class
+                for (std::size_t pi = 0; pi < lotParts.size(); ++pi) {
+                    RenderMesh& pm = lotParts[pi];
+                    if (pm.vertices.empty()) continue;
+                    Renderable r;
+                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                    r.material = materialFor(static_cast<PartId>(pi),
+                                             Vec3(0.80, 0.78, 0.75));
+                    const Surface surf = r.material.surface();
+                    if (surf != Surface::None) {
+                        applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
+                        bindSurfaceMaps(r.material,
+                                        bakeSurfaceTextures(renderer, surf, lotTex));
+                    }
+                    r.mesh = assets.acquireMesh(pm, "");   // world-space, unkeyed
+                    Entity e = world.create();
+                    Transform t;   // identity — the merged mesh sits in world space
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    world.add<Renderable>(e, r);
+                }
+            }
+            // Publish the plan (blocks + lots + collider prisms) for the
+            // citysim debug overlay.
+            if (!plan.blocks.empty() || !colliderPrisms.empty()) {
+                engine::CityPlanDebug dbg;
+                dbg.blocks = std::move(plan.blocks);
+                dbg.lots = std::move(plan.lots);
+                dbg.prisms = std::move(colliderPrisms);
+                world.add<engine::CityPlanDebug>(world.create(), std::move(dbg));
+            }
+        }
+        // Real buildings become a living city (ADR-0066): when the level has a
+        // generated `shape:"city"` entity, drive the citysim on ITS streets and
+        // tag ITS buildings as places — no hand-authoring. The generator already
+        // built the road graph; spawn a nav-only RoadNet from it (no Renderable —
+        // the city drew its own carriageway) so `world.each<RoadNet>` finds it,
+        // and map each building's District to a place type.
+        if (!cityModel.roadGraph.edges.empty()) {
+            engine::RoadNet net;
+            net.nodes.reserve(cityModel.roadGraph.nodes.size());
+            for (const auto& n : cityModel.roadGraph.nodes) net.nodes.push_back(n.pos);
+            net.edges.reserve(cityModel.roadGraph.edges.size());
+            net.edgeWidths.reserve(cityModel.roadGraph.edges.size());
+            for (const auto& e : cityModel.roadGraph.edges) {
+                net.edges.push_back({e.a, e.b});
+                net.edgeWidths.push_back(e.width);   // real per-road width (arterial vs street)
+            }
+            net.width = 12.0;      // fallback ribbon (grid city; district uses edgeWidths)
+            net.sidewalk = 2.5;
+            net.markings = false;  // the city already drew its own road surface
+            net.crosswalks = false;
+            // Drape on terrain (ADR-0066): an on-terrain city's roads conform to
+            // the ground, so the sim must too — CityRenderSystem reads net.heightAt
+            // for agent elevation. Without this, agents float over / sink under a
+            // hilly city's streets.
+            if (entityGround) net.heightAt = entityGround;
+            world.add<engine::RoadNet>(world.create(), net);
+
+            // District → place type. Kept as string tags (the citysim bridge
+            // parses them) so engine core stays free of citysim's PlaceType.
+            auto placeTag = [](engine::District d) -> const char* {
+                switch (d) {
+                    case engine::District::Residential: return "home";
+                    case engine::District::Commercial:  return "shop";
+                    case engine::District::HighRise:     return "office";
+                    case engine::District::Industrial:   return "office";
+                    case engine::District::Park:         return "park";
+                    default:                             return "civic";
+                }
+            };
+            for (const engine::CityBuilding& b : cityModel.buildings) {
+                engine::AuthoredPlace p;
+                p.type = placeTag(b.district);
+                p.x = static_cast<float>(b.site.x);
+                p.z = static_cast<float>(b.site.y);
+                cfg.places.push_back(std::move(p));   // building already drawn — label only
+            }
+        }
         world.add<CitySimConfig>(world.create(), cfg);
     }
 
     // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so
     // the first-person gun viewmodel and a settling capsule don't intrude on an overhead frame dump.
     if (!std::getenv("RT_NO_PLAYER")) {
-        if (root.contains("player"))
-            (editorMode ? loadPlayerSpawn(root["player"], world, assets)
-                        : loadPlayer(root["player"], world));
+        if (root.contains("player")) {
+            json pj = root["player"];
+            // Terrain levels: never spawn under a hill — authored spawns
+            // assume flat ground, so lift the point to the surface when the
+            // terrain there is higher.
+            if (entityGround && pj.contains("position") &&
+                pj["position"].is_array() && pj["position"].size() >= 3) {
+                const double px = pj["position"][0].get<double>();
+                const double py = pj["position"][1].get<double>();
+                const double pz = pj["position"][2].get<double>();
+                const double gy = entityGround(px, pz);
+                if (py < gy + 1.2) pj["position"][1] = gy + 1.2;
+            }
+            (editorMode ? loadPlayerSpawn(pj, world, assets)
+                        : loadPlayer(pj, world));
+        }
         else if (!editorMode) {
             // Every playable level gets a player. With no authored spawn, drop one in from above so
             // the character settles onto the (collidable) ground rather than the level having no actor.
@@ -1954,6 +2435,13 @@ bool LevelLoader::load(const std::string& path,
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
         }
+        // Reset FIRST: only a successful HDR load below may raise this. It is
+        // the flag DayNightSystem uses to yield to a baked HDR sun — leaving a
+        // previous level's value in the reused renderer silently disabled the
+        // day/night cycle on every level loaded after an HDR one (device:
+        // "the day/night cycle is broken in Metal" — really "after an HDR
+        // level", which a fresh single-level web session never hits).
+        renderer.environmentAvgLuminance = 0.0f;
         if (env.contains("hdr")) {
             std::string envPath = env["hdr"].get<std::string>();
             if (!envPath.empty() && envPath[0] != '/')
@@ -1971,7 +2459,9 @@ bool LevelLoader::load(const std::string& path,
             renderer.setEnvironmentMap(TextureHandle{});
         }
     } else {
-        // No "environment" object at all — also clear any stale env map.
+        // No "environment" object at all — also clear any stale env map (and
+        // the avg-luminance flag, or the day/night cycle stays disabled).
+        renderer.environmentAvgLuminance = 0.0f;
         renderer.setEnvironmentMap(TextureHandle{});
     }
 

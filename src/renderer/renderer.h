@@ -433,6 +433,13 @@ public:
     // groups this session. Applied by RenderSystem's per-instance cull.
     float vegetationDrawDistance = 0.0f;
 
+    // Debug LAYER visibility mask (device: "turn layers on/off ... to debug
+    // individual layers ... see the terrain underneath"). A Renderable /
+    // InstanceGroup tagged with a RenderLayer bit is SKIPPED by RenderSystem
+    // when that bit is set here. Layer 0 (untagged — terrain, sky, props) is
+    // always drawn. Runtime-only; never serialized.
+    uint32_t hiddenLayers = 0;
+
     // Debug visualization: 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
     // 5=shadow, 6=albedo, 7=facing (green=front / red=back), 8=shadow cascades
     int debugView = 0;

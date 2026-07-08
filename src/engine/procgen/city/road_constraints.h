@@ -66,6 +66,31 @@ bool nodeNeedsRoundabout(const RoadGraph& graph, int v, const RoadRules& rules);
 // node is within the cap. Pure + headless. A graph already within the cap is returned unchanged.
 RoadGraph capDegree(const RoadGraph& graph, const RoadRules& rules = {});
 
+// MAXIMUM bend at a through-node (device feedback: "sharp bends in the road ...
+// creating some really bad overlap"). A degree-2 node whose two legs turn more
+// than `maxTurn` (radians) folds the stroked carriageway over itself — roads do
+// not hairpin mid-block. Relax every such node toward its neighbours' chord
+// midpoint, repeatedly, until all through-bends are within the limit (or
+// `iterations` passes elapse). Junctions and dead ends never move; degree-2
+// geometry eases into a drivable curve. Deterministic and pure.
+RoadGraph relaxSharpBends(const RoadGraph& graph, Real maxTurn = 0.9,
+                          int iterations = 48);
+
+// MINIMUM road length (device feedback: "we end up with some really short roads").
+// Crossings that land close together (planarize) read as broken stubs — signals in
+// the middle of the street, cramped junction pads. Repeatedly take the shortest
+// edge under `minLen` and:
+//   * MERGE its endpoints into one node (at their degree-weighted midpoint) when
+//     the united node stays within `maxDegree` unique arms — two adjacent
+//     crossings become one clean junction; or
+//   * LENGTHEN it — push the endpoints apart along the edge axis to `minLen` —
+//     when merging would over-crowd the junction (e.g. the staggered link a
+//     capDegree split leaves can't merge back), so the short road becomes a real
+//     drivable block face instead.
+// Self-loops and duplicate parallel edges from a merge are dropped (widest wins);
+// orphaned nodes are compacted away. Deterministic and pure.
+RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4);
+
 }  // namespace engine
 
 #endif

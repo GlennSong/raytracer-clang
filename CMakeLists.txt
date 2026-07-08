@@ -80,6 +80,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/city.cpp
+    src/engine/procgen/city/architect.cpp
+    src/engine/procgen/city/city_lots.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
     src/engine/level_loader.cpp
@@ -116,16 +118,11 @@ add_library(engine_core STATIC
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
-    # Agent-based city simulation app (ADR-0060). Pure C++, headless-safe; the
-    # game (arena_state) registers citysim::CityRenderSystem. Lives under
-    # src/apps/citysim but compiles into the shared lib.
-    src/apps/citysim/traffic_signal.cpp
-    src/apps/citysim/traffic_rules.cpp
-    src/apps/citysim/city_goals.cpp
-    src/apps/citysim/city_sim.cpp
-    src/apps/citysim/city_render.cpp
-    src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
-    src/apps/citysim/city_meshes.cpp
+    # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
+    # APPLICATION of the engine, built as its own `citysim` static library below
+    # (src/apps/citysim). engine_core is the platform-free, city-free engine; a
+    # host that wants the living world links `citysim` on top. Keeping it out of
+    # the core is what lets a plain engine app carry none of the city's code.
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -205,17 +202,51 @@ if(RT_ENABLE_SCRIPTING)
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
 
+    # NOTE: the citysim-specific Lua readers (agent_goals, vehicle_body) are NOT
+    # here — they read citysim types, so they live in the `citysim` library
+    # (src/apps/citysim/scripting) to keep engine_core free of any app dependency.
     target_sources(engine_core PRIVATE
         src/engine/scripting/script_vm.cpp
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
-        src/engine/scripting/agent_goals.cpp
-        src/engine/scripting/vehicle_body.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
+endif()
+
+# ============================================================
+# citysim — the living-world APPLICATION library (ADR-0060…0066). The agent
+# city sim, traffic, places, and its render bridge: an application built ON the
+# engine, not part of it. Links engine_core (the only arrow — citysim depends on
+# the engine, never the reverse), so a host that wants the living world links
+# `citysim`; a plain engine app links only engine_core and carries none of this.
+# Headless-safe: no GPU/windowing here (the Jolt-coupled bridges — city_physics
+# /vehicles/walkers/player_body — stay in RT_PHYSICS_HOST_SOURCES, compiled per
+# host alongside Jolt, exactly as engine_core keeps Jolt systems out).
+# ============================================================
+add_library(citysim STATIC
+    src/apps/citysim/traffic_signal.cpp
+    src/apps/citysim/traffic_rules.cpp
+    src/apps/citysim/city_goals.cpp
+    src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
+    src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
+    src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
+    src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_render.cpp
+    src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
+    src/apps/citysim/city_meshes.cpp
+)
+target_compile_options(citysim PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(citysim PUBLIC engine_core)
+if(RT_ENABLE_SCRIPTING)
+    # The citysim-specific Lua readers (moved out of engine_core): they turn Lua
+    # goal/fleet tables into citysim types, so they belong to the app, not the core.
+    target_sources(citysim PRIVATE
+        src/apps/citysim/scripting/agent_goals.cpp
+        src/apps/citysim/scripting/vehicle_body.cpp
+    )
 endif()
 
 # ============================================================
@@ -406,10 +437,16 @@ add_executable(run_tests
     tests/test_car_lamps.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
+    tests/test_places.cpp
+    tests/test_screen_project.cpp
+    tests/test_relationships.cpp
+    tests/test_ped_graph.cpp
+    tests/test_city_generated.cpp
+    tests/test_city_lots.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(run_tests PRIVATE engine_core)
+target_link_libraries(run_tests PRIVATE citysim engine_core)
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
@@ -659,7 +696,7 @@ target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 # Vendored headers (tinygltf/stb/nlohmann) are SYSTEM so our strict warnings
 # apply only to our own code, not to libraries we don't maintain.
 target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
-target_link_libraries(viewer PRIVATE engine_core glfw Threads::Threads ${PLATFORM_LIBS})
+target_link_libraries(viewer PRIVATE citysim engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 # Build the SPIR-V shaders before the viewer that loads them (Vulkan builds only).
 if(TARGET vulkan_shaders)
@@ -724,7 +761,7 @@ if(Qt6_FOUND)
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(editor_app PRIVATE engine_core Qt6::Widgets Threads::Threads)
+    target_link_libraries(editor_app PRIVATE citysim engine_core Qt6::Widgets Threads::Threads)
 
     if(RT_ENABLE_PHYSICS)
         target_sources(editor_app PRIVATE ${RT_PHYSICS_HOST_SOURCES})
@@ -863,7 +900,7 @@ if(EMSCRIPTEN)
         "emdawnwebgpu port name, or path to a local emdawnwebgpu.port.py")
     target_compile_options(viewer_web PRIVATE -Wall -Wextra "--use-port=${RT_EMDAWN_PORT}")
     target_include_directories(viewer_web SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
-    target_link_libraries(viewer_web PRIVATE engine_core)
+    target_link_libraries(viewer_web PRIVATE citysim engine_core)
 
     # The GLFW shim, a growable heap, and MODULARIZE so the page instantiates the
     # module by name (web/viewer.html). ASYNCIFY lets the backend await the async
@@ -883,7 +920,7 @@ if(EMSCRIPTEN)
         "-sEXPORT_NAME=createViewer"
         "-sENVIRONMENT=web"
         # Hooks the page calls (on-screen sticks/buttons + debug panel; keep _main).
-        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause"
+        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause,_rt_web_city"
         # web_main's EM_ASM uses stringToNewUTF8; Emscripten doesn't dependency-
         # scan EM_ASM bodies, so pin it explicitly or a toolchain bump can DCE it.
         "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8"

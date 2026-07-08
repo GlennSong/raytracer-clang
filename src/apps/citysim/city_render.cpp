@@ -1,15 +1,20 @@
 #include "city_render.h"
 
 #include "car_lamps.h"                                // lamp decision core (ADR-0065)
+#include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
+#include "../../log.h"                               // LOG_WARN (place-type validation)
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>                                   // Living City debug section
+#endif
 #ifdef RT_ENABLE_SCRIPTING
-#include "../../engine/scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
-#include "../../engine/scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
+#include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../log.h"
 #endif
@@ -134,6 +139,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
         debugWidgets_ = c.debugWidgets;
+        authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
     });
 
     // Merge every RoadNet's constrained graph into one combined graph (a level
@@ -157,6 +163,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+
+    // Places (ADR-0066): turn the level-authored destinations into a routable
+    // PlaceMap now that the nav graph exists (each entrance snaps to a sidewalk).
+    // An unrecognized type tag is warned-and-skipped so one typo can't drop the
+    // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
+    places_ = PlaceMap{};
+    for (const engine::AuthoredPlace& ap : authoredPlaces_) {
+        PlaceType type;
+        if (!parsePlaceType(ap.type, type)) {
+            LOG_WARN << "citysim: unknown place type '" << ap.type << "' — skipped";
+            continue;
+        }
+        places_.add(type, Vec2(ap.x, ap.z), nav_, ap.openHour, ap.closeHour, 0,
+                    ap.name);
+    }
 
     sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
@@ -182,6 +203,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         }
     }
 #endif
+    // Make the agents LIVE in the city (ADR-0066 Phase 3): pin each one's home +
+    // job to real places and seed the relationship table, so the commute below
+    // routes them to actual buildings. No-op when the level authored no places
+    // (then the built random home/work schedule stands). After setWander so the
+    // (persistent) mode is settled; before the warm-up so day one runs on places.
+    sim_.assignPlaces(places_, nav_);
+
     // Warm up so the city is already ALIVE when the level appears — agents depart
     // and spread onto the roads instead of standing still for the first minute.
     for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);
@@ -262,17 +290,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             InstanceGroup g;
             g.mesh = mh;
             g.material = carMaterial();
+            g.renderLayer = engine::LayerSim;   // debug layer toggle
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
         }
     }
     pedGroup_ = world.create();
-    { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial(); world.add<InstanceGroup>(pedGroup_, g); }
+    { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(pedGroup_, g); }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
         g.mesh = lensMesh;
         g.material = signalMaterial(static_cast<SignalState>(s));
+        g.renderLayer = engine::LayerSim;   // debug layer toggle
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
 
@@ -285,13 +316,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                                        "city:carlamp");
     headlightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
-      world.add<InstanceGroup>(headlightGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(headlightGroup_, g); }
     brakeLightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
-      world.add<InstanceGroup>(brakeLightGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(brakeLightGroup_, g); }
     turnSignalGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
-      world.add<InstanceGroup>(turnSignalGroup_, g); }
+      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -310,6 +341,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         InstanceGroup g;
         g.mesh = postMesh;
         g.material = signalPostMaterial();
+        g.renderLayer = engine::LayerSim;   // debug layer toggle
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
@@ -401,6 +433,41 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             g.material = widgetMaterial(kNavTint);
             world.add<InstanceGroup>(navNodeGroup_, g);
         }
+        // City-plan outlines (ADR-0066): BLOCKS in magenta, LOTS in amber — the
+        // "blocks → lots → buildings" story drawn on the ground, same painted-
+        // outline style as the rest of the widgets.
+        blockGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(0.85, 0.30, 0.85));
+            world.add<InstanceGroup>(blockGroup_, g);
+        }
+        lotGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(0.95, 0.80, 0.25));
+            world.add<InstanceGroup>(lotGroup_, g);
+        }
+        // Collider prisms (device: "a physics hull visualizer"): each building's
+        // plan-prism collider drawn as its EXACT volume — a rim loop at the
+        // prism base and top (ground strips at explicit heights) plus vertical
+        // corner posts. Hot orange so a missing/short prism reads instantly.
+        colliderStripGroup_ = world.create();
+        {
+            InstanceGroup g;
+            g.mesh = stripMesh;
+            g.material = widgetMaterial(Vec3(1.0, 0.45, 0.10));
+            world.add<InstanceGroup>(colliderStripGroup_, g);
+        }
+        colliderPostGroup_ = world.create();
+        {
+            InstanceGroup g;
+            if (assets) g.mesh = assets->acquirePrimitive("box", Vec3(1, 1, 1));
+            g.material = widgetMaterial(Vec3(1.0, 0.45, 0.10));
+            world.add<InstanceGroup>(colliderPostGroup_, g);
+        }
     }
 
     // Bake the navgraph view ONCE — it depends only on nav_, so unlike the
@@ -433,6 +500,68 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         Vec2 p = nav_.nodes[n];
         navNodeBake_.push_back(Mat4::trs(
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
+    }
+
+    // Bake the CITY-PLAN outlines once (ADR-0066): every block interior and lot
+    // polygon (published by the loader as CityPlanDebug) becomes a loop of thin
+    // ground strips — one strip per polygon edge, the navgraph strip pattern.
+    blockBake_.clear();
+    lotBake_.clear();
+    {
+        auto outline = [&](const engine::Poly2& poly, Real width, Real lift,
+                           std::vector<Mat4>& out) {
+            const std::size_t n = poly.size();
+            if (n < 3) return;
+            for (std::size_t i = 0; i < n; ++i) {
+                Vec2 a = poly[i], b = poly[(i + 1) % n];
+                Vec2 d(b.x - a.x, b.y - a.y);
+                Real len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len < 1e-6) continue;
+                Real yaw = std::atan2(d.x, d.y);
+                out.push_back(Mat4::trs(
+                    Vec3(a.x, groundAt(a.x, a.y) + lift, a.y),
+                    Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(width, 1, len)));
+            }
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::Poly2& b : plan.blocks) outline(b, 0.35, 0.06, blockBake_);
+            for (const engine::Poly2& l : plan.lots) outline(l, 0.16, 0.05, lotBake_);
+        });
+    }
+
+    // Bake the COLLIDER-PRISM outlines once (device: "a physics hull
+    // visualizer"): the exact Jolt volumes — a rim loop at each prism's world
+    // base and top plus vertical corner posts. Heights are ABSOLUTE (they're
+    // the collider's own), not ground-sampled.
+    colliderStripBake_.clear();
+    colliderPostBake_.clear();
+    {
+        auto rimLoop = [&](const engine::Poly2& poly, Real y) {
+            const std::size_t n = poly.size();
+            for (std::size_t i = 0; i < n; ++i) {
+                Vec2 a = poly[i], b = poly[(i + 1) % n];
+                Vec2 d(b.x - a.x, b.y - a.y);
+                Real len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len < 1e-6) continue;
+                Real yaw = std::atan2(d.x, d.y);
+                colliderStripBake_.push_back(Mat4::trs(
+                    Vec3(a.x, y, a.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                    Vec3(0.14, 1, len)));
+            }
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::CityPlanDebug::Prism& pr : plan.prisms) {
+                if (pr.plan.size() < 3) continue;
+                rimLoop(pr.plan, pr.y0);
+                rimLoop(pr.plan, pr.y1);
+                const Real h = pr.y1 - pr.y0;
+                if (h <= 0) continue;
+                for (const Vec2& v : pr.plan)
+                    colliderPostBake_.push_back(Mat4::trs(
+                        Vec3(v.x, pr.y0 + h * 0.5, v.y), Quat(),
+                        Vec3(0.12, h, 0.12)));
+            }
+        });
     }
 
     // Per-agent speed history for the brake-light hard-decel test (ADR-0065
@@ -490,11 +619,17 @@ CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
     // off along the approach by the widest crossing road's half-width (so it sits
     // beyond the perpendicular carriageway) and out to the side by this road's own
     // half-width. A fixed setback left poles in the middle of wider cross streets.
+    // A KNOT-MERGED junction's drawn crossing extends nodeSpread beyond the node
+    // (the node is the knot centroid) — back off by that too, or the pole stands
+    // mid-carriageway on generated crossings (device feedback).
     Real thisHalf = nav_.links[link].width * 0.5;
     Real crossHalf = thisHalf;
     for (int ol : nav_.outLinks[toNode])
         crossHalf = std::max(crossHalf, nav_.links[ol].width * 0.5);
-    Vec2 corner = node - d * (crossHalf + kCurbGap) + right * (thisHalf + kCurbGap);
+    Real spread = toNode < static_cast<int>(nav_.nodeSpread.size())
+                      ? nav_.nodeSpread[toNode] : 0.0;
+    Vec2 corner = node - d * (crossHalf + spread + kCurbGap) +
+                  right * (thisHalf + kCurbGap);
     Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
     SignalSite s;
     s.base = Vec3(corner.x, baseY, corner.y);
@@ -661,10 +796,21 @@ void CityRenderSystem::syncGroups(World& world) {
         // leave the groups empty when it's off (mirrors the vanishing rings).
         InstanceGroup* navL = world.get<InstanceGroup>(navLinkGroup_);
         InstanceGroup* navN = world.get<InstanceGroup>(navNodeGroup_);
-        if (navL) navL->transforms = debugWidgets_ ? navLinkBake_
-                                                   : std::vector<Mat4>{};
-        if (navN) navN->transforms = debugWidgets_ ? navNodeBake_
-                                                   : std::vector<Mat4>{};
+        const bool showNav = debugWidgets_ && showNavGraph_;
+        if (navL) navL->transforms = showNav ? navLinkBake_ : std::vector<Mat4>{};
+        if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
+        // City-plan outlines (static bakes, same show-or-empty pattern).
+        const bool showPlan = debugWidgets_ && showPlan_;
+        InstanceGroup* blk = world.get<InstanceGroup>(blockGroup_);
+        InstanceGroup* lot = world.get<InstanceGroup>(lotGroup_);
+        if (blk) blk->transforms = showPlan ? blockBake_ : std::vector<Mat4>{};
+        if (lot) lot->transforms = showPlan ? lotBake_ : std::vector<Mat4>{};
+        // Collider prisms (static bake, same pattern).
+        const bool showCol = debugWidgets_ && showColliders_;
+        InstanceGroup* colS = world.get<InstanceGroup>(colliderStripGroup_);
+        InstanceGroup* colP = world.get<InstanceGroup>(colliderPostGroup_);
+        if (colS) colS->transforms = showCol ? colliderStripBake_ : std::vector<Mat4>{};
+        if (colP) colP->transforms = showCol ? colliderPostBake_ : std::vector<Mat4>{};
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
@@ -717,9 +863,9 @@ void CityRenderSystem::syncGroups(World& world) {
             }
             radius *= 1.2;   // proud of the body so the painted rim always shows
             InstanceGroup* fg = foot[static_cast<int>(ringState)];
-            if (fg) fg->transforms.push_back(
+            if (showAgentWidgets_ && fg) fg->transforms.push_back(
                 Mat4::trs(Vec3(x, y, z), Quat(), Vec3(radius, 1, radius)));
-            if (fwd && a.moving) {
+            if (showAgentWidgets_ && fwd && a.moving) {
                 // The INTENT arrow: from the agent to where it's trying to go —
                 // the pursuit target for external bodies, the ghost's short-
                 // horizon aim otherwise. Reads as "this is my plan".
@@ -737,7 +883,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // the mesh). Moving agents only — a parked car senses nothing worth
             // drawing — and just below the ring so the two never z-fight.
             InstanceGroup* cg = cone[static_cast<int>(a.mode)];
-            if (cg && a.moving) {
+            if (showVisionCones_ && cg && a.moving) {
                 Real range = car ? kCarConeRange : kPedConeRange;
                 Real coneYaw = std::atan2(heading.x, heading.y);
                 cg->transforms.push_back(Mat4::trs(
@@ -751,6 +897,8 @@ void CityRenderSystem::syncGroups(World& world) {
         for (int mi = 0; mi < 2; ++mi) refreshBounds(cone[mi]);
         refreshBounds(navL);
         refreshBounds(navN);
+        refreshBounds(blk);
+        refreshBounds(lot);
     }
 
     // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
@@ -766,11 +914,227 @@ void CityRenderSystem::step(World& world, Real dt) {
 
 void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("agent_widgets", engine::KeyCode::J);   // toggle debug widgets
+    ctx.actions.bindButton("plan_widgets", engine::KeyCode::L);    // toggle block/lot plan
 }
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
+    // L flips the city-plan layer (blocks + lots) — and switches the master on
+    // when it was off, so the key works standalone on web (no ImGui panel there).
+    if (ctx.actions.pressed("plan_widgets")) {
+        showPlan_ = !showPlan_;
+        if (showPlan_) debugWidgets_ = true;
+    }
+    // Web debug panel (rt_web_city): ONE-SHOT settings writes — apply and clear,
+    // so the page's checkboxes and the J/L keys can share the same flags without
+    // a persistent setting overriding the keys every frame.
+    auto pull = [&](const char* key, bool& flag) {
+        const double v = ctx.settings.getDouble(key, -1.0);
+        if (v >= 0.0) {
+            flag = v > 0.5;
+            ctx.settings.setDouble(key, -1.0);
+        }
+    };
+    pull("citysim.master", debugWidgets_);
+    pull("citysim.agents", showAgentWidgets_);
+    pull("citysim.cones", showVisionCones_);
+    pull("citysim.nav", showNavGraph_);
+    pull("citysim.plan", showPlan_);
+}
+
+#ifdef RT_ENABLE_IMGUI
+namespace {
+// Overlay colour per place type (ADR-0066 labels): home green, shop amber, office
+// blue, park teal, civic violet — the same hue keys the marker, connector, dot,
+// and text so a place reads as one unit.
+ImU32 placeColor(PlaceType t) {
+    switch (t) {
+        case PlaceType::Home:   return IM_COL32( 90, 200, 110, 255);
+        case PlaceType::Shop:   return IM_COL32(240, 170,  60, 255);
+        case PlaceType::Office: return IM_COL32( 90, 160, 240, 255);
+        case PlaceType::Park:   return IM_COL32( 60, 210, 190, 255);
+        case PlaceType::Civic:  return IM_COL32(190, 130, 240, 255);
+        default:                return IM_COL32(220, 220, 220, 255);
+    }
+}
+// Short label for an agent's Role (Living City Phase 4).
+const char* agentRoleName(Agent::Role r) {
+    switch (r) {
+        case Agent::Role::Commuter:   return "Commuter";
+        case Agent::Role::Shopkeeper: return "Shopkeeper";
+        case Agent::Role::Stroller:   return "Stroller";
+        default:                      return "?";
+    }
+}
+// Short label for an Agent::State (the reactive FSM value the ring colours use).
+const char* agentStateName(Agent::State s) {
+    switch (s) {
+        case Agent::State::Resting:   return "Resting";
+        case Agent::State::Walking:   return "Walking";
+        case Agent::State::Avoiding:  return "Avoiding";
+        case Agent::State::Waiting:   return "Waiting";
+        case Agent::State::Cruising:  return "Cruising";
+        case Agent::State::Following: return "Following";
+        case Agent::State::Yielding:  return "Yielding";
+        case Agent::State::Turning:   return "Turning";
+        default:                      return "?";
+    }
+}
+}  // namespace
+#endif
+
+void CityRenderSystem::render(engine::FrameContext& ctx) {
+#ifdef RT_ENABLE_IMGUI
+    // No ImGui context (a backend without the debug UI): stay inert — same guard
+    // the engine's DebugOverlaySystem uses.
+    if (ImGui::GetCurrentContext() == nullptr) return;
+    // Only when a living city is actually loaded: an engine app that happens to
+    // register this system (or a level with no roads) shows no city section.
+    if (!built_ || sim_.agents().empty()) return;
+
+    // Append into the SHARED Debug window by matching its title (ImGui merges
+    // same-titled Begin() calls in a frame). We do not create a second panel.
+    ImGui::Begin(kDebugWindowTitle);
+    if (ImGui::CollapsingHeader("Living City")) {
+        const auto& agents = sim_.agents();
+        int drivers = 0, peds = 0;
+        for (const Agent& a : agents)
+            (a.mode == Agent::Mode::Driver ? drivers : peds)++;
+        ImGui::Text("Time %05.2f h   Agents %d  (%d cars, %d peds)",
+                    sim_.timeOfDay(), static_cast<int>(agents.size()), drivers, peds);
+        ImGui::Text("Perception faults: %ld", sim_.faults());
+
+        // Master toggle (mirrors the J key) + per-layer refinements.
+        ImGui::Checkbox("Debug widgets (J)", &debugWidgets_);
+        ImGui::BeginDisabled(!debugWidgets_);
+        ImGui::Indent();
+        ImGui::Checkbox("Agent rings + intent", &showAgentWidgets_);
+        ImGui::Checkbox("Vision cones", &showVisionCones_);
+        ImGui::Checkbox("Nav graph", &showNavGraph_);
+        ImGui::Checkbox("City plan: blocks + lots (L)", &showPlan_);
+        ImGui::Checkbox("Building colliders (prisms)", &showColliders_);
+        ImGui::Unindent();
+        ImGui::EndDisabled();
+
+        // Render LAYERS (device: "layers for roads, buildings, simulation ...
+        // turn them on or off ... so we can visually debug the terrain
+        // underneath"). Each unchecked box hides that whole class of world
+        // geometry via the renderer's hidden-layer mask; the terrain, sky and
+        // props (layer 0) always draw, so unchecking all three bares the ground.
+        ImGui::Separator();
+        ImGui::TextUnformatted("Render layers");
+        auto layerToggle = [&](const char* label, uint32_t bit) {
+            bool shown = !(ctx.renderer.hiddenLayers & bit);
+            if (ImGui::Checkbox(label, &shown)) {
+                if (shown) ctx.renderer.hiddenLayers &= ~bit;
+                else       ctx.renderer.hiddenLayers |= bit;
+            }
+        };
+        ImGui::Indent();
+        layerToggle("Roads", engine::LayerRoads);
+        layerToggle("Buildings", engine::LayerBuildings);
+        layerToggle("Simulation (cars, peds, signals)", engine::LayerSim);
+        ImGui::Unindent();
+
+        // Rebuild the road graph (device ask): reseed the road recipe and reload
+        // the level, so roads, terrain grading, and buildings all regrow from the
+        // fresh graph. The host (ArenaState) does the reseed+reload on the poll.
+        if (ImGui::Button("Rebuild road graph (new seed)"))
+            rebuildRoadsRequested_ = true;
+
+        // Places (ADR-0066): the level-authored destinations + their type counts.
+        ImGui::Separator();
+        ImGui::Checkbox("Places (labels + markers)", &showPlaces_);
+        if (places_.empty()) {
+            ImGui::TextDisabled("  (no authored places in this level)");
+        } else {
+            for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+                const int n = places_.countOfType(static_cast<PlaceType>(t));
+                if (n) ImGui::Text("  %-7s %d", placeTypeName(static_cast<PlaceType>(t)), n);
+            }
+        }
+
+        // Selected-agent inspector: identity (UID) + schedule + live state.
+        ImGui::Separator();
+        const int count = static_cast<int>(agents.size());
+        if (inspectAgent_ >= count) inspectAgent_ = count - 1;
+        ImGui::SliderInt("Inspect agent", &inspectAgent_, -1, count - 1);
+        if (inspectAgent_ >= 0) {
+            const Agent& a = agents[inspectAgent_];
+            ImGui::Text("UID %u   %s   %s", a.uid,
+                        a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian",
+                        agentRoleName(a.role));
+            ImGui::Text("State: %s%s", agentStateName(a.state),
+                        a.playerControlled ? "  (player)" : "");
+            // Where it lives / works (ADR-0066 Phase 3): real place names.
+            auto placeLabel = [&](PlaceId id) -> const char* {
+                if (id == kNoPlace || id >= static_cast<PlaceId>(places_.size()))
+                    return "—";
+                const Place& pl = places_[id];
+                return pl.name.empty() ? placeTypeName(pl.type) : pl.name.c_str();
+            };
+            ImGui::Text("Lives: %s", placeLabel(a.homePlace));
+            ImGui::Text("Works: %s", placeLabel(a.workPlace));
+            // Surface-level social graph: who this agent knows.
+            const RelationshipTable& rel = sim_.relationships();
+            const auto& knows = rel.relationsOf(a.uid);
+            ImGui::Text("Knows %d", static_cast<int>(knows.size()));
+            for (std::size_t k = 0; k < knows.size() && k < 6; ++k)
+                ImGui::BulletText("UID %u (%s)", knows[k].first,
+                                  relationshipName(knows[k].second));
+            ImGui::Text("Depart work %.1f h   home %.1f h", a.departWork, a.departHome);
+            ImGui::Text("Pos (%.1f, %.1f)   Speed %.1f m/s", a.pos.x, a.pos.y, a.speed);
+        }
+    }
+    ImGui::End();
+
+    // The place overlay (approach A): project each place to the screen and draw a
+    // site ring, an entrance dot, a connector, and a type/name label on the
+    // foreground draw list (independent of any window, so it reads over the 3D
+    // scene). Perspective view only; an orthographic debug camera would need its
+    // own projection, which the gameplay camera never uses.
+    if (showPlaces_ && !places_.empty()) {
+        const engine::CameraState& cam = ctx.view.camera;
+        const Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+        const Mat4 proj = Mat4::perspective(cam.fovDegrees * 3.14159265358979 / 180.0,
+                                            cam.aspectRatio, cam.nearPlane, cam.farPlane);
+        const Mat4 vp = proj * view;
+        const ImGuiIO& io = ImGui::GetIO();
+        const Real w = io.DisplaySize.x, h = io.DisplaySize.y;
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        // A generated city has hundreds of places; only annotate the ones near the
+        // camera so the overlay stays legible (and cheap). Text drops out sooner
+        // than the marker so distant places read as dots, nearby ones as labels.
+        const Real kMarkerRange = 120.0, kLabelRange = 55.0;
+        for (const Place& p : places_.places()) {
+            const Real dx = p.site.x - cam.position.x, dz = p.site.y - cam.position.z;
+            const Real dist2 = dx * dx + dz * dz;
+            if (dist2 > kMarkerRange * kMarkerRange) continue;
+            const bool label = dist2 <= kLabelRange * kLabelRange;
+            const Vec3 siteW(p.site.x, groundAt(p.site.x, p.site.y) + 0.1, p.site.y);
+            const Vec3 entW(p.entrance.x, groundAt(p.entrance.x, p.entrance.y) + 0.1,
+                            p.entrance.y);
+            Vec2 sp, ep;
+            const bool sv = worldToScreen(vp, siteW, w, h, sp);
+            const bool ev = worldToScreen(vp, entW, w, h, ep);
+            const ImU32 col = placeColor(p.type);
+            if (sv && ev)
+                dl->AddLine(ImVec2(sp.x, sp.y), ImVec2(ep.x, ep.y), col, 1.5f);
+            if (ev) dl->AddCircleFilled(ImVec2(ep.x, ep.y), 4.0f, col);   // entrance
+            if (sv) {
+                dl->AddCircle(ImVec2(sp.x, sp.y), 6.0f, col, 0, 2.0f);    // site
+                if (label) {
+                    const char* nm = p.name.empty() ? placeTypeName(p.type)
+                                                    : p.name.c_str();
+                    dl->AddText(ImVec2(sp.x + 8, sp.y - 6), col, nm);
+                }
+            }
+        }
+    }
+#else
+    (void)ctx;
+#endif
 }
 
 void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {

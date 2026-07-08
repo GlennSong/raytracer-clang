@@ -612,8 +612,9 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     CHECK(groupCount(world, city.navLinkGroup()) == lanes);
     InstanceGroup* strips = world.get<InstanceGroup>(city.navLinkGroup());
     CHECK(strips != nullptr);
+    const double lift = crossRoads().lift;   // strips ride the net's own lift
     for (const Mat4& m : strips->transforms)
-        CHECK(std::fabs(m.m[1][3] - (0.3 + 0.04)) < 1e-6);   // road lift (0.3) + 0.04
+        CHECK(std::fabs(m.m[1][3] - (lift + 0.04)) < 1e-6);   // road lift + 0.04
     // One ring per junction node (the cross has exactly one).
     int junctions = 0;
     for (int n = 0; n < nav.nodeCount(); ++n)

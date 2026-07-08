@@ -72,6 +72,14 @@
       background: rgba(10,16,24,.94); color: #dff; z-index: 25; padding: 14px; overflow: auto;
       display: none; box-shadow: -4px 0 16px #0008; font-size: 14px; }
     #dbg h3 { margin: 6px 0 10px; font-size: 15px; color: #8df; }
+    /* ImGui-style collapsible sections: native <details>, which works with touch
+       and keyboards for free. The <summary> is the section header. */
+    #dbg details.sec { border-top: 1px solid #4cf3; margin-top: 6px; padding-top: 2px; }
+    #dbg details.sec > summary { cursor: pointer; font-size: 15px; color: #8df;
+      padding: 8px 0 6px; list-style: none; user-select: none; -webkit-user-select: none; }
+    #dbg details.sec > summary::-webkit-details-marker { display: none; }
+    #dbg details.sec > summary::before { content: '▸ '; color: #4cf; }
+    #dbg details.sec[open] > summary::before { content: '▾ '; }
     #dbg .row { display: flex; align-items: center; justify-content: space-between;
       gap: 8px; padding: 7px 0; border-bottom: 1px solid #ffffff14; }
     #dbg button { border-radius: 8px; border: 1px solid #4cf6; background: #1b3346; color: #dff;
@@ -118,7 +126,7 @@
       <a href="index.html">← all scenes</a>
       <button class="close" id="dbgClose" aria-label="Close">✕</button>
     </div>
-    <h3>Quality</h3>
+    <details class="sec" open><summary>Quality</summary>
     <div class="row"><span>Preset</span>
       <select id="quality" aria-label="Quality preset">
         <option value="mobile">Mobile</option>
@@ -127,22 +135,36 @@
         <option value="custom">Custom</option>
       </select>
     </div>
-    <h3 style="margin-top:14px">Mode</h3>
+    </details>
+    <details class="sec" open><summary>Mode</summary>
     <div class="row"><span>Play (gun + physics)</span><button id="play">off</button></div>
     <div class="row"><span>Draw gun (slot 2)</span><button id="drawgun">equip</button></div>
-    <h3 style="margin-top:14px">World</h3>
+    </details>
+    <details class="sec"><summary>Living City</summary>
+    <div class="row"><span>Debug widgets (J)</span><button id="cityMaster">on</button></div>
+    <div class="row"><span>Agent rings + intent</span><button id="cityAgents">on</button></div>
+    <div class="row"><span>Vision cones</span><button id="cityCones">on</button></div>
+    <div class="row"><span>Nav graph</span><button id="cityNav">on</button></div>
+    <div class="row"><span>Blocks + lots (L)</span><button id="cityPlan">on</button></div>
+    </details>
+    <details class="sec"><summary>Touch controls</summary>
+    <div class="row"><span>Look sens.</span><input id="lookSens" type="range" aria-label="Look stick sensitivity" min="20" max="300" value="100" style="flex:1"><span class="val" id="lookSensVal">1.00</span></div>
+    <div class="row"><span>Move sens.</span><input id="moveSens" type="range" aria-label="Move stick sensitivity" min="20" max="200" value="100" style="flex:1"><span class="val" id="moveSensVal">1.00</span></div>
+    <div class="row"><span>Dead zone</span><input id="deadZone" type="range" aria-label="Stick dead zone" min="0" max="35" value="10" style="flex:1"><span class="val" id="deadZoneVal">0.10</span></div>
+    </details>
+    <details class="sec"><summary>World</summary>
     <div class="row"><span>Day/night cycle</span><button id="dncycle">on</button></div>
     <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" aria-label="Time of day" min="0" max="1000" value="350" style="flex:1"></div>
     <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
     <div class="row"><span>Speed</span><input id="dnspeed" type="range" aria-label="Day/night speed" min="0" max="200" value="20" style="flex:1"></div>
-
-    <h3 style="margin-top:14px">View / Tone</h3>
+    </details>
+    <details class="sec"><summary>View / Tone</summary>
     <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
     <div class="row"><span>Exposure</span><input id="exposure" type="range" aria-label="Exposure" min="10" max="400" value="100" style="flex:1"><span class="val" id="exposureVal">100%</span></div>
     <div class="row"><span>Contrast</span><input id="contrast" type="range" aria-label="Contrast" min="50" max="200" value="100" style="flex:1"><span class="val" id="contrastVal">100%</span></div>
     <div class="row"><span>Saturation</span><input id="saturation" type="range" aria-label="Saturation" min="0" max="200" value="100" style="flex:1"><span class="val" id="saturationVal">100%</span></div>
-
-    <h3 style="margin-top:14px">Debug</h3>
+    </details>
+    <details class="sec"><summary>Debug</summary>
     <div class="row"><span>Fly (free move)</span><button id="fly">off</button></div>
     <div class="row"><span>Debug view</span><button id="dview">0: normal</button></div>
     <div class="row"><span>Wireframe</span><button id="wire">off</button></div>
@@ -153,8 +175,10 @@
     <div class="row"><span>Lens FX</span><button id="lens">on</button></div>
     <div class="row"><span>Stats overlay (FPS)</span><button id="hudToggle">off</button></div>
     <div class="row"><span>Console log</span><button id="logToggle">off</button></div>
-    <h3 style="margin-top:14px">Stats</h3>
+    </details>
+    <details class="sec"><summary>Stats</summary>
     <div id="stats">—</div>
+    </details>
   </div>
 
   <script>
@@ -219,6 +243,24 @@
       const tapKey = (i) => { key(i, 1); setTimeout(() => key(i, 0), 80); };
 
       // --- floating joystick (multitouch by identifier) ---
+      // Stick tuning (panel → Touch controls), persisted per browser. `look`/`move`
+      // are output multipliers; `dead` is the centre dead zone as a fraction of
+      // the stick radius. Move output clamps to the unit circle (full speed at
+      // less deflection); look is a rate and may exceed 1.
+      const tune = (() => {
+        const d = { look: 1.0, move: 1.0, dead: 0.10 };
+        try { return Object.assign(d, JSON.parse(localStorage.getItem('rt.touch') || '{}')); }
+        catch { return d; }
+      })();
+      const stickOut = (idx, x, y) => {
+        let m = Math.hypot(x, y);
+        if (m < tune.dead) return axis(idx, 0, 0);
+        const nx = x / m, ny = y / m;
+        m = Math.min(1, (m - tune.dead) / (1 - tune.dead));   // re-span past dead zone
+        const s = idx === 0 ? tune.move : tune.look;
+        const k = idx === 0 ? Math.min(1, m * s) : m * s;
+        axis(idx, nx * k, ny * k);
+      };
       const R = 46;
       function makeStick(zoneId, baseId, thumbId, idx) {
         const zone = $(zoneId), base = $(baseId), thumb = $(thumbId);
@@ -236,7 +278,7 @@
             let dx = t.clientX - ox, dy = t.clientY - oy;
             const len = Math.hypot(dx, dy) || 1; if (len > R) { dx *= R / len; dy *= R / len; }
             thumb.style.left = (ox + dx) + 'px'; thumb.style.top = (oy + dy) + 'px';
-            axis(idx, dx / R, dy / R);
+            stickOut(idx, dx / R, dy / R);
           }
         }, { passive: false });
         const end = (e) => { for (const t of e.changedTouches) if (t.identifier === id) {
@@ -450,6 +492,36 @@
       };
       const tSsao = mkToggle('ssao', 2, true), tSsr = mkToggle('ssr', 3, true),
             tBloom = mkToggle('bloom', 4, true), tLens = mkToggle('lens', 5, true);
+
+      // Living City layers (rt_web_city): 0=master(J) 1=agent rings 2=vision
+      // cones 3=nav graph 4=blocks+lots(L). One-shot writes; the engine-side
+      // flags stay shared with the J/L keys. Defaults mirror the engine's.
+      const cityCall = (id, v) => {
+        if (typeof mod._rt_web_city === 'function') mod._rt_web_city(id, v);
+      };
+      const mkCity = (btnId, cid) => {
+        const b = $(btnId); let on = true;
+        const paint = () => { b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; };
+        paint();
+        b.onclick = () => { on = !on; paint(); cityCall(cid, on ? 1 : 0); };
+      };
+      mkCity('cityMaster', 0); mkCity('cityAgents', 1); mkCity('cityCones', 2);
+      mkCity('cityNav', 3); mkCity('cityPlan', 4);
+
+      // Touch-stick tuning sliders (values persist per browser; the numbers shown
+      // are what to report back when dialling in the feel).
+      const saveTune = () => { try { localStorage.setItem('rt.touch', JSON.stringify(tune)); } catch (e) {} };
+      const wireTune = (id, valId, key) => {
+        const el = $(id), lab = $(valId);
+        el.value = Math.round(tune[key] * 100);
+        lab.textContent = tune[key].toFixed(2);
+        el.addEventListener('input', () => {
+          tune[key] = el.value / 100; lab.textContent = tune[key].toFixed(2); saveTune();
+        });
+      };
+      wireTune('lookSens', 'lookSensVal', 'look');
+      wireTune('moveSens', 'moveSensVal', 'move');
+      wireTune('deadZone', 'deadZoneVal', 'dead');
 
       // SSAO/SSR buffer resolution scale (perf). Lower = faster, softer effects.
       const setFx = (pct) => { $('fxres').value = pct; $('fxreslbl').textContent = pct + '%'; post(4, pct / 100); };

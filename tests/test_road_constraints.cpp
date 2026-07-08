@@ -242,3 +242,122 @@ TEST_CASE(generated_road_recipe_survives_edit) {
     nlohmann::json handSaved = roadRecipeForSave("{}", hand);
     CHECK(handSaved.contains("nodes"));
 }
+
+// Minimum road length (device: "really short roads ... should be merged"). Two
+// crossings that landed a few metres apart fold into ONE junction when the
+// united node stays within the degree cap; the absorbed node is compacted away.
+TEST_CASE(short_edge_merges_adjacent_crossings) {
+    // Two T-junctions 5 m apart on a through road: |  5m  |, each with one side
+    // arm. Merged: one 4-way (2 through + 2 side arms) — within the cap.
+    RoadGraph g;
+    g.nodes = { {Vec2(-40, 0)}, {Vec2(0, 0)}, {Vec2(5, 0)}, {Vec2(45, 0)},
+                {Vec2(0, 30)}, {Vec2(5, -30)} };
+    g.edges.push_back({0, 1, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 2, 7, RoadClass::Local, 0});   // the 5 m stub
+    g.edges.push_back({2, 3, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 4, 7, RoadClass::Local, 0});   // side arm north
+    g.edges.push_back({2, 5, 7, RoadClass::Local, 0});   // side arm south
+    RoadGraph m = mergeShortEdges(g, 14.0, 4);
+    CHECK(m.nodes.size() == 5);                          // one node absorbed
+    CHECK(m.edges.size() == 4);                          // the stub is gone
+    for (const RoadEdge& e : m.edges) {                  // no edge under the floor
+        Real len = (m.nodes[e.a].pos - m.nodes[e.b].pos).length();
+        CHECK(len >= 13.0);
+    }
+    int mx = 0;                                          // merged junction is a 4-way
+    for (int v = 0; v < static_cast<int>(m.nodes.size()); ++v) {
+        int d = 0;
+        for (const RoadEdge& e : m.edges) if (e.a == v || e.b == v) ++d;
+        mx = std::max(mx, d);
+    }
+    CHECK(mx == 4);
+}
+
+// When merging would over-crowd the junction (> maxDegree arms), the short road
+// is LENGTHENED instead: endpoints pushed apart along the edge to minLen — the
+// capDegree stagger link becomes a drivable block face, not a stub.
+TEST_CASE(short_edge_lengthens_when_merge_would_overcrowd) {
+    // Two 3-arm junctions joined by a 6 m link: merging would make a 6-way.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(6, 0)},
+                {Vec2(-30, 20)}, {Vec2(-30, 0)}, {Vec2(-30, -20)},
+                {Vec2(36, 20)}, {Vec2(36, 0)}, {Vec2(36, -20)} };
+    g.edges.push_back({0, 1, 7, RoadClass::Local, 0});   // the 6 m link
+    g.edges.push_back({0, 2, 7, RoadClass::Local, 0});
+    g.edges.push_back({0, 3, 7, RoadClass::Local, 0});
+    g.edges.push_back({0, 4, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 5, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 6, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 7, 7, RoadClass::Local, 0});
+    RoadGraph m = mergeShortEdges(g, 14.0, 4);
+    CHECK(m.nodes.size() == 8);                          // nothing merged
+    CHECK(m.edges.size() == 7);
+    Real len = (m.nodes[0].pos - m.nodes[1].pos).length();
+    CHECK(std::fabs(len - 14.0) < 1e-6);                 // pushed apart to minLen
+    // Symmetric push: the midpoint stayed put.
+    Vec2 mid = (m.nodes[0].pos + m.nodes[1].pos) * 0.5;
+    CHECK(std::fabs(mid.x - 3.0) < 1e-6);
+    CHECK(std::fabs(mid.y - 0.0) < 1e-6);
+}
+
+// The generate recipe applies the floor: no junction-to-junction road in a
+// generated district comes out shorter than min_road_len (default 14 m), and the
+// degree cap still holds afterwards.
+TEST_CASE(generate_recipe_enforces_min_road_length) {
+    RoadNet net;
+    net.width = 7;
+    nlohmann::json gen = {{"radius", 170.0}, {"arterials", 3}, {"artery_width", 13.0},
+                          {"street_width", 7.0}, {"block_size", 82.0}, {"seed", 5}};
+    applyGenerateRecipe(net, gen);                       // straight version (no warp samples)
+    CHECK(!net.edges.empty());
+    int n = static_cast<int>(net.nodes.size());
+    std::vector<int> deg(n, 0);
+    for (const auto& e : net.edges) { ++deg[e[0]]; ++deg[e[1]]; }
+    for (const auto& e : net.edges) {
+        Real len = (net.nodes[e[0]] - net.nodes[e[1]]).length();
+        // Only junction-to-junction stubs matter (curve/warp samples are degree-2).
+        if (deg[e[0]] >= 3 && deg[e[1]] >= 3) CHECK(len >= 13.0);
+    }
+    for (int v = 0; v < n; ++v) CHECK(deg[v] <= 4);
+}
+
+// No hairpins mid-block (device: "sharp bends in the road ... creating some
+// really bad overlap"): a degree-2 corner sharper than the limit is relaxed
+// toward its chord until the road can actually be stroked without folding.
+// Junction and dead-end nodes never move.
+TEST_CASE(sharp_through_bends_are_relaxed) {
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(40, 0)}, {Vec2(42, 8)}, {Vec2(4, 12)} };
+    g.edges.push_back({0, 1, 7, RoadClass::Local, 0});
+    g.edges.push_back({1, 2, 7, RoadClass::Local, 0});   // ~150 deg hairpin at node 1
+    g.edges.push_back({2, 3, 7, RoadClass::Local, 0});
+    RoadGraph r = relaxSharpBends(g, 0.9, 48);
+    CHECK((r.nodes[0].pos - Vec2(0, 0)).length() < 1e-9);   // dead ends pinned
+    CHECK((r.nodes[3].pos - Vec2(4, 12)).length() < 1e-9);
+    for (int v = 1; v <= 2; ++v) {                          // through-nodes now gentle
+        Vec2 a = r.nodes[v - 1].pos, m = r.nodes[v].pos, b = r.nodes[v + 1].pos;
+        Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
+        CHECK(dot(d0, d1) >= std::cos(0.9) - 1e-6);
+    }
+}
+
+// The generate recipe applies the bend limit: no degree-2 node in a generated
+// district turns sharper than ~52 degrees, so the welded carriageway never folds.
+TEST_CASE(generate_recipe_has_no_hairpin_bends) {
+    RoadNet net;
+    net.width = 7;
+    nlohmann::json gen = {{"radius", 170.0}, {"arterials", 3}, {"artery_width", 13.0},
+                          {"street_width", 7.0}, {"block_size", 82.0},
+                          {"curviness", 0.22}, {"seed", 5}};
+    applyGenerateRecipe(net, gen);
+    const int n = static_cast<int>(net.nodes.size());
+    std::vector<std::vector<int>> adj(n);
+    for (const auto& e : net.edges) { adj[e[0]].push_back(e[1]); adj[e[1]].push_back(e[0]); }
+    for (int v = 0; v < n; ++v) {
+        if (adj[v].size() != 2) continue;
+        Vec2 a = net.nodes[adj[v][0]], m = net.nodes[v], b = net.nodes[adj[v][1]];
+        if ((m - a).length() < 1e-6 || (b - m).length() < 1e-6) continue;
+        Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
+        CHECK(dot(d0, d1) >= std::cos(0.95));   // limit + slack
+    }
+}

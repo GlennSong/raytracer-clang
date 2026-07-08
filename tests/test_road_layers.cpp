@@ -454,12 +454,18 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
         if (v.u > 0.5) sawStrip = true;                          // painted marking strip
     }
     CHECK(sawBottom && sawWall && sawStrip);                     // underside, walls, and paint strip
-    CHECK(std::fabs(deckY - 1.0) < 1e-6);                       // plain deck at topY
+    // The plain deck rides topY plus a sub-mm per-spine LAYER bias (device:
+    // "roads overlap and z-fight" — overlapping fringes resolve to a
+    // deterministic upper surface instead of flickering).
+    CHECK(deckY > 1.0 - 1e-6);
+    CHECK(deckY < 1.0 + 0.005);
     CHECK(std::fabs(botY - 0.5) < 1e-6);                        // underside thickness below
 
-    // The plain (unpainted) deck is laid as per-spine strips that overlap at the junction, so the
-    // cross's two 20x4 = 80 strips sum to 160 (the 16 overlap counted by both); the marking strips
-    // ride above and aren't part of this count.
+    // EXCLUSIVE junction ownership: strips used to overlap at the crossing
+    // (two 20x4 strips summing to 160, the 16 m2 junction counted by BOTH —
+    // the z-fight). Deck quads fully inside a lower-index spine's corridor are
+    // skipped now, so the total is strictly under the double-counted 160 but
+    // still covers the union (>= 144: no holes torn in the crossing).
     double deckArea = 0;
     for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         const Vertex& A = m.vertices[m.indices[i]];
@@ -468,7 +474,8 @@ TEST_CASE(weld_solid_is_a_closed_slab) {
                     &c = m.vertices[m.indices[i + 2]].position;
         deckArea += std::fabs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) * 0.5;
     }
-    CHECK(std::fabs(deckArea - 160.0) < 0.5);
+    CHECK(deckArea >= 144.0 - 0.5);
+    CHECK(deckArea <= 158.0);
 }
 
 // With a terrain function the deck rides a smoothed profile: a road over a single sharp bump
@@ -513,4 +520,87 @@ TEST_CASE(weld_solid_bakes_road_local_uv) {
     CHECK(stripVerts > 60);                      // finely subdivided (100 m / ~3 m steps, 6 v/quad)
     CHECK(allPaintFacesUp);                      // walls/underside carry no paint UV
     CHECK(maxV > 90.0);                          // v tracks arc-length toward the 100 m length
+}
+
+// Junction pads close the wedge at OFF-SQUARE junctions (device: "a break in the
+// geometry ... at a t-junction where the angles aren't square"). Every chain ends
+// square to its OWN direction at a junction node, so when the through-road BENDS
+// there, the two arm caps disagree by the bend angle and a knife-wedge of ground
+// shows between them. WeldSolidParams::padCenters lays a disc per junction that
+// must cover the wedge with up-facing deck.
+TEST_CASE(weld_solid_junction_pad_fills_skewed_tee) {
+    // A through road that bends ~20 degrees at the junction, plus a side arm: the
+    // three chains all END at the node (0,0), each with a square cap.
+    auto mk = [](Vec2 a, Vec2 b) {
+        UnionSpine s; s.halfWidth = 3.5;
+        for (int i = 0; i <= 10; ++i) s.points.push_back(a + (b - a) * (i / 10.0));
+        return s;
+    };
+    Vec2 node(0, 0);
+    std::vector<UnionSpine> sp = {
+        mk(Vec2(-40, 0), node),                       // west arm
+        mk(node, Vec2(40, 10)),                       // east arm, bent up ~14 deg
+        mk(node, Vec2(5, 40)),                        // side arm, north
+    };
+    auto upCovered = [](const RenderMesh& m, const Vec2& p) {
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vertex& A = m.vertices[m.indices[i]];
+            const Vertex& B = m.vertices[m.indices[i + 1]];
+            const Vertex& C = m.vertices[m.indices[i + 2]];
+            if (A.normal.y < 0.5 && B.normal.y < 0.5) continue;
+            auto s = [&](Vec2 a, Vec2 b) {
+                return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+            };
+            Vec2 a(A.position.x, A.position.z), b(B.position.x, B.position.z),
+                 c(C.position.x, C.position.z);
+            double d1 = s(a, b), d2 = s(b, c), d3 = s(c, a);
+            bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            if (!(neg && pos)) return true;
+        }
+        return false;
+    };
+    // The wedge sits on the OUTSIDE of the through-road bend (below the node
+    // here): the 14-degree sector between the west arm's cap plane (x = 0) and
+    // the east arm's cap plane (0.970x + 0.243y = 0), within the arms' 3.5 m
+    // half-width of the node — no arm's ribbon covers it.
+    std::vector<Vec2> wedge = { Vec2(0.15, -3.0), Vec2(0.35, -3.2), Vec2(0.6, -3.3) };
+
+    WeldSolidParams bare;                       // without pads: the wedge is open
+    RenderMesh holey = weldSolid(sp, bare);
+    int uncoveredBare = 0;
+    for (const Vec2& p : wedge) if (!upCovered(holey, p)) ++uncoveredBare;
+    CHECK(uncoveredBare > 0);                   // the bug reproduces without pads
+
+    WeldSolidParams padded;                     // with the junction pad: covered
+    padded.padCenters = { node };
+    padded.padRadii = { 3.5 * 1.02 };
+    RenderMesh solid = weldSolid(sp, padded);
+    for (const Vec2& p : wedge) CHECK(upCovered(solid, p));
+}
+
+// Multilane roads (device: "do we still have multilane roads?"): a 13 m arterial
+// (4 lanes) bakes dashed lane-DIVIDER strips at u = 4 between same-direction
+// lanes, with v carrying raw arc-length for the dash phase. A 7 m street (2
+// lanes, centre boundary only) bakes none — the double yellow is the only divide.
+TEST_CASE(weld_solid_bakes_lane_dividers_on_arterials) {
+    auto mk = [](Vec2 a, Vec2 b, double hw) {
+        UnionSpine s; s.halfWidth = hw;
+        for (int i = 0; i <= 20; ++i) s.points.push_back(a + (b - a) * (i / 20.0));
+        return s;
+    };
+    RenderMesh wide = weldSolid({mk(Vec2(-60, 0), Vec2(60, 0), 6.5)}, WeldSolidParams{});
+    int dividerVerts = 0;
+    float maxV = 0;
+    for (const Vertex& v : wide.vertices)
+        if (v.u > 3.5f) {
+            ++dividerVerts;
+            maxV = std::max(maxV, v.v);
+            CHECK(v.normal.y > 0.9);              // paint faces up
+        }
+    CHECK(dividerVerts > 0);                      // dividers exist on the arterial
+    CHECK(maxV > 100.0f);                         // v tracks raw arc-length (120 m road)
+
+    RenderMesh narrow = weldSolid({mk(Vec2(-60, 0), Vec2(60, 0), 3.5)}, WeldSolidParams{});
+    for (const Vertex& v : narrow.vertices) CHECK(v.u <= 3.5f);   // streets: none
 }

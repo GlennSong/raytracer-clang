@@ -216,6 +216,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     simSeconds_ = 0;
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
+    ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
     signals_.build(graph);
     // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
     // (persistent) wander flag; a host with custom tables re-installs after.
@@ -233,7 +234,19 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     nodeBoxRadius_.assign(n, 0.0);
     for (int v = 0; v < n; ++v) {
         Real r = 0;
-        for (int li : graph.outLinks[v]) r = std::max(r, graph.links[li].width * 0.5);
+        // The box must FIT its local geometry: a curvy crossing gets sampled into
+        // a KNOT of nodes a few metres apart, and a half-width-sized box there
+        // (arterial: 6.5 m vs 4.5 m links) swallows the neighbouring nodes' stop
+        // lines — every held car sits inside someone else's box, a circular wait,
+        // permanent gridlock (device: "cars all stuck at one intersection"). Cap
+        // the radius at 60% of the shortest incident link so adjacent boxes can
+        // never overlap; open grids (80 m links) are untouched.
+        Real shortestLink = 1e9;
+        for (int li : graph.outLinks[v]) {
+            r = std::max(r, graph.links[li].width * 0.5);
+            shortestLink = std::min(shortestLink, graph.links[li].length);
+        }
+        if (shortestLink < 1e9) r = std::min(r, std::max(Real(1.5), shortestLink * 0.6));
         nodeBoxRadius_[v] = r;
         if (graph.isJunction(v)) junctions_.push_back({graph.nodes[v], r});
     }
@@ -243,6 +256,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     vehicles_.reserve(driverCount);
     for (int i = 0; i < total; ++i) {
         Agent a;
+        a.uid = ids_.next();   // stable identity for relationships / memory / jobs
         a.mode = (i < driverCount) ? Agent::Mode::Driver : Agent::Mode::Pedestrian;
         a.home = static_cast<int>(rnd() % n);
         a.work = static_cast<int>(rnd() % n);
@@ -300,6 +314,106 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         }
         agents_.push_back(a);
     }
+}
+
+void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
+    relationships_.clear();
+    for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
+    if (places.empty() || graph.nodeCount() == 0) return;
+
+    const std::vector<PlaceId>& homes = places.ofType(PlaceType::Home);
+    const std::vector<PlaceId>& parks = places.ofType(PlaceType::Park);
+    // A "job" is a workplace place: shop / office / civic (a park is not a job).
+    std::vector<PlaceId> jobs;
+    for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic})
+        for (PlaceId id : places.ofType(t)) jobs.push_back(id);
+    if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
+
+    // The nav node a place routes through (nearest to its snapped entrance).
+    auto nodeOf = [&](PlaceId id) { return graph.nearestNode(places[id].entrance); };
+    auto commutable = [&](int h, int w) {
+        return w != h && engine::findRoute(graph, h, w).valid() &&
+               engine::findRoute(graph, w, h).valid();
+    };
+
+    // A place's DOORSTEP: its sidewalk entrance nudged toward the building site,
+    // so a resting body stands at the door — clearly off the carriageway.
+    auto doorOf = [&](PlaceId id) {
+        const Place& p = places[id];
+        return p.entrance + (p.site - p.entrance) * 0.4;
+    };
+
+    for (Agent& a : agents_) {
+        // Home: deterministic pick from the agent's own brain bits (no rng draw).
+        PlaceId hp = homes[a.brain % homes.size()];
+        int hn = nodeOf(hp);
+        a.homePlace = hp;
+        a.home = hn;
+        a.restNode = hn;
+        a.homeDoor = doorOf(hp);
+        // Walkers start the day at their door (indoors); cars stay parked on the
+        // verge (idlePose) — a car "at home" is a car parked outside it.
+        a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor
+                                                  : idlePose(hn, a.mode, a.brain);
+        if (!graph.outLinks[hn].empty())
+            a.heading = graph.direction(graph.outLinks[hn][0]);
+
+        // Role (Phase 4) decides how the day runs. ~1 in 5 (when the city has a
+        // park) is a Stroller — no job, a day out at the park; the rest hold a job
+        // and are a Shopkeeper (if their workplace is a shop) or a Commuter. All
+        // deterministic from the brain's bits (no rng draw).
+        a.work = a.home;
+        a.role = Agent::Role::Commuter;
+        const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
+        const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
+        auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
+
+        if (stroller) {
+            PlaceId pk = parks[(a.brain >> 4) % parks.size()];
+            if (commutable(hn, nodeOf(pk))) {
+                a.role = Agent::Role::Stroller;
+                a.work = nodeOf(pk);              // a daytime destination, not a job
+                a.workPlace = kNoPlace;
+                a.workDoor = doorOf(pk);          // rests at the park, not the kerb
+                a.departWork = 9.5 + 2.0 * unit(a.brain);         // late-morning out
+                a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
+            }
+        } else if (!jobs.empty()) {
+            // Prefer the brain-picked workplace; if it isn't routable from home,
+            // scan for any that is; if none, the agent works from home.
+            PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
+            if (!commutable(hn, nodeOf(pick))) {
+                pick = kNoPlace;
+                for (PlaceId cand : jobs)
+                    if (commutable(hn, nodeOf(cand))) { pick = cand; break; }
+            }
+            if (pick != kNoPlace) {
+                a.workPlace = pick;
+                a.work = nodeOf(pick);
+                a.workDoor = doorOf(pick);
+                if (places[pick].type == PlaceType::Shop) {
+                    // Shopkeeper: open the shop before it opens, close it after.
+                    a.role = Agent::Role::Shopkeeper;
+                    Real open = places[pick].openHour, close = places[pick].closeHour;
+                    a.departWork = open > 0.5 ? open - 0.5 : 0.0;
+                    a.departHome = close < 23.5 ? close + 0.5 : 24.0;
+                }
+                // else Commuter — keep the jittered office hours from build().
+            }
+        }
+    }
+
+    // Seed the surface-level social graph: agents sharing a workplace are
+    // coworkers; those sharing a home are neighbors (housemates). Insertion order.
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+            const Agent& A = agents_[i];
+            const Agent& B = agents_[j];
+            if (A.workPlace != kNoPlace && A.workPlace == B.workPlace)
+                relationships_.set(A.uid, B.uid, Relationship::Coworker);
+            else if (A.homePlace != kNoPlace && A.homePlace == B.homePlace)
+                relationships_.set(A.uid, B.uid, Relationship::Neighbor);
+        }
 }
 
 Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
@@ -704,6 +818,11 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             Vec2 jc = nav_->nodes[toNode];
             Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
+            // Gridlock escape: held this long by nothing but STALLED occupants, a
+            // real driver inches through the box. Staggered per agent (brain bits)
+            // so a ring of mutual waiters releases one at a time, deterministic.
+            const bool gridlocked =
+                a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
             for (const Agent& b : agents_) {
                 if (&b == &a || b.mode != Agent::Mode::Driver) continue;
                 if (!b.moving || b.released) continue;
@@ -712,14 +831,23 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                 Real db2 = dx * dx + dy * dy;
                 if (db2 > range * range) continue;
                 Real along = b.heading.x * d0.x + b.heading.y * d0.y;
-                // 1: crossing-heading occupant INSIDE the box proper.
+                // 1: crossing-heading occupant INSIDE the box proper. A stalled
+                // occupant stops counting once this car is gridlocked — waiting
+                // on a car that is itself waiting is how the circular wait forms.
                 if (db2 < jr * jr && std::fabs(along) < 0.7) {
+                    if (gridlocked && b.speed < 0.3) continue;
                     yieldAtLine = true;
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
                 if (!turning || along >= -0.3) continue;
                 if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
+                // A gridlocked car stops waiting on anything STALLED — including
+                // the stopped-turner tie-break below, whose cross-junction chains
+                // (A waits on B waits on C...) were the 400-second holds. Only
+                // live moving traffic holds it now; the staggered release means
+                // opposing turners still don't sweep simultaneously.
+                if (gridlocked) continue;
                 if (&b < &a && b.leg + 1 < static_cast<int>(b.route.links.size())) {
                     int bli = b.route.links[b.leg];
                     if (nav_->links[bli].to == toNode) {
@@ -828,6 +956,31 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     Real slowZone = car ? kCarSlowZone : kPedSlowZone;
     target = followCap(target, gap, minGap, slowZone);
     a.speed = std::min(target, a.speed + accel * dt);
+
+    // Gridlock clock + escape. A jam's terminal form is a RING: cars pinned
+    // nose-to-nose across adjacent junctions by the follow gap (each behind the
+    // next stalled car), which no yield rule will ever release. So ANY car pinned
+    // to a standstill near a junction — by a yield or by a stalled leader, but
+    // never by a red (the light will change) — counts its hold; once gridlocked,
+    // it stops yielding to stalled traffic (junctionSpeedCap) and CREEPS, so the
+    // ring inches apart the way real drivers unpick a blocked box. If bodies
+    // brush during the creep, the fender-bender freeze-and-recover arbitrates.
+    if (car) {
+        const int toNode = nav_->links[li].to;
+        const bool redAhead = signals_.hasSignal(li) &&
+                              signals_.stateForLink(li) != SignalState::Green;
+        const bool nearJunc =
+            nav_->isJunction(toNode) &&
+            nav_->links[li].length - a.distOnLeg < kSignalApproach + 12.0;
+        if (a.speed < 0.05 && nearJunc && !redAhead && a.crashTimer <= 0)
+            a.holdTimer += dt;
+        else if (a.speed > 1.5)   // above creep: genuinely rolling again — a
+            a.holdTimer = 0;      // reset at creep speed sawtoothed the escape
+        const bool gridlocked =
+            a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
+        if (gridlocked && !redAhead && a.crashTimer <= 0 && a.speed < 0.7)
+            a.speed = 0.7;   // creep — the hard line clamp below still applies
+    }
 
     // Hard stop line at a red light: the smooth cap above slows the agent but
     // never to exactly zero, so without this the leftover motion would carry it
@@ -974,6 +1127,17 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // A walker rests at the end of its sidewalk (continuous with the final
         // motion — not snapped across the node, which was the old visible jump).
         a.pos = nav_->sidewalkPoint(lastLink, 1.0);
+        // Living City: an arrival AT one of its places rests at THAT DOOR — the
+        // walker is semantically indoors. The corner pose could sit inside the
+        // traffic corridor (and, sensed, froze every approaching car — device).
+        const int node = nav_->links[lastLink].to;
+        const bool atHome = a.homePlace != kNoPlace && node == a.home;
+        const bool atWork =
+            node == a.work &&
+            (a.workPlace != kNoPlace ||
+             (a.role == Agent::Role::Stroller && a.work != a.home));
+        if (atHome) a.pos = a.homeDoor;
+        else if (atWork) a.pos = a.workDoor;
     }
     if (next >= 0) {
         a.goal = next;
@@ -1104,6 +1268,12 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     sensed_.clear();
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         const Agent& a = agents_[i];
+        // A RESTING pedestrian is INSIDE its place (home/shop/office) — not a
+        // body on the street. Sensing it anyway had cars braking forever for a
+        // person who is semantically indoors (a rest pose near the kerb sat in
+        // the sensed corridor and froze traffic for good — device jam).
+        if (a.mode == Agent::Mode::Pedestrian && !a.moving && !a.playerControlled)
+            continue;
         if (a.mode == Agent::Mode::Pedestrian || a.playerControlled) {
             // A tethered walker has a physical BODY (the tether anchor the
             // bridge feeds every step) that may trail its ghost by metres —
@@ -1297,6 +1467,24 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 consider(t.pos + t.vel * kPedAnticipation);
             }
             for (const Vec2& o : staticObstacles_) consider(o);   // signal poles
+            // Cars are bodies too (device: walkers pinned against a car): the
+            // walker considers the CLOSEST POINT on each car's rectangle — not
+            // its centre, which sits outside the short vision cone when you're
+            // up against a long body — so the lean routes around the car. Both
+            // driven and parked cars: vehicles_ carries every body's live pose.
+            for (const SimVehicle& v : vehicles_) {
+                const Real ve = (v.driver >= 0 &&
+                                 v.driver < static_cast<int>(agents_.size()))
+                                    ? agents_[v.driver].elevation : 0.0;
+                if (std::fabs(ve - a.elevation) > 2.0) continue;   // a deck away
+                const Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
+                const Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
+                const Real hl = v.length * 0.5, hw = v.width * 0.5;
+                const Real lx = std::max(-hl, std::min(hl, rel.x * f.x + rel.y * f.y));
+                const Real ly = std::max(-hw, std::min(hw, rel.x * r.x + rel.y * r.y));
+                consider(Vec2(v.pos.x + f.x * lx + r.x * ly,
+                              v.pos.y + f.y * lx + r.y * ly));
+            }
             a.leanTarget = std::max(Real(-1), std::min(Real(1), bias)) * kPedMaxLateral;
             // Held at a signal (advance() parked us at the kerb, speed 0,
             // Waiting): keep the honest red ring rather than repainting Walking.
@@ -1365,6 +1553,31 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         };
         for (const Vec2& o : staticObstacles_) pushOut(o, kPoleClearance);
         for (const Vec2& o : externalObstacles_) pushOut(o, kPlayerClearance);
+        // ...and never stand INSIDE a car's footprint (device: walkers stuck
+        // bumping a car). The push resolves along the SHALLOWEST axis of the
+        // car-local box, so a walker pressed against a door is squeezed out
+        // sideways and SLIDES along the body until it clears the bumper —
+        // combined with the cone lean above, it walks around the car.
+        for (const SimVehicle& v : vehicles_) {
+            const Real ve = (v.driver >= 0 &&
+                             v.driver < static_cast<int>(agents_.size()))
+                                ? agents_[v.driver].elevation : 0.0;
+            if (std::fabs(ve - a.elevation) > 2.0) continue;
+            const Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
+            const Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
+            const Real cx = v.length * 0.5 + 0.35, cy = v.width * 0.5 + 0.35;
+            const Real lx = rel.x * f.x + rel.y * f.y;
+            const Real ly = rel.x * r.x + rel.y * r.y;
+            if (std::fabs(lx) >= cx || std::fabs(ly) >= cy) continue;
+            const Real px = cx - std::fabs(lx), py = cy - std::fabs(ly);
+            if (px < py) {
+                const Real s = lx >= 0 ? 1.0 : -1.0;
+                a.pos.x += f.x * s * px; a.pos.y += f.y * s * px;
+            } else {
+                const Real s = ly >= 0 ? 1.0 : -1.0;
+                a.pos.x += r.x * s * py; a.pos.y += r.y * s * py;
+            }
+        }
     }
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.

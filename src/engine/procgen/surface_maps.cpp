@@ -77,9 +77,19 @@ CellHit gridCell(double u, double v, int cellsU, int cellsV, bool runningBond,
     return c;
 }
 
+// Brick tuning (device feedback: mortar amount + colour should be adjustable).
+// kBrickMortar is the joint band as a fraction of the smaller cell dimension —
+// bigger = more mortar showing. Courses per tile MUST stay EVEN: a running bond
+// staggers odd rows, so an odd count seams two aligned rows at every vertical
+// tile repeat (the "double row of bricks" device bug).
+constexpr int    kBrickCoursesU = 4;      // bricks per tile row
+constexpr int    kBrickCoursesV = 8;      // courses per tile (EVEN — see above)
+constexpr double kBrickMortar   = 0.12;   // mortar band width (fraction of cell)
+const     Vec3   kMortarColor{0.78, 0.75, 0.70};   // cream-grey lime mortar
+
 SurfSample evalBrick(double u, double v, uint32_t seed) {
     SurfSample s;
-    CellHit c = gridCell(u, v, 4, 7, true, 0.10);
+    CellHit c = gridCell(u, v, kBrickCoursesU, kBrickCoursesV, true, kBrickMortar);
     double j = c.joint;
     double bump = wrapFbm(u, v, 16, 2, seed) - 0.5;
     double brickV = 0.85 + 0.15 * ihash(c.cu, c.cv, seed) + 0.08 * bump;
@@ -87,8 +97,7 @@ SurfSample evalBrick(double u, double v, uint32_t seed) {
     s.h = mixd(0.25, brickV, j);                       // mortar recessed
     Vec3 brick = mixv(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28),
                       ihash(c.cu, c.cv, seed));
-    Vec3 mortar(0.74, 0.72, 0.67);
-    s.albedo = mixv(mortar, brick * (0.85 + 0.25 * brickV), j);
+    s.albedo = mixv(kMortarColor, brick * (0.85 + 0.25 * brickV), j);
     s.rough = mixd(0.95, 0.82, j);                     // mortar matte
     return s;
 }
@@ -170,12 +179,19 @@ SurfSample evalAsphalt(double u, double v, uint32_t seed) {
 }
 SurfSample evalPavement(double u, double v, uint32_t seed) {
     SurfSample s;
-    CellHit c = gridCell(u, v, 3, 3, false, 0.05);
-    double spk = wrapNoise(u, v, 70, seed) - 0.5;
-    double slabV = 0.9 + 0.12 * (ihash(c.cu, c.cv, seed) - 0.5) + 0.06 * spk;
-    s.h = mixd(0.45, 0.85 + 0.1 * spk, c.joint);
-    s.albedo = Vec3(0.60, 0.59, 0.57) * slabV * mixd(0.75, 1.0, c.joint);
-    s.rough = 0.9;
+    // Slabs at ~1.2 m (3 per 3.6 m tile). Two device notes drive this:
+    // (1) "the pbr texture ... is too noisy" — the old high-freq speckle
+    //     (wrapNoise at freq 70) is gone; only a gentle low-frequency mottle
+    //     and a faint per-slab value shift remain, so the concrete reads calm.
+    // (2) "the concrete divides ... aren't emphasized with a bump" — the joint
+    //     is a crisp, DEEP height groove (0.12 vs a flat 0.9 face) so the baked
+    //     normal map shows a real scored line, not a hairline colour change.
+    CellHit c = gridCell(u, v, 3, 3, false, 0.06);
+    double mott = wrapFbm(u, v, 5, 3, seed) - 0.5;          // slow mottle, not speckle
+    double slabV = 0.95 + 0.045 * (ihash(c.cu, c.cv, seed) - 0.5) + 0.03 * mott;
+    s.h = mixd(0.12, 0.9, c.joint);                         // deep scored groove
+    s.albedo = Vec3(0.63, 0.62, 0.60) * slabV * mixd(0.70, 1.0, c.joint);
+    s.rough = 0.92;
     return s;
 }
 SurfSample evalCobble(double u, double v, uint32_t seed) {
@@ -302,7 +318,7 @@ SurfaceMaps surfaceMaps(Surface surface, int size, uint32_t seed) {
 
 double surfaceWorldTileSize(Surface surface) {
     switch (surface) {
-        case Surface::Brick:           return 0.8;   // 4 bricks ~0.2 m, 7 courses
+        case Surface::Brick:           return 0.8;   // 4 bricks ~0.2 m, 8 courses (even = seamless bond)
         case Surface::RoofShingle:     return 1.5;
         case Surface::RoofTile:        return 1.1;
         case Surface::Cobblestone:     return 0.9;

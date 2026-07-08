@@ -202,7 +202,7 @@ vec3 surfCorrugated(vec3 base, float u, float v) {
 }
 vec3 surfAsphalt(vec3 base, float u, float v) {
     float spk = vnoise2(u * 30.0, v * 30.0), blotch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (blotch - 0.5), 0.5, 1.4);
+    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (blotch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 vec3 surfPavement(vec3 base, float u, float v) {
@@ -237,8 +237,31 @@ vec3 surfWood(vec3 base, float u, float v) {
     float shadow = smoothstep(0.0, 0.02, fy);
     return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
-vec3 surfRoadMarkings(vec3 base, float mu, float mv) {
-    if (mu < 0.5) return base;
+vec3 surfRoadMarkings(vec3 base, float mu, float mv, float wu, float wv) {
+    // One surface id covers the welded road, split by road-local mu: the
+    // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
+    // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
+    // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Metal.
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain + scoring joints that FOLLOW the curb
+        // (slab tops bake u = -(metres along the kerb loop)). Curb faces (u = 0)
+        // stay plain. Mirrors scene.cpp / WGSL / Metal.
+        float spk = vnoise2(wu * 26.0, wv * 26.0);
+        vec3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        float su = -mu;
+        if (su > 0.02) {
+            float t = tile1(su, 1.5);
+            float jd = min(t, 1.5 - t);
+            c = c * (0.68 + 0.32 * smoothstep(0.02, 0.06, jd));
+        }
+        return c;
+    }
+    vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
+    // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
+    // internal same-direction lane boundary on multilane roads; 3 m of white
+    // paint every 7.5 m. Mirrors scene.cpp / WGSL / Metal.
+    if (mu > 3.5)
+        return (fract(mv / 7.5) < 0.4) ? vec3(0.86, 0.86, 0.83) : deck;
     float lat = mu - 2.0;
     float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
     float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -246,7 +269,11 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);
-    vec3 c = mix(base, vec3(0.82, 0.68, 0.13), y);
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): the band ends at mv ~3.6, so the yellow fades in
+    // just past it. Without crosswalks mv is a large sentinel (full-length line).
+    y *= smoothstep(4.0, 4.8, mv);
+    vec3 c = mix(deck, vec3(0.82, 0.68, 0.13), y);
     c = mix(c, vec3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
     // the junction mouth (baked by the road mesher), so the band sits set back on
@@ -273,7 +300,7 @@ vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV) {
         case 8u:  c = surfPavement(base, uv.x, uv.y); break;
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
-        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y); break;
+        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
         default:  return base;
     }
     return clamp(c, 0.0, 1.0);
@@ -415,6 +442,25 @@ void main() {
     if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
     uint surfaceId = pc.surfaceFlags.x;
     if (surfaceId != 0u) albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord);
+    // Road micro-relief (device: roads "don't look like a PBR texture"): the road
+    // carries no baked normal/roughness maps (its mesh UV is road-local paint
+    // space), so perturb the normal and vary the roughness procedurally from the
+    // same world-planar noise the asphalt albedo tiles by. Mirrors WGSL/Metal.
+    if (surfaceId == 11u) {
+        float rx = inWorldPos.x, rz = inWorldPos.z;
+        // Three octaves: metre-scale undulation, decimetre patching, and a
+        // near-aggregate grain — summed finite differences tilt the normal hard
+        // enough to read as bumpy asphalt (device: "no sense of bumpiness").
+        float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.5 * vnoise2(rx * 11.0, rz * 11.0)
+                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0);
+        float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.5 * vnoise2(rx * 11.0 + 1.7, rz * 11.0)
+                 + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
+        float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
+                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
+        N = normalize(N + vec3(-bx, 0.0, -bz) * 0.6);
+        float spk = vnoise2(rx * 23.0, rz * 23.0);
+        roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.55, 1.0);
+    }
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);

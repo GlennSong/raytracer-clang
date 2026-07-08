@@ -1,7 +1,7 @@
-#ifndef RAYTRACER_ENGINE_SCRIPTING_AGENT_GOALS_H
-#define RAYTRACER_ENGINE_SCRIPTING_AGENT_GOALS_H
+#ifndef RAYTRACER_APPS_CITYSIM_SCRIPTING_AGENT_GOALS_H
+#define RAYTRACER_APPS_CITYSIM_SCRIPTING_AGENT_GOALS_H
 
-#include "../../apps/citysim/city_goals.h"
+#include "../city_goals.h"
 
 #include <string>
 

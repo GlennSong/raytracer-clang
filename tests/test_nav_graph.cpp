@@ -116,3 +116,43 @@ TEST_CASE(nav_nearest_queries) {
     int li = nav.nearestLink(Vec2(5, 2));
     CHECK(li >= 0);
 }
+
+TEST_CASE(nav_junction_knot_merges_into_one_intersection) {
+    // Two 4-way junction nodes 5 m apart, joined by a car-length stub (the shape
+    // a curvy generated crossing planarizes into). buildNavGraph must merge them
+    // into ONE intersection (ADR-0066 gridlock fix), record how far the members
+    // sat from the centroid (nodeSpread — signal poles back off by it), and keep
+    // far-apart degree-2 nodes untouched.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)},   {Vec2(5, 0)},              // the knot pair
+                {Vec2(-60, 0)}, {Vec2(65, 0)},             // long approaches
+                {Vec2(0, 60)},  {Vec2(0, -60)},
+                {Vec2(5, 60)},  {Vec2(5, -60)} };
+    g.edges = {
+        RoadEdge{0, 1, 8, RoadClass::Local, 0},            // the stub
+        RoadEdge{2, 0, 8, RoadClass::Local, 0},
+        RoadEdge{1, 3, 8, RoadClass::Local, 0},
+        RoadEdge{4, 0, 8, RoadClass::Local, 0},
+        RoadEdge{0, 5, 8, RoadClass::Local, 0},
+        RoadEdge{6, 1, 8, RoadClass::Local, 0},
+        RoadEdge{1, 7, 8, RoadClass::Local, 0},
+    };
+    NavGraph nav = buildNavGraph(g);
+    CHECK(nav.nodeCount() == 7);                 // 8 nodes, knot pair merged to 1
+    // Exactly one junction, at the knot centroid, carrying the members' spread.
+    int junctions = 0, merged = -1;
+    for (int i = 0; i < nav.nodeCount(); ++i)
+        if (nav.isJunction(i)) { ++junctions; merged = i; }
+    CHECK(junctions == 1);
+    CHECK_APPROX(nav.nodes[merged].x, 2.5, 1e-9);
+    CHECK_APPROX(nav.nodes[merged].y, 0.0, 1e-9);
+    CHECK_APPROX(nav.nodeSpread[merged], 2.5, 1e-9);   // members sat 2.5 m out
+    // Every surviving link still routes (no stub self-loop, no orphan endpoints).
+    for (const NavLink& l : nav.links) {
+        CHECK(l.from != l.to);
+        CHECK(l.length > 1.0);
+    }
+    // Ordinary graphs are untouched: no merge, zero spread everywhere.
+    NavGraph plain = buildNavGraph(straightRoad());
+    for (Real s : plain.nodeSpread) CHECK(s == 0.0);
+}

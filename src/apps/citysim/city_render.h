@@ -3,10 +3,13 @@
 
 #include "../../engine/system.h"
 #include "../../engine/ai/nav_graph.h"
+#include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
 #include "city_meshes.h"   // fleetCarMesh, buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
+#include "places.h"        // PlaceMap (ADR-0066)
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace citysim {
 
@@ -46,6 +49,15 @@ struct CityRenderParams {
     std::string vehicleScript;
 };
 
+// The Dear ImGui window this system appends its "Living City" section into. It
+// MUST match engine DebugOverlaySystem's ImGui::Begin(...) title: ImGui merges
+// same-titled Begin() calls within a frame into ONE window, so the city section
+// stacks inside the existing Debug panel instead of floating separately. This
+// string is the ONLY coupling between the engine's debug panel and the city app
+// — deliberately a shared literal, not a code dependency (which would reinstate
+// the engine→app arrow the citysim library extraction removed).
+inline constexpr const char* kDebugWindowTitle = "Debug";
+
 class CityRenderSystem : public engine::System {
 public:
     explicit CityRenderSystem(const CityRenderParams& params = {})
@@ -54,12 +66,28 @@ public:
     void onStart(engine::FrameContext& ctx) override;
     void update(engine::FrameContext& ctx) override;   // per-frame: debug-widget toggle
     void fixedUpdate(engine::FrameContext& ctx) override;
+    // The "Living City" debug section (ADR-0066). Appends into the shared Debug
+    // ImGui window (see kDebugWindowTitle) — per-layer widget toggles + a
+    // selected-agent inspector. Guarded by RT_ENABLE_IMGUI + a null-context
+    // check + "a city is loaded", so it draws only when a living city is present.
+    void render(engine::FrameContext& ctx) override;
 
     // Debug widgets (rings / vision cones / navgraph) show/hide state. The `j`
     // action flips it in update(); this setter lets another system force it (the
     // spectate camera turns it on so the followed agent shows its ring + cone).
     void setDebugWidgets(bool on) { debugWidgets_ = on; }
     bool debugWidgets() const { return debugWidgets_; }
+
+    // Rebuild-road-graph button (device: "a button to rebuild the road graph on
+    // the terrain"). The panel sets a request; the host (ArenaState) polls this
+    // each frame and, when true, reseeds the road recipe on disk and reloads the
+    // level — so roads, terrain conform, and buildings all regrow consistently
+    // from the new graph. Returns true once, then clears.
+    bool consumeRebuildRoadsRequest() {
+        bool r = rebuildRoadsRequested_;
+        rebuildRoadsRequested_ = false;
+        return r;
+    }
 
     // Agent `agentId`'s current WORLD pose for spectating: the real external body
     // pose when one is reported (cars/peds owned by the physics bridges), else the
@@ -220,14 +248,38 @@ private:
     engine::Entity navLinkGroup_{};          // debug navgraph lane strips (static bake)
     engine::Entity navNodeGroup_{};          // debug junction-node rings (static bake)
     engine::Entity visionGroups_[2]{};       // debug sensing wedges, indexed by Agent::Mode
+    engine::Entity blockGroup_{};            // debug city-BLOCK outlines (static bake)
+    engine::Entity lotGroup_{};              // debug LOT outlines (static bake)
+    engine::Entity colliderStripGroup_{};    // debug collider-prism rim outlines
+    engine::Entity colliderPostGroup_{};     // debug collider-prism corner posts
     std::vector<engine::Mat4> navLinkBake_;  // cached navgraph transforms (built once)
     std::vector<engine::Mat4> navNodeBake_;
+    std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
+    std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
+    std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
+    std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
     bool built_ = false;
-    bool debugWidgets_ = false;   // runtime toggle (init from params; key flips it)
+    bool debugWidgets_ = false;   // master runtime toggle (init from params; J flips it)
+    // Per-layer refinements of debugWidgets_ (ADR-0066 panel): when the master is
+    // on, each of these gates one widget layer independently from the Living City
+    // ImGui section. Default on, so the J key alone behaves exactly as before.
+    bool showAgentWidgets_ = true;   // per-agent state rings + intent arrows
+    bool showVisionCones_ = true;    // per-agent sensing wedges
+    bool showNavGraph_ = true;       // lane strips + junction-node rings
+    bool showPlan_ = true;           // city-plan outlines: blocks + lots (L key)
+    bool showColliders_ = false;     // building physics prisms (rims + posts)
+    bool rebuildRoadsRequested_ = false;   // panel button → host reseeds + reloads
+    int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)
+    // Places (ADR-0066): the level-authored destinations, and the routable
+    // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
+    // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
+    std::vector<engine::AuthoredPlace> authoredPlaces_;
+    PlaceMap places_;
+    bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

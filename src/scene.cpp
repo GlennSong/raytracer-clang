@@ -190,8 +190,10 @@ Vec3 surfCorrugated(const Vec3& base, double u, double v) {
     return base * shade * (1 - rmask) + rustCol * rmask;
 }
 Vec3 surfAsphalt(const Vec3& base, double u, double v) {
+    // Kept SUBTLE and dark (device: "the road doesn't look dark anymore ...
+    // dialed back and allow more of the black to show through").
     double spk = surfVNoise(u * 30.0, v * 30.0), patch = surfFbm(u * 0.4, v * 0.4);
-    double shade = std::clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    double shade = std::clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (patch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 Vec3 surfPavement(const Vec3& base, double u, double v) {
@@ -238,8 +240,36 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
 // sidewalk or junction pad — so it stays plain). Normalised across the width, so it
 // tracks any road width and conforms to terrain for free. `mv` (arc-length) is baked
 // for future dashed dividers; v1 paints a double-yellow centreline + white edge lines.
-Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
-    if (mu < 0.5) return base;                        // not carriageway: no paint
+Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double wv) {
+    // The welded road wears ONE surface id, split by its road-local mu: the
+    // carriageway sits at mu in [1,3] (lat = mu-2); the raised sidewalk/curb band
+    // carries mu in [0,1]. Texture BOTH (device: roads/sidewalks were flat
+    // colour): concrete pavement on the band, asphalt grain under the lane
+    // paint. wu/wv is the world-planar UV the other surfaces tile by.
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain with scoring joints that FOLLOW the
+        // curb (device: world-aligned plaza slabs looked wrong): slab tops bake
+        // u = -(metres along the kerb loop), so joints run perpendicular to the
+        // curb and turn with it. Curb faces / junction decks (u = 0) stay plain.
+        double spk = surfVNoise(wu * 26.0, wv * 26.0);
+        Vec3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        double su = -mu;
+        if (su > 0.02) {
+            double t = su - 1.5 * std::floor(su / 1.5);   // a joint every 1.5 m
+            double jd = std::min(t, 1.5 - t);
+            double jt = std::clamp((jd - 0.02) / 0.04, 0.0, 1.0);
+            c = c * (0.68 + 0.32 * (jt * jt * (3.0 - 2.0 * jt)));
+        }
+        return c;
+    }
+    Vec3 deck = surfAsphalt(base, wu, wv);              // grained asphalt deck
+    // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): the mesher lays one
+    // thin strip per internal same-direction lane boundary on multilane roads;
+    // 3 m of white paint every 7.5 m. Mirrors WGSL/Metal/Vulkan.
+    if (mu > 3.5) {
+        double phase = mv / 7.5; phase -= std::floor(phase);
+        return phase < 0.4 ? Vec3(0.86, 0.86, 0.83) : deck;
+    }
     double lat = mu - 2.0;                            // [-1, 1], 0 = centreline, ±1 = curb
     auto band = [](double x, double c, double hw) {  // ~1 inside a line of half-width hw
         double d = std::fabs(x - c), t = std::clamp((d - hw) / 0.006, 0.0, 1.0);
@@ -248,7 +278,15 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv) {
     const Vec3 yellow(0.82, 0.68, 0.13), white(0.86, 0.86, 0.83);
     double y = std::max(band(lat, 0.030, 0.013), band(lat, -0.030, 0.013));  // double yellow centre
     double w = std::max(band(lat, 0.92, 0.016), band(lat, -0.92, 0.016));    // solid white edges
-    Vec3 c = base * (1.0 - y) + yellow * y;
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): mv = metres past the junction mouth and the band
+    // ends at ~3.6, so the yellow fades in just past it. Without crosswalks mv
+    // is a large sentinel and the line runs the full segment as before.
+    {
+        double t = std::clamp((mv - 4.0) / 0.8, 0.0, 1.0);
+        y *= t * t * (3.0 - 2.0 * t);
+    }
+    Vec3 c = deck * (1.0 - y) + yellow * y;
     c = c * (1.0 - w) + white * w;
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST the
     // junction mouth (baked by the road mesher), so the band sits set back on the
@@ -282,7 +320,7 @@ Vec3 applySurface(int id, const Vec3& base, const Vec3& worldPos, const Vec3& n,
         case 8:  c = surfPavement(base, u, v); break;
         case 9:  c = surfCobble(base, u, v); break;
         case 10: c = surfWood(base, u, v); break;
-        case 11: c = surfRoadMarkings(base, mu, mv); break;
+        case 11: c = surfRoadMarkings(base, mu, mv, u, v); break;
         default: return base;
     }
     return Vec3(std::clamp(c.x, 0.0, 1.0), std::clamp(c.y, 0.0, 1.0),

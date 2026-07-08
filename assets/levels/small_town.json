@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [0.0, -0.3, 0.0],
+      "size": [260.0, 0.4, 220.0],
+      "material": {
+        "albedo": [0.34, 0.4, 0.29],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [0.0, 0.0, 0.0],
+        "checkerboard": false
+      },
+      "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 }
+    },
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [0.0, 0.0, 0.0],
+      "road": {
+        "nodes": [
+          { "x": -40.0, "z": -28.0 },
+          { "x": 40.0, "z": -28.0 },
+          { "x": 40.0, "z": 28.0 },
+          { "x": -40.0, "z": 28.0 },
+          { "x": -40.0, "z": 0.0 },
+          { "x": 40.0, "z": 0.0 },
+          { "x": 0.0, "z": -28.0 },
+          { "x": 0.0, "z": 28.0 }
+        ],
+        "edges": [
+          [0, 6],
+          [6, 1],
+          [1, 5],
+          [5, 2],
+          [2, 7],
+          [7, 3],
+          [3, 4],
+          [4, 0],
+          [6, 7]
+        ],
+        "width": 7.0,
+        "sidewalk": 1.8,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [0.09, 0.09, 0.1]
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 10,
+    "pedestrians": 14,
+    "seed": 11,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": true,
+    "wander": false,
+    "vehicles": "vehicles.lua",
+    "places": [
+      { "type": "home",   "position": [-52.0, 0.0, -16.0], "name": "Maple House",
+        "building": [12.0, 7.0, 9.0], "color": [0.76, 0.55, 0.45] },
+      { "type": "shop",   "position": [52.0, 0.0, -16.0], "name": "Corner Store",
+        "open": 8.0, "close": 20.0,
+        "building": [14.0, 6.0, 11.0], "color": [0.85, 0.7, 0.4] },
+      { "type": "civic",  "position": [-52.0, 0.0, 16.0], "name": "Town Hall",
+        "building": [16.0, 10.0, 14.0], "color": [0.8, 0.8, 0.85] },
+      { "type": "office", "position": [52.0, 0.0, 16.0], "name": "Works Ltd",
+        "open": 9.0, "close": 17.0,
+        "building": [14.0, 13.0, 12.0], "color": [0.55, 0.62, 0.72] },
+      { "type": "park",   "position": [18.0, 0.0, 0.0], "name": "The Green",
+        "building": [20.0, 0.3, 20.0], "color": [0.35, 0.6, 0.35] }
+    ]
+  },
+  "player": {
+    "position": [0, 1.2, -14],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "friction": 0.5
+  },
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [1, 0.98, 0.94],
+      "direction": [0.4, 0.72, -0.32],
+      "intensity": 6.0
+    }
+  }
+}

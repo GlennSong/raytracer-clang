@@ -330,6 +330,60 @@ int l_mesh_merge(lua_State* L) {
     pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::merged(parts)));
     return 1;
 }
+}  // namespace
+
+BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p);
+
+std::function<void(const std::string&, BuildingParams&)>
+makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
+    if (!vm.doString(code, error)) return {};
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "style_book");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        if (error) *error = "style_book.lua did not set a `style_book` table";
+        return {};
+    }
+    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);   // pops + pins the table
+    ScriptVM* vmp = &vm;
+    return [vmp, ref](const std::string& recipe, BuildingParams& p) {
+        lua_State* L2 = luaState(*vmp);
+        lua_rawgeti(L2, LUA_REGISTRYINDEX, ref);
+        lua_getfield(L2, -1, recipe.c_str());
+        if (lua_istable(L2, -1)) p = readBuildingParamsOnto(L2, -1, p);
+        lua_pop(L2, 2);
+    };
+}
+
+namespace {
+
+// mesh.lathe{profile={{r,y},...}, segments=16} -> mesh : revolve a 2D profile
+// around +Y at the origin. Columns, domes, finials, vases — the op library's
+// Lua face (the C++ grammar composes the same latheMesh).
+int l_mesh_lathe(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<Vec2> prof;
+    lua_getfield(L, 1, "profile");
+    if (lua_istable(L, -1)) {
+        lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                lua_geti(L, -1, 1);
+                lua_geti(L, -2, 2);
+                prof.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)));
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    const int segs = static_cast<int>(optField(L, 1, "segments", 16.0));
+    if (prof.size() < 2) return luaL_error(L, "mesh.lathe: profile needs >= 2 rows");
+    pushMesh(L, std::make_shared<RenderMesh>(
+                    latheMesh(Vec3(0, 0, 0), prof, segs, Vec3(1, 1, 1))));
+    return 1;
+}
 int l_mesh_translate(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
     Vec3 t = checkVec3(L, 2);
@@ -481,8 +535,12 @@ bool optBoolField(lua_State* L, int idx, const char* key, bool fallback) {
 Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback);
 std::string optStrField(lua_State* L, int idx, const char* key, const char* def);
 
-BuildingParams readBuildingParams(lua_State* L, int idx) {
-    BuildingParams p;
+}  // namespace
+
+// Overlay variant: reads the table's fields ONTO `p`, leaving everything the
+// table doesn't mention untouched — the style book applies recipe overrides
+// through this, so a book entry of { roof = "hip" } changes only the roof.
+BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     if (lua_isnoneornil(L, idx)) return p;
     luaL_checktype(L, idx, LUA_TTABLE);
     p.floors        = static_cast<int>(optField(L, idx, "floors", p.floors));
@@ -506,6 +564,8 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
     p.tiers     = static_cast<int>(optField(L, idx, "tiers", p.tiers));
     p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
+    p.solidFacade = optBoolField(L, idx, "solid_facade", p.solidFacade);
+    p.groundRetail = optBoolField(L, idx, "ground_retail", p.groundRetail);
 
     // Facade style: a named look picks the wall material + a seeded colour
     // (brick reds, concrete greys, glass curtain, ...). Fine knobs override it.
@@ -518,8 +578,60 @@ BuildingParams readBuildingParams(lua_State* L, int idx) {
     else if (style == "painted")    p.wallColor = facadeColor(FacadeStyle::Painted, seed);
     p.curtainWall = optBoolField(L, idx, "curtain_wall", p.curtainWall);
     p.wallColor = optVec3Field(L, idx, "wall_color", p.wallColor);
+
+    // Window ELEMENT knobs (building-grammar-plan.md P2) — the lab's dials:
+    //   window_head = "flat" | "segmental" | "round"
+    //   window_hood = "none" | "band" | "arch"
+    //   lights_x / lights_y = pane grid; arch_rise; frame_width; quoins; sill
+    // Defaults follow the style table (brick -> segmental arch + voussoirs...).
+    if (style == "brick") {
+        p.window.head = OpeningStyle::Head::Segmental;
+        p.window.hood = OpeningStyle::Hood::Arch;
+        p.window.lightsX = 2; p.window.lightsY = 2;
+        p.quoins = true;
+    } else if (style == "stucco") {
+        p.window.head = OpeningStyle::Head::Round;
+        p.window.hood = OpeningStyle::Hood::Arch;
+        p.window.lightsX = 2; p.window.lightsY = 1;
+        p.quoins = true;
+    } else if (style == "concrete") {
+        p.window.lightsX = 1; p.window.lightsY = 2;
+    }
+    std::string head = optStrField(L, idx, "window_head", "");
+    if (head == "flat")           p.window.head = OpeningStyle::Head::Flat;
+    else if (head == "segmental") p.window.head = OpeningStyle::Head::Segmental;
+    else if (head == "round")     p.window.head = OpeningStyle::Head::Round;
+    std::string hood = optStrField(L, idx, "window_hood", "");
+    if (hood == "none")      p.window.hood = OpeningStyle::Hood::None;
+    else if (hood == "band") p.window.hood = OpeningStyle::Hood::Band;
+    else if (hood == "arch") p.window.hood = OpeningStyle::Hood::Arch;
+    p.window.lightsX = static_cast<int>(optField(L, idx, "lights_x", p.window.lightsX));
+    p.window.lightsY = static_cast<int>(optField(L, idx, "lights_y", p.window.lightsY));
+    p.window.archRise = static_cast<Real>(optField(L, idx, "arch_rise", p.window.archRise));
+    p.window.frameWidth = static_cast<Real>(optField(L, idx, "frame_width", p.window.frameWidth));
+    p.quoins = optBoolField(L, idx, "quoins", p.quoins);
+    p.window.sill = optBoolField(L, idx, "sill", p.window.sill);
+    // Vehicle bays on the street face (fire stations, loading docks).
+    p.groundBays = static_cast<int>(optField(L, idx, "ground_bays", p.groundBays));
+    // Classical entrance elements + the dome rotunda (mesh-op vocabulary).
+    p.portico = static_cast<int>(optField(L, idx, "portico", p.portico));
+    p.entranceSteps = optBoolField(L, idx, "entrance_steps", p.entranceSteps);
+    p.dome = optBoolField(L, idx, "dome", p.dome);
+    // Roof form + street-aware retail (P3.c).
+    std::string roof = optStrField(L, idx, "roof", "");
+    if (roof == "flat")       p.roofStyle = BuildingParams::RoofStyle::Flat;
+    else if (roof == "gable") p.roofStyle = BuildingParams::RoofStyle::Gable;
+    else if (roof == "hip")   p.roofStyle = BuildingParams::RoofStyle::Hip;
+    p.roofPitch = static_cast<Real>(optField(L, idx, "roof_pitch", p.roofPitch));
+    p.retailStreetOnly = optBoolField(L, idx, "retail_street_only", p.retailStreetOnly);
     return p;
 }
+
+BuildingParams readBuildingParams(lua_State* L, int idx) {
+    return readBuildingParamsOnto(L, idx, BuildingParams{});
+}
+
+namespace {
 
 // building.grow{ floors=, width=, depth=, seed=, ... } -> mesh
 // Grows the split/shape-grammar building over a rectangular footprint and returns
@@ -534,6 +646,86 @@ int l_building_grow(lua_State* L) {
     Scope s = scopeFromFootprint(foot, 0.0, 10.0);
     BuildingMesh bm = growBuilding(s, p);
     pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
+    return 1;
+}
+
+// building.grow_parts{ ... } -> { {mesh=, part="brick"|"glass"|...}, ... }
+// Like building.grow, but the parts keep their shape-grammar identity instead of
+// being flattened into one vertex-coloured mesh — so a recipe can bind REAL
+// materials per class (brick/concrete/stucco surfaces, reflective glass), the
+// same way the city pipeline does (building-grammar-plan.md P2, lab feedback:
+// "don't see materials on the surface of the building").
+int l_building_grow_parts(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
+    Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
+    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
+                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
+    BuildingMesh bm = growBuilding(scopeFromFootprint(foot, 0.0, 10.0), p);
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood"};
+    lua_newtable(L);
+    int n = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames)/sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
+// building.grow_plan_parts{ plan = {{x,z}, ...}, setback = m, ... } -> parts
+// The FLOORPLAN grammar (building-grammar-plan.md P3): the massing is the given
+// closed polygon — the lot's own shape — optionally inset by `setback`, grown
+// with the same elements as grow_parts and returned as named parts. Tiers via
+// setback_floors/setback_every give the base/shaft/capital stack.
+int l_building_grow_plan_parts(lua_State* L) {
+    BuildingParams p = readBuildingParams(L, 1);
+    Poly2 plan;
+    lua_getfield(L, 1, "plan");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                plan.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)));
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    const Real setback = static_cast<Real>(optField(L, 1, "setback", 0.0));
+    if (setback > 0 && plan.size() >= 3) plan = inset(plan, setback);
+    BuildingMesh bm = growPlanBuilding(plan, p);
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood"};
+    lua_newtable(L);
+    int cnt = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
+                                                             sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++cnt);
+    }
     return 1;
 }
 
@@ -2389,6 +2581,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"capsule", l_mesh_capsule},
         {"car_shell", l_mesh_car_shell},
         {"merge", l_mesh_merge},
+        {"lathe", l_mesh_lathe},
         {"translate", l_mesh_translate},
         {"place", l_mesh_place},
         {"scale", l_mesh_scale},
@@ -2430,6 +2623,8 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kBuildingFns[] = {
         {"grow", l_building_grow},
+        {"grow_parts", l_building_grow_parts},
+        {"grow_plan_parts", l_building_grow_plan_parts},
         {"height", l_building_height},
         {nullptr, nullptr},
     };

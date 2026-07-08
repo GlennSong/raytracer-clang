@@ -5129,6 +5129,258 @@ rather than reverting to vendoring.
 
 ---
 
+## ADR-0066 — The Living City: places, pedestrian routing, and agent identity
+
+**Context.** ADR-0060…0065 built agents that perceive, decide, and drive/walk a
+road network deterministically, with goals and bodies authored as Lua data. But
+the world they move through is *featureless*: a car laps a graph, a walker
+strolls a sidewalk, and neither has anywhere to *go*. Buildings are inert mass
+boxes (ADR-0038 `CityBuilding`) with no meaning — no home, no shop, no office —
+and there is no walkable graph off the carriageway, so an agent cannot route
+"house → corner → crosswalk → shop door." Nor does any agent have a durable
+identity: it is its array slot, which churns on rebuild, so nothing can remember
+"A knows B" or "A works at the diner." The full plan (six phases, headless
+through phase 3) lives in `docs/living-city-plan.md`; this ADR records the
+decisions and lands **Phase 1**.
+
+**Decision — three new pieces, everything else reuse.** A **places layer**
+(buildings become typed, routable destinations), a **pedestrian navigation
+graph** (a walkable graph the existing A* traverses), and a thin **identity
+layer** (a stable UID per agent + surface-level relationships/memory + jobs).
+Roles are goal-table variants (ADR-0064), tools reuse the capability/`gun.lua`
+seam, and the player joins as a *participant* — an agent with a UID, a home, and
+a job — with observer free-roam retained as a camera mode. Deliberately shallow
+where it could go deep (⟨A6⟩): relationships are pair *tags*, not an affinity
+sim; memory is a bounded set of familiar places/faces, not an episodic store.
+
+**Phase 1 (this change) — places model + agent identity, headless.**
+
+- `apps/citysim/places.{h,cpp}` — a `Place` (type ∈ {Home, Shop, Office, Park,
+  Civic}, footprint `site`, an `entrance` snapped onto the walkable network, and
+  light metadata: `openHour`/`closeHour` with a midnight-wrapping `openAt`, and
+  `capacity`) plus a `PlaceMap` that indexes places by type and answers
+  `nearest(type, from)` — "a shop near me" returns a concrete, routable target.
+  Entrance snapping (`snapToSidewalk`) scans every NavLink, projects the site
+  onto each centreline, and keeps the closest *sidewalk* point — so a two-way
+  road's two opposite-kerb links resolve the door to the FRONTAGE side, off the
+  carriageway. Pure data + pure queries; deterministic; no ECS/render/Lua.
+
+- `apps/citysim/agent_id.h` — `AgentId` (a UID, NOT the array index) + an
+  `AgentIdAllocator` (a monotonic counter, `reset()` at build). `CitySim::build`
+  resets the allocator and hands each agent a UID in order, off a stream
+  SEPARATE from the sim rng_ so identity never perturbs the deterministic draw
+  sequence. UIDs are dense, unique, and reproducible from the seed; a live scene
+  that later spawns agents keeps counting up, never recycling an id a
+  still-remembered agent held. This is the key later phases hang relationships,
+  memory, and job assignment on.
+
+**Why the sim rng and the id stream are separate.** Determinism (ADR-0002) is
+per-call-order. Threading UID allocation through `rnd()` would have been simpler
+but would couple identity to the draw count — adding a UID would shift every
+subsequent random decision. A dedicated monotonic counter keeps `build`'s draw
+stream bit-identical to before, so every existing seeded test is unchanged.
+
+**Tests.** `test_places.cpp` (Makefile + ctest, headless): type-tag round-trip
+and rejection; entrance snapping lands every door on a walkable edge, off the
+carriageway (offset ≥ road half-width), with a graph-empty fallback to the site;
+type indexing + insertion order; `nearest`-of-type with a deterministic tie
+break; open-hours including the midnight wrap; the allocator's monotonic/reset
+contract; and — through a real `CitySim::build` — that every agent gets a dense,
+unique UID and the same seed reproduces the same UID sequence. The added field
+is purely additive (default `kNoAgent`) and default-empty structures mean the
+Lua-free build and every prior test are unaffected.
+
+**Organization — the city becomes its own library.** Before building further we
+made the app/core boundary structural, not just cosmetic. Previously
+`apps/citysim/*` compiled *into* `engine_core` (the comment admitted it: "lives
+under src/apps/citysim but compiles into the shared lib"), and two engine-core
+scripting files (`agent_goals`, `vehicle_body`) `#include`d citysim headers — a
+dependency INVERSION (core reaching up into an app). Now:
+
+- `apps/citysim/*` builds as its own **`citysim` static library** that links
+  `engine_core`. That is the only arrow — `citysim → engine_core`, never the
+  reverse. A host that wants the living world links `citysim`; a plain engine app
+  links only `engine_core` and carries none of the city's code. `engine_core` is
+  verifiably city-free (no `apps/citysim` include remains under `src/engine` or
+  `src/renderer`).
+- the citysim-specific Lua readers moved from `engine/scripting/` into
+  `apps/citysim/scripting/` (they read `citysim::` types, so they belong to the
+  app). The generic `ScriptVM` / bindings stay in core.
+- the Jolt-coupled bridges (`city_physics`/`vehicles`/`walkers`/`player_body`)
+  stay in `RT_PHYSICS_HOST_SOURCES`, compiled per host alongside Jolt — exactly
+  as `engine_core` keeps Jolt systems out. Hosts (viewer, editor, web, tests)
+  link `citysim`.
+
+This is what lets the "Living City" ImGui debug panel live on `CityRenderSystem`
+and appear ONLY when a city is present — an engine-only app never links the code
+that would draw it. The Makefile Lua-free suite (706/706) and the CMake
+scripting-on suite (771/771, incl. the relocated reader tests) both stay green
+across the move; it is a pure relocation, no behaviour change.
+
+**The Living City debug panel + place visibility.** `CityRenderSystem::render()`
+contributes a collapsible "Living City" section to the SHARED Debug window by
+calling `ImGui::Begin(kDebugWindowTitle)` with the same title the engine's
+`DebugOverlaySystem` uses — ImGui merges same-titled Begin() calls in a frame, so
+the section stacks inside the one Debug panel instead of floating separately. The
+ONLY coupling is that title literal (a shared string, not a code dependency —
+which would reinstate the engine→app arrow). All guarded by RT_ENABLE_IMGUI + a
+null-context check + "a city is loaded". The section carries per-layer widget
+toggles (agent rings+intent / vision cones / nav graph — each refining the master
+J-key flag) and a selected-agent inspector (UID, mode, live FSM state, home/work,
+depart times, pose). To make the Phase-1 places VISIBLE, the citysim block gained
+an authored `"places"` array (⟨A1⟩ hybrid: authored first, generator later): each
+`{type, position, name?, open?, close?}` becomes an engine `AuthoredPlace`
+(string-typed so core stays citysim-free), which the render bridge parses
+(`parsePlaceType`) into the routable `PlaceMap` at build. Places draw as a
+projected overlay (approach A) on the ImGui foreground draw list — a site ring,
+an entrance dot, a connector, and a type/name label per place, colour-keyed by
+type — projected by the pure, headless-tested `worldToScreen`
+(`apps/citysim/screen_project.h`). No meshes, no instance groups: the whole place
+overlay is self-contained in `render()`. `agent_lab.json` authors one place of
+each type so the layer shows immediately. Headless suites cover the data + the
+projection (`test_places`, `test_screen_project`); the on-screen look is
+viewer-gated (RT_ENABLE_IMGUI + GLFW) and owed a device pass.
+
+**A place IS a building (the small-town slice).** A place should be a structure,
+not a floating point. An authored place may now carry a `"building": [w, h, d]`
+footprint + `"color"`; when present, the loader spawns a static box STRUCTURE at
+the site (mesh + box `Collider` + static `RigidBody`, `AuthoredPlace`'s building
+fields), so one JSON entry yields BOTH the building and its `Place` — the tightest
+association, matching the plan's "each building gains a type + entrance." The box
+is plain engine geometry spawned in `level_loader` (engine core, no citysim
+dependency — the citysim bridge only reads the place site/type for the PlaceMap +
+labels); it is a runtime companion regenerated each load, like the road meshes.
+The new `assets/levels/small_town.json` is the first hand-authored slice: a loop
++ cross-street grid, five typed places each a real building (Maple House home,
+Corner Store shop, Town Hall civic, Works Ltd office, and The Green — a low park
+pad), with a small ambient population. This is Phase-4 authoring pulled forward;
+place-AWARE routing (agents choosing home/work/errands from these places) is
+still Phase 3. The buildings render only in the ECS/viewer path (device-gated);
+the offline tracer uses a separate scene loader and does not spawn them.
+
+**Real generated buildings become a living city (the generator bridge).** The
+hand-authored slice proved the model; this makes a *procedural* city alive with
+no authoring. `generateCity` already built its street network internally
+(`planarize(gridRoads(...))`) but discarded it — `CityModel` now SURFACES it as
+`roadGraph` (nodes + edges, edge widths = the drawn ribbon). When a level has
+both a `shape:"city"` entity and a `citysim` block, `level_loader` spawns a
+**nav-only `RoadNet`** from that graph (no `Renderable` — the city already drew
+its carriageway) so `CityRenderSystem`'s `world.each<RoadNet>` drives agents on
+the generated streets, and maps each `CityBuilding`'s `District` to a place-type
+tag (Residential→home, Commercial→shop, HighRise/Industrial→office, Park→park,
+else civic) — so every generated building becomes a labelled, routable place with
+no hand work. The District→tag map is string-valued in engine core (the citysim
+bridge parses it), so core stays citysim-free. Because a city has hundreds of
+places, the label overlay distance-caps: markers within 120 m, text within 55 m
+of the camera, so it stays legible and cheap. `assets/levels/living_city.json` is
+a compact generated city wired this way. `run_tests` 775/775; the drive-the-
+generated-streets behaviour is viewer-gated (device pass owed). This is the
+Phase-6 payoff — a whole procedural city instantly alive — reached by exposing a
+graph the generator already had.
+
+**Agents live in the city (Phase 3 — home, job, relationships).** The buildings
+were labelled and drivable, but agents still wandered. Now they LIVE there:
+`CitySim::assignPlaces(PlaceMap, NavGraph)` (called from `CityRenderSystem::build`
+after the sim + places are built, before the warm-up) gives every agent a **home**
+(a Home place) and a **job** (a routable Shop/Office/Civic place), and pins its
+existing commute NODES to those places' sidewalk entrances — so the shipped
+schedule machinery (ADR-0064) now routes agents to REAL buildings with no new
+routing code. A job that isn't reachable from home is swapped for one that is; an
+agent with no reachable job works from home. Every agent carries its
+`homePlace`/`workPlace` UIDs. Assignment is deterministic — it draws from each
+agent's `brain` bits, never the sim rng, so the build's random stream (and every
+seeded test) is unchanged (ADR-0002). It also seeds a **surface-level social
+graph** (`relationships.{h,cpp}`, ⟨A6⟩): a `RelationshipTable` keyed on UID pairs
+with a single tag (coworker / neighbor / acquaintance), stronger-tag-wins,
+symmetric — agents sharing a workplace become coworkers, sharing a home become
+neighbors. Deliberately shallow: a tag, not an affinity model. The panel inspector
+now shows an agent's home + job by name and who it knows; the town levels switch
+to `wander:false` so agents commute to their places. Headless-tested
+(`test_relationships` — table symmetry/upgrade/no-downgrade, and home/job
+assignment + coworker seeding + determinism through a real `CitySim`); the visible
+commuting is viewer-gated. Suites: Makefile 714/714, CMake 781/781.
+
+**Roles (Phase 4) — the crowd becomes people.** A role is not new machinery; it
+FLAVOURS the existing home↔work schedule so the street isn't all identical
+commuters. `assignPlaces` gives each agent an `Agent::Role` deterministically
+from its brain bits + workplace: a **Commuter** keeps the jittered office hours; a
+**Shopkeeper** (assigned to a Shop) opens the shop half an hour before it opens
+and closes it half an hour after (departWork/departHome pinned to the place's
+`openHour`/`closeHour`); a **Stroller** (~1 in 5 when the city has a park) holds
+no job and spends the day out at a park (its "work" node is the park; workPlace
+stays kNoPlace so it seeds no coworker bonds). All deterministic (brain bits, not
+the rng), so seeded scenarios are unchanged (ADR-0002). The panel inspector shows
+the role. Headless-tested (`test_relationships` — shopkeepers work at shops kept
+open through hours, strollers hold no job, same seed → same roles). Suites:
+Makefile 717/717, CMake 782/782.
+
+**Pedestrian nav-graph (Phase 2 — the walkable layer).** Cars and pedestrians
+share the road NavGraph, which has two consequences: a walker can only route to
+the nearest road NODE (never AT a door), and any door connector added to that
+graph would let a CAR "drive" to a front door. So the walkable layer is a
+SEPARATE structure — `ped_graph.{h,cpp}`: a corner node per road node, an
+undirected sidewalk edge per road link (deduped from the directed pairs), and one
+ENTRANCE node + connector per place (snapped to its nearest corner). `pedRoute`
+is A* with a Euclidean heuristic over it, so a walk begins and ends at real doors
+— house → corner → … → shop-door. Pure data + queries, deterministic, headless;
+crosswalks are implicit at shared corner nodes (explicit mid-block crossings are
+a refinement). This lands the TESTED foundation (`test_ped_graph` — a door per
+place, door-to-door routes that never leave the walkable net, degenerate cases,
+determinism); routing live walkers on it instead of the car graph is a separate,
+careful integration step (deferred so the deployed traffic isn't destabilised).
+Suites: Makefile 721/721, CMake 786/786. Phase 5 (tools/capabilities) and the
+ped-graph live integration remain as enrichment.
+
+**The intersection gridlock (device round, three locks deep).** living_city's
+cars all pinned at one crossing, permanently. A headless repro of the exact
+level pipeline (roads → lots → places → assignPlaces → a full sim day) showed a
+328-second total standstill and let each layer of the deadlock be peeled with
+instrumented dumps rather than guesses:
+1. *Junction knots.* A curvy generated crossing planarizes into several nodes
+   joined by car-length stub links; each node's hold box (arterial half-width,
+   6.5 m vs 4.5 m stubs) swallowed its neighbours' stop lines — every held car
+   sat inside another junction's box, a circular wait. Fixed twice over: the box
+   radius is capped at 60% of the node's shortest incident link, and
+   `buildNavGraph` now MERGES junction nodes (degree ≥ 3) within 7 m into one
+   intersection at their centroid (`NavBuildParams::junctionMergeRadius`).
+   Degree-2 nodes are curve samples and never merge, so drawn bends survive.
+2. *Follower rings.* The jam's terminal form: cars nose-to-nose across adjacent
+   junctions, each pinned by the FOLLOW gap behind the next stalled car — no
+   yield rule ever releases that. Fixed with a gridlock clock: any car pinned
+   near a junction (never by a red — the light will change) accumulates
+   `Agent::holdTimer`; past ~6–12 s (staggered by brain bits, deterministic) it
+   stops yielding to STALLED traffic — box occupancy and the stopped-turner
+   tie-break both — and CREEPS at 0.7 m/s, unpicking the ring the way real
+   drivers inch through a blocked box. The timer resets only above creep speed;
+   resetting at 0.5 m/s sawtoothed the escape into one creep-tick per ten
+   seconds.
+3. *The device root cause.* A RESTING pedestrian — semantically "at home" — was
+   left standing at the road-corner idle pose, physically inside the traffic
+   corridor; every approaching car sensed the stationary body and braked
+   forever. Two semantic fixes: resting (off-trip) pedestrians are NOT sensable
+   (they are indoors), and a resting walker now stands at its place's DOORSTEP
+   (`homeDoor`/`workDoor` — the entrance nudged toward the building), set at
+   assignment and on every arrival.
+Worst all-stopped streak 328 s → 9 s; `living_city_traffic_never_gridlocks`
+pins the whole pipeline as a regression. Buildings also stopped growing
+malformed: a lot must fill ≥ 72% of its oriented bounding box (the grammar
+fills the OBB, so triangular off-cuts overhung their lots) and floors are
+clamped so height ≤ ~1.8× the footprint's short side. And the plan became
+visible: `growLotBuildings` exposes blocks + lots (`LotPlanDebug`), the loader
+publishes them (`CityPlanDebug`), and the citysim bridge bakes both as ground
+outline layers — blocks magenta, lots amber — on the L key and Living City
+panel checkboxes. Suites 728/728 · 794/794.
+
+**Later phases (planned, see the plan doc).** 2: build the pedestrian nav-graph
+(sidewalk + crosswalk + entrance edges) the A* routes over. 3: place-aware
+`GoTo(placeType)` goals + jobs (home/workplace assignment seeds the relationship
+table). 4: role goal-tables + the vertical-slice level (device) — plus the
+Living City ImGui debug panel (per-layer toggles + selected-agent inspector) and
+projected place labels. 5: capabilities / tools. 6: the generator emits the
+PlaceMap + ped graph for a whole city.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

@@ -4,6 +4,7 @@
 #include "polygon.h"
 #include "../../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -28,8 +29,10 @@ namespace engine {
 namespace human {
 constexpr Real FLOOR_HEIGHT      = 3.2;   // residential floor-to-floor
 constexpr Real GROUND_HEIGHT     = 4.5;   // taller ground-floor (retail/lobby)
-constexpr Real DOOR_HEIGHT       = 2.1;   // clear opening
-constexpr Real DOOR_WIDTH        = 1.6;   // double-leaf entrance
+constexpr Real DOOR_HEIGHT       = 2.7;   // clear opening — reads as an ENTRANCE
+                                          // against 4.5 m retail ground floors
+                                          // (device: "front doors are very short")
+constexpr Real DOOR_WIDTH        = 2.0;   // double-leaf entrance
 constexpr Real WINDOW_SILL       = 0.9;
 constexpr Real WINDOW_HEAD       = 2.4;   // top of window above its floor
 constexpr Real PARAPET           = 1.1;   // roof-edge railing height
@@ -86,7 +89,12 @@ struct Scope {
 // becomes the box footprint, raised to `height` along +Y, sitting at ground
 // elevation `baseY`. The forward axis is the OBB's long edge so facades face the
 // long sides. This is `extrude` from a lot footprint (city-plan §3.4.2).
-Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height);
+// The box is shrunk about an interior anchor until its corners sit inside the
+// footprint; `cornerOk`, when set, is an EXTRA per-corner constraint folded into
+// that fit (the Living City passes "far enough from every road centreline", so a
+// building can never overhang the sidewalk — device feedback).
+Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height,
+                         const std::function<bool(const Vec2&)>& cornerOk = {});
 
 // The output of growing a building: geometry grouped by part (each part one
 // RenderMesh with its own material), plus attach points the composition layer
@@ -110,6 +118,28 @@ struct BuildingMesh {
 
 // Parameters for the mid-rise mixed-use hero (ADR-0038 §7) and its variants. All
 // lengths in metres. A skyscraper is just this with a big `floors` and setbacks.
+// An OPENING design (building-grammar-plan.md P2) — the first ELEMENT: a
+// parametric window/door assembly the facade splitter stamps once per bay.
+// The opening's real shape is cut into the wall (an arched head is a
+// tessellated arc, not a square hole), a FRAME sits in the reveal, and the
+// glass sits inside the frame — with optional partitioned lights (muntins),
+// a projecting sill, and a hood (flat header band, or a voussoir band that
+// FOLLOWS the arch). Archetype tables pick styles; the geometry emitter is
+// shared. More elements (cornices, quoins, balconies, storefronts) join the
+// same pattern.
+struct OpeningStyle {
+    enum class Head : uint8_t { Flat, Segmental, Round };
+    enum class Hood : uint8_t { None, Band, Arch };
+    Head head = Head::Flat;
+    Real archRise = 0.30;      // segmental arch rise as a fraction of the span
+    Real frameWidth = 0.09;    // face width of the frame border (m)
+    int  lightsX = 1;          // pane columns (muntin partitions)
+    int  lightsY = 1;          // pane rows (below the springline on an arch)
+    bool sill = true;          // projecting sill course under the opening
+    Hood hood = Hood::Band;    // Band = flat header; Arch = follows the arc
+    Vec3 frameColor{0.93, 0.91, 0.86};   // painted timber / metal frame
+};
+
 struct BuildingParams {
     int   floors = 5;            // residential floors above the ground floor
     bool  groundRetail = true;   // taller, glassier ground floor with an entrance
@@ -139,6 +169,36 @@ struct BuildingParams {
     bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
     bool  pilasters = false;     // vertical piers framing each bay (run full height)
     bool  awning = true;         // a projecting ledge over the entrance
+    // The upper-storey window ELEMENT (OpeningStyle above): head shape, frame,
+    // lights, sill/hood. Ground retail keeps flat storefront openings.
+    OpeningStyle window;
+    // Quoins: alternating corner masonry blocks up every building arris —
+    // traditional on brick/stucco, and they hide the thin-texture corner edge.
+    bool  quoins = false;
+    // VEHICLE BAYS on the street face (>0): the ground floor's entrance edge
+    // becomes a bay-door front — wide segmented roller doors with reveals and
+    // a lintel band. Fire stations, loading docks, parking entries.
+    int   groundBays = 0;
+    // CLASSICAL entrance elements (the mesh-op vocabulary: lathe/array/steps).
+    // portico (>0): a colonnade of that many lathe-turned columns carrying an
+    // entablature + pediment in front of the entrance; entranceSteps: a porch
+    // platform with descending steps under the door; dome: a drum + colonnade
+    // + dome ROTUNDA crowns the flat roof (capitols, town halls) instead of
+    // the mechanical penthouse.
+    int   portico = 0;
+    bool  entranceSteps = false;
+    bool  dome = false;
+    // Roof form (P3.c): Flat keeps the parapet deck; Gable/Hip raise a pitched
+    // roof over the top plan (rect-ish plans only — an odd plan falls back to
+    // Flat until a straight-skeleton pass exists). Residential vocabulary.
+    enum class RoofStyle : uint8_t { Flat, Gable, Hip };
+    RoofStyle roofStyle = RoofStyle::Flat;
+    Real  roofPitch = 0.55;      // rise/run of the pitched roof
+    // Street-aware facades (P3.c): when true, ground-floor RETAIL storefronts
+    // appear only on edges whose outward normal faces the street (faceDir);
+    // side/rear edges wear plain residential ground walls — a building has a
+    // FRONT (living-city realism).
+    bool  retailStreetOnly = false;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
     int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)
@@ -149,8 +209,28 @@ struct BuildingParams {
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params);
 
+// Grow a FLOORPLAN building (building-grammar-plan.md P3): the massing is a
+// closed polygon — the lot's own shape, an L/T/U composition, a flatiron
+// wedge — extruded storey by storey with the SAME facade/element machinery
+// the box grammar uses (each plan edge becomes one facade rectangle: bays,
+// windows, arches, frames, the door on the street-facing edge). Roof and
+// ground slabs triangulate the plan; cornices are SWEPT around the plan
+// outline; corner posts hide the wall miters at every vertex. Setbacks
+// (setbackFloors/setbackEvery) shrink the plan by a uniform offset per tier —
+// the base/shaft/capital stack — with a swept cornice at every transition.
+// Winding is normalized internally; deterministic for `params.seed`.
+BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
+                              Real baseY = 0.0);
+
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);
+
+// LATHE op (the mesh-op library's Lua face too, as mesh.lathe): revolve a 2D
+// profile of (radius, height) rows around the +Y axis at `center` (center.y =
+// the profile's y origin). Low-poly faceted normals; rows with radius ~0
+// close into fans. Columns, domes, finials, balusters are all this one op.
+RenderMesh latheMesh(const Vec3& center, const std::vector<Vec2>& profile,
+                     int segments, const Vec3& color);
 
 // --- The op vocabulary, exposed so Lua/C++ recipes compose buildings directly
 // (city-plan §4.3). Each appends geometry to `out` under a part id. ----------

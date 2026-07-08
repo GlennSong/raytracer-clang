@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_SCRIPTING_PROCGEN_BINDINGS_H
 #define RAYTRACER_ENGINE_SCRIPTING_PROCGEN_BINDINGS_H
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +73,17 @@ struct ScriptMeshPart {
 // Frames are plain Lua arrays of {position, yaw, scale}. The heavy lifting stays
 // in C++ — a script orchestrates (ADR-0023).
 void openProcgenLibrary(ScriptVM& vm);
+
+// STYLE BOOK (the architect's Lua DATA layer): run `code` — a chunk that sets
+// a global table `style_book = { recipe_name = { <BuildingParams fields> } }`
+// — and return an applier that overlays the named recipe's overrides onto a
+// BuildingParams via the same reader the building lab uses (style, windows,
+// colors, roofs...). The architect (C++) decides WHAT + WHERE; the style book
+// owns HOW IT LOOKS. Returns an empty function on error (falls back to the
+// built-in looks). Overrides are pure data, so determinism holds.
+struct BuildingParams;
+std::function<void(const std::string& recipe, BuildingParams&)>
+makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error = nullptr);
 
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when

@@ -868,8 +868,11 @@ TEST_CASE(city_buildings_have_valid_box_colliders) {
         CHECK(b.boxHalf.x > 0.1 && b.boxHalf.y > 0.1 && b.boxHalf.z > 0.1);
         // Box centre sits half the height above the foundation.
         CHECK_APPROX(b.boxCenter.y, b.baseY + b.height * 0.5, 1e-6);
-        // Box centre (the OBB centre) is near the footprint site.
-        CHECK(distance(Vec2(b.boxCenter.x, b.boxCenter.z), b.site) < 6.0);
+        // Box centre (the OBB centre) is near the footprint site. Not exact:
+        // scopeFromFootprint anchors its shrink-fit at the lot OBB's centre,
+        // which on an L/wedge off-cut can sit several metres from the polygon
+        // centroid — 8 m still catches a real misplacement (roads are further).
+        CHECK(distance(Vec2(b.boxCenter.x, b.boxCenter.z), b.site) < 8.0);
     }
 }
 
@@ -892,4 +895,147 @@ TEST_CASE(city_parks_leave_blocks_empty) {
     CityParams cp2 = cp; cp2.parkFraction = 0.0;
     CityModel m2 = generateCity(cp2);
     CHECK(m.buildings.size() < m2.buildings.size());
+}
+
+// --- Floorplan buildings (building-grammar-plan.md P3) ----------------------
+
+TEST_CASE(plan_building_extrudes_an_l_plan) {
+    // An L-shaped plan grows an L-shaped building: geometry reaches into BOTH
+    // wings, the winding convention holds (it culls correctly in the viewer),
+    // and the build is deterministic.
+    Poly2 L = {{-12, -10}, {12, -10}, {12, 2}, {2, 2}, {2, 10}, {-12, 10}};
+    BuildingParams p;
+    p.floors = 3;
+    p.seed = 4;
+    p.wallPart = PartId::Brick;
+    p.quoins = true;
+    BuildingMesh bm = growPlanBuilding(L, p);
+    CHECK(!bm.parts.empty());
+    CHECK(bm.height > 6.0);
+    RenderMesh m = bm.merged();
+    CHECK(!m.vertices.empty());
+    // Coverage of both wings: some wall vertex deep in the east wing (x > 8,
+    // z < 0) AND some in the south wing (z > 6, x < 0).
+    bool east = false, south = false;
+    for (const Vertex& v : m.vertices) {
+        if (v.position.x > 8 && v.position.z < 0) east = true;
+        if (v.position.z > 6 && v.position.x < 0) south = true;
+    }
+    CHECK(east);
+    CHECK(south);
+    int bad = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vertex& a = m.vertices[m.indices[i]];
+        const Vertex& b = m.vertices[m.indices[i + 1]];
+        const Vertex& c = m.vertices[m.indices[i + 2]];
+        if (dot(cross(b.position - a.position, c.position - a.position), a.normal) > 1e-6)
+            ++bad;
+    }
+    CHECK(bad == 0);
+    BuildingMesh bm2 = growPlanBuilding(L, p);
+    CHECK(bm2.merged().vertices.size() == m.vertices.size());
+}
+
+TEST_CASE(plan_building_setbacks_stack_tiers) {
+    // setbackFloors/setbackEvery shrink the plan per tier (base/shaft/capital):
+    // wall vertices in the TOP tier sit strictly inside the base footprint.
+    Poly2 sq = {{-10, -10}, {10, -10}, {10, 10}, {-10, 10}};
+    BuildingParams p;
+    p.floors = 9;
+    p.setbackFloors = 3;
+    p.setbackEvery = 1.5;
+    p.seed = 2;
+    p.groundHeight = 4.0;
+    p.floorHeight = 3.0;
+    BuildingMesh bm = growPlanBuilding(sq, p);
+    RenderMesh m = bm.merged();
+    // Top tier spans the last three floors: y in [4 + 6*3, 4 + 9*3].
+    Real topY0 = 4.0 + 6 * 3.0 + 0.5;
+    Real maxR = 0;
+    for (const Vertex& v : m.vertices) {
+        if (v.position.y < topY0 || v.position.y > 4.0 + 9 * 3.0) continue;
+        maxR = std::max(maxR, std::max(std::fabs(v.position.x), std::fabs(v.position.z)));
+    }
+    CHECK(maxR > 1.0);            // the top tier exists
+    CHECK(maxR < 10.0 - 1.0);     // and is set back inside the base (2 tiers in)
+}
+
+TEST_CASE(plan_building_grows_pitched_roofs) {
+    // Gable: sloped roof faces (normals tilted, not flat-up) + gable-end wall
+    // triangles rising above the eaves; Hip: sloped ends instead of walls.
+    Poly2 sq = {{-8, -6}, {8, -6}, {8, 6}, {-8, 6}};
+    BuildingParams p;
+    p.floors = 2;
+    p.seed = 3;
+    p.roofStyle = BuildingParams::RoofStyle::Gable;
+    p.roofPitch = 0.6;
+    BuildingMesh gable = growPlanBuilding(sq, p);
+    int sloped = 0;
+    Real maxY = 0;
+    RenderMesh gm = gable.merged();
+    for (std::size_t i = 0; i + 2 < gm.indices.size(); i += 3) {
+        const Vec3& n = gm.vertices[gm.indices[i]].normal;
+        if (n.y > 0.25 && n.y < 0.93) ++sloped;
+    }
+    for (const Vertex& v : gm.vertices) maxY = std::max(maxY, (Real)v.position.y);
+    CHECK(sloped >= 2);                     // the two roof slopes exist
+    CHECK(maxY > gable.height - 0.1);       // height includes the ridge
+    p.roofStyle = BuildingParams::RoofStyle::Hip;
+    BuildingMesh hip = growPlanBuilding(sq, p);
+    int hipSloped = 0;
+    RenderMesh hm = hip.merged();
+    for (std::size_t i = 0; i + 2 < hm.indices.size(); i += 3) {
+        const Vec3& n = hm.vertices[hm.indices[i]].normal;
+        if (n.y > 0.25 && n.y < 0.93) ++hipSloped;
+    }
+    CHECK(hipSloped > sloped);              // hips slope the ends too
+
+    // SOFFIT (device: "you can see through the bottom of them if they
+    // overhang"): the roof volume is CLOSED underneath — down-facing faces at
+    // the eave plane reach past the wall line to the overhang's outer edge.
+    auto soffitReach = [](const RenderMesh& m, Real wallHalfDepth) {
+        Real reach = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vec3& n = m.vertices[m.indices[i]].normal;
+            if (n.y > -0.99) continue;                       // not a soffit face
+            for (int k = 0; k < 3; ++k) {
+                const Vec3& q = m.vertices[m.indices[i + k]].position;
+                if (q.y < 1.0) continue;                     // ground slab, not eaves
+                reach = std::max(reach, std::fabs((Real)q.z));
+            }
+        }
+        return reach - wallHalfDepth;   // > 0: covers the overhang
+    };
+    CHECK(soffitReach(gm, 6.0) > 0.2);
+    CHECK(soffitReach(hm, 6.0) > 0.2);
+}
+
+TEST_CASE(plan_building_prow_tiers_stay_bounded) {
+    // A rounded flatiron PROW with aggressive setback tiers: the tier insets
+    // used to explode at the near-parallel arc chords — the line intersection
+    // flies off and the ring grows spikes (device: "one of the triangle
+    // skyscrapers went haywire when building the top"). Every emitted vertex
+    // must stay within the ground plan's bounds (+ cornice/eave slack).
+    Poly2 prow = {{-10, -7}, {6, -6}};
+    for (int k = 0; k <= 4; ++k) {   // the arc nose: near-parallel chords
+        Real t = k / 4.0, a = -0.6 + t * 1.9;
+        prow.push_back(Vec2(6 + 3.0 * std::cos(a), -2 + 3.0 * std::sin(a)));
+    }
+    prow.push_back({-9, 7});
+    BuildingParams p;
+    p.floors = 12;
+    p.setbackFloors = 3;
+    p.setbackEvery = 1.5;
+    p.curtainWall = true;
+    p.seed = 4;
+    BuildingMesh bm = growPlanBuilding(prow, p);
+    Vec2 lo, hi;
+    bounds(prow, lo, hi);
+    RenderMesh m = bm.merged();
+    for (const Vertex& v : m.vertices) {
+        CHECK(v.position.x > lo.x - 2.0);
+        CHECK(v.position.x < hi.x + 2.0);
+        CHECK(v.position.z > lo.y - 2.0);
+        CHECK(v.position.z < hi.y + 2.0);
+    }
 }

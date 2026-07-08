@@ -258,8 +258,24 @@ struct WeldSolidParams {
     // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
     // When false, mv is a large sentinel so no band is painted (ADR-0062).
     bool   crosswalks = false;
+    // Junction pads (device: mesh holes at skewed junctions): every chain ENDS
+    // square to its own direction at a junction node, so where the arms meet
+    // off-square (a bent through-road at a T, arms at 170°) the caps disagree and
+    // a knife-wedge of ground shows through between them. A disc of the widest
+    // incident arm's half-width per junction node — unioned into the outline and
+    // laid as a plain deck fan — covers every such wedge at any arm angle.
+    std::vector<Vec2>   padCenters;
+    std::vector<double> padRadii;
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
+
+// The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
+// an endpoint agree on its height) — weldSolid rides these, and the terrain
+// conform pass carves to the same surface. heightAt null = flat topY.
+std::vector<std::vector<double>> weldChainProfiles(
+    const std::vector<UnionSpine>& spines,
+    const std::function<double(double, double)>& heightAt, double topY,
+    double maxGrade);
 
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},

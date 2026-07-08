@@ -367,6 +367,25 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.topColor = net.color;
     wp.heightAt = net.heightAt;
     wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
+    // Junction pads (device: mesh holes at skewed T-junctions): chains end square
+    // to their own direction, so where a through-road BENDS at a junction the two
+    // arm caps disagree by the bend angle and a wedge of ground shows through. A
+    // disc per junction node, radius = the widest incident arm's half-width,
+    // fills every such wedge regardless of the arm angles.
+    {
+        std::vector<int> deg(g.nodes.size(), 0);
+        std::vector<double> jw(g.nodes.size(), 0.0);
+        for (const RoadEdge& e : g.edges) {
+            ++deg[e.a]; ++deg[e.b];
+            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
+            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
+        }
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v)
+            if (deg[v] >= 3) {
+                wp.padCenters.push_back(g.nodes[v].pos);
+                wp.padRadii.push_back(jw[v] * 0.5 * 1.02);
+            }
+    }
     return weldSolid(weldChainSpines(g), wp);
 }
 
@@ -374,27 +393,60 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
                                                   double falloff, double maxGrade) {
     std::vector<TerrainFlatten> out;
     if (!net.heightAt) return out;                       // flat road: nothing to carve
+    // Mirror the DECK's own profile computation EXACTLY — the same constrained
+    // graph, the same weldChainSpines decomposition (curve-sampled points,
+    // per-chain widths), the same roadProfile smoothing at the weld's grade —
+    // so the carve grades the ground to where the deck actually is. The old
+    // independently-densified profile diverged by metres on slopes: the
+    // grade-limited deck cut through hills the carve never lowered (device:
+    // "the road is being buried by the terrain — it's not conforming").
     RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
-    double hw = net.width * 0.5;
-    for (const std::vector<Vec2>& chain : traceChains(g)) {
-        if (chain.size() < 2) continue;
-        // Densify to a fixed step so even a straight road (2 graph nodes) has enough
-        // samples for roadProfile to smooth and grade-limit along its length.
-        const double step = 4.0;
-        std::vector<Vec2> dense;
-        for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
-            Vec2 a = chain[i], b = chain[i + 1];
-            int sub = std::max(1, static_cast<int>(std::ceil((b - a).length() / step)));
-            for (int k = 0; k < sub; ++k) dense.push_back(a + (b - a) * (double(k) / sub));
+    (void)maxGrade;   // superseded: the carve must use the deck's own grade
+    std::vector<UnionSpine> spines = weldChainSpines(g);
+    std::vector<std::vector<double>> profiles = weldChainProfiles(
+        spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade);
+    // Where corridors OVERLAP (junction interiors), the decks of the crossing
+    // chains can still disagree mid-span even after endpoint reconciliation —
+    // the ground must sit under the LOWEST of them, or the lower deck reads
+    // buried. Pull each carve sample down to the minimum overlapping profile.
+    auto minOverlapping = [&](std::size_t si, const Vec2& q, double h) {
+        for (std::size_t sj = 0; sj < spines.size(); ++sj) {
+            if (sj == si || profiles[sj].size() < 2) continue;
+            const auto& pts = spines[sj].points;
+            const double reach = spines[sj].halfWidth + net.sidewalk + 1.0;
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                Vec2 ab = pts[i + 1] - pts[i];
+                double L2 = ab.lengthSquared();
+                double t = L2 < 1e-12
+                               ? 0.0
+                               : std::max(0.0, std::min(1.0, dot(q - pts[i], ab) / L2));
+                if ((q - (pts[i] + ab * t)).length() > reach) continue;
+                h = std::min(h, profiles[sj][i] +
+                                    (profiles[sj][i + 1] - profiles[sj][i]) * t);
+            }
         }
-        dense.push_back(chain.back());
-        int n = static_cast<int>(dense.size());
-        std::vector<double> ground(n), s(n);
-        for (int i = 0; i < n; ++i) ground[i] = net.heightAt(dense[i].x, dense[i].y);
-        s[0] = 0.0;
-        for (int i = 1; i < n; ++i) s[i] = s[i - 1] + (dense[i] - dense[i - 1]).length();
-        std::vector<double> profile = roadProfile(ground, s, maxGrade);
-        std::vector<TerrainFlatten> r = roadConformRegions(dense, profile, hw, shoulder, falloff);
+        return h;
+    };
+    for (std::size_t si = 0; si < spines.size(); ++si) {
+        const UnionSpine& sp = spines[si];
+        if (profiles[si].size() < 2) continue;
+        std::vector<double> profile = profiles[si];
+        for (std::size_t k = 0; k < profile.size(); ++k)
+            profile[k] = minOverlapping(si, sp.points[k], profile[k]);
+        // Carve a step BELOW the drivable profile, not exactly to it: the
+        // terrain grid interpolates between its samples and can overshoot the
+        // carve target past the road's small lift, patchily swallowing the
+        // deck. 0.22 m keeps the deck proud; the curb skirt hides the step.
+        for (double& hh : profile) hh -= 0.22;
+        // Flatten out to the SIDEWALK's outer edge, not just the carriageway —
+        // the sidewalk band rides the same smoothed profile and needs ground
+        // graded under it too.
+        // +2 m margin past the sidewalk's outer edge: corner bevels and the
+        // curb skirt reach slightly beyond the band, and the flatten's full
+        // strength must cover them before its falloff starts.
+        std::vector<TerrainFlatten> r = roadConformRegions(
+            sp.points, profile, sp.halfWidth + net.sidewalk + 2.0, shoulder,
+            falloff);
         out.insert(out.end(), r.begin(), r.end());
     }
     return out;
@@ -659,7 +711,7 @@ static RoadGraph deAcute(const RoadGraph& in, double minAngle) {
         double cs = std::cos(ang), sn = std::sin(ang);
         g.nodes[far].pos = c + Vec2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
     };
-    for (int pass = 0; pass < 6; ++pass) {
+    for (int pass = 0; pass < 10; ++pass) {
         std::vector<std::vector<int>> inc(g.nodes.size());
         for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
             inc[g.edges[e].a].push_back(e);
@@ -696,6 +748,53 @@ static RoadGraph deAcute(const RoadGraph& in, double minAngle) {
     return g;
 }
 
+// The HARD angle constraint behind deAcute (device: "we should have more rules
+// in the road graph that disallow sharp angles"): relaxation rotates arms
+// apart, but a hemmed-in junction can be un-relaxable — two arms stay nearly
+// parallel and the sidewalk crotch between them is a razor no corner math can
+// weld. Any arm pair still tighter than `hardMin` after relaxation loses its
+// SHORTER edge: a clean cul-de-sac beats a broken junction.
+static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
+    const double kTwoPi = 6.283185307179586;
+    RoadGraph g = in;
+    std::vector<char> drop(g.edges.size(), 0);
+    std::vector<std::vector<int>> inc(g.nodes.size());
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[g.edges[e].a].push_back(e);
+        inc[g.edges[e].b].push_back(e);
+    }
+    for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+        if (static_cast<int>(inc[v].size()) < 3) continue;
+        struct Arm { int edge; double ang, len; };
+        std::vector<Arm> arms;
+        for (int e : inc[v]) {
+            if (drop[e]) continue;
+            int far = (g.edges[e].a == v) ? g.edges[e].b : g.edges[e].a;
+            Vec2 d = g.nodes[far].pos - g.nodes[v].pos;
+            if (d.lengthSquared() > 1e-9)
+                arms.push_back({e, std::atan2(d.y, d.x), d.length()});
+        }
+        int n = static_cast<int>(arms.size());
+        if (n < 3) continue;
+        std::sort(arms.begin(), arms.end(),
+                  [](const Arm& a, const Arm& b) { return a.ang < b.ang; });
+        for (int k = 0; k < n; ++k) {
+            const Arm& a0 = arms[k];
+            const Arm& a1 = arms[(k + 1) % n];
+            if (drop[a0.edge] || drop[a1.edge]) continue;
+            double gap = a1.ang - a0.ang;
+            if (gap <= 0) gap += kTwoPi;
+            if (gap >= hardMin || gap < 1e-3) continue;
+            drop[a0.len <= a1.len ? a0.edge : a1.edge] = 1;
+        }
+    }
+    RoadGraph out;
+    out.nodes = g.nodes;
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e)
+        if (!drop[e]) out.edges.push_back(g.edges[e]);
+    return out;
+}
+
 void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (!g.is_object()) return;
     DistrictParams dp;
@@ -722,8 +821,25 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     RoadRules rules;
     rules.autoRoundabout = false;
     RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
+    // Minimum road length (device: "really short roads ... should be merged"):
+    // fold crossings that landed close together into one junction, or stretch a
+    // stub that can't merge (a capDegree stagger link) out to a drivable length.
+    // Runs BEFORE the warp so it sees real junction-to-junction edges, not the
+    // curve samples warping introduces.
+    const double minRoadLen = g.value("min_road_len", 14.0);
+    if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
     if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
     cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
+    // Hard floor (device: "disallow sharp angles like that ... some
+    // constraints"): drop the shorter arm of any junction pair relaxation
+    // couldn't open past ~20 deg, so no razor sidewalk crotch survives. Opt-out
+    // via "prune_acute_deg": 0.
+    const double pruneDeg = g.value("prune_acute_deg", 20.0);
+    if (pruneDeg > 0.0) cg = pruneAcuteArms(cg, pruneDeg * 3.14159265358979323846 / 180.0);
+    // No hairpins (device: "sharp bends ... creating some really bad overlap"):
+    // a degree-2 corner sharper than ~52 deg folds the stroked carriageway over
+    // itself. Relax such through-nodes toward their chord until drivable.
+    cg = relaxSharpBends(cg);
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {

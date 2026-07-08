@@ -55,30 +55,54 @@ double distanceToFootprint(const std::vector<Vec3>& poly, double x, double z) {
 // Blend the flatten footprints over a natural height. The strongest (closest)
 // footprint wins, so overlapping road/block stamps don't fight; inside a
 // footprint the weight is 1 (fully levelled), easing to 0 across `falloff`.
+// `dilate` grows every footprint by that many metres for THIS query — a coarse
+// CDLOD node samples with dilate ≈ half its cell so a triangle whose corners
+// both land outside a narrow road corridor can't interpolate natural ground
+// straight across the carriageway (device: "terrain poked through in places").
 double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
-                    double z, double base) {
+                    double z, double base, double dilate) {
     double result = base;
     double bestW = 0.0;
+    // Inside OVERLAPPING footprints — every junction interior — the ground
+    // takes the LOWEST plane, not the first region in list order: two roads
+    // crossing on a slope disagree about the junction's height, and only the
+    // lower target keeps both decks proud of the ground (device: "the road
+    // is being buried by the terrain — it's not conforming").
+    bool insideAny = false;
+    double insideMin = std::numeric_limits<double>::max();
     for (const TerrainFlatten& r : regions) {
         if (r.polygon.size() < 3) continue;
-        if (x < r.minX - r.falloff || x > r.maxX + r.falloff ||
-            z < r.minZ - r.falloff || z > r.maxZ + r.falloff)
+        const double reach = r.falloff + dilate;
+        if (x < r.minX - reach || x > r.maxX + reach ||
+            z < r.minZ - reach || z > r.maxZ + reach)
             continue;
-        double w;
         if (pointInFootprint(r.polygon, x, z)) {
-            w = 1.0;
-        } else {
-            double d = distanceToFootprint(r.polygon, x, z);
-            if (d >= r.falloff) continue;
-            w = 1.0 - smoothstep(0.0, r.falloff, d);
+            insideAny = true;
+            insideMin = std::min(insideMin, r.planeY(x, z));
+            continue;
         }
+        double d = distanceToFootprint(r.polygon, x, z);
+        if (dilate > 0.0 && d <= dilate) {   // inside the grown footprint
+            insideAny = true;
+            insideMin = std::min(insideMin, r.planeY(x, z));
+            continue;
+        }
+        if (insideAny) continue;   // an inside hit already owns this point
+        d -= dilate;
+        if (d >= r.falloff) continue;
+        double w = 1.0 - smoothstep(0.0, r.falloff, d);
         if (w > bestW) {
             bestW = w;
             result = base + (r.planeY(x, z) - base) * w;
-            if (bestW >= 1.0) break;   // fully inside — nothing can beat it
         }
     }
+    if (insideAny) return insideMin;
     return result;
+}
+
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base) {
+    return applyFlatten(regions, x, z, base, 0.0);
 }
 
 static void footprintBounds(TerrainFlatten& f) {
@@ -134,29 +158,42 @@ TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double y
 }
 
 Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    // Richer, more saturated palette with a green -> olive -> earth gradient on
-    // flat ground, warm-grey rock on slopes, and snow on high gentle ground.
-    const Vec3 grass(0.13, 0.30, 0.07);    // deep green
-    const Vec3 dryGrass(0.34, 0.36, 0.12); // olive / dry meadow
-    const Vec3 dirt(0.30, 0.20, 0.10);     // rich earth brown
-    const Vec3 rock(0.29, 0.27, 0.25);     // warm grey
-    const Vec3 snow(0.90, 0.92, 0.96);
+    // A layered natural palette: lush lowland grass dries to upland meadow and
+    // bare earth, warm-grey rock and pale scree take the slopes and high
+    // benches, snow caps the peaks — banded by DRYNESS (noise + altitude) and
+    // SLOPE, with the noise term breaking every boundary so nothing reads as a
+    // hard contour line (device: "a better terrain shader with more realistic
+    // colors").
+    const Vec3 grass (0.16, 0.32, 0.09);   // lush lowland green
+    const Vec3 meadow(0.34, 0.40, 0.16);   // upland dry meadow
+    const Vec3 dirt  (0.34, 0.25, 0.15);   // earth brown
+    const Vec3 rock  (0.34, 0.31, 0.28);   // warm grey stone
+    const Vec3 scree (0.56, 0.53, 0.49);   // pale talus / gravel
+    const Vec3 snow  (0.92, 0.94, 0.98);
 
-    double slope = 1.0 - clamp01(normalUp);                 // 0 flat .. 1 vertical
-    double rockFactor = smoothstep(0.30, 0.62, slope);
+    const double n = noiseValue;                    // ~[-1, 1]
+    const double slope = 1.0 - clamp01(normalUp);   // 0 flat .. 1 vertical
+    // Altitude 0..1 across the playable relief, jittered so the treeline and
+    // snowline meander instead of ringing the hill at one exact height.
+    const double alt = clamp01((height + 4.0) / 60.0 + 0.06 * n);
 
-    // Two-stop gradient over the noise term: green -> dry meadow -> earth, so the
-    // ground varies richly instead of a flat green/brown lerp.
-    double t = clamp01(noiseValue * 0.5 + 0.5);
-    Vec3 ground = t < 0.5 ? mixv(grass, dryGrass, t * 2.0)
-                          : mixv(dryGrass, dirt, (t - 0.5) * 2.0);
-    Vec3 c = mixv(ground, rock, rockFactor);
+    // Flat-ground colour by DRYNESS: green -> meadow -> earth. Noise dominates
+    // near sea level (grass and dirt patches on the plain), altitude adds the
+    // dry upland drift — so high-noise lowland still reads brown as before.
+    const double dry = clamp01(0.5 + 0.5 * n + 0.4 * alt);
+    Vec3 ground = dry < 0.5 ? mixv(grass, meadow, dry * 2.0)
+                            : mixv(meadow, dirt, (dry - 0.5) * 2.0);
 
-    // Snow on high, non-steep ground (absolute altitude — a no-op on low terrain,
-    // caps mountains). Snow doesn't cling to cliffs.
-    double snowFactor = smoothstep(74.0, 108.0, height) *
-                        (1.0 - smoothstep(0.42, 0.68, slope));
-    c = mixv(c, snow, snowFactor);
+    // Slope exposes rock; the higher, steeper benches shed pale scree.
+    double rockF = smoothstep(0.34, 0.60, slope + 0.10 * n);
+    Vec3 c = mixv(ground, rock, rockF);
+    double screeF = smoothstep(0.45, 0.75, alt) * smoothstep(0.18, 0.48, slope);
+    c = mixv(c, scree, clamp01(screeF));
+
+    // Snow on high, gentle ground; a jittered snowline, none on cliffs.
+    double snowF = smoothstep(0.74, 0.96, alt + 0.05 * n) *
+                   (1.0 - smoothstep(0.42, 0.66, slope));
+    c = mixv(c, snow, snowF);
 
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }
@@ -253,6 +290,11 @@ std::vector<RidgeSegment> buildRangeRidges(float length, float branchAngle,
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ) {
+    return terrainHeight(params, noise, worldX, worldZ, 0.0);
+}
+
+double terrainHeight(const TerrainParams& params, const Noise& noise,
+                     double worldX, double worldZ, double flattenDilate) {
     double nx = worldX * params.noiseScale;
     double nz = worldZ * params.noiseScale;
     double h = params.warp > 0.0
@@ -328,7 +370,7 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     // City cut/fill: grade the ground flat under roads and blocks (applied last so
     // it overrides every relief layer there).
     if (!params.flatten.empty())
-        h = applyFlatten(params.flatten, worldX, worldZ, h);
+        h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
     return h;
 }
 

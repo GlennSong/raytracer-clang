@@ -149,7 +149,7 @@ float3 surfCorrugated(float3 base, float u, float v) {
 }
 float3 surfAsphalt(float3 base, float u, float v) {
     float spk = vnoise2(u * 30.0, v * 30.0), patch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.92 + 0.46 * (spk - 0.5) + 0.12 * (patch - 0.5), 0.5, 1.4);
+    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (patch - 0.5), 0.6, 1.02);
     return base * shade;
 }
 float3 surfPavement(float3 base, float u, float v) {
@@ -189,8 +189,31 @@ float3 surfWood(float3 base, float u, float v) {
 // scene.cpp surfRoadMarkings. mu = lateral (1 left / 2 centre / 3 right; < 0.5 =
 // not carriageway -> plain). Constant AA band (not fwidth) so it is legal in any
 // shader stage; MSAA/TAA cleans up the rest.
-float3 surfRoadMarkings(float3 base, float mu, float mv) {
-    if (mu < 0.5) return base;                       // not carriageway: no paint
+float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
+    // One surface id covers the welded road, split by road-local mu: the
+    // sidewalk/curb band (mu in [0,1]) wears concrete pavement, the carriageway
+    // (mu in [1,3]) asphalt grain under the lane paint. wu/wv = the world-planar
+    // UV the other surfaces tile by. Mirrors scene.cpp / WGSL / Vulkan.
+    if (mu < 0.98) {
+        // Sidewalk band: concrete grain + scoring joints that FOLLOW the curb
+        // (slab tops bake u = -(metres along the kerb loop)). Curb faces (u = 0)
+        // stay plain. Mirrors scene.cpp / WGSL / Vulkan.
+        float spk = vnoise2(wu * 26.0, wv * 26.0);
+        float3 c = base * (0.92 + 0.10 * (spk - 0.5));
+        float su = -mu;
+        if (su > 0.02) {
+            float t = tile1(su, 1.5);
+            float jd = min(t, 1.5 - t);
+            c = c * (0.68 + 0.32 * smoothstep(0.02, 0.06, jd));
+        }
+        return c;
+    }
+    float3 deck = surfAsphalt(base, wu, wv);            // grained asphalt deck
+    // Dashed lane DIVIDER strip (u = 4, v = raw arc-length): one thin strip per
+    // internal same-direction lane boundary on multilane roads; 3 m of white
+    // paint every 7.5 m. Mirrors scene.cpp / WGSL / Vulkan.
+    if (mu > 3.5)
+        return (fract(mv / 7.5) < 0.4) ? float3(0.86, 0.86, 0.83) : deck;
     float lat = mu - 2.0;                            // [-1, 1], 0 = centreline
     float yL = 1.0 - smoothstep(0.013, 0.019, abs(lat - 0.030));
     float yR = 1.0 - smoothstep(0.013, 0.019, abs(lat + 0.030));
@@ -198,7 +221,11 @@ float3 surfRoadMarkings(float3 base, float mu, float mv) {
     float wL = 1.0 - smoothstep(0.016, 0.022, abs(lat - 0.86));
     float wR = 1.0 - smoothstep(0.016, 0.022, abs(lat + 0.86));
     float w  = max(wL, wR);                          // white edge lines
-    float3 c = mix(base, float3(0.82, 0.68, 0.13), y);
+    // The centreline ENDS before a crosswalk (device: the double yellow cut
+    // through the zebra bars): the band ends at mv ~3.6, so the yellow fades in
+    // just past it. Without crosswalks mv is a large sentinel (full-length line).
+    y *= smoothstep(4.0, 4.8, mv);
+    float3 c = mix(deck, float3(0.82, 0.68, 0.13), y);
     c = mix(c, float3(0.86, 0.86, 0.83), w);
     // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
     // the junction mouth (baked by the road mesher), so the band sits set back on
@@ -226,7 +253,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 mesh
         case 8u:  c = surfPavement(base, uv.x, uv.y); break;
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
-        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y); break;
+        case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
         default:  return base;
     }
     return saturate(c);   // keep albedo energy-conserving (see scene.cpp)

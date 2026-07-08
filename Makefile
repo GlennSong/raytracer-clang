@@ -75,6 +75,8 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
+	$(SRC_DIR)/engine/procgen/city/architect.cpp \
+	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp
@@ -166,7 +168,13 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_render.cpp \
 	$(TEST_DIR)/test_car_lamps.cpp \
 	$(TEST_DIR)/test_city_flow.cpp \
-	$(TEST_DIR)/test_city_spectate.cpp
+	$(TEST_DIR)/test_city_spectate.cpp \
+	$(TEST_DIR)/test_places.cpp \
+	$(TEST_DIR)/test_screen_project.cpp \
+	$(TEST_DIR)/test_relationships.cpp \
+	$(TEST_DIR)/test_ped_graph.cpp \
+	$(TEST_DIR)/test_city_generated.cpp \
+	$(TEST_DIR)/test_city_lots.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -189,6 +197,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/camera_store.cpp \
 	$(SRC_DIR)/engine/level_writer.cpp \
 	$(SRC_DIR)/renderer/hosted_window.cpp \
+	$(SRC_DIR)/renderer/settings.cpp \
 	$(SRC_DIR)/engine/editor_bridge.cpp \
 	$(SRC_DIR)/engine/properties.cpp \
 	$(SRC_DIR)/engine/component_registry.cpp \
@@ -229,11 +238,16 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
+	$(SRC_DIR)/engine/procgen/city/architect.cpp \
+	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/ai/nav_graph.cpp \
 	$(SRC_DIR)/engine/ai/pathfind.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_goals.cpp \
+	$(SRC_DIR)/apps/citysim/places.cpp \
+	$(SRC_DIR)/apps/citysim/ped_graph.cpp \
+	$(SRC_DIR)/apps/citysim/relationships.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
 	$(SRC_DIR)/apps/citysim/city_spectate.cpp \

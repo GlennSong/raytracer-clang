@@ -1,0 +1,79 @@
+name: Deploy Web (WebGPU/WASM)
+
+# Build the Emscripten/WebGPU viewer and publish it to GitHub Pages (the
+# gh-pages branch). Two ways in:
+#   • workflow_dispatch — the "Run workflow" button (or the API): kick off a
+#     deploy on demand, from any branch, whenever you want to see it online.
+#   • push to main — auto-rebuild when code that affects the web build lands.
+#
+# NOTE: the emdawnwebgpu WebGPU port downloads automatically on GitHub's runners
+# (open network) — the local Dawn-from-source workaround in docs/web-build.md is
+# only for proxied sandboxes, so CI needs none of it. The workflow must exist on
+# the DEFAULT branch (main) for the manual button + push trigger to be active.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'web/**'
+      - 'shaders/webgpu/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/deploy-web.yml'
+
+# One deploy at a time; a newer run cancels an in-flight older one.
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # push the built site to the gh-pages branch
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # Jolt (physics) + Lua (scripting); imgui is off for web
+
+      - name: Install Emscripten (emsdk)
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.1
+          actions-cache-folder: emsdk-cache
+
+      - name: WebGPU port glue deps
+        run: pip3 install --user jinja2 markupsafe
+
+      - name: Configure (emcmake)
+        run: emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build viewer_web
+        run: cmake --build build-web --target viewer_web -j"$(nproc)"
+
+      - name: Stage the site
+        run: |
+          mkdir -p public/thumbs
+          cp build-web/index.html build-web/viewer.html build-web/about.html \
+             build-web/city-sim.html build-web/scenes.json \
+             build-web/viewer_web.js build-web/viewer_web.wasm \
+             build-web/viewer_web.data public/
+          cp build-web/thumbs/*.webp public/thumbs/ 2>/dev/null || true
+          touch public/.nojekyll
+          # Guard: the build-id must have been injected (never publish the raw
+          # placeholder — it disables cache-busting for every visitor).
+          if grep -q "__RT_BUILD__" public/viewer.html; then
+            echo "viewer.html still has the __RT_BUILD__ placeholder — build is stale"; exit 1
+          fi
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          publish_branch: gh-pages
+          commit_message: "Pages: CI deploy ${{ github.sha }}"

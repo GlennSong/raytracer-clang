@@ -6,6 +6,7 @@
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
+#include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/terrain.h"
 #include "world.h"
 #include <cstdint>
@@ -48,10 +49,22 @@ struct Velocity {
     Vec3 angular;
 };
 
+// Debug render layers (device: "layers for roads, buildings, simulation ... so
+// we can turn them on or off"). A bit set on Renderable::renderLayer /
+// InstanceGroup::renderLayer; RenderSystem skips the draw when the same bit is
+// set in Renderer::hiddenLayers. 0 = untagged (terrain, sky, props) — always
+// drawn, so hiding roads/buildings/sim reveals the ground underneath.
+enum RenderLayer : uint32_t {
+    LayerRoads     = 1u << 0,
+    LayerBuildings = 1u << 1,
+    LayerSim       = 1u << 2,
+};
+
 // What to draw for an entity.
 struct Renderable {
     MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
+    uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -71,6 +84,7 @@ struct InstanceGroup {
     // the camera are not drawn. Distant L-system trees/rocks dominate the triangle
     // budget, so a finite radius is the cheapest large fps win in a big world.
     Real drawDistance = 0;
+    uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
@@ -275,6 +289,42 @@ struct AgentDriver {
 // lab runs ONE driver and ONE walker with the debug HUD on, while grown.json
 // keeps the default bustle. Defaults mirror CityRenderParams so an absent field
 // changes nothing.
+// A level-authored place (Living City, ADR-0066): a labelled destination in the
+// citysim world. Its TYPE is a citysim PlaceType TAG kept as a string here — the
+// citysim bridge parses it (parsePlaceType) — so engine core stays free of
+// citysim types. `x`/`z` are the site (world XZ); the bridge snaps the entrance
+// onto the nearest sidewalk. Hours are in-world 0..24 (default = always open).
+// The city PLAN as data (Living City, ADR-0066): the block interiors the lot
+// pass subdivided and every lot it produced. One entity carries this when a
+// citysim level grew lot buildings; the citysim render bridge draws the
+// polygons as ground-outline debug layers ("show me the blocks and the lots").
+// Plain data — absent on levels that grew nothing.
+struct CityPlanDebug {
+    std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
+    std::vector<Poly2> lots;     // every parcelled lot inside them
+    // Physics-collider outlines (device: "maybe we need a physics hull
+    // visualizer"): every building's plan-prism collider footprint with its
+    // world base/top, so the debug layer can draw the exact volumes Jolt sees.
+    struct Prism {
+        Poly2 plan;      // world-XZ footprint (the collider's side walls)
+        Real y0 = 0, y1 = 0;   // world base/top of the extrusion
+    };
+    std::vector<Prism> prisms;
+};
+
+struct AuthoredPlace {
+    std::string type;      // "home" | "shop" | "office" | "park" | "civic"
+    float x = 0, z = 0;    // building site (world XZ)
+    std::string name;      // optional label (may be empty)
+    float openHour = 0, closeHour = 24;
+    // Optional building (Living City Phase 4): when width/depth/height are all > 0
+    // the loader spawns a static box STRUCTURE of this footprint at the site, so
+    // the place IS a building you can walk up to (its door snaps to the sidewalk).
+    // All-zero = a bare marker (e.g. a park). `buildingColor` tints the structure.
+    float buildingW = 0, buildingH = 0, buildingD = 0;   // full extents (m)
+    Vec3 buildingColor{0.72f, 0.70f, 0.64f};
+};
+
 struct CitySimConfig {
     int cars = 40;
     int pedestrians = 40;
@@ -295,6 +345,10 @@ struct CitySimConfig {
     // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
     // failure falls back to the C++ fleetCarMesh; "" = built-in fleet meshes.
     std::string vehicleScript;
+    // Level-authored places (ADR-0066): labelled destinations (home/shop/office/
+    // park/civic) the citysim bridge turns into a routable PlaceMap at build.
+    // Empty for levels that don't author any (the generator emits them later).
+    std::vector<AuthoredPlace> places;
 };
 
 // --- Document hierarchy (stable ids + parenting) --------------------------

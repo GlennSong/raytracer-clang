@@ -10,6 +10,7 @@ namespace engine {
 class Renderer;
 class EditorBridge;
 }
+namespace citysim { class CityRenderSystem; }
 
 class ArenaState : public engine::PlayingState {
 public:
@@ -33,6 +34,22 @@ private:
     std::string levelFile;
     EditorFactory makeEditorState;
     engine::EditorBridge* bridge = nullptr;
+
+    // Recipe hot-reload (the BUILDING LAB loop, building-grammar-plan.md P1):
+    // a level with `"watch_scripts": true` watches its own file plus every
+    // shape:"script" recipe file; when one changes on disk the state replaces
+    // itself through the state machine — the same clean reset as the
+    // editor→play transition — so a saved Lua edit shows up in seconds.
+    // Desktop only (the web bundle bakes assets; nothing changes on disk).
+    struct WatchedFile { std::string path; long long stamp = 0; };
+    std::vector<WatchedFile> watchFiles;   // empty = watching disabled
+    double watchTimer = 0.0;
+    void collectWatchFiles();
+    bool watchedFilesChanged();
+
+    // The living-city render bridge (owned by the system list): polled each frame
+    // for its "rebuild road graph" button so update() can reseed + reload.
+    citysim::CityRenderSystem* citySys_ = nullptr;
 };
 
 #endif

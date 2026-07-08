@@ -348,15 +348,15 @@ RenderMaterial signalPostMaterial() {
 RenderMaterial widgetMaterial(Vec3 color) {
     RenderMaterial m;
     // Bright glowing paint: strong emission (pops through bloom/tonemap), dark
-    // base so lighting can't wash it toward a grey "shadow ring". Drawn as
-    // GROUND-projected geometry with regular depth (like lane markings) — NOT
-    // FLAG_OVERLAY: the overlay depth state is unverified on device and a marker
-    // hidden inside body geometry is invisible; paint on the pavement never is.
+    // base so lighting can't wash it toward a grey "shadow ring".
     // Emission tuned DOWN from 4x (device round 3): at 4x the bloom/tonemap
     // saturated every ring toward white — a green ring read as "white looking".
     // 1.7x still glows through daylight but keeps its hue legible.
+    // FLAG_OVERLAY (device feedback): debug widgets/lines draw on TOP of world
+    // geometry (the road solid was burying the block/lot outlines) and are
+    // skipped by every backend's shadow pass, so gizmos cast no shadows.
     m.albedo = color * 0.15; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
-    m.emission = color * 1.7; m.flags = 0;
+    m.emission = color * 1.7; m.flags = RenderMaterial::FLAG_OVERLAY;
     return m;
 }
 

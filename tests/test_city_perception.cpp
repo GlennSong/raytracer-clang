@@ -188,3 +188,32 @@ TEST_CASE(cars_slow_down_for_pedestrians_they_see) {
     // Seeing a pedestrian ahead makes a car measurably slower than a blind one.
     CHECK(withPerception < withoutPerception);
 }
+
+TEST_CASE(pedestrians_never_stand_inside_cars) {
+    // Cars are obstacles to walkers (device: "pedestrians get stuck if they bump
+    // up against a car"): the think scan considers the closest point on each
+    // car's rectangle and a hard push-out squeezes a walker out of the footprint
+    // along the shallowest axis, so it slides around the body instead of
+    // pinning. Invariant: after any step, no MOVING walker's centre is inside
+    // any car's (slightly inflated) footprint.
+    NavGraph nav = cityNav();
+    CitySim sim;
+    sim.build(nav, 14, 20, 9);   // cars AND pedestrians
+    Real worstPen = 0;
+    for (int i = 0; i < 3000; ++i) {
+        sim.step(0.1, 0.4);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+            for (const SimVehicle& v : sim.vehicles()) {
+                Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
+                Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
+                Real lx = std::fabs(rel.x * f.x + rel.y * f.y);
+                Real ly = std::fabs(rel.x * r.x + rel.y * r.y);
+                Real px = v.length * 0.5 + 0.30 - lx;
+                Real py = v.width * 0.5 + 0.30 - ly;
+                if (px > 0 && py > 0) worstPen = std::max(worstPen, std::min(px, py));
+            }
+        }
+    }
+    CHECK(worstPen < 0.10);   // never meaningfully inside a car body
+}

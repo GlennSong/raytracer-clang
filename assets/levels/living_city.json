@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "terrain": {
+    "seed": 7,
+    "size": 620,
+    "resolution": 380,
+    "heightScale": 13,
+    "noiseScale": 0.008,
+    "octaves": 4,
+    "warp": 0.3,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "cdlod": true,
+    "rangeSpine": [
+      [
+        -300,
+        -255
+      ],
+      [
+        -150,
+        -288
+      ],
+      [
+        20,
+        -284
+      ],
+      [
+        190,
+        -268
+      ],
+      [
+        310,
+        -244
+      ]
+    ],
+    "rangeWidth": 135,
+    "rangeHeight": 76,
+    "rangeVariation": 0.6,
+    "mountainScale": 0.01
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "generate": {
+          "kind": "district",
+          "radius": 170,
+          "arterials": 3,
+          "artery_width": 13,
+          "street_width": 7,
+          "block_size": 82,
+          "curviness": 0.22,
+          "seed": 5
+        },
+        "width": 7.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 22,
+    "pedestrians": 26,
+    "seed": 5,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": true,
+    "wander": false,
+    "vehicles": "vehicles.lua",
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 60,
+    "midtownRadius": 140,
+    "buildChance": 0.9
+  },
+  "player": {
+    "position": [
+      0,
+      1.2,
+      150
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.8
+    },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  }
+}

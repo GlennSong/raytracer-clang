@@ -1,6 +1,7 @@
 #include "city.h"
 
 #include "parcel.h"
+#include "district.h"     // buildDistrict: the real road-network tech (ADR-0066)
 #include "street_kit.h"
 #include "road_mesh.h"
 #include "../tree.h"
@@ -110,6 +111,33 @@ BuildingParams paramsForDistrict(District d, Rng& rng, uint32_t seed) {
     if (d == District::HighRise && p.curtainWall && rng.unit() < 0.35) {
         p.shape = BuildingShape::Cylinder;
         p.sides = 36;
+    }
+
+    // Window ELEMENT + quoins by cladding (building-grammar-plan.md P2): brick
+    // walk-ups get segmental-arched sashes with voussoir hoods and 2x2 lights;
+    // stucco mixes round arches in; concrete/precast keeps flat heads with a
+    // header band; glass/metal stays a clean skin.
+    switch (style) {
+        case FacadeStyle::Brick:
+            p.window.head = OpeningStyle::Head::Segmental;
+            p.window.hood = OpeningStyle::Hood::Arch;
+            p.window.lightsX = 2; p.window.lightsY = 2;
+            p.quoins = (rng.unit() < 0.6);
+            break;
+        case FacadeStyle::Stucco:
+            p.window.head = (rng.unit() < 0.4) ? OpeningStyle::Head::Round
+                                               : OpeningStyle::Head::Flat;
+            p.window.hood = (p.window.head == OpeningStyle::Head::Round)
+                                ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
+            p.window.lightsX = 2; p.window.lightsY = 1;
+            p.quoins = (rng.unit() < 0.5);
+            break;
+        case FacadeStyle::Concrete:
+            p.window.head = OpeningStyle::Head::Flat;
+            p.window.hood = OpeningStyle::Hood::Band;
+            p.window.lightsX = 1; p.window.lightsY = 2;
+            break;
+        default: break;   // painted/glass/metal keep the plain defaults
     }
 
     // Ornamentation by archetype: a glass curtain wall and a metal shed stay
@@ -284,12 +312,34 @@ CityModel generateCity(const CityParams& cp) {
     for (int i = 0; i < static_cast<int>(PartId::Count); ++i)
         model.parts[i].materialIndex = i;
 
-    // 1. Roads -> 2. planarize -> 3. block faces.
-    GridRoadParams gp;
-    gp.center = cp.center; gp.extent = cp.extent; gp.cellSize = cp.cellSize;
-    gp.jitter = cp.roadJitter; gp.seed = cp.seed;
-    RoadGraph graph = planarize(gridRoads(gp));
-    model.blocks = extractBlocks(graph);
+    // 1. Roads -> 2. planarize -> 3. block faces. Two road sources (ADR-0066):
+    // the classic regular GRID, or the DISTRICT subdivision tech (arterials +
+    // irregular streets — what grown.json drives on), which hands back both the
+    // planarized graph AND its block polygons, so the same lot/building pipeline
+    // below runs on the real road network.
+    RoadGraph graph;
+    if (cp.districtRoads) {
+        DistrictParams dpp;
+        dpp.center = cp.center;
+        dpp.radius = cp.extent;
+        dpp.arterials = cp.arterials;
+        dpp.blockSizeMin = cp.blockSizeMin;
+        dpp.blockSizeMax = cp.blockSizeMax;
+        dpp.arteryWidth = cp.arteryWidth;
+        dpp.streetWidth = cp.streetWidth;
+        dpp.irregular = cp.irregular;
+        dpp.jitter = cp.roadJitter;
+        dpp.seed = cp.seed;
+        DistrictNet dn = buildDistrict(dpp);
+        graph = dn.graph;              // already planarized + connected
+        model.blocks = dn.blocks;      // buildDistrict emits the block faces itself
+    } else {
+        GridRoadParams gp;
+        gp.center = cp.center; gp.extent = cp.extent; gp.cellSize = cp.cellSize;
+        gp.jitter = cp.roadJitter; gp.seed = cp.seed;
+        graph = planarize(gridRoads(gp));
+        model.blocks = extractBlocks(graph);
+    }
     model.blockCount = static_cast<int>(model.blocks.size());
 
     // Road-grade solver: assign each intersection an elevation, then Laplacian-
@@ -342,8 +392,13 @@ CityModel generateCity(const CityParams& cp) {
     Vec3 sidewalkCol(0.52, 0.52, 0.50), asphaltCol(0.12, 0.12, 0.13),
          retainCol(0.42, 0.42, 0.42), yellow(0.72, 0.62, 0.12), white(0.78, 0.78, 0.76);
     const Real roadThickness = 0.12;   // carriageway slab depth over the cut ground
-    const Real roadW = 12.0;           // fill the corridor (= 2 x apron setback)
-    for (RoadEdge& e : graph.edges) e.width = roadW;   // ribbon width
+    // Corridor / apron setback basis. GRID roads fill a uniform 12 m ribbon.
+    // DISTRICT roads keep buildDistrict's real per-edge widths (arterials ~13 m,
+    // streets ~7 m), so a narrow street draws narrow instead of a fat 12 m ribbon
+    // overrunning its sidewalk (user feedback); the apron sizes to the widest road.
+    const Real roadW = cp.districtRoads ? 13.0 : 12.0;
+    if (!cp.districtRoads)
+        for (RoadEdge& e : graph.edges) e.width = roadW;   // grid: one ribbon width
 
     auto appendMesh = [](RenderMesh& dst, const RenderMesh& src) {
         uint32_t base = static_cast<uint32_t>(dst.vertices.size());
@@ -589,10 +644,15 @@ CityModel generateCity(const CityParams& cp) {
             if (rng.unit() > cp.buildChance) continue;        // plaza / empty
             if (lot.area < 50) continue;
             // Reject sliver lots — a long, thin footprint extrudes into an
-            // impossibly narrow blade. Need a real minimum short side.
+            // impossibly narrow blade. Need a real minimum short side AND a
+            // bounded aspect ratio, or an irregular block's off-cuts become
+            // knife-edge buildings (user feedback).
             {
                 Vec2 llo, lhi; bounds(lot.footprint, llo, lhi);
-                if (std::min(lhi.x - llo.x, lhi.y - llo.y) < 6.0) continue;
+                Real w = lhi.x - llo.x, dpt = lhi.y - llo.y;
+                Real shortSide = std::min(w, dpt), longSide = std::max(w, dpt);
+                if (shortSide < 9.0) continue;                  // too skinny to be a building
+                if (longSide > shortSide * 3.5) continue;       // long thin blade
             }
             // Pull the building in from the lot lines a little (setback to the lot).
             Poly2 site = inset(lot.footprint, 1.2);
@@ -717,6 +777,12 @@ CityModel generateCity(const CityParams& cp) {
         std::remove_if(model.parts.begin(), model.parts.end(),
                        [](const RenderMesh& m) { return m.vertices.empty(); }),
         model.parts.end());
+
+    // Surface the road GRAPH (Living City, ADR-0066): the same planarized graph the
+    // carriageway was meshed over — its edges now carry the drawn ribbon width. A
+    // host can spawn a RoadNet from it so the citysim drives the generated streets
+    // (and buildings become places), turning a procedural city into a living one.
+    model.roadGraph = graph;
     return model;
 }
 

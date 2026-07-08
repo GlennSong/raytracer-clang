@@ -7,6 +7,7 @@
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
 #include "engine/procgen/city/city.h"
+#include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/road_net.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
@@ -654,10 +655,107 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
 #endif
 
     // Procedural terrain (top-level block, regenerated from its recipe), graded
-    // flat under the city/script cut-fill footprints.
+    // flat under the city/script cut-fill footprints — and CARVED to every
+    // shape:"road" net (mirroring the viewer's road pre-pass; without this the
+    // offline ground buries the draped roads — device: "the road is being
+    // buried by the terrain").
     if (root.contains("terrain")) {
         std::vector<TerrainFlatten> allFlatten = cityFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
+        std::vector<RoadNet> lotNets;
+        if (levelGround)
+            for (const auto& ent : root.value("entities", json::array())) {
+                if (ent.value("shape", std::string()) != "road") continue;
+                const json roadBlock =
+                    ent.contains("road") ? ent["road"] : json::object();
+                RoadNet net = roadNetFromJson(roadBlock);
+                if (roadBlock.contains("generate"))
+                    applyGenerateRecipe(net, roadBlock["generate"]);
+                net.heightAt = levelGround;
+                std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+                allFlatten.insert(allFlatten.end(), r.begin(), r.end());
+                lotNets.push_back(std::move(net));
+            }
+        // Living-city LOTS (mirrors the viewer's loader): grow the blocks'
+        // buildings on the road-carved ground, stamp each building's FLAT
+        // graded pad into the terrain, and bake the grown geometry — so the
+        // offline render shows the same city-on-terrain the device does.
+        if (levelGround && !lotNets.empty() && root.contains("citysim") &&
+            root["citysim"].value("buildLots", false)) {
+            const json& cs = root["citysim"];
+            TerrainParams ctp = parseTerrainParams(root["terrain"]);
+            ctp.flatten = allFlatten;   // the road-carved ground the lots see
+            Noise cnoise(root["terrain"].value("seed", 0u));
+            engine::EdgeBlockParams ep;
+            ep.depth = cs.value("edgeBlockDepth", ep.depth);
+            ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
+            ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
+            ep.margin = 4.0 + cs.value("sidewalk", 4.0);
+            engine::LotParams lp;
+            lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
+            lp.buildChance = cs.value("buildChance", 0.9);
+            lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);
+            lp.innerRadius = cs.value("downtownRadius", 55.0);
+            lp.midRadius = cs.value("midtownRadius", 135.0);
+            lp.plinth = cs.value("plinth", lp.plinth);
+            lp.ground = [&ctp, &cnoise](engine::Real x, engine::Real z) {
+                return static_cast<engine::Real>(terrainHeight(ctp, cnoise, x, z));
+            };
+#ifdef RT_ENABLE_SCRIPTING
+            std::unique_ptr<ScriptVM> styleVm;   // must outlive the grow
+            {
+                std::string sb = loadScriptCode("style_book.lua", levelDir);
+                if (!sb.empty()) {
+                    styleVm = std::make_unique<ScriptVM>();
+                    openProcgenLibrary(*styleVm);
+                    std::string err;
+                    auto hook = engine::makeStyleBook(*styleVm, sb, &err);
+                    if (hook) lp.styleHook = std::move(hook);
+                }
+            }
+#endif
+            engine::NetLotResult lots = engine::growLotBuildingsOnNets(
+                lotNets, lp, ep, cs.value("sidewalk", 4.0) + 0.6);
+            // Building pads: flat graded ground under every footprint.
+            for (const engine::LotBuilding& lb : lots.lots) {
+                if (lb.type == "park" || lb.type == "green" ||
+                    lb.plan.size() < 3) continue;
+                std::vector<Vec3> poly;
+                poly.reserve(lb.plan.size());
+                for (const engine::Vec2& v : lb.plan)
+                    poly.push_back(Vec3(v.x, 0, v.y));
+                allFlatten.push_back(makeFlattenPad(std::move(poly), lb.groundY, 5.0));
+            }
+            // Bake the grown parts with the SAME per-part PBR recipes the city
+            // pipeline binds (materialFor + baked surface texture sets).
+            {
+                using S = RenderMaterial::Surface;
+                SurfaceTexCache texCache;
+                for (const RenderMesh& part : lots.parts) {
+                    if (part.vertices.empty()) continue;
+                    RenderMaterial rm = materialFor(
+                        static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
+                    Material mat = Material::pbr(Vec3(1, 1, 1), rm.metallic,
+                                                 rm.roughness);
+                    if (rm.surface() != S::None)
+                        bindSurfaceTextures(mat, rm.surface(), scene, 1337u, 256,
+                                            &texCache);
+                    int mi = scene.addMaterial(mat);
+                    addMeshAsTriangles(part, Vec3(), Quat::identity(),
+                                       Vec3(1, 1, 1), mi, scene);
+                }
+                // Park / green pads: draped lot-shaped slabs, tinted like the
+                // viewer (grass green).
+                for (const engine::LotBuilding& lb : lots.lots) {
+                    if ((lb.type != "park" && lb.type != "green") ||
+                        lb.padMesh.vertices.empty()) continue;
+                    Material mat = Material::pbr(lb.color, 0.0, 1.0);
+                    int mi = scene.addMaterial(mat);
+                    addMeshAsTriangles(lb.padMesh, Vec3(), Quat::identity(),
+                                       Vec3(1, 1, 1), mi, scene);
+                }
+            }
+        }
         addTerrain(root["terrain"], scene, materials, allFlatten);
     }
 

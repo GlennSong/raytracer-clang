@@ -33,6 +33,10 @@ struct NavGraph {
     std::vector<NavLink> links;             // directed links
     std::vector<std::vector<int>> outLinks; // node -> indices of links departing it
     std::vector<uint8_t> junction;          // 1 if the node is an intersection (deg >= 3)
+    // How far a KNOT-MERGED junction's members sat from its centroid (m); 0 for
+    // ordinary nodes. The drawn crossing spans this far around the merged node,
+    // so anything PLACED relative to the node (signal poles) backs off by it.
+    std::vector<Real> nodeSpread;
 
     int nodeCount() const { return static_cast<int>(nodes.size()); }
     int linkCount() const { return static_cast<int>(links.size()); }
@@ -71,6 +75,16 @@ struct NavGraph {
 struct NavBuildParams {
     Real laneWidth = 3.5;
     bool oneWayRamps = true;
+    // Junction KNOT merge (ADR-0066 device fix). A generated crossing — two curvy
+    // arterials meeting — planarizes into several intersection nodes a few metres
+    // apart, joined by car-length stub links. Treating each as an independent
+    // junction gave every stub its own stop line and hold box; the boxes overlap,
+    // every held car sits in another junction's box, and the centre gridlocks
+    // permanently. Semantically that knot is ONE intersection, so: cluster
+    // JUNCTION nodes (degree >= 3) closer than this radius into one node at their
+    // centroid. Degree-2 nodes are curve samples and never merge (collapsing them
+    // would straighten the drawn bends). 0 disables.
+    Real junctionMergeRadius = 7.0;
 };
 NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params = {});
 

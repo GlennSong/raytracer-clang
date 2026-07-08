@@ -1,0 +1,4 @@
+{ "cameras": [
+  { "name": "Lab", "position": [36, 26, 44], "forward": [-0.58, -0.38, -0.72],
+    "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 60.0 } }
+] }
