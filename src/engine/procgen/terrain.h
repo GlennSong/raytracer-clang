@@ -40,6 +40,13 @@ struct TerrainFlatten {
     Falloff falloffMode = Falloff::Smoothstep;
     double cutBatter = 1.0;    // uphill cut slope, rise:run (1.0 = 45°, steeper rock cut)
     double fillBatter = 0.6;   // downhill fill embankment, rise:run (gentler than cut)
+    // Overlap priority (ADR-0075 Phase 2). Inside overlapping footprints the
+    // HIGHEST priority wins; among equal priority the LOWEST plane wins (the
+    // junction rule). So a road/pad (default 0) overrides a block grade (-1)
+    // inside its footprint — a building pad stays flat over the tilted block it
+    // sits on, and a block still grades to its streets. Equal priority everywhere
+    // reproduces the original lowest-plane-wins behaviour exactly.
+    int priority = 0;
     double planeY(double x, double z) const { return c + dx * x + dz * z; }
 };
 

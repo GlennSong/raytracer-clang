@@ -204,6 +204,25 @@ TEST_CASE(block_grades_to_a_plane_then_terraces) {
     CHECK(rising >= 1);                          // steps climb the slope
 }
 
+// Overlap priority (ADR-0075 Phase 2): a flat building pad (priority 0) stays flat
+// over the tilted block grade (priority -1) it sits on — the higher priority wins
+// inside the overlap — while the block still grades its own yards.
+TEST_CASE(flatten_priority_pad_beats_block_grade) {
+    std::vector<Vec3> blockPoly = {Vec3(-30, 0, -30), Vec3(30, 0, -30),
+                                   Vec3(30, 0, 30), Vec3(-30, 0, 30)};
+    TerrainFlatten block = makeFlattenPad(blockPoly, 0.0, 4.0);
+    block.dx = 0.3; block.priority = -1;              // tilted, low priority
+    std::vector<Vec3> padPoly = {Vec3(-10, 0, -10), Vec3(10, 0, -10),
+                                 Vec3(10, 0, 10), Vec3(-10, 0, 10)};
+    TerrainFlatten pad = makeFlattenPad(padPoly, 5.0, 4.0);   // flat at 5, priority 0
+    std::vector<TerrainFlatten> regs = {block, pad};
+
+    CHECK_APPROX(applyFlatten(regs, 0, 0, 100.0, 0.0), 5.0, 1e-9);   // pad centre: flat
+    CHECK_APPROX(applyFlatten(regs, 8, 8, 100.0, 0.0), 5.0, 1e-9);   // block tilt(2.4) < pad, pad wins
+    CHECK_APPROX(applyFlatten(regs, 20, 0, 100.0, 0.0),              // outside pad, in block
+                 block.planeY(20, 0), 1e-9);                          // -> block grade applies
+}
+
 // StructureSet walls (ADR-0075 Phase 1b): a steep sidehill cut that can't daylight
 // within reach gets a retaining wall; flat ground gets none.
 TEST_CASE(road_walls_only_where_cuts_are_steep) {

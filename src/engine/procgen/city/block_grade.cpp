@@ -70,6 +70,7 @@ TerrainFlatten planePad(const Poly2& block, double c, double dx, double dz, doub
     for (const Vec2& v : block) poly.push_back(Vec3(v.x, 0, v.y));
     TerrainFlatten f = makeFlattenPad(std::move(poly), c, falloff);  // sets AABB
     f.dx = dx; f.dz = dz;   // tilt the target plane to grade with the streets
+    f.priority = -1;        // roads + building pads (priority 0) override the block grade
     return f;
 }
 

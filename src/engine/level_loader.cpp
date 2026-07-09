@@ -5,6 +5,8 @@
 #include "procgen/city/city.h"
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
+#include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
+#include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
@@ -1958,6 +1960,33 @@ bool LevelLoader::load(const std::string& path,
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
                 return terrainHeight(*lotTp, *lotNoise, x, z);
             };
+            // BLOCK GRADING CASCADE (ADR-0075 P2): grade each block down to its
+            // bounding streets (measured on the ROAD-CARVED lotGround) BEFORE lots
+            // grow, so building pads flatten on graded ground that meets the
+            // street instead of picking a level off the raw noise. Block grades are
+            // priority -1, so the road carve and the building pads (priority 0)
+            // override them where they overlap — the block only grades its yards.
+            {
+                RoadGraph rg;
+                for (const RoadNet& net : preNets) {
+                    const int base = static_cast<int>(rg.nodes.size());
+                    for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
+                    for (std::size_t ei = 0; ei < net.edges.size(); ++ei)
+                        rg.edges.push_back(RoadEdge{
+                            base + net.edges[ei][0], base + net.edges[ei][1],
+                            static_cast<float>(roadNetEdgeWidth(net, static_cast<int>(ei))),
+                            RoadClass::Local, 0});
+                }
+                std::vector<TerrainFlatten> bg = gradeBlocks(extractBlocks(rg), lotGround);
+                for (const TerrainFlatten& f : bg) {
+                    terrainParams.flatten.push_back(f);
+                    baseFlatten.push_back(f);
+                }
+                // lotGround must now include the block grades so the pads below
+                // sample the graded ground.
+                *lotTp = terrainParams;
+                rebuildFlattenIndex(*lotTp);
+            }
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround);
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||

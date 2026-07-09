@@ -69,25 +69,27 @@ struct FlattenAccum {
     double result;
     double bestW = 0.0;
     bool insideAny = false;
+    int insidePriority = std::numeric_limits<int>::min();
     double insideMin = std::numeric_limits<double>::max();
     explicit FlattenAccum(double b) : base(b), result(b) {}
+    // Fold one inside footprint: the highest priority wins; among equal priority
+    // the lowest plane wins (junction rule). Lower-priority footprints are ignored
+    // when a higher one already covers the point.
+    void foldInside(const TerrainFlatten& r, double x, double z) {
+        insideAny = true;
+        double y = r.planeY(x, z);
+        if (r.priority > insidePriority) { insidePriority = r.priority; insideMin = y; }
+        else if (r.priority == insidePriority) insideMin = std::min(insideMin, y);
+    }
     void fold(const TerrainFlatten& r, double x, double z, double dilate) {
         if (r.polygon.size() < 3) return;
         const double reach = r.falloff + dilate;
         if (x < r.minX - reach || x > r.maxX + reach ||
             z < r.minZ - reach || z > r.maxZ + reach)
             return;
-        if (pointInFootprint(r.polygon, x, z)) {
-            insideAny = true;
-            insideMin = std::min(insideMin, r.planeY(x, z));
-            return;
-        }
+        if (pointInFootprint(r.polygon, x, z)) { foldInside(r, x, z); return; }
         double d = distanceToFootprint(r.polygon, x, z);
-        if (dilate > 0.0 && d <= dilate) {   // inside the grown footprint
-            insideAny = true;
-            insideMin = std::min(insideMin, r.planeY(x, z));
-            return;
-        }
+        if (dilate > 0.0 && d <= dilate) { foldInside(r, x, z); return; }  // grown footprint
         if (insideAny) return;   // an inside hit already owns this point
         d -= dilate;
         if (d >= r.falloff) return;
