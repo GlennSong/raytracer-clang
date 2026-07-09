@@ -572,6 +572,24 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         return false;
     }
 
+    // Sea level is ONE source of truth: default every road recipe's buildability
+    // sea_level from the level's water.seaLevel (see the loader), so the offline
+    // render's city avoids the water exactly as the viewer's does.
+    if (root.contains("water") && root.contains("entities") &&
+        root["entities"].is_array()) {
+        double sea = root["water"].value("seaLevel", 0.0);
+        double beach = root["water"].value("beachRise", 2.5);
+        for (auto& ent : root["entities"]) {
+            if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
+                continue;
+            json& road = ent["road"];
+            if (!road.contains("generate") || !road["generate"].is_object()) continue;
+            json& g = road["generate"];
+            if (!g.contains("sea_level")) g["sea_level"] = sea;
+            if (!g.contains("beach_rise")) g["beach_rise"] = beach;
+        }
+    }
+
     // A city draped on the terrain has to be generated BEFORE the terrain mesh:
     // it computes its road/block grades from the natural ground, then hands back
     // cut/fill footprints (flatten) that the terrain is built around so the

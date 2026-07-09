@@ -49,6 +49,29 @@ static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
     return Vec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>());
 }
 
+// Default every road recipe's buildability `sea_level` (and beach reserve) from
+// the level's top-level "water" block, so the coast's water and the city's
+// land-gate share ONE number. A recipe that sets its own sea_level keeps it.
+// Mutates `root` in place; a no-op when there's no water block. Shared by both
+// loaders' road pre-pass and real build so they gate on an identical graph.
+static void propagateWaterSeaLevel(json& root) {
+    if (!root.contains("water") || !root.contains("entities") ||
+        !root["entities"].is_array())
+        return;
+    const json& w = root["water"];
+    double sea = w.value("seaLevel", 0.0);
+    double beach = w.value("beachRise", 2.5);
+    for (auto& ent : root["entities"]) {
+        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
+            continue;
+        json& road = ent["road"];
+        if (!road.contains("generate") || !road["generate"].is_object()) continue;
+        json& g = road["generate"];
+        if (!g.contains("sea_level")) g["sea_level"] = sea;
+        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
+    }
+}
+
 // Applies a material block onto `mat` through the property layer: described
 // fields only, missing keys leave values untouched (so a partial block acts
 // as an override, e.g. on a glTF's imported materials). Levels written before
@@ -1853,6 +1876,14 @@ bool LevelLoader::load(const std::string& path,
         levelDir = path.substr(0, lastSlash);
     else
         levelDir = ".";
+
+    // Sea level is ONE source of truth: the level's water.seaLevel gates city
+    // buildability too, so a coast city's roads/blocks avoid the water instead of
+    // marching into it. Inject it (and the beach reserve) as the DEFAULT sea_level
+    // for every road recipe that doesn't set its own — done once, up front, so the
+    // road pre-pass and the real build regenerate the SAME land-gated graph. Author
+    // can still override sea_level per recipe.
+    propagateWaterSeaLevel(root);
 
     // Baked EROSION (ADR-0043 "use the whole toolset"): if the terrain opts in with
     // "erode": true, bake the hydraulically + thermally eroded height field ONCE

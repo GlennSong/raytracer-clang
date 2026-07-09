@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.53,
+      0.67,
+      0.87
+    ],
+    "fog": {
+      "density": 0.0006,
+      "color": [
+        0.68,
+        0.76,
+        0.88
+      ]
+    }
+  },
+  "terrain": {
+    "seed": 12,
+    "size": 900,
+    "resolution": 450,
+    "heightScale": 15,
+    "noiseScale": 0.0052,
+    "octaves": 6,
+    "warp": 0.35,
+    "erode": true,
+    "erodeRes": 500,
+    "erodeDroplets": 220000,
+    "erodeThermal": 12,
+    "mountainHeight": 120,
+    "mountainScale": 0.003,
+    "mountainMaskScale": 0.0016,
+    "mountainMaskLo": -0.1,
+    "mountainMaskHi": 0.4,
+    "mountainAlongRange": true,
+    "cdlod": {
+      "worldHalf": 450
+    },
+    "rangeSpine": [
+      [
+        -120,
+        -430
+      ],
+      [
+        80,
+        -400
+      ],
+      [
+        280,
+        -430
+      ]
+    ],
+    "rangeWidth": 240,
+    "rangeHeight": 170,
+    "rangeVariation": 0.55,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    }
+  },
+  "water": {
+    "seaLevel": 1.0,
+    "region": 450,
+    "cell": 6,
+    "foamBand": 34,
+    "color": [
+      0.04,
+      0.13,
+      0.2
+    ]
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "road": {
+        "generate": {
+          "kind": "metro",
+          "radius": 230,
+          "hotspots": 5,
+          "block_size": 74,
+          "artery_width": 13,
+          "street_width": 7,
+          "seed": 5,
+          "center": {
+            "x": 200,
+            "z": -200
+          }
+        },
+        "width": 7.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 0,
+    "pedestrians": 0,
+    "seed": 5,
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 70,
+    "midtownRadius": 150,
+    "buildChance": 0.85
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.35,
+        0.55,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.55
+  },
+  "name": "coast_city"
+}
