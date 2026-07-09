@@ -97,6 +97,12 @@ struct RenderMaterial {
         // buffer; waves + foam animate on windTime. Rides the material's low
         // roughness + <1 opacity for SSR reflection and fresnel transparency.
         Water,
+        // Natural ground (terrain). The biome colour is already baked into the
+        // vertex colour; this surface adds procedural MICRO-RELIEF: a slope-scaled
+        // normal perturbation + roughness variation (rougher/bumpier on steep rock,
+        // smoother on flat sand/snow) so the ground isn't a flat-shaded plane.
+        // Albedo grain only; the normal/roughness work is in lighting.metal.
+        TerrainGround,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -138,6 +144,7 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "wood" || s == "woodsiding" || s == "siding") return S::WoodSiding;
     if (s == "roadmarkings" || s == "road_markings" || s == "lanes") return S::RoadMarkings;
     if (s == "water" || s == "ocean" || s == "river") return S::Water;
+    if (s == "terrain" || s == "ground" || s == "terrainground") return S::TerrainGround;
     return S::None;
 }
 
@@ -158,6 +165,7 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::WoodSiding:      return "wood";
         case S::RoadMarkings:    return "roadmarkings";
         case S::Water:           return "water";
+        case S::TerrainGround:   return "terrain";
         default:                 return "";
     }
 }

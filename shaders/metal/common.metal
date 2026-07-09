@@ -259,6 +259,15 @@ float3 surfWater(float3 base, float depth, float shore, float3 worldPos) {
     return c;
 }
 
+// Natural ground: the biome colour is baked in the vertex colour (grass/rock/sand/
+// snow/sea floor); add fine albedo GRAIN so it isn't a flat wash. The normal
+// micro-relief + roughness live in lighting.metal (surfId 13), like the road.
+float3 surfTerrain(float3 base, float3 worldPos) {
+    float g = fbm2(worldPos.x * 0.5, worldPos.z * 0.5) * 0.6 +
+              fbm2(worldPos.x * 2.1, worldPos.z * 2.1) * 0.4;   // ~[0,1]
+    return base * (0.90 + 0.18 * g);
+}
+
 float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 meshUV) {
     float2 uv = surfUV(worldPos, n);
     float3 c;
@@ -275,6 +284,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 mesh
         case 10u: c = surfWood(base, uv.x, uv.y); break;
         case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
         case 12u: c = surfWater(base, meshUV.x, meshUV.y, worldPos); break;
+        case 13u: c = surfTerrain(base, worldPos); break;
         default:  return base;
     }
     return saturate(c);   // keep albedo energy-conserving (see scene.cpp)

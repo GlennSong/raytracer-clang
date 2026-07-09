@@ -1307,6 +1307,11 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
         cfg.material.albedo = Vec3(0.42, 0.5, 0.32);
         cfg.material.roughness = 0.95f;
     }
+    // Give the ground its natural-surface material (micro-relief + roughness) unless
+    // the level authored a specific surface. The biome colour stays in the vertex
+    // colour; this only adds the normal/roughness detail (Surface::TerrainGround).
+    if (cfg.material.surface() == RenderMaterial::Surface::None)
+        cfg.material.setSurface(RenderMaterial::Surface::TerrainGround);
     Entity e = world.create();
     world.add<TerrainLodConfig>(e, cfg);
 }
@@ -1366,6 +1371,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
         r.material.albedo = Vec3(0.42, 0.5, 0.32);   // muted green-brown default
         r.material.roughness = 0.95f;
     }
+    if (r.material.surface() == RenderMaterial::Surface::None)
+        r.material.setSurface(RenderMaterial::Surface::TerrainGround);   // ground micro-relief
     world.add<Renderable>(e, r);
 
     // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a
