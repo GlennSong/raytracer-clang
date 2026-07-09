@@ -273,36 +273,53 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
     // SLOPE, with the noise term breaking every boundary so nothing reads as a
     // hard contour line (device: "a better terrain shader with more realistic
     // colors").
-    const Vec3 grass (0.16, 0.32, 0.09);   // lush lowland green
-    const Vec3 meadow(0.34, 0.40, 0.16);   // upland dry meadow
-    const Vec3 dirt  (0.34, 0.25, 0.15);   // earth brown
-    const Vec3 rock  (0.34, 0.31, 0.28);   // warm grey stone
-    const Vec3 scree (0.56, 0.53, 0.49);   // pale talus / gravel
-    const Vec3 snow  (0.92, 0.94, 0.98);
+    const Vec3 grass  (0.20, 0.34, 0.12);   // lush lowland green
+    const Vec3 meadow (0.36, 0.42, 0.19);   // upland dry meadow
+    const Vec3 dirt   (0.36, 0.28, 0.17);   // earth brown
+    const Vec3 rock   (0.31, 0.27, 0.22);   // warm brown-grey stone (mountain body)
+    const Vec3 darkRock(0.18, 0.16, 0.14);  // shadowed / weathered stone, for variation
+    const Vec3 scree  (0.42, 0.38, 0.33);   // talus / gravel (warm mid grey)
+    const Vec3 snow   (0.95, 0.96, 0.99);
 
     const double n = noiseValue;                    // ~[-1, 1]
     const double slope = 1.0 - clamp01(normalUp);   // 0 flat .. 1 vertical
-    // Altitude 0..1 across the playable relief, jittered so the treeline and
-    // snowline meander instead of ringing the hill at one exact height.
-    const double alt = clamp01((height + 4.0) / 60.0 + 0.06 * n);
 
-    // Flat-ground colour by DRYNESS: green -> meadow -> earth. Noise dominates
-    // near sea level (grass and dirt patches on the plain), altitude adds the
-    // dry upland drift — so high-noise lowland still reads brown as before.
-    const double dry = clamp01(0.5 + 0.5 * n + 0.4 * alt);
+    // The bands key off ABSOLUTE height (metres), not a normalized 0..1: the old
+    // (height+4)/60 saturated any terrain taller than ~44 m to full snow, so a
+    // mountain range read as an all-white cap with no stone (device: "mountains
+    // are either snowcapped or green"). Absolute thresholds keep grassy HILLS
+    // (~10 m) green while a real MOUNTAIN (80-100 m) grows a stone body with snow
+    // only on the true peaks — the treeline/snowline meander via the noise term.
+
+    // Lowland ground by DRYNESS, driven mostly by ALTITUDE, not noise: the green
+    // plain stays green (no dirt splatter — device: "the dirt is splotchy"); dry
+    // earth appears on the higher, drier uplands. Noise only nudges the boundary
+    // so it isn't a contour ring.
+    double lowAlt = clamp01(height / 45.0);
+    double dry = clamp01(0.28 + 0.16 * n + 0.58 * lowAlt);
     Vec3 ground = dry < 0.5 ? mixv(grass, meadow, dry * 2.0)
                             : mixv(meadow, dirt, (dry - 0.5) * 2.0);
 
-    // Slope exposes rock; the higher, steeper benches shed pale scree.
-    double rockF = smoothstep(0.34, 0.60, slope + 0.10 * n);
-    Vec3 c = mixv(ground, rock, rockF);
-    double screeF = smoothstep(0.45, 0.75, alt) * smoothstep(0.18, 0.48, slope);
+    // STONE: a mountain is stone-bodied. Exposed by ABSOLUTE altitude (the massif
+    // above the treeline) OR by slope (a cliff at any height), and mottled between
+    // two tones so it isn't a flat grey. This is the band the mountains were
+    // missing entirely.
+    Vec3 stone = mixv(darkRock, rock, clamp01(0.5 + 0.5 * n));
+    double altRock   = smoothstep(16.0, 40.0, height + 7.0 * n);   // mountain body (stone dominates)
+    double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * n);   // cliffs anywhere
+    double rockF = clamp01(std::max(altRock, slopeRock));
+    Vec3 c = mixv(ground, stone, rockF);
+
+    // Pale scree only on the high benches (kept rare so it doesn't wash the body).
+    double screeF = smoothstep(66.0, 94.0, height) * smoothstep(0.14, 0.34, slope);
     c = mixv(c, scree, clamp01(screeF));
 
-    // Snow on high, gentle ground; a jittered snowline, none on cliffs.
-    double snowF = smoothstep(0.74, 0.96, alt + 0.05 * n) *
-                   (1.0 - smoothstep(0.42, 0.66, slope));
-    c = mixv(c, snow, snowF);
+    // Snow CAPS the peaks: the upper massif turns white while the mid-body stays
+    // stone, so it reads as a snow-capped mountain, not a snowfield. Only sheer
+    // cliffs shed it (the slope gate is relaxed so steep peaks keep their cap).
+    double snowF = smoothstep(78.0, 100.0, height + 6.0 * n) *
+                   (1.0 - smoothstep(0.58, 0.82, slope));
+    c = mixv(c, snow, clamp01(snowF));
 
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
 }
