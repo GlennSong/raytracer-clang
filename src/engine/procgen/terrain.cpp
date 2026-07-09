@@ -324,16 +324,19 @@ Vec3 terrainColorImpl(double height, double slope,
     // in the greens and too warm-brown in the stone. Greens are cooler + a touch
     // deeper (cool-temperate turf, not neon), stone is neutral granite grey, dry
     // upland is a muted khaki (not orange), snow is faintly cool.
-    const Vec3 grass  (0.16, 0.27, 0.11);   // cool temperate turf
-    const Vec3 grassDk(0.11, 0.20, 0.08);   // shaded / wetter grass (macro patches)
-    const Vec3 meadow (0.40, 0.41, 0.24);   // upland dry grass (khaki, not orange)
-    const Vec3 dirt   (0.33, 0.26, 0.17);   // earth brown
-    const Vec3 rock   (0.33, 0.32, 0.30);   // NEUTRAL granite grey (mountain body)
-    const Vec3 darkRock(0.17, 0.17, 0.16);  // shadowed / weathered stone
-    const Vec3 rockLt (0.47, 0.46, 0.43);   // sun-bleached stone (adds tonal range)
-    const Vec3 scree  (0.42, 0.41, 0.38);   // talus / gravel (cool mid grey)
-    const Vec3 snow   (0.90, 0.93, 0.97);   // faintly cool white
-    const Vec3 snowBlue(0.72, 0.78, 0.88);  // shadowed snow (cool)
+    // Deepened after device feedback ("too light for grass and stone"): the realtime
+    // renderer lights the ground brighter than the offline tracer, so the albedos run
+    // ~35% darker here — richer forest-green turf and darker mid-grey stone.
+    const Vec3 grass  (0.10, 0.18, 0.07);   // deep cool turf
+    const Vec3 grassDk(0.06, 0.12, 0.05);   // shaded / wetter grass (macro patches)
+    const Vec3 meadow (0.29, 0.29, 0.16);   // upland dry grass (dark khaki)
+    const Vec3 dirt   (0.24, 0.19, 0.12);   // earth brown
+    const Vec3 rock   (0.22, 0.21, 0.20);   // NEUTRAL mid-grey granite (mountain body)
+    const Vec3 darkRock(0.11, 0.11, 0.11);  // shadowed / weathered stone
+    const Vec3 rockLt (0.34, 0.33, 0.31);   // sun-bleached stone (adds tonal range)
+    const Vec3 scree  (0.32, 0.31, 0.29);   // talus / gravel (cool mid grey)
+    const Vec3 snow   (0.90, 0.93, 0.97);   // faintly cool white (snow stays bright)
+    const Vec3 snowBlue(0.68, 0.74, 0.85);  // shadowed snow (cool)
 
     // The bands key off ABSOLUTE height (metres), not a normalized 0..1: absolute
     // thresholds keep grassy HILLS (~10 m) green while a real MOUNTAIN (80-100 m)
@@ -363,18 +366,19 @@ Vec3 terrainColorImpl(double height, double slope,
     double screeF = smoothstep(66.0, 94.0, height) * smoothstep(0.14, 0.34, slope);
     c = mixv(c, scree, clamp01(screeF));
 
-    // Snow CAPS the peaks: the upper massif turns white while the mid-body stays
-    // stone. The snowline is PERTURBED hard (snowN at ~10 m amplitude + detailN
-    // fringe) so the cap edge is ragged — fingers of snow reaching down gullies and
-    // bare stone poking through — instead of a clean regular line. Only sheer cliffs
-    // shed it; shaded snow cools to blue so the cap has form, not a flat white blob.
-    double snowLine = height + 10.0 * snowN + 4.0 * detailN;
-    // Steep faces SHED snow (it can't hold on a cliff), so a peak shows bare rock
-    // faces with snow on its shoulders, ridges and couloirs — a real snow-capped
-    // mountain, not a white dome. The slope gate is the biggest lever on "more
-    // exposed stone": snow thins from ~0.42 slope and is gone by ~0.72.
-    double snowLo = smoothstep(78.0, 104.0, snowLine);
-    double snowF = snowLo * (1.0 - smoothstep(0.42, 0.72, slope));
+    // Snow CAPS the peaks. The snowline is perturbed on THREE scales so the edge is
+    // ragged, never a contour line: big lobes from the low-freq dryN (±22 m — snow
+    // tongues far down gullies, bare shoulders reaching high), a mid ripple from
+    // snowN, and a fine fringe from detailN. Steep faces SHED snow (it can't hold on
+    // a cliff), so a peak shows bare rock faces with snow on shoulders/ridges/couloirs.
+    double snowLine = height + 22.0 * dryN + 9.0 * snowN + 4.0 * detailN;
+    double snowLo = smoothstep(74.0, 104.0, snowLine);
+    double snowF = snowLo * (1.0 - smoothstep(0.44, 0.76, slope));
+    // PATCHINESS: near the transition (not the deep snowfields) punch bare-rock holes
+    // so the line dissolves into a mottle of snow and stone instead of a clean edge.
+    double patch = smoothstep(-0.5, 0.5, snowN + 0.7 * toneN + 0.5 * detailN);
+    double deepSnow = smoothstep(0.65, 1.0, snowF);   // 1 in the full snowfields
+    snowF *= patch + (1.0 - patch) * deepSnow;         // patchy at the edge, solid up high
     Vec3 snowTone = mixv(snowBlue, snow, clamp01(0.5 + 0.5 * detailN));
     c = mixv(c, snowTone, clamp01(snowF));
 

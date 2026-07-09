@@ -351,6 +351,21 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         rough = clamp(mix(0.93, 0.72, snowy) + (vnoise2(wx * 11.0, wz * 11.0) - 0.5) * 0.14,
                       0.55, 1.0);
     }
+    // Water ripples (Surface::Water): the plane shades flat, so the sky/sun reflection
+    // reads as a dead mirror (device: "no ripples, no reflection"). Add a STATIC
+    // (wind-less) multi-octave normal perturbation so the reflection shimmers and the
+    // sun glints break up — a real water surface. Small tilt; the low roughness +
+    // fresnel do the reflecting, this just ruffles it. (Wind-animated waves later.)
+    if (surfId == 12u) {
+        float wx = geom.worldPosition.x, wz = geom.worldPosition.z;
+        float r0 = vnoise2(wx * 0.9, wz * 0.9) + 0.5 * vnoise2(wx * 3.1, wz * 3.1)
+                 + 0.25 * vnoise2(wx * 9.0, wz * 9.0);
+        float rx = vnoise2(wx * 0.9 + 0.3, wz * 0.9) + 0.5 * vnoise2(wx * 3.1 + 1.1, wz * 3.1)
+                 + 0.25 * vnoise2(wx * 9.0 + 2.0, wz * 9.0) - r0;
+        float rz = vnoise2(wx * 0.9, wz * 0.9 + 0.3) + 0.5 * vnoise2(wx * 3.1, wz * 3.1 + 1.1)
+                 + 0.25 * vnoise2(wx * 9.0, wz * 9.0 + 2.0) - r0;
+        normal = normalize(normal + float3(-rx, 0.0, -rz) * 0.22);
+    }
     float3 viewDir = normalize(camera.cameraPosition - geom.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
