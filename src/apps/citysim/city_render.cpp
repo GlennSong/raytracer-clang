@@ -989,6 +989,11 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
     // No ImGui context (a backend without the debug UI): stay inert — same guard
     // the engine's DebugOverlaySystem uses.
     if (ImGui::GetCurrentContext() == nullptr) return;
+    // Only draw the panel when the backtick debug overlay is UP — the shared
+    // FrameContext flag every always-registered debug panel gates on, so plain
+    // play looks like the shipped game. Without this the city forced the "Debug"
+    // window open every frame (device: "the debug panel is always on screen").
+    if (!ctx.debugOverlayActive) return;
     // Only when a living city is actually loaded: an engine app that happens to
     // register this system (or a level with no roads) shows no city section.
     if (!built_ || sim_.agents().empty()) return;
