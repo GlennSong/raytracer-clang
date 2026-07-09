@@ -879,38 +879,65 @@ void EditorSystem::drawInspector(FrameContext& ctx) {
             if (recipe.is_object() && recipe.contains("generate") && recipe["generate"].is_object()) {
                 ImGui::SeparatorText("Road Generation");
                 nlohmann::json& g = recipe["generate"];
-                float bsNominal = static_cast<float>(g.value("block_size", 36.0));
-                float radius    = static_cast<float>(g.value("radius", 130.0));
-                int   arterials = g.value("arterials", 3);
-                float blockMax  = static_cast<float>(g.value("block_size_max", static_cast<double>(bsNominal)));
-                float blockMin  = static_cast<float>(g.value("block_size_min", bsNominal * 0.55));
-                float irregular = static_cast<float>(g.value("irregular", 0.22));
-                float jitter    = static_cast<float>(g.value("jitter", 0.16));
-                float arteryW   = static_cast<float>(g.value("artery_width", rnet->width * 1.6));
-                float streetW   = static_cast<float>(g.value("street_width", rnet->width));
-                int   seed      = static_cast<int>(g.value("seed", 1u));
+                const bool metro = g.value("kind", std::string("district")) == "metro";
+                float arteryW = static_cast<float>(g.value("artery_width", rnet->width * 1.6));
+                float streetW = static_cast<float>(g.value("street_width", rnet->width));
+                int   seed    = static_cast<int>(g.value("seed", 1u));
+                bool  changed = false;
 
-                bool changed = false;
-                changed |= ImGui::SliderFloat("Radius", &radius, 40.0f, 1500.0f, "%.0f m");
-                changed |= ImGui::SliderInt("Arterials", &arterials, 0, 8);
-                changed |= ImGui::SliderFloat("Block max", &blockMax, 12.0f, 120.0f, "%.0f m");
-                changed |= ImGui::SliderFloat("Block min", &blockMin, 6.0f, 100.0f, "%.0f m");
-                changed |= ImGui::SliderFloat("Irregular", &irregular, 0.0f, 1.0f, "%.2f");
-                changed |= ImGui::SliderFloat("Jitter", &jitter, 0.0f, 0.5f, "%.2f");
-                changed |= ImGui::SliderFloat("Artery width", &arteryW, 4.0f, 30.0f, "%.1f m");
-                changed |= ImGui::SliderFloat("Street width", &streetW, 3.0f, 20.0f, "%.1f m");
-                changed |= ImGui::SliderInt("Seed", &seed, 1, 9999);
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Reseed")) { seed = (seed * 1103515 + 12345) & 0x7fff; changed = true; }
+                if (metro) {
+                    // A whole-metro network: hotspots linked by organic arterials,
+                    // each block between them filled by grid/radial subdivision.
+                    float radius   = static_cast<float>(g.value("radius", 700.0));
+                    int   hotspots = g.value("hotspots", 6);
+                    float blockSz  = static_cast<float>(g.value("block_size", 70.0));
+                    bool  ringRoad = g.value("ring_road", false);
+                    changed |= ImGui::SliderFloat("Radius", &radius, 200.0f, 1500.0f, "%.0f m");
+                    changed |= ImGui::SliderInt("Hotspots", &hotspots, 2, 12);
+                    changed |= ImGui::SliderFloat("Block size", &blockSz, 30.0f, 140.0f, "%.0f m");
+                    changed |= ImGui::Checkbox("Ring road", &ringRoad);
+                    changed |= ImGui::SliderFloat("Artery width", &arteryW, 4.0f, 30.0f, "%.1f m");
+                    changed |= ImGui::SliderFloat("Street width", &streetW, 3.0f, 20.0f, "%.1f m");
+                    changed |= ImGui::SliderInt("Seed", &seed, 1, 9999);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Reseed")) { seed = (seed * 1103515 + 12345) & 0x7fff; changed = true; }
+                    if (changed) {
+                        g["radius"] = radius;           g["hotspots"] = hotspots;
+                        g["block_size"] = blockSz;      g["ring_road"] = ringRoad;
+                        g["artery_width"] = arteryW;    g["street_width"] = streetW;
+                        g["seed"] = seed;
+                    }
+                } else {
+                    float bsNominal = static_cast<float>(g.value("block_size", 36.0));
+                    float radius    = static_cast<float>(g.value("radius", 130.0));
+                    int   arterials = g.value("arterials", 3);
+                    float blockMax  = static_cast<float>(g.value("block_size_max", static_cast<double>(bsNominal)));
+                    float blockMin  = static_cast<float>(g.value("block_size_min", bsNominal * 0.55));
+                    float irregular = static_cast<float>(g.value("irregular", 0.22));
+                    float jitter    = static_cast<float>(g.value("jitter", 0.16));
+                    changed |= ImGui::SliderFloat("Radius", &radius, 40.0f, 1500.0f, "%.0f m");
+                    changed |= ImGui::SliderInt("Arterials", &arterials, 0, 8);
+                    changed |= ImGui::SliderFloat("Block max", &blockMax, 12.0f, 120.0f, "%.0f m");
+                    changed |= ImGui::SliderFloat("Block min", &blockMin, 6.0f, 100.0f, "%.0f m");
+                    changed |= ImGui::SliderFloat("Irregular", &irregular, 0.0f, 1.0f, "%.2f");
+                    changed |= ImGui::SliderFloat("Jitter", &jitter, 0.0f, 0.5f, "%.2f");
+                    changed |= ImGui::SliderFloat("Artery width", &arteryW, 4.0f, 30.0f, "%.1f m");
+                    changed |= ImGui::SliderFloat("Street width", &streetW, 3.0f, 20.0f, "%.1f m");
+                    changed |= ImGui::SliderInt("Seed", &seed, 1, 9999);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Reseed")) { seed = (seed * 1103515 + 12345) & 0x7fff; changed = true; }
+                    if (changed) {
+                        if (blockMin > blockMax) blockMin = blockMax; // keep the bracket sane
+                        g.erase("block_size");                        // normalise to explicit min/max
+                        g["radius"] = radius;            g["arterials"] = arterials;
+                        g["block_size_max"] = blockMax;  g["block_size_min"] = blockMin;
+                        g["irregular"] = irregular;      g["jitter"] = jitter;
+                        g["artery_width"] = arteryW;     g["street_width"] = streetW;
+                        g["seed"] = seed;
+                    }
+                }
 
                 if (changed) {
-                    if (blockMin > blockMax) blockMin = blockMax;     // keep the bracket sane
-                    g.erase("block_size");                            // normalise to explicit min/max
-                    g["radius"] = radius;            g["arterials"] = arterials;
-                    g["block_size_max"] = blockMax;  g["block_size_min"] = blockMin;
-                    g["irregular"] = irregular;      g["jitter"] = jitter;
-                    g["artery_width"] = arteryW;     g["street_width"] = streetW;
-                    g["seed"] = seed;
                     rspec->recipe = recipe.dump();                    // panel writes the params...
                     regenerateRoadFromRecipe(ctx.world, selected, ctx.renderer);   // ...then rebuilds live
                 }
