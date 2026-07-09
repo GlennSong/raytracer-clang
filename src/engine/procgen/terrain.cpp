@@ -319,16 +319,21 @@ namespace {
 Vec3 terrainColorImpl(double height, double slope,
                       double dryN, double snowN, double toneN, double detailN,
                       double seaLevel) {
-    const Vec3 grass  (0.20, 0.34, 0.12);   // lush lowland green
-    const Vec3 grassDk(0.14, 0.26, 0.09);   // shaded / wetter grass (macro patches)
-    const Vec3 meadow (0.36, 0.42, 0.19);   // upland dry meadow
-    const Vec3 dirt   (0.36, 0.28, 0.17);   // earth brown
-    const Vec3 rock   (0.31, 0.27, 0.22);   // warm brown-grey stone (mountain body)
-    const Vec3 darkRock(0.18, 0.16, 0.14);  // shadowed / weathered stone
-    const Vec3 rockLt (0.44, 0.40, 0.35);   // sun-bleached stone (adds tonal range)
-    const Vec3 scree  (0.42, 0.38, 0.33);   // talus / gravel (warm mid grey)
-    const Vec3 snow   (0.95, 0.96, 0.99);
-    const Vec3 snowBlue(0.80, 0.85, 0.95);  // shadowed snow (cool)
+    // Palette grounded in real natural-surface albedo (grass ~0.25, sand ~0.4, rock
+    // ~0.2-0.3 NEUTRAL grey not brown, snow ~0.85): the old set read too yellow-olive
+    // in the greens and too warm-brown in the stone. Greens are cooler + a touch
+    // deeper (cool-temperate turf, not neon), stone is neutral granite grey, dry
+    // upland is a muted khaki (not orange), snow is faintly cool.
+    const Vec3 grass  (0.16, 0.27, 0.11);   // cool temperate turf
+    const Vec3 grassDk(0.11, 0.20, 0.08);   // shaded / wetter grass (macro patches)
+    const Vec3 meadow (0.40, 0.41, 0.24);   // upland dry grass (khaki, not orange)
+    const Vec3 dirt   (0.33, 0.26, 0.17);   // earth brown
+    const Vec3 rock   (0.33, 0.32, 0.30);   // NEUTRAL granite grey (mountain body)
+    const Vec3 darkRock(0.17, 0.17, 0.16);  // shadowed / weathered stone
+    const Vec3 rockLt (0.47, 0.46, 0.43);   // sun-bleached stone (adds tonal range)
+    const Vec3 scree  (0.42, 0.41, 0.38);   // talus / gravel (cool mid grey)
+    const Vec3 snow   (0.90, 0.93, 0.97);   // faintly cool white
+    const Vec3 snowBlue(0.72, 0.78, 0.88);  // shadowed snow (cool)
 
     // The bands key off ABSOLUTE height (metres), not a normalized 0..1: absolute
     // thresholds keep grassy HILLS (~10 m) green while a real MOUNTAIN (80-100 m)
@@ -338,8 +343,8 @@ Vec3 terrainColorImpl(double height, double slope,
     // Lowland ground by DRYNESS (mostly ALTITUDE), with a macro green variation so
     // the plain isn't one flat green — lush green mottles toward a darker/wetter
     // green over large patches before it dries to meadow and bare earth uphill.
-    double lowAlt = clamp01(height / 45.0);
-    double dry = clamp01(0.28 + 0.16 * dryN + 0.58 * lowAlt);
+    double lowAlt = clamp01(height / 55.0);
+    double dry = clamp01(0.10 + 0.14 * dryN + 0.42 * lowAlt);   // lush low, dries only uphill
     Vec3 greenMix = mixv(grass, grassDk, clamp01(0.5 + 0.5 * toneN));
     Vec3 ground = dry < 0.5 ? mixv(greenMix, meadow, dry * 2.0)
                             : mixv(meadow, dirt, (dry - 0.5) * 2.0);
@@ -378,11 +383,11 @@ Vec3 terrainColorImpl(double height, double slope,
     // as a real coast instead of grass running into the water. Overrides the upland
     // bands near the sea; inland (no seaLevel) this is skipped entirely.
     if (seaLevel > -1e29) {
-        const Vec3 sand    (0.62, 0.56, 0.40);   // dry beach sand
-        const Vec3 wetSand (0.44, 0.40, 0.30);   // damp sand at the tideline
-        const Vec3 shoreRock(0.24, 0.22, 0.19);  // wet dark stone (rocky shore/cliff foot)
-        const Vec3 bedShallow(0.30, 0.34, 0.26); // sunlit shallow sea bed (sandy olive)
-        const Vec3 bedDeep  (0.10, 0.15, 0.15);  // deep sea bed (dark silt)
+        const Vec3 sand    (0.66, 0.59, 0.43);   // warm pale beach sand (albedo ~0.4)
+        const Vec3 wetSand (0.40, 0.36, 0.27);   // damp sand at the tideline
+        const Vec3 shoreRock(0.25, 0.24, 0.22);  // wet neutral stone (rocky shore/cliff foot)
+        const Vec3 bedShallow(0.26, 0.36, 0.32); // sunlit shallow sea bed (green-teal sand)
+        const Vec3 bedDeep  (0.06, 0.13, 0.15);  // deep sea bed (dark teal silt)
         double aboveSea = height - seaLevel;
         if (aboveSea < 0.0) {
             // Sea FLOOR: darkens with depth (seen through the translucent water; also

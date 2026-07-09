@@ -145,7 +145,9 @@ TEST_CASE(terrain_color_grass_dirt_patches_and_rock_slopes) {
     Vec3 peak  = terrainColor(120.0, 1.0, 1.0);  // high flat peak -> snow (bright)
     CHECK(grass.y > grass.x && grass.y > grass.z);   // grass is green-dominant
     CHECK(plain.y > plain.x);                        // the plain is green even at high noise
-    CHECK(grass.y > rock.y);                         // grass greener than bare rock
+    // Grass is more green-SATURATED than rock (neutral grey rock can be brighter,
+    // so compare green dominance, not the raw green channel).
+    CHECK((grass.y - grass.x) > (rock.y - rock.x));
     // Rock is desaturated (channels close together), unlike green grass.
     CHECK(std::fabs(rock.x - rock.y) < 0.1);
     // A high, flat peak reads as snow: bright and near-neutral.

@@ -245,9 +245,13 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
 // transparency via shadeSurface, so this stays a plain surface entry. (Animated
 // waves/foam on windTime are a shadeSurface follow-up.)
 float3 surfWater(float3 base, float depth, float shore, float3 worldPos) {
-    const float3 shallow = float3(0.20, 0.55, 0.58);
-    const float3 deep    = float3(0.02, 0.11, 0.22);
-    float3 c = mix(shallow, deep, saturate(smoothstep(0.0, 1.0, depth / 26.0)));
+    // Real water reads teal->deep-blue-green, not teal->navy: red absorbs first,
+    // then green, so shallow is a bright turquoise and deep a dark teal-blue.
+    const float3 shallow = float3(0.14, 0.48, 0.50);   // turquoise shallows
+    const float3 mid     = float3(0.05, 0.28, 0.36);   // green-blue
+    const float3 deep    = float3(0.02, 0.12, 0.18);   // deep teal-blue
+    float t = saturate(depth / 22.0);
+    float3 c = t < 0.5 ? mix(shallow, mid, t * 2.0) : mix(mid, deep, (t - 0.5) * 2.0);
     // gentle surface mottling so flat water isn't dead-flat
     c *= 0.94 + 0.10 * fbm2(worldPos.x * 0.08, worldPos.z * 0.08);
     // shoreline foam band (wavy edge from noise), only near true land
