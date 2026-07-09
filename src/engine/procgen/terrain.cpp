@@ -324,19 +324,20 @@ Vec3 terrainColorImpl(double height, double slope,
     // in the greens and too warm-brown in the stone. Greens are cooler + a touch
     // deeper (cool-temperate turf, not neon), stone is neutral granite grey, dry
     // upland is a muted khaki (not orange), snow is faintly cool.
-    // Deepened after device feedback ("too light for grass and stone"): the realtime
-    // renderer lights the ground brighter than the offline tracer, so the albedos run
-    // ~35% darker here — richer forest-green turf and darker mid-grey stone.
-    const Vec3 grass  (0.10, 0.18, 0.07);   // deep cool turf
-    const Vec3 grassDk(0.06, 0.12, 0.05);   // shaded / wetter grass (macro patches)
-    const Vec3 meadow (0.29, 0.29, 0.16);   // upland dry grass (dark khaki)
-    const Vec3 dirt   (0.24, 0.19, 0.12);   // earth brown
-    const Vec3 rock   (0.22, 0.21, 0.20);   // NEUTRAL mid-grey granite (mountain body)
-    const Vec3 darkRock(0.11, 0.11, 0.11);  // shadowed / weathered stone
-    const Vec3 rockLt (0.34, 0.33, 0.31);   // sun-bleached stone (adds tonal range)
-    const Vec3 scree  (0.32, 0.31, 0.29);   // talus / gravel (cool mid grey)
-    const Vec3 snow   (0.90, 0.93, 0.97);   // faintly cool white (snow stays bright)
-    const Vec3 snowBlue(0.68, 0.74, 0.85);  // shadowed snow (cool)
+    // Darkened + MUTED twice after device feedback ("still too light, more muted for
+    // grass and mountainside stone"): the realtime renderer lights the ground much
+    // brighter than the offline tracer. Greens are desaturated toward olive-drab (less
+    // vivid), stone is a dark, low-saturation grey. Snow stays bright (it reads right).
+    const Vec3 grass  (0.075, 0.115, 0.055); // muted dark olive-green turf
+    const Vec3 grassDk(0.048, 0.078, 0.040); // shaded / wetter grass (macro patches)
+    const Vec3 meadow (0.22,  0.21,  0.13);  // upland dry grass (muted khaki)
+    const Vec3 dirt   (0.19,  0.155, 0.105); // earth brown
+    const Vec3 rock   (0.165, 0.160, 0.150); // dark neutral granite grey (mountain body)
+    const Vec3 darkRock(0.085, 0.085, 0.082);// shadowed / weathered stone
+    const Vec3 rockLt (0.27,  0.265, 0.250); // sun-bleached stone (tonal range)
+    const Vec3 scree  (0.255, 0.250, 0.235); // talus / gravel (cool mid grey)
+    const Vec3 snow   (0.90,  0.93,  0.97);  // faintly cool white (snow stays bright)
+    const Vec3 snowBlue(0.68,  0.74,  0.85); // shadowed snow (cool)
 
     // The bands key off ABSOLUTE height (metres), not a normalized 0..1: absolute
     // thresholds keep grassy HILLS (~10 m) green while a real MOUNTAIN (80-100 m)
