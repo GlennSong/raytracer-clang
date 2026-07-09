@@ -552,6 +552,15 @@ Each composes Phases A–C:
   parcels → buildings; the split/shape grammar as an L1 sibling of the L-system;
   facades + walkable shells, not interiors; impostors as the render-scale LOD
   ladder, ADR-0034 §5).
+  - **Terrain grading cascade** (**ADR-0075**) — the conform sub-epic: one
+    `SurfaceField` oracle over the existing `terrainHeight`+`applyFlatten`
+    substrate; road *corridors* (profile + crown cross-section + cut/fill
+    earthwork daylighting into natural ground) and *blocks* that grade to their
+    bounding streets; grade breaks become a `StructureSet` of walls / steps /
+    terraces (and later bridges + tunnels). Ground stays 2.5-D (the "Voxel
+    terrain" bullet above was weighed and declined here — the win it offers is
+    what StructureSet already factors out). Phases 0 seam → 1 corridor → 2 block
+    cascade → 3 polish, each with a device checkpoint.
 - **Procedural planet** — cube-sphere quadtree LOD + spherical terrain +
   atmosphere. The capstone.
 

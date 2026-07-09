@@ -5381,6 +5381,95 @@ PlaceMap + ped graph for a whole city.
 
 ---
 
+## ADR-0075 — Terrain conform as a grading cascade: one SurfaceField, corridors + blocks that grade to it, walls/bridges as 3-D structures
+**Status:** Accepted · **Date:** 2026-07-09
+
+**Context.** The road-on-terrain story was "drape then carve": each deck rides a
+grade-limited *sample* of the noise (`weldChainProfiles`, road_mesh.cpp) and a
+matching `TerrainFlatten` ramp (`roadNetConformRegions`, road_net.cpp) grades the
+ground to it with a smoothstep falloff. On flat ground it reads fine; on the
+hilly, denser terrain the Living City now wants it fails — decks sit proud of or
+buried in the slope, junctions disagree, and there is nothing between the
+carriageway edge and the natural ground but a fixed-width blend. Buildings have
+the same shape of problem one layer up: every pad flattens *independently*
+(`makeFlattenPad` per footprint via `padPlaneFor`), so a block on a hill has no
+coherent surface — each lot picks its own level off the raw ground with no
+relationship to the streets that bound it or the lots beside it. Two throwaway
+proofs (a road corridor cut across a hillside; a block grading down to its four
+streets with a flattened pad) established the model that actually works:
+engineer a 3-D *corridor* (alignment + grade-limited profile + crown
+cross-section + cut/fill earthwork that daylights into natural ground), then
+cascade grading up the layer stack — terrain is ground truth, roads set the
+primary grades, blocks grade to their bounding streets, lots to their frontage,
+building pads flatten locally, and every grade break too steep to absorb becomes
+a wall, step, or terrace.
+
+**Decision.** Make the *existing* cut/fill substrate the surface oracle and
+extend it, rather than build a parallel field. (1) **SurfaceField** — one type
+subsuming the three interchangeable closures (`HeightSampler` buildability.h,
+`HeightField` terrain_field.h, and the anonymous `heightAt` on `RoadNet`/
+`RoadMeshParams`/`CityRenderSystem`): read `height/normal/classify(x,z)`, write
+by pushing layered edits, all backed by `terrainHeight` + `applyFlatten`. It
+carries a spatial index over edit-footprint AABBs so a query is not O(all
+edits). (2) **Ground stays 2.5-D; the 3-D lives in reasoning and in
+structures.** Ground is a single-valued height function almost everywhere, so
+`SurfaceField` stays a height field (CDLOD, colliders and every placement query
+keep working); we *reason* in 3-D (profiles, cross-sections, earthwork volumes)
+and store a surface. The genuinely multi-valued exceptions — retaining walls,
+fill walls, terrace steps, and later bridges and tunnel portals — become a
+parallel **StructureSet** of explicit meshes + Jolt colliders. (3) **`TerrainFlatten`
+gains richer targets** beyond its single tilted plane: a *daylight batter*
+(march the target to natural ground at a cut/fill slope, emitting a retaining
+wall where daylight overruns a reach budget) and a *sampled patch* (a
+frontage-blended block surface is curved, not a plane). (4) **The corridor
+writer** replaces the flat-`P3` deck and the `makeFlattenRamp` carve with a real
+cross-section + earthwork. (5) **The block grader** slots at the lot pre-pass:
+per `extractBlocks` face it writes a frontage-pinned graded surface and, where
+the frontage-to-frontage drop exceeds a wall budget, terraces the parcel into
+stepped sub-pads instead of one flat pad. Built in four phases, each headless-
+tested and ending at a device checkpoint: 0 the SurfaceField seam + spatial
+index + the autoRoundabout re-promotion fix (buildRoadNetMesh/`constrainedNetGraph`
+re-run `applyConstraints` with default rules, undoing the generator's
+`autoRoundabout=false`); 1 the corridor earthwork + StructureSet walls; 2 the
+block grading cascade + terracing; 3 lot/frontage polish + cut≈fill balance +
+Lua authoring.
+
+**Alternatives.** *Voxelise the ground* so cut/fill is literal add/remove
+material and multi-valued terrain (caves, overhangs, tunnels) is free —
+rejected: at 16 km scale it means a sparse-volume subsystem replacing CDLOD, a
+meshing pipeline (dual-contour) replacing the heightfield, and stair-stepped
+engineered surfaces vs. the crisp parametric decks and UV-authored PBR the whole
+content pipeline assumes; the win (arbitrary multi-valued ground) is exactly what
+the layered decomposition already factors out into StructureSet, so we pay none
+of the cost. Revisit only if dig-anywhere terraforming or destructible terrain
+becomes a *core mechanic*. *Keep drape-then-carve and just tune it* — rejected:
+the proofs showed the missing piece is structural (cross-section, daylight,
+cascade, walls), not a falloff/grade constant. *A brand-new SurfaceField type
+parallel to `TerrainFlatten`* — rejected against the engineering ethos (no
+parallel half-systems); everything already reads `terrainHeight` and writes
+`TerrainFlatten`, so we unify onto that. *N small plane footprints for a curved
+block grade* — rejected: it multiplies `applyFlatten`'s per-sample cost; a single
+patch-target footprint is the reason the spatial index and the patch target land
+in Phase 0/1.
+
+**Consequences.** The city gains a real conform: roads remesh a corridor of
+ground around themselves, blocks grade to their streets, and hillside grade
+breaks read as walls and terraces instead of decks floating over or sinking into
+the slope — and it composes up the whole layer stack the Living City is built
+on. The cost is that the terrain-carve path stops being a bag of independent
+stamps and becomes an ordered write pipeline (corridor → block → lot → pad) with
+a spatial index, a StructureSet the renderer + physics must draw and collide
+(playable-by-default), and Lua authoring surface for the corridor/block params.
+Cut/fill balancing and terracing introduce policy knobs (max grade, batter
+slopes, wall/reach budgets) that will need tuning on device. **Revisit trigger:**
+if the height-field ground blocks a wanted feature that is inherently
+multi-valued and *not* expressible as a StructureSet overlay (natural caves,
+player digging, large-scale destruction), reopen the voxel-ground decision;
+if the spatial-indexed `applyFlatten` still dominates terrain build time at city
+scale, move the edit stack to a baked grid or GPU field.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
