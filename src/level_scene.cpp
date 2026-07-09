@@ -11,6 +11,7 @@
 #include "engine/procgen/city/road_net.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
+#include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
 #include "log.h"
 #include <unordered_map>
@@ -784,6 +785,37 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             }
         }
         addTerrain(root["terrain"], scene, materials, allFlatten, sharedEroded);
+    }
+
+    // Water surface (ocean / lake): a flat plane at seaLevel, emitted only where the
+    // natural terrain floor dips below it (buildWaterMesh skips land cells). Offline
+    // it renders as a dark, glossy dielectric — near-mirror at grazing angles (sky
+    // reflection), deep blue face-on — the still-water read the depth/foam shader
+    // gives on device. Needs a terrain floor, so it's gated on levelGround.
+    if (root.contains("water") && levelGround) {
+        const json& w = root["water"];
+        engine::WaterMeshParams wp;
+        wp.seaLevel = w.value("seaLevel", 0.0);
+        if (double region = w.value("region", 0.0); region > 0.0) {
+            wp.lo = {-region, -region};
+            wp.hi = {region, region};
+        }
+        if (w.contains("lo") && w["lo"].is_array())
+            wp.lo = {w["lo"][0].get<double>(), w["lo"][1].get<double>()};
+        if (w.contains("hi") && w["hi"].is_array())
+            wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
+        wp.cell = w.value("cell", wp.cell);
+        wp.foamBand = w.value("foamBand", wp.foamBand);
+        RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
+        if (!wmesh.vertices.empty()) {
+            Vec3 tint(0.015, 0.05, 0.09);
+            if (w.contains("color") && w["color"].is_array() && w["color"].size() == 3)
+                tint = Vec3(w["color"][0], w["color"][1], w["color"][2]);
+            Material wm = Material::pbr(tint, 0.0, w.value("roughness", 0.04));
+            int mi = scene.addMaterial(wm);
+            addMeshAsTriangles(wmesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi,
+                               scene);
+        }
     }
 
     for (const auto& ent : root.value("entities", json::array())) {

@@ -10,6 +10,7 @@
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
+#include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -2015,6 +2016,44 @@ bool LevelLoader::load(const std::string& path,
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
         world.each<TerrainLodConfig>(
             [&](Entity, TerrainLodConfig& c) { c.baseFlatten = baseFlatten; });
+        // Water surface (ocean / lake): a flat plane at seaLevel emitted only where
+        // the NATURAL terrain floor dips below it. Drawn with the Water surface
+        // shader (waves + depth-graded colour + shoreline foam baked into UV,
+        // animated on windTime; low roughness + <1 opacity for SSR reflection and
+        // fresnel). Uses levelGround (the un-carved floor) so it fills real basins.
+        if (root["terrain"].contains("water") || root.contains("water")) {
+            const json& w = root.contains("water") ? root["water"]
+                                                   : root["terrain"]["water"];
+            engine::WaterMeshParams wp;
+            wp.seaLevel = w.value("seaLevel", 0.0);
+            if (double region = w.value("region", 0.0); region > 0.0) {
+                wp.lo = {-region, -region};
+                wp.hi = {region, region};
+            }
+            if (w.contains("lo") && w["lo"].is_array())
+                wp.lo = {w["lo"][0].get<double>(), w["lo"][1].get<double>()};
+            if (w.contains("hi") && w["hi"].is_array())
+                wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
+            wp.cell = w.value("cell", wp.cell);
+            wp.foamBand = w.value("foamBand", wp.foamBand);
+            RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
+            if (!wmesh.vertices.empty()) {
+                Entity we = world.create();
+                world.add<Transform>(we, Transform{});
+                world.add<PrevTransform>(we, PrevTransform{Transform{}});
+                Renderable wr;
+                wr.material.albedo = Vec3(0.05, 0.14, 0.22);   // deep-water tint
+                if (w.contains("color") && w["color"].is_array() &&
+                    w["color"].size() == 3)
+                    wr.material.albedo = Vec3(w["color"][0], w["color"][1],
+                                             w["color"][2]);
+                wr.material.roughness = static_cast<float>(w.value("roughness", 0.06));
+                wr.material.opacity = static_cast<float>(w.value("opacity", 0.72));
+                wr.material.setSurface(RenderMaterial::Surface::Water);
+                wr.mesh = assets.acquireMesh(wmesh, "water");
+                world.add<Renderable>(we, wr);
+            }
+        }
         // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
         // road's grade-break structures — concrete-grey, with a static MeshCollider
         // so cars and pedestrians can't walk through a cut face. The terrain batter

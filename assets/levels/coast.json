@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.53,
+      0.67,
+      0.87
+    ],
+    "fog": {
+      "density": 0.0007,
+      "color": [
+        0.68,
+        0.76,
+        0.88
+      ]
+    }
+  },
+  "terrain": {
+    "seed": 12,
+    "size": 900,
+    "resolution": 450,
+    "heightScale": 13,
+    "noiseScale": 0.005,
+    "octaves": 6,
+    "warp": 0.35,
+    "erode": true,
+    "erodeRes": 500,
+    "erodeDroplets": 240000,
+    "erodeThermal": 12,
+    "mountainHeight": 120,
+    "mountainScale": 0.003,
+    "mountainMaskScale": 0.0016,
+    "mountainMaskLo": -0.1,
+    "mountainMaskHi": 0.4,
+    "mountainAlongRange": true,
+    "cdlod": {
+      "worldHalf": 450
+    },
+    "rangeSpine": [
+      [
+        -120,
+        -430
+      ],
+      [
+        80,
+        -400
+      ],
+      [
+        280,
+        -430
+      ]
+    ],
+    "rangeWidth": 260,
+    "rangeHeight": 175,
+    "rangeVariation": 0.55,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    }
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.35,
+        0.5,
+        -0.55
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.55
+  },
+  "name": "coast",
+  "water": {
+    "seaLevel": 2.0,
+    "region": 450,
+    "cell": 6,
+    "foamBand": 36,
+    "color": [
+      0.04,
+      0.13,
+      0.2
+    ]
+  }
+}
