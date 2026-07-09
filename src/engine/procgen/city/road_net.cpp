@@ -816,6 +816,25 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.streetWidth = g.value("street_width", net.width);
         mp.ringRoad    = g.value("ring_road", false);
         mp.seed        = g.value("seed", 5u);
+        // Terrain-aware layout: when the road is draped on terrain, gate the city
+        // on buildability so it hugs buildable land and avoids water / steep
+        // mountain instead of marching over them. Opt out with terrain_aware:false.
+        if (net.heightAt && g.value("terrain_aware", true)) {
+            mp.ground = net.heightAt;
+            mp.build.maxSlope  = g.value("max_slope", 0.32);
+            mp.build.seaLevel  = g.value("sea_level", -1e30);
+            mp.build.beachRise = g.value("beach_rise", 2.5);
+            mp.build.riverWidth = g.value("river_width", 20.0);
+            if (g.contains("rivers") && g["rivers"].is_array())
+                for (const auto& rv : g["rivers"]) {
+                    std::vector<Vec2> line;
+                    if (rv.is_array())
+                        for (const auto& pt : rv)
+                            if (pt.is_array() && pt.size() >= 2)
+                                line.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
+                    if (line.size() >= 2) mp.build.rivers.push_back(std::move(line));
+                }
+        }
         base = buildMetro(mp);
     } else {
         DistrictParams dp;

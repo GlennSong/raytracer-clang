@@ -669,9 +669,9 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 const json roadBlock =
                     ent.contains("road") ? ent["road"] : json::object();
                 RoadNet net = roadNetFromJson(roadBlock);
+                net.heightAt = levelGround;   // BEFORE generate: terrain-aware recipes (metro) gate on it
                 if (roadBlock.contains("generate"))
                     applyGenerateRecipe(net, roadBlock["generate"]);
-                net.heightAt = levelGround;
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 allFlatten.insert(allFlatten.end(), r.begin(), r.end());
                 lotNets.push_back(std::move(net));
@@ -798,12 +798,12 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (ent.value("shape", std::string()) == "road") {
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
             RoadNet net = roadNetFromJson(roadBlock);
+            if (levelGround) net.heightAt = levelGround;   // BEFORE generate: metro gates on terrain
             // A generated network (ADR-0056 "generate" recipe — grown.json's whole
             // city) has no authored nodes: grow it exactly like the level loader
             // does, or the offline render shows bare ground where the city is.
             if (roadBlock.contains("generate"))
                 applyGenerateRecipe(net, roadBlock["generate"]);
-            if (levelGround) net.heightAt = levelGround;
             Material rm = Material::pbr(Vec3(1, 1, 1), 0.0, 0.93);
             if (net.markings)   // lane paint via the RoadMarkings surface, not geometry
                 rm.surface = static_cast<int>(RenderMaterial::Surface::RoadMarkings);

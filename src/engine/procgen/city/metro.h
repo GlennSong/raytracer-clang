@@ -3,6 +3,7 @@
 
 #include "polygon.h"
 #include "road_network.h"   // RoadGraph
+#include "buildability.h"   // HeightSampler, BuildabilityConfig (terrain-aware layout)
 #include <cstdint>
 
 namespace engine {
@@ -26,6 +27,13 @@ struct MetroParams {
     double streetWidth = 7.0;     // width tagged on local streets
     bool   ringRoad    = false;   // add a deliberate ring road around the core
     std::uint32_t seed = 5u;
+
+    // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
+    // growth and blocks are gated on the buildability of the ground: the city
+    // hugs buildable land and avoids water / steep mountain, instead of marching
+    // over them. Unset `ground` = the old terrain-blind 2D layout.
+    HeightSampler      ground;    // terrain height sampler (null = no gating)
+    BuildabilityConfig build;     // slope/water thresholds for the gate
 };
 
 // Grow the metro and return its planarized RoadGraph (arterials tagged

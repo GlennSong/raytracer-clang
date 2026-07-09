@@ -64,8 +64,8 @@
       "road": {
         "generate": {
           "kind": "metro",
-          "radius": 900,
-          "hotspots": 6,
+          "radius": 300,
+          "hotspots": 5,
           "block_size": 70,
           "artery_width": 13,
           "street_width": 7,

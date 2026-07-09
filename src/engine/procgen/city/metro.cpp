@@ -92,13 +92,35 @@ RoadGraph buildMetro(const MetroParams& p) {
     const int H = std::max(2, p.hotspots);
 
     // --- hotspots: one central hub + the rest on a jittered ring; ~1 in 3 radial.
+    // Terrain-aware gate: when a ground sampler is supplied, the city may only
+    // occupy buildable land (not water, not steep mountain).
+    const bool gated = static_cast<bool>(p.ground);
+    auto buildable = [&](double x, double z) {
+        return !gated || isBuildable(p.build, p.ground, x, z);
+    };
+    auto inDomain = [&](const Vec2& q) {
+        return std::fabs(q.x - p.center.x) <= DOM && std::fabs(q.y - p.center.y) <= DOM;
+    };
+    // Nudge a point to the nearest buildable ground (spiral search); returns the
+    // input unchanged if none is found within the domain.
+    auto snapBuildable = [&](Vec2 s) -> Vec2 {
+        if (buildable(s.x, s.y)) return s;
+        for (double r = 25; r <= DOM; r += 25)
+            for (int k = 0; k < 16; ++k) {
+                double t = kTau * k / 16;
+                Vec2 q = s + Vec2(std::cos(t), std::sin(t)) * r;
+                if (inDomain(q) && buildable(q.x, q.y)) return q;
+            }
+        return s;
+    };
+
     struct Hot { Vec2 pos; bool radial; };
     std::vector<Hot> hots;
-    hots.push_back({p.center, true});
+    hots.push_back({snapBuildable(p.center), true});
     for (int i = 1; i < H; ++i) {
         double ang = kTau * i / (H - 1) + rng.range(-0.35, 0.35);
         double r = DOM * rng.range(0.42, 0.74);
-        hots.push_back({p.center + Vec2(std::cos(ang), std::sin(ang)) * r, (i % 3) == 0});
+        hots.push_back({snapBuildable(p.center + Vec2(std::cos(ang), std::sin(ang)) * r), (i % 3) == 0});
     }
 
     // --- attractors: dense along inter-hotspot corridors + light ambient wander.
@@ -110,14 +132,17 @@ RoadGraph buildMetro(const MetroParams& p) {
             for (int k = 0; k < n; ++k) {
                 double t = (k + 0.5) / std::max(1, n);
                 Vec2 m = hots[i].pos * (1.0 - t) + hots[j].pos * t;
-                attr.push_back({m.x + rng.range(-55, 55), m.y + rng.range(-55, 55)});
+                Vec2 q{m.x + rng.range(-55, 55), m.y + rng.range(-55, 55)};
+                if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
     // A little ambient wander (kept low): too much sends arterials shooting into
     // empty land as long tendrils that add length/nodes without enclosing blocks.
     int ambient = static_cast<int>(H * 3);
-    for (int k = 0; k < ambient; ++k)
-        attr.push_back({p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)});
+    for (int k = 0; k < ambient; ++k) {
+        Vec2 q{p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)};
+        if (buildable(q.x, q.y)) attr.push_back(q);
+    }
 
     // --- multi-source space colonization: a growth tree seeded at each hotspot.
     std::vector<Vec2> node; std::vector<int> src; std::vector<std::pair<int, int>> aedge;
@@ -143,6 +168,7 @@ RoadGraph buildMetro(const MetroParams& p) {
             Vec2 np = node[n] + dir * SEG;
             if (np.x < p.center.x - DOM || np.x > p.center.x + DOM ||
                 np.y < p.center.y - DOM || np.y > p.center.y + DOM) continue;
+            if (!buildable(np.x, np.y)) continue;   // don't grow into water / up the mountain
             int hit = -1;
             for (std::size_t m = 0; m < node.size(); ++m)
                 if (src[m] != src[n] && dist2(np, node[m]) < MERGE * MERGE) { hit = static_cast<int>(m); break; }
@@ -221,7 +247,9 @@ RoadGraph buildMetro(const MetroParams& p) {
     const double mn = p.blockSize * 0.6, mx = p.blockSize * 1.18;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
-        Vec2 c = centroid(f); int h = nearestHot(c);
+        Vec2 c = centroid(f);
+        if (gated && !buildable(c.x, c.y)) continue;   // don't fill a block that's mostly water/steep
+        int h = nearestHot(c);
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
             Vec2 C = hots[h].pos; int spokes = 12; double ringStep = std::max(40.0, p.blockSize * 0.8);
             double R = 1e30; for (const Vec2& v : f) R = std::min(R, (v - C).length()); R *= 0.96;

@@ -273,10 +273,9 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     // A GENERATED road runs its recipe into the net's graph — shared with the editor's regenerate
     // (applyGenerateRecipe), so a generated city stays a real editable RoadNet whose recipe
     // round-trips instead of baking to frozen geometry (road-network-v2-plan T2.1).
+    if (ground) net.heightAt = *ground;   // BEFORE generate: terrain-aware recipes (metro) gate on it
     if (roadBlock.contains("generate"))
         applyGenerateRecipe(net, roadBlock["generate"]);
-
-    if (ground) net.heightAt = *ground;
 
     Entity e = world.create();
     createEntityCommon(e, ent, world);
@@ -1914,9 +1913,9 @@ bool LevelLoader::load(const std::string& path,
                 // exactly like the real build below does, or this pre-pass
                 // sees an empty net and carves NOTHING (device: "the road is
                 // being buried by the terrain — it's not conforming").
+                net.heightAt = levelGround;   // BEFORE generate: metro gates on terrain
                 if (roadBlock.contains("generate"))
                     applyGenerateRecipe(net, roadBlock["generate"]);
-                net.heightAt = levelGround;
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
                 preNets.push_back(std::move(net));
