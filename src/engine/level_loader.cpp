@@ -1921,14 +1921,12 @@ bool LevelLoader::load(const std::string& path,
                     applyGenerateRecipe(net, roadBlock["generate"]);
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
-                // Retaining/fill walls where the batter can't daylight (ADR-0075
-                // P1b). Built HERE because net.heightAt is still the NATURAL ground
-                // — the cut/fill is measured against pristine terrain, not the
-                // profile a later pass carved for the road. World-space; emitted as
-                // one wall entity after the terrain is built.
-                StructureSet walls = buildRoadWalls(net);
-                if (!walls.mesh.vertices.empty())
-                    MeshBuilder::append(roadWallMesh, walls.mesh);
+                // Retaining/fill walls (ADR-0075 P1b) are DISABLED: they were sized
+                // to the DaylightBatter reach, which regressed the conform and was
+                // reverted to the smoothstep feather — so a wall at the old batter
+                // step no longer matches the ground. buildRoadWalls stays in-tree
+                // for a future attempt that co-designs the walls with the carve.
+                (void)roadWallMesh;
                 preNets.push_back(std::move(net));
             }
         }
@@ -1960,33 +1958,11 @@ bool LevelLoader::load(const std::string& path,
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
                 return terrainHeight(*lotTp, *lotNoise, x, z);
             };
-            // BLOCK GRADING CASCADE (ADR-0075 P2): grade each block down to its
-            // bounding streets (measured on the ROAD-CARVED lotGround) BEFORE lots
-            // grow, so building pads flatten on graded ground that meets the
-            // street instead of picking a level off the raw noise. Block grades are
-            // priority -1, so the road carve and the building pads (priority 0)
-            // override them where they overlap — the block only grades its yards.
-            {
-                RoadGraph rg;
-                for (const RoadNet& net : preNets) {
-                    const int base = static_cast<int>(rg.nodes.size());
-                    for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
-                    for (std::size_t ei = 0; ei < net.edges.size(); ++ei)
-                        rg.edges.push_back(RoadEdge{
-                            base + net.edges[ei][0], base + net.edges[ei][1],
-                            static_cast<float>(roadNetEdgeWidth(net, static_cast<int>(ei))),
-                            RoadClass::Local, 0});
-                }
-                std::vector<TerrainFlatten> bg = gradeBlocks(extractBlocks(rg), lotGround);
-                for (const TerrainFlatten& f : bg) {
-                    terrainParams.flatten.push_back(f);
-                    baseFlatten.push_back(f);
-                }
-                // lotGround must now include the block grades so the pads below
-                // sample the graded ground.
-                *lotTp = terrainParams;
-                rebuildFlattenIndex(*lotTp);
-            }
+            // BLOCK GRADING CASCADE (ADR-0075 P2) is DISABLED pending a device-
+            // verified rework: on the real city the block grader either extracted
+            // no faces (a terrain-gated metro is tree-like) or the graded ground
+            // interacted badly with lot/pad placement. gradeBlocks + the priority
+            // mechanism stay in-tree; re-enable behind a measured device pass.
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround);
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||

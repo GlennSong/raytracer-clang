@@ -455,23 +455,13 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
         std::vector<TerrainFlatten> r = roadConformRegions(
             sp.points, profile, sp.halfWidth + net.sidewalk + 2.0, shoulder,
             falloff);
-        // Real earthwork instead of a fixed feather (ADR-0075 Phase 1): beyond the
-        // graded corridor the ground leaves the shoulder on a cut/fill batter and
-        // daylights where it meets natural terrain. Flat ground is untouched (the
-        // batter clamps to natural immediately); only slopes grow a cut slope or
-        // fill embankment. `falloff` here is the daylight REACH — the residual step
-        // where a steep cut can't daylight within it is capped by a retaining wall
-        // (StructureSet, emitted separately). Pads keep the smoothstep feather.
-        for (TerrainFlatten& f : r) {
-            f.falloffMode = TerrainFlatten::Falloff::DaylightBatter;
-            f.cutBatter = 1.0;
-            f.fillBatter = 0.6;
-            // Reach kept tight (not a 26 m swath that would eat the block interiors
-            // a dense grid leaves between roads — those are P2's to grade): a batter
-            // this daylights a moderate slope cleanly, and a steeper cut that can't
-            // daylight in it gets a retaining wall (P1b StructureSet) instead.
-            f.falloff = 12.0;
-        }
+        // NOTE (ADR-0075): the DaylightBatter earthwork was tried here and REGRESSED
+        // the conform on the real CDLOD city — the batter rises too steeply near the
+        // road, so coarse-LOD terrain samples poke through the deck (headless
+        // road_poke_probe: 0.00% -> 0.14% device poke, worst 0.44 m -> 2.15 m). The
+        // smoothstep feather (roadConformRegions' default) sits the road cleanly, so
+        // we keep it. The batter mode stays available on TerrainFlatten for a future
+        // attempt that samples the deck the way the LOD terrain does.
         out.insert(out.end(), r.begin(), r.end());
     }
     return out;
