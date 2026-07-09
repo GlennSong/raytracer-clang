@@ -214,6 +214,7 @@ TerrainParams parseTerrainParams(const json& t) {
     tp.mountainAlongRange = t.value("mountainAlongRange", tp.mountainAlongRange);
     tp.tiltX = t.value("tiltX", tp.tiltX);
     tp.tiltZ = t.value("tiltZ", tp.tiltZ);
+    tp.seaLevel = t.value("seaLevel", tp.seaLevel);
     tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
     tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
@@ -574,22 +575,26 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         return false;
     }
 
-    // Sea level is ONE source of truth: default every road recipe's buildability
-    // sea_level from the level's water.seaLevel (see the loader), so the offline
-    // render's city avoids the water exactly as the viewer's does.
-    if (root.contains("water") && root.contains("entities") &&
-        root["entities"].is_array()) {
+    // Sea level is ONE source of truth: the terrain colours its coast by it and
+    // every road recipe gates buildability on it (see the loader for rationale).
+    if (root.contains("water")) {
         double sea = root["water"].value("seaLevel", 0.0);
         double beach = root["water"].value("beachRise", 2.5);
-        for (auto& ent : root["entities"]) {
-            if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
-                continue;
-            json& road = ent["road"];
-            if (!road.contains("generate") || !road["generate"].is_object()) continue;
-            json& g = road["generate"];
-            if (!g.contains("sea_level")) g["sea_level"] = sea;
-            if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-        }
+        if (root.contains("terrain") && root["terrain"].is_object() &&
+            !root["terrain"].contains("seaLevel"))
+            root["terrain"]["seaLevel"] = sea;
+        if (root.contains("entities") && root["entities"].is_array())
+            for (auto& ent : root["entities"]) {
+                if (ent.value("shape", std::string()) != "road" ||
+                    !ent.contains("road"))
+                    continue;
+                json& road = ent["road"];
+                if (!road.contains("generate") || !road["generate"].is_object())
+                    continue;
+                json& g = road["generate"];
+                if (!g.contains("sea_level")) g["sea_level"] = sea;
+                if (!g.contains("beach_rise")) g["beach_rise"] = beach;
+            }
     }
 
     // A city draped on the terrain has to be generated BEFORE the terrain mesh:

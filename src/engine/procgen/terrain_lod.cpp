@@ -122,7 +122,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             Vertex v(Vec3(x, y, z), terrainNormal(params, noise, x, z, eps));
             v.u = static_cast<float>(x / node.size);
             v.v = static_cast<float>(z / node.size);
-            v.color = terrainColor(x, z, y, v.normal.y, noise);
+            v.color = terrainColor(x, z, y, v.normal.y, noise, params.seaLevel);
             mesh.vertices.push_back(v);
         }
     }

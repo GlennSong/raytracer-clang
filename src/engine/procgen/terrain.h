@@ -108,6 +108,11 @@ struct TerrainParams {
     // primitive. 0 = flat. e.g. tiltX = -0.05 drops the +x side 5 m per 100 m.
     double tiltX = 0.0;
     double tiltZ = 0.0;
+    // Sea level (world Y). When a level has a water block, the loaders copy
+    // water.seaLevel here so terrainColor can band the coast by height-ABOVE-SEA:
+    // sea floor below it, a sand/rock shore just above, then the upland bands.
+    // -1e30 = no sea (inland terrain colours exactly as before).
+    double seaLevel = -1e30;
     // Long-range relief: a ridged-MULTIFRACTAL layer (varied, sharp, irregular
     // peaks — not uniform bumps), domain-warped, added on top of the hill octaves.
     // 0 = off.
@@ -223,7 +228,7 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // like a layered field (macro colour regions, ragged snowline, mottled stone, fine
 // grain). Used by the mesh bakers; the 3-arg form above stays for tests/simple use.
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise);
+                  const Noise& noise, double seaLevel = -1e30);
 
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration

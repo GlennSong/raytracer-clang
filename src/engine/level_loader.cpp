@@ -55,12 +55,16 @@ static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
 // Mutates `root` in place; a no-op when there's no water block. Shared by both
 // loaders' road pre-pass and real build so they gate on an identical graph.
 static void propagateWaterSeaLevel(json& root) {
-    if (!root.contains("water") || !root.contains("entities") ||
-        !root["entities"].is_array())
-        return;
+    if (!root.contains("water")) return;
     const json& w = root["water"];
     double sea = w.value("seaLevel", 0.0);
     double beach = w.value("beachRise", 2.5);
+    // The terrain colours its coast by this same sea level (beach/rock/sea floor).
+    if (root.contains("terrain") && root["terrain"].is_object() &&
+        !root["terrain"].contains("seaLevel"))
+        root["terrain"]["seaLevel"] = sea;
+    // Every road recipe gates buildability on it (roads/blocks stay on land).
+    if (!root.contains("entities") || !root["entities"].is_array()) return;
     for (auto& ent : root["entities"]) {
         if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
             continue;
@@ -1207,6 +1211,7 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.mountainAlongRange = t.value("mountainAlongRange", p.mountainAlongRange);
     p.tiltX = t.value("tiltX", p.tiltX);
     p.tiltZ = t.value("tiltZ", p.tiltZ);
+    p.seaLevel = t.value("seaLevel", p.seaLevel);   // set from the water block below
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
         std::vector<Vec3> ctl;
         for (const auto& pt : t["rangeSpine"])

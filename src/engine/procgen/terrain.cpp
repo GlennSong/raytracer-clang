@@ -317,7 +317,8 @@ namespace {
 //   toneN   — stone + ground tone mottle (mid freq: stone isn't a flat grey)
 //   detailN — fine value break-up (high freq: grain where the mesh is dense)
 Vec3 terrainColorImpl(double height, double slope,
-                      double dryN, double snowN, double toneN, double detailN) {
+                      double dryN, double snowN, double toneN, double detailN,
+                      double seaLevel) {
     const Vec3 grass  (0.20, 0.34, 0.12);   // lush lowland green
     const Vec3 grassDk(0.14, 0.26, 0.09);   // shaded / wetter grass (macro patches)
     const Vec3 meadow (0.36, 0.42, 0.19);   // upland dry meadow
@@ -372,6 +373,35 @@ Vec3 terrainColorImpl(double height, double slope,
     Vec3 snowTone = mixv(snowBlue, snow, clamp01(0.5 + 0.5 * detailN));
     c = mixv(c, snowTone, clamp01(snowF));
 
+    // COAST (only when the level has a sea): band the shoreline by height ABOVE the
+    // waterline — sea floor below, a sand/rock shore just above — so the ground reads
+    // as a real coast instead of grass running into the water. Overrides the upland
+    // bands near the sea; inland (no seaLevel) this is skipped entirely.
+    if (seaLevel > -1e29) {
+        const Vec3 sand    (0.62, 0.56, 0.40);   // dry beach sand
+        const Vec3 wetSand (0.44, 0.40, 0.30);   // damp sand at the tideline
+        const Vec3 shoreRock(0.24, 0.22, 0.19);  // wet dark stone (rocky shore/cliff foot)
+        const Vec3 bedShallow(0.30, 0.34, 0.26); // sunlit shallow sea bed (sandy olive)
+        const Vec3 bedDeep  (0.10, 0.15, 0.15);  // deep sea bed (dark silt)
+        double aboveSea = height - seaLevel;
+        if (aboveSea < 0.0) {
+            // Sea FLOOR: darkens with depth (seen through the translucent water; also
+            // what shows if the tide/level ever drops). Sandy near shore -> dark silt.
+            double depth = -aboveSea;
+            c = mixv(bedShallow, bedDeep, clamp01(depth / 14.0));
+        } else {
+            // SHORE band in the first few metres above the water: sand on gentle
+            // ground, wet rock where the coast is steep (a cliff foot / rocky shore).
+            double band = 1.0 - smoothstep(0.0, 4.0, aboveSea - 1.0 * detailN);
+            if (band > 1e-3) {
+                double rocky = smoothstep(0.24, 0.52, slope + 0.10 * toneN);
+                double tide  = 1.0 - smoothstep(0.0, 1.5, aboveSea);   // wetter at waterline
+                Vec3 beach = mixv(mixv(sand, wetSand, tide), shoreRock, rocky);
+                c = mixv(c, beach, clamp01(band));
+            }
+        }
+    }
+
     // Fine value break-up everywhere (grain where the mesh is dense enough to carry
     // it): a subtle ±light multiply so no band is perfectly uniform.
     double v = 1.0 + 0.06 * detailN;
@@ -385,11 +415,11 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
     // drives every band — the deterministic banding the unit tests assert.
     double slope = 1.0 - clamp01(normalUp);
     return terrainColorImpl(height, slope, noiseValue, noiseValue, noiseValue,
-                            noiseValue * 0.0);
+                            noiseValue * 0.0, -1e30);
 }
 
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise) {
+                  const Noise& noise, double seaLevel) {
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
     // so the terrain textures like a layered field — big colour regions, a ragged
     // snowline, mottled stone, fine grain — instead of one frequency modulating
@@ -400,7 +430,7 @@ Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
     double snowN   = noise.fbm2(worldX * 0.032 + 19.3, worldZ * 0.032 + 7.1, 3);
     double toneN   = noise.fbm2(worldX * 0.06 - 8.4, worldZ * 0.06 + 2.9, 3);
     double detailN = noise.noise2(worldX * 0.35, worldZ * 0.35);
-    return terrainColorImpl(height, slope, dryN, snowN, toneN, detailN);
+    return terrainColorImpl(height, slope, dryN, snowN, toneN, detailN, seaLevel);
 }
 
 namespace {
@@ -638,7 +668,7 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     // noise term varies it). The shader multiplies these with the material.
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise);
+                               v.normal.y, noise, params.seaLevel);
     }
     return mesh;
 }
@@ -678,7 +708,7 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise);
+                               v.normal.y, noise, params.seaLevel);
     }
     return mesh;
 }
@@ -746,7 +776,7 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                     // World-continuous UVs (tile across the whole world).
                     v.u = static_cast<float>(x / chunkSize);
                     v.v = static_cast<float>(z / chunkSize);
-                    v.color = terrainColor(x, z, y, v.normal.y, noise);
+                    v.color = terrainColor(x, z, y, v.normal.y, noise, params.seaLevel);
                     mesh.vertices.push_back(v);
                 }
             }
