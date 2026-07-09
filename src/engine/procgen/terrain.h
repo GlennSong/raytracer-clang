@@ -213,6 +213,11 @@ std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls,
 // is the surface normal's y (1 flat, 0 vertical); `noiseValue` ~[-1,1] varies
 // it. Pure and testable; baked into the terrain's per-vertex colors.
 Vec3 terrainColor(double height, double normalUp, double noiseValue);
+// Rich per-position variant: samples multi-frequency noise so the palette textures
+// like a layered field (macro colour regions, ragged snowline, mottled stone, fine
+// grain). Used by the mesh bakers; the 3-arg form above stays for tests/simple use.
+Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
+                  const Noise& noise);
 
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration

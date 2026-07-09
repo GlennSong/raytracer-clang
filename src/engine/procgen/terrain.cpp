@@ -308,47 +308,48 @@ TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double y
     return f;
 }
 
-Vec3 terrainColor(double height, double normalUp, double noiseValue) {
-    // A layered natural palette: lush lowland grass dries to upland meadow and
-    // bare earth, warm-grey rock and pale scree take the slopes and high
-    // benches, snow caps the peaks — banded by DRYNESS (noise + altitude) and
-    // SLOPE, with the noise term breaking every boundary so nothing reads as a
-    // hard contour line (device: "a better terrain shader with more realistic
-    // colors").
+namespace {
+// The shared band logic. Takes explicit noise scalars (each ~[-1,1]) so both the
+// simple test entry (one value for all) and the rich per-position entry (a value
+// per frequency band) drive the SAME palette:
+//   dryN    — macro dryness/colour patches (low freq: big grass/meadow regions)
+//   snowN   — snow/treeline meander (mid freq: irregular caps, not a contour ring)
+//   toneN   — stone + ground tone mottle (mid freq: stone isn't a flat grey)
+//   detailN — fine value break-up (high freq: grain where the mesh is dense)
+Vec3 terrainColorImpl(double height, double slope,
+                      double dryN, double snowN, double toneN, double detailN) {
     const Vec3 grass  (0.20, 0.34, 0.12);   // lush lowland green
+    const Vec3 grassDk(0.14, 0.26, 0.09);   // shaded / wetter grass (macro patches)
     const Vec3 meadow (0.36, 0.42, 0.19);   // upland dry meadow
     const Vec3 dirt   (0.36, 0.28, 0.17);   // earth brown
     const Vec3 rock   (0.31, 0.27, 0.22);   // warm brown-grey stone (mountain body)
-    const Vec3 darkRock(0.18, 0.16, 0.14);  // shadowed / weathered stone, for variation
+    const Vec3 darkRock(0.18, 0.16, 0.14);  // shadowed / weathered stone
+    const Vec3 rockLt (0.44, 0.40, 0.35);   // sun-bleached stone (adds tonal range)
     const Vec3 scree  (0.42, 0.38, 0.33);   // talus / gravel (warm mid grey)
     const Vec3 snow   (0.95, 0.96, 0.99);
+    const Vec3 snowBlue(0.80, 0.85, 0.95);  // shadowed snow (cool)
 
-    const double n = noiseValue;                    // ~[-1, 1]
-    const double slope = 1.0 - clamp01(normalUp);   // 0 flat .. 1 vertical
+    // The bands key off ABSOLUTE height (metres), not a normalized 0..1: absolute
+    // thresholds keep grassy HILLS (~10 m) green while a real MOUNTAIN (80-100 m)
+    // grows a stone body with snow only on the true peaks; the noise terms meander
+    // every boundary so nothing reads as a hard contour line.
 
-    // The bands key off ABSOLUTE height (metres), not a normalized 0..1: the old
-    // (height+4)/60 saturated any terrain taller than ~44 m to full snow, so a
-    // mountain range read as an all-white cap with no stone (device: "mountains
-    // are either snowcapped or green"). Absolute thresholds keep grassy HILLS
-    // (~10 m) green while a real MOUNTAIN (80-100 m) grows a stone body with snow
-    // only on the true peaks — the treeline/snowline meander via the noise term.
-
-    // Lowland ground by DRYNESS, driven mostly by ALTITUDE, not noise: the green
-    // plain stays green (no dirt splatter — device: "the dirt is splotchy"); dry
-    // earth appears on the higher, drier uplands. Noise only nudges the boundary
-    // so it isn't a contour ring.
+    // Lowland ground by DRYNESS (mostly ALTITUDE), with a macro green variation so
+    // the plain isn't one flat green — lush green mottles toward a darker/wetter
+    // green over large patches before it dries to meadow and bare earth uphill.
     double lowAlt = clamp01(height / 45.0);
-    double dry = clamp01(0.28 + 0.16 * n + 0.58 * lowAlt);
-    Vec3 ground = dry < 0.5 ? mixv(grass, meadow, dry * 2.0)
+    double dry = clamp01(0.28 + 0.16 * dryN + 0.58 * lowAlt);
+    Vec3 greenMix = mixv(grass, grassDk, clamp01(0.5 + 0.5 * toneN));
+    Vec3 ground = dry < 0.5 ? mixv(greenMix, meadow, dry * 2.0)
                             : mixv(meadow, dirt, (dry - 0.5) * 2.0);
 
-    // STONE: a mountain is stone-bodied. Exposed by ABSOLUTE altitude (the massif
-    // above the treeline) OR by slope (a cliff at any height), and mottled between
-    // two tones so it isn't a flat grey. This is the band the mountains were
-    // missing entirely.
-    Vec3 stone = mixv(darkRock, rock, clamp01(0.5 + 0.5 * n));
-    double altRock   = smoothstep(16.0, 40.0, height + 7.0 * n);   // mountain body (stone dominates)
-    double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * n);   // cliffs anywhere
+    // STONE: a mountain is stone-bodied. Exposed by ABSOLUTE altitude (massif above
+    // the treeline) OR by slope (a cliff at any height), mottled across THREE tones
+    // (dark / mid / light) so a cliff face reads as varied rock, not flat grey.
+    Vec3 stone = toneN < 0.0 ? mixv(darkRock, rock, clamp01(1.0 + toneN))
+                             : mixv(rock, rockLt, clamp01(toneN));
+    double altRock   = smoothstep(16.0, 40.0, height + 7.0 * snowN);
+    double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * toneN);
     double rockF = clamp01(std::max(altRock, slopeRock));
     Vec3 c = mixv(ground, stone, rockF);
 
@@ -357,13 +358,49 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
     c = mixv(c, scree, clamp01(screeF));
 
     // Snow CAPS the peaks: the upper massif turns white while the mid-body stays
-    // stone, so it reads as a snow-capped mountain, not a snowfield. Only sheer
-    // cliffs shed it (the slope gate is relaxed so steep peaks keep their cap).
-    double snowF = smoothstep(78.0, 100.0, height + 6.0 * n) *
-                   (1.0 - smoothstep(0.58, 0.82, slope));
-    c = mixv(c, snow, clamp01(snowF));
+    // stone. The snowline is PERTURBED hard (snowN at ~10 m amplitude + detailN
+    // fringe) so the cap edge is ragged — fingers of snow reaching down gullies and
+    // bare stone poking through — instead of a clean regular line. Only sheer cliffs
+    // shed it; shaded snow cools to blue so the cap has form, not a flat white blob.
+    double snowLine = height + 10.0 * snowN + 4.0 * detailN;
+    // Steep faces SHED snow (it can't hold on a cliff), so a peak shows bare rock
+    // faces with snow on its shoulders, ridges and couloirs — a real snow-capped
+    // mountain, not a white dome. The slope gate is the biggest lever on "more
+    // exposed stone": snow thins from ~0.42 slope and is gone by ~0.72.
+    double snowLo = smoothstep(78.0, 104.0, snowLine);
+    double snowF = snowLo * (1.0 - smoothstep(0.42, 0.72, slope));
+    Vec3 snowTone = mixv(snowBlue, snow, clamp01(0.5 + 0.5 * detailN));
+    c = mixv(c, snowTone, clamp01(snowF));
 
+    // Fine value break-up everywhere (grain where the mesh is dense enough to carry
+    // it): a subtle ±light multiply so no band is perfectly uniform.
+    double v = 1.0 + 0.06 * detailN;
+    c = Vec3(c.x * v, c.y * v, c.z * v);
     return Vec3(clamp01(c.x), clamp01(c.y), clamp01(c.z));
+}
+}  // namespace
+
+Vec3 terrainColor(double height, double normalUp, double noiseValue) {
+    // Simple entry (tests, and any caller without a position): one noise value
+    // drives every band — the deterministic banding the unit tests assert.
+    double slope = 1.0 - clamp01(normalUp);
+    return terrainColorImpl(height, slope, noiseValue, noiseValue, noiseValue,
+                            noiseValue * 0.0);
+}
+
+Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
+                  const Noise& noise) {
+    // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
+    // so the terrain textures like a layered field — big colour regions, a ragged
+    // snowline, mottled stone, fine grain — instead of one frequency modulating
+    // everything. Baked to vertex colour, so macro/mid bands (tens of metres)
+    // resolve everywhere; the finest grain needs mesh density (or a shader).
+    double slope = 1.0 - clamp01(normalUp);
+    double dryN    = noise.fbm2(worldX * 0.011 + 3.1, worldZ * 0.011 - 5.7, 4);
+    double snowN   = noise.fbm2(worldX * 0.032 + 19.3, worldZ * 0.032 + 7.1, 3);
+    double toneN   = noise.fbm2(worldX * 0.06 - 8.4, worldZ * 0.06 + 2.9, 3);
+    double detailN = noise.noise2(worldX * 0.35, worldZ * 0.35);
+    return terrainColorImpl(height, slope, dryN, snowN, toneN, detailN);
 }
 
 namespace {
@@ -595,8 +632,8 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     // Bake height/slope coloration into per-vertex colors (a low-frequency
     // noise term varies it). The shader multiplies these with the material.
     for (Vertex& v : mesh.vertices) {
-        double nv = noise.noise2(v.position.x * 0.15, v.position.z * 0.15);
-        v.color = terrainColor(v.position.y, v.normal.y, nv);
+        v.color = terrainColor(v.position.x, v.position.z, v.position.y,
+                               v.normal.y, noise);
     }
     return mesh;
 }
@@ -635,8 +672,8 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
     MeshBuilder::recomputeNormals(mesh);
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
     for (Vertex& v : mesh.vertices) {
-        double nv = noise.noise2(v.position.x * 0.15, v.position.z * 0.15);
-        v.color = terrainColor(v.position.y, v.normal.y, nv);
+        v.color = terrainColor(v.position.x, v.position.z, v.position.y,
+                               v.normal.y, noise);
     }
     return mesh;
 }
@@ -704,8 +741,7 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                     // World-continuous UVs (tile across the whole world).
                     v.u = static_cast<float>(x / chunkSize);
                     v.v = static_cast<float>(z / chunkSize);
-                    double nv = noise.noise2(x * 0.15, z * 0.15);
-                    v.color = terrainColor(y, v.normal.y, nv);
+                    v.color = terrainColor(x, z, y, v.normal.y, noise);
                     mesh.vertices.push_back(v);
                 }
             }
