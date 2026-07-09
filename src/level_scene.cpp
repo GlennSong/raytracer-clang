@@ -212,6 +212,8 @@ TerrainParams parseTerrainParams(const json& t) {
     tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
     tp.mountainMaskScale = t.value("mountainMaskScale", tp.mountainMaskScale);
     tp.mountainAlongRange = t.value("mountainAlongRange", tp.mountainAlongRange);
+    tp.tiltX = t.value("tiltX", tp.tiltX);
+    tp.tiltZ = t.value("tiltZ", tp.tiltZ);
     tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
     tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {

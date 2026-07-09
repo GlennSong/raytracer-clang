@@ -102,6 +102,12 @@ struct TerrainParams {
     double noiseScale = 0.02;  // frequency: multiplies world coords before noise
     int   octaves = 5;
     double warp = 0.0;         // domain-warp amount (0 = plain FBM)
+    // Planar TILT: a linear ground ramp (metres of rise per metre of world),
+    // added to the base relief. Lets a terrain slope from high ground down to a
+    // sea/basin on one side — a coastal city on a hillside — without any radial
+    // primitive. 0 = flat. e.g. tiltX = -0.05 drops the +x side 5 m per 100 m.
+    double tiltX = 0.0;
+    double tiltZ = 0.0;
     // Long-range relief: a ridged-MULTIFRACTAL layer (varied, sharp, irregular
     // peaks — not uniform bumps), domain-warped, added on top of the hill octaves.
     // 0 = off.

@@ -507,6 +507,11 @@ double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
                    : noise.fbm2(nx, nz, params.octaves);
     h *= params.heightScale;
 
+    // Planar tilt: ramp the ground down toward one side (a coastline/basin) so the
+    // relief isn't centred on sea level everywhere. Added to the base before the
+    // mountain layers, which then rise from the tilted ground.
+    h += params.tiltX * worldX + params.tiltZ * worldZ;
+
     // Mountain layer: a regional mask decides where it rises (range vs plains),
     // then a domain-warped ridged multifractal gives irregular varied peaks.
     if (params.mountainHeight > 0.0f) {

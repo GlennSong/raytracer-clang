@@ -1205,6 +1205,8 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.mountainMaskLo = t.value("mountainMaskLo", p.mountainMaskLo);
     p.mountainMaskHi = t.value("mountainMaskHi", p.mountainMaskHi);
     p.mountainAlongRange = t.value("mountainAlongRange", p.mountainAlongRange);
+    p.tiltX = t.value("tiltX", p.tiltX);
+    p.tiltZ = t.value("tiltZ", p.tiltZ);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
         std::vector<Vec3> ctl;
         for (const auto& pt : t["rangeSpine"])

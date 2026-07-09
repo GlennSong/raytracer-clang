@@ -21,13 +21,21 @@
     "mountainMaskLo": -0.1,
     "mountainMaskHi": 0.4,
     "mountainAlongRange": true,
+    "tiltX": -0.06,
     "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 },
     "cdlod": { "worldHalf": 600 },
     "rangeSpine": [[-575, -380], [-545, -120], [-575, 120], [-545, 380]],
     "rangeWidth": 240,
     "rangeHeight": 240,
     "rangeVariation": 0.6,
-    "_comment": "Full-toolset terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, hydraulically+thermally ERODED so the CDLOD surface (worldHalf 600 = size/2) carries real drainage. The VARIED peaks come from the low-frequency ridged-multifractal mountain layer (mountainHeight 150, mountainScale 0.0022 — big massifs + passes at different elevations, ~240 m peaks: stone band + snow caps), CONFINED to the range corridor by mountainAlongRange (the mountain mask is gated by the spine's cross falloff). That keeps the dramatic relief WEST of the origin while the metro core stays on gentle, buildable ground (headless probe: metro +-320 maxSlope 0.64, 0% steep) — mountainHeight everywhere (like cdlod.json) would spike the city. rangeWidth 240 keeps the falloff clear of the buildable core; the spine sits at x~=-555 (inside the +-600 mesh)."
+    "_comment": "Full-toolset COASTAL terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, ERODED, tiltX -0.06 ramps the ground DOWN to the east into a SEA (water block below) — snow peaks west, city on the coastal shelf, harbour to the east. The VARIED peaks come from the ridged-multifractal mountain layer confined to the range corridor by mountainAlongRange. The metro at the origin gates on water.seaLevel (single source of truth), so it fills the buildable shelf and stops at the shoreline."
+  },
+  "water": {
+    "seaLevel": -5.0,
+    "region": 600,
+    "cell": 8,
+    "foamBand": 40,
+    "color": [0.05, 0.14, 0.22]
   },
   "entities": [
     {
