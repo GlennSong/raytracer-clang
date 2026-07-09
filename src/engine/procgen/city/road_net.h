@@ -43,6 +43,13 @@ struct RoadNet {
                                                 // should hug the ground (device feedback)
     bool   markings = true;
     bool   crosswalks = true;
+    // Junction policy (ADR-0075 P0): may the constraints pass PROMOTE a busy or
+    // over-acute node to a roundabout ring? Generated nets (metro/district)
+    // planarize + cap degree instead and set this false; the mesh and terrain-
+    // conform passes must honour it, or they silently re-promote roundabouts the
+    // generator never intended (buildRoadNetMesh + constrainedNetGraph used to
+    // re-run applyConstraints with default rules). Hand-authored nets keep true.
+    bool   autoRoundabout = true;
     Vec3   color{0.09, 0.09, 0.10};
     std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
 };

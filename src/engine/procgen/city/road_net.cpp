@@ -134,7 +134,9 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
 RoadGraph constrainedNetGraph(const RoadNet& net) {
     double minR = net.width * 0.5 + net.sidewalk + 0.5;
-    return applyConstraints(netGraph(net, minR));
+    RoadRules rules;
+    rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
+    return applyConstraints(netGraph(net, minR), rules);
 }
 
 // Append `src` triangles into `dst`, offsetting indices.
@@ -301,10 +303,15 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     double minR = net.width * 0.5 + net.sidewalk + 0.5;
     RoadGraph raw = netGraph(net, minR);
     // Does the local-constraints pass (ADR-0052) promote any node to a roundabout?
+    // Honour the net's junction policy (ADR-0075 P0): a generated net set
+    // autoRoundabout=false, so we must NOT probe/promote with default rules here
+    // (that re-promoted roundabouts the generator disabled).
+    RoadRules rules;
+    rules.autoRoundabout = net.autoRoundabout;
     bool roundabout = false;
     for (int v = 0; v < static_cast<int>(raw.nodes.size()); ++v)
-        if (nodeNeedsRoundabout(raw, v, {})) { roundabout = true; break; }
-    RoadGraph g = applyConstraints(raw);   // promoted graph (= constrainedNetGraph)
+        if (nodeNeedsRoundabout(raw, v, rules)) { roundabout = true; break; }
+    RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= constrainedNetGraph)
 
     // Grade separations (ADR-0051/0054): if any edge is on a higher layer, the net carries an
     // overpass — build the ground roads flat and lift each bridge chain onto a clearing deck.
@@ -891,6 +898,9 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         // itself. Relax such through-nodes toward their chord until drivable.
         cg = relaxSharpBends(cg);
     }
+    // Carry the generator's junction policy onto the net so the mesh + conform
+    // passes don't re-promote roundabouts it deliberately disabled (ADR-0075 P0).
+    net.autoRoundabout = rules.autoRoundabout;
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {

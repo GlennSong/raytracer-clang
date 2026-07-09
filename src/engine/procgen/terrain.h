@@ -3,6 +3,7 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "noise.h"
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -51,6 +52,27 @@ double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
 double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
                     double z, double base, double dilate);
 
+// Spatial index over flatten footprints (ADR-0075 Phase 0): a uniform grid,
+// sized to the union of the footprints (i.e. the city, not the whole world),
+// binning each region by its falloff-expanded AABB. A height query then tests
+// only the footprints near it instead of the whole list — applyFlatten is
+// otherwise O(regions) per sample, and it runs per CDLOD vertex under
+// terrainHeight, so it dominates terrain build at city scale. Pure accelerator:
+// the indexed applyFlatten returns bit-for-bit the same height as the linear
+// scan (parity-tested). Build once when the footprint set changes.
+struct FlattenGrid {
+    double originX = 0, originZ = 0;      // min corner of the union AABB
+    double cell = 0;                       // grid pitch (m)
+    int    nx = 0, nz = 0;                 // grid dimensions
+    std::vector<std::vector<int>> bins;    // nx*nz cells, each a list of region indices
+    bool empty() const { return bins.empty(); }
+};
+FlattenGrid buildFlattenGrid(const std::vector<TerrainFlatten>& regions);
+// Indexed applyFlatten: identical result to the linear overloads, but visits
+// only the regions binned near (x,z). `grid` must have been built from `regions`.
+double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                    double x, double z, double base, double dilate);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).
@@ -94,7 +116,20 @@ struct TerrainParams {
     // terrainHeight, so the mesh, the collider, the CDLOD field and every
     // placement query all see the same levelled ground. Empty = pristine terrain.
     std::vector<TerrainFlatten> flatten;
+    // Optional spatial index over `flatten` (ADR-0075 Phase 0). Null => the
+    // linear scan (unchanged behaviour). Shared so copying the recipe into
+    // closures/entities stays cheap; rebuild via buildFlattenGrid after the
+    // footprint set is assembled. terrainHeight uses it when present.
+    std::shared_ptr<const FlattenGrid> flattenIndex;
 };
+
+// Refresh params.flattenIndex from params.flatten (ADR-0075 Phase 0). The index
+// is a derived cache keyed by position in `flatten`, so it MUST be rebuilt in
+// lockstep whenever the cut/fill set is assigned or mutated — a stale index would
+// sample the wrong regions. Cheap; clears the index when `flatten` is empty. Call
+// after finishing a flatten assembly; copies that never touch `flatten` keep the
+// (shared) index safely.
+void rebuildFlattenIndex(TerrainParams& params);
 
 // Build a branching ridge network from a planar L-system skeleton (consumer #2
 // of the shared Skeleton): a main divide throws off spur ridges, sub-spurs, etc.

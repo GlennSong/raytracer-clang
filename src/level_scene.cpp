@@ -242,6 +242,7 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                 const std::vector<TerrainFlatten>& flatten = {}) {
     TerrainParams tp = parseTerrainParams(t);
     tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
+    rebuildFlattenIndex(tp);   // index the cut/fill set (ADR-0075 P0)
     Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene, materials);
     // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
@@ -685,6 +686,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             const json& cs = root["citysim"];
             TerrainParams ctp = parseTerrainParams(root["terrain"]);
             ctp.flatten = allFlatten;   // the road-carved ground the lots see
+            rebuildFlattenIndex(ctp);   // index the cut/fill set (ADR-0075 P0)
             Noise cnoise(root["terrain"].value("seed", 0u));
             engine::EdgeBlockParams ep;
             ep.depth = cs.value("edgeBlockDepth", ep.depth);

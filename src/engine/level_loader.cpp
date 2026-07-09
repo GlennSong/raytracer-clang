@@ -1962,6 +1962,11 @@ bool LevelLoader::load(const std::string& path,
                 baseFlatten.push_back(std::move(f));   // non-road grading
             }
         }
+        // Index the assembled cut/fill set (ADR-0075 Phase 0): the CDLOD mesher,
+        // collider, and road drape all sample terrainHeight per vertex, so the
+        // O(footprints) scan there dominates the build. Shared, so the carved
+        // copies below reuse it.
+        rebuildFlattenIndex(terrainParams);
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
         // Hand the CDLOD config its non-road base so the editor's re-conform action can
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.

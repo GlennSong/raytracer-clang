@@ -217,6 +217,7 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
     // against THIS (never against terrain a previous conform already cut for the road).
     TerrainParams naturalParams = cfg->params;
     naturalParams.flatten = cfg->baseFlatten;
+    rebuildFlattenIndex(naturalParams);   // index must match this flatten, not the copy's (ADR-0075 P0)
     std::function<double(double, double)> natural =
         [naturalParams, noise](double x, double z) {
             return terrainHeight(naturalParams, *noise, x, z);
@@ -234,6 +235,7 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
     // rebuilds its tiles + collider window from the new params.
     cfg->params.flatten = cfg->baseFlatten;
     cfg->params.flatten.insert(cfg->params.flatten.end(), roads.begin(), roads.end());
+    rebuildFlattenIndex(cfg->params);   // re-index the re-conformed set (ADR-0075 P0)
     ++cfg->revision;
 
     // Re-drape every road on the freshly carved terrain so it sits exactly on its profile.

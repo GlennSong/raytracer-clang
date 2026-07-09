@@ -59,50 +59,144 @@ double distanceToFootprint(const std::vector<Vec3>& poly, double x, double z) {
 // CDLOD node samples with dilate ≈ half its cell so a triangle whose corners
 // both land outside a narrow road corridor can't interpolate natural ground
 // straight across the carriageway (device: "terrain poked through in places").
-double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
-                    double z, double base, double dilate) {
-    double result = base;
+// Accumulator for one flatten query: fold each candidate region in, tracking the
+// lowest overlapping plane (inside wins, lowest of overlaps) and, failing that,
+// the strongest falloff blend. Shared by the linear and indexed applyFlatten so
+// the two produce bit-for-bit identical heights (only the candidate SET differs).
+namespace {
+struct FlattenAccum {
+    double base;
+    double result;
     double bestW = 0.0;
-    // Inside OVERLAPPING footprints — every junction interior — the ground
-    // takes the LOWEST plane, not the first region in list order: two roads
-    // crossing on a slope disagree about the junction's height, and only the
-    // lower target keeps both decks proud of the ground (device: "the road
-    // is being buried by the terrain — it's not conforming").
     bool insideAny = false;
     double insideMin = std::numeric_limits<double>::max();
-    for (const TerrainFlatten& r : regions) {
-        if (r.polygon.size() < 3) continue;
+    explicit FlattenAccum(double b) : base(b), result(b) {}
+    void fold(const TerrainFlatten& r, double x, double z, double dilate) {
+        if (r.polygon.size() < 3) return;
         const double reach = r.falloff + dilate;
         if (x < r.minX - reach || x > r.maxX + reach ||
             z < r.minZ - reach || z > r.maxZ + reach)
-            continue;
+            return;
         if (pointInFootprint(r.polygon, x, z)) {
             insideAny = true;
             insideMin = std::min(insideMin, r.planeY(x, z));
-            continue;
+            return;
         }
         double d = distanceToFootprint(r.polygon, x, z);
         if (dilate > 0.0 && d <= dilate) {   // inside the grown footprint
             insideAny = true;
             insideMin = std::min(insideMin, r.planeY(x, z));
-            continue;
+            return;
         }
-        if (insideAny) continue;   // an inside hit already owns this point
+        if (insideAny) return;   // an inside hit already owns this point
         d -= dilate;
-        if (d >= r.falloff) continue;
+        if (d >= r.falloff) return;
         double w = 1.0 - smoothstep(0.0, r.falloff, d);
         if (w > bestW) {
             bestW = w;
             result = base + (r.planeY(x, z) - base) * w;
         }
     }
-    if (insideAny) return insideMin;
-    return result;
+    double value() const { return insideAny ? insideMin : result; }
+};
+}  // namespace
+
+double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
+                    double z, double base, double dilate) {
+    // Inside OVERLAPPING footprints — every junction interior — the ground
+    // takes the LOWEST plane, not the first region in list order: two roads
+    // crossing on a slope disagree about the junction's height, and only the
+    // lower target keeps both decks proud of the ground (device: "the road
+    // is being buried by the terrain — it's not conforming").
+    FlattenAccum acc(base);
+    for (const TerrainFlatten& r : regions) acc.fold(r, x, z, dilate);
+    return acc.value();
 }
 
 double applyFlatten(const std::vector<TerrainFlatten>& regions, double x,
                     double z, double base) {
     return applyFlatten(regions, x, z, base, 0.0);
+}
+
+FlattenGrid buildFlattenGrid(const std::vector<TerrainFlatten>& regions) {
+    FlattenGrid g;
+    // Union AABB over the *falloff-expanded* footprints — the index only needs
+    // to span where edits (plus their blend skirts) actually reach.
+    double minX = std::numeric_limits<double>::max();
+    double minZ = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double maxZ = std::numeric_limits<double>::lowest();
+    int live = 0;
+    for (const TerrainFlatten& r : regions) {
+        if (r.polygon.size() < 3) continue;
+        ++live;
+        minX = std::min(minX, r.minX - r.falloff);
+        minZ = std::min(minZ, r.minZ - r.falloff);
+        maxX = std::max(maxX, r.maxX + r.falloff);
+        maxZ = std::max(maxZ, r.maxZ + r.falloff);
+    }
+    if (live == 0) return g;   // empty grid => callers fall back to linear scan
+    double spanX = std::max(1.0, maxX - minX), spanZ = std::max(1.0, maxZ - minZ);
+    // Aim for a grid no coarser than the footprints and no finer than ~256 cells
+    // per axis, so the bins stay small without exploding memory on big worlds.
+    double cell = std::max(std::max(spanX, spanZ) / 256.0, 8.0);
+    g.originX = minX;
+    g.originZ = minZ;
+    g.cell = cell;
+    g.nx = std::max(1, static_cast<int>(std::ceil(spanX / cell)));
+    g.nz = std::max(1, static_cast<int>(std::ceil(spanZ / cell)));
+    g.bins.assign(static_cast<size_t>(g.nx) * g.nz, {});
+    auto clampi = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
+    for (int i = 0; i < static_cast<int>(regions.size()); ++i) {
+        const TerrainFlatten& r = regions[i];
+        if (r.polygon.size() < 3) continue;
+        int x0 = clampi(static_cast<int>((r.minX - r.falloff - g.originX) / cell), 0, g.nx - 1);
+        int x1 = clampi(static_cast<int>((r.maxX + r.falloff - g.originX) / cell), 0, g.nx - 1);
+        int z0 = clampi(static_cast<int>((r.minZ - r.falloff - g.originZ) / cell), 0, g.nz - 1);
+        int z1 = clampi(static_cast<int>((r.maxZ + r.falloff - g.originZ) / cell), 0, g.nz - 1);
+        for (int cz = z0; cz <= z1; ++cz)
+            for (int cx = x0; cx <= x1; ++cx)
+                g.bins[static_cast<size_t>(cz) * g.nx + cx].push_back(i);
+    }
+    return g;
+}
+
+void rebuildFlattenIndex(TerrainParams& params) {
+    if (params.flatten.empty()) { params.flattenIndex.reset(); return; }
+    params.flattenIndex =
+        std::make_shared<const FlattenGrid>(buildFlattenGrid(params.flatten));
+}
+
+double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                    double x, double z, double base, double dilate) {
+    if (grid.empty()) return applyFlatten(regions, x, z, base, dilate);
+    FlattenAccum acc(base);
+    // A region binned by its falloff-AABB can still be relevant to a query up to
+    // `dilate` beyond it (the dilated overload grows every footprint), so widen
+    // the cell window by ceil(dilate/cell). fold() re-tests the exact AABB, so
+    // over-inclusion only costs a few extra checks — never a wrong result.
+    int pad = dilate > 0.0 ? static_cast<int>(std::ceil(dilate / grid.cell)) : 0;
+    int cx = static_cast<int>((x - grid.originX) / grid.cell);
+    int cz = static_cast<int>((z - grid.originZ) / grid.cell);
+    int x0 = std::max(0, cx - pad), x1 = std::min(grid.nx - 1, cx + pad);
+    int z0 = std::max(0, cz - pad), z1 = std::min(grid.nz - 1, cz + pad);
+    if (cx + pad < 0 || cx - pad > grid.nx - 1 || cz + pad < 0 || cz - pad > grid.nz - 1)
+        return base;   // wholly outside the indexed region: no edit reaches here
+    // A region can span several bins; fold each at most once per query.
+    for (int gz = z0; gz <= z1; ++gz)
+        for (int gx = x0; gx <= x1; ++gx)
+            for (int idx : grid.bins[static_cast<size_t>(gz) * grid.nx + gx]) {
+                const TerrainFlatten& r = regions[idx];
+                // Cheap de-dup: only fold a multi-bin region from its lowest-index
+                // covering cell in the window (its min bin corner), so we don't
+                // fold it twice. Recompute that corner and skip if it's < window.
+                int rx0 = static_cast<int>((r.minX - r.falloff - grid.originX) / grid.cell);
+                int rz0 = static_cast<int>((r.minZ - r.falloff - grid.originZ) / grid.cell);
+                int fx = std::max(rx0, x0), fz = std::max(rz0, z0);
+                if (fx != gx || fz != gz) continue;   // folded (or will be) by its corner cell
+                acc.fold(r, x, z, dilate);
+            }
+    return acc.value();
 }
 
 static void footprintBounds(TerrainFlatten& f) {
@@ -368,9 +462,16 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     }
 
     // City cut/fill: grade the ground flat under roads and blocks (applied last so
-    // it overrides every relief layer there).
-    if (!params.flatten.empty())
-        h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
+    // it overrides every relief layer there). Use the spatial index when the
+    // recipe carries one (ADR-0075 Phase 0) — same height, far fewer footprints
+    // tested per sample.
+    if (!params.flatten.empty()) {
+        if (params.flattenIndex && !params.flattenIndex->empty())
+            h = applyFlatten(*params.flattenIndex, params.flatten, worldX, worldZ, h,
+                             flattenDilate);
+        else
+            h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
+    }
     return h;
 }
 
