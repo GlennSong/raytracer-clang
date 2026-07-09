@@ -891,7 +891,7 @@ void EditorSystem::drawInspector(FrameContext& ctx) {
                 int   seed      = static_cast<int>(g.value("seed", 1u));
 
                 bool changed = false;
-                changed |= ImGui::SliderFloat("Radius", &radius, 40.0f, 400.0f, "%.0f m");
+                changed |= ImGui::SliderFloat("Radius", &radius, 40.0f, 1500.0f, "%.0f m");
                 changed |= ImGui::SliderInt("Arterials", &arterials, 0, 8);
                 changed |= ImGui::SliderFloat("Block max", &blockMax, 12.0f, 120.0f, "%.0f m");
                 changed |= ImGui::SliderFloat("Block min", &blockMin, 6.0f, 100.0f, "%.0f m");

@@ -4,6 +4,7 @@
 #include "road_constraints.h"   // applyConstraints, capDegree, RoadRules
 #include "road_rules.h"         // DesignRules (clearance, deck thickness, ramp grade)
 #include "district.h"           // DistrictParams, buildDistrict (generate recipe)
+#include "metro.h"              // MetroParams, buildMetro ("kind":"metro" recipe)
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -797,49 +798,80 @@ static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
 
 void applyGenerateRecipe(RoadNet& net, const json& g) {
     if (!g.is_object()) return;
-    DistrictParams dp;
-    if (g.contains("center")) {
-        const json& c = g["center"];
-        dp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+    // Pick the generator. "district" (default) subdivides one footprint; "metro"
+    // grows organic arterials between hotspots and fills the blocks between them.
+    // Both hand a raw RoadGraph to the SHARED junction-policy tail below.
+    const std::string kind = g.value("kind", std::string("district"));
+    RoadGraph base;
+    if (kind == "metro") {
+        MetroParams mp;
+        if (g.contains("center")) {
+            const json& c = g["center"];
+            mp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+        }
+        mp.radius      = g.value("radius", 700.0);
+        mp.hotspots    = g.value("hotspots", 6);
+        mp.blockSize   = g.value("block_size", 70.0);
+        mp.arteryWidth = g.value("artery_width", net.width * 1.6);
+        mp.streetWidth = g.value("street_width", net.width);
+        mp.ringRoad    = g.value("ring_road", false);
+        mp.seed        = g.value("seed", 5u);
+        base = buildMetro(mp);
+    } else {
+        DistrictParams dp;
+        if (g.contains("center")) {
+            const json& c = g["center"];
+            dp.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+        }
+        dp.radius       = g.value("radius", 130.0);
+        dp.arterials    = g.value("arterials", 3);
+        double bs       = g.value("block_size", 36.0);   // nominal target; min/max bracket it
+        dp.blockSizeMax = g.value("block_size_max", bs);
+        dp.blockSizeMin = g.value("block_size_min", bs * 0.55);
+        dp.irregular    = g.value("irregular", 0.22);
+        dp.jitter       = g.value("jitter", 0.16);
+        dp.seed         = g.value("seed", 1u);
+        dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
+        dp.streetWidth  = g.value("street_width", net.width);
+        base = buildDistrict(dp).graph;
     }
-    dp.radius       = g.value("radius", 130.0);
-    dp.arterials    = g.value("arterials", 3);
-    double bs       = g.value("block_size", 36.0);   // nominal target; min/max bracket it
-    dp.blockSizeMax = g.value("block_size_max", bs);
-    dp.blockSizeMin = g.value("block_size_min", bs * 0.55);
-    dp.irregular    = g.value("irregular", 0.22);
-    dp.jitter       = g.value("jitter", 0.16);
-    dp.seed         = g.value("seed", 1u);
-    dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
-    dp.streetWidth  = g.value("street_width", net.width);
     double curviness = g.value("curviness", 0.0);    // 0 = straight grid; >0 sweeps streets into curves
-    DistrictNet d = buildDistrict(dp);
     // City-generation junction policy (road-network-v2-plan T1.1/T1.2): no auto roundabouts;
     // planarize every crossing into shared nodes, then cap degree to <=4 LAST — planarize itself can
     // lift a node past the cap when a street T's into it, so capping has to bind on the final noded
     // graph. The result is one connected, editable, degree-capped network.
     RoadRules rules;
     rules.autoRoundabout = false;
-    RoadGraph cg = capDegree(planarize(applyConstraints(d.graph, rules), 1.0), rules);
-    // Minimum road length (device: "really short roads ... should be merged"):
-    // fold crossings that landed close together into one junction, or stretch a
-    // stub that can't merge (a capDegree stagger link) out to a drivable length.
-    // Runs BEFORE the warp so it sees real junction-to-junction edges, not the
-    // curve samples warping introduces.
-    const double minRoadLen = g.value("min_road_len", 14.0);
-    if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
-    if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
-    cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
-    // Hard floor (device: "disallow sharp angles like that ... some
-    // constraints"): drop the shorter arm of any junction pair relaxation
-    // couldn't open past ~20 deg, so no razor sidewalk crotch survives. Opt-out
-    // via "prune_acute_deg": 0.
-    const double pruneDeg = g.value("prune_acute_deg", 20.0);
-    if (pruneDeg > 0.0) cg = pruneAcuteArms(cg, pruneDeg * 3.14159265358979323846 / 180.0);
-    // No hairpins (device: "sharp bends ... creating some really bad overlap"):
-    // a degree-2 corner sharper than ~52 deg folds the stroked carriageway over
-    // itself. Relax such through-nodes toward their chord until drivable.
-    cg = relaxSharpBends(cg);
+    RoadGraph cg = capDegree(planarize(applyConstraints(base, rules), 1.0), rules);
+    if (kind == "metro") {
+        // The metro hands us a clean planar graph: organic arterials + streets that
+        // SUBDIVIDE the blocks between them. The district cleanup below (acute-arm
+        // prune, deAcute, relax) is tuned for one footprint's regular grid and
+        // shreds the irregular-face subdivision — the local streets meet arterials
+        // at every angle by design. So only de-sliver lightly (drop sub-metre edges
+        // planarize leaves at street/arterial tees) and keep the rest intact.
+        cg = mergeShortEdges(cg, g.value("min_road_len", 3.0), rules.maxDegree);
+    } else {
+        // Minimum road length (device: "really short roads ... should be merged"):
+        // fold crossings that landed close together into one junction, or stretch a
+        // stub that can't merge (a capDegree stagger link) out to a drivable length.
+        // Runs BEFORE the warp so it sees real junction-to-junction edges, not the
+        // curve samples warping introduces.
+        const double minRoadLen = g.value("min_road_len", 14.0);
+        if (minRoadLen > 0.0) cg = mergeShortEdges(cg, minRoadLen, rules.maxDegree);
+        if (curviness > 0.0) cg = warpGraph(cg, curviness);   // domain-warp the grid into organic curves
+        cg = deAcute(cg, 0.6);                                 // open up acute junctions so corners stay clean
+        // Hard floor (device: "disallow sharp angles like that ... some
+        // constraints"): drop the shorter arm of any junction pair relaxation
+        // couldn't open past ~20 deg, so no razor sidewalk crotch survives. Opt-out
+        // via "prune_acute_deg": 0.
+        const double pruneDeg = g.value("prune_acute_deg", 20.0);
+        if (pruneDeg > 0.0) cg = pruneAcuteArms(cg, pruneDeg * 3.14159265358979323846 / 180.0);
+        // No hairpins (device: "sharp bends ... creating some really bad overlap"):
+        // a degree-2 corner sharper than ~52 deg folds the stroked carriageway over
+        // itself. Relax such through-nodes toward their chord until drivable.
+        cg = relaxSharpBends(cg);
+    }
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {
