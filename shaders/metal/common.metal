@@ -239,6 +239,26 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
     return c;
 }
 
+// Water: depth-graded ocean + shoreline foam. meshUV.x = baked water depth (m,
+// seaLevel - floor), meshUV.y = baked distance to land (m). Colour only — the
+// material's low roughness + <1 opacity give SSR reflection + fresnel
+// transparency via shadeSurface, so this stays a plain surface entry. (Animated
+// waves/foam on windTime are a shadeSurface follow-up.)
+float3 surfWater(float3 base, float depth, float shore, float3 worldPos) {
+    const float3 shallow = float3(0.20, 0.55, 0.58);
+    const float3 deep    = float3(0.02, 0.11, 0.22);
+    float3 c = mix(shallow, deep, saturate(smoothstep(0.0, 1.0, depth / 26.0)));
+    // gentle surface mottling so flat water isn't dead-flat
+    c *= 0.94 + 0.10 * fbm2(worldPos.x * 0.08, worldPos.z * 0.08);
+    // shoreline foam band (wavy edge from noise), only near true land
+    float band = 12.0 + 7.0 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05);
+    if (shore > 0.001 && shore < band) {
+        float f = (1.0 - shore / band) * (0.5 + 0.5 * fbm2(worldPos.x * 0.4, worldPos.z * 0.4));
+        c = mix(c, float3(0.90, 0.96, 0.98), saturate(f * 1.2));
+    }
+    return c;
+}
+
 float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 meshUV) {
     float2 uv = surfUV(worldPos, n);
     float3 c;
@@ -254,6 +274,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 mesh
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
         case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
+        case 12u: c = surfWater(base, meshUV.x, meshUV.y, worldPos); break;
         default:  return base;
     }
     return saturate(c);   // keep albedo energy-conserving (see scene.cpp)

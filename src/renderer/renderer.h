@@ -91,6 +91,12 @@ struct RenderMaterial {
         // dashes) instead of baked stripe geometry (ADR-0044 / road-geometry-plan
         // Problem 3): conforms to terrain for free, no z-fight, crisp at any distance.
         RoadMarkings,
+        // Water body (ocean/river/pond). Depth is baked into mesh UV.x
+        // (seaLevel - floor) and shore distance into UV.y, so the shader grades
+        // colour by depth and lays a foam band at the waterline without a depth
+        // buffer; waves + foam animate on windTime. Rides the material's low
+        // roughness + <1 opacity for SSR reflection and fresnel transparency.
+        Water,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -131,6 +137,7 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "cobblestone" || s == "cobble") return S::Cobblestone;
     if (s == "wood" || s == "woodsiding" || s == "siding") return S::WoodSiding;
     if (s == "roadmarkings" || s == "road_markings" || s == "lanes") return S::RoadMarkings;
+    if (s == "water" || s == "ocean" || s == "river") return S::Water;
     return S::None;
 }
 
@@ -150,6 +157,7 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::Cobblestone:     return "cobblestone";
         case S::WoodSiding:      return "wood";
         case S::RoadMarkings:    return "roadmarkings";
+        case S::Water:           return "water";
         default:                 return "";
     }
 }

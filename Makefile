@@ -75,6 +75,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/metro.cpp \
+	$(SRC_DIR)/engine/procgen/city/water_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
@@ -241,6 +242,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
 	$(SRC_DIR)/engine/procgen/city/metro.cpp \
+	$(SRC_DIR)/engine/procgen/city/water_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/city.cpp \
