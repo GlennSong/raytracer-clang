@@ -1,0 +1,8 @@
+{
+  "cameras": [
+    { "name": "Vista", "position": [340, 150, 360], "forward": [-0.60, -0.32, -0.73],
+      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 420 } },
+    { "name": "Street", "position": [40, 8, 120], "forward": [-0.30, -0.12, -0.95],
+      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 180 } }
+  ]
+}

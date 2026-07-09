@@ -1298,9 +1298,12 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<PrevTransform>(e, PrevTransform{tr});
 
     RenderMesh terrainMesh;
-    if (t.value("erode", false)) {
-        // Bake -> erode (drainage detail) -> mesh; the eroded grid is the source
-        // of truth for the mesh (and its collider) here.
+    if (t.value("erode", false) && !p.erodedBase) {
+        // Legacy static-mesh erode path (no pre-baked field): bake -> erode ->
+        // mesh, the eroded grid being the source of truth for mesh and collider.
+        // When loadLevel has already baked p.erodedBase (the shared path), fall
+        // through to generateTerrain — it samples that eroded field via
+        // terrainHeight, so re-eroding here would double-erode.
         Heightmap hm = bakeHeightmap(p, noise);
         ErosionParams ep;
         ep.seed = t.value("seed", 0u) + 1234u;
@@ -1849,6 +1852,29 @@ bool LevelLoader::load(const std::string& path,
     else
         levelDir = ".";
 
+    // Baked EROSION (ADR-0043 "use the whole toolset"): if the terrain opts in with
+    // "erode": true, bake the hydraulically + thermally eroded height field ONCE
+    // here and share the sampler across every terrainHeight query below — the level
+    // ground the roads/lots conform to, the meshed CDLOD terrain, and the carved
+    // drape. Sharing is load-bearing: bake it per-sampler and the roads would
+    // conform to analytic relief that the eroded mesh no longer matches, so they'd
+    // sink or poke. terrainHeight reads params.erodedBase, so injecting the same
+    // shared_ptr into every params copy is all it takes.
+    std::shared_ptr<const std::function<double(double, double)>> sharedEroded;
+    if (root.contains("terrain") && root["terrain"].value("erode", false)) {
+        const json& tj = root["terrain"];
+        TerrainParams eb = parseTerrainParams(tj);
+        Noise en(tj.value("seed", 0u));
+        ErosionParams ep;
+        ep.seed = tj.value("seed", 0u) + 1234u;
+        ep.droplets = tj.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
+        ep.talus = tj.value("erodeTalus", ep.talus);
+        bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
+        sharedEroded = eb.erodedBase;
+    }
+
     // A city draped on the terrain is generated BEFORE the terrain: it grades its
     // roads/blocks off the natural ground, then returns cut/fill footprints the
     // terrain is built around (so the ground meets the carriageways). The same
@@ -1873,6 +1899,7 @@ bool LevelLoader::load(const std::string& path,
     HeightField levelGround;
     if (root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        tp->erodedBase = sharedEroded;   // roads/lots conform to the ERODED surface
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
         levelGround = [tp, noise](double x, double z) {
             return terrainHeight(*tp, *noise, x, z);
@@ -1938,6 +1965,7 @@ bool LevelLoader::load(const std::string& path,
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
     if (root.contains("terrain")) {
         TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
+        terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
         terrainParams.flatten = cityFlatten;   // grade flat under the city
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      scriptFlatten.begin(), scriptFlatten.end());

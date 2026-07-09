@@ -239,8 +239,11 @@ TerrainParams parseTerrainParams(const json& t) {
 // it (vertex color carries the slope/height coloring; material albedo
 // multiplies it, so a white albedo lets the baked color show).
 void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
-                const std::vector<TerrainFlatten>& flatten = {}) {
+                const std::vector<TerrainFlatten>& flatten = {},
+                std::shared_ptr<const std::function<double(double, double)>>
+                    erodedBase = nullptr) {
     TerrainParams tp = parseTerrainParams(t);
+    tp.erodedBase = erodedBase;   // shared eroded surface (roads conform to it)
     tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
     rebuildFlattenIndex(tp);   // index the cut/fill set (ADR-0075 P0)
     Noise noise(t.value("seed", 0u));
@@ -260,22 +263,22 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                                Vec3(1, 1, 1), matIdx, scene);
         return;
     }
-    if (t.value("erode", false)) {
-        // Bake the analytic field to a grid, erode it (drainage detail), mesh it.
-        Heightmap hm = bakeHeightmap(tp, noise);
+    if (t.value("erode", false) && !tp.erodedBase) {
+        // Bake the analytic base into an eroded field and hang it on the params,
+        // so every terrainHeight() sample (mesh, LOD rings, flatten, normals,
+        // color banding) reads the eroded surface — the same path CDLOD uses.
+        // Skipped when the caller already supplied a shared eroded base.
         ErosionParams ep;
         ep.seed = t.value("seed", 0u) + 1234u;
         ep.droplets = t.value("erodeDroplets", ep.droplets);
         ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
         ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
         ep.talus = t.value("erodeTalus", ep.talus);
-        erode(hm, ep);
-        addMeshAsTriangles(generateTerrainMesh(hm), Vec3(), Quat::identity(),
-                           Vec3(1, 1, 1), matIdx, scene);
-    } else {
-        addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
-                           Vec3(1, 1, 1), matIdx, scene);
+        int erodeRes = t.value("erodeRes", 512);
+        bakeErodedTerrain(tp, noise, tp.size, erodeRes, ep);
     }
+    addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
+                       Vec3(1, 1, 1), matIdx, scene);
     // Distant LOD rings (mountains/hills out to the horizon).
     int lodRings = t.value("lodRings", 0);
     if (lodRings > 0) {
@@ -598,9 +601,29 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // handed to a draped recipe as the `ground` global so it can seat its city and
     // conform the carriageways. Its cut/fill footprints come back via m:conform and
     // feed the terrain build below, so the walkable CDLOD ground meets the roads.
+    // Baked EROSION (shared): if the terrain opts in with "erode": true, bake the
+    // eroded height field ONCE and share the sampler across levelGround (roads/lots
+    // conform to it), the lot ground, and addTerrain's mesh — so the offline render
+    // matches the same eroded surface everywhere (see level_loader for the rationale).
+    std::shared_ptr<const std::function<double(double, double)>> sharedEroded;
+    if (root.contains("terrain") && root["terrain"].value("erode", false)) {
+        const json& tj = root["terrain"];
+        TerrainParams eb = parseTerrainParams(tj);
+        Noise en(tj.value("seed", 0u));
+        ErosionParams ep;
+        ep.seed = tj.value("seed", 0u) + 1234u;
+        ep.droplets = tj.value("erodeDroplets", ep.droplets);
+        ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
+        ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
+        ep.talus = tj.value("erodeTalus", ep.talus);
+        bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
+        sharedEroded = eb.erodedBase;
+    }
+
     HeightField levelGround;
     if (root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        tp->erodedBase = sharedEroded;
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
         levelGround = [tp, noise](double x, double z) {
             return terrainHeight(*tp, *noise, x, z);
@@ -685,6 +708,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             root["citysim"].value("buildLots", false)) {
             const json& cs = root["citysim"];
             TerrainParams ctp = parseTerrainParams(root["terrain"]);
+            ctp.erodedBase = sharedEroded;   // lots grade off the eroded ground
             ctp.flatten = allFlatten;   // the road-carved ground the lots see
             rebuildFlattenIndex(ctp);   // index the cut/fill set (ADR-0075 P0)
             Noise cnoise(root["terrain"].value("seed", 0u));
@@ -758,7 +782,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 }
             }
         }
-        addTerrain(root["terrain"], scene, materials, allFlatten);
+        addTerrain(root["terrain"], scene, materials, allFlatten, sharedEroded);
     }
 
     for (const auto& ent : root.value("entities", json::array())) {

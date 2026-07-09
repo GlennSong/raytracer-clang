@@ -2,6 +2,8 @@
 #include "../mesh_builder.h"
 #include "lsystem.h"
 #include "skeleton.h"
+#include "terrain_field.h"   // HeightField, erodeField (bakeErodedTerrain)
+#include "erosion.h"         // ErosionParams
 #include "../../curve.h"
 
 #include <algorithm>
@@ -180,6 +182,46 @@ void rebuildFlattenIndex(TerrainParams& params) {
     if (params.flatten.empty()) { params.flattenIndex.reset(); return; }
     params.flattenIndex =
         std::make_shared<const FlattenGrid>(buildFlattenGrid(params.flatten));
+}
+
+void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSize,
+                       int res, const ErosionParams& erosion) {
+    if (res < 2 || worldSize <= 0.0) return;
+    // The field to erode is the RAW analytic relief — a copy of params with the
+    // erosion + cut/fill cleared, so terrainBaseHeight computes pure noise/relief.
+    // The closure OWNS its params + a Noise copy (the grid outlives this call and
+    // CDLOD samples it on other threads), so nothing dangles.
+    auto base = std::make_shared<TerrainParams>(params);
+    base->erodedBase.reset();
+    base->flatten.clear();
+    base->flattenIndex.reset();
+    auto noiseCopy = std::make_shared<Noise>(noise);
+    HeightField analytic = [base, noiseCopy](double x, double z) {
+        return terrainBaseHeight(*base, *noiseCopy, x, z);
+    };
+    // erodeField bakes `analytic` into a res×res grid over the centred square of
+    // side `worldSize`, runs droplet + thermal erosion, and returns a bilinear
+    // sampler over the eroded grid.
+    HeightField eroded = erodeField(analytic, worldSize, res, erosion);
+    // Blend the eroded field back to the ANALYTIC base at the square's edge, so it
+    // is a LOCAL enhancement with NO discontinuity at the boundary: inside the
+    // core it's fully eroded; across a margin it feathers to analytic; beyond the
+    // square (an open CDLOD world extends past the eroded grid via worldHalf, and
+    // lodRings reach the horizon) it IS analytic. Without this the grid clamps to
+    // its edge value outside, producing a flat plateau and radial seams.
+    const double half = worldSize * 0.5;
+    const double margin = std::max(1.0, worldSize * 0.06);   // feather band width
+    HeightField analyticCopy = analytic;                     // both closures share `base`
+    params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
+        [eroded, analyticCopy, half, margin](double x, double z) {
+            double wx = clamp01((half - std::fabs(x)) / margin);
+            double wz = clamp01((half - std::fabs(z)) / margin);
+            double w = wx < wz ? wx : wz;                    // 0 at/outside edge, 1 inside
+            if (w <= 0.0) return analyticCopy(x, z);
+            double a = analyticCopy(x, z);
+            if (w >= 1.0) return eroded(x, z);
+            return a + (eroded(x, z) - a) * w;
+        });
 }
 
 double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
@@ -419,8 +461,8 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     return terrainHeight(params, noise, worldX, worldZ, 0.0);
 }
 
-double terrainHeight(const TerrainParams& params, const Noise& noise,
-                     double worldX, double worldZ, double flattenDilate) {
+double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
+                         double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
     double nz = worldZ * params.noiseScale;
     double h = params.warp > 0.0
@@ -493,6 +535,15 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
         }
     }
 
+    return h;
+}
+
+double terrainHeight(const TerrainParams& params, const Noise& noise,
+                     double worldX, double worldZ, double flattenDilate) {
+    // Base relief: the pre-baked ERODED field when present (so CDLOD, collider and
+    // placement all get natural drainage), else the raw analytic relief.
+    double h = params.erodedBase ? (*params.erodedBase)(worldX, worldZ)
+                                 : terrainBaseHeight(params, noise, worldX, worldZ);
     // City cut/fill: grade the ground flat under roads and blocks (applied last so
     // it overrides every relief layer there). Use the spatial index when the
     // recipe carries one (ADR-0075 Phase 0) — same height, far fewer footprints

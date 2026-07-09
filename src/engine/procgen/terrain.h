@@ -3,6 +3,7 @@
 
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "noise.h"
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -139,6 +140,15 @@ struct TerrainParams {
     // closures/entities stays cheap; rebuild via buildFlattenGrid after the
     // footprint set is assembled. terrainHeight uses it when present.
     std::shared_ptr<const FlattenGrid> flattenIndex;
+    // Baked EROSION (optional). When set, terrainHeight samples this pre-baked,
+    // hydraulically+thermally eroded height field as its base — the natural
+    // drainage detail the analytic ridged noise can't produce — instead of
+    // recomputing the raw analytic relief. CDLOD, the collider and every
+    // placement query all read terrainHeight, so this is how erosion reaches the
+    // runtime CDLOD terrain (it previously only touched the static baked-chunk
+    // path). Built by bakeErodedTerrain; null = pure analytic. The cut/fill
+    // flatten still applies on top.
+    std::shared_ptr<const std::function<double(double, double)>> erodedBase;
 };
 
 // Refresh params.flattenIndex from params.flatten (ADR-0075 Phase 0). The index
@@ -168,6 +178,23 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
 // this query (see applyFlatten's dilated overload). 0 = exact footprints.
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ, double flattenDilate);
+
+// The RAW analytic relief at (x, z): fbm base + mountain/range/ridge layers, with
+// NO erosion and NO cut/fill. terrainHeight uses this as its base when no eroded
+// field is baked, and bakeErodedTerrain erodes THIS into params.erodedBase.
+double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
+                         double worldX, double worldZ);
+
+// Bake hydraulic + thermal EROSION of the analytic relief into params.erodedBase,
+// so the CDLOD terrain (and collider, and placement) get natural drainage detail
+// — the "use the whole toolset" wiring (ADR-0043 erosion had only reached the
+// static baked-chunk path). Samples terrainBaseHeight into a `res`×`res` grid over
+// the centred square of side `worldSize`, erodes it (erosion.h droplets + thermal),
+// and stores a bilinear sampler. Call BEFORE building the terrain; the cut/fill
+// flatten still applies on top. `seed` offsets the erosion RNG.
+struct ErosionParams;  // erosion.h
+void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSize,
+                       int res, const ErosionParams& erosion);
 
 // Sample a smooth spine polyline from authored control points (Catmull-Rom) for
 // TerrainParams::rangeSpine. Points are (x, 0, z).

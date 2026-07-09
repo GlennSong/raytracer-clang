@@ -2114,8 +2114,17 @@ a chunk grid/quadtree with per-chunk AABB culling and streaming; clipmaps
 - Uniform-resolution chunks make a large extent expensive (no LOD yet) — keep demo
   worlds modest until Phase 1c. The world extent is a level parameter, not hardcoded
   (ADR-0034 rule).
-- Erosion (`erode`) still applies only on the legacy single-mesh path; per-chunk
-  erosion (bake a per-chunk heightmap) is a follow-up.
+- ~~Erosion (`erode`) still applies only on the legacy single-mesh path~~ *(resolved
+  ADR-0043 wiring): `bakeErodedTerrain` now bakes the hydraulically+thermally eroded
+  field once into `TerrainParams::erodedBase`, and `terrainHeight` samples it as its
+  base — so CDLOD, the collider, road-conform and every placement query read the
+  eroded surface, not just the static mesh. The eroded grid is a LOCAL enhancement
+  feathered back to the analytic base at its square edge (no plateau/seam where an
+  open CDLOD world extends past the grid). Both loaders bake ONE shared field so the
+  roads conform to the same surface that gets meshed. Follow-up: `erodeRes` is the
+  detail floor for close-up CDLOD (the mesh can't carry finer relief than the eroded
+  grid), and the bake is a one-time load-cost — a streamed/tiled erosion would lift
+  both.*
 - Verified on Linux via the offline tracer (the parity oracle: chunk surface ==
   height field, borders seamless — unit-tested + an offline render of
   `assets/levels/chunked.json`); viewer culling is unit-tested (`test_frustum`).
