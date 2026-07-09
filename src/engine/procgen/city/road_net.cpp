@@ -477,6 +477,55 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
     return out;
 }
 
+StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p) {
+    StructureSet set;
+    if (!net.heightAt) return set;                      // flat road: no walls
+    // SAME decomposition as roadNetConformRegions, so a wall lands exactly where
+    // that pass's batter clamps at reach — the two read the identical deck profile.
+    RoadGraph g = constrainedNetGraph(net);
+    std::vector<UnionSpine> spines = weldChainSpines(g);
+    std::vector<std::vector<double>> profiles =
+        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade);
+
+    for (std::size_t si = 0; si < spines.size(); ++si) {
+        const UnionSpine& sp = spines[si];
+        const int n = static_cast<int>(sp.points.size());
+        if (static_cast<int>(profiles[si].size()) != n || n < 2) continue;
+        const double flatHalf = sp.halfWidth + net.sidewalk + 2.0;   // graded-corridor half-width
+        const double wallLat = flatHalf + p.reach;                    // where the batter clamps
+        // The wall top sits at the batter-end height at lateral offset wallLat; its
+        // drop is the residual to natural ground there. One short quad per station
+        // pair, so the wall follows the road's undulation.
+        auto stationWall = [&](int side, int k, Vec3& topOut, double& dropOut, bool& retainOut) {
+            int seg = std::min(k, n - 2);
+            Vec2 dir = normalize(sp.points[seg + 1] - sp.points[seg]);
+            Vec2 nrm = perp(dir);
+            Vec2 lat = sp.points[k] + nrm * (static_cast<double>(side) * wallLat);
+            double deckY = profiles[si][k];
+            double naturalEnd = net.heightAt(lat.x, lat.y);
+            bool cut = naturalEnd > deckY;
+            double batterEndY = cut ? deckY + p.reach * p.cutBatter
+                                    : deckY - p.reach * p.fillBatter;
+            double drop = cut ? (naturalEnd - batterEndY)   // hill still above the cut batter
+                              : (batterEndY - naturalEnd);  // fill batter still above ground
+            topOut = Vec3(lat.x, batterEndY, lat.y);
+            dropOut = std::max(0.0, drop);
+            retainOut = cut;
+        };
+        for (int side = -1; side <= 1; side += 2)
+            for (int k = 0; k + 1 < n; ++k) {
+                Vec3 topA, topB; double dropA, dropB; bool retainA, retainB;
+                stationWall(side, k, topA, dropA, retainA);
+                stationWall(side, k + 1, topB, dropB, retainB);
+                if (dropA <= p.minWall && dropB <= p.minWall) continue;
+                set.walls.push_back(WallSegment{topA, topB, dropA, dropB, retainA || retainB});
+                set.colliderEdges.push_back({topA, topB});
+            }
+    }
+    set.mesh = bakeWallMesh(set.walls, p.color);
+    return set;
+}
+
 void roadNetSetWidth(RoadNet& net, double width) {
     net.width = std::max(0.5, width);
 }

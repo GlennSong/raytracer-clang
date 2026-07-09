@@ -3,6 +3,7 @@
 
 #include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
 #include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
+#include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
 #include <nlohmann/json.hpp>
 #include <array>
 #include <functional>
@@ -73,6 +74,14 @@ RoadGraph navRoadGraph(const RoadNet& net);
 // terrain pokes through. Empty if `net.heightAt` is unset (a flat road needs no carving).
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder = 1.5,
                                                   double falloff = 8.0, double maxGrade = 0.10);
+
+// Retaining / fill walls for a road net whose `heightAt` is the NATURAL (pre-carve)
+// ground (ADR-0075 Phase 1). Reuses the SAME spine + grade-limited profile as
+// roadNetConformRegions, so a wall stands exactly where the terrain batter clamps
+// at `p.reach` — capping the residual step a steep cut/fill can't daylight, never
+// double-counting it. The 3-D grade-break geometry the 2.5-D ground defers to a
+// StructureSet. Empty on flat ground or when `net.heightAt` is unset.
+StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p = {});
 
 // --- editor edit ops (each leaves the net ready for buildRoadNetMesh) ----------
 // Set the default carriageway width (the inspector "Width" control — "widen a road").

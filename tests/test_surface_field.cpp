@@ -174,6 +174,34 @@ TEST_CASE(daylight_batter_index_parity) {
     CHECK(mismatches == 0);
 }
 
+// StructureSet walls (ADR-0075 Phase 1b): a steep sidehill cut that can't daylight
+// within reach gets a retaining wall; flat ground gets none.
+TEST_CASE(road_walls_only_where_cuts_are_steep) {
+    RoadNet net;
+    net.nodes = {Vec2(0, -100), Vec2(0, 100)};
+    net.edges = {{0, 1}};
+    net.width = 12.0; net.sidewalk = 3.5;
+
+    net.heightAt = [](double, double) { return 5.0; };   // flat: batter daylights at once
+    StructureSet flat = buildRoadWalls(net);
+    CHECK(flat.walls.empty());
+    CHECK(flat.mesh.vertices.empty());
+
+    net.heightAt = [](double x, double) { return 2.0 * x; };  // steep sidehill (grade 2.0)
+    StructureSet steep = buildRoadWalls(net);
+    CHECK(!steep.walls.empty());
+    CHECK(!steep.mesh.vertices.empty());
+    CHECK(steep.mesh.indices.size() % 3 == 0);
+    CHECK(steep.colliderEdges.size() == steep.walls.size());
+    bool anyRetain = false; double maxDrop = 0;
+    for (const WallSegment& w : steep.walls) {
+        if (w.retaining) anyRetain = true;
+        maxDrop = std::max(maxDrop, std::max(w.dropA, w.dropB));
+    }
+    CHECK(anyRetain);          // the uphill cut needs holding back
+    CHECK(maxDrop > 0.5);      // and it's a real wall, not a sliver
+}
+
 // The autoRoundabout policy on a net is honoured by the conform/mesh graph pass
 // (ADR-0075 Phase 0): a degree-5 star is promoted to a roundabout ring only when
 // the net asks for it — the generator's autoRoundabout=false must survive into

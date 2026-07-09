@@ -1903,6 +1903,7 @@ bool LevelLoader::load(const std::string& path,
     // meets the road's drivable profile and no terrain pokes through.
     std::vector<TerrainFlatten> roadFlatten;
     std::vector<engine::RoadNet> preNets;   // parsed nets, for the lot pre-pass
+    RenderMesh roadWallMesh;                 // ADR-0075 P1b: retaining/fill walls (world space)
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
@@ -1918,6 +1919,14 @@ bool LevelLoader::load(const std::string& path,
                     applyGenerateRecipe(net, roadBlock["generate"]);
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
+                // Retaining/fill walls where the batter can't daylight (ADR-0075
+                // P1b). Built HERE because net.heightAt is still the NATURAL ground
+                // — the cut/fill is measured against pristine terrain, not the
+                // profile a later pass carved for the road. World-space; emitted as
+                // one wall entity after the terrain is built.
+                StructureSet walls = buildRoadWalls(net);
+                if (!walls.mesh.vertices.empty())
+                    MeshBuilder::append(roadWallMesh, walls.mesh);
                 preNets.push_back(std::move(net));
             }
         }
@@ -1972,6 +1981,27 @@ bool LevelLoader::load(const std::string& path,
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
         world.each<TerrainLodConfig>(
             [&](Entity, TerrainLodConfig& c) { c.baseFlatten = baseFlatten; });
+        // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
+        // road's grade-break structures — concrete-grey, with a static MeshCollider
+        // so cars and pedestrians can't walk through a cut face. The terrain batter
+        // grades down to each wall's top; the wall caps the residual step to natural.
+        if (!roadWallMesh.vertices.empty()) {
+            Entity we = world.create();
+            world.add<Transform>(we, Transform{});             // mesh is world-space
+            world.add<PrevTransform>(we, PrevTransform{Transform{}});
+            Renderable wr;
+            wr.renderLayer = engine::LayerRoads;
+            wr.material.albedo = Vec3(1, 1, 1);                // grey carried in vertex colour
+            wr.material.roughness = 0.9f;
+            wr.mesh = assets.acquireMesh(roadWallMesh, "road_walls");
+            world.add<Renderable>(we, wr);
+            MeshCollider mc;
+            mc.vertices.reserve(roadWallMesh.vertices.size());
+            for (const Vertex& v : roadWallMesh.vertices) mc.vertices.push_back(v.position);
+            mc.indices = roadWallMesh.indices;
+            mc.friction = 0.9;
+            world.add<MeshCollider>(we, mc);
+        }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.
         auto carvedTp = std::make_shared<TerrainParams>(terrainParams);

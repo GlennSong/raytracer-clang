@@ -82,6 +82,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
+	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp
@@ -251,6 +252,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
+	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/ai/nav_graph.cpp \
 	$(SRC_DIR)/engine/ai/pathfind.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
