@@ -2125,6 +2125,16 @@ a chunk grid/quadtree with per-chunk AABB culling and streaming; clipmaps
   detail floor for close-up CDLOD (the mesh can't carry finer relief than the eroded
   grid), and the bake is a one-time load-cost — a streamed/tiled erosion would lift
   both.*
+- **Confining mountains to a range (`mountainAlongRange`).** The varied ridged-
+  multifractal peaks (`mountainHeight`) fire off a NOISE mask, so on a city level they
+  can drop a peak on the buildable ground and collapse the metro (buildability gating).
+  cdlod.json cranks `mountainHeight` map-wide because it has no city. `mountainAlongRange`
+  gates the mountain mask by the rangeSpine's cross falloff, so the dramatic relief only
+  rises ALONG the range corridor and fades to plains toward the origin — a level gets
+  cdlod-grade varied peaks WEST of a city while the metro core stays buildable (metro_hills
+  headless probe: metro ±320 maxSlope 0.64, 0% steep). Default off (whole-map mountain
+  levels unchanged). The alternative (peaks purely from a straight rangeSpine, mountainHeight 0)
+  reads as a uniform serrated wall — that regression is what prompted this.
 - Verified on Linux via the offline tracer (the parity oracle: chunk surface ==
   height field, borders seamless — unit-tested + an offline render of
   `assets/levels/chunked.json`); viewer culling is unit-tested (`test_frustum`).

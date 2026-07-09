@@ -114,6 +114,13 @@ struct TerrainParams {
     double mountainMaskScale = 0.0;
     float  mountainMaskLo = -0.12f;
     float  mountainMaskHi = 0.30f;
+    // Confine the mountain layer to the RANGE corridor: when true and a rangeSpine
+    // is set, the mountain mask is multiplied by the spine's cross falloff, so the
+    // big varied ridged peaks (`mountainHeight`) only rise ALONG the range and fade
+    // to plains away from it. Lets a level use dramatic mountainHeight relief west
+    // of a city without spiking the buildable ground at the origin. Default off, so
+    // whole-map mountain levels (cdlod.json) are unchanged.
+    bool   mountainAlongRange = false;
     // A mountain RANGE driven by a spine curve (range axis), instead of (or on
     // top of) the regional mask: uplift falls off with distance from the spine
     // (range -> foothills -> plains) and varies along it (tall massifs, low

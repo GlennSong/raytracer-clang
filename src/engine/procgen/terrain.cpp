@@ -479,6 +479,14 @@ double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
                                   worldZ * params.mountainMaskScale, 3);
             mask = smoothstep(params.mountainMaskLo, params.mountainMaskHi, m);
         }
+        // Confine the peaks to the range corridor (see mountainAlongRange): the
+        // spine's cross falloff gates the mask, so mountains rise along the range
+        // and fade to plains away from it — keeps a city off the origin clear.
+        if (params.mountainAlongRange && !params.rangeSpine.empty()) {
+            double dist, arc;
+            spineQuery(params.rangeSpine, worldX, worldZ, dist, arc);
+            mask *= 1.0 - smoothstep(0.0, params.rangeWidth, dist);
+        }
         if (mask > 1e-3) {
             double wx = worldX * params.mountainScale;
             double wz = worldZ * params.mountainScale;
