@@ -88,6 +88,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/surface_field.cpp
     src/engine/procgen/city/structure_set.cpp
+    src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
     src/engine/level_loader.cpp

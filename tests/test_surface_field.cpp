@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/surface_field.h"
+#include "../src/engine/procgen/city/block_grade.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_constraints.h"
 #include "../src/engine/procgen/city/road_network.h"
@@ -172,6 +173,35 @@ TEST_CASE(daylight_batter_index_parity) {
             ++mismatches;
     }
     CHECK(mismatches == 0);
+}
+
+// Block grading (ADR-0075 Phase 2): a block on a gentle slope tilts with its
+// bounding ground into ONE graded plane; a block on a steep slope TERRACES into
+// flat steps so no single grade break is a cliff.
+TEST_CASE(block_grades_to_a_plane_then_terraces) {
+    Poly2 block = {Vec2(0, 0), Vec2(60, 0), Vec2(60, 60), Vec2(0, 60)};
+
+    // Gentle: 5% grade across 60 m = 3 m drop < maxDrop -> one tilted plane.
+    HeightSampler gentle = [](double x, double) { return 0.05 * x; };
+    std::vector<TerrainFlatten> g = gradeBlock(block, gentle);
+    CHECK(g.size() == 1);
+    CHECK_APPROX(g[0].dx, 0.05, 0.01);          // tilts with the ground
+    CHECK(std::fabs(g[0].dz) < 0.01);
+    CHECK_APPROX(g[0].planeY(30, 30), 0.05 * 30, 0.2);   // meets the ground mid-block
+
+    // Steep: 30% grade across 60 m = 18 m drop > maxDrop(6) -> terrace into steps.
+    HeightSampler steep = [](double x, double) { return 0.30 * x; };
+    std::vector<TerrainFlatten> t = gradeBlock(block, steep);
+    CHECK(t.size() >= 2);                        // several terraces
+    double prev = -1e30; int rising = 0;
+    for (const TerrainFlatten& f : t) {
+        CHECK(std::fabs(f.dx) < 1e-6);           // each terrace is a FLAT step
+        CHECK(std::fabs(f.dz) < 1e-6);
+        double lvl = f.planeY(30, 30);           // (constant; dx=dz=0)
+        if (lvl > prev) ++rising;
+        prev = lvl;
+    }
+    CHECK(rising >= 1);                          // steps climb the slope
 }
 
 // StructureSet walls (ADR-0075 Phase 1b): a steep sidehill cut that can't daylight
