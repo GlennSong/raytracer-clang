@@ -91,10 +91,23 @@ struct FlattenAccum {
         if (insideAny) return;   // an inside hit already owns this point
         d -= dilate;
         if (d >= r.falloff) return;
+        // Closeness weight: the nearest footprint owns an outside point (its edge
+        // treatment dominates the feather/batter of a farther one).
         double w = 1.0 - smoothstep(0.0, r.falloff, d);
-        if (w > bestW) {
-            bestW = w;
-            result = base + (r.planeY(x, z) - base) * w;
+        if (w <= bestW) return;
+        bestW = w;
+        if (r.falloffMode == TerrainFlatten::Falloff::DaylightBatter) {
+            // Earthwork cross-section: leave the deck edge (planeY is constant
+            // across the corridor, so it reads the deck height at this station) on
+            // a cut/fill batter and daylight where it meets natural ground.
+            // `base` IS the natural ground here, so min/max clamps at daylight.
+            double edgeY = r.planeY(x, z);
+            if (base > edgeY)                      // uphill: cut a slope INTO the hill
+                result = std::min(edgeY + r.cutBatter * d, base);
+            else                                    // downhill: FILL an embankment out
+                result = std::max(edgeY - r.fillBatter * d, base);
+        } else {
+            result = base + (r.planeY(x, z) - base) * w;   // original smoothstep feather
         }
     }
     double value() const { return insideAny ? insideMin : result; }

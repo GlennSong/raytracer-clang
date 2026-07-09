@@ -29,6 +29,17 @@ struct TerrainFlatten {
     // Tight XZ AABB, filled by the makers; queries quick-reject against it
     // (expanded by falloff) before the per-edge polygon test.
     double minX = 0, minZ = 0, maxX = 0, maxZ = 0;
+    // How the graded surface returns to natural ground OUTSIDE the footprint
+    // (ADR-0075 Phase 1). Smoothstep: ease plane -> natural over `falloff` (the
+    // original feather). DaylightBatter: leave the deck edge on a real earthwork
+    // slope — a CUT batter climbing the uphill side, a FILL embankment descending
+    // the downhill side — until it DAYLIGHTS where it meets natural ground. Where
+    // it can't daylight within `falloff` (the reach), the residual step is capped
+    // by a retaining wall (emitted as a StructureSet, not baked into the terrain).
+    enum class Falloff { Smoothstep, DaylightBatter };
+    Falloff falloffMode = Falloff::Smoothstep;
+    double cutBatter = 1.0;    // uphill cut slope, rise:run (1.0 = 45°, steeper rock cut)
+    double fillBatter = 0.6;   // downhill fill embankment, rise:run (gentler than cut)
     double planeY(double x, double z) const { return c + dx * x + dz * z; }
 };
 

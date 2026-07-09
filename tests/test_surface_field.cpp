@@ -126,6 +126,54 @@ TEST_CASE(surface_field_normal_on_slope) {
     CHECK_APPROX(std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z), 1.0, 1e-5);
 }
 
+// DaylightBatter earthwork (ADR-0075 Phase 1): outside a flat corridor deck the
+// ground cuts INTO the uphill slope and FILLS OUT the downhill one, each batter
+// daylighting where it meets natural terrain — never proud of the hill on the cut
+// side nor sunk below it on the fill side.
+TEST_CASE(daylight_batter_cuts_uphill_fills_downhill) {
+    auto natural = [](double x) { return 0.3 * x; };   // hillside rising toward +x
+    std::vector<Vec3> poly = {Vec3(-4, 0, -50), Vec3(4, 0, -50),
+                              Vec3(4, 0, 50), Vec3(-4, 0, 50)};
+    TerrainFlatten f = makeFlattenPad(std::move(poly), 0.0, 6.0);  // flat deck at y=0
+    f.falloffMode = TerrainFlatten::Falloff::DaylightBatter;
+    f.cutBatter = 1.0; f.fillBatter = 0.6; f.falloff = 26.0;
+    std::vector<TerrainFlatten> regs = {f};
+    auto H = [&](double x) { return applyFlatten(regs, x, 0.0, natural(x), 0.0); };
+
+    CHECK_APPROX(H(0.0), 0.0, 1e-9);                     // deck is flat inside the corridor
+    CHECK(H(5.5) < natural(5.5) - 0.05);                 // uphill: cut below natural
+    CHECK_APPROX(H(9.0), natural(9.0), 1e-6);            // cut daylights back to natural
+    CHECK(H(-6.0) > natural(-6.0) + 0.05);               // downhill: fill above natural
+    CHECK_APPROX(H(-12.0), natural(-12.0), 1e-6);        // fill daylights back to natural
+    // Invariants: the cut never rises above the hill, the fill never sinks below it.
+    for (double x = 4.5; x < 30; x += 0.5)  CHECK(H(x) <= natural(x) + 1e-6);
+    for (double x = -30; x < -4.5; x += 0.5) CHECK(H(x) >= natural(x) - 1e-6);
+}
+
+// The spatial index reproduces batter footprints too (not just smoothstep pads).
+TEST_CASE(daylight_batter_index_parity) {
+    auto natural = [](double x, double z) { return 0.25 * x + 0.1 * z; };
+    std::vector<TerrainFlatten> regs;
+    Lcg rng(4242);
+    for (int i = 0; i < 20; ++i) {
+        double cx = rng.range(-150, 150), cz = rng.range(-150, 150), len = rng.range(30, 90);
+        Vec3 a(cx, 0, cz), b(cx + rng.range(-1, 1) * len, 0, cz + len);
+        TerrainFlatten f = makeFlattenRamp(a, b, natural(cx, cz), natural(cx, cz + len), 5.0, 6.0);
+        f.falloffMode = TerrainFlatten::Falloff::DaylightBatter;
+        f.cutBatter = 1.0; f.fillBatter = 0.6; f.falloff = 24.0;
+        regs.push_back(std::move(f));
+    }
+    FlattenGrid grid = buildFlattenGrid(regs);
+    int mismatches = 0;
+    for (int i = 0; i < 3000; ++i) {
+        double x = rng.range(-200, 200), z = rng.range(-200, 200);
+        double b = natural(x, z);
+        if (std::fabs(applyFlatten(regs, x, z, b, 0.0) - applyFlatten(grid, regs, x, z, b, 0.0)) > 1e-9)
+            ++mismatches;
+    }
+    CHECK(mismatches == 0);
+}
+
 // The autoRoundabout policy on a net is honoured by the conform/mesh graph pass
 // (ADR-0075 Phase 0): a degree-5 star is promoted to a roundabout ring only when
 // the net asks for it — the generator's autoRoundabout=false must survive into
