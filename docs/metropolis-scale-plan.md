@@ -86,6 +86,19 @@ the eroded 2.6km terrain with the CDLOD sampler.
   smoothstep feather too narrow on steep eroded slopes; junction lowest-plane
   rule fighting the chain profile; erosion detail re-emerging inside corridors
   (erodedBase sampled with flatten applied after — verify order).
+- **P3.1 RESULTS (2026-07-10, road_poke_probe metropolis mode, dilate 1.5):**
+  deck verts 147,741. Poke-through is the MINOR failure (0.08% CDLOD-sampled,
+  worst 0.66m; 0.63% vs exact carve, worst 2.0m). The DOMINANT failure is
+  PROUD APRONS: 12,457 verts (8.4%) stand >1m above the sampled terrain
+  (26,801 > 0.7m; worst 2.64m @ (2,-390)) — the "road on a plinth" cliff seen
+  on device. Junction interiors poke 5.7x worse than mid-span (2.32% vs
+  0.41%). The conform corridor already spans halfWidth + sidewalk + 2m, so
+  the proud verts are a VERTICAL disagreement between the weld's chain
+  profile and the conform's profile (they are built by parallel code paths
+  that are supposed to match — road_net.cpp weld vs roadNetConformRegions),
+  worst where the junction lowest-plane rule overrides one but not the other.
+  P3.2 should unify them: ONE profile source (the weld's, post-junction-
+  resolution) feeding both the mesh and the flatten planes.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

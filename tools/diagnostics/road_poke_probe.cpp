@@ -8,30 +8,63 @@
 #include "../../src/engine/procgen/city/road_net.h"
 #include "../../src/engine/procgen/city/road_network.h"
 #include "../../src/engine/procgen/terrain.h"
+#include "../../src/engine/procgen/erosion.h"
 #include "../../src/engine/procgen/terrain_lod.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 using namespace engine;
 
 int main(int argc, char** argv) {
+    // Mode: default = the small living_city study; "metropolis" = the real 2.6km
+    // ERODED coastal shelf + radius-1000 metro (plan P3.1 evidence pass).
+    const bool metro = argc > 2 && std::string(argv[2]) == "metropolis";
     TerrainParams tp;
-    tp.size = 620; tp.resolution = 380; tp.heightScale = 13;
-    tp.noiseScale = 0.008; tp.octaves = 4; tp.warp = 0.3; tp.mountainScale = 0.01;
-    tp.rangeSpine = sampleRangeSpine({Vec3(-300,0,-255),Vec3(-150,0,-288),Vec3(20,0,-284),
-                                      Vec3(190,0,-268),Vec3(310,0,-244)});
-    tp.rangeWidth = 135; tp.rangeHeight = 76; tp.rangeVariation = 0.6;
-    Noise noise(7u);
+    nlohmann::json gen;
+    if (metro) {
+        tp.size = 2600; tp.resolution = 900; tp.heightScale = 13;
+        tp.noiseScale = 0.0026; tp.octaves = 6; tp.warp = 0.35;
+        tp.mountainHeight = 180; tp.mountainScale = 0.002;
+        tp.mountainMaskScale = 0.001; tp.mountainMaskLo = -0.1f; tp.mountainMaskHi = 0.4f;
+        tp.mountainAlongRange = true; tp.tiltX = -0.045; tp.seaLevel = -5.0;
+        tp.rangeSpine = sampleRangeSpine({Vec3(-1180,0,-900),Vec3(-1120,0,-300),
+                                          Vec3(-1180,0,300),Vec3(-1120,0,900)});
+        tp.rangeWidth = 300; tp.rangeHeight = 260; tp.rangeVariation = 0.6;
+        gen = {{"kind","metro"},{"radius",1000},{"hotspots",9},{"block_size",150},
+               {"artery_width",13},{"street_width",7},{"freeway_width",22},
+               {"collector_width",9.5},{"interchange_spacing",700},{"seed",9},
+               {"seg_length",32},{"influence",340},{"kill_radius",70},
+               {"merge_radius",52},{"corridor_spacing",90},{"ambient_per_500",40},
+               {"loop_min",140},{"loop_max",330},{"min_road_len",24},
+               {"sea_level",-5.0}};
+    } else {
+        tp.size = 620; tp.resolution = 380; tp.heightScale = 13;
+        tp.noiseScale = 0.008; tp.octaves = 4; tp.warp = 0.3; tp.mountainScale = 0.01;
+        tp.rangeSpine = sampleRangeSpine({Vec3(-300,0,-255),Vec3(-150,0,-288),Vec3(20,0,-284),
+                                          Vec3(190,0,-268),Vec3(310,0,-244)});
+        tp.rangeWidth = 135; tp.rangeHeight = 76; tp.rangeVariation = 0.6;
+        gen = {{"kind","district"},{"radius",170},{"arterials",3},
+            {"artery_width",13},{"street_width",7},{"block_size",82},{"curviness",0.22},{"seed",5}};
+    }
+    Noise noise(metro ? 11u : 7u);
+    if (metro) {
+        // The device bakes EROSION into the shared height path — conform evidence
+        // must run on the same ground (erosion re-carving corridors is hypothesis
+        // #4 in the plan). Same knobs as metropolis.json.
+        ErosionParams ep;
+        ep.droplets = 500000; ep.thermalIterations = 14; ep.talus = 1.0f;
+        ep.erodeRadius = 4;
+        bakeErodedTerrain(tp, noise, tp.size, 800, ep);
+    }
     auto natural = [&](double x, double z){ return terrainHeight(tp, noise, x, z); };
 
     RoadNet net; net.width = 7.0; net.sidewalk = 3.5; net.curb = 0.16;
     net.cornerRadius = 3.0; net.lift = 0.08;
-    nlohmann::json gen = {{"kind","district"},{"radius",170},{"arterials",3},
-        {"artery_width",13},{"street_width",7},{"block_size",82},{"curviness",0.22},{"seed",5}};
+    net.heightAt = natural;   // BEFORE generate: the metro recipe gates on terrain
     applyGenerateRecipe(net, gen);
-    net.heightAt = natural;
 
     // conform -> carved terrain (exact)
     TerrainParams carved = tp;
