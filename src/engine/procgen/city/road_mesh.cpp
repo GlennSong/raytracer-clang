@@ -1101,7 +1101,7 @@ static Poly2 cleanPolygon(const Poly2& in, double grid) {
 std::vector<std::vector<double>> weldChainProfiles(
     const std::vector<UnionSpine>& spines,
     const std::function<double(double, double)>& heightAt, double topY,
-    double maxGrade) {
+    double maxGrade, double overlapReach) {
     std::vector<std::vector<double>> out(spines.size());
     std::vector<std::vector<double>> arcs(spines.size());
     for (std::size_t si = 0; si < spines.size(); ++si) {
@@ -1149,6 +1149,43 @@ std::vector<std::vector<double>> weldChainProfiles(
             }
         }
     }
+    if (heightAt && overlapReach > 0.0) {
+        // MID-SPAN overlap reconciliation (P3.2): where corridors overlap, every
+        // deck takes the LOWEST overlapping profile — the same rule the terrain
+        // carve uses — so deck and carved ground cannot disagree there. Sampled
+        // against the pre-adjustment snapshot so the pass is order-independent.
+        const std::vector<std::vector<double>> snap = out;
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            if (out[si].size() < 2) continue;
+            const auto& pts = spines[si].points;
+            for (std::size_t k = 0; k < out[si].size(); ++k) {
+                const Vec2& q = pts[k];
+                for (std::size_t sj = 0; sj < spines.size(); ++sj) {
+                    if (sj == si || snap[sj].size() < 2) continue;
+                    const auto& pj = spines[sj].points;
+                    const double reach = spines[sj].halfWidth + overlapReach;
+                    for (std::size_t i = 0; i + 1 < pj.size(); ++i) {
+                        Vec2 ab = pj[i + 1] - pj[i];
+                        double L2 = ab.lengthSquared();
+                        double t = L2 < 1e-12 ? 0.0
+                                              : std::max(0.0, std::min(1.0, dot(q - pj[i], ab) / L2));
+                        if ((q - (pj[i] + ab * t)).length() > reach) continue;
+                        out[si][k] = std::min(out[si][k],
+                                              snap[sj][i] + (snap[sj][i + 1] - snap[sj][i]) * t);
+                    }
+                }
+            }
+            // Ease the approaches back into any dip at maxGrade (lower-only, so
+            // the reconciled overlap height is never raised back up).
+            const auto& sArc = arcs[si];
+            for (std::size_t k = 1; k < out[si].size(); ++k)
+                out[si][k] = std::min(out[si][k],
+                                      out[si][k - 1] + maxGrade * (sArc[k] - sArc[k - 1]));
+            for (std::size_t k = out[si].size() - 1; k-- > 0;)
+                out[si][k] = std::min(out[si][k],
+                                      out[si][k + 1] + maxGrade * (sArc[k + 1] - sArc[k]));
+        }
+    }
     for (auto& h : out)
         for (double& v : h) v += topY;
     return out;
@@ -1164,7 +1201,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         // Junction-RECONCILED deck profiles (shared with the terrain-conform
         // pass, so the ground is carved to the same surface the deck rides).
         std::vector<std::vector<double>> hs =
-            weldChainProfiles(spines, p.heightAt, p.topY, p.maxGrade);
+            weldChainProfiles(spines, p.heightAt, p.topY, p.maxGrade,
+                              p.sidewalkWidth + 4.0);
         for (std::size_t si = 0; si < spines.size(); ++si) {
             const UnionSpine& sp = spines[si];
             const int n = static_cast<int>(sp.points.size());

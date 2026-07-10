@@ -412,36 +412,18 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
     RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
     (void)maxGrade;   // superseded: the carve must use the deck's own grade
     std::vector<UnionSpine> spines = weldChainSpines(g);
-    std::vector<std::vector<double>> profiles = weldChainProfiles(
-        spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade);
-    // Where corridors OVERLAP (junction interiors), the decks of the crossing
-    // chains can still disagree mid-span even after endpoint reconciliation —
-    // the ground must sit under the LOWEST of them, or the lower deck reads
-    // buried. Pull each carve sample down to the minimum overlapping profile.
-    auto minOverlapping = [&](std::size_t si, const Vec2& q, double h) {
-        for (std::size_t sj = 0; sj < spines.size(); ++sj) {
-            if (sj == si || profiles[sj].size() < 2) continue;
-            const auto& pts = spines[sj].points;
-            const double reach = spines[sj].halfWidth + net.sidewalk + 1.0;
-            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
-                Vec2 ab = pts[i + 1] - pts[i];
-                double L2 = ab.lengthSquared();
-                double t = L2 < 1e-12
-                               ? 0.0
-                               : std::max(0.0, std::min(1.0, dot(q - pts[i], ab) / L2));
-                if ((q - (pts[i] + ab * t)).length() > reach) continue;
-                h = std::min(h, profiles[sj][i] +
-                                    (profiles[sj][i + 1] - profiles[sj][i]) * t);
-            }
-        }
-        return h;
-    };
+    // ONE profile source (plan P3.2): weldChainProfiles now reconciles mid-span
+    // overlaps INSIDE the shared pass — the mesher rides the same reconciled
+    // heights — so deck and carve cannot disagree at junctions. The old carve-
+    // only minOverlapping left the higher deck floating up to 2.6 m above the
+    // ground it never lowered (road_poke_probe metropolis, 8.4% verts >1 m).
+    std::vector<std::vector<double>> profiles =
+        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade,
+                          net.sidewalk + 4.0);
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         if (profiles[si].size() < 2) continue;
         std::vector<double> profile = profiles[si];
-        for (std::size_t k = 0; k < profile.size(); ++k)
-            profile[k] = minOverlapping(si, sp.points[k], profile[k]);
         // Carve a step BELOW the drivable profile, not exactly to it: the
         // terrain grid interpolates between its samples and can overshoot the
         // carve target past the road's small lift, patchily swallowing the
@@ -476,7 +458,8 @@ StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p) {
     RoadGraph g = constrainedNetGraph(net);
     std::vector<UnionSpine> spines = weldChainSpines(g);
     std::vector<std::vector<double>> profiles =
-        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade);
+        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade,
+                          net.sidewalk + 4.0);
 
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];

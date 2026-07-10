@@ -99,6 +99,14 @@ the eroded 2.6km terrain with the CDLOD sampler.
   worst where the junction lowest-plane rule overrides one but not the other.
   P3.2 should unify them: ONE profile source (the weld's, post-junction-
   resolution) feeding both the mesh and the flatten planes.
+- **P3.2 ROUND 1 (2026-07-10):** the mid-span overlap reconciliation moved INTO
+  weldChainProfiles (overlapReach param) so decks agree with each other and the
+  carve by construction; approaches ease back at maxGrade. Probe: >0.7m proud
+  26,801 -> 14,321 (-47%), >1m 12,457 -> 5,822, CDLOD poke steady 0.09%. The
+  RESIDUE clusters where junction-pad geometry (corner fillets, plaza rings)
+  bulges outside every chain corridor — next: probe dumps worst-proud vertex
+  locations bucketed by pad-vs-chain, then either widen chain coverage to the
+  pad ring or emit pad-specific flatten footprints.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

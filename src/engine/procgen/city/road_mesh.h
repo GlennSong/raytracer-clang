@@ -279,10 +279,17 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
 // The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
 // an endpoint agree on its height) — weldSolid rides these, and the terrain
 // conform pass carves to the same surface. heightAt null = flat topY.
+// `overlapReach` > 0 additionally reconciles MID-SPAN overlaps: wherever two
+// chains' corridors come within (halfWidth_j + overlapReach) of each other —
+// junction interiors, slip roads, close parallels — every deck is pulled to
+// the LOWEST overlapping profile and the approach is re-eased at maxGrade.
+// This is what lets the terrain conform carve to the same surface the decks
+// ride: with one-sided reconciliation the higher deck floated up to 2.6 m
+// above the carved ground (road_poke_probe metropolis, plan P3.1/P3.2).
 std::vector<std::vector<double>> weldChainProfiles(
     const std::vector<UnionSpine>& spines,
     const std::function<double(double, double)>& heightAt, double topY,
-    double maxGrade);
+    double maxGrade, double overlapReach = 0.0);
 
 // Union spines into a full ROADBED — carriageway + raised sidewalk + curb — and drape
 // it on terrain (ADR-0048). The SDF gives the bands for free: carriageway is {sdf<0},
