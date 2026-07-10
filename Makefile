@@ -182,7 +182,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_ped_graph.cpp \
 	$(TEST_DIR)/test_city_generated.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
-	$(TEST_DIR)/test_surface_field.cpp
+	$(TEST_DIR)/test_surface_field.cpp \
+	$(TEST_DIR)/test_architect.cpp
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \

@@ -46,7 +46,10 @@ enum class PartId : uint8_t {
     // (materialFor packs the Surface id into the RenderMaterial flags).
     Brick, Concrete, Stucco, Metal,
     Wood,    // rooftop water tanks, timber details
-    Count
+    Siding,  // painted wood-siding facades (WoodSiding surface, colour in verts)
+    Path,    // walking paths / front walks (Pavement surface)
+    Foliage, // hedges, planter greenery (lot landscaping)
+    Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
 // Facade material style (the "different facades like brick or concrete" axis).
@@ -55,7 +58,11 @@ enum class PartId : uint8_t {
 // the building to an all-glass facade. A future layer can swap in tiled
 // procedural brick/concrete *textures* with world-scaled UVs.
 enum class FacadeStyle : uint8_t {
-    Concrete, Brick, Stucco, Painted, GlassCurtain, Metal, Count
+    Concrete, Brick, Stucco, Painted, GlassCurtain, Metal,
+    Wood,       // painted wood siding (suburban timber homes)
+    DarkBrick,  // deep browns / charcoal reds (lofts, factories, dark towers)
+    Sandstone,  // warm buff ashlar (banks, museums, art-deco masonry)
+    Count
 };
 
 // A seeded wall colour for a style (brick reds, concrete greys, stucco creams,
@@ -191,7 +198,8 @@ struct BuildingParams {
     // Roof form (P3.c): Flat keeps the parapet deck; Gable/Hip raise a pitched
     // roof over the top plan (rect-ish plans only — an odd plan falls back to
     // Flat until a straight-skeleton pass exists). Residential vocabulary.
-    enum class RoofStyle : uint8_t { Flat, Gable, Hip };
+    // Sawtooth is the factory roof: north-light teeth with clerestory glass.
+    enum class RoofStyle : uint8_t { Flat, Gable, Hip, Sawtooth };
     RoofStyle roofStyle = RoofStyle::Flat;
     Real  roofPitch = 0.55;      // rise/run of the pitched roof
     // Street-aware facades (P3.c): when true, ground-floor RETAIL storefronts
@@ -199,6 +207,26 @@ struct BuildingParams {
     // side/rear edges wear plain residential ground walls — a building has a
     // FRONT (living-city realism).
     bool  retailStreetOnly = false;
+    // BALCONIES: a slab + railing stamped per bay on street-facing upper
+    // floors (condos / modern flats). Skipped on curtain/solid facades.
+    bool  balconies = false;
+    // PORCH: a covered timber entrance porch — platform, posts, shed roof —
+    // in front of the door (bungalows, craftsman houses).
+    bool  porch = false;
+    // CHIMNEY: a masonry stack through the pitched roof near the ridge.
+    bool  chimney = false;
+    // SPIRE: a stepped crown + lathe-turned finial mast on the flat roof
+    // (art-deco towers) instead of the mechanical penthouse.
+    bool  spire = false;
+    // STEEPLE: a square bell tower over the entrance bay, capped by a
+    // pyramidal spire (churches, chapels).
+    bool  steeple = false;
+    // PARKING DECKS: upper storeys become open decks — a solid spandrel band,
+    // an open air gap, and slim piers per bay (parking garages).
+    bool  parkingDecks = false;
+    // SIDE vehicle bays (>0): roller doors on the edge NEXT to the street
+    // face — the attached-garage / loading-side vocabulary.
+    int   sideBays = 0;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
     int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)

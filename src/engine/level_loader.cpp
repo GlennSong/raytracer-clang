@@ -2487,6 +2487,46 @@ bool LevelLoader::load(const std::string& path,
                     cfg.places.push_back(std::move(p));
                 }
 
+                // One tree (bark + leaf entities) planted at a world spot —
+                // shared by the legacy scatter and the sculpted treeSpots.
+                auto plantTreeAt = [&](double px, double pz, double scale,
+                                       uint32_t th) {
+                    Vec3 tPos(px, 0, pz);
+                    tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;
+                    const TreeKit& kit = treeKit(th % 3u);
+                    Transform tt;
+                    tt.position = tPos;
+                    tt.scale = Vec3(scale, scale, scale);
+                    tt.orientation =
+                        Quat::fromAxisAngle(Vec3(0, 1, 0), (th % 628u) / 100.0);
+                    Entity te = world.create();
+                    world.add<Transform>(te, tt);
+                    world.add<PrevTransform>(te, PrevTransform{tt});
+                    Renderable tr;
+                    tr.mesh = kit.bark;
+                    tr.material = kit.barkMat;
+                    world.add<Renderable>(te, tr);
+                    if (kit.leaves.index) {
+                        Entity le = world.create();
+                        world.add<Transform>(le, tt);
+                        world.add<PrevTransform>(le, PrevTransform{tt});
+                        Renderable lr;
+                        lr.mesh = kit.leaves;
+                        lr.material = kit.leafMat;
+                        world.add<Renderable>(le, lr);
+                    }
+                };
+                // SCULPTED lots (parks, house yards) carry their own
+                // deterministic tree spots: (x, trunk scale, z).
+                if (!lb.treeSpots.empty()) {
+                    uint32_t th = static_cast<uint32_t>(
+                        std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
+                        2654435761u;
+                    for (const Vec3& s : lb.treeSpots) {
+                        th = th * 1664525u + 1013904223u;
+                        plantTreeAt(s.x, s.z, s.y, th >> 8);
+                    }
+                }
                 if (lb.type == "park" || lb.type == "green") {
                     // A grass pad plus a few trees, not a grown building. The
                     // pad is the LOT'S OWN polygon when the pass provides one
@@ -2516,6 +2556,7 @@ bool LevelLoader::load(const std::string& path,
                     // Trees: deterministic count + spots from the lot position,
                     // scaled by the pad's real area so a block-sized park reads
                     // as a park (device: "scatter more trees around it").
+                    // Sculpted lots already planted their own spots above.
                     const uint32_t h = static_cast<uint32_t>(
                         std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) * 2654435761u;
                     const double padArea = lb.pad.empty()
@@ -2524,7 +2565,7 @@ bool LevelLoader::load(const std::string& path,
                     const int nTrees = lb.type == "park"
                         ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
                         : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
-                    for (int ti = 0; ti < nTrees; ++ti) {
+                    for (int ti = 0; lb.treeSpots.empty() && ti < nTrees; ++ti) {
                         const uint32_t th = h ^ (0x9e3779b9u * static_cast<uint32_t>(ti + 1));
                         // Spread across ~90% of the pad; the point-in-polygon
                         // shrink below pulls strays back onto the grass.
@@ -2542,32 +2583,10 @@ bool LevelLoader::load(const std::string& path,
                                     lx *= f; lz *= f; break;
                                 }
                             }
-                        Vec3 tPos(lb.site.x + lx * cy - lz * sy, 0,
-                                  lb.site.y + lx * sy + lz * cy);
-                        tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;
-                        const TreeKit& kit = treeKit((th >> 16) % 3u);
                         const double scale = 0.8 + ((th >> 24) & 0x3Fu) / 63.0 * 0.6;
-                        Transform tt;
-                        tt.position = tPos;
-                        tt.scale = Vec3(scale, scale, scale);
-                        tt.orientation = Quat::fromAxisAngle(
-                            Vec3(0, 1, 0), (th % 628u) / 100.0);
-                        Entity te = world.create();
-                        world.add<Transform>(te, tt);
-                        world.add<PrevTransform>(te, PrevTransform{tt});
-                        Renderable tr;
-                        tr.mesh = kit.bark;
-                        tr.material = kit.barkMat;
-                        world.add<Renderable>(te, tr);
-                        if (kit.leaves.index) {
-                            Entity le = world.create();
-                            world.add<Transform>(le, tt);
-                            world.add<PrevTransform>(le, PrevTransform{tt});
-                            Renderable lr;
-                            lr.mesh = kit.leaves;
-                            lr.material = kit.leafMat;
-                            world.add<Renderable>(le, lr);
-                        }
+                        plantTreeAt(lb.site.x + lx * cy - lz * sy,
+                                    lb.site.y + lx * sy + lz * cy, scale,
+                                    th >> 16);
                     }
                 }
             }

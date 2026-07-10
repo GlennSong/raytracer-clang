@@ -39,6 +39,25 @@
       }
     },
     {
+      "name": "NewRecipes",
+      "position": [
+        72,
+        52,
+        248
+      ],
+      "forward": [
+        -0.51,
+        -0.34,
+        -0.79
+      ],
+      "lens": {
+        "focalLength": 28,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 125.0
+      }
+    },
+    {
       "name": "Eaves",
       "position": [
         -46,

@@ -25,6 +25,9 @@ local MATS = {
   metal    = material.new{ surface = "metal",    roughness = 0.45, metallic = 0.55 },
   glass    = material.new{ roughness = 0.08, metallic = 0.9 },
   roof     = material.new{ roughness = 0.85 },
+  siding   = material.new{ surface = "siding",   roughness = 0.80 },
+  path     = material.new{ surface = "pavement", roughness = 0.95 },
+  foliage  = material.new{ roughness = 0.95 },
 }
 
 local function addParts(parts, off)
@@ -140,6 +143,42 @@ local SPECS = {
                                     roof = "gable" } },       -- one rowhouse unit
   { plan = rectPlan(18, 13), p = { floors = 4, style = "brick",
                                    ground_retail = true } },  -- mixed use
+  -- Row 6: the NEW archetypes (city-building-recipes) — suburban timber,
+  -- balconied condos, the deco spire, the sawtooth factory.
+  { plan = rectPlan(13, 10), p = { floors = 2, style = "wood",
+                                   ground_retail = false, porch = true,
+                                   chimney = true, roof = "gable" } },
+                                                              -- craftsman house
+  { plan = rectPlan(18, 14), p = { floors = 6, style = "concrete",
+                                   balconies = true,
+                                   ground_retail = false } }, -- condo tower
+  { plan = rectPlan(18, 15), p = { floors = 12, style = "darkbrick",
+                                   setback_floors = 4, setback_every = 1.5,
+                                   spire = true, lights_y = 2 } },
+                                                              -- art-deco tower
+  { plan = rectPlan(24, 16), p = { floors = 1, style = "darkbrick",
+                                   solid_facade = true, ground_height = 5.5,
+                                   ground_bays = 2, roof = "sawtooth" } },
+                                                              -- the factory
+  -- Row 7: church steeple, parking decks, the sandstone bank, a modern house.
+  { plan = rectPlan(20, 12), p = { floors = 0, style = "stucco",
+                                   ground_height = 7, ground_retail = false,
+                                   window_head = "round", quoins = true,
+                                   roof = "gable", roof_pitch = 0.65,
+                                   steeple = true, entrance_steps = true } },
+                                                              -- the church
+  { plan = rectPlan(22, 16), p = { floors = 5, style = "concrete",
+                                   parking_decks = true, ground_bays = 2,
+                                   ground_retail = false } }, -- parking garage
+  { plan = rectPlan(18, 13), p = { floors = 2, style = "sandstone",
+                                   pilasters = true, quoins = true,
+                                   ground_height = 5, ground_retail = false,
+                                   entrance_steps = true } }, -- the bank
+  { plan = rectPlan(13, 9),  p = { floors = 2, style = "painted",
+                                   wall_color = {0.86, 0.86, 0.84},
+                                   ground_retail = false, lights_x = 2,
+                                   window_hood = "none", parapet = 0.5 } },
+                                                              -- modern house
 }
 
 local COLS, SPACING = 4, 38

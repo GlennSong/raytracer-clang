@@ -76,6 +76,27 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         case FacadeStyle::Metal:
             // Cool steel / corrugated siding (industrial).
             return lerp(Vec3(0.46, 0.50, 0.54), Vec3(0.56, 0.58, 0.60), t);
+        case FacadeStyle::Wood: {
+            // Painted wood siding: a small swatch book of house paints —
+            // whites, sages, blue-greys, butter yellows, barn reds.
+            static const Vec3 kSwatch[] = {
+                {0.88, 0.86, 0.80},   // farmhouse white
+                {0.68, 0.74, 0.66},   // sage green
+                {0.58, 0.66, 0.74},   // coastal blue-grey
+                {0.84, 0.76, 0.52},   // butter yellow
+                {0.60, 0.34, 0.28},   // barn red
+                {0.74, 0.68, 0.58},   // driftwood tan
+            };
+            const Vec3 base = kSwatch[rng.next() % 6];
+            return base + Vec3(rng.range(-0.03, 0.03), rng.range(-0.03, 0.03),
+                               rng.range(-0.03, 0.03));
+        }
+        case FacadeStyle::DarkBrick:
+            // Deep browns to charcoal reds (lofts, factories, dark towers).
+            return lerp(Vec3(0.26, 0.14, 0.11), Vec3(0.38, 0.22, 0.18), t);
+        case FacadeStyle::Sandstone:
+            // Warm buff / honey ashlar (banks, museums, deco masonry).
+            return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
         case FacadeStyle::Concrete:
         default:
             return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
@@ -115,6 +136,17 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Wood:
             m.albedo = {0.52, 0.40, 0.27}; m.metallic = 0.0f; m.roughness = 0.85f;
             m.setSurface(RenderMaterial::Surface::WoodSiding); break;
+        case PartId::Siding:
+            // Painted siding: the paint colour rides in vertex colour (like
+            // Brick/Stucco); the WoodSiding surface adds the board detail.
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.80f;
+            m.setSurface(RenderMaterial::Surface::WoodSiding); break;
+        case PartId::Path:
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.95f;
+            m.setSurface(RenderMaterial::Surface::Pavement); break;
+        case PartId::Foliage:
+            // Hedges/planters: colour rides in vertex colour, no surface.
+            m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.95f; break;
         case PartId::Wall:
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
@@ -1530,6 +1562,213 @@ static void emitRotunda(BuildingMesh& out, const Vec3& c, Real R, Real roofY,
     emitLathe(out, PartId::Trim, Vec3(c.x, roofY, c.z), cupola, 10, trimCol);
 }
 
+// BALCONIES: one slab + railing per facade bay, hung at floor level over a
+// street-facing edge (the condo / modern-flat vocabulary). Same bay math as
+// the facade splitter, so balconies land under their windows.
+static void emitBalconyRun(BuildingMesh& out, const FaceRect& fr,
+                           const BuildingParams& p) {
+    const Vec3 up(0, 1, 0);
+    const int bays = std::max(
+        1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
+    const Real bw = fr.width / bays;
+    const Real w = std::min(bw - 0.9, Real(3.2));
+    if (w < 1.2) return;
+    const Real depth = 1.25, railH = 0.95;
+    const Vec3 railCol(0.22, 0.23, 0.25);
+    for (int b = 0; b < bays; ++b) {
+        const Real cx = (b + 0.5) * bw;
+        emitBox(out, Scope{fr.at(cx - w * 0.5, -0.07), {fr.h, up, fr.n},
+                           Vec3(w, 0.14, depth)},
+                PartId::Concrete, p.trimColor);
+        emitBox(out, Scope{fr.at(cx - w * 0.5, 0.07) + fr.n * (depth - 0.06),
+                           {fr.h, up, fr.n}, Vec3(w, railH, 0.06)},
+                PartId::Metal, railCol);
+        emitBox(out, Scope{fr.at(cx - w * 0.5, 0.07), {fr.h, up, fr.n},
+                           Vec3(0.06, railH, depth)},
+                PartId::Metal, railCol);
+        emitBox(out, Scope{fr.at(cx + w * 0.5 - 0.06, 0.07), {fr.h, up, fr.n},
+                           Vec3(0.06, railH, depth)},
+                PartId::Metal, railCol);
+    }
+}
+
+// PORCH: the covered timber entrance — platform + steps, corner posts, and a
+// flat canopy with a fascia board — centred on the door (bungalow/craftsman).
+static void emitPorch(BuildingMesh& out, const FaceRect& fr,
+                      const BuildingParams& p) {
+    const Vec3 up(0, 1, 0);
+    const Real w = std::min(fr.width - 0.8, Real(4.6));
+    if (w < 2.2) return;
+    const Real depth = 1.9, platH = 0.28;
+    const Real roofY = std::min(fr.height - 0.3, Real(2.75));
+    const Real cx = fr.width * 0.5;
+    const Vec3 wood = materialFor(PartId::Wood, p.wallColor).albedo;
+    emitEntranceSteps(out, fr, cx, w, platH, depth, PartId::Concrete,
+                      p.trimColor * 0.9);
+    const int posts = w > 3.6 ? 3 : 2;
+    for (int i = 0; i < posts; ++i) {
+        const Real x = cx - w * 0.5 + 0.12 + (w - 0.38) * (Real(i) / (posts - 1));
+        emitBox(out, Scope{fr.at(x, platH) + fr.n * (depth - 0.24),
+                           {fr.h, up, fr.n}, Vec3(0.14, roofY - platH, 0.14)},
+                PartId::Wood, wood * 0.9);
+    }
+    emitBox(out, Scope{fr.at(cx - w * 0.5 - 0.25, roofY), {fr.h, up, fr.n},
+                       Vec3(w + 0.5, 0.10, depth + 0.35)},
+            PartId::Roof, materialFor(PartId::Roof, p.wallColor).albedo);
+    emitBox(out, Scope{fr.at(cx - w * 0.5 - 0.25, roofY - 0.16) +
+                           fr.n * (depth + 0.29),
+                       {fr.h, up, fr.n}, Vec3(w + 0.5, 0.18, 0.06)},
+            PartId::Wood, wood);
+}
+
+// OPEN PARKING DECK storey: a solid spandrel band below, an open air gap, a
+// thin top edge band, and slim piers per bay — plus a guard rail across the
+// opening. The caller lays a deck slab per storey so the openings read as
+// floors, not holes.
+static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
+                                const BuildingParams& p, const Vec3& wallColor) {
+    const Vec3 up(0, 1, 0);
+    RenderMesh wall;
+    const Real spandrel = std::min(Real(1.05), fr.height * 0.35);
+    const Real band = 0.30;
+    emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, spandrel),
+             fr.at(0, spandrel), fr.n, wallColor);
+    emitQuad(wall, fr.at(0, fr.height - band), fr.at(fr.width, fr.height - band),
+             fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
+    appendToPart(out, p.wallPart, wall);
+    const int bays = std::max(
+        1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
+    const Real bw = fr.width / bays;
+    for (int b = 0; b <= bays; ++b) {
+        const Real x = std::min(std::max(b * bw - 0.14, Real(0)), fr.width - 0.28);
+        emitBox(out, Scope{fr.at(x, 0) - fr.n * 0.05, {fr.h, up, fr.n},
+                           Vec3(0.28, fr.height, 0.30)},
+                PartId::Concrete, wallColor * 0.94);
+    }
+    emitBox(out, Scope{fr.at(0, spandrel + 0.32) - fr.n * 0.02,
+                       {fr.h, up, fr.n}, Vec3(fr.width, 0.05, 0.05)},
+            PartId::Metal, Vec3(0.25, 0.26, 0.28));
+}
+
+// ART-DECO SPIRE CROWN: stepped setback blocks over the top tier and a
+// lathe-turned mast — the skyline finial (replaces the mechanical penthouse).
+// Returns the crown's rise above roofY.
+static Real emitSpireCrown(BuildingMesh& out, const OBB2& topObb, Real roofY,
+                           const BuildingParams& p, const Vec3& wallColor) {
+    const Vec3 up(0, 1, 0);
+    Vec3 r3(topObb.axis[0].x, 0, topObb.axis[0].y);
+    Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
+    const Vec3 c(topObb.center.x, 0, topObb.center.y);
+    const Real hw = topObb.half[0], hd = topObb.half[1];
+    Real y = roofY;
+    for (Real s : {Real(0.62), Real(0.38)}) {
+        const Real w2 = hw * s, d2 = hd * s;
+        const Real h = std::max(Real(1.2), std::min(hw, hd) * 0.45);
+        emitBox(out, Scope{Vec3(c.x, y, c.z) - r3 * w2 - f3 * d2, {r3, up, f3},
+                           Vec3(w2 * 2, h, d2 * 2)},
+                p.wallPart, wallColor);
+        emitBox(out, Scope{Vec3(c.x, y + h, c.z) - r3 * (w2 + 0.12) -
+                               f3 * (d2 + 0.12),
+                           {r3, up, f3}, Vec3(w2 * 2 + 0.24, 0.14, d2 * 2 + 0.24)},
+                PartId::Trim, p.trimColor);
+        y += h + 0.14;
+    }
+    const Real mastH =
+        std::min(Real(9.0), std::max(Real(3.0), std::min(hw, hd) * 1.6));
+    std::vector<Vec2> prof = {{0.50, 0.0},
+                              {0.34, mastH * 0.25},
+                              {0.18, mastH * 0.60},
+                              {0.06, mastH * 0.90},
+                              {0.0, mastH}};
+    emitLathe(out, PartId::Metal, Vec3(c.x, y, c.z), prof, 10,
+              Vec3(0.55, 0.56, 0.60));
+    return (y + mastH) - roofY;
+}
+
+// SAWTOOTH ROOF: north-light factory teeth — a slope up, a vertical
+// clerestory glass drop, repeated along the top plan's long axis, with
+// wall-material end caps. Returns the teeth's rise above y.
+static Real emitSawtoothRoof(BuildingMesh& out, const Poly2& topPlan, Real y,
+                             const BuildingParams& p, const Vec3& wallColor) {
+    OBB2 obb = orientedBoundingBox(topPlan);
+    const int la = obb.longAxis(), sa = 1 - la;
+    Vec3 r3(obb.axis[la].x, 0, obb.axis[la].y);
+    Vec3 f3(obb.axis[sa].x, 0, obb.axis[sa].y);
+    const Real hw = obb.half[la], hd = obb.half[sa];
+    const int teeth = std::max(2, static_cast<int>(std::lround(2 * hw / 4.2)));
+    const Real tw = 2 * hw / teeth;
+    const Real rise = std::min(Real(1.7), std::max(Real(0.9), tw * 0.38));
+    const Vec3 C(obb.center.x, 0, obb.center.y);
+    const Vec3 up(0, 1, 0);
+    const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
+    const Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    RenderMesh roof, glass, wallM;
+    const Real y0 = y + 0.03;
+    for (int k = 0; k < teeth; ++k) {
+        const Real u0 = -hw + k * tw, u1 = u0 + tw;
+        Vec3 A0 = C + r3 * u0 - f3 * hd + up * y0;         // low eave, near
+        Vec3 A1 = C + r3 * u0 + f3 * hd + up * y0;         // low eave, far
+        Vec3 B0 = C + r3 * u1 - f3 * hd + up * (y0 + rise);
+        Vec3 B1 = C + r3 * u1 + f3 * hd + up * (y0 + rise);
+        emitQuad(roof, A0, A1, B1, B0, normalize(up * tw - r3 * rise), roofCol);
+        Vec3 D0 = C + r3 * u1 - f3 * hd + up * y0;
+        Vec3 D1 = C + r3 * u1 + f3 * hd + up * y0;
+        emitQuad(glass, D0, D1, B1, B0, r3, glassCol);     // the clerestory
+        MeshBuilder::emitTri(wallM, A0, D0, B0, f3 * -1, wallColor);
+        MeshBuilder::emitTri(wallM, D1, A1, B1, f3, wallColor);
+    }
+    appendToPart(out, PartId::Roof, roof);
+    appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, p.wallPart, wallM);
+    return rise + 0.03;
+}
+
+// STEEPLE: a square bell tower rising through the pitched roof at the
+// entrance end of the ridge — belfry openings on all four faces, a cornice
+// cap, a pyramidal spire and a finial. Returns the tower top (world y).
+static Real emitSteeple(BuildingMesh& out, const Vec3& cXZ, const Vec3& r3,
+                        const Vec3& f3, Real baseYv, Real ridgeY,
+                        const BuildingParams& p, const Vec3& wallColor) {
+    const Vec3 up(0, 1, 0);
+    const Real tw = 1.5;                       // tower half-width
+    const Real bodyTop = ridgeY + 2.6;
+    emitBox(out, Scope{Vec3(cXZ.x, baseYv, cXZ.z) - r3 * tw - f3 * tw,
+                       {r3, up, f3}, Vec3(tw * 2, bodyTop - baseYv, tw * 2)},
+            p.wallPart, wallColor);
+    // Belfry openings: a dark louvred panel proud of each face near the top.
+    const Vec3 dark(0.14, 0.15, 0.16);
+    const Real oy = bodyTop - 2.0;
+    emitBox(out, Scope{Vec3(cXZ.x, oy, cXZ.z) + r3 * (tw - 0.02) - f3 * 0.45,
+                       {f3, up, r3}, Vec3(0.9, 1.3, 0.04)}, PartId::Detail, dark);
+    emitBox(out, Scope{Vec3(cXZ.x, oy, cXZ.z) - r3 * (tw + 0.02) - f3 * 0.45,
+                       {f3, up, r3}, Vec3(0.9, 1.3, 0.04)}, PartId::Detail, dark);
+    emitBox(out, Scope{Vec3(cXZ.x, oy, cXZ.z) + f3 * (tw - 0.02) - r3 * 0.45,
+                       {r3, up, f3}, Vec3(0.9, 1.3, 0.04)}, PartId::Detail, dark);
+    emitBox(out, Scope{Vec3(cXZ.x, oy, cXZ.z) - f3 * (tw + 0.06) - r3 * 0.45,
+                       {r3, up, f3}, Vec3(0.9, 1.3, 0.04)}, PartId::Detail, dark);
+    // Cornice cap, then the pyramidal spire + finial.
+    emitBox(out, Scope{Vec3(cXZ.x, bodyTop, cXZ.z) - r3 * (tw + 0.15) -
+                           f3 * (tw + 0.15),
+                       {r3, up, f3}, Vec3(tw * 2 + 0.3, 0.18, tw * 2 + 0.3)},
+            PartId::Trim, p.trimColor);
+    const Real spireH = 3.2, sy = bodyTop + 0.18;
+    const Vec3 apex(cXZ.x, sy + spireH, cXZ.z);
+    Vec3 c0 = Vec3(cXZ.x, sy, cXZ.z) - r3 * tw - f3 * tw;
+    Vec3 c1 = Vec3(cXZ.x, sy, cXZ.z) + r3 * tw - f3 * tw;
+    Vec3 c2 = Vec3(cXZ.x, sy, cXZ.z) + r3 * tw + f3 * tw;
+    Vec3 c3 = Vec3(cXZ.x, sy, cXZ.z) - r3 * tw + f3 * tw;
+    RenderMesh spire;
+    const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
+    MeshBuilder::emitTri(spire, c0, c1, apex, f3 * -1, roofCol);
+    MeshBuilder::emitTri(spire, c1, c2, apex, r3, roofCol);
+    MeshBuilder::emitTri(spire, c2, c3, apex, f3, roofCol);
+    MeshBuilder::emitTri(spire, c3, c0, apex, r3 * -1, roofCol);
+    appendToPart(out, PartId::Roof, spire);
+    std::vector<Vec2> finial = {{0.06, 0.0}, {0.04, 0.5}, {0.0, 0.85}};
+    emitLathe(out, PartId::Trim, apex, finial, 8, p.trimColor);
+    return apex.y + 0.85;
+}
+
 // The VEHICLE BAY front (fire stations, loading docks, parking entries): the
 // entrance edge's ground floor as a row of wide segmented roller doors. Each
 // bay is a real recessed opening — jamb + head reveals connect the wall plane
@@ -1688,6 +1927,25 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     FacadeMode groundMode = params.solidFacade ? FacadeMode::Solid
                           : params.groundRetail ? FacadeMode::Retail
                                                 : FacadeMode::Residential;
+    // SIDE vehicle bays (attached garage / loading side): the widest non-
+    // entrance edge roughly perpendicular to the street face carries them.
+    std::size_t sideEdge = plan.size();   // invalid = none
+    if (params.sideBays > 0) {
+        Real bestLen = 3.4 * params.sideBays;
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            if (i == entranceEdge) continue;
+            Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
+            Vec2 d = b - a;
+            const Real len = d.length();
+            if (len < 1e-6 || len < bestLen) continue;
+            Vec2 nrm(d.y / len, -d.x / len);
+            if (std::fabs(nrm.x * params.faceDir.x + nrm.y * params.faceDir.z) >
+                0.5)
+                continue;   // faces the street or the rear, not a side
+            bestLen = len;
+            sideEdge = i;
+        }
+    }
     // Ground storey: one facade rect per plan edge; the door on the street edge.
     // retailStreetOnly (P3.c): storefronts only where the edge FACES the street
     // (normal within ~70 deg of faceDir); side/rear edges wear plain walls.
@@ -1695,6 +1953,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // VEHICLE BAYS claim the street edge outright (fire station, depot).
         if (i == entranceEdge && params.groundBays > 0) {
             emitBayFront(out, planEdgeRect(plan, i, y, gh), params, wallColor);
+            continue;
+        }
+        if (i == sideEdge) {
+            BuildingParams sp = params;
+            sp.groundBays = params.sideBays;
+            emitBayFront(out, planEdgeRect(plan, i, y, gh), sp, wallColor);
             continue;
         }
         FacadeMode mode = (i == entranceEdge && params.walkableGround)
@@ -1711,6 +1975,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         else
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
     }
+    // The covered timber PORCH (bungalow/craftsman) — brings its own platform
+    // and steps, so it replaces the classical entrance elements.
+    if (params.porch) {
+        emitPorch(out, planEdgeRect(plan, entranceEdge, y, gh), params);
+    } else
     // CLASSICAL entrance elements on the street face: a portico (colonnade +
     // entablature + pediment over porch steps) or bare entrance steps.
     if (params.portico > 0 || params.entranceSteps) {
@@ -1789,6 +2058,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
         const Real fh = params.floorHeight;
         for (std::size_t e = 0; e < cur.size(); ++e) {
+            if (params.parkingDecks && !params.curtainWall) {
+                emitParkingDeckRect(out, planEdgeRect(cur, e, y, fh), upper,
+                                    wallColor);
+                continue;
+            }
             if (params.curtainWall)
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor);
             else
@@ -1796,7 +2070,24 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                params.solidFacade ? FacadeMode::Solid
                                                   : FacadeMode::Residential,
                                upper, wallColor);
+            // BALCONIES on street-facing edges, second storey and up.
+            if (params.balconies && !params.curtainWall && !params.solidFacade &&
+                i >= 1) {
+                Vec2 a = cur[e], b2 = cur[(e + 1) % cur.size()];
+                Vec2 d = b2 - a;
+                const Real len = d.length();
+                if (len > 2.4) {
+                    Vec2 nrm(d.y / len, -d.x / len);
+                    if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z >
+                        0.3)
+                        emitBalconyRun(out, planEdgeRect(cur, e, y, fh), params);
+                }
+            }
         }
+        // Parking storeys read as DECKS, not holes: a slab per level.
+        if (params.parkingDecks && !params.curtainWall)
+            emitPlanSlab(out, cur, y + 0.02, 0.12, PartId::Concrete,
+                         wallColor * 0.92);
         if (i == params.floors / 2) {
             FaceRect ff = planEdgeRect(cur, entranceEdge % cur.size(), y, fh);
             out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
@@ -1808,11 +2099,22 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // ROOF (P3.c): a Gable/Hip pitched roof over a rect-ish top plan — the
     // residential silhouette — else the flat deck + parapet + crown.
     OBB2 topObb = orientedBoundingBox(cur);
-    const bool pitched =
-        params.roofStyle != BuildingParams::RoofStyle::Flat &&
+    const bool rectish =
         area(cur) > 0.85 * (4 * topObb.half[0] * topObb.half[1]);
+    const bool sawtooth =
+        params.roofStyle == BuildingParams::RoofStyle::Sawtooth && rectish;
+    const bool pitched =
+        !sawtooth && params.roofStyle != BuildingParams::RoofStyle::Flat &&
+        params.roofStyle != BuildingParams::RoofStyle::Sawtooth && rectish;
     Real roofRise = 0;
-    if (pitched) {
+    if (sawtooth) {
+        // The factory roof: a ceiling deck, then the north-light teeth.
+        if (params.stringCourse && !params.curtainWall)
+            sweptCornice(cur, y - 0.30, 0.7);
+        emitPlanSlab(out, cur, y + 0.02, 0.15, PartId::Roof,
+                     materialFor(PartId::Roof, wallColor).albedo);
+        roofRise = emitSawtoothRoof(out, cur, y, params, wallColor);
+    } else if (pitched) {
         const bool hip = params.roofStyle == BuildingParams::RoofStyle::Hip;
         const int la = topObb.longAxis(), sa = 1 - la;
         Vec3 r3(topObb.axis[la].x, 0, topObb.axis[la].y);
@@ -1863,6 +2165,33 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
         appendToPart(out, PartId::Roof, roof);
         appendToPart(out, params.wallPart, gableW);
+        // CHIMNEY: a masonry stack through the slope near the ridge, offset
+        // along the ridge so it reads against the sky.
+        if (params.chimney) {
+            const Real cu = rh * 0.55;
+            Vec3 cc = C + r3 * cu;
+            const Vec3 brick(0.42, 0.24, 0.18);
+            const Real chTop = y + rise + 0.85;
+            emitBox(out, Scope{Vec3(cc.x, y - 0.6, cc.z) - r3 * 0.42 - f3 * 0.42,
+                               {r3, up, f3}, Vec3(0.84, chTop - (y - 0.6), 0.84)},
+                    PartId::Brick, brick);
+            emitBox(out, Scope{Vec3(cc.x, chTop, cc.z) - r3 * 0.52 - f3 * 0.52,
+                               {r3, up, f3}, Vec3(1.04, 0.16, 1.04)},
+                    PartId::Trim, params.trimColor * 0.8);
+        }
+        // STEEPLE (churches): the bell tower rises through the roof at the
+        // ridge end nearest the entrance.
+        if (params.steeple) {
+            Vec2 em = (plan[entranceEdge] +
+                       plan[(entranceEdge + 1) % plan.size()]) * 0.5;
+            const Real side =
+                dot(em - topObb.center, topObb.axis[la]) >= 0 ? 1.0 : -1.0;
+            Vec3 cS = C + r3 * (side * rh * 0.7);
+            const Real towerTop =
+                emitSteeple(out, cS, r3, f3, y - 1.2, y + 0.03 + rise, params,
+                            wallColor);
+            roofRise = std::max(roofRise, towerTop - y);
+        }
     } else {
         if (params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
         emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
@@ -1884,7 +2213,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
         Vec3 fo = Vec3(topObb.center.x, 0, topObb.center.y) -
                   r3 * topObb.half[0] - f3 * topObb.half[1];
-        if (params.dome) {
+        if (params.spire) {
+            // The art-deco stepped crown + mast instead of the penthouse.
+            roofRise = std::max(
+                roofRise, emitSpireCrown(out, topObb, y + 0.05, params,
+                                         wallColor));
+        } else if (params.dome) {
             const Real R = std::min(
                 Real(6.0), std::max(Real(2.6),
                                     std::min(topObb.half[0], topObb.half[1]) *

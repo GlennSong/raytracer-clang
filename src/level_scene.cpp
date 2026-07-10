@@ -800,7 +800,8 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                                        Vec3(1, 1, 1), mi, scene);
                 }
                 // Park / green pads: draped lot-shaped slabs, tinted like the
-                // viewer (grass green).
+                // viewer (grass green; sculpted parks bake their own colours
+                // and arrive white).
                 for (const engine::LotBuilding& lb : lots.lots) {
                     if ((lb.type != "park" && lb.type != "green") ||
                         lb.padMesh.vertices.empty()) continue;
@@ -808,6 +809,51 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     int mi = scene.addMaterial(mat);
                     addMeshAsTriangles(lb.padMesh, Vec3(), Quat::identity(),
                                        Vec3(1, 1, 1), mi, scene);
+                }
+                // Sculpted lots carry TREE SPOTS (x, scale, z): bake real
+                // trees at them so parks and yards keep their landscaping in
+                // the offline render too (viewer parity).
+                {
+                    std::vector<TreeMesh> kits;
+                    int barkMi = -1, leafMi = -1;
+                    for (const engine::LotBuilding& lb : lots.lots) {
+                        if (lb.treeSpots.empty()) continue;
+                        if (kits.empty()) {
+                            TreeParams tp;
+                            tp.iterations = 4;
+                            tp.rootCount = 0;
+                            for (uint32_t k = 0; k < 3; ++k)
+                                kits.push_back(growTree(tp, 97u + k));
+                            barkMi = scene.addMaterial(
+                                Material::pbr(Vec3(1, 1, 1), 0.0, 1.0));
+                            TextureData leaf = leafTexture(128);
+                            Texture tex;
+                            tex.width = leaf.width;
+                            tex.height = leaf.height;
+                            tex.channels = leaf.channels;
+                            tex.pixels = std::move(leaf.pixels);
+                            Material leafMat = Material::pbr(Vec3(1, 1, 1), 0.0, 0.7);
+                            leafMat.alphaTex = scene.addTexture(std::move(tex));
+                            leafMi = scene.addMaterial(leafMat);
+                        }
+                        uint32_t th = static_cast<uint32_t>(
+                            std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
+                            2654435761u;
+                        for (const Vec3& s : lb.treeSpots) {
+                            th = th * 1664525u + 1013904223u;
+                            const TreeMesh& kit = kits[(th >> 8) % kits.size()];
+                            const Vec3 pos(s.x, lp.ground ? lp.ground(s.x, s.z) : 0.0,
+                                           s.z);
+                            const Quat rot = Quat::fromAxisAngle(
+                                Vec3(0, 1, 0), ((th >> 8) % 628u) / 100.0);
+                            addMeshAsTriangles(kit.branches, pos, rot,
+                                               Vec3(s.y, s.y, s.y), barkMi, scene);
+                            if (!kit.leaves.vertices.empty())
+                                addMeshAsTriangles(kit.leaves, pos, rot,
+                                                   Vec3(s.y, s.y, s.y), leafMi,
+                                                   scene);
+                        }
+                    }
                 }
             }
         }

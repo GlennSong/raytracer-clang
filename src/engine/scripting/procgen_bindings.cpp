@@ -575,6 +575,9 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     else if (style == "concrete") { p.wallPart = PartId::Concrete; p.wallColor = facadeColor(FacadeStyle::Concrete, seed); }
     else if (style == "stucco")   { p.wallPart = PartId::Stucco;   p.wallColor = facadeColor(FacadeStyle::Stucco, seed); }
     else if (style == "metal")    { p.wallPart = PartId::Metal;    p.wallColor = facadeColor(FacadeStyle::Metal, seed); }
+    else if (style == "wood")     { p.wallPart = PartId::Siding;   p.wallColor = facadeColor(FacadeStyle::Wood, seed); }
+    else if (style == "darkbrick"){ p.wallPart = PartId::Brick;    p.wallColor = facadeColor(FacadeStyle::DarkBrick, seed); }
+    else if (style == "sandstone"){ p.wallPart = PartId::Stucco;   p.wallColor = facadeColor(FacadeStyle::Sandstone, seed); }
     else if (style == "painted")    p.wallColor = facadeColor(FacadeStyle::Painted, seed);
     p.curtainWall = optBoolField(L, idx, "curtain_wall", p.curtainWall);
     p.wallColor = optVec3Field(L, idx, "wall_color", p.wallColor);
@@ -622,8 +625,18 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     if (roof == "flat")       p.roofStyle = BuildingParams::RoofStyle::Flat;
     else if (roof == "gable") p.roofStyle = BuildingParams::RoofStyle::Gable;
     else if (roof == "hip")   p.roofStyle = BuildingParams::RoofStyle::Hip;
+    else if (roof == "sawtooth") p.roofStyle = BuildingParams::RoofStyle::Sawtooth;
     p.roofPitch = static_cast<Real>(optField(L, idx, "roof_pitch", p.roofPitch));
     p.retailStreetOnly = optBoolField(L, idx, "retail_street_only", p.retailStreetOnly);
+    // The new element knobs: balconies / porch / chimney / spire / steeple /
+    // parking decks / side vehicle bays (attached garages, loading docks).
+    p.balconies = optBoolField(L, idx, "balconies", p.balconies);
+    p.porch = optBoolField(L, idx, "porch", p.porch);
+    p.chimney = optBoolField(L, idx, "chimney", p.chimney);
+    p.spire = optBoolField(L, idx, "spire", p.spire);
+    p.steeple = optBoolField(L, idx, "steeple", p.steeple);
+    p.parkingDecks = optBoolField(L, idx, "parking_decks", p.parkingDecks);
+    p.sideBays = static_cast<int>(optField(L, idx, "side_bays", p.sideBays));
     return p;
 }
 
@@ -664,7 +677,8 @@ int l_building_grow_parts(lua_State* L) {
     BuildingMesh bm = growBuilding(scopeFromFootprint(foot, 0.0, 10.0), p);
     static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
                                        "ground", "detail", "brick", "concrete",
-                                       "stucco", "metal", "wood"};
+                                       "stucco", "metal", "wood",
+                                       "siding", "path", "foliage"};
     lua_newtable(L);
     int n = 0;
     for (const RenderMesh& part : bm.parts) {
@@ -710,7 +724,8 @@ int l_building_grow_plan_parts(lua_State* L) {
     BuildingMesh bm = growPlanBuilding(plan, p);
     static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
                                        "ground", "detail", "brick", "concrete",
-                                       "stucco", "metal", "wood"};
+                                       "stucco", "metal", "wood",
+                                       "siding", "path", "foliage"};
     lua_newtable(L);
     int cnt = 0;
     for (const RenderMesh& part : bm.parts) {

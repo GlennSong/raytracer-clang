@@ -451,6 +451,7 @@ add_executable(run_tests
     tests/test_city_generated.cpp
     tests/test_city_lots.cpp
     tests/test_surface_field.cpp
+    tests/test_architect.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
