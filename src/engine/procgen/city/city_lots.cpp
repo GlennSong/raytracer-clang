@@ -70,6 +70,319 @@ Vec3 colorFor(const std::string& t) {
     if (t == "park")   return {0.35, 0.60, 0.35};
     return {0.72, 0.70, 0.64};
 }
+
+// Distance from p to segment [a,b] (shared by the sculptors below).
+Real distToSeg(const Vec2& p, const Vec2& a, const Vec2& b) {
+    Vec2 ab = b - a;
+    Real len2 = ab.lengthSquared();
+    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    return (p - Vec2(a.x + ab.x * t, a.y + ab.y * t)).length();
+}
+
+// Merge a grown kit's parts into the by-PartId output array.
+void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts) {
+    if (!outParts) return;
+    for (const RenderMesh& part : kit.parts) {
+        const int mi = part.materialIndex;
+        if (mi >= 0 && mi < static_cast<int>(outParts->size()))
+            MeshBuilder::append((*outParts)[mi], part);
+    }
+}
+
+// PARK SCULPTING (device: "sculpting building lots to include landscaping
+// and walking paths"): a park lot is a designed green, not a bare pad — a
+// centre PLAZA, walking-path SPOKES out to the surrounding streets, a stone
+// fountain, benches facing it, planter hedges at the path mouths, and
+// deterministic TREE SPOTS the hosts plant real trees at. Lawn and path
+// colours are BAKED into the pad's vertices (the lot's `color` goes white so
+// the bake reads as-is in both the viewer and the offline tracer).
+void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
+                const std::function<Real(Real, Real)>& ground, uint32_t seed,
+                std::vector<RenderMesh>* outParts) {
+    const Vec3 grass(0.30, 0.50, 0.26);
+    const Vec3 pathCol(0.72, 0.68, 0.60);        // decomposed granite
+    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    Hash rng(mix(seed, 0x9A46B1u));
+
+    RenderMesh m;
+    // The lawn: the pad slab in the lot's own shape, grass-coloured.
+    for (const std::array<int, 3>& t : triangulatePolygon(poly))
+        MeshBuilder::emitTri(
+            m, Vec3(poly[t[0]].x, gy(poly[t[0]]) + h, poly[t[0]].y),
+            Vec3(poly[t[1]].x, gy(poly[t[1]]) + h, poly[t[1]].y),
+            Vec3(poly[t[2]].x, gy(poly[t[2]]) + h, poly[t[2]].y),
+            Vec3(0, 1, 0), grass);
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Vec2& a = poly[i];
+        const Vec2& b = poly[(i + 1) % poly.size()];
+        Vec2 d = b - a;
+        if (d.length() < 1e-6) continue;
+        Vec2 n = normalize(Vec2(d.y, -d.x));
+        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
+                              Vec3(b.x, gy(b) - 0.4, b.y),
+                              Vec3(b.x, gy(b) + h, b.y),
+                              Vec3(a.x, gy(a) + h, a.y),
+                              Vec3(n.x, 0, n.y), grass * 0.9);
+    }
+
+    const Vec2 c = centroid(poly);
+    const Real A = area(poly);
+    const Real py = h + 0.03;                    // paths float just off the lawn
+    const Real r0 = std::min(Real(4.5), std::max(Real(2.2), std::sqrt(A) * 0.12));
+
+    // The centre PLAZA: a paved disc fan, draped on the terrain.
+    const int PN = 14;
+    Vec2 rim[PN];
+    for (int k = 0; k < PN; ++k) {
+        const Real a2 = 6.283185307179586 * k / PN;
+        rim[k] = c + Vec2(std::cos(a2), std::sin(a2)) * r0;
+    }
+    for (int k = 0; k < PN; ++k) {
+        const Vec2& a = rim[k];
+        const Vec2& b = rim[(k + 1) % PN];
+        MeshBuilder::emitTri(m, Vec3(c.x, gy(c) + py, c.y),
+                             Vec3(a.x, gy(a) + py, a.y),
+                             Vec3(b.x, gy(b) + py, b.y), Vec3(0, 1, 0), pathCol);
+    }
+
+    // Walking-path SPOKES: from the plaza out to the midpoints of the longest
+    // lot edges — the desire lines to the surrounding sidewalks.
+    struct Spoke { Vec2 a, b; };
+    std::vector<Spoke> spokes;
+    for (std::size_t i = 0; i < poly.size() && spokes.size() < 4; ++i) {
+        const Vec2& ea = poly[i];
+        const Vec2& eb = poly[(i + 1) % poly.size()];
+        if ((eb - ea).length() < 12.0) continue;
+        Vec2 mouth = (ea + eb) * 0.5;
+        Vec2 to = mouth - c;
+        const Real len = to.length();
+        if (len < r0 + 2.5) continue;
+        Vec2 dir = to * (1.0 / len);
+        Vec2 p0 = c + dir * (r0 * 0.85);
+        Vec2 perp(-dir.y, dir.x);
+        const Real hw = 0.8;                     // path half-width
+        const int segs = std::max(1, static_cast<int>((len - r0 * 0.85) / 3.0));
+        for (int s = 0; s < segs; ++s) {
+            Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
+            Vec2 q1 = p0 + dir * ((len - r0 * 0.85) * (s + 1) / segs);
+            MeshBuilder::emitQuad(
+                m, Vec3(q0.x - perp.x * hw, gy(q0 - perp * hw) + py,
+                        q0.y - perp.y * hw),
+                Vec3(q0.x + perp.x * hw, gy(q0 + perp * hw) + py,
+                     q0.y + perp.y * hw),
+                Vec3(q1.x + perp.x * hw, gy(q1 + perp * hw) + py,
+                     q1.y + perp.y * hw),
+                Vec3(q1.x - perp.x * hw, gy(q1 - perp * hw) + py,
+                     q1.y - perp.y * hw),
+                Vec3(0, 1, 0), pathCol);
+        }
+        spokes.push_back({p0, mouth});
+    }
+
+    // FURNITURE: fountain, benches, planter hedges — grown as a kit and
+    // merged into the by-part output like any building's geometry.
+    if (outParts) {
+        BuildingMesh kit;
+        const Real fy = gy(c) + py;
+        const Vec3 stone(0.72, 0.70, 0.66);
+        const Vec3 up(0, 1, 0);
+        if (r0 > 2.5) {
+            // The stone FOUNTAIN: basin ring + column + bowl (one lathe), a
+            // still water disc (glass) inside the basin.
+            std::vector<Vec2> basin = {
+                {r0 * 0.42, 0.0},  {r0 * 0.44, 0.42}, {r0 * 0.36, 0.50},
+                {r0 * 0.34, 0.14}, {0.14, 0.14},      {0.11, 1.05},
+                {0.30, 1.18},      {0.24, 1.32},      {0.0, 1.40}};
+            MeshBuilder::append(
+                (*outParts)[static_cast<std::size_t>(PartId::Trim)],
+                latheMesh(Vec3(c.x, fy, c.y), basin, 14, stone));
+            std::vector<Vec2> water = {{r0 * 0.33, 0.36}, {0.0, 0.36}};
+            MeshBuilder::append(
+                (*outParts)[static_cast<std::size_t>(PartId::Glass)],
+                latheMesh(Vec3(c.x, fy, c.y), water, 14, Vec3(0.20, 0.34, 0.40)));
+        }
+        // BENCHES around the plaza, facing the centre.
+        const Vec3 wood(0.45, 0.34, 0.22);
+        const int nb = 3 + static_cast<int>(rng.unit() * 3);
+        for (int k = 0; k < nb; ++k) {
+            const Real a2 = 6.283185307179586 * (k + rng.range(0.05, 0.3)) / nb;
+            Vec2 dir(std::cos(a2), std::sin(a2));
+            Vec2 bp = c + dir * (r0 + 0.6);
+            if (!pointInPolygon(poly, bp)) continue;
+            Vec2 t2(-dir.y, dir.x);
+            Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
+            const Real by = gy(bp) + h;
+            Vec3 o = Vec3(bp.x, by + 0.42, bp.y) - t3 * 0.8 - n3 * 0.22;
+            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.6, 0.07, 0.44)},
+                    PartId::Wood, wood);
+            for (int lg = 0; lg < 2; ++lg)
+                emitBox(kit, Scope{Vec3(bp.x, by, bp.y) +
+                                       t3 * (lg ? 0.55 : -0.65) - n3 * 0.18,
+                                   {t3, up, n3}, Vec3(0.10, 0.42, 0.36)},
+                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+        }
+        // PLANTER hedges where each path meets the street: a stone curb box
+        // with clipped greenery on top, one per side of the mouth.
+        for (const Spoke& s : spokes) {
+            Vec2 dir = normalize(s.b - s.a);
+            Vec2 perp(-dir.y, dir.x);
+            for (Real side : {Real(1), Real(-1)}) {
+                Vec2 pp = s.b - dir * 1.2 + perp * (side * 1.6);
+                if (!pointInPolygon(poly, pp)) continue;
+                const Real by = gy(pp) + h;
+                Vec3 t3(perp.x, 0, perp.y), n3(dir.x, 0, dir.y);
+                Vec3 o = Vec3(pp.x, by, pp.y) - t3 * 0.5 - n3 * 0.5;
+                emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.0, 0.35, 1.0)},
+                        PartId::Trim, stone * 0.9);
+                const Vec3 hedge(0.24 + rng.range(0, 0.05), 0.40, 0.20);
+                emitBox(kit, Scope{o + Vec3(0, 0.35, 0) + t3 * 0.1 + n3 * 0.1,
+                                   {t3, up, n3}, Vec3(0.8, 0.55, 0.8)},
+                        PartId::Foliage, hedge);
+            }
+        }
+        appendKit(kit, outParts);
+    }
+
+    // TREE SPOTS: a loose ring between the plaza and the boundary, kept off
+    // the paths. (x, trunk scale, z) — the hosts grow the real trees.
+    const int want = std::min(12, std::max(3, static_cast<int>(A / 140)));
+    for (int k = 0; k < want * 4 &&
+                    static_cast<int>(g.treeSpots.size()) < want; ++k) {
+        const Real a2 = rng.unit() * 6.283185307179586;
+        const Real rr = r0 + 2.0 + rng.unit() * std::sqrt(A) * 0.35;
+        Vec2 tp = c + Vec2(std::cos(a2), std::sin(a2)) * rr;
+        Poly2 inner = inset(poly, 1.4);
+        if (inner.size() < 3 || !pointInPolygon(inner, tp)) continue;
+        bool clear = true;
+        for (const Spoke& s : spokes)
+            if (distToSeg(tp, s.a, s.b) < 2.2) { clear = false; break; }
+        for (const Vec3& other : g.treeSpots)
+            if ((Vec2(other.x, other.z) - tp).length() < 3.2) {
+                clear = false;
+                break;
+            }
+        if (clear) g.treeSpots.push_back(Vec3(tp.x, rng.range(0.8, 1.3), tp.y));
+    }
+
+    g.padMesh = std::move(m);
+    g.color = Vec3(1, 1, 1);   // vertex colours carry the lawn/path look
+}
+
+// YARD SCULPTING: a house lot earns a FRONT WALK from its door to the street
+// boundary, a clipped hedge along the front lot line (with a gap where the
+// walk crosses), and a back-yard tree spot or two.
+void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
+                const Vec2& face, Real walkTopY,
+                const std::function<Real(Real, Real)>& ground, uint32_t seed,
+                std::vector<RenderMesh>* outParts) {
+    if (!outParts || house.size() < 3 || lotPoly.size() < 3 ||
+        face.length() < 1e-6)
+        return;
+    Hash rng(mix(seed, 0xF00D5EEDu));
+    auto gy = [&](const Vec2& v) {
+        return ground ? ground(v.x, v.y) : Real(0);
+    };
+    const Vec2 f = normalize(face);
+    // The DOOR: midpoint of the house edge whose outward normal best faces
+    // the street (the same rule growPlanBuilding uses for the entrance).
+    Real bestDot = -1e30;
+    Vec2 door = centroid(house);
+    for (std::size_t i = 0; i < house.size(); ++i) {
+        const Vec2& a = house[i];
+        const Vec2& e = house[(i + 1) % house.size()];
+        Vec2 d = e - a;
+        const Real len = d.length();
+        if (len < 2.0) continue;
+        Vec2 nrm(d.y / len, -d.x / len);
+        const Real sc = dot(nrm, f);
+        if (sc > bestDot) { bestDot = sc; door = (a + e) * 0.5; }
+    }
+    // Ray-exit from the door along the street direction to the lot boundary.
+    Real tExit = -1;
+    for (std::size_t i = 0; i < lotPoly.size(); ++i) {
+        const Vec2& a = lotPoly[i];
+        const Vec2& e = lotPoly[(i + 1) % lotPoly.size()];
+        Vec2 d = e - a;
+        const Real den = cross(f, d);
+        if (std::fabs(den) < 1e-9) continue;
+        const Real t = cross(a - door, d) / den;
+        const Real u = cross(a - door, f) / den;
+        if (t > 0.2 && u >= 0 && u <= 1) tExit = std::max(tExit, t);
+    }
+    Vec2 walkEnd = door + f * std::max(tExit, Real(0));
+    if (tExit > 0.6) {
+        // The front WALK: a draped pavement ribbon, door to lot line.
+        RenderMesh& path = (*outParts)[static_cast<std::size_t>(PartId::Path)];
+        Vec2 perp(-f.y, f.x);
+        const Real hw = 0.55;
+        const int segs = std::max(1, static_cast<int>(tExit / 2.5));
+        for (int s = 0; s < segs; ++s) {
+            Vec2 q0 = door + f * (tExit * s / segs);
+            Vec2 q1 = door + f * (tExit * (s + 1) / segs);
+            const Real y0 = ground ? gy(q0) + 0.06 : walkTopY + 0.06;
+            const Real y1 = ground ? gy(q1) + 0.06 : walkTopY + 0.06;
+            MeshBuilder::emitQuad(
+                path, Vec3(q0.x - perp.x * hw, y0, q0.y - perp.y * hw),
+                Vec3(q0.x + perp.x * hw, y0, q0.y + perp.y * hw),
+                Vec3(q1.x + perp.x * hw, y1, q1.y + perp.y * hw),
+                Vec3(q1.x - perp.x * hw, y1, q1.y - perp.y * hw),
+                Vec3(0, 1, 0), Vec3(0.72, 0.70, 0.65));
+        }
+    }
+    // The front HEDGE: clipped boxes along the street-facing lot edge, a gap
+    // where the walk crosses. Roughly half the houses keep one.
+    if (rng.unit() < 0.55) {
+        BuildingMesh kit;
+        const Vec3 up(0, 1, 0);
+        Real bestEdge = -1e30;
+        std::size_t fe = lotPoly.size();
+        for (std::size_t i = 0; i < lotPoly.size(); ++i) {
+            const Vec2& a = lotPoly[i];
+            const Vec2& e = lotPoly[(i + 1) % lotPoly.size()];
+            Vec2 d = e - a;
+            const Real len = d.length();
+            if (len < 6.0) continue;
+            Vec2 nrm(d.y / len, -d.x / len);
+            const Real sc = dot(nrm, f) + len * 0.005;
+            if (sc > bestEdge) { bestEdge = sc; fe = i; }
+        }
+        if (fe < lotPoly.size() && bestEdge > 0.5) {
+            const Vec2& a = lotPoly[fe];
+            const Vec2& e = lotPoly[(fe + 1) % lotPoly.size()];
+            Vec2 d = e - a;
+            const Real len = d.length();
+            Vec2 dir = d * (1.0 / len);
+            Vec2 nrm(dir.y, -dir.x);              // outward (CCW poly)
+            const Vec3 hedgeCol(0.24 + rng.range(0, 0.05), 0.42, 0.21);
+            const int n = static_cast<int>((len - 1.6) / 2.0);
+            for (int k = 0; k < n; ++k) {
+                Vec2 hc = a + dir * (0.8 + 2.0 * k + 1.0) - nrm * 0.6;
+                if (distToSeg(hc, door, walkEnd) < 1.4) continue;   // walk gap
+                if (!pointInPolygon(lotPoly, hc)) continue;
+                Vec3 t3(dir.x, 0, dir.y), n3(nrm.x, 0, nrm.y);
+                emitBox(kit, Scope{Vec3(hc.x, gy(hc), hc.y) - t3 * 0.9 -
+                                       n3 * 0.3,
+                                   {t3, up, n3}, Vec3(1.8, 0.65, 0.6)},
+                        PartId::Foliage, hedgeCol);
+            }
+        }
+        appendKit(kit, outParts);
+    }
+    // BACK-YARD trees: a spot or two behind the house.
+    const Vec2 hc = centroid(house);
+    const int want = 1 + (rng.unit() < 0.5 ? 1 : 0);
+    Poly2 inner = inset(lotPoly, 1.2);
+    for (int k = 0; k < 8 && static_cast<int>(b.treeSpots.size()) < want; ++k) {
+        const Real a2 = rng.unit() * 6.283185307179586;
+        Vec2 tp = hc + Vec2(std::cos(a2), std::sin(a2)) *
+                           rng.range(4.0, 9.0);
+        if (dot(tp - hc, f) > 0) continue;               // not the front yard
+        if (inner.size() < 3 || !pointInPolygon(inner, tp)) continue;
+        if (pointInPolygon(house, tp)) continue;
+        b.treeSpots.push_back(Vec3(tp.x, rng.range(0.8, 1.2), tp.y));
+    }
+}
 }  // namespace
 
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
@@ -279,7 +592,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.recipe = "park_block";
                 g.color = colorFor("park");
                 g.pad = foot;
-                g.padMesh = padMeshFor(foot, g.height, p.ground);
+                // The city square is DESIGNED: plaza, paths, fountain,
+                // benches, hedges, tree spots (not a bare green pad).
+                sculptPark(g, foot, g.height, p.ground,
+                           mix(bf.pp.seed, 0xB10C2u), outParts);
                 out.push_back(std::move(g));
                 continue;
             }
@@ -338,6 +654,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
              10.0, 180.0, false,
              nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
              nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
+            {LandmarkKind::Church, nRes >= 8 ? 1 + nRes / 70 : 0, 10.0, 180.0,
+             false, DistrictTag::Residential, DistrictTag::OldTown},
+            {LandmarkKind::Library, nCom >= 5 ? 1 : 0, 12.0, 240.0, false,
+             DistrictTag::Commercial, DistrictTag::Residential},
+            {LandmarkKind::Museum, nFin >= 3 ? 1 : 0, 14.0, 320.0, true,
+             DistrictTag::Financial, DistrictTag::Commercial},
         };
         for (const Want& w : wants) {
             for (int k = 0; k < w.count; ++k) {
@@ -473,7 +795,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.3;   // a low green pad in the lot's own shape
                 b.pad = lot.footprint;
-                b.padMesh = padMeshFor(b.pad, b.height, p.ground);
+                sculptPark(b, b.pad, b.height, p.ground,
+                           mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
+                           outParts);
                 out.push_back(std::move(b));
                 continue;
             }
@@ -639,12 +963,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
+            // BOX-MASS recipes (pagoda / cylinder shapes) must reach
+            // growBuilding — the plan path can't dispatch a BuildingShape —
+            // so a roomy rect-ish lot takes the shrink-fit box fallback
+            // below. A cramped/off-cut lot grows through the plan grammar
+            // instead (the shape can't dispatch, but the lot still builds).
+            if (rec.massing == BuildingRecipe::Massing::BoxMass &&
+                fill >= 0.72 && shortSide >= 10.0)
+                planOk = false;
             // A HOUSE sits on a small centred rectangle, not the whole lot —
             // the rest of the parcel reads as its yard (residential realism).
+            bool yardApplied = false;
             if (planOk && rec.massing == BuildingRecipe::Massing::RectYard) {
                 const Real hw2 = std::min(obb.half[0] - 1.6, rec.yardHalfWMax);
                 const Real hd2 = std::min(obb.half[1] - 1.6, rec.yardHalfDMax);
-                if (hw2 > 3.2 && hd2 > 3.2) {
+                // 3.5 m half-extents keep the house itself above the 7 m
+                // urban sliver floor the lot pass guarantees for buildings.
+                if (hw2 > 3.5 && hd2 > 3.5) {
                     Vec2 c = obb.center;
                     Poly2 house{c - obb.axis[0] * hw2 - obb.axis[1] * hd2,
                                 c + obb.axis[0] * hw2 - obb.axis[1] * hd2,
@@ -656,7 +991,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     for (const Vec2& v : house)
                         if (!pointInPolygon(site, v) ||
                             (roads && !clearOfRoads(v))) { clear = false; break; }
-                    if (clear) plan = house;
+                    if (clear) { plan = house; yardApplied = true; }
                 }
             }
             // The architect's ROUND towers: a chord-tessellated circle plan
@@ -770,7 +1105,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
             if (p.ground && !bp.entranceSteps && bp.portico == 0 &&
-                bp.groundBays == 0 && bp.floors > 0)
+                bp.groundBays == 0 && !bp.porch && bp.floors > 0)
                 bp.entranceSteps = true;
             if (planOk) {
                 bm = growPlanBuilding(plan, bp, b.baseY);
@@ -786,7 +1121,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (fill < 0.72) { if (debug) debug->rejBox++; emitGreen(); continue; }
                 Scope scope = scopeFromFootprint(site, b.baseY, 10.0, clearOfRoads);
                 const Real fitShort = std::min(scope.size.x, scope.size.z);
-                if (fitShort < p.minShort * 0.75) {
+                // The urban sliver floor holds for the box path too: a
+                // shrink-fit below minShortUrban is a knife blade, not a mass.
+                if (fitShort < std::max(p.minShort * 0.75,
+                                        std::min(p.minShort, p.minShortUrban))) {
                     if (debug) debug->rejBox++;
                     emitGreen(); continue;
                 }
@@ -813,6 +1151,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
             b.height = bm.height > 0 ? bm.height : 8.0;
             emitFoundation(b.plan, b.groundY, b.baseY);
+            // A yarded house earns its LANDSCAPING: front walk to the street,
+            // a hedge along the front lot line, back-yard tree spots.
+            if (yardApplied)
+                sculptYard(b, lot.footprint, plan,
+                           Vec2(bp.faceDir.x, bp.faceDir.z), b.groundY,
+                           p.ground,
+                           mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u),
+                           outParts);
             out.push_back(std::move(b));
         }
     }

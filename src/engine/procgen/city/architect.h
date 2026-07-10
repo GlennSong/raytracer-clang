@@ -46,6 +46,8 @@ struct BuildingRecipe {
         Circle,      // a chord-tessellated drum (roomy curtain-wall lots)
         Park,        // no building: a green with trees
         RowStrip,    // the lot packed with side-by-side ROWHOUSE units
+        BoxMass,     // force the shrink-fit BOX scope + growBuilding, so the
+                     // non-box BuildingShapes (pagoda, cylinder) can dispatch
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -69,6 +71,9 @@ enum class LandmarkKind : uint8_t {
     Market,        // one tall arched masonry hall (shop anchor)
     Capitol,       // THE town hall: portico + steps + dome rotunda, dead centre
     University,    // the campus hall: brick, portico, a real green (RectYard)
+    Church,        // one tall gabled nave with a BELL TOWER steeple
+    Library,       // sandstone civic reading hall: pilasters, arched windows
+    Museum,        // the gallery: formal portico + steps on a plaza (RectYard)
     Count
 };
 const char* landmarkName(LandmarkKind k);

@@ -8,18 +8,24 @@
 -- keep the recipe's built-in look, so entries stay tiny.
 --
 -- Available keys (see readBuildingParams): style ("brick"|"stucco"|"concrete"|
--- "metal"|"glass"|"painted"), wall_color = {r,g,b}, trim_color, window_head
--- ("flat"|"segmental"|"round"), window_hood ("none"|"band"|"arch"), lights_x,
--- lights_y, quoins, sill, roof ("flat"|"gable"|"hip"), roof_pitch, parapet,
--- awning, pilasters, portico (column count), entrance_steps, dome,
--- ground_bays, floor_height, ground_height, bay_width ...
+-- "metal"|"glass"|"painted"|"wood"|"darkbrick"|"sandstone"), wall_color =
+-- {r,g,b}, trim_color, window_head ("flat"|"segmental"|"round"), window_hood
+-- ("none"|"band"|"arch"), lights_x, lights_y, quoins, sill,
+-- roof ("flat"|"gable"|"hip"|"sawtooth"), roof_pitch, parapet, awning,
+-- pilasters, portico (column count), entrance_steps, dome, ground_bays,
+-- side_bays, balconies, porch, chimney, spire, steeple, parking_decks,
+-- floor_height, ground_height, bay_width ...
 --
 -- Recipe names: glass_tower, office_slab, commercial_block, civic_hall,
 -- civic_midtown, brick_shop, mixed_use, office_midrise, hotel, walkup_homes,
--- oldtown_house, metal_shed, industrial_office, yard_house, duplex,
--- rowhouses (the strip's fallback), rowhouse_unit (each townhome),
--- apartments, corner_shop, school, hospital, courthouse, capitol, police,
--- fire_station, market_hall, university.
+-- oldtown_house, oldtown_cafe, oldtown_grand, metal_shed, industrial_office,
+-- factory, brick_warehouse, yard_house, duplex, modern_house, bungalow,
+-- craftsman_house, cottage, villa, ranch_house, garden_condo, condo_tower,
+-- terrace_condo, loft_block, art_deco_tower, stepped_tower, drum_tower,
+-- parking_garage, pagoda_tower, cinema, bank, strip_mall, supermarket,
+-- office_park, rowhouses (the strip's fallback), rowhouse_unit (each
+-- townhome), apartments, corner_shop, school, hospital, courthouse, capitol,
+-- police, fire_station, market_hall, university, church, library, museum.
 
 style_book = {
   -- The capitol in marble-white — the one active override, proving the pipe.

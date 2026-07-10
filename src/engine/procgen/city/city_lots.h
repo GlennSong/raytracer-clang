@@ -51,8 +51,14 @@ struct LotBuilding {
     // from it, so the pad follows the parcel instead of its bounding box.
     // padMesh vertices are white — the caller tints via material albedo —
     // and world-space with ground at y=0. Empty for real buildings.
+    // EXCEPTION: sculpted parks bake lawn/path colours into the vertices and
+    // set `color` white, so the bake reads as-is under the tint.
     Poly2 pad;
     RenderMesh padMesh;
+    // LANDSCAPING tree spots: deterministic planting positions the hosts grow
+    // real trees at (parks: around the paths; yards: behind the house). Each
+    // entry is (world x, trunk scale, world z). Empty = host's own scatter.
+    std::vector<Vec3> treeSpots;
 };
 
 struct LotParams {
