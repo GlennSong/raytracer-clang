@@ -139,6 +139,20 @@ the eroded 2.6km terrain with the CDLOD sampler.
   pads + city/script flatten with their own priorities — next tool: per-site
   introspection that rebuilds the LOADER's exact flatten set and prints which
   region owns the ground at a tongue point vs the deck's owning spine.
+- **P3.2 ROUND 5 (2026-07-10) — THE HONEST INSTRUMENT.** The headless probe was
+  structurally blind: it sampled ground AT its test points (with a dilation
+  knob) while the device interpolates BETWEEN grid corners, and it point-
+  sampled 5 lateral lines while pokes live between them (user's call). New
+  RT_POKE_REPORT=1 in the loader: runs at level load with the FINAL flatten
+  set, the exact per-LOD grid formula, deck heights from the reconciled chain
+  profiles, and a DENSE map over the whole deck area (2 m x ~1.5 m).
+  BASELINE (metropolis): LOD0 9.45% of 184,688 deck samples poke (worst
+  0.94 m), LOD1 8.40%, LOD2 5.96%; worst sites cluster near (-660,-810).
+  Segment end caps added to roadConformRegions (outer-bend wedge coverage) —
+  re-A/B against THIS report, not the old one. ALL prior probe percentages are
+  understated ~8x; the -47%/-50% relative improvements likely persist but must
+  be re-verified against the dense map. Iterate fixes against RT_POKE_REPORT
+  until LOD0 < 0.5%, then screenshot-verify.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

@@ -2268,6 +2268,81 @@ bool LevelLoader::load(const std::string& path,
     }
 
     if (root.contains("entities"))
+    // RT_POKE_REPORT=1: measure the REAL renderer's ground against the decks.
+    // The headless probe approximated the CDLOD sample as "terrainHeight at the
+    // test point with a dilated footprint" — but the device interpolates BETWEEN
+    // GRID CORNERS, and a corner just past the dilation sits on natural ground,
+    // tilting its triangle up through the deck. This report uses the loader's
+    // FINAL flatten set and the exact per-LOD grid formula (size/step/dilate as
+    // generateLodNodeMesh), so its numbers are the game's numbers.
+    if (std::getenv("RT_POKE_REPORT") && root.contains("terrain")) {
+        TerrainParams tpFull;   // the FINAL carved params (with index)
+        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tpFull = c.params; });
+        Noise pnNoise(root["terrain"].value("seed", 0u));
+        float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
+        const int pNumLods = 6, pGridRes = 32;
+        for (int lvl = 0; lvl < 3; ++lvl) {
+            const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
+            const double step = nodeSize / pGridRes;
+            const double dil = step * 0.75;
+            auto gridH = [&](int gi, int gj) {
+                return terrainHeight(tpFull, pnNoise, gi * step, gj * step, dil);
+            };
+            // DENSE poke map (device feedback: point samples between verts miss
+            // pokes — cover the whole deck area; heightfield-vs-heightfield on a
+            // dense grid IS the ray-cast-down). Deck height comes from the SAME
+            // reconciled chain profiles the mesher rides, not the carve proxy.
+            long n = 0, poke = 0; double worst = 0, wx = 0, wz = 0;
+            for (const engine::RoadNet& net : preNets) {
+                std::vector<UnionSpine> spines =
+                    engine::graphToSpines(engine::navRoadGraph(net));
+                std::vector<std::vector<double>> profs = engine::weldChainProfiles(
+                    spines, levelGround, 0.0, engine::WeldSolidParams{}.maxGrade,
+                    net.sidewalk + 4.0);
+                for (std::size_t si = 0; si < spines.size(); ++si) {
+                    const auto& pts = spines[si].points;
+                    if (profs[si].size() < 2) continue;
+                    const double hw = spines[si].halfWidth + net.sidewalk - 0.3;
+                    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                        Vec2 d2v = pts[i + 1] - pts[i];
+                        const double L = d2v.length();
+                        if (L < 1e-9) continue;
+                        d2v = d2v * (1.0 / L);
+                        const Vec2 nrm(-d2v.y, d2v.x);
+                        const int segs = std::max(1, (int)(L / 2.0));
+                        const int lats = std::max(2, (int)(hw / 1.5));
+                        for (int s = 0; s <= segs; ++s) {
+                            const double t = (double)s / segs;
+                            const Vec2 qc = pts[i] + (pts[i + 1] - pts[i]) * t;
+                            const double deck =
+                                profs[si][i] + (profs[si][i + 1] - profs[si][i]) * t +
+                                net.lift;
+                            for (int li = -lats; li <= lats; ++li) {
+                                const Vec2 q = qc + nrm * (hw * li / (double)lats);
+                                const double fx = q.x / step, fz = q.y / step;
+                                const int gi = (int)std::floor(fx), gj = (int)std::floor(fz);
+                                const double u = fx - gi, v = fz - gj;
+                                const double gh = gridH(gi, gj) * (1 - u) * (1 - v) +
+                                                  gridH(gi + 1, gj) * u * (1 - v) +
+                                                  gridH(gi, gj + 1) * (1 - u) * v +
+                                                  gridH(gi + 1, gj + 1) * u * v;
+                                ++n;
+                                const double dd = gh - deck;
+                                if (dd > 0.05) {
+                                    ++poke;
+                                    if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            LOG_INFO << "[poke-report] LOD " << lvl << " (step " << step << "m): "
+                     << poke << "/" << n << " samples poke ("
+                     << (n ? 100.0 * poke / n : 0.0) << "%), worst " << worst
+                     << "m @ (" << wx << "," << wz << ")";
+        }
+    }
     {
         // Hand the pre-pass road nets to the entity pass so the recipe runs
         // ONCE per road: the entity reuses the exact network the lots and the

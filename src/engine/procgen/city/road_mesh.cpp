@@ -168,9 +168,23 @@ std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerli
     double hw = halfWidth + shoulder;
     regions.reserve(n - 1);
     for (int i = 0; i + 1 < n; ++i) {
-        Vec3 a(centerline[i].x, 0.0, centerline[i].y);          // Vec2.y is world Z
-        Vec3 b(centerline[i + 1].x, 0.0, centerline[i + 1].y);
-        regions.push_back(makeFlattenRamp(a, b, profileY[i], profileY[i + 1], hw, falloff));
+        Vec2 d = centerline[i + 1] - centerline[i];
+        const double len = d.length();
+        if (len < 1e-9) continue;
+        d = d * (1.0 / len);
+        // END CAPS: bare per-segment rectangles leave an uncovered WEDGE of
+        // natural ground on the outside of every bend — the poke-report's
+        // deck-edge tongues along curved roads (device: "still a lot of pokes").
+        // Extending each rectangle by hw makes consecutive footprints overlap
+        // across the bend; heights extrapolate along the segment's own grade,
+        // and the overlap fold (lowest plane wins) keeps the seam consistent.
+        const double cap = std::min(hw, len);
+        const double grade = (profileY[i + 1] - profileY[i]) / len;
+        const Vec2 ax = centerline[i] - d * cap, bx = centerline[i + 1] + d * cap;
+        Vec3 a(ax.x, 0.0, ax.y);                                // Vec2.y is world Z
+        Vec3 b(bx.x, 0.0, bx.y);
+        regions.push_back(makeFlattenRamp(a, b, profileY[i] - grade * cap,
+                                          profileY[i + 1] + grade * cap, hw, falloff));
     }
     return regions;
 }
