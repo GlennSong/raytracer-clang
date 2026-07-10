@@ -1212,6 +1212,8 @@ static TerrainParams parseTerrainParams(const json& t) {
     p.tiltX = t.value("tiltX", p.tiltX);
     p.tiltZ = t.value("tiltZ", p.tiltZ);
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // set from the water block below
+    p.snowLine = t.value("snowLine", p.snowLine);   // colour-band scaling
+    p.rockLine = t.value("rockLine", p.rockLine);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
         std::vector<Vec3> ctl;
         for (const auto& pt : t["rangeSpine"])
@@ -1645,6 +1647,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.regionSize       = veg.value("region", 70.0f);
     scatter.count            = veg.value("count", 80);
     scatter.maxSlopeDeg      = veg.value("maxSlopeDeg", 40.0f);
+    scatter.minHeight        = veg.value("minHeight", scatter.minHeight);   // altitude band
+    scatter.maxHeight        = veg.value("maxHeight", scatter.maxHeight);   // (treeline etc.)
     scatter.minScale         = veg.value("minScale", 0.7f);
     scatter.maxScale         = veg.value("maxScale", 1.3f);
     scatter.densityScale     = veg.value("densityScale", 0.05);
@@ -1668,6 +1672,20 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     scatter.minSpacing = veg.contains("spacing")
                              ? veg.value("spacing", 0.0f)
                              : maxXz * scatter.maxScale * spacingFactor;
+
+    // Keep vegetation off everything the city graded (road decks, building
+    // pads, lots): the flatten footprints ARE that set, so trees fill the map
+    // right up to the streets without a hand-authored clear circle. The margin
+    // keeps canopies from overhanging the kerb.
+    FlattenGrid keepOut;
+    if (!terrain.flatten.empty()) {
+        keepOut = buildFlattenGrid(terrain.flatten);
+        const double margin = veg.value("clearMargin", 3.0);
+        const TerrainParams& tp = terrain;
+        scatter.exclude = [&tp, &keepOut, margin](double x, double z) {
+            return flattenCovers(keepOut, tp.flatten, x, z, margin);
+        };
+    }
 
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
     LOG_INFO << "[veg] " << tag << ": " << placements.size() << " placements"
@@ -1821,6 +1839,12 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     lp.innerRadius = cs.value("downtownRadius", 55.0);
     lp.midRadius = cs.value("midtownRadius", 135.0);
     lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
+    // on the net — forward them so lots zone by nearest hub, not one centre.
+    for (const engine::RoadNet& n : nets)
+        for (const engine::CityHub& h : n.cityHubs)
+            lp.hubs.push_back({h.pos, h.kind});
+    lp.hubRadius = cs.value("hubRadius", 220.0);
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // net.heightAt + the flatten ramps the loader carves).

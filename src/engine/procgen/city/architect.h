@@ -34,6 +34,14 @@ struct DistrictMap {
     Real innerRadius = 55.0;    // < this: Financial
     Real midRadius = 135.0;     // < this: Commercial (or OldTown); else outer
     uint32_t seed = 1;
+    // POLYCENTRIC geography (the metropolis tier): secondary centres with a
+    // dominant flavor. Non-empty = tagAt zones by the NEAREST hub — the centre
+    // hub keeps the radial-ring reading (Financial core, Commercial ring),
+    // a flavored hub grades from its flavor out to Residential. Each entry is
+    // {position, kind} with kind mirroring DistrictTag's order
+    // (0 financial, 1 commercial, 2 residential, 3 oldtown, 4 industrial).
+    std::vector<std::pair<Vec2, int>> hubs;
+    Real hubRadius = 220.0;     // a hub's flavor reach before Residential wins
     DistrictTag tagAt(const Vec2& p) const;
 };
 

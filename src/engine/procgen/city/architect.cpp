@@ -515,6 +515,33 @@ const char* districtName(DistrictTag t) {
 }
 
 DistrictTag DistrictMap::tagAt(const Vec2& p) const {
+    // Polycentric geography (metropolis): zone by the NEAREST hub. The centre
+    // hub (kind 0) keeps the radial reading below; a flavored hub holds its
+    // flavor for hubRadius then grades to Residential, with a thin Commercial
+    // collar around non-commercial cores so district seams read as main streets.
+    if (!hubs.empty()) {
+        std::size_t best = 0;
+        Real bd = 1e30;
+        for (std::size_t i = 0; i < hubs.size(); ++i) {
+            const Real dd = (p - hubs[i].first).lengthSquared();
+            if (dd < bd) { bd = dd; best = i; }
+        }
+        const int kind = hubs[best].second;
+        if (kind > 0) {
+            const Real r = std::sqrt(bd);
+            if (r < hubRadius)
+                return static_cast<DistrictTag>(std::min(kind, 4));
+            if (r < hubRadius * 1.35 && kind != 2)
+                return DistrictTag::Commercial;
+            return DistrictTag::Residential;
+        }
+        // kind 0: fall through to the radial rings, measured from THIS hub.
+        const Vec2 d0 = p - hubs[best].first;
+        const Real r0 = d0.length();
+        if (r0 < innerRadius) return DistrictTag::Financial;
+        if (r0 < midRadius) return DistrictTag::Commercial;
+        return DistrictTag::Residential;
+    }
     const Vec2 d = p - center;
     const Real r = d.length();
     if (r < innerRadius) return DistrictTag::Financial;

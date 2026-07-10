@@ -9,7 +9,10 @@
 namespace engine {
 
 void PlayerSystem::onStart(FrameContext& ctx) {
-    camera.positionLocked = true;
+    // cameraStartDetached boots the freecam already detached (the state the
+    // cam_detach toggle reaches) so settings-driven poses frame headless
+    // captures instead of the spawn point.
+    camera.positionLocked = !ctx.settings.getBool("cameraStartDetached", false);
     shoulder.applyShoulderPreset();
     thirdPerson = ctx.settings.getBool("playerThirdPerson", false);
     ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn

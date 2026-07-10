@@ -879,6 +879,14 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.streetWidth = g.value("street_width", net.width);
         mp.ringRoad    = g.value("ring_road", false);
         mp.seed        = g.value("seed", 5u);
+        // Metropolis tier: freeway backbone + collector streets. Defaults on for
+        // 2 km-class footprints, off for the small metros that predate the tier.
+        mp.freeways           = g.value("freeways", mp.radius >= 550.0);
+        mp.freewayWidth       = g.value("freeway_width", 22.0);
+        mp.collectorWidth     = g.value("collector_width", 9.5);
+        mp.collectorSpan      = g.value("collector_span", 0.0);
+        mp.interchangeSpacing = g.value("interchange_spacing", 520.0);
+        mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep
         // mountain instead of marching over them. Opt out with terrain_aware:false.

@@ -75,6 +75,9 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
         double d = density.noise2(x * params.densityScale, z * params.densityScale);
         if (d < params.densityThreshold) continue;
 
+        // Keep-out zones (roads, pads, graded lots — whatever the loader wired).
+        if (params.exclude && params.exclude(x, z)) continue;
+
         // Focal point: a clearing around the hero, and scale stepping down with
         // distance from it (bigger near the focus, base size out at focusRadius).
         if (params.focusClear > 0.0f || params.focusRadius > 0.0f) {

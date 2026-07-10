@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -9,6 +10,73 @@ namespace engine {
 namespace {
 
 constexpr double kTau = 6.283185307179586;
+
+// Uniform hash grid over Vec2 point sets: the spatial accelerator that lifts
+// the space-colonization inner loops (nearest-node, merge, kill) from O(n) per
+// query to O(cell). Deterministic: queries scan cells in a fixed ring order and
+// candidates in insertion order.
+class PointGrid {
+public:
+    explicit PointGrid(double cell) : cell_(cell) {}
+
+    void insert(const Vec2& q, int idx) {
+        cells_[key(cx(q.x), cy(q.y))].push_back(idx);
+    }
+
+    // Nearest point within maxR; -1 when none. `pts` is the backing array the
+    // stored indices point into; `skip` filters candidates (return true = skip).
+    template <typename Skip>
+    int nearest(const std::vector<Vec2>& pts, const Vec2& q, double maxR,
+                Skip&& skip) const {
+        const int R = static_cast<int>(std::ceil(maxR / cell_));
+        const int qx = cx(q.x), qy = cy(q.y);
+        int best = -1;
+        double bd = maxR * maxR;
+        for (int ring = 0; ring <= R; ++ring) {
+            // Once a hit exists, stop after the first ring that cannot beat it.
+            if (best >= 0) {
+                double reach = (ring - 1) * cell_;
+                if (reach > 0 && reach * reach > bd) break;
+            }
+            for (int dy = -ring; dy <= ring; ++dy)
+                for (int dx = -ring; dx <= ring; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
+                    auto it = cells_.find(key(qx + dx, qy + dy));
+                    if (it == cells_.end()) continue;
+                    for (int i : it->second) {
+                        if (skip(i)) continue;
+                        Vec2 d = pts[i] - q;
+                        double dd = d.x * d.x + d.y * d.y;
+                        if (dd < bd) { bd = dd; best = i; }
+                    }
+                }
+        }
+        return best;
+    }
+
+    // Visit every stored index within `r` of q.
+    template <typename Fn>
+    void each(const Vec2& q, double r, Fn&& fn) const {
+        const int R = static_cast<int>(std::ceil(r / cell_));
+        const int qx = cx(q.x), qy = cy(q.y);
+        for (int dy = -R; dy <= R; ++dy)
+            for (int dx = -R; dx <= R; ++dx) {
+                auto it = cells_.find(key(qx + dx, qy + dy));
+                if (it == cells_.end()) continue;
+                for (int i : it->second) fn(i);
+            }
+    }
+
+private:
+    int cx(double x) const { return static_cast<int>(std::floor(x / cell_)); }
+    int cy(double y) const { return static_cast<int>(std::floor(y / cell_)); }
+    static long long key(int x, int y) {
+        return (static_cast<long long>(x) << 32) ^
+               (static_cast<long long>(y) & 0xffffffffLL);
+    }
+    double cell_;
+    std::unordered_map<long long, std::vector<int>> cells_;
+};
 
 // Small deterministic PRNG (SplitMix64-ish), so a metro is reproducible per seed
 // without pulling in the district Rng.
@@ -44,10 +112,20 @@ bool cutSpan(const Poly2& poly, const Vec2& pt, const Vec2& dir, Vec2& a, Vec2& 
     return true;
 }
 
+// One recorded subdivision cut: a street segment plus the tier it belongs to
+// (a cut across a face still wider than the collector span is a COLLECTOR —
+// the distributor between the arterials and the local grid).
+struct Cut {
+    Vec2 a, b;
+    bool collector = false;
+};
+
 // Recursively bisect a face along its long OBB axis until block-sized, recording
 // each cut as a street segment (the same recipe as district::subdivideStreets).
-void subdivide(const Poly2& poly, double mn, double mx, double jitter, Lcg& rng,
-               std::vector<std::pair<Vec2, Vec2>>& streets, int depth = 0) {
+// `collectorSpan` <= 0 disables the collector tier (every cut is Local).
+void subdivide(const Poly2& poly, double mn, double mx, double jitter,
+               double collectorSpan, Lcg& rng, std::vector<Cut>& streets,
+               int depth = 0) {
     if (poly.size() < 3 || depth > 22) return;
     OBB2 o = orientedBoundingBox(poly);
     int la = o.longAxis();
@@ -60,9 +138,10 @@ void subdivide(const Poly2& poly, double mn, double mx, double jitter, Lcg& rng,
     splitByLine(poly, sp, cutDir, left, right);
     if (left.size() < 3 || right.size() < 3) return;
     Vec2 a, b;
-    if (cutSpan(poly, sp, cutDir, a, b)) streets.push_back({a, b});
-    subdivide(left, mn, mx, jitter, rng, streets, depth + 1);
-    subdivide(right, mn, mx, jitter, rng, streets, depth + 1);
+    if (cutSpan(poly, sp, cutDir, a, b))
+        streets.push_back({a, b, collectorSpan > 0 && longHalf * 2.0 > collectorSpan});
+    subdivide(left, mn, mx, jitter, collectorSpan, rng, streets, depth + 1);
+    subdivide(right, mn, mx, jitter, collectorSpan, rng, streets, depth + 1);
 }
 
 // Connected components of a graph over its edges. Fills `comp` (−1 for isolated
@@ -114,16 +193,133 @@ RoadGraph buildMetro(const MetroParams& p) {
         return s;
     };
 
-    struct Hot { Vec2 pos; bool radial; };
-    std::vector<Hot> hots;
-    hots.push_back({snapBuildable(p.center), true});
+    // Hub kinds mirror DistrictTag: the centre is the financial core; ring hubs
+    // draw from a weighted flavor cycle (commerce-heavy near the core is the
+    // architect's job — here each SECONDARY CENTRE gets one dominant flavor).
+    std::vector<CityHub> hots;
+    hots.push_back({snapBuildable(p.center), /*kind=*/0, /*radial=*/true});
+    const int kindCycle[6] = {1, 2, 4, 1, 2, 3};   // commercial, residential,
+                                                   // industrial, ..., oldtown
+    // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
+    // footprint is covered by centres instead of leaving a bald mid-band.
+    const int ring1 = std::min(H - 1, 6);
     for (int i = 1; i < H; ++i) {
-        double ang = kTau * i / (H - 1) + rng.range(-0.35, 0.35);
-        double r = DOM * rng.range(0.42, 0.74);
-        hots.push_back({snapBuildable(p.center + Vec2(std::cos(ang), std::sin(ang)) * r), (i % 3) == 0});
+        const bool outer = (i - 1) >= ring1;
+        const int k = outer ? (i - 1 - ring1) : (i - 1);
+        const int n = outer ? (H - 1 - ring1) : ring1;
+        double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
+                     (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
+        double r = DOM * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
+        hots.push_back({snapBuildable(p.center + Vec2(std::cos(ang), std::sin(ang)) * r),
+                        kindCycle[(i - 1) % 6], (i % 3) == 0});
+    }
+    if (p.outHubs) *p.outHubs = hots;
+
+    // --- freeway backbone (metropolis tier): connect the hubs with an MST plus
+    // a few nearest extras, each link a gently-curved polyline. Laid down FIRST
+    // so everything else grows around it; interchange-spaced seeds along the
+    // lines join the arterial colonization below.
+    RoadGraph Ga;
+    std::vector<Vec2> seedPts;                      // extra colonization sources
+    if (p.freeways && H >= 2) {
+        // MST over hubs (Prim) + each hub's nearest non-tree neighbour when the
+        // link is under ~1.2 DOM (adds loops without a hairball).
+        std::vector<std::pair<int, int>> links;
+        std::vector<char> inTree(H, 0);
+        inTree[0] = 1;
+        for (int added = 1; added < H; ++added) {
+            double bd = 1e30; int bi = -1, bj = -1;
+            for (int i = 0; i < H; ++i) if (inTree[i])
+                for (int j = 0; j < H; ++j) if (!inTree[j]) {
+                    double d = dist2(hots[i].pos, hots[j].pos);
+                    if (d < bd) { bd = d; bi = i; bj = j; }
+                }
+            if (bj < 0) break;
+            inTree[bj] = 1;
+            links.push_back({bi, bj});
+        }
+        auto linked = [&](int i, int j) {
+            for (auto& l : links)
+                if ((l.first == i && l.second == j) || (l.first == j && l.second == i))
+                    return true;
+            return false;
+        };
+        for (int i = 0; i < H; ++i) {
+            double bd = 1.2 * DOM * 1.2 * DOM; int bj = -1;
+            for (int j = 0; j < H; ++j) {
+                if (j == i || linked(i, j)) continue;
+                double d = dist2(hots[i].pos, hots[j].pos);
+                if (d < bd) { bd = d; bj = j; }
+            }
+            if (bj >= 0 && i < bj) links.push_back({i, bj});
+        }
+        // Each link: anchor points every ~220 m with small perpendicular sway
+        // (freeways curve gently — DesignRules Freeway minRadius is 300 m), then
+        // segments every ~36 m. Unbuildable anchors slide sideways to stay on
+        // land (a coastal freeway hugs the shoreline instead of wading).
+        for (auto& l : links) {
+            Vec2 A = hots[l.first].pos, B = hots[l.second].pos;
+            Vec2 dir = B - A;
+            double L = dir.length();
+            if (L < 1.0) continue;
+            dir = dir * (1.0 / L);
+            Vec2 nrm(-dir.y, dir.x);
+            int anchors = std::max(2, static_cast<int>(L / 220.0) + 1);
+            std::vector<Vec2> pts;
+            for (int k = 0; k <= anchors; ++k) {
+                double t = static_cast<double>(k) / anchors;
+                double sway = (k == 0 || k == anchors)
+                                  ? 0.0
+                                  : rng.range(-0.05, 0.05) * L;
+                Vec2 q = A + dir * (t * L) + nrm * sway;
+                if (!buildable(q.x, q.y)) {
+                    bool fixed = false;
+                    for (double off = 30; off <= 210 && !fixed; off += 30)
+                        for (double s : {+1.0, -1.0}) {
+                            Vec2 c = q + nrm * (off * s);
+                            if (inDomain(c) && buildable(c.x, c.y)) { q = c; fixed = true; break; }
+                        }
+                }
+                pts.push_back(q);
+            }
+            // Catmull-Rom through the anchors, sampled every ~36 m.
+            auto cr = [&](int i0) {
+                Vec2 p0 = pts[std::max(0, i0 - 1)], p1 = pts[i0],
+                     p2 = pts[std::min<int>(pts.size() - 1, i0 + 1)],
+                     p3 = pts[std::min<int>(pts.size() - 1, i0 + 2)];
+                return [=](double t) {
+                    double t2 = t * t, t3 = t2 * t;
+                    return (p1 * 2.0 + (p2 - p0) * t +
+                            (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 +
+                            ((p1 - p2) * 3.0 + p3 - p0) * t3) * 0.5;
+                };
+            };
+            int prev = -1;
+            double along = 0, nextSeed = p.interchangeSpacing * 0.5;
+            for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+                auto seg = cr(static_cast<int>(k));
+                double segLen = (pts[k + 1] - pts[k]).length();
+                int steps = std::max(1, static_cast<int>(segLen / 36.0));
+                for (int s = (k == 0 ? 0 : 1); s <= steps; ++s) {
+                    Vec2 q = seg(static_cast<double>(s) / steps);
+                    int id = Ga.addNode(q, 8.0);
+                    if (prev >= 0 && id != prev)
+                        Ga.addEdge(prev, id, p.freewayWidth, RoadClass::Freeway);
+                    if (prev >= 0) {
+                        along += segLen / steps;
+                        if (along >= nextSeed) {   // interchange: arterial seed
+                            seedPts.push_back(q);
+                            nextSeed += p.interchangeSpacing;
+                        }
+                    }
+                    prev = id;
+                }
+            }
+        }
     }
 
-    // --- attractors: dense along inter-hotspot corridors + light ambient wander.
+    // --- attractors: dense along inter-hotspot corridors + ambient wander that
+    // scales with the FOOTPRINT AREA (a fixed count starves a 2 km domain).
     std::vector<Vec2> attr;
     for (std::size_t i = 0; i < hots.size(); ++i)
         for (std::size_t j = i + 1; j < hots.size(); ++j) {
@@ -136,28 +332,47 @@ RoadGraph buildMetro(const MetroParams& p) {
                 if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
-    // A little ambient wander (kept low): too much sends arterials shooting into
-    // empty land as long tendrils that add length/nodes without enclosing blocks.
-    int ambient = static_cast<int>(H * 3);
+    // Ambient wander: ~90 per (500 m)^2 of domain. Colonization STOPS where no
+    // attractor sits within INFL of the growing trees, so the ambient field is
+    // what carries growth across the whole footprint — sparse ambient strands
+    // whole quarters (device: the southern hubs never grew streets). Tendrils
+    // stay bounded by the loop-closing pass + block subdivision.
+    int ambient = std::max(H * 3, static_cast<int>(90.0 * (DOM / 500.0) * (DOM / 500.0)));
     for (int k = 0; k < ambient; ++k) {
         Vec2 q{p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)};
         if (buildable(q.x, q.y)) attr.push_back(q);
     }
 
-    // --- multi-source space colonization: a growth tree seeded at each hotspot.
+    // --- multi-source space colonization: a growth tree seeded at each hotspot
+    // and at each freeway interchange. Grid-accelerated (PointGrid) so a 2 km
+    // metro stays out of the old O(iterations x attractors x nodes) wall.
     std::vector<Vec2> node; std::vector<int> src; std::vector<std::pair<int, int>> aedge;
-    auto addN = [&](const Vec2& q, int s) { node.push_back(q); src.push_back(s); return static_cast<int>(node.size()) - 1; };
-    for (std::size_t h = 0; h < hots.size(); ++h) addN(hots[h].pos, static_cast<int>(h));
     const double SEG = 18, INFL = 240, KILL = 48, MERGE = 34;
+    PointGrid nodeGrid(64.0);
+    auto addN = [&](const Vec2& q, int s) {
+        node.push_back(q); src.push_back(s);
+        int id = static_cast<int>(node.size()) - 1;
+        nodeGrid.insert(q, id);
+        return id;
+    };
+    for (std::size_t h = 0; h < hots.size(); ++h) addN(hots[h].pos, static_cast<int>(h));
+    for (std::size_t s = 0; s < seedPts.size(); ++s)
+        addN(seedPts[s], static_cast<int>(hots.size() + s));
+    PointGrid attrGrid(64.0);
+    for (std::size_t a = 0; a < attr.size(); ++a) attrGrid.insert(attr[a], static_cast<int>(a));
     std::vector<char> alive(attr.size(), 1);
-    for (int iter = 0; iter < 6000; ++iter) {
+    // Kill attractors already inside a seed's kill radius.
+    for (std::size_t n = 0; n < node.size(); ++n)
+        attrGrid.each(node[n], KILL, [&](int a) {
+            if (alive[a] && dist2(attr[a], node[n]) < KILL * KILL) alive[a] = 0;
+        });
+    for (int iter = 0; iter < 20000; ++iter) {
         std::vector<Vec2> pull(node.size(), Vec2(0, 0));
         std::vector<int> votes(node.size(), 0);
         int remaining = 0;
         for (std::size_t a = 0; a < attr.size(); ++a) {
             if (!alive[a]) continue; ++remaining;
-            int best = -1; double bd = INFL * INFL;
-            for (std::size_t n = 0; n < node.size(); ++n) { double q = dist2(attr[a], node[n]); if (q < bd) { bd = q; best = static_cast<int>(n); } }
+            int best = nodeGrid.nearest(node, attr[a], INFL, [](int) { return false; });
             if (best >= 0) { pull[best] = pull[best] + normalize(attr[a] - node[best]); ++votes[best]; }
         }
         if (!remaining) break;
@@ -169,36 +384,45 @@ RoadGraph buildMetro(const MetroParams& p) {
             if (np.x < p.center.x - DOM || np.x > p.center.x + DOM ||
                 np.y < p.center.y - DOM || np.y > p.center.y + DOM) continue;
             if (!buildable(np.x, np.y)) continue;   // don't grow into water / up the mountain
-            int hit = -1;
-            for (std::size_t m = 0; m < node.size(); ++m)
-                if (src[m] != src[n] && dist2(np, node[m]) < MERGE * MERGE) { hit = static_cast<int>(m); break; }
+            int hit = nodeGrid.nearest(node, np, MERGE,
+                                       [&](int m) { return src[m] == src[n]; });
             if (hit >= 0) { aedge.push_back({static_cast<int>(n), hit}); continue; }
             int ni = addN(np, src[n]); aedge.push_back({static_cast<int>(n), ni}); ++grew;
-        }
-        for (std::size_t a = 0; a < attr.size(); ++a) {
-            if (!alive[a]) continue;
-            for (std::size_t n = 0; n < node.size(); ++n) if (dist2(attr[a], node[n]) < KILL * KILL) { alive[a] = 0; break; }
+            attrGrid.each(np, KILL, [&](int a) {
+                if (alive[a] && dist2(attr[a], np) < KILL * KILL) alive[a] = 0;
+            });
         }
         if (!grew) break;
     }
 
-    // --- arterial graph.
-    RoadGraph Ga;
+    // --- arterial graph (merged onto the freeway backbone laid above).
     std::vector<int> amap(node.size());
     for (std::size_t i = 0; i < node.size(); ++i) amap[i] = Ga.addNode(node[i], 6.0);
     for (const auto& e : aedge) Ga.addEdge(amap[e.first], amap[e.second], p.arteryWidth, RoadClass::Arterial);
 
-    // --- stitch the separately-grown trees into ONE network (greedy nearest link).
+    // --- stitch the separately-grown trees into ONE network (greedy nearest
+    // link, grid-accelerated: for every node of the smallest component, query
+    // the nearest node of any OTHER component).
     for (int guard = 0; guard < 40; ++guard) {
         std::vector<int> c; int n = components(Ga, c); if (n <= 1) break;
+        std::vector<int> csize(n, 0);
+        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) if (c[i] >= 0) ++csize[c[i]];
+        int small = 0;
+        for (int k = 1; k < n; ++k) if (csize[k] < csize[small]) small = k;
+        std::vector<Vec2> pos(Ga.nodes.size());
+        PointGrid g(96.0);
+        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+            pos[i] = Ga.nodes[i].pos;
+            if (c[i] >= 0 && c[i] != small) g.insert(pos[i], static_cast<int>(i));
+        }
         double bd = 1e30; int ba = -1, bb = -1;
-        std::vector<int> ar;
-        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) if (c[i] >= 0) ar.push_back(static_cast<int>(i));
-        for (std::size_t x = 0; x < ar.size(); ++x)
-            for (std::size_t y = x + 1; y < ar.size(); ++y) {
-                int i = ar[x], j = ar[y]; if (c[i] == c[j]) continue;
-                double q = dist2(Ga.nodes[i].pos, Ga.nodes[j].pos); if (q < bd) { bd = q; ba = i; bb = j; }
-            }
+        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+            if (c[i] != small) continue;
+            int j = g.nearest(pos, pos[i], 2.0 * DOM, [](int) { return false; });
+            if (j < 0) continue;
+            double q = dist2(pos[i], pos[j]);
+            if (q < bd) { bd = q; ba = static_cast<int>(i); bb = j; }
+        }
         if (ba < 0) break; Ga.addEdge(ba, bb, p.arteryWidth, RoadClass::Arterial);
     }
 
@@ -207,10 +431,10 @@ RoadGraph buildMetro(const MetroParams& p) {
     {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
-        const double maxLoop = 170, minLoop = 80; const int hopBar = 9;
+        const double maxLoop = 190, minLoop = 80; const int hopBar = 9;
         std::vector<std::pair<int, int>> links;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
-            if (adj[i].empty() || (i % 4) != 0) continue;
+            if (adj[i].empty() || (i % 3) != 0) continue;
             std::vector<int> d(Ga.nodes.size(), -1), q{static_cast<int>(i)}; d[i] = 0; std::size_t qi = 0;
             while (qi < q.size()) { int u = q[qi++]; if (d[u] >= hopBar) continue; for (int v : adj[u]) if (d[v] < 0) { d[v] = d[u] + 1; q.push_back(v); } }
             int best = -1; double bd = maxLoop * maxLoop;
@@ -223,15 +447,18 @@ RoadGraph buildMetro(const MetroParams& p) {
         }
         for (const auto& l : links) Ga.addEdge(l.first, l.second, p.arteryWidth, RoadClass::Arterial);
         if (p.ringRoad) {
+            // With the freeway tier on, the ring IS a freeway (an orbital).
+            const RoadClass rc = p.freeways ? RoadClass::Freeway : RoadClass::Arterial;
+            const double rw = p.freeways ? p.freewayWidth : p.arteryWidth;
             double rr = DOM * 0.72; int segs = std::max(24, static_cast<int>(kTau * rr / 40.0));
             int prev = -1, first = -1;
             for (int k = 0; k <= segs; ++k) {
                 double a = kTau * k / segs;
                 int id = Ga.addNode(p.center + Vec2(std::cos(a), std::sin(a)) * rr, 6.0);
-                if (prev >= 0) Ga.addEdge(prev, id, p.arteryWidth, RoadClass::Arterial); else first = id;
+                if (prev >= 0) Ga.addEdge(prev, id, rw, rc); else first = id;
                 prev = id;
             }
-            if (first >= 0 && prev >= 0 && first != prev) Ga.addEdge(prev, first, p.arteryWidth, RoadClass::Arterial);
+            if (first >= 0 && prev >= 0 && first != prev) Ga.addEdge(prev, first, rw, rc);
         }
     }
     Ga = planarize(Ga, 1.0);
@@ -244,12 +471,19 @@ RoadGraph buildMetro(const MetroParams& p) {
         for (std::size_t h = 0; h < hots.size(); ++h) { double d = dist2(q, hots[h].pos); if (d < bd) { bd = d; b = static_cast<int>(h); } }
         return b;
     };
-    const double mn = p.blockSize * 0.6, mx = p.blockSize * 1.18;
+    // District flavor drives the grain: financial cores parcel tight, industry
+    // parcels wide; old town is small and crooked. (Indexed by CityHub::kind.)
+    const double kindBlockMul[5] = {0.72, 0.95, 1.15, 0.60, 1.70};
+    const double kindJitter[5]   = {0.08, 0.14, 0.16, 0.30, 0.12};
+    const double collectorSpan = p.collectorSpan > 0 ? p.collectorSpan : p.blockSize * 3.0;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
         Vec2 c = centroid(f);
         if (gated && !buildable(c.x, c.y)) continue;   // don't fill a block that's mostly water/steep
         int h = nearestHot(c);
+        const int kind = std::clamp(hots[h].kind, 0, 4);
+        const double mn = p.blockSize * kindBlockMul[kind] * 0.6;
+        const double mx = p.blockSize * kindBlockMul[kind] * 1.18;
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
             Vec2 C = hots[h].pos; int spokes = 12; double ringStep = std::max(40.0, p.blockSize * 0.8);
             double R = 1e30; for (const Vec2& v : f) R = std::min(R, (v - C).length()); R *= 0.96;
@@ -270,11 +504,14 @@ RoadGraph buildMetro(const MetroParams& p) {
                         full.addEdge(sn[sd][r], sn[s2][r], p.streetWidth, RoadClass::Local);
                 }
         } else {
-            std::vector<std::pair<Vec2, Vec2>> streets;
-            subdivide(f, mn, mx, 0.16, rng, streets);
-            for (const auto& s : streets) {
-                int a = full.addNode(s.first, 6.0), b = full.addNode(s.second, 6.0);
-                full.addEdge(a, b, p.streetWidth, RoadClass::Local);
+            std::vector<Cut> streets;
+            subdivide(f, mn, mx, kindJitter[kind], collectorSpan, rng, streets);
+            for (const Cut& s : streets) {
+                int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
+                if (s.collector)
+                    full.addEdge(a, b, p.collectorWidth, RoadClass::Collector);
+                else
+                    full.addEdge(a, b, p.streetWidth, RoadClass::Local);
             }
         }
     }

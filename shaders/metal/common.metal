@@ -239,12 +239,12 @@ float3 surfRoadMarkings(float3 base, float mu, float mv, float wu, float wv) {
     return c;
 }
 
-// Water: depth-graded ocean + shoreline foam. meshUV.x = baked water depth (m,
-// seaLevel - floor), meshUV.y = baked distance to land (m). Colour only — the
-// material's low roughness + <1 opacity give SSR reflection + fresnel
-// transparency via shadeSurface, so this stays a plain surface entry. (Animated
-// waves/foam on windTime are a shadeSurface follow-up.)
-float3 surfWater(float3 base, float depth, float shore, float3 worldPos) {
+// Water: depth-graded ocean + animated shoreline foam. meshUV.x = baked water
+// depth (m, seaLevel - floor), meshUV.y = baked distance to land (m). Colour
+// only — the material's low roughness + <1 opacity give reflection + fresnel
+// transparency via shadeSurface, and the animated WAVE NORMALS live there too
+// (surfId 12 block). `time` is camera.windTime (seconds).
+float3 surfWater(float3 base, float depth, float shore, float3 worldPos, float time) {
     // `base` is the level's water.color (adjustable) — the DEEP ocean tone. The
     // shallows brighten toward teal from it, so darkening water.color darkens the
     // whole body (device feedback: "too light... looks like a sea, not the ocean").
@@ -254,13 +254,29 @@ float3 surfWater(float3 base, float depth, float shore, float3 worldPos) {
     float3 shallow = base * 3.0 + float3(0.030, 0.130, 0.120);   // teal shallows
     float t = saturate(depth / 30.0);
     float3 c = t < 0.5 ? mix(shallow, mid, t * 2.0) : mix(mid, deep, (t - 0.5) * 2.0);
-    // gentle surface mottling so flat water isn't dead-flat
-    c *= 0.95 + 0.07 * fbm2(worldPos.x * 0.08, worldPos.z * 0.08);
-    // shoreline foam band (wavy edge from noise), only near true land
-    float band = 12.0 + 7.0 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05);
+    // Two-scale mottling, each drifting at its own rate: a fixed single-octave
+    // pattern was the "repetitive texture" read. The slow macro patch mimics
+    // cloud-shadow / deep-current banding; the finer one is chop shading.
+    float m1 = fbm2(worldPos.x * 0.011 + time * 0.006, worldPos.z * 0.011 - time * 0.002);
+    float m2 = fbm2(worldPos.x * 0.055 - time * 0.010, worldPos.z * 0.055 + time * 0.004);
+    c *= 0.88 + 0.12 * m1 + 0.07 * m2;
+    // Sparse whitecap flecks in open water (deep enough that they read as sea
+    // state, not shore foam), advecting with the wind and dissolving.
+    float cap = fbm2(worldPos.x * 0.09 + time * 0.05, worldPos.z * 0.09 - time * 0.03) *
+                (0.55 + 0.45 * fbm2(worldPos.x * 0.021 - time * 0.013, worldPos.z * 0.021));
+    float capMask = smoothstep(0.60, 0.78, cap) * saturate(depth / 8.0) * 0.30;
+    c = mix(c, float3(0.85, 0.92, 0.95), capMask);
+    // LAPPING shoreline foam: a NARROW washing edge plus patchy streaks that
+    // fade fast off the beach — the wide saturated halo read as ice from above.
+    float band = 6.0 + 4.5 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05) +
+                 2.5 * sin(time * 0.8 + 6.2831853 * fbm2(worldPos.x * 0.02, worldPos.z * 0.02));
     if (shore > 0.001 && shore < band) {
-        float f = (1.0 - shore / band) * (0.5 + 0.5 * fbm2(worldPos.x * 0.4, worldPos.z * 0.4));
-        c = mix(c, float3(0.90, 0.96, 0.98), saturate(f * 1.2));
+        float u = 1.0 - shore / band;
+        float pattern = fbm2(worldPos.x * 0.35 + time * 0.22, worldPos.z * 0.35 - time * 0.13);
+        pattern *= pattern;                          // patchy streaks, not a wash
+        float f = u * u * (0.20 + 0.60 * pattern);
+        f += smoothstep(0.85, 1.0, u) * 0.30;   // bright washing edge at the waterline
+        c = mix(c, float3(0.92, 0.96, 0.98), saturate(f));
     }
     return c;
 }
@@ -274,7 +290,8 @@ float3 surfTerrain(float3 base, float3 worldPos) {
     return base * (0.90 + 0.18 * g);
 }
 
-float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 meshUV) {
+float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 meshUV,
+                    float time) {
     float2 uv = surfUV(worldPos, n);
     float3 c;
     switch (id) {
@@ -289,7 +306,7 @@ float3 applySurface(uint id, float3 base, float3 worldPos, float3 n, float2 mesh
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
         case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
-        case 12u: c = surfWater(base, meshUV.x, meshUV.y, worldPos); break;
+        case 12u: c = surfWater(base, meshUV.x, meshUV.y, worldPos, time); break;
         case 13u: c = surfTerrain(base, worldPos); break;
         default:  return base;
     }

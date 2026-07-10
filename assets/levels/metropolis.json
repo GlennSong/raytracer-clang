@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ],
+    "fog": {
+      "density": 0.00012,
+      "color": [
+        0.7,
+        0.78,
+        0.88
+      ]
+    }
+  },
+  "terrain": {
+    "seed": 11,
+    "size": 2600,
+    "resolution": 900,
+    "heightScale": 13,
+    "noiseScale": 0.0026,
+    "octaves": 6,
+    "warp": 0.35,
+    "erode": true,
+    "erodeRes": 800,
+    "erodeDroplets": 500000,
+    "erodeThermal": 14,
+    "erodeTalus": 1.0,
+    "erodeRadius": 4,
+    "mountainHeight": 180,
+    "mountainScale": 0.002,
+    "mountainMaskScale": 0.001,
+    "mountainMaskLo": -0.1,
+    "mountainMaskHi": 0.4,
+    "mountainAlongRange": true,
+    "tiltX": -0.045,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "cdlod": {
+      "worldHalf": 1300
+    },
+    "rangeSpine": [
+      [
+        -1180,
+        -900
+      ],
+      [
+        -1120,
+        -300
+      ],
+      [
+        -1180,
+        300
+      ],
+      [
+        -1120,
+        900
+      ]
+    ],
+    "rangeWidth": 300,
+    "rangeHeight": 260,
+    "rangeVariation": 0.6,
+    "snowLine": 230,
+    "rockLine": 90,
+    "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline."
+  },
+  "water": {
+    "seaLevel": -5.0,
+    "region": 1900,
+    "cell": 12,
+    "foamBand": 40,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "roughness": 0.04,
+    "opacity": 0.82
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "generate": {
+          "kind": "metro",
+          "radius": 1000,
+          "hotspots": 9,
+          "block_size": 72,
+          "artery_width": 13,
+          "street_width": 7,
+          "freeway_width": 22,
+          "collector_width": 9.5,
+          "interchange_spacing": 520,
+          "seed": 9
+        },
+        "width": 7.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
+      }
+    }
+  ],
+  "vegetation": {
+    "seed": 31,
+    "region": 1300,
+    "count": 22000,
+    "maxSlopeDeg": 40,
+    "minHeight": 2.0,
+    "maxHeight": 150,
+    "minScale": 0.7,
+    "maxScale": 1.4,
+    "spacingFactor": 0.75,
+    "densityScale": 0.004,
+    "densityThreshold": -0.35,
+    "clusterCount": 90,
+    "clusterRadius": 28,
+    "clearMargin": 4.0,
+    "drawDistance": 1600,
+    "species": [
+      {
+        "kind": "script",
+        "script": "return flora.param_tree(seed, {species='pine'})",
+        "variants": 3,
+        "collide": true
+      },
+      {
+        "kind": "script",
+        "script": "return flora.param_tree(seed, {species='oak'})",
+        "variants": 2,
+        "collide": true
+      },
+      {
+        "kind": "rock",
+        "variants": 3,
+        "material": {
+          "albedo": [
+            0.42,
+            0.41,
+            0.4
+          ],
+          "roughness": 1.0
+        }
+      }
+    ]
+  },
+  "citysim": {
+    "cars": 30,
+    "pedestrians": 30,
+    "seed": 9,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": false,
+    "wander": false,
+    "vehicles": "vehicles.lua",
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 160,
+    "midtownRadius": 340,
+    "hubRadius": 240,
+    "buildChance": 0.9
+  },
+  "player": {
+    "position": [
+      0,
+      1.2,
+      150
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.8
+    },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  },
+  "name": "metropolis"
+}

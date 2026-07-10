@@ -83,6 +83,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     districts.center = p.center;
     districts.innerRadius = p.innerRadius;
     districts.midRadius = p.midRadius;
+    districts.hubs = p.hubs;
+    districts.hubRadius = p.hubRadius;
     districts.seed = p.seed;
     // Road-clearance corner test (device: buildings poking onto the street): a
     // building box corner must stay `edge width/2 + roadClearance` from every

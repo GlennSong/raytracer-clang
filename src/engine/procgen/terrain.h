@@ -92,6 +92,12 @@ FlattenGrid buildFlattenGrid(const std::vector<TerrainFlatten>& regions);
 double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
                     double x, double z, double base, double dilate);
 
+// Coverage query: is (x,z) inside any flatten footprint grown by `dilate`
+// metres? The vegetation scatter uses this as its keep-out test — nothing
+// grows on a road deck, building pad, or graded lot (plus a small margin).
+bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                   double x, double z, double dilate);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).
@@ -113,6 +119,14 @@ struct TerrainParams {
     // sea floor below it, a sand/rock shore just above, then the upland bands.
     // -1e30 = no sea (inland terrain colours exactly as before).
     double seaLevel = -1e30;
+    // COLOUR BANDS scale to the level's relief: `snowLine` is the height where
+    // snow starts to win (the old hardcoded 74 m suited ~240 m peaks; a 450 m
+    // range needs ~200+), `rockLine` where stone starts displacing ground cover.
+    // Every other colour threshold (scree bench, snow meander amplitudes, the
+    // dryness ramp) derives from these two, so one pair of numbers rescales the
+    // whole mountain wardrobe. Defaults preserve existing levels.
+    double snowLine = 74.0;
+    double rockLine = 16.0;
     // Long-range relief: a ridged-MULTIFRACTAL layer (varied, sharp, irregular
     // peaks — not uniform bumps), domain-warped, added on top of the hill octaves.
     // 0 = off.
@@ -226,9 +240,11 @@ std::vector<Vec3> sampleRangeSpine(const std::vector<Vec3>& controls,
 Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // Rich per-position variant: samples multi-frequency noise so the palette textures
 // like a layered field (macro colour regions, ragged snowline, mottled stone, fine
-// grain). Used by the mesh bakers; the 3-arg form above stays for tests/simple use.
+// grain), plus a CURVATURE term (4 extra height taps) — gullies read wetter/
+// darker and hold snow tongues, ridges stay bare. Band heights scale with
+// params.snowLine/rockLine. Used by the mesh bakers; the 3-arg form is for tests.
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, double seaLevel = -1e30);
+                  const Noise& noise, const TerrainParams& params);
 
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration

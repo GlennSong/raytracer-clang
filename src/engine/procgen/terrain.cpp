@@ -256,6 +256,35 @@ double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& 
     return acc.value();
 }
 
+bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                   double x, double z, double dilate) {
+    auto covers = [&](const TerrainFlatten& r) {
+        if (r.polygon.size() < 3) return false;
+        if (x < r.minX - dilate || x > r.maxX + dilate ||
+            z < r.minZ - dilate || z > r.maxZ + dilate)
+            return false;
+        if (pointInFootprint(r.polygon, x, z)) return true;
+        return dilate > 0.0 && distanceToFootprint(r.polygon, x, z) <= dilate;
+    };
+    if (grid.empty()) {
+        for (const TerrainFlatten& r : regions)
+            if (covers(r)) return true;
+        return false;
+    }
+    int pad = dilate > 0.0 ? static_cast<int>(std::ceil(dilate / grid.cell)) : 0;
+    int cx = static_cast<int>((x - grid.originX) / grid.cell);
+    int cz = static_cast<int>((z - grid.originZ) / grid.cell);
+    if (cx + pad < 0 || cx - pad > grid.nx - 1 || cz + pad < 0 || cz - pad > grid.nz - 1)
+        return false;
+    int x0 = std::max(0, cx - pad), x1 = std::min(grid.nx - 1, cx + pad);
+    int z0 = std::max(0, cz - pad), z1 = std::min(grid.nz - 1, cz + pad);
+    for (int gz = z0; gz <= z1; ++gz)
+        for (int gx = x0; gx <= x1; ++gx)
+            for (int idx : grid.bins[static_cast<size_t>(gz) * grid.nx + gx])
+                if (covers(regions[idx])) return true;
+    return false;
+}
+
 static void footprintBounds(TerrainFlatten& f) {
     f.minX = f.minZ = std::numeric_limits<double>::max();
     f.maxX = f.maxZ = std::numeric_limits<double>::lowest();
@@ -318,7 +347,8 @@ namespace {
 //   detailN — fine value break-up (high freq: grain where the mesh is dense)
 Vec3 terrainColorImpl(double height, double slope,
                       double dryN, double snowN, double toneN, double detailN,
-                      double seaLevel) {
+                      double seaLevel, double snowLine = 74.0,
+                      double rockLine = 16.0, double curv = 0.0) {
     // Palette grounded in real natural-surface albedo (grass ~0.25, sand ~0.4, rock
     // ~0.2-0.3 NEUTRAL grey not brown, snow ~0.85): the old set read too yellow-olive
     // in the greens and too warm-brown in the stone. Greens are cooler + a touch
@@ -347,8 +377,10 @@ Vec3 terrainColorImpl(double height, double slope,
     // Lowland ground by DRYNESS (mostly ALTITUDE), with a macro green variation so
     // the plain isn't one flat green — lush green mottles toward a darker/wetter
     // green over large patches before it dries to meadow and bare earth uphill.
-    double lowAlt = clamp01(height / 55.0);
-    double dry = clamp01(0.10 + 0.14 * dryN + 0.42 * lowAlt);   // lush low, dries only uphill
+    // CONCAVE ground (curv > 0: valley floors, gully bottoms) stays wetter/lusher —
+    // the poor man's drainage map.
+    double lowAlt = clamp01(height / (rockLine * 3.4));
+    double dry = clamp01(0.10 + 0.14 * dryN + 0.42 * lowAlt - 0.20 * clamp01(curv));
     Vec3 greenMix = mixv(grass, grassDk, clamp01(0.5 + 0.5 * toneN));
     Vec3 ground = dry < 0.5 ? mixv(greenMix, meadow, dry * 2.0)
                             : mixv(meadow, dirt, (dry - 0.5) * 2.0);
@@ -356,24 +388,30 @@ Vec3 terrainColorImpl(double height, double slope,
     // STONE: a mountain is stone-bodied. Exposed by ABSOLUTE altitude (massif above
     // the treeline) OR by slope (a cliff at any height), mottled across THREE tones
     // (dark / mid / light) so a cliff face reads as varied rock, not flat grey.
+    // Convex breaks (curv < 0: ridge crests, spur noses) shed their soil a little
+    // earlier than the surrounding face.
     Vec3 stone = toneN < 0.0 ? mixv(darkRock, rock, clamp01(1.0 + toneN))
                              : mixv(rock, rockLt, clamp01(toneN));
-    double altRock   = smoothstep(16.0, 40.0, height + 7.0 * snowN);
-    double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * toneN);
+    double altRock   = smoothstep(rockLine, rockLine * 2.5,
+                                  height + rockLine * 0.44 * snowN);
+    double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * toneN - 0.08 * curv);
     double rockF = clamp01(std::max(altRock, slopeRock));
     Vec3 c = mixv(ground, stone, rockF);
 
     // Pale scree only on the high benches (kept rare so it doesn't wash the body).
-    double screeF = smoothstep(66.0, 94.0, height) * smoothstep(0.14, 0.34, slope);
+    double screeF = smoothstep(snowLine * 0.89, snowLine * 1.27, height) *
+                    smoothstep(0.14, 0.34, slope);
     c = mixv(c, scree, clamp01(screeF));
 
     // Snow CAPS the peaks. The snowline is perturbed on THREE scales so the edge is
-    // ragged, never a contour line: big lobes from the low-freq dryN (±22 m — snow
-    // tongues far down gullies, bare shoulders reaching high), a mid ripple from
-    // snowN, and a fine fringe from detailN. Steep faces SHED snow (it can't hold on
-    // a cliff), so a peak shows bare rock faces with snow on shoulders/ridges/couloirs.
-    double snowLine = height + 22.0 * dryN + 9.0 * snowN + 4.0 * detailN;
-    double snowLo = smoothstep(74.0, 104.0, snowLine);
+    // ragged, never a contour line: big lobes from the low-freq dryN (snow tongues
+    // far down gullies, bare shoulders reaching high), a mid ripple from snowN, and
+    // a fine fringe from detailN — amplitudes scale with the line itself so a tall
+    // range meanders proportionally. Steep faces SHED snow; COULOIRS (concave
+    // chutes) hold it below the line.
+    double snowH = height + snowLine * (0.30 * dryN + 0.12 * snowN + 0.054 * detailN)
+                 + snowLine * 0.10 * clamp01(curv);
+    double snowLo = smoothstep(snowLine, snowLine * 1.4, snowH);
     double snowF = snowLo * (1.0 - smoothstep(0.44, 0.76, slope));
     // PATCHINESS: near the transition (not the deep snowfields) punch bare-rock holes
     // so the line dissolves into a mottle of snow and stone instead of a clean edge.
@@ -412,6 +450,10 @@ Vec3 terrainColorImpl(double height, double slope,
         }
     }
 
+    // Valley-floor shading: concave ground sits slightly darker (soil moisture +
+    // sky occlusion), which makes drainage READ even where the relief is subtle.
+    c = c * (1.0 - 0.10 * clamp01(curv));
+
     // Fine value break-up everywhere (grain where the mesh is dense enough to carry
     // it): a subtle ±light multiply so no band is perfectly uniform.
     double v = 1.0 + 0.06 * detailN;
@@ -429,7 +471,7 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
 }
 
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, double seaLevel) {
+                  const Noise& noise, const TerrainParams& params) {
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
     // so the terrain textures like a layered field — big colour regions, a ragged
     // snowline, mottled stone, fine grain — instead of one frequency modulating
@@ -440,7 +482,18 @@ Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
     double snowN   = noise.fbm2(worldX * 0.032 + 19.3, worldZ * 0.032 + 7.1, 3);
     double toneN   = noise.fbm2(worldX * 0.06 - 8.4, worldZ * 0.06 + 2.9, 3);
     double detailN = noise.noise2(worldX * 0.35, worldZ * 0.35);
-    return terrainColorImpl(height, slope, dryN, snowN, toneN, detailN, seaLevel);
+    // CURVATURE (Laplacian of the height field, 4 taps): >0 concave gully/valley,
+    // <0 convex ridge/spur. eps 3 m picks up the erosion-scale drainage without
+    // dissolving into per-vertex noise.
+    const double e = 3.0;
+    double lap = (terrainHeight(params, noise, worldX - e, worldZ) +
+                  terrainHeight(params, noise, worldX + e, worldZ) +
+                  terrainHeight(params, noise, worldX, worldZ - e) +
+                  terrainHeight(params, noise, worldX, worldZ + e) - 4.0 * height) /
+                 (e * e);
+    double curv = std::max(-1.0, std::min(1.0, lap * 5.0));
+    return terrainColorImpl(height, slope, dryN, snowN, toneN, detailN,
+                            params.seaLevel, params.snowLine, params.rockLine, curv);
 }
 
 namespace {
@@ -678,7 +731,7 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     // noise term varies it). The shader multiplies these with the material.
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params.seaLevel);
+                               v.normal.y, noise, params);
     }
     return mesh;
 }
@@ -718,7 +771,7 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params.seaLevel);
+                               v.normal.y, noise, params);
     }
     return mesh;
 }
@@ -786,7 +839,7 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                     // World-continuous UVs (tile across the whole world).
                     v.u = static_cast<float>(x / chunkSize);
                     v.v = static_cast<float>(z / chunkSize);
-                    v.color = terrainColor(x, z, y, v.normal.y, noise, params.seaLevel);
+                    v.color = terrainColor(x, z, y, v.normal.y, noise, params);
                     mesh.vertices.push_back(v);
                 }
             }

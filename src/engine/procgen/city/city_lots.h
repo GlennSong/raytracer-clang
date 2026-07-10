@@ -68,6 +68,10 @@ struct LotParams {
     Vec2 center{0, 0};        // downtown centre for the radial zoning
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
+    // Polycentric zoning (metropolis tier): {position, kind} hubs forwarded to
+    // DistrictMap::hubs (kind mirrors DistrictTag order). Empty = radial rings.
+    std::vector<std::pair<Vec2, int>> hubs;
+    Real hubRadius = 220.0;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the

@@ -215,6 +215,8 @@ TerrainParams parseTerrainParams(const json& t) {
     tp.tiltX = t.value("tiltX", tp.tiltX);
     tp.tiltZ = t.value("tiltZ", tp.tiltZ);
     tp.seaLevel = t.value("seaLevel", tp.seaLevel);
+    tp.snowLine = t.value("snowLine", tp.snowLine);   // colour-band scaling
+    tp.rockLine = t.value("rockLine", tp.rockLine);
     tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
     tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {

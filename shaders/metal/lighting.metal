@@ -302,7 +302,7 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     uint surfId = (uint(mat.flags) >> 8) & 0xFFu;
     if (surfId != 0u && !(tf & 1u))
         albedo = applySurface(surfId, albedo, geom.worldPosition, normalize(geom.worldNormal),
-                              geom.texcoord);
+                              geom.texcoord, camera.windTime);
 
     float3 normal = normalize(geom.worldNormal);
     if (tf & 4u) {
@@ -351,20 +351,72 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         rough = clamp(mix(0.93, 0.72, snowy) + (vnoise2(wx * 11.0, wz * 11.0) - 0.5) * 0.14,
                       0.55, 1.0);
     }
-    // Water ripples (Surface::Water): the plane shades flat, so the sky/sun reflection
-    // reads as a dead mirror (device: "no ripples, no reflection"). Add a STATIC
-    // (wind-less) multi-octave normal perturbation so the reflection shimmers and the
-    // sun glints break up — a real water surface. Small tilt; the low roughness +
-    // fresnel do the reflecting, this just ruffles it. (Wind-animated waves later.)
+    // OCEAN WAVES (Surface::Water): an animated multi-scale wave normal.
+    // Three directional trains (a long swell + two chop trains at offset
+    // headings) with ANALYTIC slopes, each amplitude-modulated by a slow noise
+    // patch so no train reads as a repeating grid; plus a time-advected micro-
+    // ripple that FADES WITH DISTANCE (the old fixed high-frequency noise
+    // aliased into uniform far-field sparkle). Crest sharpening + a roughness
+    // lift near crests give the sun glint a sea-state structure.
     if (surfId == 12u) {
         float wx = geom.worldPosition.x, wz = geom.worldPosition.z;
-        float r0 = vnoise2(wx * 0.9, wz * 0.9) + 0.5 * vnoise2(wx * 3.1, wz * 3.1)
-                 + 0.25 * vnoise2(wx * 9.0, wz * 9.0);
-        float rx = vnoise2(wx * 0.9 + 0.3, wz * 0.9) + 0.5 * vnoise2(wx * 3.1 + 1.1, wz * 3.1)
-                 + 0.25 * vnoise2(wx * 9.0 + 2.0, wz * 9.0) - r0;
-        float rz = vnoise2(wx * 0.9, wz * 0.9 + 0.3) + 0.5 * vnoise2(wx * 3.1, wz * 3.1 + 1.1)
-                 + 0.25 * vnoise2(wx * 9.0, wz * 9.0 + 2.0) - r0;
-        normal = normalize(normal + float3(-rx, 0.0, -rz) * 0.22);
+        float wt = camera.windTime;
+        float2 P = float2(wx, wz);
+        // Shallows damp the swell so the waterline doesn't wobble the beach.
+        float depthFade = 0.15 + 0.85 * saturate(geom.texcoord.x / 6.0);
+        float slopeX = 0.0, slopeZ = 0.0, crest = 0.0;
+        // Two swells at offset headings (directional spread: their interference
+        // makes CELLS, not parallel stripes) + two chop trains.
+        const float3 trainDirLen[4] = {   // dir.x, dir.z, wavelength (m)
+            float3( 0.980,  0.199, 58.0),
+            float3( 0.845,  0.535, 47.0),
+            float3( 0.827, -0.562, 21.0),
+            float3( 0.399,  0.917,  8.5),
+        };
+        const float trainAmp[4]   = {0.115, 0.100, 0.075, 0.080};
+        const float trainSpeed[4] = {6.5, 5.8, 3.8, 2.1};
+        // Each train fades once its wavelength drops toward the pixel footprint —
+        // otherwise the short chop aliases into a corduroy grating at distance.
+        float dist = length(camera.cameraPosition - geom.worldPosition);
+        const float trainFade[4] = {0.00035, 0.00045, 0.0012, 0.0035};
+        for (int i = 0; i < 4; ++i) {
+            float fade = exp(-dist * trainFade[i]);
+            if (fade < 0.02) continue;
+            float2 d = trainDirLen[i].xy;
+            float k = 6.2831853 / trainDirLen[i].z;
+            // slow amplitude patches: wave GROUPS, not an infinite even train
+            float patch = 0.45 + 0.55 * vnoise2(wx * 0.013 + float(i) * 7.31,
+                                                wz * 0.013 - float(i) * 3.17);
+            // low-frequency phase warp: bends the crest lines so no train reads
+            // as a ruled grating stretching to the horizon (short trains bend more)
+            float warpF = 0.008 + 0.014 * float(i);
+            float warp = (2.8 + 1.6 * float(i)) * vnoise2(wx * warpF - float(i) * 5.7,
+                                                          wz * warpF + float(i) * 2.9);
+            float ph = dot(P, d) * k - wt * trainSpeed[i] * k + warp;
+            float s = sin(ph), cph = cos(ph);
+            float w = trainAmp[i] * patch * fade;
+            float slope = w * cph * (0.55 + 0.45 * (s * 0.5 + 0.5));  // sharpened crests
+            slopeX += d.x * slope;
+            slopeZ += d.y * slope;
+            crest += w * (s * 0.5 + 0.5);
+        }
+        // Micro-ripple: two advected octaves, faded by camera distance so the
+        // horizon stays calm instead of shimmering with sub-pixel noise.
+        float lodFade = exp(-dist * 0.004);
+        if (lodFade > 0.02) {
+            float g0 = vnoise2(wx * 1.6 + wt * 0.50, wz * 1.6 + wt * 0.23) +
+                       0.5 * vnoise2(wx * 4.7 - wt * 0.40, wz * 4.7 + wt * 0.31);
+            float gx = vnoise2(wx * 1.6 + 0.30 + wt * 0.50, wz * 1.6 + wt * 0.23) +
+                       0.5 * vnoise2(wx * 4.7 + 0.30 - wt * 0.40, wz * 4.7 + wt * 0.31) - g0;
+            float gz = vnoise2(wx * 1.6 + wt * 0.50, wz * 1.6 + 0.30 + wt * 0.23) +
+                       0.5 * vnoise2(wx * 4.7 - wt * 0.40, wz * 4.7 + 0.30 + wt * 0.31) - g0;
+            slopeX += gx * 0.45 * lodFade;
+            slopeZ += gz * 0.45 * lodFade;
+        }
+        normal = normalize(float3(-slopeX * depthFade, 1.0, -slopeZ * depthFade));
+        // Sea-state roughness: glassy troughs, scuffed crests — the sun lane
+        // stretches and breaks along the waves instead of one uniform streak.
+        rough = clamp(rough + smoothstep(0.10, 0.30, crest) * 0.10, 0.02, 0.30);
     }
     float3 viewDir = normalize(camera.cameraPosition - geom.worldPosition);
     float NdotV = max(dot(normal, viewDir), 0.0);

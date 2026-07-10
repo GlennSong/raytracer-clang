@@ -4,6 +4,7 @@
 #include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
 #include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
 #include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
+#include "metro.h"              // CityHub (polycentric zoning handoff)
 #include <nlohmann/json.hpp>
 #include <array>
 #include <functional>
@@ -53,6 +54,9 @@ struct RoadNet {
     bool   autoRoundabout = true;
     Vec3   color{0.09, 0.09, 0.10};
     std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
+    // Hubs the metro recipe grew this net around (with district kinds), so lot
+    // growth can zone polycentrically. Empty for hand-authored/district nets.
+    std::vector<CityHub> cityHubs;
 };
 
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).

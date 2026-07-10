@@ -5,6 +5,7 @@
 #include "terrain.h"
 #include "noise.h"
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace engine {
@@ -39,6 +40,11 @@ struct ScatterParams {
     // than even spacing. 0 = uniform (off).
     int   clusterCount = 0;
     float clusterRadius = 6.0f;
+    // Exclusion predicate (world XZ -> keep out): return true to reject a
+    // candidate. The loader wires this to the terrain's flatten footprints
+    // (roads / building pads / graded lots), so vegetation fills a level right
+    // up to — but never onto — anything the city graded. Null = off.
+    std::function<bool(double, double)> exclude;
     uint32_t seed = 0;
 };
 
