@@ -153,6 +153,15 @@ the eroded 2.6km terrain with the CDLOD sampler.
   understated ~8x; the -47%/-50% relative improvements likely persist but must
   be re-verified against the dense map. Iterate fixes against RT_POKE_REPORT
   until LOD0 < 0.5%, then screenshot-verify.
+- **P3.2 ROUND 6 (2026-07-10):** flattenDilate step*0.75 -> step*1.45 (full cell
+  diagonal) in generateLodNodeMesh + the report. Dense map: LOD2 5.96% -> 2.18%,
+  LOD1 8.40% -> 6.45% (the mid-distance shimmer), LOD0 9.45% -> 8.62% BUT its
+  worst site is byte-identical (0.9432 m) across the change — instrument
+  suspicion: the report decomposes chains via graphToSpines(navRoadGraph) while
+  the mesher uses weldChainSpines(constrainedNetGraph) (file-static), so report
+  deck heights can differ from the real deck on hills. NEXT: export
+  weldChainSpines/constrainedNetGraph, make the report read the mesher's exact
+  profiles, THEN trust and attack the LOD0 number.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

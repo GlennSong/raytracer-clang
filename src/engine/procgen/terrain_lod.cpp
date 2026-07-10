@@ -107,7 +107,10 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
     // road corridor narrower than the grid spacing would otherwise slip between
     // two samples and the triangle spanning it would lift natural ground across
     // the carriageway (device: "the terrain poked through in some places").
-    const double flattenDilate = static_cast<double>(step) * 0.75;
+    // 1.45 cells covers the full cell diagonal: at 0.75 a grid corner up to
+    // ~1.4 cells from a road cut stayed on natural ground and its triangle
+    // crossed UP through the deck (RT_POKE_REPORT: 9.45% of deck area at LOD0).
+    const double flattenDilate = static_cast<double>(step) * 1.45;
     std::vector<float> H(static_cast<size_t>(n) * n);
     float minY = std::numeric_limits<float>::max();
     float maxY = std::numeric_limits<float>::lowest();

@@ -2284,7 +2284,7 @@ bool LevelLoader::load(const std::string& path,
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
             const double step = nodeSize / pGridRes;
-            const double dil = step * 0.75;
+            const double dil = step * 1.45;   // mirror generateLodNodeMesh
             auto gridH = [&](int gi, int gj) {
                 return terrainHeight(tpFull, pnNoise, gi * step, gj * step, dil);
             };

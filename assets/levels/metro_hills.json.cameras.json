@@ -1,61 +1,80 @@
 {
   "cameras": [
     {
+      "forward": [
+        -0.6014149897972098,
+        -0.32075466122517854,
+        -0.7317215709199385
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 30.0,
+        "focusDistance": 420.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Vista",
       "position": [
-        340,
-        150,
-        360
-      ],
-      "forward": [
-        -0.6,
-        -0.32,
-        -0.73
-      ],
-      "lens": {
-        "focalLength": 30,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 420
-      }
+        340.0,
+        150.0,
+        360.0
+      ]
     },
     {
+      "forward": [
+        -0.298970325512075,
+        -0.11958813020482999,
+        -0.9467393641215709
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 34.0,
+        "focusDistance": 180.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Street",
       "position": [
-        40,
-        8,
-        120
-      ],
-      "forward": [
-        -0.3,
-        -0.12,
-        -0.95
-      ],
-      "lens": {
-        "focalLength": 34,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 180
-      }
+        40.0,
+        8.0,
+        120.0
+      ]
     },
     {
-      "name": "Harbor",
-      "position": [
-        -230,
-        170,
-        150
-      ],
       "forward": [
-        0.72,
-        -0.42,
-        -0.2
+        0.8399393399047643,
+        -0.48996461494444593,
+        -0.23331648330687887
       ],
       "lens": {
-        "focalLength": 28,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 420
-      }
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 28.0,
+        "focusDistance": 420.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Harbor",
+      "position": [
+        -230.0,
+        170.0,
+        150.0
+      ]
     }
-  ]
+  ],
+  "version": 1
 }

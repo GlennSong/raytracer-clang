@@ -1,98 +1,162 @@
 {
-  "version": 1,
-  "environment": { "skyColor": [0.55, 0.68, 0.86] },
-  "terrain": {
-    "seed": 7,
-    "size": 1200,
-    "resolution": 500,
-    "heightScale": 22,
-    "noiseScale": 0.004,
-    "octaves": 6,
-    "warp": 0.35,
-    "erode": true,
-    "erodeRes": 600,
-    "erodeDroplets": 300000,
-    "erodeThermal": 14,
-    "erodeTalus": 1.0,
-    "erodeRadius": 4,
-    "mountainHeight": 150,
-    "mountainScale": 0.0022,
-    "mountainMaskScale": 0.0012,
-    "mountainMaskLo": -0.1,
-    "mountainMaskHi": 0.4,
-    "mountainAlongRange": true,
-    "tiltX": -0.06,
-    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 },
-    "cdlod": { "worldHalf": 600 },
-    "rangeSpine": [[-575, -380], [-545, -120], [-575, 120], [-545, 380]],
-    "rangeWidth": 240,
-    "rangeHeight": 240,
-    "rangeVariation": 0.6,
-    "_comment": "Full-toolset COASTAL terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, ERODED, tiltX -0.06 ramps the ground DOWN to the east into a SEA (water block below) — snow peaks west, city on the coastal shelf, harbour to the east. The VARIED peaks come from the ridged-multifractal mountain layer confined to the range corridor by mountainAlongRange. The metro at the origin gates on water.seaLevel (single source of truth), so it fills the buildable shelf and stops at the shoreline."
-  },
-  "water": {
-    "seaLevel": -5.0,
-    "region": 600,
-    "cell": 8,
-    "foamBand": 40,
-    "color": [0.012, 0.05, 0.08], "roughness": 0.04, "opacity": 0.82
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 20,
+    "debugWidgets": true,
+    "downtownRadius": 70,
+    "hoursPerSecond": 0.05,
+    "midtownRadius": 150,
+    "pedestrians": 24,
+    "perceptionReliability": 1.0,
+    "seed": 5,
+    "sidewalk": 4.0,
+    "vehicles": "vehicles.lua",
+    "wander": false
   },
   "entities": [
     {
       "id": 2,
       "name": "streets",
-      "shape": "road",
-      "position": [0.0, 0.0, 0.0],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
       "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
         "generate": {
+          "artery_width": 13,
+          "beach_rise": 2.5,
+          "block_size": 72,
+          "hotspots": 5,
           "kind": "metro",
           "radius": 320,
-          "hotspots": 5,
-          "block_size": 72,
-          "artery_width": 13,
-          "street_width": 7,
-          "seed": 5
+          "sea_level": -5.0,
+          "seed": 5,
+          "street_width": 7
         },
-        "width": 7.0,
-        "sidewalk": 3.5,
-        "curb": 0.16,
-        "corner_radius": 3.0,
         "lift": 0.08,
         "markings": true,
-        "crosswalks": true,
-        "color": [0.09, 0.09, 0.1]
-      }
+        "sidewalk": 3.5,
+        "width": 7.0
+      },
+      "shape": "road"
     }
   ],
-  "citysim": {
-    "cars": 20,
-    "pedestrians": 24,
-    "seed": 5,
-    "hoursPerSecond": 0.05,
-    "perceptionReliability": 1.0,
-    "debugWidgets": true,
-    "wander": false,
-    "vehicles": "vehicles.lua",
-    "buildLots": true,
-    "sidewalk": 4.0,
-    "downtownRadius": 70,
-    "midtownRadius": 150,
-    "buildChance": 0.9
-  },
-  "player": {
-    "position": [0, 1.2, 150],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
-    "friction": 0.5
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
   },
   "lighting": {
-    "sun": {
-      "direction": [0.42, 0.52, -0.5],
-      "color": [1.0, 0.96, 0.86],
-      "intensity": 8.0,
-      "castsShadow": true
-    },
+    "ambientMultiplier": 0.6,
     "exposure": 0.5,
-    "ambientMultiplier": 0.6
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
+    }
   },
-  "name": "metro_hills"
+  "name": "metro_hills",
+  "player": {
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.9995751012343201,
+      150.0
+    ]
+  },
+  "terrain": {
+    "_comment": "Full-toolset COASTAL terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, ERODED, tiltX -0.06 ramps the ground DOWN to the east into a SEA (water block below) — snow peaks west, city on the coastal shelf, harbour to the east. The VARIED peaks come from the ridged-multifractal mountain layer confined to the range corridor by mountainAlongRange. The metro at the origin gates on water.seaLevel (single source of truth), so it fills the buildable shelf and stops at the shoreline.",
+    "cdlod": {
+      "worldHalf": 600
+    },
+    "erode": true,
+    "erodeDroplets": 300000,
+    "erodeRadius": 4,
+    "erodeRes": 600,
+    "erodeTalus": 1.0,
+    "erodeThermal": 14,
+    "heightScale": 22,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainAlongRange": true,
+    "mountainHeight": 150,
+    "mountainMaskHi": 0.4,
+    "mountainMaskLo": -0.1,
+    "mountainMaskScale": 0.0012,
+    "mountainScale": 0.0022,
+    "noiseScale": 0.004,
+    "octaves": 6,
+    "rangeHeight": 240,
+    "rangeSpine": [
+      [
+        -575,
+        -380
+      ],
+      [
+        -545,
+        -120
+      ],
+      [
+        -575,
+        120
+      ],
+      [
+        -545,
+        380
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 240,
+    "resolution": 500,
+    "seed": 7,
+    "size": 1200,
+    "tiltX": -0.06,
+    "warp": 0.35
+  },
+  "version": 1,
+  "water": {
+    "cell": 8,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "foamBand": 40,
+    "opacity": 0.82,
+    "region": 600,
+    "roughness": 0.04,
+    "seaLevel": -5.0
+  }
 }
