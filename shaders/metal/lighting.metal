@@ -515,10 +515,24 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // lit radiance toward the fog color by 1-exp(-density*dist), so distant
     // terrain dissolves into atmosphere and the far clip / LOD seams hide. Done
     // here in scene-referred linear space, before the composite exposure/tonemap.
+    // With fogHeightFalloff > 0 the density decays with altitude and the optical
+    // depth uses the closed-form integral of exp(-b*y) along the ray — low-lying
+    // haze a high camera looks down THROUGH, not a distance white-out.
     if (lightData.fogDensity > 0.0) {
         float dist = length(geom.worldPosition - camera.cameraPosition);
-        float f = 1.0 - exp(-lightData.fogDensity * dist);
-        color = mix(color, lightData.fogColor, f);
+        float f;
+        if (lightData.fogHeightFalloff > 0.0) {
+            float b = lightData.fogHeightFalloff;
+            float3 rd = (geom.worldPosition - camera.cameraPosition) / max(dist, 1e-4);
+            float od = lightData.fogDensity * exp(-b * camera.cameraPosition.y) *
+                       (fabs(rd.y) > 1e-4
+                            ? (1.0 - exp(-b * rd.y * dist)) / (b * rd.y)
+                            : dist);
+            f = 1.0 - exp(-max(od, 0.0));
+        } else {
+            f = 1.0 - exp(-lightData.fogDensity * dist);
+        }
+        color = mix(color, lightData.fogColor, saturate(f));
     }
 
     // Exposure is applied once, uniformly, in the composite pass — sceneColor holds

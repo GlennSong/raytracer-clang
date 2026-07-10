@@ -7,7 +7,8 @@
       0.86
     ],
     "fog": {
-      "density": 0.00012,
+      "density": 0.0011,
+      "heightFalloff": 0.016,
       "color": [
         0.7,
         0.78,

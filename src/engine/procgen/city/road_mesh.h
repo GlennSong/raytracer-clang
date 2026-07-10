@@ -68,6 +68,10 @@ struct RoadMeshParams {
     // crossing appears exactly where two roads meet. Off by default.
     bool   crosswalks = false;
     double crosswalkDepth = 2.6;        // band length along the road (m)
+    // No zebra across a FREEWAY: an arm/chain at or above this full width keeps
+    // its paint but loses the pedestrian band (grade-separated roads don't have
+    // street crossings). Wide enough that 4-lane arterials (~14 m) still get one.
+    double crosswalkMaxWidth = 18.0;
     double crosswalkBar = 0.55, crosswalkGap = 0.5;   // zebra bar/gap (m)
     Vec3   crosswalkColor{0.85, 0.85, 0.82};
     // Terrain conformance: a ribbon is split along its length only where the ground
@@ -258,6 +262,9 @@ struct WeldSolidParams {
     // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
     // When false, mv is a large sentinel so no band is painted (ADR-0062).
     bool   crosswalks = false;
+    // No zebra on FREEWAY-width chains (>= this full width): grade-separated
+    // roads have no street crossings. Mirrors RoadMeshParams::crosswalkMaxWidth.
+    double crosswalkMaxWidth = 18.0;
     // Junction pads (device: mesh holes at skewed junctions): every chain ENDS
     // square to its own direction at a junction node, so where the arms meet
     // off-square (a bent through-road at a T, arms at 170°) the caps disagree and

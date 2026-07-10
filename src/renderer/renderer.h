@@ -283,6 +283,9 @@ struct FogParams {
     bool  enabled = false;
     Vec3  color{0.6, 0.7, 0.82};
     float density = 0.0f;
+    // > 0: density decays with altitude (exp(-heightFalloff * y)) — low-lying
+    // haze that aerial cameras see through instead of a distance white-out.
+    float heightFalloff = 0.0f;
 };
 
 struct SceneLighting {

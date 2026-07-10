@@ -124,6 +124,12 @@ struct LightUniforms {
     // paths fade distant terrain into atmosphere and hide the far clip / LOD
     // seams. fogDensity 0 = off.
     simd_float3 fogColor; float fogDensity;
+    // Exponential HEIGHT fog: when fogHeightFalloff > 0 the density decays with
+    // altitude (density(y) = fogDensity * exp(-falloff * y)), integrated in
+    // closed form along the view ray — ground vistas keep their haze while a
+    // camera high above looks down through thin air instead of a white wash.
+    // 0 = the old uniform fog.
+    float fogHeightFalloff; float _fog1; float _fog2; float _fog3;
 };
 
 // Per-frame shadow sampling parameters. The rasterization depth bias is NOT

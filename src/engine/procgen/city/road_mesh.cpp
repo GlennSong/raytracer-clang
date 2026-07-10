@@ -565,6 +565,7 @@ RenderMesh buildRoadMesh(const RoadGraph& g, const RoadMeshParams& p) {
         if (p.crosswalks)
             for (const Arm& a : arms) {
                 if (edgeLen(a.edge) - a.s < p.crosswalkDepth + 1.0) continue;
+                if (a.w * 2.0 >= p.crosswalkMaxWidth) continue;   // freeway arm: no zebra
                 Vec2 center = V + a.d * (a.s + p.crosswalkDepth * 0.5 + 0.4);
                 crosswalkBand(center, a.d, a.w * 2.0);
             }
@@ -1468,6 +1469,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 double chainLen = pr.s.back();
                 auto cwV = [&](double s) -> float {
                     if (!p.crosswalks || pr.closed) return 1e4f;
+                    if (hw * 2.0 >= p.crosswalkMaxWidth) return 1e4f;   // freeway: no zebra
                     return static_cast<float>(std::min(s, chainLen - s) - hw);
                 };
                 float v0 = cwV(s0), v1 = cwV(s1);

@@ -1900,6 +1900,7 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     // distant geometry toward fogColor. density 0 / disabled = off.
     lu.fogColor = toSimd3(lighting.fog.color);
     lu.fogDensity = lighting.fog.enabled ? lighting.fog.density : 0.0f;
+    lu.fogHeightFalloff = lighting.fog.enabled ? lighting.fog.heightFalloff : 0.0f;
 
     impl->skyCloudsEnabled = sky.cloudsEnabled;
 

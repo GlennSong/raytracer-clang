@@ -2608,6 +2608,7 @@ bool LevelLoader::load(const std::string& path,
             const auto& f = env["fog"];
             view.lighting.fog.enabled = true;
             view.lighting.fog.density = f.value("density", 0.0f);
+            view.lighting.fog.heightFalloff = f.value("heightFalloff", 0.0f);
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
         }
