@@ -1405,7 +1405,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
                            Renderer& renderer, AssetManager& assets,
                            const std::string& levelDir,
-                           const std::string& tag = "veg") {
+                           const std::string& tag = "veg",
+                           const std::vector<engine::LotBuilding>* lots = nullptr) {
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     // A species variant is now a multi-part model (ADR-0032): each part is one
@@ -1688,6 +1689,38 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     }
 
     std::vector<Placement> placements = scatterOnTerrain(scatter, terrain, terrainNoise);
+
+    // PARK PLANTING: city park/green lots get their own trees — the open-world
+    // scatter above can't be relied on to land inside a small urban park. Each
+    // pad plants by area (parkTreeDensity per m^2), on the pad's own top plane.
+    if (lots && veg.value("parkTrees", true)) {
+        const double density = veg.value("parkTreeDensity", 0.012);   // ~1 / 85 m^2
+        std::mt19937 prng(vegSeed ^ 0x51ed270bu);
+        std::uniform_real_distribution<double> uni(0.0, 1.0);
+        for (const engine::LotBuilding& lb : *lots) {
+            if (lb.pad.size() < 3 || (lb.type != "park" && lb.type != "green")) continue;
+            const double a = engine::area(lb.pad);
+            int want = std::min(6, static_cast<int>(a * density));
+            if (want < 1) continue;
+            // Pad bounding box for rejection sampling.
+            double mnx = 1e30, mnz = 1e30, mxx = -1e30, mxz = -1e30;
+            for (const engine::Vec2& v : lb.pad) {
+                mnx = std::min(mnx, (double)v.x); mxx = std::max(mxx, (double)v.x);
+                mnz = std::min(mnz, (double)v.y); mxz = std::max(mxz, (double)v.y);
+            }
+            for (int k = 0, placed = 0; k < want * 12 && placed < want; ++k) {
+                engine::Vec2 q(mnx + uni(prng) * (mxx - mnx),
+                               mnz + uni(prng) * (mxz - mnz));
+                if (!engine::pointInPolygon(lb.pad, q)) continue;
+                Placement pl;
+                pl.position = Vec3(q.x, lb.groundY + 0.3, q.y);   // pad top plane
+                pl.yaw = static_cast<float>(uni(prng) * 6.2831853);
+                pl.scale = static_cast<float>(0.55 + 0.35 * uni(prng));
+                placements.push_back(pl);
+                ++placed;
+            }
+        }
+    }
     LOG_INFO << "[veg] " << tag << ": " << placements.size() << " placements"
              << " (count=" << scatter.count << ", region=" << scatter.regionSize
              << ", maxSlopeDeg=" << scatter.maxSlopeDeg << ")";
@@ -2153,7 +2186,8 @@ bool LevelLoader::load(const std::string& path,
         };
         if (root.contains("vegetation"))
             loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
-                           renderer, assets, levelDir, "veg");
+                           renderer, assets, levelDir, "veg",
+                           preLots.grown ? &preLots.lots : nullptr);
         // A second, denser pass for ground cover (grass/flowers). Same scatter
         // generator with its own params — typically a low maxSlopeDeg so it lands
         // on the gentle, green ground (terrainColor reads steep slopes as rock).
