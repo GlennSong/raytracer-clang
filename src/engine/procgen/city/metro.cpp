@@ -324,11 +324,12 @@ RoadGraph buildMetro(const MetroParams& p) {
     for (std::size_t i = 0; i < hots.size(); ++i)
         for (std::size_t j = i + 1; j < hots.size(); ++j) {
             double L = (hots[j].pos - hots[i].pos).length();
-            int n = static_cast<int>(L / 55.0);
+            int n = static_cast<int>(L / p.corridorSpacing);
             for (int k = 0; k < n; ++k) {
                 double t = (k + 0.5) / std::max(1, n);
                 Vec2 m = hots[i].pos * (1.0 - t) + hots[j].pos * t;
-                Vec2 q{m.x + rng.range(-55, 55), m.y + rng.range(-55, 55)};
+                Vec2 q{m.x + rng.range(-p.corridorSpacing, p.corridorSpacing),
+                       m.y + rng.range(-p.corridorSpacing, p.corridorSpacing)};
                 if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
@@ -337,7 +338,7 @@ RoadGraph buildMetro(const MetroParams& p) {
     // what carries growth across the whole footprint — sparse ambient strands
     // whole quarters (device: the southern hubs never grew streets). Tendrils
     // stay bounded by the loop-closing pass + block subdivision.
-    int ambient = std::max(H * 3, static_cast<int>(90.0 * (DOM / 500.0) * (DOM / 500.0)));
+    int ambient = std::max(H * 3, static_cast<int>(p.ambientPer500 * (DOM / 500.0) * (DOM / 500.0)));
     for (int k = 0; k < ambient; ++k) {
         Vec2 q{p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)};
         if (buildable(q.x, q.y)) attr.push_back(q);
@@ -347,7 +348,8 @@ RoadGraph buildMetro(const MetroParams& p) {
     // and at each freeway interchange. Grid-accelerated (PointGrid) so a 2 km
     // metro stays out of the old O(iterations x attractors x nodes) wall.
     std::vector<Vec2> node; std::vector<int> src; std::vector<std::pair<int, int>> aedge;
-    const double SEG = 18, INFL = 240, KILL = 48, MERGE = 34;
+    const double SEG = p.segLength, INFL = p.influence, KILL = p.killRadius,
+                 MERGE = p.mergeRadius;
     PointGrid nodeGrid(64.0);
     auto addN = [&](const Vec2& q, int s) {
         node.push_back(q); src.push_back(s);
@@ -431,7 +433,7 @@ RoadGraph buildMetro(const MetroParams& p) {
     {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
-        const double maxLoop = 190, minLoop = 80; const int hopBar = 9;
+        const double maxLoop = p.loopMax, minLoop = p.loopMin; const int hopBar = 9;
         std::vector<std::pair<int, int>> links;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
             if (adj[i].empty() || (i % 3) != 0) continue;

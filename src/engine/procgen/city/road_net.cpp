@@ -887,6 +887,16 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.collectorWidth     = g.value("collector_width", 9.5);
         mp.collectorSpan      = g.value("collector_span", 0.0);
         mp.interchangeSpacing = g.value("interchange_spacing", 520.0);
+        // Growth spacing (the "room to breathe" dials): a big metro roughly
+        // doubles the small-metro defaults so faces are parcel-sized.
+        mp.segLength       = g.value("seg_length", mp.segLength);
+        mp.influence       = g.value("influence", mp.influence);
+        mp.killRadius      = g.value("kill_radius", mp.killRadius);
+        mp.mergeRadius     = g.value("merge_radius", mp.mergeRadius);
+        mp.corridorSpacing = g.value("corridor_spacing", mp.corridorSpacing);
+        mp.ambientPer500   = g.value("ambient_per_500", mp.ambientPer500);
+        mp.loopMin         = g.value("loop_min", mp.loopMin);
+        mp.loopMax         = g.value("loop_max", mp.loopMax);
         mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep

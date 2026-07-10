@@ -60,7 +60,11 @@ void PlayingState::render(FrameContext& ctx) {
                     cam.position.x, cam.position.y, cam.position.z);
 
         RenderStats rs = ctx.renderer.getRenderStats();
-        uint32_t culled = static_cast<uint32_t>(ctx.world.entityCount()) - rs.entitiesSubmitted;
+        // entitiesSubmitted counts submitted draws (instances included) and can
+        // exceed the entity count — clamp so this never underflows to billions.
+        const uint32_t totalEnts = static_cast<uint32_t>(ctx.world.entityCount());
+        uint32_t culled =
+            rs.entitiesSubmitted <= totalEnts ? totalEnts - rs.entitiesSubmitted : 0;
         ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
         ImGui::Text("Draws: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
 

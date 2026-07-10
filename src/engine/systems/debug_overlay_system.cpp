@@ -137,7 +137,11 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
                 cam.position.x, cam.position.y, cam.position.z);
 
     RenderStats rs = ctx.renderer.getRenderStats();
-    uint32_t culled = static_cast<uint32_t>(ctx.world.entityCount()) - rs.entitiesSubmitted;
+    // entitiesSubmitted counts submitted draws (instances included), which can
+    // exceed the entity count — clamp so the difference never underflows to
+    // "4.2 billion culled".
+    const uint32_t total = static_cast<uint32_t>(ctx.world.entityCount());
+    uint32_t culled = rs.entitiesSubmitted <= total ? total - rs.entitiesSubmitted : 0;
     ImGui::Text("Visible: %u  Culled: %u", rs.entitiesSubmitted, culled);
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,

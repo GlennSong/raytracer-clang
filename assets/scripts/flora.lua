@@ -321,3 +321,25 @@ function flora.flower(seed, opts)
 end
 
 return flora
+
+-- SCATTER-GRADE trees: the same species grammar with the polygon budget of an
+-- instanced forest, not a hero close-up. param_tree's defaults explode at
+-- scatter counts (pine: iterations 7 x (3+1) branches = ~16k tips = ~500k tris
+-- PER TREE — the 2 fps "explosion of branches"). These caps land near 6-12k
+-- tris: forests of hundreds stay in budget, and the silhouette still reads.
+function flora.scatter_tree(seed, opts)
+    opts = opts or {}
+    local caps = {
+        oak   = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.34 },
+        pine  = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.26 },
+        birch = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.28 },
+    }
+    local c = caps[opts.species or "oak"] or caps.oak
+    for k, v in pairs(c) do
+        if opts[k] == nil then opts[k] = v end
+    end
+    return flora.param_tree(seed, opts)
+end

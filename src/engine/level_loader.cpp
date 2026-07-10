@@ -32,6 +32,7 @@
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <array>
@@ -292,9 +293,17 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // so the inspector can widen it and the viewport can drag its nodes — the editor
 // regenerates the mesh through onEdited. Drapes on the level terrain (`ground`).
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
-                           int index, const HeightField* ground) {
+                           int index, const HeightField* ground,
+                           const RoadNet* preNet = nullptr) {
     const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
-    RoadNet net = roadNetFromJson(roadBlock);
+    // REUSE the terrain pre-pass net when given: the pre-pass ran the recipe
+    // against the NATURAL ground and everything downstream (corridor carve,
+    // lot growth, building placement) used THAT graph. Re-running the recipe
+    // here against the CARVED ground made the terrain-aware gate diverge and
+    // built a DIFFERENT network than the lots respect — buildings mid-road
+    // (device: "buildings ... strewn about haphazardly"). One recipe run, one
+    // network; only the drape ground is swapped to the carved terrain below.
+    RoadNet net = preNet ? *preNet : roadNetFromJson(roadBlock);
 
     // A GENERATED road: instead of authored nodes, "generate" runs a procgen graph (buildDistrict)
     // and fills the RoadNet's nodes/edges from it — so the generated city IS a real, editable RoadNet
@@ -304,7 +313,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     // (applyGenerateRecipe), so a generated city stays a real editable RoadNet whose recipe
     // round-trips instead of baking to frozen geometry (road-network-v2-plan T2.1).
     if (ground) net.heightAt = *ground;   // BEFORE generate: terrain-aware recipes (metro) gate on it
-    if (roadBlock.contains("generate"))
+    if (!preNet && roadBlock.contains("generate"))
         applyGenerateRecipe(net, roadBlock["generate"]);
 
     Entity e = world.create();
@@ -945,7 +954,9 @@ static void loadEntities(const json& entities, const json& root, World& world,
                          const CityModel* cityModel = nullptr,
                          const std::vector<std::pair<const json*, ProcModel>>*
                              scriptCache = nullptr,
-                         const HeightField* ground = nullptr) {
+                         const HeightField* ground = nullptr,
+                         const std::vector<std::pair<const json*, RoadNet>>*
+                             roadCache = nullptr) {
     MaterialTable materials = buildMaterialTable(root);   // named "materials" table
     SurfaceTexCache surfaceTex;   // one bake+upload per surface across the load
     int treeIndex = 0;
@@ -960,7 +971,11 @@ static void loadEntities(const json& entities, const json& root, World& world,
         }
         // Editor-authored road (ADR-0049): an editable RoadNet + its baked mesh.
         if (ent.value("shape", std::string()) == "road") {
-            loadRoadEntity(ent, world, assets, roadIndex++, ground);
+            const RoadNet* pre = nullptr;
+            if (roadCache != nullptr)
+                for (const auto& p : *roadCache)
+                    if (p.first == &ent) { pre = &p.second; break; }
+            loadRoadEntity(ent, world, assets, roadIndex++, ground, pre);
             continue;
         }
         // Lua recipe (ADR-0042): run the script and spawn its composable model —
@@ -1725,38 +1740,50 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
              << " (count=" << scatter.count << ", region=" << scatter.regionSize
              << ", maxSlopeDeg=" << scatter.maxSlopeDeg << ")";
 
-    // One InstanceGroup per (variant, part): a variant's parts share the same
-    // per-instance transforms (ROADMAP Phase B instancing). Plants carry no
-    // SourceSpec, so they were never document entities anyway (ADR-0022).
+    // One InstanceGroup per (variant, part, GRID CELL): a variant's parts share
+    // the same per-instance transforms (ROADMAP Phase B instancing), and the
+    // cell split gives every group LOCAL bounds — frustum and draw-distance
+    // culling then drop whole forest chunks instead of treating the entire
+    // map's scatter as one huge always-visible group (device: 2 fps whenever
+    // trees were on screen). Plants carry no SourceSpec (ADR-0022).
+    const Real vegCell = veg.value("cullCell", 280.0);
     std::vector<std::vector<Mat4>> buckets =
         bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
     for (std::size_t si = 0; si < variantList.size(); ++si) {
         if (buckets[si].empty()) continue;
-        const std::vector<Mat4>& transforms = buckets[si];
 
-        // Coarse group bounds shared by the variant's parts: centroid of instance
-        // origins + the spread (the per-part mesh extent is added below).
-        Vec3 centroid(0, 0, 0);
-        for (const Mat4& m : transforms)
-            centroid = centroid + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
-        centroid = centroid / static_cast<Real>(transforms.size());
-        Real spread = 0;
-        for (const Mat4& m : transforms)
-            spread = std::max(spread,
-                              (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - centroid).length());
-
-        for (const Part& part : variantList[si].parts) {
-            InstanceGroup g;
-            g.mesh = part.mesh;
-            g.material = part.material;
-            g.transforms = transforms;
-            BoundingSphere mb = assets.meshBounds(g.mesh);
-            g.boundsCenter = centroid;
-            g.boundsRadius = spread + (mb.center.length() + mb.radius) *
-                                          static_cast<Real>(scatter.maxScale);
-            g.drawDistance = vegDrawDistance;
-            world.add<InstanceGroup>(world.create(), g);
+        std::map<std::pair<int, int>, std::vector<Mat4>> cells;
+        for (const Mat4& m : buckets[si]) {
+            const int cx = static_cast<int>(std::floor(m.m[0][3] / vegCell));
+            const int cz = static_cast<int>(std::floor(m.m[2][3] / vegCell));
+            cells[{cx, cz}].push_back(m);
         }
+        for (const auto& [key, transforms] : cells) {
+            // Coarse group bounds: centroid of instance origins + the spread
+            // (the per-part mesh extent is added below).
+            Vec3 centroid(0, 0, 0);
+            for (const Mat4& m : transforms)
+                centroid = centroid + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+            centroid = centroid / static_cast<Real>(transforms.size());
+            Real spread = 0;
+            for (const Mat4& m : transforms)
+                spread = std::max(spread,
+                                  (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - centroid).length());
+
+            for (const Part& part : variantList[si].parts) {
+                InstanceGroup g;
+                g.mesh = part.mesh;
+                g.material = part.material;
+                g.transforms = transforms;
+                BoundingSphere mb = assets.meshBounds(g.mesh);
+                g.boundsCenter = centroid;
+                g.boundsRadius = spread + (mb.center.length() + mb.radius) *
+                                              static_cast<Real>(scatter.maxScale);
+                g.drawDistance = vegDrawDistance;
+                world.add<InstanceGroup>(world.create(), g);
+            }
+        }
+        const std::vector<Mat4>& transforms = buckets[si];
 
         // Per-trunk static capsule colliders (one body per instance) so you
         // bounce off forest trees. Cheap vs the bark triangle soup; the
@@ -2036,6 +2063,7 @@ bool LevelLoader::load(const std::string& path,
     // meets the road's drivable profile and no terrain pokes through.
     std::vector<TerrainFlatten> roadFlatten;
     std::vector<engine::RoadNet> preNets;   // parsed nets, for the lot pre-pass
+    std::vector<const json*> preNetEnts;    // matching entity per pre-pass net
     RenderMesh roadWallMesh;                 // ADR-0075 P1b: retaining/fill walls (world space)
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
@@ -2059,6 +2087,7 @@ bool LevelLoader::load(const std::string& path,
                 // for a future attempt that co-designs the walls with the carve.
                 (void)roadWallMesh;
                 preNets.push_back(std::move(net));
+                preNetEnts.push_back(&ent);
             }
         }
     }
@@ -2197,9 +2226,19 @@ bool LevelLoader::load(const std::string& path,
     }
 
     if (root.contains("entities"))
+    {
+        // Hand the pre-pass road nets to the entity pass so the recipe runs
+        // ONCE per road: the entity reuses the exact network the lots and the
+        // terrain carve were built against (see loadRoadEntity).
+        std::vector<std::pair<const json*, RoadNet>> roadCache;
+        roadCache.reserve(preNets.size());
+        for (std::size_t i = 0; i < preNets.size(); ++i)
+            roadCache.emplace_back(preNetEnts[i], std::move(preNets[i]));
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, cityEnt, &cityModel, &scriptCache,
-                     entityGround ? &entityGround : nullptr);
+                     entityGround ? &entityGround : nullptr,
+                     roadCache.empty() ? nullptr : &roadCache);
+    }
 
     // Drivable vehicles (ADR-0059) — play mode only (runtime actors, like the
     // player; not editor document entities).

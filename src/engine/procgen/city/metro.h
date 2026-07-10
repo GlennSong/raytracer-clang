@@ -50,6 +50,20 @@ struct MetroParams {
                                         // cuts first (0 = 3x blockSize)
     double interchangeSpacing = 520.0;  // arterial seed spacing along freeways
 
+    // GROWTH SPACING (the "room to breathe" dials, device feedback: blocks need
+    // space for lots + landscaping, roads should run LONGER between junctions).
+    // Defaults are the proven small-metro values; a 2 km metro roughly doubles
+    // them so the arterial mesh is sparser and every enclosed face is big
+    // enough to parcel properly.
+    double segLength       = 18.0;   // colonization step (arterial segment, m)
+    double influence       = 240.0;  // attractor influence radius (m)
+    double killRadius      = 48.0;   // attractor consumed within this (m)
+    double mergeRadius     = 34.0;   // growth tips fuse across trees within this (m)
+    double corridorSpacing = 55.0;   // corridor attractor spacing + jitter (m)
+    double ambientPer500   = 90.0;   // ambient attractors per (500 m)^2
+    double loopMin         = 80.0;   // loop-closing link length range (m)
+    double loopMax         = 190.0;
+
     // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
     // growth and blocks are gated on the buildability of the ground: the city
     // hugs buildable land and avoids water / steep mountain, instead of marching
