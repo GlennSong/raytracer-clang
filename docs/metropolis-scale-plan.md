@@ -162,6 +162,17 @@ the eroded 2.6km terrain with the CDLOD sampler.
   deck heights can differ from the real deck on hills. NEXT: export
   weldChainSpines/constrainedNetGraph, make the report read the mesher's exact
   profiles, THEN trust and attack the LOD0 number.
+- **P3.2 ROUND 7 (2026-07-10):** the report now reads the mesher's EXACT
+  decomposition (roadNetWeldSpines/roadNetConstrainedGraph exported) — LOD0
+  numbers byte-identical, so 8.6% is REAL, not instrument drift. New
+  classification: every >0.3m poke is INSIDE a flatten footprint, ZERO coverage
+  holes. Diagnosis: adjacent LOT/BUILDING PAD planes sit above the road deck
+  (uphill lots don't grade down to their street — the disabled ADR-0075 block
+  cascade), their grid corners own cells beside the corridor, and those
+  triangles tilt over the sidewalk. NEXT (pick by measurement): (a) road
+  footprints get priority over lot pads + corner-clamp cells straddling
+  priority-1 corridors; (b) clamp pad groundY near roads to deck height +
+  step (frontage grading); (c) re-enable block grading behind the dense map.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

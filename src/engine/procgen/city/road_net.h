@@ -70,6 +70,12 @@ RenderMesh buildRoadNetMesh(const RoadNet& net);
 // the asphalt is drawn on. (Wraps the file-local builder; defined in road_net.cpp.)
 RoadGraph navRoadGraph(const RoadNet& net);
 
+// Diagnostic accessors: the mesher's exact constrained graph + weld-chain
+// decomposition, so instruments (RT_POKE_REPORT) measure the deck the mesh
+// actually rides — not a near-miss reconstruction.
+RoadGraph roadNetConstrainedGraph(const RoadNet& net);
+std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g);
+
 // The terrain cut/fill footprints that grade the ground to this road (ADR-0044 corridor
 // conforming). Traces the net's chains, gives each a smoothed, grade-limited vertical
 // profile (roadProfile, over `net.heightAt`), and emits a flatten ramp per segment at the

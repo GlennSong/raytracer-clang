@@ -2292,7 +2292,8 @@ bool LevelLoader::load(const std::string& path,
             // pokes — cover the whole deck area; heightfield-vs-heightfield on a
             // dense grid IS the ray-cast-down). Deck height comes from the SAME
             // reconciled chain profiles the mesher rides, not the carve proxy.
-            long n = 0, poke = 0; double worst = 0, wx = 0, wz = 0;
+            long n = 0, poke = 0, pokeCovered = 0, pokeHole = 0;
+            double worst = 0, wx = 0, wz = 0;
             for (const engine::RoadNet& net : preNets) {
                 std::vector<UnionSpine> spines =
                     engine::graphToSpines(engine::navRoadGraph(net));
@@ -2331,6 +2332,12 @@ bool LevelLoader::load(const std::string& path,
                                 if (dd > 0.05) {
                                     ++poke;
                                     if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
+                                    if (dd > 0.3) {
+                                        const bool covered = tpFull.flattenIndex &&
+                                            flattenCovers(*tpFull.flattenIndex,
+                                                          tpFull.flatten, q.x, q.y, dil);
+                                        if (covered) ++pokeCovered; else ++pokeHole;
+                                    }
                                 }
                             }
                         }
@@ -2340,7 +2347,9 @@ bool LevelLoader::load(const std::string& path,
             LOG_INFO << "[poke-report] LOD " << lvl << " (step " << step << "m): "
                      << poke << "/" << n << " samples poke ("
                      << (n ? 100.0 * poke / n : 0.0) << "%), worst " << worst
-                     << "m @ (" << wx << "," << wz << ")";
+                     << "m @ (" << wx << "," << wz << ")  [>0.3m: "
+                     << pokeCovered << " inside a footprint, " << pokeHole
+                     << " coverage holes]";
         }
     }
     {

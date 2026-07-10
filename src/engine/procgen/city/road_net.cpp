@@ -1025,6 +1025,13 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     }
 }
 
+// Diagnostic accessors (RT_POKE_REPORT): the poke instrument must read the
+// EXACT chain decomposition + constrained graph the mesher builds from — a
+// near-miss decomposition gave it deck heights that drifted from the real road
+// on hills and poisoned the LOD0 numbers (plan P3.2 round 6).
+RoadGraph roadNetConstrainedGraph(const RoadNet& net) { return constrainedNetGraph(net); }
+std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g) { return weldChainSpines(g); }
+
 json roadRecipeForSave(const std::string& currentRecipe, const RoadNet& net) {
     json recipe = json::parse(currentRecipe, nullptr, false);
     if (!recipe.is_object() || !recipe.contains("generate"))
