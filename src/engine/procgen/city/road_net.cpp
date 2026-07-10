@@ -447,6 +447,64 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
         // attempt that samples the deck the way the LOD terrain does.
         out.insert(out.end(), r.begin(), r.end());
     }
+    // JUNCTION PAD CARVE (plan P3.2 round 3): the chain footprints above are
+    // RECTANGLES that stop at the chain ends, but the weld adds a DISC per
+    // junction node (padCenters) whose lobes between the arms sit past every
+    // rectangle — on sloped ground those lobes ride natural, uncarved terrain
+    // and the deck stands metres proud (or the ground swallows the pad). Carve
+    // each disc to the deck's own local plane, sampled from the SAME reconciled
+    // profiles the mesher rides (nearest-spine, like weldSolid's heightOf).
+    {
+        auto deckAt = [&](const Vec2& q) {
+            double best = 1e30, h = 0.0;
+            for (std::size_t si = 0; si < spines.size(); ++si) {
+                if (profiles[si].size() < 2) continue;
+                const auto& pts = spines[si].points;
+                for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                    Vec2 ab = pts[i + 1] - pts[i];
+                    double L2 = ab.lengthSquared();
+                    double t = L2 < 1e-12
+                                   ? 0.0
+                                   : std::max(0.0, std::min(1.0, dot(q - pts[i], ab) / L2));
+                    double d2 = (q - (pts[i] + ab * t)).lengthSquared();
+                    if (d2 < best) {
+                        best = d2;
+                        h = profiles[si][i] + (profiles[si][i + 1] - profiles[si][i]) * t;
+                    }
+                }
+            }
+            return h;
+        };
+        std::vector<int> deg(g.nodes.size(), 0);
+        std::vector<double> jw(g.nodes.size(), 0.0);
+        for (const RoadEdge& e : g.edges) {
+            ++deg[e.a]; ++deg[e.b];
+            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
+            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
+        }
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+            if (deg[v] < 3) continue;
+            const Vec2 C = g.nodes[v].pos;
+            // Cover the weld disc + the sidewalk wrap + the same margin the
+            // chain footprints use, so the pad's full apron sits on graded ground.
+            const double r = jw[v] * 0.5 * 1.02 + net.sidewalk + 2.0;
+            // The deck's local plane: sampled along the steepest deck direction
+            // through the node (8-direction probe), carved 0.22 m under like the
+            // chains so the deck stays proud of the interpolating terrain grid.
+            Vec2 gdir(0, 0);
+            const double hC = deckAt(C);
+            for (int k = 0; k < 8; ++k) {
+                const double a = 2.0 * 3.14159265358979323846 * k / 8.0;
+                const Vec2 d(std::cos(a), std::sin(a));
+                gdir = gdir + d * (deckAt(C + d * r) - hC);
+            }
+            Vec2 axis = gdir.length() > 1e-6 ? normalize(gdir) : Vec2(1, 0);
+            const Vec2 A = C - axis * r, B = C + axis * r;
+            out.push_back(makeFlattenRamp(Vec3(A.x, 0, A.y), Vec3(B.x, 0, B.y),
+                                          deckAt(A) - 0.22, deckAt(B) - 0.22, r,
+                                          falloff));
+        }
+    }
     return out;
 }
 

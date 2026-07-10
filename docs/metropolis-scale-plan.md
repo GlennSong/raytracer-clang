@@ -117,6 +117,15 @@ the eroded 2.6km terrain with the CDLOD sampler.
   stands ~2.3 m proud at its downhill edge). NEXT: export the weld's pad/disc
   polygons as their own TerrainFlatten pads at the pad's plane (the
   "pad-specific flatten footprints" option), then re-run the probe.
+- **P3.2 ROUND 3 (2026-07-10):** junction pad discs now emit their own tilted
+  flatten ramps (roadNetConformRegions samples the reconciled deck plane per
+  pad). CDLOD poke HALVED (0.09% -> 0.04%; exact 0.67% -> 0.56%) — the
+  terrain-slicing-through-junction symptom visibly cleaned up at the evidence
+  site. The >1m proud metric is FLAT (~5.8-6.0k) and its worst sites are
+  byte-identical across every flatten change tried — those verts' ground is
+  NOT owned by any region we've touched. Next: per-site introspection (dump
+  which flatten region + which spine owns the deck vert at (-24,-390)) before
+  any more fixes.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own
