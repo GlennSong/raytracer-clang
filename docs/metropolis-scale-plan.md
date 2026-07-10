@@ -126,6 +126,19 @@ the eroded 2.6km terrain with the CDLOD sampler.
   NOT owned by any region we've touched. Next: per-site introspection (dump
   which flatten region + which spine owns the deck vert at (-24,-390)) before
   any more fixes.
+- **P3.2 ROUND 4 (2026-07-10):** two orthogonal poke sources fixed on-device.
+  (a) CDLOD MORPH: coarse-LOD morph targets are blind neighbour averages, so
+  flatten-clamped corridor vertices lerped back UP through the asphalt at
+  distance — corridor-owned vertices (flattenCovers) no longer morph.
+  (b) LOT PADS: padMeshFor triangulated corner vertices only, so big green/park
+  lots were flat sheets BRIDGING over road cuts — pads now drape-subdivide
+  (~7 m edges) and park height dropped under the deck lift, so pad edges tuck
+  below the asphalt. REMAINING: darker olive tongues over decks at the
+  evidence site are TERRAIN mesh at fine LOD (not pads, not morph). The probe
+  approximates the device flatten but the loader's set also contains BUILDING
+  pads + city/script flatten with their own priorities — next tool: per-site
+  introspection that rebuilds the LOADER's exact flatten set and prints which
+  region owns the ground at a tongue point vs the deck's owning spine.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

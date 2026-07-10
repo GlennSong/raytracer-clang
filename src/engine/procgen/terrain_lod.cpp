@@ -132,6 +132,18 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
     // average of their even neighbours (the coarse mesh's height at that XZ). Only
     // the height changes — the XZ of an edge midpoint is already the coarse midpoint.
     auto h = [&](int i, int j) { return H[static_cast<size_t>(j) * n + i]; };
+    // Flatten-owned vertices DON'T morph (device: "pokes throughout the entire
+    // city"): the morph target is a blind neighbour average, so a vertex sitting
+    // on a road corridor — clamped to the deck plane in pass one — lerped back
+    // UP toward its natural-ground neighbours at distance and rose through the
+    // asphalt. Pin such vertices to their carved height at every LOD; they equal
+    // the fine height, so there is nothing to pop.
+    const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
+    static const FlattenGrid kNoGrid;
+    auto corridorOwned = [&](double x, double z) {
+        if (params.flatten.empty()) return false;
+        return flattenCovers(fg ? *fg : kNoGrid, params.flatten, x, z, flattenDilate);
+    };
     for (int j = 0; j < n; j++) {
         for (int i = 0; i < n; i++) {
             bool ei = (i % 2 == 0), ej = (j % 2 == 0);
@@ -142,6 +154,8 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             else                 my = 0.25f * (h(i - 1, j - 1) + h(i + 1, j - 1) +
                                                h(i - 1, j + 1) + h(i + 1, j + 1));
             Vertex& v = mesh.vertices[static_cast<size_t>(j) * n + i];
+            if (my != h(i, j) && corridorOwned(v.position.x, v.position.z))
+                my = h(i, j);
             v.tangent = Vec3(v.position.x, my, v.position.z);   // morph-target pos
         }
     }

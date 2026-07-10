@@ -40,12 +40,39 @@ RenderMesh padMeshFor(const Poly2& poly, Real h,
     RenderMesh m;
     const Vec3 white(1, 1, 1);
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    // DRAPE-SUBDIVIDE (device: mint-green pads lying across roads all over the
+    // city): the polygon's corner triangles span tens of metres, so a big green
+    // lot was one flat sheet that BRIDGED over the sunken road corridors beside
+    // it (and over terrain relief) instead of following the ground. Split any
+    // triangle edge over ~7 m and drape every new vertex, so pads hug the carve
+    // and tuck UNDER the deck edge where a lot meets a road.
+    std::function<void(const Vec2&, const Vec2&, const Vec2&, int)> emitDraped =
+        [&](const Vec2& a, const Vec2& b, const Vec2& c, int depth) {
+            const Real ab = (b - a).length(), bc = (c - b).length(),
+                       ca = (a - c).length();
+            const Real longest = std::max(ab, std::max(bc, ca));
+            if (ground && depth < 6 && longest > 7.0) {
+                if (ab >= bc && ab >= ca) {
+                    const Vec2 mid = (a + b) * 0.5;
+                    emitDraped(a, mid, c, depth + 1);
+                    emitDraped(mid, b, c, depth + 1);
+                } else if (bc >= ab && bc >= ca) {
+                    const Vec2 mid = (b + c) * 0.5;
+                    emitDraped(a, b, mid, depth + 1);
+                    emitDraped(a, mid, c, depth + 1);
+                } else {
+                    const Vec2 mid = (c + a) * 0.5;
+                    emitDraped(a, b, mid, depth + 1);
+                    emitDraped(mid, b, c, depth + 1);
+                }
+                return;
+            }
+            MeshBuilder::emitTri(m, Vec3(a.x, gy(a) + h, a.y),
+                                 Vec3(b.x, gy(b) + h, b.y),
+                                 Vec3(c.x, gy(c) + h, c.y), Vec3(0, 1, 0), white);
+        };
     for (const std::array<int, 3>& t : triangulatePolygon(poly))
-        MeshBuilder::emitTri(
-            m, Vec3(poly[t[0]].x, gy(poly[t[0]]) + h, poly[t[0]].y),
-            Vec3(poly[t[1]].x, gy(poly[t[1]]) + h, poly[t[1]].y),
-            Vec3(poly[t[2]].x, gy(poly[t[2]]) + h, poly[t[2]].y),
-            Vec3(0, 1, 0), white);
+        emitDraped(poly[t[0]], poly[t[1]], poly[t[2]], 0);
     for (std::size_t i = 0; i < poly.size(); ++i) {
         const Vec2& a = poly[i];
         const Vec2& b = poly[(i + 1) % poly.size()];
@@ -795,7 +822,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.recipe = rec.name;
             b.color = colorFor(b.type);
             if (rec.massing == BuildingRecipe::Massing::Park) {
-                b.height = 0.3;   // a low green pad in the lot's own shape
+                b.height = 0.18;  // low green pad — stays UNDER the road deck
+                                  // lift so park edges tuck below the asphalt
                 b.pad = lot.footprint;
                 sculptPark(b, b.pad, b.height, p.ground,
                            mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
