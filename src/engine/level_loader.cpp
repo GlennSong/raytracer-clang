@@ -292,6 +292,48 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // look) baked to a carriageway mesh and carried as a first-class DOCUMENT entity,
 // so the inspector can widen it and the viewport can drag its nodes — the editor
 // regenerates the mesh through onEdited. Drapes on the level terrain (`ground`).
+// Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid, so the
+// per-Renderable frustum/AABB cull (render_system) drops city blocks instead of
+// treating a district-wide merged mesh as one always-visible draw (plan
+// metropolis-scale P1.1/P1.3). Vertices are duplicated per chunk (cheap: a
+// vertex is shared by few triangles); materialIndex carries over.
+static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell) {
+    std::vector<RenderMesh> out;
+    if (cell <= 0.0 || m.indices.size() < 3) {
+        out.push_back(m);
+        return out;
+    }
+    std::map<std::pair<int, int>, std::size_t> slot;
+    std::vector<std::unordered_map<uint32_t, uint32_t>> remap;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t i0 = m.indices[t], i1 = m.indices[t + 1], i2 = m.indices[t + 2];
+        const Vec3& a = m.vertices[i0].position;
+        const Vec3& b = m.vertices[i1].position;
+        const Vec3& c = m.vertices[i2].position;
+        const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
+        const std::pair<int, int> key{static_cast<int>(std::floor(cx / cell)),
+                                      static_cast<int>(std::floor(cz / cell))};
+        auto it = slot.find(key);
+        if (it == slot.end()) {
+            it = slot.emplace(key, out.size()).first;
+            out.emplace_back();
+            out.back().materialIndex = m.materialIndex;
+            remap.emplace_back();
+        }
+        RenderMesh& dst = out[it->second];
+        auto& rm = remap[it->second];
+        for (uint32_t src_i : {i0, i1, i2}) {
+            auto ri = rm.find(src_i);
+            if (ri == rm.end()) {
+                ri = rm.emplace(src_i, static_cast<uint32_t>(dst.vertices.size())).first;
+                dst.vertices.push_back(m.vertices[src_i]);
+            }
+            dst.indices.push_back(ri->second);
+        }
+    }
+    return out;
+}
+
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
                            int index, const HeightField* ground,
                            const RoadNet* preNet = nullptr) {
@@ -2558,25 +2600,34 @@ bool LevelLoader::load(const std::string& path,
             {
                 using Surface = RenderMaterial::Surface;
                 SurfaceTexCache lotTex;   // one bake+upload per surface class
+                // Chunked per grid cell (plan P1.1): the whole-district merged
+                // mesh defeated frustum culling — any visible corner drew the
+                // entire city. One Renderable per (cell, part) gives the AABB
+                // cull real granularity. renderCell 0 restores the old merge.
+                const double renderCell = cs.value("renderCell", 250.0);
                 for (std::size_t pi = 0; pi < lotParts.size(); ++pi) {
                     RenderMesh& pm = lotParts[pi];
                     if (pm.vertices.empty()) continue;
-                    Renderable r;
-                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
-                    r.material = materialFor(static_cast<PartId>(pi),
-                                             Vec3(0.80, 0.78, 0.75));
-                    const Surface surf = r.material.surface();
+                    Renderable proto;
+                    proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                    proto.material = materialFor(static_cast<PartId>(pi),
+                                                 Vec3(0.80, 0.78, 0.75));
+                    const Surface surf = proto.material.surface();
                     if (surf != Surface::None) {
                         applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
-                        bindSurfaceMaps(r.material,
+                        bindSurfaceMaps(proto.material,
                                         bakeSurfaceTextures(renderer, surf, lotTex));
                     }
-                    r.mesh = assets.acquireMesh(pm, "");   // world-space, unkeyed
-                    Entity e = world.create();
-                    Transform t;   // identity — the merged mesh sits in world space
-                    world.add<Transform>(e, t);
-                    world.add<PrevTransform>(e, PrevTransform{t});
-                    world.add<Renderable>(e, r);
+                    for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
+                        if (chunk.vertices.empty()) continue;
+                        Renderable r = proto;
+                        r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
+                        Entity e = world.create();
+                        Transform t;   // identity — the mesh sits in world space
+                        world.add<Transform>(e, t);
+                        world.add<PrevTransform>(e, PrevTransform{t});
+                        world.add<Renderable>(e, r);
+                    }
                 }
             }
             // Publish the plan (blocks + lots + collider prisms) for the
