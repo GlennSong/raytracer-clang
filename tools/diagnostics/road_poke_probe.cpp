@@ -92,6 +92,10 @@ int main(int argc, char** argv) {
     double wx = 0, wz = 0;
     int proudN[4] = {0,0,0,0};                 // <0.45 | 0.45-0.7 | 0.7-1.0 | >1.0 m
     double worstProud = 0, px = 0, pz = 0;
+    int proudIn = 0, proudOut = 0, proudOutDumped = 0;
+    struct Site { double proud, x, z; };
+    std::vector<Site> worstSites;
+    std::vector<UnionSpine> cSpines = graphToSpines(navRoadGraph(net));
     // buckets by distance to junction
     int bJ[3] = {0,0,0}, bJn[3] = {0,0,0};   // <8m, 8-20m, >20m : poke count / total
     // buckets by cross-slope (natural gradient magnitude)
@@ -120,6 +124,33 @@ int main(int argc, char** argv) {
         if (proud > 0.0) {
             ++proudN[proud < 0.45 ? 0 : (proud < 0.7 ? 1 : (proud < 1.0 ? 2 : 3))];
             if (proud > worstProud) { worstProud = proud; px = x; pz = z; }
+            // P3.2 round 2 evidence: is a badly-proud vertex INSIDE some chain's
+            // carve corridor (plane disagreement) or OUTSIDE every corridor
+            // (coverage hole — junction corner / sidewalk wrap)?
+            if (proud > 1.0) {
+                bool inside = false;
+                double minRel = 1e30;
+                for (std::size_t sj = 0; sj < cSpines.size() && !inside; ++sj) {
+                    const auto& pts = cSpines[sj].points;
+                    const double reach = cSpines[sj].halfWidth + 3.5 + 2.0;
+                    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                        Vec2 ab = pts[i + 1] - pts[i];
+                        double L2 = ab.lengthSquared();
+                        double t = L2 < 1e-12 ? 0.0
+                                              : std::max(0.0, std::min(1.0, dot(Vec2(x, z) - pts[i], ab) / L2));
+                        double d = (Vec2(x, z) - (pts[i] + ab * t)).length();
+                        minRel = std::min(minRel, d - reach);
+                        if (d <= reach) { inside = true; break; }
+                    }
+                }
+                if (inside) ++proudIn; else ++proudOut;
+                worstSites.push_back({proud, x, z});
+                if (!inside && proudOutDumped < 5) {
+                    printf("  proud>1m OUTSIDE corridors: %.2f m @ (%.0f,%.0f), %.2f m past reach\n",
+                           proud, x, z, minRel);
+                    ++proudOutDumped;
+                }
+            }
         }
     }
     printf("# POKE-THROUGH — living_city. deck verts=%d  (dilate=%.1f)\n", deck, dilate);
@@ -131,6 +162,23 @@ int main(int argc, char** argv) {
            worstProud, px, pz);
     printf("  0.00-0.45m: %d   0.45-0.70m: %d   0.70-1.0m: %d   >1.0m: %d  (of %d top verts)\n",
            proudN[0], proudN[1], proudN[2], proudN[3], deck);
+    printf("  >1m proud: %d INSIDE a carve corridor (plane disagreement), %d OUTSIDE all (coverage hole)\n",
+           proudIn, proudOut);
+    // Top offender SITES (clustered to 30 m so one junction = one line), with
+    // junction distance — the forensics pointer for the next fix round.
+    std::sort(worstSites.begin(), worstSites.end(),
+              [](const Site& a, const Site& b) { return a.proud > b.proud; });
+    std::vector<Site> clustered;
+    for (const Site& s : worstSites) {
+        bool dup = false;
+        for (const Site& c : clustered)
+            if (std::hypot(s.x - c.x, s.z - c.z) < 30.0) { dup = true; break; }
+        if (!dup) clustered.push_back(s);
+        if (clustered.size() >= 6) break;
+    }
+    for (const Site& s : clustered)
+        printf("  site: %.2f m proud @ (%.0f,%.0f), %.1f m to nearest junction\n",
+               s.proud, s.x, s.z, nearestJunction(s.x, s.z));
     printf("# poke rate by distance-to-junction:\n");
     const char* jl[3] = {"<8m (in junction)","8-20m","  >20m (mid-span)"};
     for (int b = 0; b < 3; ++b)

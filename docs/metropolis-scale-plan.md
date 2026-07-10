@@ -107,6 +107,16 @@ the eroded 2.6km terrain with the CDLOD sampler.
   bulges outside every chain corridor — next: probe dumps worst-proud vertex
   locations bucketed by pad-vs-chain, then either widen chain coverage to the
   pad ring or emit pad-specific flatten footprints.
+- **P3.2 ROUND 2 (2026-07-10):** forensics narrowed it decisively. The probe now
+  classifies >1m-proud verts: ALL are INSIDE a carve corridor (zero coverage
+  holes), and the clustered worst sites all sit 7-28 m from a junction (worst
+  3.17 m @ (-24,-390)). Endpoint mean->min and self-overlap reconciliation were
+  both ~inert (5,822 -> 5,807), which rules out chain-profile rules entirely:
+  the offending mesh heights come from JUNCTION PAD / TURNING-DISC surfaces —
+  flat pads at one plane over per-chain carve ramps (a 15 m pad on a 15% slope
+  stands ~2.3 m proud at its downhill edge). NEXT: export the weld's pad/disc
+  polygons as their own TerrainFlatten pads at the pad's plane (the
+  "pad-specific flatten footprints" option), then re-run the probe.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

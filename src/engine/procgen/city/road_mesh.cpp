@@ -1119,29 +1119,35 @@ std::vector<std::vector<double>> weldChainProfiles(
         out[si] = roadProfile(ground, sArc, maxGrade);
     }
     if (heightAt) {
-        // Junction endpoints: average the incident chains' independent ends.
+        // Junction endpoints: every incident chain takes the LOWEST arriving
+        // deck — the SAME rule the terrain carve's overlapping-footprint fold
+        // uses (lowest plane wins), so deck and carved ground agree at the
+        // node. The old MEAN left decks up to half the arms' spread above the
+        // min-carved ground (probe: 2-3 m proud walls on junction approaches,
+        // all worst sites 7-28 m from a junction).
         auto key = [](const Vec2& v) {
             return std::make_pair(static_cast<long long>(std::llround(v.x * 8)),
                                   static_cast<long long>(std::llround(v.y * 8)));
         };
-        std::map<std::pair<long long, long long>, std::pair<double, int>> nodes;
+        std::map<std::pair<long long, long long>, double> nodes;
         for (std::size_t si = 0; si < spines.size(); ++si) {
             if (out[si].empty() || spines[si].closed) continue;
             const auto& pts = spines[si].points;
             if ((pts.front() - pts.back()).length() < 1e-6) continue;   // ring
-            auto& a = nodes[key(pts.front())];
-            a.first += out[si].front(); a.second += 1;
-            auto& b = nodes[key(pts.back())];
-            b.first += out[si].back(); b.second += 1;
+            auto foldMin = [&](const Vec2& v, double h) {
+                auto it = nodes.find(key(v));
+                if (it == nodes.end()) nodes.emplace(key(v), h);
+                else it->second = std::min(it->second, h);
+            };
+            foldMin(pts.front(), out[si].front());
+            foldMin(pts.back(), out[si].back());
         }
         for (std::size_t si = 0; si < spines.size(); ++si) {
             if (out[si].empty() || spines[si].closed) continue;
             const auto& pts = spines[si].points;
             if ((pts.front() - pts.back()).length() < 1e-6) continue;
-            const auto& a = nodes[key(pts.front())];
-            const auto& b = nodes[key(pts.back())];
-            const double dA = a.first / a.second - out[si].front();
-            const double dB = b.first / b.second - out[si].back();
+            const double dA = nodes.at(key(pts.front())) - out[si].front();
+            const double dB = nodes.at(key(pts.back())) - out[si].back();
             const double L = std::max(1e-6, arcs[si].back());
             for (std::size_t i = 0; i < out[si].size(); ++i) {
                 const double t = arcs[si][i] / L;
@@ -1161,10 +1167,18 @@ std::vector<std::vector<double>> weldChainProfiles(
             for (std::size_t k = 0; k < out[si].size(); ++k) {
                 const Vec2& q = pts[k];
                 for (std::size_t sj = 0; sj < spines.size(); ++sj) {
-                    if (sj == si || snap[sj].size() < 2) continue;
+                    if (snap[sj].size() < 2) continue;
                     const auto& pj = spines[sj].points;
                     const double reach = spines[sj].halfWidth + overlapReach;
+                    // SELF-overlap counts too (an S-curve passing near its own
+                    // earlier leg: the carve's lowest-plane rule doesn't care
+                    // about chain identity, so neither can the deck) — but only
+                    // legs FAR AWAY along the arc, or every sample would just
+                    // min against its own neighbourhood.
+                    const bool self = sj == si;
+                    const double arcWin = 3.0 * (spines[si].halfWidth + reach);
                     for (std::size_t i = 0; i + 1 < pj.size(); ++i) {
+                        if (self && std::fabs(arcs[sj][i] - arcs[si][k]) < arcWin) continue;
                         Vec2 ab = pj[i + 1] - pj[i];
                         double L2 = ab.lengthSquared();
                         double t = L2 < 1e-12 ? 0.0
