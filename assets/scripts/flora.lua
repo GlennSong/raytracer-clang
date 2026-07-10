@@ -320,8 +320,6 @@ function flora.flower(seed, opts)
     return mesh.merge(parts)
 end
 
-return flora
-
 -- SCATTER-GRADE trees: the same species grammar with the polygon budget of an
 -- instanced forest, not a hero close-up. param_tree's defaults explode at
 -- scatter counts (pine: iterations 7 x (3+1) branches = ~16k tips = ~500k tris
@@ -343,3 +341,5 @@ function flora.scatter_tree(seed, opts)
     end
     return flora.param_tree(seed, opts)
 end
+
+return flora
