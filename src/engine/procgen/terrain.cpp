@@ -285,6 +285,36 @@ bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& r
     return false;
 }
 
+double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                     double x, double z, double reach) {
+    double best = 1e30;
+    auto consider = [&](const TerrainFlatten& r) {
+        if (r.priority < 1 || r.polygon.size() < 3) return;
+        if (x < r.minX - reach || x > r.maxX + reach ||
+            z < r.minZ - reach || z > r.maxZ + reach)
+            return;
+        if (pointInFootprint(r.polygon, x, z) ||
+            distanceToFootprint(r.polygon, x, z) <= reach)
+            best = std::min(best, r.planeY(x, z));
+    };
+    if (grid.empty()) {
+        for (const TerrainFlatten& r : regions) consider(r);
+        return best;
+    }
+    int pad = reach > 0.0 ? static_cast<int>(std::ceil(reach / grid.cell)) : 0;
+    int cx = static_cast<int>((x - grid.originX) / grid.cell);
+    int cz = static_cast<int>((z - grid.originZ) / grid.cell);
+    if (cx + pad < 0 || cx - pad > grid.nx - 1 || cz + pad < 0 || cz - pad > grid.nz - 1)
+        return best;
+    int x0 = std::max(0, cx - pad), x1 = std::min(grid.nx - 1, cx + pad);
+    int z0 = std::max(0, cz - pad), z1 = std::min(grid.nz - 1, cz + pad);
+    for (int gz = z0; gz <= z1; ++gz)
+        for (int gx = x0; gx <= x1; ++gx)
+            for (int idx : grid.bins[static_cast<size_t>(gz) * grid.nx + gx])
+                consider(regions[idx]);
+    return best;
+}
+
 static void footprintBounds(TerrainFlatten& f) {
     f.minX = f.minZ = std::numeric_limits<double>::max();
     f.maxX = f.maxZ = std::numeric_limits<double>::lowest();

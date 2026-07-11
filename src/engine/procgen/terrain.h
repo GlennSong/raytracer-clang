@@ -98,6 +98,13 @@ double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& 
 bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
                    double x, double z, double dilate);
 
+// Lowest ROAD plane (priority >= 1 regions) within `reach` of (x,z); +1e30 when
+// none. Fix A of the frontage-seam plan: terrain grid corners near a corridor
+// clamp to this so an adjacent lot pad's higher plane can't tilt a triangle
+// across the sidewalk (RT_POKE_REPORT: all hard pokes were pad-owned corners).
+double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                     double x, double z, double reach);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).

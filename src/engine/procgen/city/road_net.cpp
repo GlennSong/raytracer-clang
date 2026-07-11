@@ -505,6 +505,11 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
                                           falloff));
         }
     }
+    // FIX A (frontage seams): road regions outrank lot/building pads wherever
+    // both cover — the street owns its corridor and verge; pads own the block
+    // interior. Priority 1 also lets the LOD bake identify "near a road" for
+    // its corner clamp (roadPlaneNear).
+    for (TerrainFlatten& f : out) f.priority = 1;
     return out;
 }
 

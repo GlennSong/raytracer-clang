@@ -119,6 +119,15 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             double x = node.minX + i * step;
             double z = node.minZ + j * step;
             double y = terrainHeight(params, noise, x, z, flattenDilate);
+            // FIX A corner clamp: a corner within ~1.6 cells of a road corridor
+            // never exceeds the corridor's plane — an uphill lot pad's higher
+            // ground starts its climb one cell later instead of tilting a
+            // triangle across the sidewalk.
+            if (params.flattenIndex) {
+                const double rp = roadPlaneNear(*params.flattenIndex, params.flatten,
+                                                x, z, static_cast<double>(step) * 1.6);
+                if (rp < 1e29) y = std::min(y, rp);
+            }
             H[static_cast<size_t>(j) * n + i] = static_cast<float>(y);
             minY = std::min(minY, static_cast<float>(y));
             maxY = std::max(maxY, static_cast<float>(y));

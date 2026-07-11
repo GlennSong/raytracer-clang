@@ -2286,7 +2286,13 @@ bool LevelLoader::load(const std::string& path,
             const double step = nodeSize / pGridRes;
             const double dil = step * 1.45;   // mirror generateLodNodeMesh
             auto gridH = [&](int gi, int gj) {
-                return terrainHeight(tpFull, pnNoise, gi * step, gj * step, dil);
+                double y = terrainHeight(tpFull, pnNoise, gi * step, gj * step, dil);
+                if (tpFull.flattenIndex) {   // mirror generateLodNodeMesh's Fix A clamp
+                    const double rp = roadPlaneNear(*tpFull.flattenIndex, tpFull.flatten,
+                                                    gi * step, gj * step, step * 1.6);
+                    if (rp < 1e29) y = std::min(y, rp);
+                }
+                return y;
             };
             // DENSE poke map (device feedback: point samples between verts miss
             // pokes — cover the whole deck area; heightfield-vs-heightfield on a
@@ -2300,6 +2306,54 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<std::vector<double>> profs = engine::weldChainProfiles(
                     spines, levelGround, 0.0, engine::WeldSolidParams{}.maxGrade,
                     net.sidewalk + 4.0);
+                // Segment spatial hash: the DECK at a point is the NEAREST
+                // spine's profile (weldSolid::heightOf) — comparing a sample
+                // against its OWN chain's profile miscounted junction overlaps
+                // where a closer, higher chain owns the surface (the immortal
+                // 0.9432 m "poke" was this instrument error, not terrain).
+                struct SegRef { int si, i; };
+                std::map<std::pair<int, int>, std::vector<SegRef>> segGrid;
+                const double segCell = 25.0;
+                auto cellOf = [&](double x, double z) {
+                    return std::make_pair((int)std::floor(x / segCell),
+                                          (int)std::floor(z / segCell));
+                };
+                for (int si2 = 0; si2 < (int)spines.size(); ++si2) {
+                    if (profs[si2].size() < 2) continue;
+                    const auto& pp = spines[si2].points;
+                    for (int i2 = 0; i2 + 1 < (int)pp.size(); ++i2) {
+                        const auto c0 = cellOf(std::min(pp[i2].x, pp[i2 + 1].x),
+                                               std::min(pp[i2].y, pp[i2 + 1].y));
+                        const auto c1 = cellOf(std::max(pp[i2].x, pp[i2 + 1].x),
+                                               std::max(pp[i2].y, pp[i2 + 1].y));
+                        for (int gx = c0.first; gx <= c1.first; ++gx)
+                            for (int gz = c0.second; gz <= c1.second; ++gz)
+                                segGrid[{gx, gz}].push_back({si2, i2});
+                    }
+                }
+                auto deckNearest = [&](const Vec2& q, double fallback) {
+                    double bestD2 = 1e30, h = fallback;
+                    const auto cq = cellOf(q.x, q.y);
+                    for (int gx = cq.first - 1; gx <= cq.first + 1; ++gx)
+                        for (int gz = cq.second - 1; gz <= cq.second + 1; ++gz) {
+                            auto it = segGrid.find({gx, gz});
+                            if (it == segGrid.end()) continue;
+                            for (const SegRef& sr : it->second) {
+                                const auto& pp = spines[sr.si].points;
+                                Vec2 ab = pp[sr.i + 1] - pp[sr.i];
+                                double L2 = ab.lengthSquared();
+                                double tt = L2 < 1e-12 ? 0.0
+                                    : std::max(0.0, std::min(1.0, dot(q - pp[sr.i], ab) / L2));
+                                double d2 = (q - (pp[sr.i] + ab * tt)).lengthSquared();
+                                if (d2 < bestD2) {
+                                    bestD2 = d2;
+                                    h = profs[sr.si][sr.i] +
+                                        (profs[sr.si][sr.i + 1] - profs[sr.si][sr.i]) * tt;
+                                }
+                            }
+                        }
+                    return h;
+                };
                 for (std::size_t si = 0; si < spines.size(); ++si) {
                     const auto& pts = spines[si].points;
                     if (profs[si].size() < 2) continue;
@@ -2315,11 +2369,12 @@ bool LevelLoader::load(const std::string& path,
                         for (int s = 0; s <= segs; ++s) {
                             const double t = (double)s / segs;
                             const Vec2 qc = pts[i] + (pts[i + 1] - pts[i]) * t;
-                            const double deck =
+                            const double ownDeck =
                                 profs[si][i] + (profs[si][i + 1] - profs[si][i]) * t +
-                                net.lift;
+                                0.0;
                             for (int li = -lats; li <= lats; ++li) {
                                 const Vec2 q = qc + nrm * (hw * li / (double)lats);
+                                const double deck = deckNearest(q, ownDeck) + net.lift;
                                 const double fx = q.x / step, fz = q.y / step;
                                 const int gi = (int)std::floor(fx), gj = (int)std::floor(fz);
                                 const double u = fx - gi, v = fz - gj;
