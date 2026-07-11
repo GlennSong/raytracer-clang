@@ -1479,6 +1479,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     struct Part { MeshHandle mesh; RenderMaterial material; };
     struct Variant {
         std::vector<Part> parts;
+        bool isRock = false;         // rocks get squash/scale variance + deeper bedding
         float xzRadius = 0.0f;       // canopy footprint, for scatter spacing
         float trunkHeight = 0.0f;    // measured mesh height (capsule collider)
         float trunkRadius = 0.0f;    // measured base footprint (capsule collider)
@@ -1702,7 +1703,10 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 MeshBuilder::bakeHeightColor(mesh, trunkColor, leafColor);
                 addPart(mesh, material);
             }
-            if (!var.parts.empty()) variantList.push_back(std::move(var));
+            if (!var.parts.empty()) {
+                var.isRock = (kind == "rock");
+                variantList.push_back(std::move(var));
+            }
         }
         speciesIndex++;
     }
@@ -1802,7 +1806,39 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         if (buckets[si].empty()) continue;
 
         std::map<std::pair<int, int>, std::vector<Mat4>> cells;
-        for (const Mat4& m : buckets[si]) {
+        const bool isRock = variantList[si].isRock;
+        for (const Mat4& mIn : buckets[si]) {
+            Mat4 m = mIn;
+            // PER-INSTANCE VARIANCE + BEDDING (device: fields read uniform;
+            // trees/rocks float or sink). Deterministic from the position hash.
+            // Rocks: independent XZ/Y scale (squat boulders to tall outcrops)
+            // and bed a third of their height into the ground. Trees: mild
+            // extra scale jitter and root the trunk slightly below grade.
+            const uint32_t hsh = static_cast<uint32_t>(
+                (static_cast<int64_t>(m.m[0][3] * 8) * 73856093LL) ^
+                (static_cast<int64_t>(m.m[2][3] * 8) * 19349663LL) ^ vegSeed);
+            auto unit = [&](uint32_t salt) {
+                uint32_t x = hsh ^ (salt * 2654435761u);
+                x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu;
+                x ^= x >> 16;
+                return (x & 0xFFFFFF) / 16777215.0;
+            };
+            if (isRock) {
+                const double sxz = 0.55 + 1.85 * unit(1) * unit(1);  // skew small
+                const double sy = 0.5 + 1.4 * unit(2);
+                for (int r = 0; r < 3; ++r) {
+                    m.m[r][0] *= sxz; m.m[r][2] *= sxz;   // local X/Z columns
+                    m.m[r][1] *= sy;                       // local Y column
+                }
+                const double bedded =
+                    0.33 * sy * variantList[si].trunkHeight;   // measured mesh height
+                m.m[1][3] -= bedded;
+            } else {
+                const double s = 0.85 + 0.3 * unit(3);
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 3; ++c) m.m[r][c] *= s;
+                m.m[1][3] -= 0.35;   // root the trunk below grade
+            }
             const int cx = static_cast<int>(std::floor(m.m[0][3] / vegCell));
             const int cz = static_cast<int>(std::floor(m.m[2][3] / vegCell));
             cells[{cx, cz}].push_back(m);
@@ -2297,7 +2333,10 @@ bool LevelLoader::load(const std::string& path,
                 if (tpFull.flattenIndex) {   // mirror generateLodNodeMesh's Fix A clamp
                     const double rp = roadPlaneNear(*tpFull.flattenIndex, tpFull.flatten,
                                                     gi * step, gj * step, step * 1.6);
-                    if (rp < 1e29) y = std::min(y, rp);
+                    if (rp < 1e29 &&
+                        !padPlaneAbove(*tpFull.flattenIndex, tpFull.flatten,
+                                       gi * step, gj * step, rp))
+                        y = std::min(y, rp);
                 }
                 return y;
             };

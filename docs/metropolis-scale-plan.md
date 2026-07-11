@@ -199,6 +199,17 @@ the eroded 2.6km terrain with the CDLOD sampler.
   meshes per level (not the runtime morph blend between them, bounded by the
   measured levels) and profile-math decks (not literal mesh verts). Next
   device pass decides if those matter.
+- **DEVICE FEEDBACK ROUND (2026-07-11, post-closure):** pad skirt normals
+  oriented by lot winding (half the lots arrive CW); scatter gains per-instance
+  variance + bedding (rocks: independent XZ/Y scale 0.55-2.4x/0.5-1.9x, bedded
+  a third of their height; trees: extra jitter, rooted 0.35 below grade);
+  road boundary skirts drop to the sampled ground + 0.5 m instead of a fixed
+  0.5 m (high decks no longer show terrain underneath); LOD corner clamp
+  exempts corners strictly inside a building-pad footprint whose plane sits
+  above the road plane (houses stay grounded, steps meet earth) — LOD0 dense
+  map still ZERO with the exemption. QUEUED: rock FORMATIONS (clustered
+  outcrops, not just bigger stones); residual pokes the user still sees on
+  device — collect coordinates via RT_POKE_SITE.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

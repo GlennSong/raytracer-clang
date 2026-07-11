@@ -1324,7 +1324,18 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             Vec2 e = b - a; if (e.length() < 1e-9) continue;
             Vec2 rn = normalize(Vec2(e.y, -e.x));               // right normal in XZ
             Vec3 nrm(rn.x, 0, rn.y);
-            Vec3 tA = P3(a, 0), tB = P3(b, 0), bA = P3(a, -p.thickness), bB = P3(b, -p.thickness);
+            // Skirt to the GROUND, not a fixed thickness: where the deck rides
+            // high over a dip the fixed skirt ended mid-air and the terrain
+            // showed underneath (device feedback). Drop each edge to the lower
+            // of the sampled ground under its two ends, minus a margin, but
+            // never less than the old thickness.
+            double drop = p.thickness;
+            if (p.heightAt) {
+                const double gA = heightOf(a.x, a.y) - p.heightAt(a.x, a.y);
+                const double gB = heightOf(b.x, b.y) - p.heightAt(b.x, b.y);
+                drop = std::max(drop, std::max(gA, gB) + 0.5);
+            }
+            Vec3 tA = P3(a, 0), tB = P3(b, 0), bA = P3(a, -drop), bB = P3(b, -drop);
             MeshBuilder::emitTri(mesh, tA, tB, bB, nrm, p.sideColor);
             MeshBuilder::emitTri(mesh, tA, bB, bA, nrm, p.sideColor);
         }

@@ -106,6 +106,14 @@ bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& r
 double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
                      double x, double z, double reach);
 
+// Is (x,z) strictly INSIDE a non-road region (priority < 1, e.g. a building
+// pad) whose plane sits above `planeCut`? The LOD corner clamp exempts such
+// corners: a frontage pad keeps its grade instead of being dragged down to
+// the road plane (device: houses floated above the clamped bank, steps in
+// mid-air). The pad<->road seam is the retaining-wall cascade's job.
+bool padPlaneAbove(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                   double x, double z, double planeCut);
+
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,
 // so the same recipe rebuilds the same terrain (ADR-0021).

@@ -73,18 +73,35 @@ RenderMesh padMeshFor(const Poly2& poly, Real h,
         };
     for (const std::array<int, 3>& t : triangulatePolygon(poly))
         emitDraped(poly[t[0]], poly[t[1]], poly[t[2]], 0);
+    // The skirt's outward normal assumed a CCW plan — half the lots arrive CW
+    // (device: "foundation skirts have the normals inverted"), so orient once.
+    double area2 = 0.0;
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Vec2& a = poly[i];
+        const Vec2& b = poly[(i + 1) % poly.size()];
+        area2 += a.x * b.y - b.x * a.y;
+    }
+    const double wind = area2 >= 0.0 ? 1.0 : -1.0;
     for (std::size_t i = 0; i < poly.size(); ++i) {
         const Vec2& a = poly[i];
         const Vec2& b = poly[(i + 1) % poly.size()];
         Vec2 d = b - a;
         if (d.length() < 1e-6) continue;
-        Vec2 n = normalize(Vec2(d.y, -d.x));   // CCW plan: outward
-        // Skirt from the draped top down past the terrain surface.
-        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
-                              Vec3(b.x, gy(b) - 0.4, b.y),
-                              Vec3(b.x, gy(b) + h, b.y),
-                              Vec3(a.x, gy(a) + h, a.y),
-                              Vec3(n.x, 0, n.y), white);
+        Vec2 n = normalize(Vec2(d.y, -d.x)) * wind;   // outward for either winding
+        // Skirt from the draped top down past the terrain surface; wind the
+        // quad to face its normal.
+        if (wind >= 0.0)
+            MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
+                                  Vec3(b.x, gy(b) - 0.4, b.y),
+                                  Vec3(b.x, gy(b) + h, b.y),
+                                  Vec3(a.x, gy(a) + h, a.y),
+                                  Vec3(n.x, 0, n.y), white);
+        else
+            MeshBuilder::emitQuad(m, Vec3(b.x, gy(b) - 0.4, b.y),
+                                  Vec3(a.x, gy(a) - 0.4, a.y),
+                                  Vec3(a.x, gy(a) + h, a.y),
+                                  Vec3(b.x, gy(b) + h, b.y),
+                                  Vec3(n.x, 0, n.y), white);
     }
     return m;
 }

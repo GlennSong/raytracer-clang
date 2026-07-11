@@ -315,6 +315,26 @@ double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>&
     return best;
 }
 
+bool padPlaneAbove(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
+                   double x, double z, double planeCut) {
+    bool found = false;
+    auto consider = [&](const TerrainFlatten& r) {
+        if (found || r.priority >= 1 || r.polygon.size() < 3) return;
+        if (x < r.minX || x > r.maxX || z < r.minZ || z > r.maxZ) return;
+        if (r.planeY(x, z) > planeCut && pointInFootprint(r.polygon, x, z)) found = true;
+    };
+    if (grid.empty()) {
+        for (const TerrainFlatten& r : regions) consider(r);
+        return found;
+    }
+    int cx = static_cast<int>((x - grid.originX) / grid.cell);
+    int cz = static_cast<int>((z - grid.originZ) / grid.cell);
+    if (cx < 0 || cx > grid.nx - 1 || cz < 0 || cz > grid.nz - 1) return false;
+    for (int idx : grid.bins[static_cast<size_t>(cz) * grid.nx + cx])
+        consider(regions[idx]);
+    return found;
+}
+
 static void footprintBounds(TerrainFlatten& f) {
     f.minX = f.minZ = std::numeric_limits<double>::max();
     f.maxX = f.maxZ = std::numeric_limits<double>::lowest();
