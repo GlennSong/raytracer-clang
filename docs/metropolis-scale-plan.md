@@ -173,6 +173,19 @@ the eroded 2.6km terrain with the CDLOD sampler.
   footprints get priority over lot pads + corner-clamp cells straddling
   priority-1 corridors; (b) clamp pad groundY near roads to deck height +
   step (frontage grading); (c) re-enable block grading behind the dense map.
+- **P3.2 ROUND 8 (2026-07-11) — AUTOPSY RESULTS.** RT_POKE_SITE per-sample dump
+  at the immortal site: the terrain corners sit EXACTLY on a road conform plane
+  (raw == roadPlane, covered) — but that plane is ~1 m ABOVE the deck actually
+  there. Owner tags show the covering regions belong to conform-chain 232 while
+  the report indexes the same physical road as chain 1289 AND finds it owns
+  ZERO regions: the conform's spine list and the report's spine list DIFFER in
+  content/order despite calling the same functions on the same net. Also fixed
+  on principle: cached pre-pass road nets now keep their NATURAL-ground sampler
+  for meshing (the mesh had been re-deriving profiles over CARVED ground —
+  the recipe-ran-twice sin one level deeper). NEXT: log spine counts in
+  roadNetConformRegions vs the report; find why two same-input calls disagree
+  (suspect hidden state or nondeterminism in netGraph/applyConstraints);
+  THEN the conform planes and deck heights unify for real.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

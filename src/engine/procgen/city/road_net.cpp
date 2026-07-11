@@ -438,6 +438,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
         std::vector<TerrainFlatten> r = roadConformRegions(
             sp.points, profile, sp.halfWidth + net.sidewalk + 2.0, shoulder,
             falloff);
+        for (TerrainFlatten& f : r) f.owner = static_cast<int>(si);
         // NOTE (ADR-0075): the DaylightBatter earthwork was tried here and REGRESSED
         // the conform on the real CDLOD city — the batter rises too steeply near the
         // road, so coarse-LOD terrain samples poke through the deck (headless
@@ -503,6 +504,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
             out.push_back(makeFlattenRamp(Vec3(A.x, 0, A.y), Vec3(B.x, 0, B.y),
                                           deckAt(A) - 0.22, deckAt(B) - 0.22, r,
                                           falloff));
+            out.back().owner = -2 - v;   // junction pad for node v
         }
     }
     // FIX A (frontage seams): road regions outrank lot/building pads wherever

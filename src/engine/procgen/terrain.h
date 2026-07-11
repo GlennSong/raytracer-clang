@@ -48,6 +48,7 @@ struct TerrainFlatten {
     // sits on, and a block still grades to its streets. Equal priority everywhere
     // reproduces the original lowest-plane-wins behaviour exactly.
     int priority = 0;
+    int owner = -1;   // diagnostic: which chain/pad emitted this region (RT_POKE_SITE)
     double planeY(double x, double z) const { return c + dx * x + dz * z; }
 };
 

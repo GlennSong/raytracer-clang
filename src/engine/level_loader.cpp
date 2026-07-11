@@ -354,7 +354,14 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     // A GENERATED road runs its recipe into the net's graph — shared with the editor's regenerate
     // (applyGenerateRecipe), so a generated city stays a real editable RoadNet whose recipe
     // round-trips instead of baking to frozen geometry (road-network-v2-plan T2.1).
-    if (ground) net.heightAt = *ground;   // BEFORE generate: terrain-aware recipes (metro) gate on it
+    // A PRE-PASS net keeps its NATURAL-ground sampler: the terrain conform
+    // computed the road's height profile on natural ground, and the mesh must
+    // compute the IDENTICAL profile — swapping in the carved sampler here made
+    // the weld re-derive profiles over already-carved terrain, diverging from
+    // the conform planes by up to ~1 m at junctions (RT_POKE_SITE autopsy: the
+    // ground obeyed a plane a metre above the deck). Fresh hand-authored roads
+    // (no preNet) still drape on the carved ground as before.
+    if (ground && !preNet) net.heightAt = *ground;
     if (!preNet && roadBlock.contains("generate"))
         applyGenerateRecipe(net, roadBlock["generate"]);
 
@@ -2384,6 +2391,100 @@ bool LevelLoader::load(const std::string& path,
                                                   gridH(gi + 1, gj + 1) * u * v;
                                 ++n;
                                 const double dd = gh - deck;
+                                // RT_POKE_SITE="x,z": full autopsy of samples
+                                // within 3 m of the given point — deck source,
+                                // corner heights, and what the corner clamp saw.
+                                if (const char* site = std::getenv("RT_POKE_SITE")) {
+                                    double sx = 0, sz = 0;
+                                    if (sscanf(site, "%lf,%lf", &sx, &sz) == 2 &&
+                                        std::hypot(q.x - sx, q.y - sz) < 3.0 && lvl == 0) {
+                                        LOG_INFO << "[poke-site] q=(" << q.x << "," << q.y
+                                                 << ") gh=" << gh << " deck=" << deck
+                                                 << " ownDeck=" << ownDeck
+                                                 << " dd=" << dd << " chain=" << si
+                                                 << " hw=" << spines[si].halfWidth;
+                                        // every priority-1 region covering q (dilated):
+                                        for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
+                                            const TerrainFlatten& r = tpFull.flatten[ri];
+                                            if (r.priority < 1 || r.polygon.size() < 3) continue;
+                                            if (q.x < r.minX - dil || q.x > r.maxX + dil ||
+                                                q.y < r.minZ - dil || q.y > r.maxZ + dil) continue;
+                                            auto inPoly = [&](double px, double pz) {
+                                                bool in = false;
+                                                size_t np = r.polygon.size();
+                                                for (size_t a = 0, b = np - 1; a < np; b = a++) {
+                                                    double xi = r.polygon[a].x, zi = r.polygon[a].z;
+                                                    double xj = r.polygon[b].x, zj = r.polygon[b].z;
+                                                    if (((zi > pz) != (zj > pz)) &&
+                                                        (px < (xj - xi) * (pz - zi) / (zj - zi) + xi))
+                                                        in = !in;
+                                                }
+                                                return in;
+                                            };
+                                            auto distPoly = [&](double px, double pz) {
+                                                double bd = 1e30;
+                                                size_t np = r.polygon.size();
+                                                for (size_t a = 0, b = np - 1; a < np; b = a++) {
+                                                    double ax = r.polygon[b].x, az = r.polygon[b].z;
+                                                    double ex = r.polygon[a].x - ax,
+                                                           ez = r.polygon[a].z - az;
+                                                    double l2 = ex * ex + ez * ez;
+                                                    double tt = l2 > 1e-12
+                                                        ? std::max(0.0, std::min(1.0,
+                                                              ((px - ax) * ex + (pz - az) * ez) / l2))
+                                                        : 0.0;
+                                                    double ddx = px - (ax + ex * tt),
+                                                           ddz = pz - (az + ez * tt);
+                                                    bd = std::min(bd, std::sqrt(ddx * ddx + ddz * ddz));
+                                                }
+                                                return bd;
+                                            };
+                                            const bool insideR = inPoly(q.x, q.y);
+                                            if (!insideR && distPoly(q.x, q.y) > dil) continue;
+                                            LOG_INFO << "[poke-site]   region#" << ri
+                                                     << " owner=" << r.owner
+                                                     << " plane=" << r.planeY(q.x, q.y)
+                                                     << (insideR ? " INSIDE" : " (dilated)");
+                                        }
+                                        int mine = 0;
+                                        for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
+                                            const TerrainFlatten& r = tpFull.flatten[ri];
+                                            if (r.owner != (int)si) continue;
+                                            ++mine;
+                                            if (std::abs((r.minX + r.maxX) * 0.5 - q.x) < 40 &&
+                                                std::abs((r.minZ + r.maxZ) * 0.5 - q.y) < 40)
+                                                LOG_INFO << "[poke-site]   my-chain region#"
+                                                         << ri << " bbox x["
+                                                         << r.minX << "," << r.maxX << "] z["
+                                                         << r.minZ << "," << r.maxZ
+                                                         << "] plane@q=" << r.planeY(q.x, q.y);
+                                        }
+                                        LOG_INFO << "[poke-site]   chain " << si
+                                                 << " owns " << mine << " regions total";
+                                        for (int cj = 0; cj <= 1; ++cj)
+                                            for (int ci = 0; ci <= 1; ++ci) {
+                                                const double cxw = (gi + ci) * step;
+                                                const double czw = (gj + cj) * step;
+                                                const double raw = terrainHeight(
+                                                    tpFull, pnNoise, cxw, czw, dil);
+                                                double rp = 1e30;
+                                                if (tpFull.flattenIndex)
+                                                    rp = roadPlaneNear(*tpFull.flattenIndex,
+                                                                       tpFull.flatten, cxw,
+                                                                       czw, step * 1.6);
+                                                const bool cov = tpFull.flattenIndex &&
+                                                    flattenCovers(*tpFull.flattenIndex,
+                                                                  tpFull.flatten, cxw, czw,
+                                                                  dil);
+                                                LOG_INFO << "[poke-site]   corner("
+                                                         << cxw << "," << czw
+                                                         << ") raw=" << raw
+                                                         << " roadPlane="
+                                                         << (rp < 1e29 ? rp : -999)
+                                                         << " covered=" << cov;
+                                            }
+                                    }
+                                }
                                 if (dd > 0.05) {
                                     ++poke;
                                     if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
