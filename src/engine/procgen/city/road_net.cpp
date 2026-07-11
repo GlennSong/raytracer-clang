@@ -1,4 +1,5 @@
 #include "road_net.h"
+#include "../../../log.h"
 
 #include "road_network.h"       // RoadGraph, RoadEdge
 #include "road_constraints.h"   // applyConstraints, capDegree, RoadRules
@@ -412,6 +413,14 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
     RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
     (void)maxGrade;   // superseded: the carve must use the deck's own grade
     std::vector<UnionSpine> spines = weldChainSpines(g);
+    if (std::getenv("RT_POKE_SITE")) {
+        double fp = 0;
+        for (std::size_t si = 0; si < spines.size(); ++si)
+            fp += spines[si].points.front().x * (si + 1) * 1e-3;
+        LOG_INFO << "[conform-fingerprint] nodes=" << g.nodes.size()
+                 << " edges=" << g.edges.size() << " spines=" << spines.size()
+                 << " fp=" << fp;
+    }
     // ONE profile source (plan P3.2): weldChainProfiles now reconciles mid-span
     // overlaps INSIDE the shared pass — the mesher rides the same reconciled
     // heights — so deck and carve cannot disagree at junctions. The old carve-

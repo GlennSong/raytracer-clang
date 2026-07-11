@@ -186,6 +186,19 @@ the eroded 2.6km terrain with the CDLOD sampler.
   roadNetConformRegions vs the report; find why two same-input calls disagree
   (suspect hidden state or nondeterminism in netGraph/applyConstraints);
   THEN the conform planes and deck heights unify for real.
+- **P3.2 ROUND 9 (2026-07-11) — CLOSED. LOD0/1/2 = 0/184,688 POKES, pixel-
+  verified at both evidence sites.** The round-7 report swap to the mesher's
+  decomposition had silently not applied (fingerprints: conform 341 welded
+  chains vs report 1,719 per-edge spines — one spine per edge, phantom ~1 m
+  profile disagreements at every junction). With the swap actually landed the
+  dense map reads ZERO at all LODs, and the previously-poking sites render
+  clean. The stack that got here, all real: overlap-reconciled profiles ->
+  end caps -> junction pad carve -> full-diagonal dilation -> corner clamp +
+  road priority -> ONE ground source for mesh + carve profiles (cached nets
+  keep the natural sampler). Remaining honest caveats: the report models LOD
+  meshes per level (not the runtime morph blend between them, bounded by the
+  measured levels) and profile-math decks (not literal mesh verts). Next
+  device pass decides if those matter.
 - **P3.2 Fix by measurement**, then re-enable the disabled pieces in order:
   retaining walls (P1b) where cut depth > threshold, block grading (P2) now
   that faces are guaranteed by the enclosed-block metro. Each behind its own

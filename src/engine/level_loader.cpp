@@ -2309,10 +2309,19 @@ bool LevelLoader::load(const std::string& path,
             double worst = 0, wx = 0, wz = 0;
             for (const engine::RoadNet& net : preNets) {
                 std::vector<UnionSpine> spines =
-                    engine::graphToSpines(engine::navRoadGraph(net));
+                    engine::roadNetWeldSpines(engine::roadNetConstrainedGraph(net));
                 std::vector<std::vector<double>> profs = engine::weldChainProfiles(
                     spines, levelGround, 0.0, engine::WeldSolidParams{}.maxGrade,
                     net.sidewalk + 4.0);
+                if (std::getenv("RT_POKE_SITE")) {
+                    RoadGraph gFp = engine::roadNetConstrainedGraph(net);
+                    double fp = 0;
+                    for (std::size_t si2 = 0; si2 < spines.size(); ++si2)
+                        fp += spines[si2].points.front().x * (si2 + 1) * 1e-3;
+                    LOG_INFO << "[report-fingerprint] nodes=" << gFp.nodes.size()
+                             << " edges=" << gFp.edges.size()
+                             << " spines=" << spines.size() << " fp=" << fp;
+                }
                 // Segment spatial hash: the DECK at a point is the NEAREST
                 // spine's profile (weldSolid::heightOf) — comparing a sample
                 // against its OWN chain's profile miscounted junction overlaps
