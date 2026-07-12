@@ -31,7 +31,7 @@ struct Rib {
 
 CorridorMeshOut buildCorridorMesh(
     const CorridorDef& c, const std::function<Real(Real, Real)>& ground,
-    Real step) {
+    Real step, const RoadGraph* avoidRoads) {
     CorridorMeshOut out;
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
@@ -157,41 +157,106 @@ CorridorMeshOut buildCorridorMesh(
         MeshBuilder::emitQuad(out.deck, b0, a0, a1, b1, Vec3(0, -1, 0),
                               kConcrete * 0.8);
     }
-    // PIERS: a bent (column) every ~28 m of elevated run, at the median.
+    // EDGE RAILINGS (device): a low concrete parapet running BOTH outer
+    // edges, continuous over structure and at-grade alike — nothing drives
+    // off this deck.
+    for (int side = -1; side <= 1; side += 2) {
+        const Real ph = 0.85, pt = 0.28;   // parapet height / thickness
+        for (int i = 0; i < n; ++i) {
+            auto o0 = [&](int k) { return side * half[k]; };
+            auto o1 = [&](int k) { return side * (half[k] - pt); };
+            const Vec3 a0 = ribs[i].at(o0(i)), a1 = ribs[i + 1].at(o0(i + 1));
+            const Vec3 b0 = ribs[i].at(o1(i)), b1 = ribs[i + 1].at(o1(i + 1));
+            const Vec3 up3(0, ph, 0);
+            Vec3 outN(side * ribs[i].n.x, 0, side * ribs[i].n.y);
+            MeshBuilder::emitQuad(out.barrier, a0, a1, a1 + up3, a0 + up3,
+                                  outN, kConcrete);                  // outer face
+            MeshBuilder::emitQuad(out.barrier, b1, b0, b0 + up3, b1 + up3,
+                                  outN * -1.0, kConcrete);           // inner face
+            MeshBuilder::emitQuad(out.barrier, a0 + up3, a1 + up3, b1 + up3,
+                                  b0 + up3, Vec3(0, 1, 0), kConcrete);   // cap
+        }
+    }
+
+    // PIER BENTS (device: "circular pillars and U braces"): every ~28 m of
+    // elevated run, a real bent — two ROUND columns + a cap beam under the
+    // deck. A bent whose columns would land in a street below SLIDES along
+    // the corridor until clear (or the span just gets longer). Footprints
+    // are exported so the city passes treat them as USED ground.
     {
-        Real sincePier = 28.0;   // drop one near the start of the span
+        auto clearOfRoads = [&](const Vec2& p) {
+            if (!avoidRoads) return true;
+            for (const RoadEdge& e : avoidRoads->edges) {
+                if (e.a < 0 || e.b < 0 ||
+                    e.a >= static_cast<int>(avoidRoads->nodes.size()) ||
+                    e.b >= static_cast<int>(avoidRoads->nodes.size())) continue;
+                const Vec2& ra = avoidRoads->nodes[e.a].pos;
+                const Vec2& rb = avoidRoads->nodes[e.b].pos;
+                Vec2 ab = rb - ra;
+                const Real len2 = ab.lengthSquared();
+                Real t = len2 > 1e-12 ? dot(p - ra, ab) / len2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                const Vec2 q(ra.x + ab.x * t, ra.y + ab.y * t);
+                if ((q - p).length() < e.width * 0.5 + 1.8) return false;
+            }
+            return true;
+        };
+        auto emitBent = [&](Real s) {
+            const Vec2 cc = c.horizontal.pos(s);
+            const Vec2 nn = c.horizontal.normal(s);
+            const Real z = c.vertical.elevation(s);
+            const Real gz = gy(cc);
+            const Real capTop = z - deckDepth + 0.08;
+            if (capTop - gz < 1.2) return;
+            const Real colOff = c.halfWidthAt(s) * 0.52;   // column pair spread
+            const Real colR = 0.95;
+            for (int sd = -1; sd <= 1; sd += 2) {
+                const Vec2 foot2 = cc + nn * (sd * colOff);
+                const Real fgz = gy(foot2);
+                const Real hgt = capTop - 0.6 - (fgz - 1.0);
+                if (hgt < 1.0) continue;
+                RenderMesh col = MeshBuilder::cylinder(
+                    static_cast<float>(colR), static_cast<float>(hgt), 12);
+                for (Vertex& v : col.vertices) v.color = kConcrete;
+                MeshBuilder::transform(
+                    col, Mat4::translate(foot2.x, fgz - 1.0 + hgt * 0.5, foot2.y));
+                MeshBuilder::append(out.barrier, col);
+                out.pierBases.push_back(foot2);
+            }
+            // The cap beam (the U-brace's crossbar) tying the pair under the
+            // deck — a box rotated to lie across the carriageways.
+            const Real capW = c.halfWidthAt(s) * 2.0 * 0.92;
+            RenderMesh cap = MeshBuilder::box(Vec3(capW, 1.1, 1.7));
+            for (Vertex& v : cap.vertices) v.color = kConcrete * 1.05;
+            const Real yaw = std::atan2(-nn.y, nn.x);
+            MeshBuilder::transform(
+                cap, Mat4::trs(Vec3(cc.x, capTop - 0.55, cc.y),
+                               Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                               Vec3(1, 1, 1)));
+            MeshBuilder::append(out.barrier, cap);
+        };
+        Real sincePier = 28.0;
         for (int i = 0; i <= n; ++i) {
-            const Real ds = i > 0 ? L / n : 0.0;
-            sincePier += ds;
+            sincePier += i > 0 ? L / n : 0.0;
             if (!elevated[i] || sincePier < 28.0) continue;
-            sincePier = 0;
-            const Rib& r = ribs[i];
-            const Real gz = gy(r.c);
-            const Real top = r.z - deckDepth + 0.05;
-            if (top - gz < 1.0) continue;
-            // a rectangular column, wider across the road than along it
-            const Vec2 across = r.n, along(r.n.y, -r.n.x);
-            const Real hw2 = 1.1, hd2 = 0.7;
-            const Vec3 base(r.c.x, gz - 1.0, r.c.y);
-            Vec3 axA(across.x, 0, across.y), axB(along.x, 0, along.y);
-            const Real h = top - (gz - 1.0);
-            // 4 sides of the column
-            auto post = [&](const Vec3& u, const Vec3& v, Real hu, Real hv) {
-                const Vec3 c0 = base - u * hu - v * hv;
-                const Vec3 c1 = base + u * hu - v * hv;
-                const Vec3 c2 = base + u * hu + v * hv;
-                const Vec3 c3 = base - u * hu + v * hv;
-                const Vec3 up(0, h, 0);
-                auto wall = [&](const Vec3& p0, const Vec3& p1, const Vec3& nn) {
-                    MeshBuilder::emitQuad(out.barrier, p0, p1, p1 + up, p0 + up,
-                                          nn, kConcrete);
-                };
-                wall(c0, c1, v * -1.0 * (1.0 / std::max(Real(1e-9), hv)));
-                wall(c1, c2, u * (1.0 / std::max(Real(1e-9), hu)));
-                wall(c2, c3, v * (1.0 / std::max(Real(1e-9), hv)));
-                wall(c3, c0, u * -1.0 * (1.0 / std::max(Real(1e-9), hu)));
-            };
-            post(axA, axB, hw2, hd2);
+            const Real s0 = L * i / n;
+            // slide the bent so no column stands in a road below
+            bool placed = false;
+            for (Real shift : {0.0, 4.0, -4.0, 8.0, -8.0, 12.0}) {
+                const Real s = std::max(Real(0), std::min(L, s0 + shift));
+                const Vec2 cc = c.horizontal.pos(s);
+                const Vec2 nn = c.horizontal.normal(s);
+                const Real colOff = c.halfWidthAt(s) * 0.52;
+                if (clearOfRoads(cc + nn * colOff) &&
+                    clearOfRoads(cc - nn * colOff)) {
+                    emitBent(s);
+                    placed = true;
+                    break;
+                }
+            }
+            sincePier = placed ? 0.0 : 20.0;   // blocked: try again soon —
+                                               // the span stretches, never
+                                               // a column in the street
         }
     }
 

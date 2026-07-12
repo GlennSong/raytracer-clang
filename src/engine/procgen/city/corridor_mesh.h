@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CORRIDOR_MESH_H
 
 #include "alignment.h"
+#include "road_network.h"           // RoadGraph (piers dodge the streets below)
 #include "../terrain.h"                    // TerrainFlatten
 #include "../../../renderer/renderer.h"    // RenderMesh
 #include <functional>
@@ -20,14 +21,20 @@ namespace engine {
 struct CorridorMeshOut {
     RenderMesh deck;        // asphalt top (+ fascia/underside where elevated)
     RenderMesh markings;    // painted lines, floated just above the deck
-    RenderMesh barrier;     // median Jersey barrier + piers (concrete)
+    RenderMesh barrier;     // median barrier, edge railings, bents (concrete)
     std::vector<TerrainFlatten> flatten;   // at-grade windows carve to deck
+    // Pier bent footprints (world XZ) — the lot/vegetation passes treat these
+    // as USED ground (device: "turn those pylons into a used lot so nothing
+    // else can be built there").
+    std::vector<Vec2> pierBases;
 };
 
+// `avoidRoads`: pier bents SLIDE along the corridor (or the span lengthens)
+// so no column lands inside a street corridor below (device feedback).
 CorridorMeshOut buildCorridorMesh(
     const CorridorDef& corridor,
     const std::function<Real(Real, Real)>& ground,
-    Real step = 3.0);
+    Real step = 3.0, const RoadGraph* avoidRoads = nullptr);
 
 }  // namespace engine
 

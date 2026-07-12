@@ -2296,8 +2296,23 @@ bool LevelLoader::load(const std::string& path,
                         {std::min(s, len), levelGround(p.x, p.y) + 0.4, 50.0});
                 }
             }
+            // Bents must not stand in the streets below: hand the sweep the
+            // same sampled graph the road meshes are built from.
+            engine::RoadGraph streetsBelow;
+            for (const engine::RoadNet& net : preNets) {
+                engine::RoadGraph g = engine::navRoadGraph(net);
+                const int base = static_cast<int>(streetsBelow.nodes.size());
+                for (const engine::RoadNode& nd : g.nodes)
+                    streetsBelow.nodes.push_back(nd);
+                for (engine::RoadEdge e : g.edges) {
+                    e.a += base; e.b += base;
+                    streetsBelow.edges.push_back(e);
+                }
+            }
             PendingCorridor pc;
-            pc.mesh = buildCorridorMesh(def, levelGround);
+            pc.mesh = buildCorridorMesh(def, levelGround, 3.0,
+                                        streetsBelow.edges.empty()
+                                            ? nullptr : &streetsBelow);
             roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
                                pc.mesh.flatten.end());
             preCorridors.push_back(std::move(pc));

@@ -55,33 +55,76 @@
       "shape": "road"
     },
     {
-      "id": 3,
-      "name": "mainline",
-      "position": [0.0, 0.0, 0.0],
-      "shape": "corridor",
       "corridor": {
+        "designSpeed": 30.0,
+        "laneWidth": 3.6,
+        "lanes": 4,
+        "median": 1.4,
         "points": [
-          [-560, -420],
-          [-180, -240],
-          [120, 40],
-          [180, 420],
-          [520, 560]
+          [
+            -560,
+            -420
+          ],
+          [
+            -180,
+            -240
+          ],
+          [
+            120,
+            40
+          ],
+          [
+            180,
+            420
+          ],
+          [
+            520,
+            560
+          ]
+        ],
+        "profile": [
+          [
+            0,
+            22,
+            0
+          ],
+          [
+            260,
+            14,
+            140
+          ],
+          [
+            560,
+            21,
+            160
+          ],
+          [
+            860,
+            21,
+            160
+          ],
+          [
+            1120,
+            12,
+            140
+          ],
+          [
+            1500,
+            10,
+            0
+          ]
         ],
         "radius": 240,
-        "spiral": 70,
-        "lanes": 4,
-        "laneWidth": 3.6,
-        "median": 1.4,
-        "designSpeed": 30.0,
-        "profile": [
-          [0, 22, 0],
-          [260, 14, 140],
-          [560, 21, 160],
-          [860, 21, 160],
-          [1120, 12, 140],
-          [1500, 10, 0]
-        ]
-      }
+        "spiral": 70
+      },
+      "id": 3,
+      "name": "mainline",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shape": "corridor"
     }
   ],
   "environment": {
@@ -120,13 +163,13 @@
   },
   "name": "freeway_lab",
   "player": {
+    "_comment": "spawns beside the viaduct mid-span, looking at the piers + the street grid under the deck",
     "collider": {
       "halfHeight": 0.8,
       "radius": 0.3,
       "shape": "capsule"
     },
     "friction": 0.5,
-    "_comment": "spawns beside the viaduct mid-span, looking at the piers + the street grid under the deck",
     "position": [
       300.0,
       14.0,
