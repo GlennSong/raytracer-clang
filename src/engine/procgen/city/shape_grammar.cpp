@@ -1,6 +1,7 @@
 #include "shape_grammar.h"
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
+#include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -147,6 +148,14 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Fan:
             m.albedo = {1, 1, 1}; m.metallic = 0.75f; m.roughness = 0.5f;
             m.setSurface(RenderMaterial::Surface::FanTop); break;
+        case PartId::Shingle:
+            // Pitched-roof slopes: the shingle bake carries the tone + course
+            // relief (normal map); the per-building roof tint rides in vertex
+            // colour, so the base stays neutral white. UVs are slope-fitted in
+            // the grammar (u along the eave, v up the slope, world metres /
+            // tile) — the loader must NOT re-UV this part world-planar.
+            m.albedo = {1, 1, 1}; m.metallic = 0.0f; m.roughness = 0.92f;
+            m.setSurface(RenderMaterial::Surface::RoofShingle); break;
         case PartId::Siding:
             // Painted siding: the paint colour rides in vertex colour (like
             // Brick/Stucco); the WoodSiding surface adds the board detail.
@@ -2186,7 +2195,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         Vec3 r3(topObb.axis[la].x, 0, topObb.axis[la].y);
         Vec3 f3(topObb.axis[sa].x, 0, topObb.axis[sa].y);
         const Real ov = 0.45;                            // eaves overhang
-        const Real hw = topObb.half[la] + (hip ? ov : Real(0));
+        const Real rk = hip ? Real(0) : Real(0.40);      // gable RAKE overhang
+        const Real hwW = topObb.half[la];                // wall plane (gable ends)
+        const Real hw = hwW + (hip ? ov : rk);           // slope extent along ridge
         const Real hd = topObb.half[sa] + ov;
         const Real rise = std::max(Real(0.8), params.roofPitch * hd);
         roofRise = rise + 0.03;
@@ -2201,27 +2212,71 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         Vec3 up(0, 1, 0);
         Vec3 Rg0 = C - r3 * rh + up * rise, Rg1 = C + r3 * rh + up * rise;
         RenderMesh roof, gableW;
-        const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
+        // SHINGLES (device: top faces want shingle relief): slopes go in their
+        // own part with the RoofShingle bake; the per-building tint rides in
+        // vertex colour (the bake carries the tone + course steps -> normal
+        // map). Tint picked deterministically from the wall colour so the
+        // house palette stays coherent without another RNG draw.
+        static const Vec3 kShingleTint[] = {
+            {0.78, 0.78, 0.84},   // slate grey
+            {0.94, 0.78, 0.62},   // warm cedar
+            {0.72, 0.80, 0.74},   // mossy grey-green
+            {0.90, 0.62, 0.52},   // faded terracotta
+        };
+        const Vec3 roofCol = kShingleTint[
+            (static_cast<int>(wallColor.x * 255) * 3 +
+             static_cast<int>(wallColor.y * 255) * 5 +
+             static_cast<int>(wallColor.z * 255) * 7) & 3];
+        // Slope-fitted UVs in world metres / tile: u marches along the eave,
+        // v climbs the slope, so the courses always run parallel to the eave
+        // whatever the building's yaw. The loader skips its world-planar re-UV
+        // for this part (it would break exactly this).
+        const Real tile = surfaceWorldTileSize(RenderMaterial::Surface::RoofShingle);
+        const float sv = static_cast<float>(std::sqrt(hd * hd + rise * rise) / tile);
+        auto su = [&](const Vec3& p) {
+            return static_cast<float>(dot(p - A0, r3) / tile);
+        };
         Vec3 nNear = normalize(f3 * (-rise) + up * hd);
         Vec3 nFar = normalize(f3 * rise + up * hd);
-        emitQuad(roof, A0, A1, Rg1, Rg0, nNear, roofCol);   // near slope
-        emitQuad(roof, B1, B0, Rg0, Rg1, nFar, roofCol);    // far slope
+        MeshBuilder::emitQuadUV(roof, A0, A1, Rg1, Rg0, nNear, roofCol,   // near slope
+                                su(A0), 0, su(A1), 0, su(Rg1), sv, su(Rg0), sv);
+        MeshBuilder::emitQuadUV(roof, B1, B0, Rg0, Rg1, nFar, roofCol,    // far slope
+                                su(B1), 0, su(B0), 0, su(Rg0), sv, su(Rg1), sv);
         if (hip) {
             const Real run = std::max(Real(0.2), hw - rh);
-            MeshBuilder::emitTri(roof, A0, B0, Rg0,
-                                 normalize(r3 * (-rise) + up * run), roofCol);
-            MeshBuilder::emitTri(roof, A1, B1, Rg1,
-                                 normalize(r3 * rise + up * run), roofCol);
+            const float hv = static_cast<float>(std::sqrt(run * run + rise * rise) / tile);
+            const float du = static_cast<float>(2.0 * hd / tile);
+            MeshBuilder::emitTriUV(roof, A0, B0, Rg0,
+                                   normalize(r3 * (-rise) + up * run), roofCol,
+                                   0, 0, du, 0, du * 0.5f, hv);
+            MeshBuilder::emitTriUV(roof, A1, B1, Rg1,
+                                   normalize(r3 * rise + up * run), roofCol,
+                                   0, 0, du, 0, du * 0.5f, hv);
         } else {
-            // Gable END walls rise to the ridge in the wall material.
-            MeshBuilder::emitTri(gableW, A0, B0, Rg0, r3 * -1, wallColor);
-            MeshBuilder::emitTri(gableW, A1, B1, Rg1, r3, wallColor);
+            // Gable END walls stay on the WALL plane and rise to the ridge in
+            // the wall material; the slopes overhang them by the rake. Close
+            // each rake's underside with an angled trim strip so the overhang
+            // never reads see-through from below.
+            RenderMesh rakeM;
+            const Vec3 tc = materialFor(PartId::Trim, wallColor).albedo;
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                const Vec3 e3 = r3 * static_cast<Real>(sgn);
+                const Vec3 We = C + e3 * hwW;            // wall plane
+                const Vec3 Xe = C + e3 * hw;             // slope end plane
+                MeshBuilder::emitTri(gableW, We - f3 * hd, We + f3 * hd,
+                                     We + up * rise, e3, wallColor);
+                emitQuad(rakeM, Xe - f3 * hd, We - f3 * hd, We + up * rise,
+                         Xe + up * rise, normalize(f3 * rise - up * hd), tc);
+                emitQuad(rakeM, Xe + f3 * hd, We + f3 * hd, We + up * rise,
+                         Xe + up * rise, normalize(f3 * (-rise) - up * hd), tc);
+            }
+            appendToPart(out, PartId::Trim, rakeM);
         }
-        // SOFFIT: a down-facing deck across the whole eave rectangle. The
-        // slopes are single-sided, so wherever they overhang the walls the
-        // roof was see-through from below (device: "you can see through the
-        // bottom of them"). Sits a hair under the slope base so it never
-        // fights the ceiling slab.
+        // SOFFIT: a down-facing deck across the whole eave rectangle (rake
+        // overhang included). The slopes are single-sided, so wherever they
+        // overhang the walls the roof was see-through from below (device: "you
+        // can see through the bottom of them"). Sits a hair under the slope
+        // base so it never fights the ceiling slab.
         {
             RenderMesh soffit;
             const Vec3 dn(0, -1, 0), sc = materialFor(PartId::Trim, wallColor).albedo;
@@ -2229,7 +2284,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitQuad(soffit, A0 + drop, B0 + drop, B1 + drop, A1 + drop, dn, sc);
             appendToPart(out, PartId::Trim, soffit);
         }
-        appendToPart(out, PartId::Roof, roof);
+        appendToPart(out, PartId::Shingle, roof);
         appendToPart(out, params.wallPart, gableW);
         // CHIMNEY: a masonry stack through the slope near the ridge, offset
         // along the ridge so it reads against the sky.

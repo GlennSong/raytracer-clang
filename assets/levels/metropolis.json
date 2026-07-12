@@ -201,6 +201,13 @@
       },
       {
         "kind": "rock",
+        "skin": "sdf",
+        "faceted": true,
+        "sdfResolution": 18,
+        "lumps": 5,
+        "cuts": 4,
+        "lumpScale": 0.45,
+        "smoothness": 0.22,
         "material": {
           "albedo": [
             0.26,

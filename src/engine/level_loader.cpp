@@ -127,6 +127,16 @@ static void applyWorldPlanarUVs(RenderMesh& mesh, double scale) {
     }
 }
 
+// Surfaces whose geometry bakes its OWN meaningful UVs in the generator —
+// FanTop (centred disc), VentGrille (plate-fitted with a margin), RoofShingle
+// (slope-fitted: u along the eave, v up the slope). A world-planar re-UV would
+// break exactly what those parameterizations encode.
+static bool surfaceBakesOwnUVs(RenderMaterial::Surface s) {
+    return s == RenderMaterial::Surface::FanTop ||
+           s == RenderMaterial::Surface::VentGrille ||
+           s == RenderMaterial::Surface::RoofShingle;
+}
+
 // One bake+upload per surface, shared across a level load (every brick entity
 // binds the same uploaded set). The cache keys on the surface id.
 using SurfaceTexCache = std::unordered_map<int, std::array<TextureHandle, 4>>;
@@ -612,7 +622,8 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
             // Textured: world-planar tiling UVs (so the baked set tiles at human
             // scale, tangent aligned to U for the normal map), and bind the maps.
             RenderMesh tiled = mesh;
-            applyWorldPlanarUVs(tiled, 1.0 / surfaceWorldTileSize(surface));
+            if (!surfaceBakesOwnUVs(surface))
+                applyWorldPlanarUVs(tiled, 1.0 / surfaceWorldTileSize(surface));
             r.mesh = assets.acquireMesh(tiled, key + ":" + tag);
             std::array<TextureHandle, 4> h = surfaceSet(surface);
             r.material.albedoMap = h[0];
@@ -1570,6 +1581,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         rsp.lumpScale  = s.value("lumpScale", rsp.lumpScale);
         rsp.smoothness = s.value("smoothness", rsp.smoothness);
         rsp.resolution = s.value("sdfResolution", rsp.resolution);
+        rsp.faceted    = s.value("faceted", rsp.faceted);
         RockParams rp;
         rp.radius       = s.value("radius", rp.radius);
         rp.displacement = s.value("displacement", rp.displacement);
@@ -2971,18 +2983,31 @@ bool LevelLoader::load(const std::string& path,
                                                  Vec3(0.80, 0.78, 0.75));
                     const Surface surf = proto.material.surface();
                     if (surf != Surface::None) {
-                        // FanTop and VentGrille bake their own UVs in the
-                        // grammar (centred disc / plate-fitted with a margin) —
-                        // a world-planar re-UV would break them.
-                        if (surf != Surface::FanTop && surf != Surface::VentGrille)
+                        // FanTop/VentGrille/RoofShingle bake their own UVs in
+                        // the grammar (centred disc / plate-fitted / slope-
+                        // fitted) — a world-planar re-UV would break them.
+                        if (!surfaceBakesOwnUVs(surf))
                             applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
                         bindSurfaceMaps(proto.material,
                                         bakeSurfaceTextures(renderer, surf, lotTex));
                     }
+                    // MID TIER: small dressing (HVAC, tanks, trim, doors,
+                    // hedges) is subpixel long before the shell swaps to its
+                    // proxy — cull those parts earlier so the far half of the
+                    // detail ring draws bare shells. Invisible at range, and
+                    // it thins exactly the draws that dominate part counts.
+                    double ddScale = 1.0;
+                    switch (static_cast<PartId>(pi)) {
+                        case PartId::Vent: case PartId::Utility: case PartId::Fan:
+                        case PartId::Wood: case PartId::Detail: case PartId::Trim:
+                        case PartId::Door: case PartId::Foliage: case PartId::Path:
+                            ddScale = 0.55; break;
+                        default: break;
+                    }
                     for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
                         if (chunk.vertices.empty()) continue;
                         Renderable r = proto;
-                        if (detailDistance > 0) r.drawDistance = detailDistance;
+                        if (detailDistance > 0) r.drawDistance = detailDistance * ddScale;
                         r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
                         Entity e = world.create();
                         Transform t;   // identity — the mesh sits in world space
@@ -3012,14 +3037,21 @@ bool LevelLoader::load(const std::string& path,
                     const Vec3 top = base + Vec3(0, lb.height, 0);
                     const Vec3 c[4] = {ax * -hw + az * -hd, ax * hw + az * -hd,
                                        ax * hw + az * hd, ax * -hw + az * hd};
+                    // Value-match the detail look (device: pop at the swap):
+                    // real facades read darker than their wall colour because
+                    // of the window grid, and every roof deck is near-charcoal
+                    // — sides bake that window duty cycle in, the cap takes
+                    // the roof material's tone.
+                    const Vec3 sideCol = lb.color * 0.84;
+                    const Vec3 roofCol(0.20, 0.20, 0.22);
                     for (int e = 0; e < 4; ++e) {
                         const Vec3 &a = c[e], &b = c[(e + 1) % 4];
                         Vec3 n = normalize(Vec3(a.z - b.z, 0, b.x - a.x));
                         MeshBuilder::emitQuad(pmesh, base + a, base + b, top + b,
-                                              top + a, n, lb.color);
+                                              top + a, n, sideCol);
                     }
                     MeshBuilder::emitQuad(pmesh, top + c[0], top + c[1], top + c[2],
-                                          top + c[3], Vec3(0, 1, 0), lb.color);
+                                          top + c[3], Vec3(0, 1, 0), roofCol);
                 }
                 for (auto& [key, pmesh] : proxies) {
                     if (pmesh.vertices.empty()) continue;

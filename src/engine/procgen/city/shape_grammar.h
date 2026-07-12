@@ -52,6 +52,7 @@ enum class PartId : uint8_t {
     Vent,    // HVAC intake grille (VentGrille surface, long faces)
     Utility, // HVAC service panels (UtilityPanel surface, short faces)
     Fan,     // HVAC fan cowl top (FanTop surface, centred disc UVs)
+    Shingle, // pitched roof slopes (RoofShingle surface, slope-fitted UVs)
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 

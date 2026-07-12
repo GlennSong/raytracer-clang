@@ -244,22 +244,22 @@ double capsuleSdf(double x, double y, double halfLen, double radius) {
 }
 
 SurfSample evalVent(double u, double v, uint32_t seed) {
-    // WIDE capsule holes (device: wider than tall) in a metallic casing, with a
-    // hole-free MARGIN band so nothing clips the plate edge — the vent plate
-    // maps this texture 0..1 across itself (plate-fitted UVs, like FanTop).
-    // The height dips into each hole with a slightly PROUD rim so the baked
-    // normal gives the punched-metal lip.
+    // TALL capsule slats (device: vertical, not wide) punched in a metallic
+    // casing, with a hole-free MARGIN band so nothing clips the plate edge —
+    // the vent plate maps this texture 0..1 across itself (plate-fitted UVs,
+    // like FanTop). The height dips into each slat with a slightly PROUD rim
+    // so the baked normal gives the punched-metal lip.
     const double mu = 0.10, mv = 0.16;               // margins (u along, v up)
     double hole = 0.0, rim = 0.0;
     if (u > mu && u < 1.0 - mu && v > mv && v < 1.0 - mv) {
-        const double cols = 5, rows = 3;
+        const double cols = 8, rows = 2;
         const double iu = (u - mu) / (1.0 - 2.0 * mu);
         const double iv = (v - mv) / (1.0 - 2.0 * mv);
         const double cu = iu * cols, cv = iv * rows;
         const double fx = (cu - std::floor(cu)) - 0.5;
         const double fy = (cv - std::floor(cv)) - 0.5;
-        // capsule lies ALONG the row: half-length on x, small radius on y
-        const double d = capsuleSdf(fy * 1.35, fx * 1.0, 0.24, 0.105);
+        // capsule stands IN the column: half-length on y, small radius on x
+        const double d = capsuleSdf(fx * 1.35, fy * 1.0, 0.24, 0.105);
         hole = clamp01(-d * 20.0);                    // 1 deep inside the hole
         rim = clamp01(1.0 - std::fabs(d) * 24.0) * (d > 0 ? 1.0 : 0.0);
     }

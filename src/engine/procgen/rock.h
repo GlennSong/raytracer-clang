@@ -32,6 +32,9 @@ struct RockSdfParams {
     float lumpScale = 0.5f;   // lump radius as a fraction of baseRadius
     double smoothness = 0.3;  // blend radius of the smooth-union
     int resolution = 40;      // polygonization grid cells per axis
+    bool faceted = false;     // flat-shade per triangle (stylized low-poly):
+                              // pair with a LOW resolution (~14-20) so the
+                              // facets are big enough to read as cut planes
 };
 
 RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed);

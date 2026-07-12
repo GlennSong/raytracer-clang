@@ -72,14 +72,51 @@ RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed) {
     SdfBounds bounds{Vec3(0, 0, 0) - m, m};
     RenderMesh mesh = polygonizeSdf(body, bounds, params.resolution);
 
+    // Stylized option: unweld every triangle and flat-shade it, so at a low
+    // polygonization resolution the rock reads as a hand-cut low-poly prop
+    // (matching the city's look) instead of a smooth blob.
+    if (params.faceted) {
+        RenderMesh flat;
+        flat.vertices.reserve(mesh.indices.size());
+        flat.indices.reserve(mesh.indices.size());
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            Vertex a = mesh.vertices[mesh.indices[i]];
+            Vertex b = mesh.vertices[mesh.indices[i + 1]];
+            Vertex c = mesh.vertices[mesh.indices[i + 2]];
+            Vec3 n = cross(c.position - a.position, b.position - a.position);
+            if (n.lengthSquared() < 1e-14) continue;   // degenerate sliver
+            n = normalize(n);
+            a.normal = b.normal = c.normal = n;
+            for (const Vertex& v : {a, b, c}) {
+                flat.indices.push_back(static_cast<uint32_t>(flat.vertices.size()));
+                flat.vertices.push_back(v);
+            }
+        }
+        mesh = std::move(flat);
+    }
+
     // Bake a grayscale brightness variation into the vertex color so the rock
     // reads as mottled grey (the material albedo is multiplied by this), rather
-    // than a single flat tone.
+    // than a single flat tone. Faceted rocks tint per FACE (all three verts
+    // sample the face centroid) so each facet is a constant plate of tone.
     Noise tint(seed + 50u);
-    for (Vertex& v : mesh.vertices) {
-        double n = tint.fbm3(v.position.x * 1.5, v.position.y * 1.5, v.position.z * 1.5, 2);
-        float b = static_cast<float>(0.78 + 0.30 * (0.5 * n + 0.5));   // ~0.78..1.08
-        v.color = Vec3(b, b, b);
+    auto tone = [&](const Vec3& p) {
+        double n = tint.fbm3(p.x * 1.5, p.y * 1.5, p.z * 1.5, 2);
+        return static_cast<float>(0.78 + 0.30 * (0.5 * n + 0.5));   // ~0.78..1.08
+    };
+    if (params.faceted) {
+        for (std::size_t i = 0; i + 2 < mesh.vertices.size(); i += 3) {
+            Vec3 c = (mesh.vertices[i].position + mesh.vertices[i + 1].position +
+                      mesh.vertices[i + 2].position) / 3.0;
+            float b = tone(c);
+            mesh.vertices[i].color = mesh.vertices[i + 1].color =
+                mesh.vertices[i + 2].color = Vec3(b, b, b);
+        }
+    } else {
+        for (Vertex& v : mesh.vertices) {
+            float b = tone(v.position);
+            v.color = Vec3(b, b, b);
+        }
     }
     return mesh;
 }
