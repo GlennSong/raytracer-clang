@@ -10,7 +10,10 @@
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
+#include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
+#include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
+#include "ai/nav_graph.h"             // buildNavGraph (street furniture plan)
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -2881,30 +2884,34 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
                 if (lb.type == "park" || lb.type == "green") {
-                    // A grass pad plus a few trees, not a grown building. The
-                    // pad is the LOT'S OWN polygon when the pass provides one
-                    // (device: "square green lots don't fit the blocks"); the
-                    // oriented box is only the legacy fallback.
-                    Entity e = world.create();
-                    Transform t;
-                    Renderable r;
-                    if (!lb.padMesh.vertices.empty()) {
-                        t.position = Vec3(0, 0, 0);   // heights baked (draped)
-                        r.mesh = assets.acquireMesh(
-                            lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
-                                        ":" + std::to_string(lb.site.y));
-                    } else {
-                        t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
-                        t.scale = Vec3(lb.width, lb.height, lb.depth);
-                        t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
-                        r.mesh = pad;
+                    // The lot's GROUND is the terrain (device: "remove the
+                    // green pads ... make sure they adhere to the ground").
+                    // Sculpted parks still carry a padMesh — but it holds only
+                    // the plaza + walking paths now; a green has none. The
+                    // oriented-box pad survives solely for legacy grid levels
+                    // whose lots have no polygon.
+                    if (!lb.padMesh.vertices.empty() || lb.pad.empty()) {
+                        Entity e = world.create();
+                        Transform t;
+                        Renderable r;
+                        if (!lb.padMesh.vertices.empty()) {
+                            t.position = Vec3(0, 0, 0);   // heights baked (draped)
+                            r.mesh = assets.acquireMesh(
+                                lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
+                                            ":" + std::to_string(lb.site.y));
+                        } else {
+                            t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
+                            t.scale = Vec3(lb.width, lb.height, lb.depth);
+                            t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), lb.yaw);
+                            r.mesh = pad;
+                        }
+                        world.add<Transform>(e, t);
+                        world.add<PrevTransform>(e, PrevTransform{t});
+                        r.material.albedo = lb.color;
+                        r.material.roughness = 1.0f;
+                        r.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                        world.add<Renderable>(e, r);
                     }
-                    world.add<Transform>(e, t);
-                    world.add<PrevTransform>(e, PrevTransform{t});
-                    r.material.albedo = lb.color;
-                    r.material.roughness = 1.0f;
-                    r.renderLayer = engine::LayerBuildings;   // debug layer toggle
-                    world.add<Renderable>(e, r);
 
                     // Trees: deterministic count + spots from the lot position,
                     // scaled by the pad's real area so a block-sized park reads
@@ -3133,6 +3140,117 @@ bool LevelLoader::load(const std::string& path,
             }
         }
         world.add<CitySimConfig>(world.create(), cfg);
+    }
+
+    // STREET FURNITURE at BUILD time (device: "place the stop lights when we
+    // build the city instead of during the simulation ... the simulation
+    // should use it but it shouldn't be responsible for where they are").
+    // Plan every signal pole + street lamp from the roads' deterministic nav
+    // graph (the same one the citysim bridge will derive), spawn them as city
+    // geometry, and publish a StreetFurniture component: the sim animates the
+    // lenses and reacts to phases, but never invents a pole.
+    if (root.contains("citysim") &&
+        root["citysim"].value("streetFurniture", true)) {
+        engine::RoadGraph combined;
+        std::function<Real(Real, Real)> furnGround;
+        world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
+            engine::RoadGraph g = engine::navRoadGraph(net);
+            const int base = static_cast<int>(combined.nodes.size());
+            for (const engine::RoadNode& n : g.nodes) combined.nodes.push_back(n);
+            for (engine::RoadEdge e : g.edges) {
+                e.a += base; e.b += base;
+                combined.edges.push_back(e);
+            }
+            if (!furnGround && net.heightAt) furnGround = net.heightAt;
+        });
+        if (!combined.edges.empty()) {
+            const engine::NavGraph nav = engine::buildNavGraph(combined);
+            const engine::StreetFurniturePlan fplan =
+                engine::planStreetFurniture(nav, furnGround);
+            engine::StreetFurniture sf;
+            sf.navLinkCount = nav.linkCount();
+            sf.lampHeads = fplan.lampHeads;
+            for (const engine::SignalSpot& s : fplan.signals)
+                sf.signalPoles.push_back({s.base, s.face, s.link});
+
+            auto groupBounds = [&](InstanceGroup& g, Real meshReach) {
+                if (g.transforms.empty()) return;
+                Vec3 c(0, 0, 0);
+                for (const Mat4& m : g.transforms)
+                    c = c + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+                c = c / static_cast<Real>(g.transforms.size());
+                Real spread = 0;
+                for (const Mat4& m : g.transforms)
+                    spread = std::max(spread,
+                        (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - c).length());
+                g.boundsCenter = c;
+                g.boundsRadius = spread + meshReach;
+            };
+
+            // Signal posts: ONE static group — the citysim bridge adopts this
+            // entity (lens animation, pedestrian obstacles, physics poles).
+            if (!sf.signalPoles.empty()) {
+                InstanceGroup g;
+                g.mesh = assets.acquireMesh(engine::trafficSignalProto(),
+                                            "city:signalpost");
+                g.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
+                g.material.roughness = 0.6f;
+                for (const auto& s : sf.signalPoles) {
+                    const Real yaw = std::atan2(s.face.x, s.face.z);
+                    g.transforms.push_back(Mat4::trs(
+                        s.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                        Vec3(1, 1, 1)));
+                }
+                groupBounds(g, 8.0);
+                Entity pg = world.create();
+                world.add<InstanceGroup>(pg, g);
+                sf.postGroup = pg;
+            }
+
+            // Street lamps: per-cell groups so the frustum/draw-distance cull
+            // works street by street, plus an emissive HEAD shell per lamp so
+            // the fixture reads lit (it also feeds the night point lights —
+            // see RenderSystem).
+            if (!fplan.lampBases.empty()) {
+                const Real cellSz = 280.0;
+                std::map<std::pair<int, int>, std::vector<Mat4>> cells;
+                for (const Vec3& b : fplan.lampBases)
+                    cells[{(int)std::floor(b.x / cellSz),
+                           (int)std::floor(b.z / cellSz)}]
+                        .push_back(Mat4::translate(b.x, b.y, b.z));
+                MeshHandle poleMesh =
+                    assets.acquireMesh(engine::streetLamp(), "city:streetlamp");
+                engine::LampParams lp;
+                RenderMesh glowBox = MeshBuilder::box(
+                    Vec3(lp.headSize.x + 0.05, lp.headSize.y + 0.04,
+                         lp.headSize.z + 0.05));
+                for (Vertex& v : glowBox.vertices)
+                    v.position.y += lp.height;   // shell wraps the head
+                MeshHandle glowMesh = assets.acquireMesh(glowBox, "city:lampglow");
+                for (auto& [key, transforms] : cells) {
+                    InstanceGroup g;
+                    g.mesh = poleMesh;
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.7f;
+                    g.transforms = transforms;
+                    g.drawDistance = 650.0;
+                    groupBounds(g, lp.height + 1.0);
+                    world.add<InstanceGroup>(world.create(), g);
+                    InstanceGroup glow;
+                    glow.mesh = glowMesh;
+                    glow.material.albedo = Vec3(0.25, 0.21, 0.12);
+                    glow.material.emission = Vec3(1.0, 0.85, 0.55) * 1.6;
+                    glow.material.roughness = 0.4f;
+                    glow.transforms = std::move(transforms);
+                    glow.drawDistance = 650.0;
+                    groupBounds(glow, lp.height + 1.0);
+                    world.add<InstanceGroup>(world.create(), glow);
+                }
+            }
+            LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
+                     << fplan.lampBases.size() << " street lamps";
+            world.add<engine::StreetFurniture>(world.create(), std::move(sf));
+        }
     }
 
     // RT_NO_PLAYER=1 suppresses the player entirely — for headless screenshots / debug renders, so

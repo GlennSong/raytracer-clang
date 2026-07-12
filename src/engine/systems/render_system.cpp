@@ -48,7 +48,40 @@ void RenderSystem::update(FrameContext& ctx) {
 
 void RenderSystem::render(FrameContext& ctx) {
     ctx.renderer.setCamera(ctx.view.camera);
-    ctx.renderer.setLights(ctx.view.lighting);
+    // Street lamps become REAL point lights near the camera (device: "working
+    // street lights"): the loader's StreetFurniture carries every bulb
+    // position; each frame the nearest few join the light list on a COPY, so
+    // level-authored point lights are never displaced or accumulated into.
+    {
+        bool lit = false;
+        SceneLighting withLamps;
+        ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
+            if (f.lampHeads.empty() || lit) return;
+            const Vec3 eye = ctx.view.camera.position;
+            constexpr int kMaxLampLights = 14;      // leave room for authored lights
+            const Real maxDist2 = 160.0 * 160.0;    // beyond this a bulb is subpixel
+            std::vector<std::pair<Real, const Vec3*>> nearBulbs;
+            for (const Vec3& h : f.lampHeads) {
+                const Real d2 = (h - eye).lengthSquared();
+                if (d2 < maxDist2) nearBulbs.emplace_back(d2, &h);
+            }
+            if (nearBulbs.empty()) return;
+            if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
+                std::nth_element(nearBulbs.begin(),
+                                 nearBulbs.begin() + kMaxLampLights, nearBulbs.end(),
+                                 [](const auto& a, const auto& b) {
+                                     return a.first < b.first;
+                                 });
+                nearBulbs.resize(kMaxLampLights);
+            }
+            withLamps = ctx.view.lighting;
+            for (const auto& [d2, h] : nearBulbs)
+                withLamps.pointLights.push_back(PointLight(
+                    *h - Vec3(0, 0.35, 0), Vec3(1.0, 0.82, 0.55), 30.0f));
+            lit = true;
+        });
+        ctx.renderer.setLights(lit ? withLamps : ctx.view.lighting);
+    }
 
     const auto& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);

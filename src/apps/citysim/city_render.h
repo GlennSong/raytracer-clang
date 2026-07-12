@@ -259,6 +259,12 @@ private:
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
+    // BUILD-TIME furniture adoption (device: the city places poles, the sim
+    // reacts): per-link SignalSite overrides published by the level loader's
+    // StreetFurniture component. Empty when the level placed none — then this
+    // system computes its own sites as before.
+    std::vector<SignalSite> siteByLink_;
+    std::vector<uint8_t> siteHasLink_;
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;

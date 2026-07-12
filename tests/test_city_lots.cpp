@@ -51,11 +51,13 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
         }
         CHECK(lb.height > 0.0);                         // has mass (park = low pad)
         CHECK(isKnownType(lb.type));                    // a valid schedule tag
-        // Unbuilt lots carry their OWN polygon + a slab mesh in its shape
-        // (device: "square green lots don't fit the blocks they're in").
+        // Unbuilt lots carry their OWN polygon (device: "square green lots
+        // don't fit the blocks they're in"). The TERRAIN is their ground now
+        // (device: "remove the green pads"): greens bake no pad mesh at all,
+        // and a park's padMesh holds only its plaza + walking paths.
         if (lb.type == "park" || lb.type == "green") {
             CHECK(lb.pad.size() >= 3u);
-            CHECK(!lb.padMesh.vertices.empty());
+            if (lb.type == "green") CHECK(lb.padMesh.vertices.empty());
         } else {
             CHECK(lb.pad.empty());
         }

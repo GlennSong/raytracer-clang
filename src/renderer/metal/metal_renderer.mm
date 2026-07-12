@@ -237,6 +237,7 @@ struct MetalRenderer::Impl {
 
     std::vector<DrawCall> opaqueDrawCalls;
     std::vector<DrawCall> transparentDrawCalls;
+    std::vector<DrawCall> overlayDrawCalls;   // FLAG_OVERLAY gizmos, issued last
 
     // CDLOD terrain nodes (ADR-0036): drawn with the morph pipeline after opaque.
     struct TerrainDrawCall {
@@ -1589,6 +1590,7 @@ RenderStats MetalRenderer::getRenderStats() const {
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
+    impl->overlayDrawCalls.clear();
     impl->terrainDrawCalls.clear();
     // Advance the dynamic-buffer ring so this frame writes a slot the GPU isn't
     // still reading for an in-flight earlier frame (fixes instance tearing —
@@ -2165,7 +2167,13 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     dc.material = material;
     dc.distanceToCamera = dist;
 
-    if (material.opacity < 1.0f) {
+    if (material.flags & RenderMaterial::FLAG_OVERLAY) {
+        // Debug gizmos must be issued LAST: they pass depth but never write it,
+        // so anything drawn after them in the opaque pass — and the terrain /
+        // foliage passes, which run later — painted straight over them
+        // (device: "the visualization doesn't show for the agents").
+        impl->overlayDrawCalls.push_back(dc);
+    } else if (material.opacity < 1.0f) {
         impl->transparentDrawCalls.push_back(dc);
     } else {
         impl->opaqueDrawCalls.push_back(dc);
@@ -2759,6 +2767,18 @@ void MetalRenderer::endFrame() {
 
     issuePass(impl->transparentDrawCalls, impl->transparentPipeline,
               impl->transparentInstancedPipeline, impl->depthStateTransparent,
+              /*skipFoliage=*/false);
+
+    // Debug-gizmo overlays LAST (device: agent widgets weren't drawn over the
+    // world): they pass depth without writing it, so they only stay visible if
+    // nothing renders after them. Sorted far-to-near like transparents so
+    // nested gizmos layer sanely.
+    std::sort(impl->overlayDrawCalls.begin(), impl->overlayDrawCalls.end(),
+              [](const Impl::DrawCall& a, const Impl::DrawCall& b) {
+                  return a.distanceToCamera > b.distanceToCamera;
+              });
+    issuePass(impl->overlayDrawCalls, impl->opaquePipeline,
+              impl->opaqueInstancedPipeline, impl->depthStateOverlay,
               /*skipFoliage=*/false);
 
     // Wireframe overlay (mode 2): re-draw opaque geometry as lines on top of the

@@ -334,10 +334,37 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     for (int li = 0; li < nav_.linkCount(); ++li)
         if (sc.hasSignal(li)) signalLinks_.push_back(li);
 
-    MeshHandle postMesh{};
-    if (assets) postMesh = assets->acquireMesh(engine::trafficSignalProto(), "city:signalpost");
-    signalPostGroup_ = world.create();
-    {
+    // BUILD-TIME furniture (device: "place the stop lights when we build the
+    // city ... the simulation should use it"): when the loader published a
+    // StreetFurniture plan over the SAME nav build, adopt its pole sites and
+    // its already-spawned post group — the sim animates lenses and holds cars,
+    // but the city decided where every pole stands.
+    siteByLink_.clear();
+    siteHasLink_.clear();
+    engine::Entity adoptedPosts{};
+    world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
+        if (f.navLinkCount != nav_.linkCount() || f.signalPoles.empty()) return;
+        siteByLink_.assign(nav_.linkCount(), SignalSite{});
+        siteHasLink_.assign(nav_.linkCount(), 0);
+        for (const auto& s : f.signalPoles) {
+            if (s.link < 0 || s.link >= nav_.linkCount()) continue;
+            SignalSite st;
+            st.base = s.base;
+            st.face = s.face;
+            st.side = Vec3(s.face.z, 0, -s.face.x);   // rightOf(face): road centre
+            st.yaw = std::atan2(s.face.x, s.face.z);
+            siteByLink_[s.link] = st;
+            siteHasLink_[s.link] = 1;
+        }
+        adoptedPosts = f.postGroup;
+    });
+
+    if (adoptedPosts.valid()) {
+        signalPostGroup_ = adoptedPosts;   // loader owns the geometry
+    } else {
+        MeshHandle postMesh{};
+        if (assets) postMesh = assets->acquireMesh(engine::trafficSignalProto(), "city:signalpost");
+        signalPostGroup_ = world.create();
         InstanceGroup g;
         g.mesh = postMesh;
         g.material = signalPostMaterial();
@@ -588,6 +615,38 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
     Real halfH = bodyH * 0.5;
     Real y = groundAt(x, z) + a.elevation + halfH;   // a.elevation lifts bridge traffic
     Real yaw = std::atan2(a.heading.x, a.heading.y); // box local +Z -> travel heading
+    // Cars sit NORMAL to the road plane (device: a world-upright box on a
+    // graded street floats its nose or buries its tail). Sample the drive
+    // surface a wheelbase fore/aft and a track left/right, build the tilted
+    // frame from those slopes, and write the basis directly — no pitch/roll
+    // sign gymnastics. Bridge traffic (elevation) rides a flat deck: skip.
+    if (car && a.elevation < 0.5) {
+        Vec2 f = a.heading;
+        const Real fl = f.length();
+        if (fl > 1e-6) {
+            f = f * (1.0 / fl);
+            const Vec2 r(f.y, -f.x);
+            const Real hl = 1.3, hw = 0.7;
+            const Real yF = groundAt(x + f.x * hl, z + f.y * hl);
+            const Real yB = groundAt(x - f.x * hl, z - f.y * hl);
+            const Real yR = groundAt(x + r.x * hw, z + r.y * hw);
+            const Real yL = groundAt(x - r.x * hw, z - r.y * hw);
+            Vec3 fw = normalize(Vec3(f.x, (yF - yB) / (2 * hl), f.y));
+            Vec3 rt = normalize(Vec3(r.x, (yR - yL) / (2 * hw), r.y));
+            Vec3 up = cross(fw, rt);
+            if (up.lengthSquared() > 1e-9) {
+                up = normalize(up);
+                if (up.y < 0) up = up * -1;
+                rt = normalize(cross(up, fw));
+                Mat4 m;   // columns: X = right, Y = up, Z = forward (yaw basis)
+                m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+                m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+                m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+                m.m[0][3] = x; m.m[1][3] = y; m.m[2][3] = z;
+                return m;
+            }
+        }
+    }
     Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
     return Mat4::trs(Vec3(x, y, z), rot, Vec3(1, 1, 1));
 }
@@ -611,6 +670,12 @@ constexpr Real kCurbGap = 0.8;   // pole stands this far beyond the kerb
 // carriageway (a fixed setback put poles in the middle of wide roads). The mast
 // arm then reaches sideways over the street toward the centre.
 CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
+    // Build-time furniture override: the CITY placed this pole (StreetFurniture,
+    // adopted in build()); everything downstream — lens poses, ped obstacles,
+    // physics poles — reads the placed site.
+    if (link >= 0 && link < static_cast<int>(siteHasLink_.size()) &&
+        siteHasLink_[link])
+        return siteByLink_[link];
     int toNode = nav_.links[link].to;
     Vec2 d = nav_.direction(link);               // approach direction (toward junction)
     Vec2 node = nav_.nodes[toNode];

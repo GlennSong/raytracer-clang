@@ -358,6 +358,23 @@ struct CitySimConfig {
     std::vector<AuthoredPlace> places;
 };
 
+// Build-time street furniture (device: "place the stop lights when we build
+// the city ... the simulation should use it but it shouldn't be responsible
+// for where they are"). The loader plans and SPAWNS every signal pole and
+// street lamp from the roads' deterministic nav graph; this component tells
+// the sim where they stand. The sim animates lenses / reacts to phases only.
+struct StreetFurniture {
+    struct Signal {
+        Vec3 base;      // pole foot (on the road deck)
+        Vec3 face;      // head faces this way (toward its approaching traffic)
+        int link = -1;  // NavGraph link the signal governs
+    };
+    std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
+    std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)
+    int navLinkCount = 0;         // consumer sanity check: same nav build?
+    Entity postGroup{};           // the loader's signal-post InstanceGroup
+};
+
 // --- Document hierarchy (stable ids + parenting) --------------------------
 // Document entities (those carrying a SourceSpec) reference one another by
 // stable id, not by runtime Handle. These helpers index and compose that

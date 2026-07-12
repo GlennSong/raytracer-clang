@@ -901,7 +901,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.recipe = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
                 g.pad = lot.footprint;
-                g.padMesh = padMeshFor(g.pad, g.height, p.ground);
+                // NO pad mesh (device: "I still get the green pads here and
+                // there. We should remove them"): the terrain is the green's
+                // ground; the lot polygon still marks it for planting.
                 out.push_back(std::move(g));
             };
             if (cand.landmark < 0 && rng.unit() > buildChance) {
