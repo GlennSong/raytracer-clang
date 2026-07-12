@@ -1,4 +1,7 @@
 #include "terrain_field.h"
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
 
 #include "noise.h"
 #include "erosion.h"
@@ -611,10 +614,66 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
     hm->h.resize(static_cast<std::size_t>(n) * n);
     double half = worldSize * 0.5;
     double step = worldSize / (n - 1);
+
+    // CONTENT-HASH CACHE (metropolis-scale-plan P4.1): the droplet sim is the
+    // single biggest load cost and is DETERMINISTIC in (input field, size, res,
+    // erosion params). The key hashes the INPUT FIELD BY SAMPLING it — any
+    // terrain knob or seed change alters sampled heights, so invalidation is
+    // automatic and no parameter enumeration can go stale. RT_NOCACHE=1 skips.
+    const bool useCache = std::getenv("RT_NOCACHE") == nullptr;
+    std::uint64_t key = 1469598103934665603ULL;   // FNV-1a
+    auto fold = [&](double v) {
+        std::uint64_t bits;
+        std::memcpy(&bits, &v, sizeof bits);
+        key ^= bits;
+        key *= 1099511628211ULL;
+    };
+    if (useCache) {
+        for (int i = 0; i < 64; ++i) {           // deterministic probe pattern
+            const double px = -half + worldSize * ((i * 37) % 61) / 61.0;
+            const double pz = -half + worldSize * ((i * 53) % 67) / 67.0;
+            fold(f(px, pz));
+        }
+        fold(worldSize); fold(static_cast<double>(n));
+        fold(static_cast<double>(params.droplets));
+        fold(params.inertia); fold(params.sedimentCapacity);
+        fold(params.depositSpeed); fold(params.erodeSpeed);
+        fold(params.evaporation); fold(params.gravity); fold(params.minSlope);
+        fold(static_cast<double>(params.erodeRadius));
+        fold(static_cast<double>(params.thermalIterations));
+        fold(params.talus); fold(params.thermalRate);
+    }
+    char cachePath[256] = {0};
+    if (useCache) {
+        std::snprintf(cachePath, sizeof cachePath, "cache/terrain/%016llx.bin",
+                      static_cast<unsigned long long>(key));
+        if (std::FILE* fp = std::fopen(cachePath, "rb")) {
+            int fn = 0;
+            const bool ok =
+                std::fread(&fn, sizeof fn, 1, fp) == 1 && fn == n &&
+                std::fread(hm->h.data(), sizeof(float), hm->h.size(), fp) ==
+                    hm->h.size();
+            std::fclose(fp);
+            if (ok)
+                return [hm](double x, double z) {
+                    return static_cast<double>(
+                        hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
+                };
+        }
+    }
+
     for (int z = 0; z < n; ++z)
         for (int x = 0; x < n; ++x)            // same index convention as bakeHeightmap
             hm->set(x, z, static_cast<float>(f(-half + x * step, -half + z * step)));
     erode(*hm, params);
+    if (useCache) {
+        std::filesystem::create_directories("cache/terrain");
+        if (std::FILE* fp = std::fopen(cachePath, "wb")) {
+            std::fwrite(&n, sizeof n, 1, fp);
+            std::fwrite(hm->h.data(), sizeof(float), hm->h.size(), fp);
+            std::fclose(fp);
+        }
+    }
     return [hm](double x, double z) {
         return static_cast<double>(
             hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));

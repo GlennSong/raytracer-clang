@@ -238,6 +238,16 @@ a knob and it rebuilds.
   mesh, metro, weld, lots, buildings, veg) in both editor and viewer boot.
 - Gate: warm metropolis load < 15s; cold unchanged; progress bar tracks.
 
+## 4b. FOUND 2026-07-12: the build was -O0 all along
+
+CMAKE_BUILD_TYPE was EMPTY -> no optimization flags. Every device number in
+this plan (2-8 fps, 10-60 fps after chunking, ~3.5 min loads) was a DEBUG
+build. CMakeLists now defaults to RelWithDebInfo (explicit Debug still works).
+Measured: metropolis load 3.5 min -> 12 s; the erosion cache (P4.1, landed the
+same day, content-hash keyed, RT_NOCACHE=1 to skip) saves ~2 s at -O2 — kept
+for debug builds and bigger worlds. P1.2 HLOD and P1.5 streaming should be
+re-justified against optimized numbers before building them.
+
 ## 5. Building foundations (done) + look follow-ups
 
 Plinth 0.45m landed; evaluate on-device. If slopes still read wrong, the

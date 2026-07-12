@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(raytracer LANGUAGES CXX C)
 
+# Default to an OPTIMIZED build with symbols: an empty CMAKE_BUILD_TYPE means
+# -O0, and the whole engine (erosion, weld, colonization, per-frame systems)
+# had been running unoptimized — debug-build framerates and load times were
+# being mistaken for engine limits (device: 10-60 fps, 3-minute loads).
+# Explicit -DCMAKE_BUILD_TYPE=Debug still gives a true debug build.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
