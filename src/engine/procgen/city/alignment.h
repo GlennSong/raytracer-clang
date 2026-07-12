@@ -107,6 +107,21 @@ struct CorridorDef {
     Real superelevationAt(Real s) const;
 };
 
+// An EXIT (plan §8 P8.3): the lane schedule grows an auxiliary lane over the
+// deceleration length; at the gore the aux lane's edge becomes the ramp,
+// which clothoids away and grades down to `target` (a street junction). The
+// exit direction is the corridor's up-station carriageway when `upStation`,
+// else the opposing one.
+struct ExitDef {
+    Real station = 0;        // the GORE station (where the nose paints)
+    bool upStation = true;   // which carriageway the exit serves
+    Vec2 target;             // where the ramp lands (world XZ, on a street)
+    Real targetY = 0;        // landing elevation (the street's grade)
+    Real decelLength = 220;  // aux-lane length before the gore
+    Real rampRadius = 70;    // ramp design radius (low speed)
+    Real rampSpiral = 30;    // ramp clothoid length
+};
+
 }  // namespace engine
 
 #endif
