@@ -40,7 +40,8 @@ CorridorMeshOut buildCorridorMesh(
     const int n = std::max(2, static_cast<int>(std::ceil(L / step)));
     std::vector<Rib> ribs(n + 1);
     std::vector<Real> half(n + 1);
-    std::vector<bool> elevated(n + 1);
+    std::vector<bool> elevated(n + 1);   // tall enough for pier bents
+    std::vector<bool> raised(n + 1);     // off the ground at all: structure box
     const Real deckDepth = 1.1;            // structure depth of the viaduct box
     for (int i = 0; i <= n; ++i) {
         const Real s = L * i / n;
@@ -51,6 +52,7 @@ CorridorMeshOut buildCorridorMesh(
         r.slope = c.superelevationAt(s);
         half[i] = c.halfWidthAt(s);
         elevated[i] = r.z - gy(r.c) > 2.0;
+        raised[i] = r.z - gy(r.c) > 0.9;
     }
 
     // A long quad-strip between two lateral offset FUNCTIONS, top face.
@@ -138,7 +140,7 @@ CorridorMeshOut buildCorridorMesh(
         for (int i = 0; i < n; ++i) {
             const Vec3 e0 = ribs[i].at(side * half[i]);
             const Vec3 e1 = ribs[i + 1].at(side * half[i + 1]);
-            const bool up = elevated[i] || elevated[i + 1];
+            const bool up = raised[i] || raised[i + 1];
             const Real d0 = up ? deckDepth : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
             const Real d1 = up ? deckDepth : e1.y - (gy(Vec2(e1.x, e1.z)) - 0.6);
             const Vec3 f0 = e0 - Vec3(0, std::max(Real(0.3), d0), 0);
@@ -149,7 +151,7 @@ CorridorMeshOut buildCorridorMesh(
     }
     // Underside where elevated (seen from streets below).
     for (int i = 0; i < n; ++i) {
-        if (!(elevated[i] || elevated[i + 1])) continue;
+        if (!(raised[i] || raised[i + 1])) continue;
         const Vec3 a0 = ribs[i].at(half[i]) - Vec3(0, deckDepth, 0);
         const Vec3 b0 = ribs[i].at(-half[i]) - Vec3(0, deckDepth, 0);
         const Vec3 a1 = ribs[i + 1].at(half[i + 1]) - Vec3(0, deckDepth, 0);
@@ -207,14 +209,14 @@ CorridorMeshOut buildCorridorMesh(
             const Real z = c.vertical.elevation(s);
             const Real gz = gy(cc);
             const Real capTop = z - deckDepth + 0.08;
-            if (capTop - gz < 1.2) return;
+            if (capTop - gz < 0.8) return;
             const Real colOff = c.halfWidthAt(s) * 0.52;   // column pair spread
-            const Real colR = 0.95;
+            const Real colR = 1.35;   // girthy (device: "tiny and scrawny")
             for (int sd = -1; sd <= 1; sd += 2) {
                 const Vec2 foot2 = cc + nn * (sd * colOff);
                 const Real fgz = gy(foot2);
                 const Real hgt = capTop - 0.6 - (fgz - 1.0);
-                if (hgt < 1.0) continue;
+                if (hgt < 0.6) continue;
                 RenderMesh col = MeshBuilder::cylinder(
                     static_cast<float>(colR), static_cast<float>(hgt), 12);
                 for (Vertex& v : col.vertices) v.color = kConcrete;
@@ -226,23 +228,23 @@ CorridorMeshOut buildCorridorMesh(
             // The cap beam (the U-brace's crossbar) tying the pair under the
             // deck — a box rotated to lie across the carriageways.
             const Real capW = c.halfWidthAt(s) * 2.0 * 0.92;
-            RenderMesh cap = MeshBuilder::box(Vec3(capW, 1.1, 1.7));
+            RenderMesh cap = MeshBuilder::box(Vec3(capW, 1.6, 2.6));
             for (Vertex& v : cap.vertices) v.color = kConcrete * 1.05;
             const Real yaw = std::atan2(-nn.y, nn.x);
             MeshBuilder::transform(
-                cap, Mat4::trs(Vec3(cc.x, capTop - 0.55, cc.y),
+                cap, Mat4::trs(Vec3(cc.x, capTop - 0.8, cc.y),
                                Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
                                Vec3(1, 1, 1)));
             MeshBuilder::append(out.barrier, cap);
         };
-        Real sincePier = 28.0;
+        Real sincePier = 26.0;
         for (int i = 0; i <= n; ++i) {
             sincePier += i > 0 ? L / n : 0.0;
-            if (!elevated[i] || sincePier < 28.0) continue;
+            if (!elevated[i] || sincePier < 26.0) continue;
             const Real s0 = L * i / n;
             // slide the bent so no column stands in a road below
             bool placed = false;
-            for (Real shift : {0.0, 4.0, -4.0, 8.0, -8.0, 12.0}) {
+            for (Real shift : {0.0, 4.0, -4.0, 8.0, -8.0, 12.0, -12.0, 16.0, -16.0}) {
                 const Real s = std::max(Real(0), std::min(L, s0 + shift));
                 const Vec2 cc = c.horizontal.pos(s);
                 const Vec2 nn = c.horizontal.normal(s);
@@ -254,7 +256,7 @@ CorridorMeshOut buildCorridorMesh(
                     break;
                 }
             }
-            sincePier = placed ? 0.0 : 20.0;   // blocked: try again soon —
+            sincePier = placed ? 0.0 : 23.0;   // blocked: retry within 3 m —
                                                // the span stretches, never
                                                // a column in the street
         }
