@@ -87,25 +87,6 @@ struct LaneSchedule {
     int lanesAt(Real s) const;
 };
 
-// --- The corridor ------------------------------------------------------------
-// One directed pair of carriageways around a median, described by station.
-struct CorridorDef {
-    Alignment horizontal;
-    VerticalProfile vertical;
-    LaneSchedule lanes;
-    Real laneWidth = 3.6;
-    Real shoulderOut = 2.4;             // outer (right) shoulder per carriageway
-    Real shoulderIn = 0.9;              // inner shoulder against the median
-    Real medianWidth = 1.4;             // barrier strip between directions
-    Real superelevationMax = 0.07;      // bank cap (7%)
-    Real designSpeed = 30.0;            // m/s (~110 km/h): e = v^2/(gR), capped
-
-    // Total paved half-width at station s (median centre to outer edge).
-    Real halfWidthAt(Real s) const;
-    // Bank angle cross-slope at s (signed: positive tilts the LEFT edge up,
-    // i.e. banking INTO a left curve).
-    Real superelevationAt(Real s) const;
-};
 
 // An EXIT (plan §8 P8.3): the lane schedule grows an auxiliary lane over the
 // deceleration length; at the gore the aux lane's edge becomes the ramp,
@@ -121,6 +102,34 @@ struct ExitDef {
     Real rampRadius = 70;    // ramp design radius (low speed)
     Real rampSpiral = 30;    // ramp clothoid length
 };
+
+
+// --- The corridor ------------------------------------------------------------
+// One directed pair of carriageways around a median, described by station.
+struct CorridorDef {
+    Alignment horizontal;
+    VerticalProfile vertical;
+    LaneSchedule lanes;
+    Real laneWidth = 3.6;
+    Real shoulderOut = 2.4;             // outer (right) shoulder per carriageway
+    Real shoulderIn = 0.9;              // inner shoulder against the median
+    Real medianWidth = 1.4;             // barrier strip between directions
+    Real superelevationMax = 0.07;      // bank cap (7%)
+    Real designSpeed = 30.0;            // m/s (~110 km/h): e = v^2/(gR), capped
+
+    // The corridor's exits (P8.3): the sweep grows each one's aux lane into
+    // the schedule and emits its ramp as a single-carriageway sweep.
+    // (Declared below CorridorDef; stored here as the corridor OWNS them.)
+    std::vector<ExitDef> exits;
+
+    // Total paved half-width at station s (median centre to outer edge).
+    Real halfWidthAt(Real s) const;
+    // Bank angle cross-slope at s (signed: positive tilts the LEFT edge up,
+    // i.e. banking INTO a left curve).
+    Real superelevationAt(Real s) const;
+};
+
+
 
 }  // namespace engine
 
