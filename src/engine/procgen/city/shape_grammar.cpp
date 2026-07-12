@@ -136,6 +136,17 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Wood:
             m.albedo = {0.52, 0.40, 0.27}; m.metallic = 0.0f; m.roughness = 0.85f;
             m.setSurface(RenderMaterial::Surface::WoodSiding); break;
+        case PartId::Vent:
+            // HVAC intake: baked maps carry the punched holes' albedo/rough/
+            // metal split, so the base stays neutral white.
+            m.albedo = {1, 1, 1}; m.metallic = 0.9f; m.roughness = 0.4f;
+            m.setSurface(RenderMaterial::Surface::VentGrille); break;
+        case PartId::Utility:
+            m.albedo = {1, 1, 1}; m.metallic = 0.9f; m.roughness = 0.45f;
+            m.setSurface(RenderMaterial::Surface::UtilityPanel); break;
+        case PartId::Fan:
+            m.albedo = {1, 1, 1}; m.metallic = 0.75f; m.roughness = 0.5f;
+            m.setSurface(RenderMaterial::Surface::FanTop); break;
         case PartId::Siding:
             // Painted siding: the paint colour rides in vertex colour (like
             // Brick/Stucco); the WoodSiding surface adds the board detail.
@@ -996,15 +1007,21 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
                                Vec3(aw, ah, ad)},
                     PartId::Metal, casing);
-            // Intake louvres: three dark bands along both long faces.
-            for (int band = 0; band < 3; ++band) {
-                const Real ly = roofY + ah * (0.22 + 0.24 * band);
-                for (int side = 0; side < 2; ++side) {
-                    Vec3 lo = po + r * 0.2 + f * (side ? ad : Real(-0.05));
-                    emitBox(out, Scope{Vec3(lo.x, ly, lo.z), {r, up, f},
-                                       Vec3(aw - 0.4, 0.12, 0.05)},
-                            PartId::Detail, louvre);
-                }
+            // Intake grilles (device: capsule vent holes, matte-in-metal, on
+            // the OPPOSING long faces): one thin plate per long face wearing
+            // the baked VentGrille maps instead of three louvre boxes.
+            for (int side = 0; side < 2; ++side) {
+                Vec3 lo = po + r * 0.25 + f * (side ? ad : Real(-0.04));
+                emitBox(out, Scope{Vec3(lo.x, roofY + ah * 0.18, lo.z),
+                                   {r, up, f}, Vec3(aw - 0.5, ah * 0.6, 0.04)},
+                        PartId::Vent, louvre);
+            }
+            // Service panels on the two SHORT faces: riveted utility-box look.
+            for (int side = 0; side < 2; ++side) {
+                Vec3 lo = po + r * (side ? aw : Real(-0.04)) + f * 0.2;
+                emitBox(out, Scope{Vec3(lo.x, roofY + ah * 0.12, lo.z),
+                                   {f, up, r}, Vec3(ad - 0.4, ah * 0.72, 0.04)},
+                        PartId::Utility, louvre);
             }
             // Fan cowls + dark blade discs on top.
             const int nf = aw > 4.2 ? 2 : 1;
@@ -1015,8 +1032,19 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                 const Real frad = std::min(Real(0.6), std::min(aw, ad) * 0.22);
                 emitTube(out, fcen, frad, roofY + ah, roofY + ah + 0.22, 12,
                          PartId::Metal, casing * 0.9);
+                // Fan blades come from the FanTop maps; the disc gets CENTRED
+                // 0..1 UVs (the loader skips world-planar re-UV for Fan parts).
+                const std::size_t v0 = partMesh(out, PartId::Fan).vertices.size();
                 emitDisc(out, fcen, frad, roofY + ah + 0.22, 12,
-                         PartId::Detail, darkPanel, true);
+                         PartId::Fan, darkPanel, true);
+                RenderMesh& fanMesh = partMesh(out, PartId::Fan);
+                for (std::size_t vi = v0; vi < fanMesh.vertices.size(); ++vi) {
+                    Vertex& vv = fanMesh.vertices[vi];
+                    vv.u = static_cast<float>(0.5 + (vv.position.x - fcen.x) /
+                                                        (2.0 * frad) * 0.92);
+                    vv.v = static_cast<float>(0.5 + (vv.position.z - fcen.z) /
+                                                        (2.0 * frad) * 0.92);
+                }
             }
             break;
         }

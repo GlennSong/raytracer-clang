@@ -49,6 +49,9 @@ enum class PartId : uint8_t {
     Siding,  // painted wood-siding facades (WoodSiding surface, colour in verts)
     Path,    // walking paths / front walks (Pavement surface)
     Foliage, // hedges, planter greenery (lot landscaping)
+    Vent,    // HVAC intake grille (VentGrille surface, long faces)
+    Utility, // HVAC service panels (UtilityPanel surface, short faces)
+    Fan,     // HVAC fan cowl top (FanTop surface, centred disc UVs)
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 

@@ -235,6 +235,99 @@ SurfSample evalWood(double u, double v, uint32_t seed) {
     return s;
 }
 
+// --- Rooftop HVAC kit (VentGrille / UtilityPanel / FanTop) ---------------
+// Distance to a vertical capsule (stadium) centred in a cell, for punched
+// intake holes: negative inside.
+double capsuleSdf(double x, double y, double halfLen, double radius) {
+    const double cy = std::max(-halfLen, std::min(halfLen, y));
+    return std::sqrt(x * x + (y - cy) * (y - cy)) - radius;
+}
+
+SurfSample evalVent(double u, double v, uint32_t seed) {
+    // 6 x 3 capsule holes per tile, matte-dark in a metallic casing; the height
+    // dips into each hole with a slightly PROUD rim so the baked normal gives
+    // the punched-metal lip the device asked for.
+    const double cols = 6, rows = 3;
+    const double cu = u * cols, cv = v * rows;
+    const double fx = (cu - std::floor(cu)) - 0.5;
+    const double fy = (cv - std::floor(cv)) - 0.5;
+    // capsule occupies the middle of the cell: vertical half-length + radius
+    const double d = capsuleSdf(fx * 1.6, fy * 1.1, 0.16, 0.13);
+    const double hole = clamp01(-d * 18.0);           // 1 deep inside the hole
+    const double rim = clamp01(1.0 - std::fabs(d) * 22.0) * (d > 0 ? 1.0 : 0.0);
+    const double brush =
+        0.03 * ihash(static_cast<int>(u * 40.0), static_cast<int>(v * 3.0),
+                     seed ^ 0x7a3f00d1u);
+    SurfSample s;
+    s.h = clamp01(0.62 - 0.5 * hole + 0.22 * rim);
+    const double body = 0.52 + brush;
+    s.albedo = Vec3(body, body, body + 0.01) * (1.0 - hole) +
+               Vec3(0.030, 0.030, 0.032) * hole;
+    s.rough = 0.34 * (1.0 - hole) + 0.92 * hole;      // matte hole, satin metal
+    s.metal = 0.95 * (1.0 - hole);                    // hole reads as void
+    return s;
+}
+
+SurfSample evalUtilityPanel(double u, double v, uint32_t seed) {
+    // 2 x 2 riveted panels with recessed seams and one darker access hatch.
+    const double pu = u * 2.0, pv = v * 2.0;
+    const double fu = pu - std::floor(pu), fv = pv - std::floor(pv);
+    const double seam = clamp01(1.0 - std::min(std::min(fu, 1.0 - fu),
+                                               std::min(fv, 1.0 - fv)) * 26.0);
+    // rivets: bumps near each panel corner
+    const double rx = std::min(fu, 1.0 - fu) - 0.07;
+    const double ry = std::min(fv, 1.0 - fv) - 0.07;
+    const double rivet = clamp01(1.0 - std::sqrt(rx * rx + ry * ry) * 30.0);
+    // hatch: a recessed darker rectangle in the lower-left panel of the tile
+    const bool hatchPanel = pu < 1.0 && pv < 1.0;
+    const double hatch = hatchPanel && fu > 0.25 && fu < 0.75 && fv > 0.2 &&
+                                 fv < 0.7
+                             ? 1.0
+                             : 0.0;
+    const double wear =
+        0.05 * ihash(static_cast<int>(u * 9.0), static_cast<int>(v * 9.0),
+                     seed ^ 0x00babe11u);
+    SurfSample s;
+    s.h = clamp01(0.6 - 0.3 * seam + 0.25 * rivet - 0.12 * hatch);
+    const double tone = 0.46 + wear - 0.10 * hatch - 0.08 * seam;
+    s.albedo = Vec3(tone, tone + 0.005, tone + 0.012);
+    s.rough = clamp01(0.42 + 0.25 * hatch + 0.2 * seam);
+    s.metal = 0.9;
+    return s;
+}
+
+SurfSample evalFanTop(double u, double v, uint32_t seed) {
+    // Radial blades under a hub, smooth ring outside the blade disc — the disc
+    // mesh bakes centred UVs, and the cowl's sides sample the outer ring so
+    // they stay smooth (device: "sides look smooth, top appears to have a
+    // fan blade").
+    (void)seed;
+    const double x = u - 0.5, y = v - 0.5;
+    const double r = std::sqrt(x * x + y * y) * 2.0;   // 0 centre, 1 at tile edge
+    SurfSample s;
+    if (r > 0.96) {                                   // casing ring / cowl side
+        s.h = 0.62; s.albedo = Vec3(0.40, 0.41, 0.42);
+        s.rough = 0.38; s.metal = 0.9;
+        return s;
+    }
+    const double hub = clamp01(1.0 - (r - 0.16) * 14.0);
+    const double nBlades = 5.0;
+    double th = std::atan2(y, x) / (2.0 * 3.14159265358979323846);
+    th -= std::floor(th);
+    // blade sawtooth, twisted with radius; height ramps across each blade so
+    // the normal map reads pitched blades
+    double bladePhase = th * nBlades + r * 0.35;
+    bladePhase -= std::floor(bladePhase);
+    const double blade = clamp01(1.0 - std::fabs(bladePhase - 0.42) * 3.2);
+    const double bladeMask = (r > 0.14 && r < 0.92) ? 1.0 : 0.0;
+    s.h = clamp01(0.18 + 0.30 * blade * bladeMask + 0.45 * hub);
+    const double tone = 0.16 + 0.10 * blade * bladeMask + 0.24 * hub;
+    s.albedo = Vec3(tone, tone, tone + 0.008);
+    s.rough = clamp01(0.55 - 0.15 * hub);
+    s.metal = 0.75;
+    return s;
+}
+
 SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
     switch (s) {
         case Surface::Brick:           return evalBrick(u, v, seed);
@@ -247,6 +340,9 @@ SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
         case Surface::Pavement:        return evalPavement(u, v, seed);
         case Surface::Cobblestone:     return evalCobble(u, v, seed);
         case Surface::WoodSiding:      return evalWood(u, v, seed);
+        case Surface::VentGrille:      return evalVent(u, v, seed);
+        case Surface::UtilityPanel:    return evalUtilityPanel(u, v, seed);
+        case Surface::FanTop:          return evalFanTop(u, v, seed);
         default:                       return SurfSample{};
     }
 }
@@ -328,6 +424,9 @@ double surfaceWorldTileSize(Surface surface) {
         case Surface::Concrete:        return 3.0;
         case Surface::Asphalt:         return 4.0;
         case Surface::Stucco:          return 2.5;
+        case Surface::VentGrille:      return 0.9;   // 6 capsule holes across ~0.9 m
+        case Surface::UtilityPanel:    return 1.6;   // 2 panels ~0.8 m each
+        case Surface::FanTop:          return 1.2;   // one fan per tile (disc bakes own UVs)
         default:                       return 2.0;
     }
 }

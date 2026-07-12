@@ -103,6 +103,14 @@ struct RenderMaterial {
         // smoother on flat sand/snow) so the ground isn't a flat-shaded plane.
         // Albedo grain only; the normal/roughness work is in lighting.metal.
         TerrainGround,
+        // Rooftop HVAC kit (device: "procedural recipe … UV wrap around the
+        // HVAC unit"). Baked PBR sets like the facade surfaces:
+        //  VentGrille   — capsule intake holes: matte dark holes punched in a
+        //                 metallic casing, normal-mapped rims (long faces).
+        //  UtilityPanel — panelled metal box with seams/rivets/hatch (short faces).
+        //  FanTop       — radial fan blades under a hub, smooth casing ring
+        //                 (cowl top; the disc bakes its own centred UVs).
+        VentGrille, UtilityPanel, FanTop,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -138,6 +146,9 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "rooftile" || s == "roof_tile" || s == "tile") return S::RoofTile;
     if (s == "shingle" || s == "roofshingle") return S::RoofShingle;
     if (s == "corrugated" || s == "corrugatedmetal" || s == "metal") return S::CorrugatedMetal;
+    if (s == "vent" || s == "ventgrille") return S::VentGrille;
+    if (s == "utilitypanel") return S::UtilityPanel;
+    if (s == "fantop") return S::FanTop;
     if (s == "asphalt") return S::Asphalt;
     if (s == "pavement" || s == "sidewalk") return S::Pavement;
     if (s == "cobblestone" || s == "cobble") return S::Cobblestone;
@@ -159,6 +170,9 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::RoofTile:        return "rooftile";
         case S::RoofShingle:     return "shingle";
         case S::CorrugatedMetal: return "corrugated";
+        case S::VentGrille: return "vent";
+        case S::UtilityPanel: return "utilitypanel";
+        case S::FanTop: return "fantop";
         case S::Asphalt:         return "asphalt";
         case S::Pavement:        return "pavement";
         case S::Cobblestone:     return "cobblestone";
