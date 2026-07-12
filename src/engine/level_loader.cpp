@@ -10,6 +10,7 @@
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
+#include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
@@ -1032,6 +1033,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
             continue;
         }
+        // Freeway corridor (plan §8): built + spawned by the loader's terrain
+        // pre-pass (its flatten windows must join the carve set), so the
+        // generic entity loop has nothing to do here.
+        if (ent.value("shape", std::string()) == "corridor") continue;
         // Editor-authored road (ADR-0049): an editable RoadNet + its baked mesh.
         if (ent.value("shape", std::string()) == "road") {
             const RoadNet* pre = nullptr;
@@ -2243,6 +2248,82 @@ bool LevelLoader::load(const std::string& path,
                 preNetEnts.push_back(&ent);
             }
         }
+    }
+    // CORRIDORS (plan §8): freeway-grade alignments. The mesh is built here
+    // against the BASE terrain so its at-grade flatten windows join the same
+    // carve set the roads use; the entities spawn after the terrain does.
+    struct PendingCorridor { CorridorMeshOut mesh; };
+    std::vector<PendingCorridor> preCorridors;
+    if (levelGround && root.contains("entities")) {
+        for (const auto& ent : root["entities"]) {
+            if (ent.value("shape", std::string()) != "corridor") continue;
+            const json cb = ent.contains("corridor") ? ent["corridor"] : json::object();
+            CorridorDef def;
+            std::vector<Vec2> control;
+            for (const auto& p : cb.value("points", json::array()))
+                if (p.is_array() && p.size() >= 2)
+                    control.emplace_back(p[0].get<double>(), p[1].get<double>());
+            if (control.size() < 2) continue;
+            def.horizontal = Alignment::fromPolyline(
+                control, cb.value("radius", 220.0), cb.value("spiral", 60.0));
+            def.lanes.throughLanes = cb.value("lanes", 4);
+            def.laneWidth = cb.value("laneWidth", 3.6);
+            def.medianWidth = cb.value("median", 1.4);
+            def.designSpeed = cb.value("designSpeed", 30.0);
+            if (cb.contains("profile") && cb["profile"].is_array()) {
+                for (const auto& pv : cb["profile"])
+                    if (pv.is_array() && pv.size() >= 2)
+                        def.vertical.pvis.push_back(
+                            {pv[0].get<double>(), pv[1].get<double>(),
+                             pv.size() > 2 ? pv[2].get<double>() : 0.0});
+            } else {
+                // No authored profile: follow the terrain at a smoothed grade
+                // (PVIs every 80 m at ground height + a small embankment).
+                const Real len = def.horizontal.length();
+                for (Real s = 0; s <= len; s += 80.0) {
+                    const Vec2 p = def.horizontal.pos(std::min(s, len));
+                    def.vertical.pvis.push_back(
+                        {std::min(s, len), levelGround(p.x, p.y) + 0.4, 50.0});
+                }
+            }
+            PendingCorridor pc;
+            pc.mesh = buildCorridorMesh(def, levelGround);
+            roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
+                               pc.mesh.flatten.end());
+            preCorridors.push_back(std::move(pc));
+        }
+    }
+    // Spawn the corridor geometry: deck (collidable — cars/player drive it,
+    // elevated spans included, same guarantee the road decks make), painted
+    // markings, and the concrete barrier + piers.
+    for (std::size_t ci = 0; ci < preCorridors.size(); ++ci) {
+        CorridorMeshOut& cm = preCorridors[ci].mesh;
+        const std::string tag = std::to_string(ci);
+        auto spawn = [&](const RenderMesh& mesh, const std::string& name,
+                         const Vec3& albedo, Real rough, bool collide) {
+            if (mesh.vertices.empty()) return;
+            Entity e = world.create();
+            Transform t;
+            world.add<Transform>(e, t);
+            world.add<PrevTransform>(e, PrevTransform{t});
+            Renderable r;
+            r.material.albedo = albedo;
+            r.material.roughness = static_cast<float>(rough);
+            r.mesh = assets.acquireMesh(mesh, "corridor:" + name + ":" + tag);
+            world.add<Renderable>(e, r);
+            if (collide) {
+                MeshCollider mc;
+                mc.vertices.reserve(mesh.vertices.size());
+                for (const Vertex& v : mesh.vertices)
+                    mc.vertices.push_back(v.position);
+                mc.indices = mesh.indices;
+                mc.friction = 0.85;
+                world.add<MeshCollider>(e, mc);
+            }
+        };
+        spawn(cm.deck, "deck", Vec3(1, 1, 1), 0.95, true);
+        spawn(cm.markings, "markings", Vec3(1, 1, 1), 0.8, false);
+        spawn(cm.barrier, "barrier", Vec3(1, 1, 1), 0.9, true);
     }
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
 

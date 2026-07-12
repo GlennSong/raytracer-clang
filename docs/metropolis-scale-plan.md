@@ -345,6 +345,72 @@ content-hash cache (P4.1 pattern) makes rebuild ≈ disk read after first visit.
   this one, landing P7.1 (manifest split) first since it's independently
   useful for load time.
 
+## 8. Freeway engineering: the corridor model (task 9, done RIGHT)
+
+Device direction: freeways are multilane (CA-style, up to 8 lanes) with exits
+where ONLY the last lane peels off through a gore and curves (clothoid) down
+to a surface street; elevated sections spiral/slant down to grade; city
+streets run underneath; and it must be REAL because the traffic simulation
+depends on it. Borrowed civil-engineering vocabulary (the corridor model used
+by Civil 3D / OpenRoads):
+
+- **Alignment**: a stationed centreline — every point addressed by distance
+  along the line. Horizontal geometry is tangent–spiral–arc–spiral–tangent:
+  clothoid transitions so curvature ramps linearly (design speed sets minimum
+  radius; a 40 km/h loop ramp may be R~50m, a 110 km/h mainline R>=600m).
+- **Vertical profile**: separate 1D design — constant grades (freeway <=4%,
+  ramp <=7%) joined by parabolic crest/sag curves. Elevated->surface = sag at
+  the bottom, crest at the top; height / max-grade = minimum ramp length
+  (that's WHY real ramps are long or helical).
+- **Cross-section template + lane schedule**: lanes(station) — through lanes
+  continuous end-to-end; lanes appear/drop only at GORES (the painted
+  triangular nose). An exit = auxiliary lane -> decel length -> gore -> the
+  aux lane BECOMES the ramp. Merges mirror with accel lane + ~50:1 taper.
+- **Superelevation**: deck banks into curves (e ~ V^2/127R, cap ~7%) — the
+  swept template rotates about the centreline per station.
+- **Clearance + structures**: streets pass under when the profile holds
+  ~5.1m vertical clearance over their surface; the deck becomes a viaduct on
+  piers every 25-35m where deck-ground exceeds ~2m.
+- **Interchange catalogue**: diamond (default), parclo/cloverleaf loops,
+  trumpet, stack — each a recipe of ramp alignments between corridors.
+
+**Per-lane driving, current state (city_sim):** NavGraph links carry `lanes`
+(from width/3.5) and `laneCenter(link, lane, t)` offsets the drive point;
+drivers roll a lane at trip start, KEEP the index across legs (clamped to
+each leg's count), and car-following keys gaps per (link, lane). Missing for
+real exits: (a) mid-link lane CHANGES (lane is fixed per trip), (b)
+lane-level connectivity (router is link-level; any lane may take any turn),
+(c) the geometric tie "ramp continues lane N's edge". Additions: fractional
+lane offset (Real) animated toward a target lane; "seek rightmost lane
+starting ~40m before a gore leg"; gore records which lane feeds the ramp.
+
+**Phases (all proven in the FREEWAY LAB first — `freeway_lab.json`: HILLY
+terrain (device: meshing vs terrain is part of the test), a small street grid
+passing under, one curved partially-elevated mainline, NO buildings):**
+- **P8.1 Alignment module.** Stationed horizontal alignment (clothoid corner
+  fitting by curvature-driven trace), parabolic vertical profile, lane
+  schedule spans. Headless unit tests (lengths, tangent continuity, curvature
+  ramps, grade limits).
+- **P8.2 Corridor sweep mesher + "corridor" level entity.** Sweep the
+  template (median | lanes | shoulder) along the alignment with
+  superelevation; per-lane-edge marking strips as geometry first (defers the
+  marking-shader work honestly); flatten pads where at grade; piers where
+  deck-ground > 2m. Terrain conform must hold on the hilly lab (poke map 0).
+- **P8.3 Gores + diamond ramps.** Lane schedule grows an aux lane before each
+  exit; ramp alignment inherits the aux lane edge at the gore, clothoids away
+  and grades down to a street junction. Lab gate: geometry reads as a real
+  exit (gore nose, taper) into the street grid.
+- **P8.4 Lane-aware sim.** Fractional lane positions + target-lane seek; ramp
+  links enterable only from the feeding lane; cars visibly move right, take
+  the exit, and merge back on-ramp. Lab gate: watch a car street->on-ramp->
+  mainline->off-ramp->street.
+- **P8.5 Clearance solver + viaduct.** Profile constrained by crossing street
+  elevations + 5.1m clearance; piers/bents emitted; streets truly run under.
+- **P8.6 Loop ramps (parclo quadrant), then metro integration** behind
+  corridor identity: the metro's freeway backbone becomes corridors; growth
+  may not junction the mainline (grade-separated crossings only); ramps at
+  interchange_spacing near arterials.
+
 ## Order of execution
 
 1. P1.1–P1.4 (chunking + mips) — perf floor for everything else. **DONE**

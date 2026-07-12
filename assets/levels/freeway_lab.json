@@ -1,0 +1,112 @@
+{
+  "name": "freeway_lab",
+  "version": 1,
+  "_comment": "Plan §8 test bed: one clothoid mainline over HILLY terrain (device: meshing vs terrain is part of the test), a small street grid running underneath the elevated span, NO buildings. Every corridor feature is judged here before the metro sees it.",
+  "citysim": {
+    "cars": 12,
+    "pedestrians": 0,
+    "buildLots": false,
+    "seed": 4,
+    "debugWidgets": false
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "position": [0.0, 0.0, 0.0],
+      "shape": "road",
+      "road": {
+        "color": [0.09, 0.09, 0.1],
+        "width": 7.0,
+        "sidewalk": 3.0,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "markings": true,
+        "lift": 0.08,
+        "generate": {
+          "kind": "metro",
+          "seed": 4,
+          "radius": 260,
+          "hotspots": 1,
+          "sea_level": -100.0,
+          "block_size": 110,
+          "seg_length": 30,
+          "influence": 300,
+          "kill_radius": 60,
+          "merge_radius": 44,
+          "corridor_spacing": 80,
+          "ambient_per_500": 60,
+          "loop_min": 120,
+          "loop_max": 260,
+          "min_road_len": 22,
+          "street_width": 7,
+          "collector_width": 9,
+          "artery_width": 12,
+          "freeway_width": 12,
+          "interchange_spacing": 4000
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "mainline",
+      "position": [0.0, 0.0, 0.0],
+      "shape": "corridor",
+      "corridor": {
+        "points": [
+          [-560, -420],
+          [-180, -240],
+          [120, 40],
+          [180, 420],
+          [520, 560]
+        ],
+        "radius": 240,
+        "spiral": 70,
+        "lanes": 4,
+        "laneWidth": 3.6,
+        "median": 1.4,
+        "designSpeed": 30.0,
+        "profile": [
+          [0, 22, 0],
+          [260, 14, 140],
+          [560, 21, 160],
+          [860, 21, 160],
+          [1120, 12, 140],
+          [1500, 10, 0]
+        ]
+      }
+    }
+  ],
+  "terrain": {
+    "size": 1400,
+    "resolution": 700,
+    "seed": 7,
+    "noiseScale": 0.004,
+    "octaves": 5,
+    "heightScale": 11,
+    "warp": 0.3,
+    "erode": false,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 },
+    "cdlod": { "worldHalf": 700 }
+  },
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86],
+    "fog": { "color": [0.72, 0.78, 0.88], "density": 0.0008, "heightFalloff": 0.012 }
+  },
+  "lighting": {
+    "ambientMultiplier": 0.6,
+    "exposure": 0.5,
+    "sun": {
+      "direction": [0.42, 0.52, -0.5],
+      "color": [1.0, 0.96, 0.86],
+      "intensity": 8.0,
+      "castsShadow": true
+    }
+  },
+  "player": {
+    "position": [0.0, 30.0, 0.0],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "friction": 0.5
+  }
+}

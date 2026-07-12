@@ -68,6 +68,8 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_furniture.cpp \
+	$(SRC_DIR)/engine/procgen/city/alignment.cpp \
+	$(SRC_DIR)/engine/procgen/city/corridor_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/triangulate.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
@@ -183,6 +185,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_ped_graph.cpp \
 	$(TEST_DIR)/test_city_generated.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
+	$(TEST_DIR)/test_alignment.cpp \
 	$(TEST_DIR)/test_surface_field.cpp \
 	$(TEST_DIR)/test_architect.cpp
 TEST_ENGINE_SRCS = \
@@ -241,6 +244,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_furniture.cpp \
+	$(SRC_DIR)/engine/procgen/city/alignment.cpp \
+	$(SRC_DIR)/engine/procgen/city/corridor_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/triangulate.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \

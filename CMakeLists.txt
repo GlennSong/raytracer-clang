@@ -82,6 +82,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
+    src/engine/procgen/city/alignment.cpp
+    src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
     src/engine/procgen/city/triangulate.cpp
     src/engine/procgen/city/metro.cpp
@@ -460,6 +462,7 @@ add_executable(run_tests
     tests/test_ped_graph.cpp
     tests/test_city_generated.cpp
     tests/test_city_lots.cpp
+    tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
     ${CORE_SOURCES}

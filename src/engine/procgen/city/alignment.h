@@ -1,0 +1,112 @@
+#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ALIGNMENT_H
+#define RAYTRACER_ENGINE_PROCGEN_CITY_ALIGNMENT_H
+
+#include "polygon.h"   // Vec2, Real
+#include <vector>
+
+namespace engine {
+
+// The CORRIDOR MODEL (plan §8, device: "we should build this all in a very
+// real sense because the traffic simulation will depend on it"). A road is
+// not a graph edge with a width: it is an ALIGNMENT — a stationed centreline
+// (every point addressed by its distance along the line), plus a VERTICAL
+// PROFILE designed separately, plus a LANE SCHEDULE. Meshes, markings, ramps,
+// piers, and the per-lane nav all read the same stationed description.
+
+// --- Horizontal alignment ---------------------------------------------------
+// Built from a control polyline whose corners are filleted the way highways
+// are: tangent -> clothoid spiral -> circular arc -> mirror spiral -> tangent.
+// The clothoid ramps curvature LINEARLY (steering input is gradual — the
+// device's "the curves have to spiral down" tool). Represented sampled: a
+// dense polyline with per-sample station, heading and curvature, so callers
+// interpolate by station without re-deriving the geometry.
+struct AlignmentSample {
+    Vec2 pos;
+    Vec2 tangent;     // unit
+    Real station = 0; // arclength from the start (m)
+    Real curvature = 0;   // signed 1/R (left turn positive)
+};
+
+class Alignment {
+public:
+    // Fillet every interior corner of `control` with design radius `radius`
+    // and spiral length `spiralLen` (clamped per corner when the deflection
+    // is too small for the full spiral pair). `step` is the sampling
+    // interval along the curve (m).
+    static Alignment fromPolyline(const std::vector<Vec2>& control,
+                                  Real radius, Real spiralLen,
+                                  Real step = 2.0);
+
+    Real length() const { return samples_.empty() ? 0 : samples_.back().station; }
+    bool empty() const { return samples_.size() < 2; }
+    const std::vector<AlignmentSample>& samples() const { return samples_; }
+
+    // Interpolated queries by station (clamped to [0, length]).
+    Vec2 pos(Real s) const;
+    Vec2 tangent(Real s) const;          // unit
+    Vec2 normal(Real s) const;           // unit, LEFT of travel
+    Real curvature(Real s) const;        // signed, left positive
+    // A point offset laterally from the centreline: +offset is LEFT of travel.
+    Vec2 offset(Real s, Real off) const { return pos(s) + normal(s) * off; }
+
+private:
+    std::vector<AlignmentSample> samples_;
+    std::size_t indexFor(Real s) const;  // sample interval containing s
+};
+
+// --- Vertical profile --------------------------------------------------------
+// Constant grades joined by parabolic crest/sag curves at each PVI (point of
+// vertical intersection) — the standard highway profile. Stations are on the
+// horizontal alignment; elevations are absolute world Y.
+struct VerticalProfile {
+    struct Pvi {
+        Real station = 0;
+        Real elevation = 0;
+        Real curveLength = 0;   // parabolic transition centred on the PVI
+                                // (0 at the endpoints)
+    };
+    std::vector<Pvi> pvis;      // strictly increasing station; >= 2 entries
+
+    Real elevation(Real s) const;
+    Real grade(Real s) const;   // dz/ds (e.g. 0.04 = 4%)
+};
+
+// --- Lane schedule -----------------------------------------------------------
+// lanes(station), per direction. Through lanes run the whole corridor; spans
+// add AUXILIARY lanes (deceleration/exit or acceleration/merge) on the OUTER
+// (right) edge — lane count changes happen only at gores (plan §8).
+struct LaneSchedule {
+    int throughLanes = 3;               // per direction, continuous end-to-end
+    struct AuxSpan {
+        Real s0 = 0, s1 = 0;            // station range carrying the extra lane
+        bool rightSide = true;          // aux lanes live on the outer edge
+    };
+    std::vector<AuxSpan> aux;
+
+    // Lane count for one direction at station s (through + active aux spans).
+    int lanesAt(Real s) const;
+};
+
+// --- The corridor ------------------------------------------------------------
+// One directed pair of carriageways around a median, described by station.
+struct CorridorDef {
+    Alignment horizontal;
+    VerticalProfile vertical;
+    LaneSchedule lanes;
+    Real laneWidth = 3.6;
+    Real shoulderOut = 2.4;             // outer (right) shoulder per carriageway
+    Real shoulderIn = 0.9;              // inner shoulder against the median
+    Real medianWidth = 1.4;             // barrier strip between directions
+    Real superelevationMax = 0.07;      // bank cap (7%)
+    Real designSpeed = 30.0;            // m/s (~110 km/h): e = v^2/(gR), capped
+
+    // Total paved half-width at station s (median centre to outer edge).
+    Real halfWidthAt(Real s) const;
+    // Bank angle cross-slope at s (signed: positive tilts the LEFT edge up,
+    // i.e. banking INTO a left curve).
+    Real superelevationAt(Real s) const;
+};
+
+}  // namespace engine
+
+#endif
