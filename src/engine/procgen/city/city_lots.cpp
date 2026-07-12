@@ -494,7 +494,7 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
 // beds that each CLAIM their footprint on the flat deck.
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
-                 std::vector<RenderMesh>* outParts) {
+                 std::vector<RenderMesh>* outParts, const RoadGraph* roads) {
     if (!outParts || planIn.size() < 3) return;
     Poly2 plan = planIn;
     if (area(plan) < 0) std::reverse(plan.begin(), plan.end());   // CCW
@@ -543,8 +543,9 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 
     // STAIRS at the plaza's mouths: the longest edges whose outside ground
     // sits a walkable drop below the deck get a full stair run — the
-    // "staircases between elevations". Each mouth also opens the fence.
-    struct Mouth { Vec2 p; Real halfW; };
+    // "staircases between elevations". Each mouth also opens the fence, and
+    // each records its FOOT (where a walk to the street starts).
+    struct Mouth { Vec2 p; Real halfW; Vec2 foot; };
     std::vector<Mouth> mouths;
     {
         std::vector<std::pair<Real, std::size_t>> ranked;
@@ -562,7 +563,14 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
             Vec2 m = (a + e) * 0.5;
             const Real go = gy(m + nOut * 2.2);
             const Real drop = slabY - go;
-            if (drop < 0.18 || drop > 2.6) continue;
+            if (drop > 2.6) continue;
+            if (drop < 0.18) {
+                // FLUSH mouth: level with the outside ground — no stairs
+                // needed, but it still opens the fence and takes a walk.
+                mouths.push_back({m, std::min(len * 0.45, Real(6.0)) * 0.5,
+                                  m + nOut * 0.5});
+                continue;
+            }
             const Real w = std::min(len * 0.45, Real(6.0));
             const int steps = std::max(1, static_cast<int>(std::ceil(drop / 0.17)));
             const Real tread = 0.34;
@@ -575,10 +583,61 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                         Scope{Vec3(m.x, botY, m.y) - u3 * (w * 0.5) +
                                   n3 * ((s - 1) * tread),
                               {u3, up, n3}, Vec3(w, topY - botY, tread)},
-                        PartId::Concrete, white);
+                        PartId::Path, white);   // paver steps: walk surface
             }
-            mouths.push_back({m, w * 0.5});
+            mouths.push_back({m, w * 0.5, m + nOut * (steps * tread + 0.3)});
         }
+    }
+
+    // WALKS to the street (P6.3, device: "walking paths"): from each mouth's
+    // foot to the nearest carriageway edge — a paver ribbon that follows the
+    // terrain with side skirts (the same construction the park spokes use),
+    // so the plaza is HOOKED to its sidewalks instead of floating in a lot.
+    if (roads) {
+        RenderMesh walk;
+        for (const Mouth& mo : mouths) {
+            Real best = 1e30;
+            Vec2 curb{};
+            for (const RoadEdge& e : roads->edges) {
+                if (e.a < 0 || e.b < 0 ||
+                    e.a >= static_cast<int>(roads->nodes.size()) ||
+                    e.b >= static_cast<int>(roads->nodes.size())) continue;
+                const Vec2& ra = roads->nodes[e.a].pos;
+                const Vec2& rb = roads->nodes[e.b].pos;
+                Vec2 ab = rb - ra;
+                Real len2 = ab.lengthSquared();
+                Real t = len2 > 1e-12 ? dot(mo.foot - ra, ab) / len2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                Vec2 q(ra.x + ab.x * t, ra.y + ab.y * t);
+                const Real d = (q - mo.foot).length();
+                if (d >= best || d < 1e-6) continue;
+                best = d;
+                // stop the walk at the carriageway edge, on the mouth's side
+                curb = q + (mo.foot - q) * ((e.width * 0.5 + 0.4) / d);
+            }
+            const Real len = (curb - mo.foot).length();
+            if (best > 1e29 || len < 1.2 || len > 28.0) continue;
+            Vec2 dir = (curb - mo.foot) * (1.0 / len);
+            Vec2 perp(-dir.y, dir.x);
+            const Real hw = 1.0;
+            const int segs = std::max(1, static_cast<int>(len / 3.0));
+            for (int s = 0; s < segs; ++s) {
+                Vec2 q0 = mo.foot + dir * (len * s / segs);
+                Vec2 q1 = mo.foot + dir * (len * (s + 1) / segs);
+                const Real e0 = 0.08, e1 = 0.08;
+                const Vec3 L0(q0.x - perp.x * hw, gy(q0 - perp * hw) + e0, q0.y - perp.y * hw);
+                const Vec3 R0(q0.x + perp.x * hw, gy(q0 + perp * hw) + e0, q0.y + perp.y * hw);
+                const Vec3 L1(q1.x - perp.x * hw, gy(q1 - perp * hw) + e1, q1.y - perp.y * hw);
+                const Vec3 R1(q1.x + perp.x * hw, gy(q1 + perp * hw) + e1, q1.y + perp.y * hw);
+                MeshBuilder::emitQuad(walk, L0, R0, R1, L1, up, white);
+                const Vec3 drop3(0, -0.45, 0);
+                const Vec3 pL(-perp.x, 0, -perp.y), pR(perp.x, 0, perp.y);
+                MeshBuilder::emitQuad(walk, L0 + drop3, L1 + drop3, L1, L0, pL, white);
+                MeshBuilder::emitQuad(walk, R0 + drop3, R1 + drop3, R1, R0, pR, white);
+            }
+        }
+        MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Path)],
+                            walk);
     }
 
     // Decorative GUARD FENCE: iron posts + one rail along deck edges that
@@ -1498,7 +1557,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.height = 0.35;             // the podium IS the massing
                 sculptPlaza(b, plan, p.ground,
                             mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
-                            outParts);
+                            outParts, roads);
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
                 out.push_back(std::move(b));

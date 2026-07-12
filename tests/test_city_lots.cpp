@@ -181,10 +181,14 @@ TEST_CASE(lot_buildings_keep_clear_of_roads) {
     const Real minDist = 13.0 * 0.5 + clearance;                 // 11.1 m
     // Every building vertex — walls, trim, roofs — stays behind the corridor.
     // Facade elements protrude from the plan (awnings ~0.9 m, hood bands), so
-    // the tolerance is the element depth, not a rounding epsilon.
-    for (const RenderMesh& pm : parts)
-        for (const Vertex& v : pm.vertices)
+    // the tolerance is the element depth, not a rounding epsilon. The Path
+    // part is EXEMPT by design: plaza walks and stair runs exist to reach the
+    // sidewalk, so they legitimately run right up to the carriageway edge.
+    for (std::size_t pi = 0; pi < parts.size(); ++pi) {
+        if (pi == static_cast<std::size_t>(PartId::Path)) continue;
+        for (const Vertex& v : parts[pi].vertices)
             CHECK(std::fabs(v.position.x + 105.0) >= minDist - 1.2);
+    }
 }
 
 // --- The ARCHITECT pass (building-grammar-plan.md P5) ------------------------
