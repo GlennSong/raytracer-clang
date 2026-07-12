@@ -6,6 +6,8 @@
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
+#include "street_kit.h"      // streetLamp (plaza lamp posts)
+#include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
 #include <array>
@@ -30,80 +32,6 @@ uint32_t mix(uint32_t a, uint32_t b) {
     uint32_t h = a * 0x85ebca6bu ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2));
     h ^= h >> 15; h *= 0xc2b2ae35u; h ^= h >> 13;
     return h;
-}
-
-// A slab in the lot's OWN shape (device: "square green lots don't fit the
-// blocks"): triangulated top + a side skirt, world-space, ground at y=0.
-// Vertices stay white so the caller tints the whole pad via material albedo.
-RenderMesh padMeshFor(const Poly2& poly, Real h,
-                      const std::function<Real(Real, Real)>& ground) {
-    RenderMesh m;
-    const Vec3 white(1, 1, 1);
-    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
-    // DRAPE-SUBDIVIDE (device: mint-green pads lying across roads all over the
-    // city): the polygon's corner triangles span tens of metres, so a big green
-    // lot was one flat sheet that BRIDGED over the sunken road corridors beside
-    // it (and over terrain relief) instead of following the ground. Split any
-    // triangle edge over ~7 m and drape every new vertex, so pads hug the carve
-    // and tuck UNDER the deck edge where a lot meets a road.
-    std::function<void(const Vec2&, const Vec2&, const Vec2&, int)> emitDraped =
-        [&](const Vec2& a, const Vec2& b, const Vec2& c, int depth) {
-            const Real ab = (b - a).length(), bc = (c - b).length(),
-                       ca = (a - c).length();
-            const Real longest = std::max(ab, std::max(bc, ca));
-            if (ground && depth < 6 && longest > 7.0) {
-                if (ab >= bc && ab >= ca) {
-                    const Vec2 mid = (a + b) * 0.5;
-                    emitDraped(a, mid, c, depth + 1);
-                    emitDraped(mid, b, c, depth + 1);
-                } else if (bc >= ab && bc >= ca) {
-                    const Vec2 mid = (b + c) * 0.5;
-                    emitDraped(a, b, mid, depth + 1);
-                    emitDraped(a, mid, c, depth + 1);
-                } else {
-                    const Vec2 mid = (c + a) * 0.5;
-                    emitDraped(a, b, mid, depth + 1);
-                    emitDraped(mid, b, c, depth + 1);
-                }
-                return;
-            }
-            MeshBuilder::emitTri(m, Vec3(a.x, gy(a) + h, a.y),
-                                 Vec3(b.x, gy(b) + h, b.y),
-                                 Vec3(c.x, gy(c) + h, c.y), Vec3(0, 1, 0), white);
-        };
-    for (const std::array<int, 3>& t : triangulatePolygon(poly))
-        emitDraped(poly[t[0]], poly[t[1]], poly[t[2]], 0);
-    // The skirt's outward normal assumed a CCW plan — half the lots arrive CW
-    // (device: "foundation skirts have the normals inverted"), so orient once.
-    double area2 = 0.0;
-    for (std::size_t i = 0; i < poly.size(); ++i) {
-        const Vec2& a = poly[i];
-        const Vec2& b = poly[(i + 1) % poly.size()];
-        area2 += a.x * b.y - b.x * a.y;
-    }
-    const double wind = area2 >= 0.0 ? 1.0 : -1.0;
-    for (std::size_t i = 0; i < poly.size(); ++i) {
-        const Vec2& a = poly[i];
-        const Vec2& b = poly[(i + 1) % poly.size()];
-        Vec2 d = b - a;
-        if (d.length() < 1e-6) continue;
-        Vec2 n = normalize(Vec2(d.y, -d.x)) * wind;   // outward for either winding
-        // Skirt from the draped top down past the terrain surface; wind the
-        // quad to face its normal.
-        if (wind >= 0.0)
-            MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
-                                  Vec3(b.x, gy(b) - 0.4, b.y),
-                                  Vec3(b.x, gy(b) + h, b.y),
-                                  Vec3(a.x, gy(a) + h, a.y),
-                                  Vec3(n.x, 0, n.y), white);
-        else
-            MeshBuilder::emitQuad(m, Vec3(b.x, gy(b) - 0.4, b.y),
-                                  Vec3(a.x, gy(a) - 0.4, a.y),
-                                  Vec3(a.x, gy(a) + h, a.y),
-                                  Vec3(b.x, gy(b) + h, b.y),
-                                  Vec3(n.x, 0, n.y), white);
-    }
-    return m;
 }
 
 Vec3 colorFor(const std::string& t) {
@@ -554,6 +482,268 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
         if (pointInPolygon(house, tp)) continue;
         b.treeSpots.push_back(Vec3(tp.x, rng.range(0.8, 1.2), tp.y));
     }
+}
+
+// PLAZA SCULPTING (device: "concrete plazas, walking paths, decorative
+// fencing and staircases between elevations ... like building a building
+// structure without the building"): the fitted plan becomes a raised paver
+// PODIUM at the lot's graded plane — the pad under it flattens exactly like a
+// building's (the recipe is type "civic" so the park/green flatten skip does
+// not apply) — dressed with STAIRS where its edges meet lower ground, guard
+// FENCING over bigger drops, and a fountain / planters / benches / flower
+// beds that each CLAIM their footprint on the flat deck.
+void sculptPlaza(LotBuilding& b, const Poly2& planIn,
+                 const std::function<Real(Real, Real)>& ground, uint32_t seed,
+                 std::vector<RenderMesh>* outParts) {
+    if (!outParts || planIn.size() < 3) return;
+    Poly2 plan = planIn;
+    if (area(plan) < 0) std::reverse(plan.begin(), plan.end());   // CCW
+    Hash rng(mix(seed, 0x9A7A5EEDu));
+    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    const Real slabY = b.groundY + 0.35;          // podium reveal over the pad
+    const Real A = area(plan);
+    const Vec2 c = centroid(plan);
+    const Vec3 up(0, 1, 0);
+    const Vec3 white(1, 1, 1);                    // surfaces carry the look
+    BuildingMesh kit;
+
+    // The paver DECK: one flat plate (the pad below is graded to b.groundY,
+    // so the reveal is constant); Pavement surface via PartId::Path.
+    {
+        RenderMesh deck;
+        for (const std::array<int, 3>& t : triangulatePolygon(plan))
+            MeshBuilder::emitTri(deck,
+                                 Vec3(plan[t[0]].x, slabY, plan[t[0]].y),
+                                 Vec3(plan[t[1]].x, slabY, plan[t[1]].y),
+                                 Vec3(plan[t[2]].x, slabY, plan[t[2]].y),
+                                 up, white);
+        MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Path)],
+                            deck);
+    }
+    // Concrete SKIRT: deck edge down past the surrounding ground, so a
+    // downhill boundary never opens a gap under the slab.
+    {
+        RenderMesh skirt;
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            const Vec2& a = plan[i];
+            const Vec2& e = plan[(i + 1) % plan.size()];
+            Vec2 d = e - a;
+            if (d.length() < 1e-6) continue;
+            Vec2 n2 = normalize(Vec2(d.y, -d.x));   // CCW: right normal = outward
+            MeshBuilder::emitQuad(skirt,
+                                  Vec3(a.x, gy(a) - 0.5, a.y),
+                                  Vec3(e.x, gy(e) - 0.5, e.y),
+                                  Vec3(e.x, slabY, e.y),
+                                  Vec3(a.x, slabY, a.y),
+                                  Vec3(n2.x, 0, n2.y), white);
+        }
+        MeshBuilder::append(
+            (*outParts)[static_cast<std::size_t>(PartId::Concrete)], skirt);
+    }
+
+    // STAIRS at the plaza's mouths: the longest edges whose outside ground
+    // sits a walkable drop below the deck get a full stair run — the
+    // "staircases between elevations". Each mouth also opens the fence.
+    struct Mouth { Vec2 p; Real halfW; };
+    std::vector<Mouth> mouths;
+    {
+        std::vector<std::pair<Real, std::size_t>> ranked;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            ranked.emplace_back(
+                (plan[(i + 1) % plan.size()] - plan[i]).length(), i);
+        std::sort(ranked.begin(), ranked.end(),
+                  [](const auto& x, const auto& y) { return x.first > y.first; });
+        for (const auto& [len, i] : ranked) {
+            if (mouths.size() >= 3 || len < 6.0) break;
+            const Vec2& a = plan[i];
+            const Vec2& e = plan[(i + 1) % plan.size()];
+            Vec2 dir = (e - a) * (1.0 / len);
+            Vec2 nOut(dir.y, -dir.x);
+            Vec2 m = (a + e) * 0.5;
+            const Real go = gy(m + nOut * 2.2);
+            const Real drop = slabY - go;
+            if (drop < 0.18 || drop > 2.6) continue;
+            const Real w = std::min(len * 0.45, Real(6.0));
+            const int steps = std::max(1, static_cast<int>(std::ceil(drop / 0.17)));
+            const Real tread = 0.34;
+            Vec3 u3(dir.x, 0, dir.y), n3(nOut.x, 0, nOut.y);
+            for (int s = 1; s <= steps; ++s) {
+                const Real topY = slabY - s * (drop / steps);
+                const Real botY = go - 0.4;
+                if (topY <= botY) break;
+                emitBox(kit,
+                        Scope{Vec3(m.x, botY, m.y) - u3 * (w * 0.5) +
+                                  n3 * ((s - 1) * tread),
+                              {u3, up, n3}, Vec3(w, topY - botY, tread)},
+                        PartId::Concrete, white);
+            }
+            mouths.push_back({m, w * 0.5});
+        }
+    }
+
+    // Decorative GUARD FENCE: iron posts + one rail along deck edges that
+    // stand above the outside ground, opened at every stair mouth.
+    {
+        const Vec3 iron(0.13, 0.13, 0.15);
+        for (std::size_t i = 0; i < plan.size(); ++i) {
+            const Vec2& a = plan[i];
+            const Vec2& e = plan[(i + 1) % plan.size()];
+            const Real len = (e - a).length();
+            if (len < 1.6) continue;
+            Vec2 dir = (e - a) * (1.0 / len);
+            Vec2 nOut(dir.y, -dir.x);
+            Vec3 u3(dir.x, 0, dir.y), n3(nOut.x, 0, nOut.y);
+            const int posts = std::max(1, static_cast<int>(len / 2.2));
+            const Real step = len / posts;
+            auto keep = [&](const Vec2& pp) {
+                for (const Mouth& mo : mouths)
+                    if ((mo.p - pp).length() < mo.halfW + 0.9) return false;
+                // guard only where there is something to guard against
+                return slabY - gy(pp + nOut * 1.4) > 0.55;
+            };
+            for (int pi2 = 0; pi2 <= posts; ++pi2) {
+                Vec2 pp = a + dir * (step * pi2) - nOut * 0.22;   // inboard of edge
+                if (!keep(pp + nOut * 0.22)) continue;
+                emitBox(kit,
+                        Scope{Vec3(pp.x, slabY, pp.y) - u3 * 0.05 - n3 * 0.05,
+                              {u3, up, n3}, Vec3(0.10, 0.95, 0.10)},
+                        PartId::Metal, iron);
+                if (pi2 == posts) continue;
+                Vec2 np = a + dir * (step * (pi2 + 1)) - nOut * 0.22;
+                if (!keep(np + nOut * 0.22)) continue;
+                emitBox(kit,
+                        Scope{Vec3(pp.x, slabY + 0.82, pp.y) - n3 * 0.03,
+                              {u3, up, n3}, Vec3(step, 0.07, 0.06)},
+                        PartId::Metal, iron);
+            }
+        }
+    }
+
+    // FURNITURE on the flat deck — claim-registry spacing, same discipline as
+    // the parks (device: "spaced out and placed correctly").
+    std::vector<std::pair<Vec2, Real>> claimed;
+    auto clearAt = [&](const Vec2& p2, Real r) {
+        for (const auto& [q, qr] : claimed)
+            if ((q - p2).length() < r + qr) return false;
+        return true;
+    };
+    auto claim = [&](const Vec2& p2, Real r) { claimed.emplace_back(p2, r); };
+    Poly2 innerPoly = inset(plan, 1.2);
+    auto onDeck = [&](const Vec2& p2) {
+        return innerPoly.size() >= 3 && pointInPolygon(innerPoly, p2);
+    };
+    const Vec3 stone(0.72, 0.70, 0.66);
+
+    // The FOUNTAIN: centrepiece of a roomy plaza.
+    Real r0 = 0;
+    if (A > 380 && onDeck(c)) {
+        r0 = std::min(Real(4.5), std::max(Real(2.2), std::sqrt(A) * 0.11));
+        std::vector<Vec2> basin = {
+            {r0 * 0.42, 0.0},  {r0 * 0.44, 0.42}, {r0 * 0.36, 0.50},
+            {r0 * 0.34, 0.14}, {0.14, 0.14},      {0.11, 1.05},
+            {0.30, 1.18},      {0.24, 1.32},      {0.0, 1.40}};
+        MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Trim)],
+                            latheMesh(Vec3(c.x, slabY, c.y), basin, 16, stone));
+        std::vector<Vec2> water = {{r0 * 0.33, 0.36}, {0.0, 0.36}};
+        MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Glass)],
+                            latheMesh(Vec3(c.x, slabY, c.y), water, 16,
+                                      Vec3(0.20, 0.34, 0.40)));
+        claim(c, r0 * 0.5 + 0.4);
+    }
+
+    // Plaza LAMPS: the street-kit lamp, standing on the deck.
+    {
+        const RenderMesh lampProto = streetLamp();
+        const int nl = A > 500 ? 4 : 2;
+        for (int k = 0, placed = 0; k < nl * 4 && placed < nl; ++k) {
+            const Real a2 = rng.unit() * 6.283185307179586;
+            const Real rr = (r0 > 0 ? r0 + 2.5 : 3.0) +
+                            rng.unit() * std::sqrt(A) * 0.22;
+            Vec2 lp = c + Vec2(std::cos(a2), std::sin(a2)) * rr;
+            if (!onDeck(lp) || !clearAt(lp, 0.6)) continue;
+            claim(lp, 0.6);
+            ++placed;
+            RenderMesh lamp = lampProto;
+            MeshBuilder::transform(lamp, Mat4::translate(lp.x, slabY, lp.y));
+            MeshBuilder::append(
+                (*outParts)[static_cast<std::size_t>(PartId::Metal)], lamp);
+        }
+    }
+
+    // BENCHES facing the centre.
+    {
+        const Vec3 wood(0.45, 0.34, 0.22);
+        const int nb = 3 + static_cast<int>(rng.unit() * 3);
+        for (int k = 0; k < nb * 2; ++k) {
+            const Real a2 = rng.unit() * 6.283185307179586;
+            Vec2 dir(std::cos(a2), std::sin(a2));
+            Vec2 bp = c + dir * ((r0 > 0 ? r0 + 1.1 : 2.8) + rng.range(0, 1.5));
+            if (!onDeck(bp) || !clearAt(bp, 1.0)) continue;
+            claim(bp, 1.0);
+            Vec2 t2(-dir.y, dir.x);
+            Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
+            Vec3 o = Vec3(bp.x, slabY + 0.42, bp.y) - t3 * 0.8 - n3 * 0.22;
+            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.6, 0.07, 0.44)},
+                    PartId::Wood, wood);
+            for (int lg = 0; lg < 2; ++lg)
+                emitBox(kit,
+                        Scope{Vec3(bp.x, slabY, bp.y) +
+                                  t3 * (lg ? 0.55 : -0.65) - n3 * 0.18,
+                              {t3, up, n3}, Vec3(0.10, 0.42, 0.36)},
+                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+        }
+    }
+
+    // Stone PLANTERS with trees — the plaza's canopy, rooted in boxes.
+    {
+        const int np = std::min(6, std::max(2, static_cast<int>(A / 220)));
+        Real mnx = 1e30, mnz = 1e30, mxx = -1e30, mxz = -1e30;
+        for (const Vec2& v : plan) {
+            mnx = std::min(mnx, v.x); mxx = std::max(mxx, v.x);
+            mnz = std::min(mnz, v.y); mxz = std::max(mxz, v.y);
+        }
+        for (int k = 0, placed = 0; k < np * 5 && placed < np; ++k) {
+            Vec2 sp(mnx + rng.unit() * (mxx - mnx),
+                    mnz + rng.unit() * (mxz - mnz));
+            if (!onDeck(sp) || !clearAt(sp, 1.7)) continue;
+            claim(sp, 1.7);
+            ++placed;
+            const Real a2 = rng.unit() * 6.283185307179586;
+            Vec3 t3(std::cos(a2), 0, std::sin(a2)), n3(-t3.z, 0, t3.x);
+            emitBox(kit,
+                    Scope{Vec3(sp.x, slabY, sp.y) - t3 * 0.85 - n3 * 0.85,
+                          {t3, up, n3}, Vec3(1.7, 0.55, 1.7)},
+                    PartId::Trim, stone * 0.9);
+            b.treeSpots.push_back(Vec3(sp.x, rng.range(0.65, 0.9), sp.y));
+        }
+    }
+
+    // FLOWER BEDS: a bright ring accent between the benches.
+    {
+        const Vec3 bloom[3] = {{0.72, 0.22, 0.26},
+                               {0.82, 0.68, 0.20},
+                               {0.56, 0.32, 0.66}};
+        const int nf = 2 + static_cast<int>(rng.unit() * 2);
+        for (int k = 0; k < nf * 3; ++k) {
+            const Real a2 = rng.unit() * 6.283185307179586;
+            Vec2 dir(std::cos(a2), std::sin(a2));
+            Vec2 fp = c + dir * ((r0 > 0 ? r0 + 1.6 : 3.2) + rng.range(0, 1.0));
+            if (!onDeck(fp) || !clearAt(fp, 0.8)) continue;
+            claim(fp, 0.8);
+            Vec3 t3(-dir.y, 0, dir.x), n3(dir.x, 0, dir.y);
+            Vec3 o = Vec3(fp.x, slabY, fp.y) - t3 * 0.55 - n3 * 0.55;
+            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.1, 0.22, 1.1)},
+                    PartId::Trim, stone * 0.92);
+            emitBox(kit,
+                    Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
+                          {t3, up, n3}, Vec3(0.86, 0.14, 0.86)},
+                    PartId::Foliage,
+                    bloom[static_cast<int>(rng.unit() * 2.99)]);
+        }
+    }
+
+    appendKit(kit, outParts);
+    b.color = Vec3(1, 1, 1);   // the surfaces carry the plaza's look
 }
 }  // namespace
 
@@ -1291,6 +1481,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     Vec2(bp.faceDir.x, bp.faceDir.z));
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
+            // PLAZA massing (device: "a building structure without the
+            // building"): the fitted plan becomes a raised paver podium —
+            // graded + flattened like any building pad (type "civic", so the
+            // park/green flatten skip doesn't apply), then dressed with
+            // stairs, fencing, fountain, planters, benches. No storeys grown.
+            if (rec.massing == BuildingRecipe::Massing::Plaza) {
+                if (!planOk) { emitGreen(); continue; }
+                b.plan = plan;               // pad flatten + walkable prism
+                OBB2 pb = orientedBoundingBox(plan);
+                b.site = pb.center;
+                b.width = 2 * pb.half[0];
+                b.depth = 2 * pb.half[1];
+                b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
+                b.baseY = p.ground ? b.groundY : baseYFor(plan);   // no plinth
+                b.height = 0.35;             // the podium IS the massing
+                sculptPlaza(b, plan, p.ground,
+                            mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
+                            outParts);
+                LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
+                         << ") area " << static_cast<int>(area(plan)) << " m2";
+                out.push_back(std::move(b));
+                continue;
+            }
             if (p.ground && !bp.entranceSteps && bp.portico == 0 &&
                 bp.groundBays == 0 && !bp.porch && bp.floors > 0)
                 bp.entranceSteps = true;

@@ -56,6 +56,8 @@ struct BuildingRecipe {
         RowStrip,    // the lot packed with side-by-side ROWHOUSE units
         BoxMass,     // force the shrink-fit BOX scope + growBuilding, so the
                      // non-box BuildingShapes (pagoda, cylinder) can dispatch
+        Plaza,       // no storeys: a raised paver podium with stairs, fencing,
+                     // fountain and planting ("a building without the building")
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow

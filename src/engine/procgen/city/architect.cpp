@@ -328,6 +328,19 @@ void recipePocketPark(BuildingRecipe& out, Hash&, RecipeCtx&) {
     out.name = "pocket_park";
 }
 
+// The urban PLAZA (device: "concrete plazas, walking paths, decorative
+// fencing and staircases between elevations ... like building a building
+// structure without the building"): no storeys — the lot becomes a raised
+// paver podium with stairs at its street mouths, guard fencing over drops,
+// a fountain, planters and benches. placeType "civic" ON PURPOSE: agents
+// visit it, and the loader's pad-flatten pass (which skips park/green)
+// grades the terrain under it exactly like a building's pad.
+void recipePlaza(BuildingRecipe& out, Hash&, RecipeCtx&) {
+    out.massing = BuildingRecipe::Massing::Plaza;
+    out.placeType = "civic";
+    out.name = "plaza";
+}
+
 // The HOTEL: masonry mid-rise, awninged entrance, tiers when tall — fabric,
 // but distinct from offices by proportion and ornament.
 void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1052,11 +1065,13 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.72) recipeSteppedTower(out, rng, cx);
             else if (roll < 0.80) recipeDrumTower(out, rng, cx);
             else if (roll < 0.90) recipeCommercialBlock(out, rng, cx);
-            else if (roll < 0.95) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.94) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.975) recipePlaza(out, rng, cx);
             else                  recipeCivicHall(out, rng, cx);
             break;
         case DistrictTag::Commercial:
-            if (roll < 0.05)      recipePocketPark(out, rng, cx);
+            if (roll < 0.04)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.07) recipePlaza(out, rng, cx);
             else if (roll < 0.25) recipeBrickShop(out, rng, cx);
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
             else if (roll < 0.48) recipeOfficeMidrise(out, rng, cx);

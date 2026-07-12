@@ -256,6 +256,14 @@ footprint), and street-side entrances want a step/stoop from the grammar.
 
 ## 6. Urban ground plan: plazas, paths, stairs, fencing ("a building without the building")
 
+**Status 2026-07-12: P6.1 + P6.2 + P6.4 SHIPPED** (recipePlaza -> Massing::Plaza ->
+sculptPlaza): paver podium on the fitted plan (PartId::Path / Pavement — no new
+surface needed), pad flattens like a building (placeType "civic" dodges the
+park/green flatten skip), concrete skirt, stair runs at the longest low-drop
+edges, iron guard fence with mouth gaps, fountain/lamps/benches/planter-trees/
+flower beds on a claim registry. Financial 3.5%% / Commercial 3%% table slices.
+Device-verified overhead + street level. P6.3 (paths as mini-roads) still open.
+
 Device direction: skyscraper and beachfront lots need designed OPEN space —
 concrete plazas, walking paths, decorative fencing, staircases between
 elevations — not just the green pads parks get today. The framing that makes

@@ -372,6 +372,8 @@ TEST_CASE(buildings_grow_from_terrain_base) {
             continue;
         }
         if (lb.plan.size() < 3) continue;
+        if (lb.recipe == "plaza") continue;   // a podium SITS AT the pad grade
+                                              // (no plinth reveal — by design)
         Real lo = 1e30, hi = -1e30;
         for (const Vec2& v : lb.plan) {
             const Real g = 0.04 * v.x + 0.02 * v.y;
