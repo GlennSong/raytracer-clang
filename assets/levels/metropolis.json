@@ -4,6 +4,7 @@
     "buildLots": true,
     "cars": 30,
     "debugWidgets": false,
+    "detailDistance": 950,
     "downtownRadius": 160,
     "hoursPerSecond": 0.05,
     "hubRadius": 240,
@@ -200,14 +201,11 @@
         "variants": 2
       },
       {
-        "kind": "rock",
-        "skin": "sdf",
-        "faceted": true,
-        "sdfResolution": 18,
-        "lumps": 5,
         "cuts": 4,
+        "faceted": true,
+        "kind": "rock",
         "lumpScale": 0.45,
-        "smoothness": 0.22,
+        "lumps": 5,
         "material": {
           "albedo": [
             0.26,
@@ -216,6 +214,9 @@
           ],
           "roughness": 1.0
         },
+        "sdfResolution": 18,
+        "skin": "sdf",
+        "smoothness": 0.22,
         "variants": 3
       }
     ]

@@ -188,6 +188,14 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         MeshBuilder::emitTri(m, Vec3(c.x, gy(c) + py, c.y),
                              Vec3(a.x, gy(a) + py, a.y),
                              Vec3(b.x, gy(b) + py, b.y), Vec3(0, 1, 0), pathCol);
+        // Curb skirt: the plaza is a raised slab, not a floating decal — its
+        // rim drops to below the lawn so slopes never open a gap under it.
+        Vec2 n2 = normalize(Vec2(b.y - a.y, a.x - b.x));
+        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) + py - 0.45, a.y),
+                              Vec3(b.x, gy(b) + py - 0.45, b.y),
+                              Vec3(b.x, gy(b) + py, b.y),
+                              Vec3(a.x, gy(a) + py, a.y),
+                              Vec3(n2.x, 0, n2.y), pathCol * 0.85);
     }
 
     // Walking-path SPOKES: from the plaza out to the midpoints of the longest
@@ -210,16 +218,18 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
             Vec2 q1 = p0 + dir * ((len - r0 * 0.85) * (s + 1) / segs);
-            MeshBuilder::emitQuad(
-                m, Vec3(q0.x - perp.x * hw, gy(q0 - perp * hw) + py,
-                        q0.y - perp.y * hw),
-                Vec3(q0.x + perp.x * hw, gy(q0 + perp * hw) + py,
-                     q0.y + perp.y * hw),
-                Vec3(q1.x + perp.x * hw, gy(q1 + perp * hw) + py,
-                     q1.y + perp.y * hw),
-                Vec3(q1.x - perp.x * hw, gy(q1 - perp * hw) + py,
-                     q1.y - perp.y * hw),
-                Vec3(0, 1, 0), pathCol);
+            const Vec3 L0(q0.x - perp.x * hw, gy(q0 - perp * hw) + py, q0.y - perp.y * hw);
+            const Vec3 R0(q0.x + perp.x * hw, gy(q0 + perp * hw) + py, q0.y + perp.y * hw);
+            const Vec3 L1(q1.x - perp.x * hw, gy(q1 - perp * hw) + py, q1.y - perp.y * hw);
+            const Vec3 R1(q1.x + perp.x * hw, gy(q1 + perp * hw) + py, q1.y + perp.y * hw);
+            MeshBuilder::emitQuad(m, L0, R0, R1, L1, Vec3(0, 1, 0), pathCol);
+            // Curb skirts: the path is a slab with thickness — its long edges
+            // drop below the lawn so a terrain dip never leaves it hovering
+            // (device: "the walkway is floating").
+            const Vec3 drop(0, -0.45, 0);
+            const Vec3 pL(-perp.x, 0, -perp.y), pR(perp.x, 0, perp.y);
+            MeshBuilder::emitQuad(m, L0 + drop, L1 + drop, L1, L0, pL, pathCol * 0.85);
+            MeshBuilder::emitQuad(m, R0 + drop, R1 + drop, R1, R0, pR, pathCol * 0.85);
         }
         spokes.push_back({p0, mouth});
     }
@@ -254,6 +264,13 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec2 dir(std::cos(a2), std::sin(a2));
             Vec2 bp = c + dir * (r0 + 0.6);
             if (!pointInPolygon(poly, bp)) continue;
+            // Benches claim their own spot: the plaza ring crosses the path
+            // spokes, and a bench standing ON a walkway was the overlap the
+            // device round flagged — skip any spot a path runs through.
+            bool onPath = false;
+            for (const Spoke& s : spokes)
+                if (distToSeg(bp, s.a, s.b) < 1.9) { onPath = true; break; }
+            if (onPath) continue;
             Vec2 t2(-dir.y, dir.x);
             Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
             const Real by = gy(bp) + h;
@@ -858,6 +875,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // The STYLE BOOK (Lua data layer) overlays look overrides by
             // recipe name — cladding, windows, colours — before growth.
             if (p.styleHook) p.styleHook(rec.name, bp);
+            // The lot record carries the building's REAL facade colour (post
+            // style book), not the zoning palette — the HLOD mass-box proxy
+            // bakes from it, and a proxy that pops in wearing the zone colour
+            // instead of the building's own reads as a different building
+            // (device: "the cubes don't look like they have the color").
+            b.color = bp.wallColor;
             // The door (and the retail front) faces the nearest STREET, not a
             // fixed +Z: aim faceDir at the closest point on the road network.
             if (roads) {
@@ -900,7 +923,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 for (std::size_t vi = 0; vi < s.size(); ++vi) {
                     Vec2 a = s[(vi + s.size() - 1) % s.size()], m2 = s[vi],
                          c2 = s[(vi + 1) % s.size()];
-                    if (std::fabs(cross(normalize(m2 - a), normalize(c2 - m2))) < 0.03)
+                    // 0.08: shallow bends inherited from the block subdivision
+                    // used to survive into long facades as a visible KINK
+                    // partway along a wall (device feedback) — straighten
+                    // anything under ~4.6 deg; real corners keep their turn.
+                    if (std::fabs(cross(normalize(m2 - a), normalize(c2 - m2))) < 0.08)
                         continue;
                     s2.push_back(m2);
                 }

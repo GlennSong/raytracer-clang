@@ -434,8 +434,15 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         head = std::min(fh - 0.4, retailish ? fh - 0.4 : human::WINDOW_HEAD);
         // A CONSTANT window module across every face (the piers absorb the slack),
         // so a wide face and a narrow one show the same window size, not different
-        // ones (ADR-0040). Width is the bay minus piers, clamped.
-        Real winW = std::min(Real(1.6), std::max(Real(0.8), bw - 0.8));
+        // ones (ADR-0040). Width is the bay minus piers, clamped PORTRAIT: the
+        // opening is 1.5 m tall (sill->head), so the width cap stays under it —
+        // windows read taller than wide (device feedback). Arched heads go
+        // narrower still: the classic French window is tall and slim, and the
+        // slimmer span also steepens the arc so the arch reads.
+        const bool arched = mode == FacadeMode::Residential &&
+                            p.window.head != OpeningStyle::Head::Flat;
+        Real winW = std::min(arched ? Real(1.05) : Real(1.25),
+                             std::max(Real(0.8), bw - 0.8));
         margin = (bw - winW) * 0.5;
     }
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
@@ -1769,7 +1776,26 @@ static Real emitSawtoothRoof(BuildingMesh& out, const Poly2& topPlan, Real y,
     const int la = obb.longAxis(), sa = 1 - la;
     Vec3 r3(obb.axis[la].x, 0, obb.axis[la].y);
     Vec3 f3(obb.axis[sa].x, 0, obb.axis[sa].y);
-    const Real hw = obb.half[la], hd = obb.half[sa];
+    Real hw = obb.half[la], hd = obb.half[sa];
+    // INSCRIBE the teeth in the actual plan, not its bounding box: a rect-ish
+    // plan can still fall 15% short of its OBB (notches, trapezoid ends), and
+    // teeth spanning the full box hang past the walls there (device: "the roof
+    // extends outwards ... not adhering to the shape of the floorplan").
+    // Shrink both extents until all four corners sit inside the plan.
+    {
+        auto inside = [&](Real s) {
+            for (int cu = -1; cu <= 1; cu += 2)
+                for (int cv = -1; cv <= 1; cv += 2) {
+                    Vec2 q = obb.center + obb.axis[la] * (cu * hw * s) +
+                             obb.axis[sa] * (cv * hd * s);
+                    if (!pointInPolygon(topPlan, q)) return false;
+                }
+            return true;
+        };
+        Real s = 1.0;
+        while (s > 0.55 && !inside(s)) s -= 0.05;
+        hw *= s; hd *= s;
+    }
     const int teeth = std::max(2, static_cast<int>(std::lround(2 * hw / 4.2)));
     const Real tw = 2 * hw / teeth;
     const Real rise = std::min(Real(1.7), std::max(Real(0.9), tw * 0.38));
@@ -2242,6 +2268,21 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                 su(A0), 0, su(A1), 0, su(Rg1), sv, su(Rg0), sv);
         MeshBuilder::emitQuadUV(roof, B1, B0, Rg0, Rg1, nFar, roofCol,    // far slope
                                 su(B1), 0, su(B0), 0, su(Rg0), sv, su(Rg1), sv);
+        // ROOF SLAB ANATOMY (device: "the roof should have some thickness ...
+        // edges not shingled but a solid color"): the roof is a SLAB, not a
+        // film. Shingles live on the top surfaces only; every edge and every
+        // underside is solid trim, named as built: the UNDERSIDE (open-eave
+        // soffit) is the slope plane dropped by the slab thickness, the EAVE
+        // FASCIA is the vertical band closing the slab along the horizontal
+        // eaves, and on gables the RAKE FASCIA is the sloped band closing the
+        // slab cross-section at the end overhangs.
+        const Vec3 dnT = up * -0.18;                     // slab thickness
+        const Vec3 tc = materialFor(PartId::Trim, wallColor).albedo;
+        RenderMesh under, fascia;
+        emitQuad(under, A0 + dnT, A1 + dnT, Rg1 + dnT, Rg0 + dnT, nNear * -1, tc);
+        emitQuad(under, B1 + dnT, B0 + dnT, Rg0 + dnT, Rg1 + dnT, nFar * -1, tc);
+        emitQuad(fascia, A0 + dnT, A1 + dnT, A1, A0, f3 * -1, tc);   // near eave
+        emitQuad(fascia, B1 + dnT, B0 + dnT, B0, B1, f3, tc);        // far eave
         if (hip) {
             const Real run = std::max(Real(0.2), hw - rh);
             const float hv = static_cast<float>(std::sqrt(run * run + rise * rise) / tile);
@@ -2252,38 +2293,32 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             MeshBuilder::emitTriUV(roof, A1, B1, Rg1,
                                    normalize(r3 * rise + up * run), roofCol,
                                    0, 0, du, 0, du * 0.5f, hv);
+            // hip end slopes: underside copies + the end eave fascia bands
+            MeshBuilder::emitTri(under, A0 + dnT, B0 + dnT, Rg0 + dnT,
+                                 normalize(r3 * rise - up * run), tc);
+            MeshBuilder::emitTri(under, A1 + dnT, B1 + dnT, Rg1 + dnT,
+                                 normalize(r3 * (-rise) - up * run), tc);
+            emitQuad(fascia, A0 + dnT, B0 + dnT, B0, A0, r3 * -1, tc);
+            emitQuad(fascia, B1 + dnT, A1 + dnT, A1, B1, r3, tc);
         } else {
             // Gable END walls stay on the WALL plane and rise to the ridge in
-            // the wall material; the slopes overhang them by the rake. Close
-            // each rake's underside with an angled trim strip so the overhang
-            // never reads see-through from below.
-            RenderMesh rakeM;
-            const Vec3 tc = materialFor(PartId::Trim, wallColor).albedo;
+            // the wall material; the slopes overhang them by the rake, and the
+            // RAKE FASCIA (one sloped band per slope per end) closes the slab
+            // cross-section so nothing is see-through from any angle.
             for (int sgn = -1; sgn <= 1; sgn += 2) {
                 const Vec3 e3 = r3 * static_cast<Real>(sgn);
                 const Vec3 We = C + e3 * hwW;            // wall plane
-                const Vec3 Xe = C + e3 * hw;             // slope end plane
+                const Vec3 eN = (sgn < 0 ? A0 : A1);     // near-eave corner
+                const Vec3 eF = (sgn < 0 ? B0 : B1);     // far-eave corner
+                const Vec3 rg = (sgn < 0 ? Rg0 : Rg1);   // ridge end
                 MeshBuilder::emitTri(gableW, We - f3 * hd, We + f3 * hd,
                                      We + up * rise, e3, wallColor);
-                emitQuad(rakeM, Xe - f3 * hd, We - f3 * hd, We + up * rise,
-                         Xe + up * rise, normalize(f3 * rise - up * hd), tc);
-                emitQuad(rakeM, Xe + f3 * hd, We + f3 * hd, We + up * rise,
-                         Xe + up * rise, normalize(f3 * (-rise) - up * hd), tc);
+                emitQuad(fascia, eN + dnT, rg + dnT, rg, eN, e3, tc);
+                emitQuad(fascia, eF + dnT, rg + dnT, rg, eF, e3, tc);
             }
-            appendToPart(out, PartId::Trim, rakeM);
         }
-        // SOFFIT: a down-facing deck across the whole eave rectangle (rake
-        // overhang included). The slopes are single-sided, so wherever they
-        // overhang the walls the roof was see-through from below (device: "you
-        // can see through the bottom of them"). Sits a hair under the slope
-        // base so it never fights the ceiling slab.
-        {
-            RenderMesh soffit;
-            const Vec3 dn(0, -1, 0), sc = materialFor(PartId::Trim, wallColor).albedo;
-            Vec3 drop = up * -0.01;
-            emitQuad(soffit, A0 + drop, B0 + drop, B1 + drop, A1 + drop, dn, sc);
-            appendToPart(out, PartId::Trim, soffit);
-        }
+        appendToPart(out, PartId::Trim, under);
+        appendToPart(out, PartId::Trim, fascia);
         appendToPart(out, PartId::Shingle, roof);
         appendToPart(out, params.wallPart, gableW);
         // CHIMNEY: a masonry stack through the slope near the ridge, offset
