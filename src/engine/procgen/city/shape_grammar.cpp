@@ -1004,9 +1004,11 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                 v < bv + bd + 0.6 && v + ad + 0.6 > bv) continue;
             Vec3 po = footOrigin + r * u + f * v;
             if (!onRoof(po, aw, ad)) continue;
+            // Whole casing wears the smooth panelled metal (device: corrugated
+            // read wrong on the unit — the kit surface covers ALL faces now).
             emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
                                Vec3(aw, ah, ad)},
-                    PartId::Metal, casing);
+                    PartId::Utility, casing);
             // Intake grilles (device: capsule vent holes, matte-in-metal, on
             // the OPPOSING long faces): one thin plate per long face wearing
             // the baked VentGrille maps instead of three louvre boxes.
@@ -1016,13 +1018,8 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                                    {r, up, f}, Vec3(aw - 0.5, ah * 0.6, 0.04)},
                         PartId::Vent, louvre);
             }
-            // Service panels on the two SHORT faces: riveted utility-box look.
-            for (int side = 0; side < 2; ++side) {
-                Vec3 lo = po + r * (side ? aw : Real(-0.04)) + f * 0.2;
-                emitBox(out, Scope{Vec3(lo.x, roofY + ah * 0.12, lo.z),
-                                   {f, up, r}, Vec3(ad - 0.4, ah * 0.72, 0.04)},
-                        PartId::Utility, louvre);
-            }
+            // (Short faces are covered by the casing's own UtilityPanel maps —
+            // no separate plates needed.)
             // Fan cowls + dark blade discs on top.
             const int nf = aw > 4.2 ? 2 : 1;
             for (int k2 = 0; k2 < nf; ++k2) {
@@ -1031,7 +1028,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                 fcen.y = 0;
                 const Real frad = std::min(Real(0.6), std::min(aw, ad) * 0.22);
                 emitTube(out, fcen, frad, roofY + ah, roofY + ah + 0.22, 12,
-                         PartId::Metal, casing * 0.9);
+                         PartId::Utility, casing * 0.9);
                 // Fan blades come from the FanTop maps; the disc gets CENTRED
                 // 0..1 UVs (the loader skips world-planar re-UV for Fan parts).
                 const std::size_t v0 = partMesh(out, PartId::Fan).vertices.size();
