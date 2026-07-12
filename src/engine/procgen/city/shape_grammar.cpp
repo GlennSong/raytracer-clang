@@ -950,133 +950,141 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     //  - a louvred HVAC unit — metal casing, intake bands, fan discs on top.
     // Every element proves its seat is ON the roof polygon before emitting.
     const Vec3 darkPanel(0.16, 0.17, 0.18);
-    Real bu = -1, bv = 0, bw = 0, bd = 0;   // bulkhead seat (HVAC keeps clear)
-    if (p.floors >= 4 && width > 5 && depth > 5) {
-        bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
-        bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
-        const Real bh = rng.range(2.8, 3.3);
-        for (int attempt = 0; attempt < 4; ++attempt) {
-            const Real u = (width - bw) * rng.range(0.15, 0.6);
-            const Real v = (depth - bd) * rng.range(0.15, 0.6);
-            Vec3 po = footOrigin + r * u + f * v;
-            if (!onRoof(po, bw, bd)) {
-                bw *= 0.8; bd *= 0.8;   // shrink toward a seat; give up quietly
-                if (bw < 2.4 || bd < 2.0) break;
-                continue;
-            }
-            bu = u; bv = v;
-            emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
-                               Vec3(bw, bh, bd)},
-                    PartId::Trim, p.trimColor * 0.85);
-            // The lid: a slightly oversailing cap slab, darker — a roof on
-            // the roof, so the box stops reading as an unfinished block.
-            emitBox(out, Scope{Vec3(po.x, roofY + bh, po.z) - r * 0.15 - f * 0.15,
-                               {r, up, f}, Vec3(bw + 0.3, 0.14, bd + 0.3)},
-                    PartId::Trim, p.trimColor * 0.6);
-            // The access DOOR faces the open roof centre.
-            Vec3 bc = po + r * (bw * 0.5) + f * (bd * 0.5);
-            Vec3 rc = footOrigin + r * (width * 0.5) + f * (depth * 0.5);
-            Vec3 to = rc - bc;
-            const Real dr = dot(to, r), df = dot(to, f);
-            const bool alongR = std::fabs(dr) >= std::fabs(df);
-            Vec3 n2 = alongR ? r * (dr > 0 ? 1.0 : -1.0)
-                             : f * (df > 0 ? 1.0 : -1.0);
-            Vec3 tang = alongR ? f : r;
-            Vec3 fc = bc + n2 * ((alongR ? bw : bd) * 0.5);
-            Vec3 doorO = fc - tang * 0.5;
-            emitBox(out, Scope{Vec3(doorO.x, roofY, doorO.z), {tang, up, n2},
-                               Vec3(1.0, 2.1, 0.06)},
-                    PartId::Detail, darkPanel);
-            break;
+
+    // ---- ROOF PLAN (device: "partition the rooftop space so the water tower,
+    // HVAC unit(s) and roof access aren't sitting on top of one another").
+    // The roof is planned like a tiny city block: recursive longest-axis
+    // bisection (the same technique the street grid uses to cut blocks into
+    // lots) carves the parapet-inset rect into cells, and every piece of
+    // equipment gets its OWN cell — roof access exactly 1, water tanks 1-2,
+    // HVAC units 1-4 by roof size. Items centre in their cell with jitter.
+    struct RoofItem { int kind; Real w, d, minW, minD; };   // 0 access, 1 tank, 2 hvac
+    struct RoofCell { Real u, v, w, d; };
+    const Real inset = 0.7;                                 // parapet clearance
+    const Real uw = width - 2 * inset, ud = depth - 2 * inset;
+    if (uw < 3.5 || ud < 3.5) return;
+    const Real roofArea = uw * ud;
+
+    std::vector<RoofItem> items;
+    if (p.floors >= 4 && width > 5 && depth > 5) {          // roof access: always 1
+        const Real bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
+        const Real bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
+        items.push_back({0, bw, bd, Real(2.4), Real(2.0)});
+    }
+    if (p.floors >= 3 && p.floors <= 20 && !p.curtainWall && width > 4 &&
+        depth > 4 && rng.unit() < 0.65) {                   // water tanks: 1-2
+        const int nTank = (roofArea > 170.0 && rng.unit() < 0.35) ? 2 : 1;
+        for (int i = 0; i < nTank; ++i) {
+            const Real tr = std::min(rng.range(1.2, 1.7),
+                                     std::min(width, depth) * 0.22);
+            items.push_back({1, 2 * tr + 1.0, 2 * tr + 1.0, Real(2.4), Real(2.4)});
         }
     }
-    // The HVAC unit: lower and wider than the bulkhead, kept clear of it.
     if (p.floors >= 4 && width > 6 && depth > 5 && rng.unit() < 0.85) {
-        const Real aw = std::min(std::max(width * 0.30, Real(2.6)), Real(6.0));
-        const Real ad = std::min(std::max(depth * 0.22, Real(2.0)), Real(3.4));
+        // HVAC units: 1-4 based on the size of the roof
+        const int nHvac =
+            std::max(1, std::min(4, static_cast<int>(roofArea / 70.0)));
+        for (int i = 0; i < nHvac; ++i) {
+            const Real aw = std::min(std::max(width * 0.26, Real(2.6)), Real(5.2));
+            const Real ad = std::min(std::max(depth * 0.20, Real(2.0)), Real(3.2));
+            items.push_back({2, aw, ad, Real(2.2), Real(1.8)});
+        }
+    }
+    if (items.empty()) return;
+
+    std::vector<RoofCell> cells{{inset, inset, uw, ud}};
+    while (cells.size() < items.size()) {
+        std::size_t bi = 0;                                 // split the biggest cell
+        for (std::size_t i = 1; i < cells.size(); ++i)
+            if (cells[i].w * cells[i].d > cells[bi].w * cells[bi].d) bi = i;
+        RoofCell c = cells[bi];
+        if (std::max(c.w, c.d) < 4.5) break;                // roof full: extras skipped
+        const Real t = rng.range(0.4, 0.6);
+        RoofCell a = c, b = c;
+        if (c.w >= c.d) { a.w = c.w * t; b.u = c.u + a.w; b.w = c.w - a.w; }
+        else            { a.d = c.d * t; b.v = c.v + a.d; b.d = c.d - a.d; }
+        cells[bi] = a;
+        cells.push_back(b);
+    }
+    // Biggest item takes the biggest cell.
+    std::sort(items.begin(), items.end(), [](const RoofItem& a, const RoofItem& b) {
+        return a.w * a.d > b.w * b.d;
+    });
+    std::sort(cells.begin(), cells.end(), [](const RoofCell& a, const RoofCell& b) {
+        return a.w * a.d > b.w * b.d;
+    });
+
+    // --- emitters (verbatim geometry from the old placement code, seated at a
+    // planned cell instead of a rejection-sampled spot) ---
+    auto emitAccess = [&](Real u, Real v, Real bw, Real bd) {
+        const Real bh = rng.range(2.8, 3.3);
+        Vec3 po = footOrigin + r * u + f * v;
+        emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(bw, bh, bd)},
+                PartId::Trim, p.trimColor * 0.85);
+        emitBox(out, Scope{Vec3(po.x, roofY + bh, po.z) - r * 0.15 - f * 0.15,
+                           {r, up, f}, Vec3(bw + 0.3, 0.14, bd + 0.3)},
+                PartId::Trim, p.trimColor * 0.6);
+        Vec3 bc = po + r * (bw * 0.5) + f * (bd * 0.5);
+        Vec3 rc = footOrigin + r * (width * 0.5) + f * (depth * 0.5);
+        Vec3 to = rc - bc;
+        const Real dr = dot(to, r), df = dot(to, f);
+        const bool alongR = std::fabs(dr) >= std::fabs(df);
+        Vec3 n2 = alongR ? r * (dr > 0 ? 1.0 : -1.0) : f * (df > 0 ? 1.0 : -1.0);
+        Vec3 tang = alongR ? f : r;
+        Vec3 fc = bc + n2 * ((alongR ? bw : bd) * 0.5);
+        Vec3 doorO = fc - tang * 0.5;
+        emitBox(out, Scope{Vec3(doorO.x, roofY, doorO.z), {tang, up, n2},
+                           Vec3(1.0, 2.1, 0.06)},
+                PartId::Detail, darkPanel);
+    };
+    auto emitHvac = [&](Real u, Real v, Real aw, Real ad) {
         const Real ah = rng.range(1.5, 2.1);
         const Vec3 casing = materialFor(PartId::Metal, p.wallColor).albedo;
         const Vec3 louvre(0.30, 0.31, 0.33);
-        for (int attempt = 0; attempt < 5; ++attempt) {
-            const Real u = (width - aw) * rng.range(0.1, 0.9);
-            const Real v = (depth - ad) * rng.range(0.1, 0.9);
-            if (bu >= 0 && u < bu + bw + 0.6 && u + aw + 0.6 > bu &&
-                v < bv + bd + 0.6 && v + ad + 0.6 > bv) continue;
-            Vec3 po = footOrigin + r * u + f * v;
-            if (!onRoof(po, aw, ad)) continue;
-            // Whole casing wears the smooth panelled metal (device: corrugated
-            // read wrong on the unit — the kit surface covers ALL faces now).
-            emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f},
-                               Vec3(aw, ah, ad)},
-                    PartId::Utility, casing);
-            // Intake grilles (device: capsule vent holes, matte-in-metal, on
-            // the OPPOSING long faces): one thin plate per long face wearing
-            // the baked VentGrille maps instead of three louvre boxes.
-            for (int side = 0; side < 2; ++side) {
-                Vec3 lo = po + r * 0.25 + f * (side ? ad : Real(-0.04));
-                const Real pw = aw - 0.5, ph = ah * 0.6, py = roofY + ah * 0.18;
-                const std::size_t vv0 = partMesh(out, PartId::Vent).vertices.size();
-                emitBox(out, Scope{Vec3(lo.x, py, lo.z),
-                                   {r, up, f}, Vec3(pw, ph, 0.04)},
-                        PartId::Vent, louvre);
-                // Plate-fitted UVs (0..1 across the plate): the grille's margin
-                // band frames the holes and none clip the plate edge. The
-                // loader skips world-planar re-UV for VentGrille parts.
-                RenderMesh& vm = partMesh(out, PartId::Vent);
-                for (std::size_t vi = vv0; vi < vm.vertices.size(); ++vi) {
-                    Vertex& vt = vm.vertices[vi];
-                    const Vec3 rel = vt.position - Vec3(lo.x, py, lo.z);
-                    vt.u = static_cast<float>(dot(rel, r) / pw);
-                    vt.v = static_cast<float>(rel.y / ph);
-                }
+        Vec3 po = footOrigin + r * u + f * v;
+        emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(aw, ah, ad)},
+                PartId::Utility, casing);
+        for (int side = 0; side < 2; ++side) {
+            Vec3 lo = po + r * 0.25 + f * (side ? ad : Real(-0.04));
+            const Real pw = aw - 0.5, ph = ah * 0.6, py = roofY + ah * 0.18;
+            const std::size_t vv0 = partMesh(out, PartId::Vent).vertices.size();
+            emitBox(out, Scope{Vec3(lo.x, py, lo.z), {r, up, f}, Vec3(pw, ph, 0.04)},
+                    PartId::Vent, louvre);
+            RenderMesh& vm = partMesh(out, PartId::Vent);
+            for (std::size_t vi = vv0; vi < vm.vertices.size(); ++vi) {
+                Vertex& vt = vm.vertices[vi];
+                const Vec3 rel = vt.position - Vec3(lo.x, py, lo.z);
+                vt.u = static_cast<float>(dot(rel, r) / pw);
+                vt.v = static_cast<float>(rel.y / ph);
             }
-            // (Short faces are covered by the casing's own UtilityPanel maps —
-            // no separate plates needed.)
-            // Fan cowls + dark blade discs on top.
-            const int nf = aw > 4.2 ? 2 : 1;
-            for (int k2 = 0; k2 < nf; ++k2) {
-                const Real fu = aw * (nf == 1 ? 0.5 : (k2 == 0 ? 0.3 : 0.7));
-                Vec3 fcen = po + r * fu + f * (ad * 0.5);
-                fcen.y = 0;
-                const Real frad = std::min(Real(0.6), std::min(aw, ad) * 0.22);
-                emitTube(out, fcen, frad, roofY + ah, roofY + ah + 0.22, 12,
-                         PartId::Utility, casing * 0.9);
-                // Fan blades come from the FanTop maps; the disc gets CENTRED
-                // 0..1 UVs (the loader skips world-planar re-UV for Fan parts).
-                const std::size_t v0 = partMesh(out, PartId::Fan).vertices.size();
-                emitDisc(out, fcen, frad, roofY + ah + 0.22, 12,
-                         PartId::Fan, darkPanel, true);
-                RenderMesh& fanMesh = partMesh(out, PartId::Fan);
-                for (std::size_t vi = v0; vi < fanMesh.vertices.size(); ++vi) {
-                    Vertex& vv = fanMesh.vertices[vi];
-                    vv.u = static_cast<float>(0.5 + (vv.position.x - fcen.x) /
-                                                        (2.0 * frad) * 0.92);
-                    vv.v = static_cast<float>(0.5 + (vv.position.z - fcen.z) /
-                                                        (2.0 * frad) * 0.92);
-                }
-            }
-            break;
         }
-    }
-    // Timber water tank: a tube on four legs with a flat top — the NYC rooftop
-    // tank, on masonry mid-rises. The wood surface makes it read as timber.
-    if (p.floors >= 3 && p.floors <= 20 && !p.curtainWall && width > 4 && depth > 4 &&
-        rng.unit() < 0.65) {
-        Real tr = std::min(rng.range(1.2, 1.7), std::min(width, depth) * 0.22);
-        Real th = rng.range(2.6, 3.4), legH = rng.range(1.6, 2.4);
-        Real ix = tr + 0.6, iz = tr + 0.6;   // keep the tank fully on the roof
-        Vec3 tc = footOrigin + r * (ix + (width - 2 * ix) * rng.unit()) +
-                  f * (iz + (depth - 2 * iz) * rng.unit());
+        const int nf = aw > 4.2 ? 2 : 1;
+        for (int k2 = 0; k2 < nf; ++k2) {
+            const Real fu = aw * (nf == 1 ? 0.5 : (k2 == 0 ? 0.3 : 0.7));
+            Vec3 fcen = po + r * fu + f * (ad * 0.5);
+            fcen.y = 0;
+            const Real frad = std::min(Real(0.6), std::min(aw, ad) * 0.22);
+            emitTube(out, fcen, frad, roofY + ah, roofY + ah + 0.22, 12,
+                     PartId::Utility, casing * 0.9);
+            const std::size_t v0 = partMesh(out, PartId::Fan).vertices.size();
+            emitDisc(out, fcen, frad, roofY + ah + 0.22, 12, PartId::Fan,
+                     darkPanel, true);
+            RenderMesh& fanMesh = partMesh(out, PartId::Fan);
+            for (std::size_t vi = v0; vi < fanMesh.vertices.size(); ++vi) {
+                Vertex& vv = fanMesh.vertices[vi];
+                vv.u = static_cast<float>(0.5 + (vv.position.x - fcen.x) /
+                                                    (2.0 * frad) * 0.92);
+                vv.v = static_cast<float>(0.5 + (vv.position.z - fcen.z) /
+                                                    (2.0 * frad) * 0.92);
+            }
+        }
+    };
+    auto emitTank = [&](Real u, Real v, Real w2, Real d2) {
+        const Real tr = std::max(Real(0.9), (std::min(w2, d2) - 1.0) * 0.5);
+        const Real th = rng.range(2.6, 3.4), legH = rng.range(1.6, 2.4);
+        Vec3 tc = footOrigin + r * (u + w2 * 0.5) + f * (v + d2 * 0.5);
         tc.y = 0;
-        for (int attempt = 0;
-             attempt < 3 && !onRoof(tc - r * tr - f * tr, 2 * tr, 2 * tr);
-             ++attempt) {
-            tc = footOrigin + r * (ix + (width - 2 * ix) * rng.unit()) +
-                 f * (iz + (depth - 2 * iz) * rng.unit());
-            tc.y = 0;
-        }
-        if (!onRoof(tc - r * tr - f * tr, 2 * tr, 2 * tr)) return;
-        Real tankBase = roofY + legH;
+        const Real tankBase = roofY + legH;
         Vec3 woodCol = materialFor(PartId::Wood, p.wallColor).albedo;
         for (int lx = -1; lx <= 1; lx += 2)
             for (int lz = -1; lz <= 1; lz += 2) {
@@ -1087,6 +1095,27 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             }
         emitTube(out, tc, tr, tankBase, tankBase + th, 14, PartId::Wood, woodCol);
         emitDisc(out, tc, tr, tankBase + th, 14, PartId::Wood, woodCol * 1.05, true);
+    };
+
+    const std::size_t nPlace = std::min(items.size(), cells.size());
+    for (std::size_t i = 0; i < nPlace; ++i) {
+        const RoofItem& it = items[i];
+        const RoofCell& c = cells[i];
+        const Real clear = 0.5;
+        const Real w2 = std::min(it.w, c.w - clear);
+        const Real d2 = std::min(it.d, c.d - clear);
+        if (w2 < it.minW || d2 < it.minD) continue;         // cell too small: skip
+        bool placed = false;
+        for (int attempt = 0; attempt < 4 && !placed; ++attempt) {
+            const Real u = c.u + (c.w - w2) * rng.range(0.2, 0.8);
+            const Real v = c.v + (c.d - d2) * rng.range(0.2, 0.8);
+            Vec3 po = footOrigin + r * u + f * v;
+            if (!onRoof(po, w2, d2)) continue;              // L-plan notch: jitter again
+            if (it.kind == 0) emitAccess(u, v, w2, d2);
+            else if (it.kind == 1) emitTank(u, v, w2, d2);
+            else emitHvac(u, v, w2, d2);
+            placed = true;
+        }
     }
 }
 
