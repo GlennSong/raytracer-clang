@@ -149,26 +149,15 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
     Hash rng(mix(seed, 0x9A46B1u));
 
+    (void)grass;
     RenderMesh m;
-    // The lawn: the pad slab in the lot's own shape, grass-coloured.
-    for (const std::array<int, 3>& t : triangulatePolygon(poly))
-        MeshBuilder::emitTri(
-            m, Vec3(poly[t[0]].x, gy(poly[t[0]]) + h, poly[t[0]].y),
-            Vec3(poly[t[1]].x, gy(poly[t[1]]) + h, poly[t[1]].y),
-            Vec3(poly[t[2]].x, gy(poly[t[2]]) + h, poly[t[2]].y),
-            Vec3(0, 1, 0), grass);
-    for (std::size_t i = 0; i < poly.size(); ++i) {
-        const Vec2& a = poly[i];
-        const Vec2& b = poly[(i + 1) % poly.size()];
-        Vec2 d = b - a;
-        if (d.length() < 1e-6) continue;
-        Vec2 n = normalize(Vec2(d.y, -d.x));
-        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) - 0.4, a.y),
-                              Vec3(b.x, gy(b) - 0.4, b.y),
-                              Vec3(b.x, gy(b) + h, b.y),
-                              Vec3(a.x, gy(a) + h, a.y),
-                              Vec3(n.x, 0, n.y), grass * 0.9);
-    }
+    // NO LAWN SLAB (device: "could we use the actual terrain for the park
+    // grounds?"): the pad plane only sampled terrain at its boundary corners,
+    // so on any real slope its interior hovered or sank — and everything
+    // placed on its plane (the old planting) went under the ground with it.
+    // The park floor IS the terrain now; the lot reads as a park because of
+    // what stands on it — paths, fence, furniture, planting — every piece
+    // sampling the ground under its own feet.
 
     const Vec2 c = centroid(poly);
     const Real A = area(poly);
@@ -234,8 +223,21 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         spokes.push_back({p0, mouth});
     }
 
-    // FURNITURE: fountain, benches, planter hedges — grown as a kit and
-    // merged into the by-part output like any building's geometry.
+    // The park is FURNISHED, not painted: every item below sits on the
+    // terrain under its own feet, and every item CLAIMS its footprint in a
+    // shared registry — nothing may stand where a path runs or another item
+    // already stands (device: "spaced out and placed correctly instead of
+    // over one another").
+    std::vector<std::pair<Vec2, Real>> claimed;
+    auto clearAt = [&](const Vec2& p2, Real r) {
+        for (const Spoke& s : spokes)
+            if (distToSeg(p2, s.a, s.b) < r + 1.1) return false;   // path + margin
+        for (const auto& [q, qr] : claimed)
+            if ((q - p2).length() < r + qr) return false;
+        return true;
+    };
+    auto claim = [&](const Vec2& p2, Real r) { claimed.emplace_back(p2, r); };
+
     if (outParts) {
         BuildingMesh kit;
         const Real fy = gy(c) + py;
@@ -255,6 +257,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             MeshBuilder::append(
                 (*outParts)[static_cast<std::size_t>(PartId::Glass)],
                 latheMesh(Vec3(c.x, fy, c.y), water, 14, Vec3(0.20, 0.34, 0.40)));
+            claim(c, r0 * 0.5);
         }
         // BENCHES around the plaza, facing the centre.
         const Vec3 wood(0.45, 0.34, 0.22);
@@ -263,17 +266,11 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             const Real a2 = 6.283185307179586 * (k + rng.range(0.05, 0.3)) / nb;
             Vec2 dir(std::cos(a2), std::sin(a2));
             Vec2 bp = c + dir * (r0 + 0.6);
-            if (!pointInPolygon(poly, bp)) continue;
-            // Benches claim their own spot: the plaza ring crosses the path
-            // spokes, and a bench standing ON a walkway was the overlap the
-            // device round flagged — skip any spot a path runs through.
-            bool onPath = false;
-            for (const Spoke& s : spokes)
-                if (distToSeg(bp, s.a, s.b) < 1.9) { onPath = true; break; }
-            if (onPath) continue;
+            if (!pointInPolygon(poly, bp) || !clearAt(bp, 1.0)) continue;
+            claim(bp, 1.0);
             Vec2 t2(-dir.y, dir.x);
             Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
-            const Real by = gy(bp) + h;
+            const Real by = gy(bp) + 0.02;
             Vec3 o = Vec3(bp.x, by + 0.42, bp.y) - t3 * 0.8 - n3 * 0.22;
             emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.6, 0.07, 0.44)},
                     PartId::Wood, wood);
@@ -291,7 +288,11 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             for (Real side : {Real(1), Real(-1)}) {
                 Vec2 pp = s.b - dir * 1.2 + perp * (side * 1.6);
                 if (!pointInPolygon(poly, pp)) continue;
-                const Real by = gy(pp) + h;
+                for (const auto& [q, qr] : claimed)   // planters flank paths by
+                    if ((q - pp).length() < 0.9 + qr) { pp.x = 1e30; break; }
+                if (pp.x > 1e29) continue;            // design; only item claims
+                claim(pp, 0.9);
+                const Real by = gy(pp) + 0.02;
                 Vec3 t3(perp.x, 0, perp.y), n3(dir.x, 0, dir.y);
                 Vec3 o = Vec3(pp.x, by, pp.y) - t3 * 0.5 - n3 * 0.5;
                 emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.0, 0.35, 1.0)},
@@ -302,19 +303,127 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                         PartId::Foliage, hedge);
             }
         }
+        // FLOWER BEDS: a stone curb with a bright planted top, on the plaza
+        // ring between the benches.
+        const Vec3 bloom[3] = {{0.72, 0.22, 0.26},    // red
+                               {0.82, 0.68, 0.20},    // marigold
+                               {0.56, 0.32, 0.66}};   // violet
+        const int nf = 2 + static_cast<int>(rng.unit() * 2);
+        for (int k = 0; k < nf * 3; ++k) {
+            const Real a2 = rng.unit() * 6.283185307179586;
+            Vec2 dir(std::cos(a2), std::sin(a2));
+            Vec2 fp = c + dir * (r0 + 1.1);
+            if (!pointInPolygon(poly, fp) || !clearAt(fp, 0.8)) continue;
+            claim(fp, 0.8);
+            const Real by = gy(fp) + 0.02;
+            Vec3 t3(-dir.y, 0, dir.x), n3(dir.x, 0, dir.y);
+            Vec3 o = Vec3(fp.x, by, fp.y) - t3 * 0.55 - n3 * 0.55;
+            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.1, 0.22, 1.1)},
+                    PartId::Trim, stone * 0.92);
+            emitBox(kit, Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
+                               {t3, up, n3}, Vec3(0.86, 0.14, 0.86)},
+                    PartId::Foliage, bloom[static_cast<int>(rng.unit() * 2.99)]);
+        }
+        // SHRUBS: loose clipped bushes scattered on the lawn, off everything.
+        Real mnx = 1e30, mnz = 1e30, mxx = -1e30, mxz = -1e30;
+        for (const Vec2& v : poly) {
+            mnx = std::min(mnx, v.x); mxx = std::max(mxx, v.x);
+            mnz = std::min(mnz, v.y); mxz = std::max(mxz, v.y);
+        }
+        Poly2 shrubIn = inset(poly, 1.5);
+        const int ns = std::min(8, std::max(2, static_cast<int>(A / 130)));
+        for (int k = 0, placed = 0; k < ns * 5 && placed < ns; ++k) {
+            Vec2 sp(mnx + rng.unit() * (mxx - mnx), mnz + rng.unit() * (mxz - mnz));
+            if (shrubIn.size() < 3 || !pointInPolygon(shrubIn, sp)) continue;
+            if (!clearAt(sp, 0.9)) continue;
+            claim(sp, 0.9);
+            ++placed;
+            const Real by = gy(sp) + 0.0;
+            const Real a2 = rng.unit() * 6.283185307179586;
+            Vec3 t3(std::cos(a2), 0, std::sin(a2)), n3(-t3.z, 0, t3.x);
+            const Real sw = rng.range(0.7, 1.15), sh = rng.range(0.5, 0.85);
+            const Vec3 bush(0.20 + rng.range(0, 0.06), 0.38 + rng.range(0, 0.06), 0.18);
+            emitBox(kit, Scope{Vec3(sp.x, by, sp.y) - t3 * (sw * 0.5) - n3 * (sw * 0.5),
+                               {t3, up, n3}, Vec3(sw, sh, sw)},
+                    PartId::Foliage, bush);
+        }
+        // The FENCE: post-and-rail around the lot line, with OPENINGS where
+        // the walking paths meet the street (and one gap on tiny greens with
+        // no paths, so every park can be entered). Small pocket greens skip
+        // the fence entirely.
+        if (A > 300.0) {
+            Poly2 ring = inset(poly, 0.5);
+            std::vector<Vec2> mouths;
+            for (const Spoke& s : spokes) mouths.push_back(s.b);
+            if (mouths.empty() && !ring.empty()) {
+                // no paths: open the middle of the longest edge
+                std::size_t bi = 0; Real bl = 0;
+                for (std::size_t i = 0; i < ring.size(); ++i) {
+                    Real l = (ring[(i + 1) % ring.size()] - ring[i]).length();
+                    if (l > bl) { bl = l; bi = i; }
+                }
+                mouths.push_back((ring[bi] + ring[(bi + 1) % ring.size()]) * 0.5);
+            }
+            const Vec3 rail(0.30, 0.26, 0.22);   // stained timber
+            for (std::size_t i = 0; i < ring.size(); ++i) {
+                const Vec2& a = ring[i];
+                const Vec2& b2 = ring[(i + 1) % ring.size()];
+                const Real len = (b2 - a).length();
+                if (len < 1.0) continue;
+                Vec2 dir = (b2 - a) * (1.0 / len);
+                Vec3 t3(dir.x, 0, dir.y), n3(-dir.y, 0, dir.x);
+                const int posts = std::max(1, static_cast<int>(len / 2.4));
+                const Real step = len / posts;
+                for (int pi2 = 0; pi2 <= posts; ++pi2) {
+                    Vec2 pp = a + dir * (step * pi2);
+                    bool gap = false;
+                    for (const Vec2& mo : mouths)
+                        if ((mo - pp).length() < 2.6) { gap = true; break; }
+                    if (gap) continue;
+                    const Real by = gy(pp);
+                    emitBox(kit, Scope{Vec3(pp.x, by, pp.y) - t3 * 0.06 - n3 * 0.06,
+                                       {t3, up, n3}, Vec3(0.12, 0.95, 0.12)},
+                            PartId::Wood, rail * 0.9);
+                    if (pi2 == posts) continue;
+                    // rails to the next post, skipped when it sits in a gap
+                    Vec2 np = a + dir * (step * (pi2 + 1));
+                    bool ngap = false;
+                    for (const Vec2& mo : mouths)
+                        if ((mo - np).length() < 2.6) { ngap = true; break; }
+                    if (ngap) continue;
+                    const Real ny = gy(np);
+                    for (Real rh2 : {Real(0.34), Real(0.76)}) {
+                        // rail follows the ground: a thin box laid corner to
+                        // corner reads fine at this scale
+                        Vec3 p0(pp.x, by + rh2, pp.y), p1(np.x, ny + rh2, np.y);
+                        Vec3 mid = (p0 + p1) * 0.5;
+                        Vec3 along = p1 - p0;
+                        const Real alen = along.length();
+                        if (alen < 1e-4) continue;
+                        along = along / alen;
+                        emitBox(kit, Scope{mid - along * (alen * 0.5) - n3 * 0.035 -
+                                               up * 0.04,
+                                           {along, up, n3}, Vec3(alen, 0.08, 0.07)},
+                                PartId::Wood, rail);
+                    }
+                }
+            }
+        }
         appendKit(kit, outParts);
     }
 
     // TREE SPOTS: a loose ring between the plaza and the boundary, kept off
-    // the paths. (x, trunk scale, z) — the hosts grow the real trees.
+    // the paths AND off everything already claimed. (x, trunk scale, z) —
+    // the hosts grow the real trees.
     const int want = std::min(12, std::max(3, static_cast<int>(A / 140)));
     for (int k = 0; k < want * 4 &&
                     static_cast<int>(g.treeSpots.size()) < want; ++k) {
         const Real a2 = rng.unit() * 6.283185307179586;
         const Real rr = r0 + 2.0 + rng.unit() * std::sqrt(A) * 0.35;
         Vec2 tp = c + Vec2(std::cos(a2), std::sin(a2)) * rr;
-        Poly2 inner = inset(poly, 1.4);
+        Poly2 inner = inset(poly, 1.8);
         if (inner.size() < 3 || !pointInPolygon(inner, tp)) continue;
+        if (!clearAt(tp, 1.4)) continue;
         bool clear = true;
         for (const Spoke& s : spokes)
             if (distToSeg(tp, s.a, s.b) < 2.2) { clear = false; break; }
@@ -323,7 +432,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 clear = false;
                 break;
             }
-        if (clear) g.treeSpots.push_back(Vec3(tp.x, rng.range(0.8, 1.3), tp.y));
+        if (!clear) continue;
+        claim(tp, 1.4);
+        g.treeSpots.push_back(Vec3(tp.x, rng.range(0.8, 1.3), tp.y));
     }
 
     g.padMesh = std::move(m);

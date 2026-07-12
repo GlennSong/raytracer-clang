@@ -1779,6 +1779,12 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         std::uniform_real_distribution<double> uni(0.0, 1.0);
         for (const engine::LotBuilding& lb : *lots) {
             if (lb.pad.size() < 3 || (lb.type != "park" && lb.type != "green")) continue;
+            // Sculpted parks planted their own treeSpots (terrain-sampled,
+            // spaced against paths/furniture) — planting on top of those both
+            // double-planted and, worse, used the pad plane's groundY, which
+            // parks never set: every one of these trees spawned metres UNDER
+            // the terrain (device: "trees are below the terrain").
+            if (!lb.treeSpots.empty()) continue;
             const double a = engine::area(lb.pad);
             int want = std::min(6, static_cast<int>(a * density));
             if (want < 1) continue;
@@ -1793,7 +1799,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                                mnz + uni(prng) * (mxz - mnz));
                 if (!engine::pointInPolygon(lb.pad, q)) continue;
                 Placement pl;
-                pl.position = Vec3(q.x, lb.groundY + 0.3, q.y);   // pad top plane
+                pl.position = Vec3(q.x, terrainHeight(terrain, terrainNoise, q.x, q.y) + 0.1,
+                                   q.y);   // the ground under its OWN feet
                 pl.yaw = static_cast<float>(uni(prng) * 6.2831853);
                 pl.scale = static_cast<float>(0.55 + 0.35 * uni(prng));
                 placements.push_back(pl);
