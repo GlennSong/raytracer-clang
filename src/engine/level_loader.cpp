@@ -2921,9 +2921,10 @@ bool LevelLoader::load(const std::string& path,
                                                  Vec3(0.80, 0.78, 0.75));
                     const Surface surf = proto.material.surface();
                     if (surf != Surface::None) {
-                        // FanTop bakes CENTRED disc UVs in the grammar — a
-                        // world-planar re-UV would spin the blades off-centre.
-                        if (surf != Surface::FanTop)
+                        // FanTop and VentGrille bake their own UVs in the
+                        // grammar (centred disc / plate-fitted with a margin) —
+                        // a world-planar re-UV would break them.
+                        if (surf != Surface::FanTop && surf != Surface::VentGrille)
                             applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
                         bindSurfaceMaps(proto.material,
                                         bakeSurfaceTextures(renderer, surf, lotTex));

@@ -1014,9 +1014,21 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             // the baked VentGrille maps instead of three louvre boxes.
             for (int side = 0; side < 2; ++side) {
                 Vec3 lo = po + r * 0.25 + f * (side ? ad : Real(-0.04));
-                emitBox(out, Scope{Vec3(lo.x, roofY + ah * 0.18, lo.z),
-                                   {r, up, f}, Vec3(aw - 0.5, ah * 0.6, 0.04)},
+                const Real pw = aw - 0.5, ph = ah * 0.6, py = roofY + ah * 0.18;
+                const std::size_t vv0 = partMesh(out, PartId::Vent).vertices.size();
+                emitBox(out, Scope{Vec3(lo.x, py, lo.z),
+                                   {r, up, f}, Vec3(pw, ph, 0.04)},
                         PartId::Vent, louvre);
+                // Plate-fitted UVs (0..1 across the plate): the grille's margin
+                // band frames the holes and none clip the plate edge. The
+                // loader skips world-planar re-UV for VentGrille parts.
+                RenderMesh& vm = partMesh(out, PartId::Vent);
+                for (std::size_t vi = vv0; vi < vm.vertices.size(); ++vi) {
+                    Vertex& vt = vm.vertices[vi];
+                    const Vec3 rel = vt.position - Vec3(lo.x, py, lo.z);
+                    vt.u = static_cast<float>(dot(rel, r) / pw);
+                    vt.v = static_cast<float>(rel.y / ph);
+                }
             }
             // (Short faces are covered by the casing's own UtilityPanel maps —
             // no separate plates needed.)

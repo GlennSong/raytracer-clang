@@ -244,17 +244,25 @@ double capsuleSdf(double x, double y, double halfLen, double radius) {
 }
 
 SurfSample evalVent(double u, double v, uint32_t seed) {
-    // 6 x 3 capsule holes per tile, matte-dark in a metallic casing; the height
-    // dips into each hole with a slightly PROUD rim so the baked normal gives
-    // the punched-metal lip the device asked for.
-    const double cols = 6, rows = 3;
-    const double cu = u * cols, cv = v * rows;
-    const double fx = (cu - std::floor(cu)) - 0.5;
-    const double fy = (cv - std::floor(cv)) - 0.5;
-    // capsule occupies the middle of the cell: vertical half-length + radius
-    const double d = capsuleSdf(fx * 1.6, fy * 1.1, 0.16, 0.13);
-    const double hole = clamp01(-d * 18.0);           // 1 deep inside the hole
-    const double rim = clamp01(1.0 - std::fabs(d) * 22.0) * (d > 0 ? 1.0 : 0.0);
+    // WIDE capsule holes (device: wider than tall) in a metallic casing, with a
+    // hole-free MARGIN band so nothing clips the plate edge — the vent plate
+    // maps this texture 0..1 across itself (plate-fitted UVs, like FanTop).
+    // The height dips into each hole with a slightly PROUD rim so the baked
+    // normal gives the punched-metal lip.
+    const double mu = 0.10, mv = 0.16;               // margins (u along, v up)
+    double hole = 0.0, rim = 0.0;
+    if (u > mu && u < 1.0 - mu && v > mv && v < 1.0 - mv) {
+        const double cols = 5, rows = 3;
+        const double iu = (u - mu) / (1.0 - 2.0 * mu);
+        const double iv = (v - mv) / (1.0 - 2.0 * mv);
+        const double cu = iu * cols, cv = iv * rows;
+        const double fx = (cu - std::floor(cu)) - 0.5;
+        const double fy = (cv - std::floor(cv)) - 0.5;
+        // capsule lies ALONG the row: half-length on x, small radius on y
+        const double d = capsuleSdf(fy * 1.35, fx * 1.0, 0.24, 0.105);
+        hole = clamp01(-d * 20.0);                    // 1 deep inside the hole
+        rim = clamp01(1.0 - std::fabs(d) * 24.0) * (d > 0 ? 1.0 : 0.0);
+    }
     const double brush =
         0.03 * ihash(static_cast<int>(u * 40.0), static_cast<int>(v * 3.0),
                      seed ^ 0x7a3f00d1u);
@@ -274,10 +282,11 @@ SurfSample evalUtilityPanel(double u, double v, uint32_t seed) {
     const double fu = pu - std::floor(pu), fv = pv - std::floor(pv);
     const double seam = clamp01(1.0 - std::min(std::min(fu, 1.0 - fu),
                                                std::min(fv, 1.0 - fv)) * 26.0);
-    // rivets: bumps near each panel corner
-    const double rx = std::min(fu, 1.0 - fu) - 0.07;
-    const double ry = std::min(fv, 1.0 - fv) - 0.07;
-    const double rivet = clamp01(1.0 - std::sqrt(rx * rx + ry * ry) * 30.0);
+    // rivets: small bumps near each panel corner, pulled OFF the seams so they
+    // read as fasteners instead of blending into the edges (device feedback)
+    const double rx = std::min(fu, 1.0 - fu) - 0.10;
+    const double ry = std::min(fv, 1.0 - fv) - 0.10;
+    const double rivet = clamp01(1.0 - std::sqrt(rx * rx + ry * ry) * 48.0);
     // hatch: a recessed darker rectangle in the lower-left panel of the tile
     const bool hatchPanel = pu < 1.0 && pv < 1.0;
     const double hatch = hatchPanel && fu > 0.25 && fu < 0.75 && fv > 0.2 &&
