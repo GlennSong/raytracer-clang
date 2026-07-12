@@ -1033,10 +1033,20 @@ static void loadEntities(const json& entities, const json& root, World& world,
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
             continue;
         }
-        // Freeway corridor (plan §8): built + spawned by the loader's terrain
-        // pre-pass (its flatten windows must join the carve set), so the
-        // generic entity loop has nothing to do here.
-        if (ent.value("shape", std::string()) == "corridor") continue;
+        // Freeway corridor (plan §8): the geometry was built + spawned by the
+        // loader's terrain pre-pass (its flatten windows must join the carve
+        // set). Here it only needs its DOCUMENT entity — the SourceSpec
+        // carrying the corridor block — so the editor's save-then-reload
+        // (Play) round-trips it instead of dropping the freeway on the floor
+        // (device: "the freeway disappeared when the simulation started").
+        if (ent.value("shape", std::string()) == "corridor") {
+            spawnDocumentEntity(
+                ent, "corridor",
+                (ent.contains("corridor") ? ent["corridor"] : json::object())
+                    .dump(),
+                world);
+            continue;
+        }
         // Editor-authored road (ADR-0049): an editable RoadNet + its baked mesh.
         if (ent.value("shape", std::string()) == "road") {
             const RoadNet* pre = nullptr;

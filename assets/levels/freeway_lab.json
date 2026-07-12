@@ -1,52 +1,58 @@
 {
-  "name": "freeway_lab",
-  "version": 1,
   "_comment": "Plan §8 test bed: one clothoid mainline over HILLY terrain (device: meshing vs terrain is part of the test), a small street grid running underneath the elevated span, NO buildings. Every corridor feature is judged here before the metro sees it.",
   "citysim": {
-    "cars": 12,
-    "pedestrians": 0,
     "buildLots": false,
-    "seed": 4,
-    "debugWidgets": false
+    "cars": 12,
+    "debugWidgets": false,
+    "pedestrians": 0,
+    "seed": 4
   },
   "entities": [
     {
       "id": 2,
       "name": "streets",
-      "position": [0.0, 0.0, 0.0],
-      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
       "road": {
-        "color": [0.09, 0.09, 0.1],
-        "width": 7.0,
-        "sidewalk": 3.0,
-        "curb": 0.16,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
         "corner_radius": 3.0,
         "crosswalks": true,
-        "markings": true,
-        "lift": 0.08,
+        "curb": 0.16,
         "generate": {
-          "kind": "metro",
-          "seed": 4,
-          "radius": 260,
-          "hotspots": 1,
-          "sea_level": -100.0,
-          "block_size": 110,
-          "seg_length": 30,
-          "influence": 300,
-          "kill_radius": 60,
-          "merge_radius": 44,
-          "corridor_spacing": 80,
           "ambient_per_500": 60,
-          "loop_min": 120,
-          "loop_max": 260,
-          "min_road_len": 22,
-          "street_width": 7,
-          "collector_width": 9,
           "artery_width": 12,
+          "block_size": 110,
+          "collector_width": 9,
+          "corridor_spacing": 80,
           "freeway_width": 12,
-          "interchange_spacing": 4000
-        }
-      }
+          "hotspots": 1,
+          "influence": 300,
+          "interchange_spacing": 4000,
+          "kill_radius": 60,
+          "kind": "metro",
+          "loop_max": 260,
+          "loop_min": 120,
+          "merge_radius": 44,
+          "min_road_len": 22,
+          "radius": 260,
+          "sea_level": -100.0,
+          "seed": 4,
+          "seg_length": 30,
+          "street_width": 7
+        },
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.0,
+        "width": 7.0
+      },
+      "shape": "road"
     },
     {
       "id": 3,
@@ -78,35 +84,75 @@
       }
     }
   ],
-  "terrain": {
-    "size": 1400,
-    "resolution": 700,
-    "seed": 7,
-    "noiseScale": 0.004,
-    "octaves": 5,
-    "heightScale": 11,
-    "warp": 0.3,
-    "erode": false,
-    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 },
-    "cdlod": { "worldHalf": 700 }
-  },
   "environment": {
-    "skyColor": [0.55, 0.68, 0.86],
-    "fog": { "color": [0.72, 0.78, 0.88], "density": 0.0008, "heightFalloff": 0.012 }
+    "fog": {
+      "color": [
+        0.72,
+        0.78,
+        0.88
+      ],
+      "density": 0.0008,
+      "heightFalloff": 0.012
+    },
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
   },
   "lighting": {
     "ambientMultiplier": 0.6,
     "exposure": 0.5,
     "sun": {
-      "direction": [0.42, 0.52, -0.5],
-      "color": [1.0, 0.96, 0.86],
-      "intensity": 8.0,
-      "castsShadow": true
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
     }
   },
+  "name": "freeway_lab",
   "player": {
-    "position": [0.0, 30.0, 0.0],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
-    "friction": 0.5
-  }
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "_comment": "spawns beside the viaduct mid-span, looking at the piers + the street grid under the deck",
+    "position": [
+      300.0,
+      14.0,
+      230.0
+    ]
+  },
+  "terrain": {
+    "cdlod": {
+      "worldHalf": 700
+    },
+    "erode": false,
+    "heightScale": 11,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "noiseScale": 0.004,
+    "octaves": 5,
+    "resolution": 700,
+    "seed": 7,
+    "size": 1400,
+    "warp": 0.3
+  },
+  "version": 1
 }
