@@ -314,10 +314,36 @@
     }
   ]
 }
-{ "cameras": [
-  { "name": "Helmet", "position": [0, 3.1, 3.0], "forward": [0, -0.02, -1.0],
-    "lens": { "focalLength": 50, "sensorHeight": 24, "fStop": 0, "focusDistance": 6.0 } }
-] }
+{
+  "cameras": [
+    {
+      "forward": [
+        0.0,
+        -0.019996001199600138,
+        -0.999800059980007
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 50.0,
+        "focusDistance": 6.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Helmet",
+      "position": [
+        0.0,
+        3.1,
+        3.0
+      ]
+    }
+  ],
+  "version": 1
+}
 {
   "version": 1,
   "watch_scripts": true,
@@ -402,6 +428,25 @@
         "sensorHeight": 24,
         "fStop": 0,
         "focusDistance": 90.0
+      }
+    },
+    {
+      "name": "NewRecipes",
+      "position": [
+        72,
+        52,
+        248
+      ],
+      "forward": [
+        -0.51,
+        -0.34,
+        -0.79
+      ],
+      "lens": {
+        "focalLength": 28,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 125.0
       }
     },
     {
@@ -792,6 +837,293 @@
   { "name": "Hub", "position": [70, 120, 130], "forward": [-0.45, -0.62, -0.64],
     "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 170 } } ] }
 {
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.53,
+      0.67,
+      0.87
+    ],
+    "fog": {
+      "density": 0.0007,
+      "color": [
+        0.68,
+        0.76,
+        0.88
+      ]
+    }
+  },
+  "terrain": {
+    "seed": 12,
+    "size": 900,
+    "resolution": 450,
+    "heightScale": 13,
+    "noiseScale": 0.005,
+    "octaves": 6,
+    "warp": 0.35,
+    "erode": true,
+    "erodeRes": 500,
+    "erodeDroplets": 240000,
+    "erodeThermal": 12,
+    "mountainHeight": 120,
+    "mountainScale": 0.003,
+    "mountainMaskScale": 0.0016,
+    "mountainMaskLo": -0.1,
+    "mountainMaskHi": 0.4,
+    "mountainAlongRange": true,
+    "cdlod": {
+      "worldHalf": 450
+    },
+    "rangeSpine": [
+      [
+        -120,
+        -430
+      ],
+      [
+        80,
+        -400
+      ],
+      [
+        280,
+        -430
+      ]
+    ],
+    "rangeWidth": 260,
+    "rangeHeight": 175,
+    "rangeVariation": 0.55,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    }
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.35,
+        0.5,
+        -0.55
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.55
+  },
+  "name": "coast",
+  "water": {
+    "seaLevel": 2.0,
+    "region": 450,
+    "cell": 6,
+    "foamBand": 36,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "roughness": 0.04,
+    "opacity": 0.82
+  }
+}{ "cameras": [
+  { "name": "Bay", "position": [40, 55, 330], "forward": [0.05, -0.28, -0.96],
+    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 380 } },
+  { "name": "Shore", "position": [230, 22, 180], "forward": [-0.55, -0.16, -0.82],
+    "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 240 } }
+]}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.53,
+      0.67,
+      0.87
+    ],
+    "fog": {
+      "density": 0.0006,
+      "color": [
+        0.68,
+        0.76,
+        0.88
+      ]
+    }
+  },
+  "terrain": {
+    "seed": 12,
+    "size": 900,
+    "resolution": 450,
+    "heightScale": 15,
+    "noiseScale": 0.0052,
+    "octaves": 6,
+    "warp": 0.35,
+    "erode": true,
+    "erodeRes": 500,
+    "erodeDroplets": 220000,
+    "erodeThermal": 12,
+    "mountainHeight": 120,
+    "mountainScale": 0.003,
+    "mountainMaskScale": 0.0016,
+    "mountainMaskLo": -0.1,
+    "mountainMaskHi": 0.4,
+    "mountainAlongRange": true,
+    "cdlod": {
+      "worldHalf": 450
+    },
+    "rangeSpine": [
+      [
+        -120,
+        -430
+      ],
+      [
+        80,
+        -400
+      ],
+      [
+        280,
+        -430
+      ]
+    ],
+    "rangeWidth": 240,
+    "rangeHeight": 170,
+    "rangeVariation": 0.55,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    }
+  },
+  "water": {
+    "seaLevel": 1.0,
+    "region": 450,
+    "cell": 6,
+    "foamBand": 34,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "roughness": 0.04,
+    "opacity": 0.82
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "road": {
+        "generate": {
+          "kind": "metro",
+          "radius": 230,
+          "hotspots": 5,
+          "block_size": 74,
+          "artery_width": 13,
+          "street_width": 7,
+          "seed": 5,
+          "center": {
+            "x": 200,
+            "z": -200
+          }
+        },
+        "width": 7.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 0,
+    "pedestrians": 0,
+    "seed": 5,
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 70,
+    "midtownRadius": 150,
+    "buildChance": 0.85
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.35,
+        0.55,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
+      "intensity": 8.5,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.55
+  },
+  "name": "coast_city"
+}{
+  "cameras": [
+    {
+      "name": "Top",
+      "position": [
+        200,
+        600,
+        -190
+      ],
+      "forward": [
+        0,
+        -0.999,
+        -0.03
+      ],
+      "lens": {
+        "focalLength": 22,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 600
+      }
+    },
+    {
+      "name": "Obl",
+      "position": [
+        430,
+        180,
+        90
+      ],
+      "forward": [
+        -0.7,
+        -0.5,
+        -0.5
+      ],
+      "lens": {
+        "focalLength": 30,
+        "sensorHeight": 24,
+        "fStop": 0,
+        "focusDistance": 380
+      }
+    }
+  ]
+}{
   "version": 1,
   "environment": { "skyColor": [0.52, 0.66, 0.86] },
   "terrain": {
@@ -1446,6 +1778,625 @@
       "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 240 }
     }
   ]
+}
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "terrain": {
+    "seed": 7,
+    "size": 620,
+    "resolution": 380,
+    "heightScale": 13,
+    "noiseScale": 0.008,
+    "octaves": 4,
+    "warp": 0.3,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "cdlod": true,
+    "rangeSpine": [
+      [
+        -300,
+        -255
+      ],
+      [
+        -150,
+        -288
+      ],
+      [
+        20,
+        -284
+      ],
+      [
+        190,
+        -268
+      ],
+      [
+        310,
+        -244
+      ]
+    ],
+    "rangeWidth": 135,
+    "rangeHeight": 76,
+    "rangeVariation": 0.6,
+    "mountainScale": 0.01
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "shape": "road",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "generate": {
+          "kind": "metro",
+          "radius": 300,
+          "hotspots": 5,
+          "block_size": 70,
+          "artery_width": 13,
+          "street_width": 7,
+          "seed": 5
+        },
+        "width": 7.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
+      }
+    }
+  ],
+  "citysim": {
+    "cars": 22,
+    "pedestrians": 26,
+    "seed": 5,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": true,
+    "wander": false,
+    "vehicles": "vehicles.lua",
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 60,
+    "midtownRadius": 140,
+    "buildChance": 0.9
+  },
+  "player": {
+    "position": [
+      0,
+      1.2,
+      150
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.8
+    },
+    "friction": 0.5
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "intensity": 8.0,
+      "castsShadow": true
+    },
+    "exposure": 0.5,
+    "ambientMultiplier": 0.6
+  },
+  "name": "metro"
+}{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 20,
+    "debugWidgets": true,
+    "downtownRadius": 70,
+    "hoursPerSecond": 0.05,
+    "midtownRadius": 150,
+    "pedestrians": 24,
+    "perceptionReliability": 1.0,
+    "seed": 5,
+    "sidewalk": 4.0,
+    "vehicles": "vehicles.lua",
+    "wander": false
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "generate": {
+          "artery_width": 13,
+          "beach_rise": 2.5,
+          "block_size": 72,
+          "hotspots": 5,
+          "kind": "metro",
+          "radius": 320,
+          "sea_level": -5.0,
+          "seed": 5,
+          "street_width": 7
+        },
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.5,
+        "width": 7.0
+      },
+      "shape": "road"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.6,
+    "exposure": 0.5,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
+    }
+  },
+  "name": "metro_hills",
+  "player": {
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.9995751012343201,
+      150.0
+    ]
+  },
+  "terrain": {
+    "_comment": "Full-toolset COASTAL terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, ERODED, tiltX -0.06 ramps the ground DOWN to the east into a SEA (water block below) — snow peaks west, city on the coastal shelf, harbour to the east. The VARIED peaks come from the ridged-multifractal mountain layer confined to the range corridor by mountainAlongRange. The metro at the origin gates on water.seaLevel (single source of truth), so it fills the buildable shelf and stops at the shoreline.",
+    "cdlod": {
+      "worldHalf": 600
+    },
+    "erode": true,
+    "erodeDroplets": 300000,
+    "erodeRadius": 4,
+    "erodeRes": 600,
+    "erodeTalus": 1.0,
+    "erodeThermal": 14,
+    "heightScale": 22,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainAlongRange": true,
+    "mountainHeight": 150,
+    "mountainMaskHi": 0.4,
+    "mountainMaskLo": -0.1,
+    "mountainMaskScale": 0.0012,
+    "mountainScale": 0.0022,
+    "noiseScale": 0.004,
+    "octaves": 6,
+    "rangeHeight": 240,
+    "rangeSpine": [
+      [
+        -575,
+        -380
+      ],
+      [
+        -545,
+        -120
+      ],
+      [
+        -575,
+        120
+      ],
+      [
+        -545,
+        380
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 240,
+    "resolution": 500,
+    "seed": 7,
+    "size": 1200,
+    "tiltX": -0.06,
+    "warp": 0.35
+  },
+  "version": 1,
+  "water": {
+    "cell": 8,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "foamBand": 40,
+    "opacity": 0.82,
+    "region": 600,
+    "roughness": 0.04,
+    "seaLevel": -5.0
+  }
+}
+{
+  "cameras": [
+    {
+      "forward": [
+        -0.6014149897972098,
+        -0.32075466122517854,
+        -0.7317215709199385
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 30.0,
+        "focusDistance": 420.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Vista",
+      "position": [
+        340.0,
+        150.0,
+        360.0
+      ]
+    },
+    {
+      "forward": [
+        -0.298970325512075,
+        -0.11958813020482999,
+        -0.9467393641215709
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 34.0,
+        "focusDistance": 180.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Street",
+      "position": [
+        40.0,
+        8.0,
+        120.0
+      ]
+    },
+    {
+      "forward": [
+        0.8399393399047643,
+        -0.48996461494444593,
+        -0.23331648330687887
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 28.0,
+        "focusDistance": 420.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Harbor",
+      "position": [
+        -230.0,
+        170.0,
+        150.0
+      ]
+    }
+  ],
+  "version": 1
+}
+{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 30,
+    "debugWidgets": false,
+    "detailDistance": 950,
+    "downtownRadius": 160,
+    "hoursPerSecond": 0.05,
+    "hubRadius": 240,
+    "midtownRadius": 340,
+    "pedestrians": 30,
+    "perceptionReliability": 1.0,
+    "plinth": 0.45,
+    "seed": 9,
+    "sidewalk": 4.0,
+    "vehicles": "vehicles.lua",
+    "wander": false
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "generate": {
+          "ambient_per_500": 40,
+          "artery_width": 13,
+          "beach_rise": 2.5,
+          "block_size": 150,
+          "collector_width": 9.5,
+          "corridor_spacing": 90,
+          "freeway_width": 22,
+          "hotspots": 9,
+          "influence": 340,
+          "interchange_spacing": 700,
+          "kill_radius": 70,
+          "kind": "metro",
+          "loop_max": 330,
+          "loop_min": 140,
+          "merge_radius": 52,
+          "min_road_len": 24,
+          "radius": 1000,
+          "sea_level": -5.0,
+          "seed": 9,
+          "seg_length": 32,
+          "street_width": 7
+        },
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.5,
+        "width": 7.0
+      },
+      "shape": "road"
+    }
+  ],
+  "environment": {
+    "fog": {
+      "color": [
+        0.7,
+        0.78,
+        0.88
+      ],
+      "density": 0.0011,
+      "heightFalloff": 0.016
+    },
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.6,
+    "exposure": 0.5,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
+    }
+  },
+  "name": "metropolis",
+  "player": {
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.2,
+      150.0
+    ]
+  },
+  "terrain": {
+    "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
+    "cdlod": {
+      "worldHalf": 1300
+    },
+    "erode": true,
+    "erodeDroplets": 500000,
+    "erodeRadius": 4,
+    "erodeRes": 800,
+    "erodeTalus": 1.0,
+    "erodeThermal": 14,
+    "heightScale": 13,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainAlongRange": true,
+    "mountainHeight": 180,
+    "mountainMaskHi": 0.4,
+    "mountainMaskLo": -0.1,
+    "mountainMaskScale": 0.001,
+    "mountainScale": 0.002,
+    "noiseScale": 0.0026,
+    "octaves": 6,
+    "rangeHeight": 260,
+    "rangeSpine": [
+      [
+        -1180,
+        -900
+      ],
+      [
+        -1120,
+        -300
+      ],
+      [
+        -1180,
+        300
+      ],
+      [
+        -1120,
+        900
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 300,
+    "resolution": 900,
+    "rockLine": 90,
+    "seed": 11,
+    "size": 2600,
+    "snowLine": 230,
+    "tiltX": -0.045,
+    "warp": 0.35
+  },
+  "vegetation": {
+    "clearMargin": 4.0,
+    "clusterCount": 90,
+    "clusterRadius": 28,
+    "count": 22000,
+    "densityScale": 0.004,
+    "densityThreshold": -0.35,
+    "drawDistance": 1100,
+    "maxHeight": 150,
+    "maxScale": 1.4,
+    "maxSlopeDeg": 40,
+    "minHeight": 2.0,
+    "minScale": 0.7,
+    "region": 1300,
+    "seed": 31,
+    "spacingFactor": 0.75,
+    "species": [
+      {
+        "collide": true,
+        "kind": "script",
+        "script": "return flora.scatter_tree(seed, {species='pine'})",
+        "variants": 3
+      },
+      {
+        "collide": true,
+        "kind": "script",
+        "script": "return flora.scatter_tree(seed, {species='oak'})",
+        "variants": 2
+      },
+      {
+        "cuts": 4,
+        "faceted": true,
+        "kind": "rock",
+        "lumpScale": 0.45,
+        "lumps": 5,
+        "material": {
+          "albedo": [
+            0.26,
+            0.25,
+            0.24
+          ],
+          "roughness": 1.0
+        },
+        "sdfResolution": 18,
+        "skin": "sdf",
+        "smoothness": 0.22,
+        "variants": 3
+      }
+    ]
+  },
+  "version": 1,
+  "water": {
+    "cell": 12,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "foamBand": 40,
+    "opacity": 0.82,
+    "region": 1900,
+    "roughness": 0.04,
+    "seaLevel": -5.0
+  }
+}
+{
+  "cameras": [],
+  "version": 1
 }
 {
   "version": 1,
@@ -2356,6 +3307,9 @@ local MATS = {
   metal    = material.new{ surface = "metal",    roughness = 0.45, metallic = 0.55 },
   glass    = material.new{ roughness = 0.08, metallic = 0.9 },
   roof     = material.new{ roughness = 0.85 },
+  siding   = material.new{ surface = "siding",   roughness = 0.80 },
+  path     = material.new{ surface = "pavement", roughness = 0.95 },
+  foliage  = material.new{ roughness = 0.95 },
 }
 
 local function addParts(parts, off)
@@ -2471,6 +3425,42 @@ local SPECS = {
                                     roof = "gable" } },       -- one rowhouse unit
   { plan = rectPlan(18, 13), p = { floors = 4, style = "brick",
                                    ground_retail = true } },  -- mixed use
+  -- Row 6: the NEW archetypes (city-building-recipes) — suburban timber,
+  -- balconied condos, the deco spire, the sawtooth factory.
+  { plan = rectPlan(13, 10), p = { floors = 2, style = "wood",
+                                   ground_retail = false, porch = true,
+                                   chimney = true, roof = "gable" } },
+                                                              -- craftsman house
+  { plan = rectPlan(18, 14), p = { floors = 6, style = "concrete",
+                                   balconies = true,
+                                   ground_retail = false } }, -- condo tower
+  { plan = rectPlan(18, 15), p = { floors = 12, style = "darkbrick",
+                                   setback_floors = 4, setback_every = 1.5,
+                                   spire = true, lights_y = 2 } },
+                                                              -- art-deco tower
+  { plan = rectPlan(24, 16), p = { floors = 1, style = "darkbrick",
+                                   solid_facade = true, ground_height = 5.5,
+                                   ground_bays = 2, roof = "sawtooth" } },
+                                                              -- the factory
+  -- Row 7: church steeple, parking decks, the sandstone bank, a modern house.
+  { plan = rectPlan(20, 12), p = { floors = 0, style = "stucco",
+                                   ground_height = 7, ground_retail = false,
+                                   window_head = "round", quoins = true,
+                                   roof = "gable", roof_pitch = 0.65,
+                                   steeple = true, entrance_steps = true } },
+                                                              -- the church
+  { plan = rectPlan(22, 16), p = { floors = 5, style = "concrete",
+                                   parking_decks = true, ground_bays = 2,
+                                   ground_retail = false } }, -- parking garage
+  { plan = rectPlan(18, 13), p = { floors = 2, style = "sandstone",
+                                   pilasters = true, quoins = true,
+                                   ground_height = 5, ground_retail = false,
+                                   entrance_steps = true } }, -- the bank
+  { plan = rectPlan(13, 9),  p = { floors = 2, style = "painted",
+                                   wall_color = {0.86, 0.86, 0.84},
+                                   ground_retail = false, lights_x = 2,
+                                   window_hood = "none", parapet = 0.5 } },
+                                                              -- modern house
 }
 
 local COLS, SPACING = 4, 38
@@ -3284,6 +4274,28 @@ function flora.flower(seed, opts)
     return mesh.merge(parts)
 end
 
+-- SCATTER-GRADE trees: the same species grammar with the polygon budget of an
+-- instanced forest, not a hero close-up. param_tree's defaults explode at
+-- scatter counts (pine: iterations 7 x (3+1) branches = ~16k tips = ~500k tris
+-- PER TREE — the 2 fps "explosion of branches"). These caps land near 6-12k
+-- tris: forests of hundreds stay in budget, and the silhouette still reads.
+function flora.scatter_tree(seed, opts)
+    opts = opts or {}
+    local caps = {
+        oak   = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.34 },
+        pine  = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.26 },
+        birch = { iterations = 5, branches = 2, ring_segments = 4,
+                  leaves_per_tip = 3, leaf_size = 0.28 },
+    }
+    local c = caps[opts.species or "oak"] or caps.oak
+    for k, v in pairs(c) do
+        if opts[k] == nil then opts[k] = v end
+    end
+    return flora.param_tree(seed, opts)
+end
+
 return flora
 -- Physics-block shooting gun (ADR-0024) — a MonoBehaviour-style ECS script on
 -- the player. On "fire" it spawns a dynamic cube along the camera aim (the Lua
@@ -3773,18 +4785,24 @@ return sf.lamp()
 -- keep the recipe's built-in look, so entries stay tiny.
 --
 -- Available keys (see readBuildingParams): style ("brick"|"stucco"|"concrete"|
--- "metal"|"glass"|"painted"), wall_color = {r,g,b}, trim_color, window_head
--- ("flat"|"segmental"|"round"), window_hood ("none"|"band"|"arch"), lights_x,
--- lights_y, quoins, sill, roof ("flat"|"gable"|"hip"), roof_pitch, parapet,
--- awning, pilasters, portico (column count), entrance_steps, dome,
--- ground_bays, floor_height, ground_height, bay_width ...
+-- "metal"|"glass"|"painted"|"wood"|"darkbrick"|"sandstone"), wall_color =
+-- {r,g,b}, trim_color, window_head ("flat"|"segmental"|"round"), window_hood
+-- ("none"|"band"|"arch"), lights_x, lights_y, quoins, sill,
+-- roof ("flat"|"gable"|"hip"|"sawtooth"), roof_pitch, parapet, awning,
+-- pilasters, portico (column count), entrance_steps, dome, ground_bays,
+-- side_bays, balconies, porch, chimney, spire, steeple, parking_decks,
+-- floor_height, ground_height, bay_width ...
 --
 -- Recipe names: glass_tower, office_slab, commercial_block, civic_hall,
 -- civic_midtown, brick_shop, mixed_use, office_midrise, hotel, walkup_homes,
--- oldtown_house, metal_shed, industrial_office, yard_house, duplex,
--- rowhouses (the strip's fallback), rowhouse_unit (each townhome),
--- apartments, corner_shop, school, hospital, courthouse, capitol, police,
--- fire_station, market_hall, university.
+-- oldtown_house, oldtown_cafe, oldtown_grand, metal_shed, industrial_office,
+-- factory, brick_warehouse, yard_house, duplex, modern_house, bungalow,
+-- craftsman_house, cottage, villa, ranch_house, garden_condo, condo_tower,
+-- terrace_condo, loft_block, art_deco_tower, stepped_tower, drum_tower,
+-- parking_garage, pagoda_tower, cinema, bank, strip_mall, supermarket,
+-- office_park, rowhouses (the strip's fallback), rowhouse_unit (each
+-- townhome), apartments, corner_shop, school, hospital, courthouse, capitol,
+-- police, fire_station, market_hall, university, church, library, museum.
 
 style_book = {
   -- The capitol in marble-white — the one active override, proving the pipe.
