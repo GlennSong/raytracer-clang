@@ -1824,15 +1824,61 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 return (x & 0xFFFFFF) / 16777215.0;
             };
             if (isRock) {
-                const double sxz = 0.55 + 1.85 * unit(1) * unit(1);  // skew small
-                const double sy = 0.5 + 1.4 * unit(2);
-                for (int r = 0; r < 3; ++r) {
-                    m.m[r][0] *= sxz; m.m[r][2] *= sxz;   // local X/Z columns
-                    m.m[r][1] *= sy;                       // local Y column
+                // ROCK FORMATIONS (device: "tall slats, boulders, or smaller
+                // groupings ... around the foothills"): each accepted placement
+                // becomes a FORMATION — a deterministic cluster whose members
+                // share a family look. Rocks live in the FOOTHILLS; inside the
+                // city shelf only the occasional park boulder survives.
+                const double baseY = m.m[1][3];
+                if (baseY < 20.0 && unit(9) > 0.12) continue;   // shelf: rare
+                const double kindRoll = unit(11);
+                int members; double sxzLo, sxzHi, syLo, syHi, spread;
+                if (kindRoll < 0.22) {          // tall slats in a rough row
+                    members = 3 + (int)(unit(12) * 3); sxzLo = 0.35; sxzHi = 0.6;
+                    syLo = 1.8; syHi = 2.9; spread = 1.0;
+                } else if (kindRoll < 0.55) {   // chunky boulder cluster
+                    members = 2 + (int)(unit(12) * 3); sxzLo = 1.3; sxzHi = 2.5;
+                    syLo = 0.8; syHi = 1.5; spread = 2.2;
+                } else if (kindRoll < 0.80) {   // small scatter grouping
+                    members = 4 + (int)(unit(12) * 3); sxzLo = 0.4; sxzHi = 0.8;
+                    syLo = 0.4; syHi = 0.8; spread = 1.4;
+                } else {                        // lone stone
+                    members = 1; sxzLo = 0.7; sxzHi = 1.6; syLo = 0.6; syHi = 1.4;
+                    spread = 0;
                 }
-                const double bedded =
-                    0.33 * sy * variantList[si].trunkHeight;   // measured mesh height
-                m.m[1][3] -= bedded;
+                const double rowAng = unit(13) * 6.2831853;
+                const Vec2 rowDir(std::cos(rowAng), std::sin(rowAng));
+                for (int mi = 0; mi < members; ++mi) {
+                    Mat4 mm = m;
+                    const uint32_t ms = 100 + (uint32_t)mi * 17u;
+                    const double sxz = sxzLo + (sxzHi - sxzLo) * unit(ms + 1);
+                    const double sy = syLo + (syHi - syLo) * unit(ms + 2);
+                    for (int r = 0; r < 3; ++r) {
+                        mm.m[r][0] *= sxz; mm.m[r][2] *= sxz;
+                        mm.m[r][1] *= sy;
+                    }
+                    // slats march along the row; clusters spread radially
+                    Vec2 off(0, 0);
+                    if (members > 1) {
+                        if (kindRoll < 0.22)
+                            off = rowDir * (spread * (mi - members * 0.5) +
+                                            (unit(ms + 3) - 0.5) * 0.5);
+                        else {
+                            const double oa = unit(ms + 4) * 6.2831853;
+                            const double orr = spread * (0.4 + 0.6 * unit(ms + 5));
+                            off = Vec2(std::cos(oa), std::sin(oa)) * orr;
+                        }
+                    }
+                    mm.m[0][3] += off.x;
+                    mm.m[2][3] += off.y;
+                    const double gy = terrainHeight(terrain, terrainNoise,
+                                                    mm.m[0][3], mm.m[2][3]);
+                    mm.m[1][3] = gy - 0.33 * sy * variantList[si].trunkHeight;
+                    const int cx2 = (int)std::floor(mm.m[0][3] / vegCell);
+                    const int cz2 = (int)std::floor(mm.m[2][3] / vegCell);
+                    cells[{cx2, cz2}].push_back(mm);
+                }
+                continue;   // formation members already binned
             } else {
                 const double s = 0.85 + 0.3 * unit(3);
                 for (int r = 0; r < 3; ++r)
@@ -2912,6 +2958,10 @@ bool LevelLoader::load(const std::string& path,
                 // entire city. One Renderable per (cell, part) gives the AABB
                 // cull real granularity. renderCell 0 restores the old merge.
                 const double renderCell = cs.value("renderCell", 250.0);
+                // HLOD (P1.2): full-detail chunks draw to detailDistance; past
+                // it each cell's MASS-BOX proxy takes over (baked below from
+                // the lots' oriented boxes). 0 disables the swap.
+                const double detailDistance = cs.value("detailDistance", 700.0);
                 for (std::size_t pi = 0; pi < lotParts.size(); ++pi) {
                     RenderMesh& pm = lotParts[pi];
                     if (pm.vertices.empty()) continue;
@@ -2932,6 +2982,7 @@ bool LevelLoader::load(const std::string& path,
                     for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
                         if (chunk.vertices.empty()) continue;
                         Renderable r = proto;
+                        if (detailDistance > 0) r.drawDistance = detailDistance;
                         r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
                         Entity e = world.create();
                         Transform t;   // identity — the mesh sits in world space
@@ -2939,6 +2990,50 @@ bool LevelLoader::load(const std::string& path,
                         world.add<PrevTransform>(e, PrevTransform{t});
                         world.add<Renderable>(e, r);
                     }
+                }
+            }
+            // HLOD PROXIES (P1.2): one mass-box mesh per render cell, baked
+            // from the lots' oriented boxes in their own colours — a distant
+            // chunk becomes a handful of boxes, visually the same silhouette
+            // for a fraction of the triangles. Drawn only PAST detailDistance.
+            if (cs.value("detailDistance", 700.0) > 0) {
+                const double cell = cs.value("renderCell", 250.0);
+                const double dd = cs.value("detailDistance", 700.0);
+                std::map<std::pair<int, int>, RenderMesh> proxies;
+                for (const engine::LotBuilding& lb : grown.lots) {
+                    if (lb.height < 1.5 || lb.pad.size() >= 3) continue;   // parks/greens: skip
+                    RenderMesh& pmesh =
+                        proxies[{(int)std::floor(lb.site.x / cell),
+                                 (int)std::floor(lb.site.y / cell)}];
+                    const Real hw = lb.width * 0.5, hd = lb.depth * 0.5;
+                    const Vec3 ax(std::cos(lb.yaw), 0, std::sin(lb.yaw));
+                    const Vec3 az(-std::sin(lb.yaw), 0, std::cos(lb.yaw));
+                    const Vec3 base(lb.site.x, lb.baseY, lb.site.y);
+                    const Vec3 top = base + Vec3(0, lb.height, 0);
+                    const Vec3 c[4] = {ax * -hw + az * -hd, ax * hw + az * -hd,
+                                       ax * hw + az * hd, ax * -hw + az * hd};
+                    for (int e = 0; e < 4; ++e) {
+                        const Vec3 &a = c[e], &b = c[(e + 1) % 4];
+                        Vec3 n = normalize(Vec3(a.z - b.z, 0, b.x - a.x));
+                        MeshBuilder::emitQuad(pmesh, base + a, base + b, top + b,
+                                              top + a, n, lb.color);
+                    }
+                    MeshBuilder::emitQuad(pmesh, top + c[0], top + c[1], top + c[2],
+                                          top + c[3], Vec3(0, 1, 0), lb.color);
+                }
+                for (auto& [key, pmesh] : proxies) {
+                    if (pmesh.vertices.empty()) continue;
+                    Renderable r;
+                    r.renderLayer = engine::LayerBuildings;
+                    r.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
+                    r.material.roughness = 0.9f;
+                    r.minDistance = dd;
+                    r.mesh = assets.acquireMesh(pmesh, "");
+                    Entity e = world.create();
+                    Transform t;
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    world.add<Renderable>(e, r);
                 }
             }
             // Publish the plan (blocks + lots + collider prisms) for the

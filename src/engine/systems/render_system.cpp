@@ -82,6 +82,15 @@ void RenderSystem::render(FrameContext& ctx) {
             transformedAABB(model, bounds.boxMin, bounds.boxMax, worldMin, worldMax);
             if (!frustum.containsAABB(worldMin, worldMax))
                 return;
+            // HLOD distance policy (P1.2): detail chunks fade out past
+            // drawDistance, their mass-box proxies fade IN at minDistance —
+            // measured to the bounds centre so the pair swaps in lockstep.
+            if (r.drawDistance > 0 || r.minDistance > 0) {
+                const Vec3 c = (worldMin + worldMax) * 0.5;
+                const Real dist = (c - cam.position).length();
+                if (r.drawDistance > 0 && dist > r.drawDistance) return;
+                if (r.minDistance > 0 && dist <= r.minDistance) return;
+            }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
         });
 

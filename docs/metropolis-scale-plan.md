@@ -254,10 +254,95 @@ Plinth 0.45m landed; evaluate on-device. If slopes still read wrong, the
 architect's plinth should scale with local grade (pad drop across the
 footprint), and street-side entrances want a step/stoop from the grammar.
 
+## 6. Urban ground plan: plazas, paths, stairs, fencing ("a building without the building")
+
+Device direction: skyscraper and beachfront lots need designed OPEN space —
+concrete plazas, walking paths, decorative fencing, staircases between
+elevations — not just the green pads parks get today. The framing that makes
+this cheap: an open-space lot goes through the SAME pipeline as a building lot
+(road → block → lot → pad → grammar), but the grammar emits ground furniture
+instead of storeys. Everything below already exists: pads flatten and conform,
+the shape grammar knows lot frontage/orientation, the roof-plan partitioner
+(shape_grammar emitCrown) is exactly the space-divider a plaza needs, and the
+baked-PBR surface pipeline can mint concrete/paver materials like it did the
+HVAC kit.
+
+- **P6.1 Lot selection + slab.** DistrictMap tags candidate lots (financial
+  hub adjacency, beach frontage, or `plaza` zone roll). The lot keeps its
+  flatten pad (it already grades + conforms); the "ground floor" is a concrete
+  slab inset from the lot like a building footprint, with the existing plinth
+  logic as the slab edge. New PartId::PlazaSlab + a paver/concrete Surface
+  (Field2 recipe: expansion-joint grid + aggregate noise, same pattern as
+  evalUtilityPanel).
+- **P6.2 Plaza plan partition.** Reuse the roof-plan partitioner on the slab
+  polygon: cells become lawn insets, planter beds (shrub clusters from the
+  vegetation variants), a fountain (revolved basin + the water surface at rest,
+  no sim), benches/light posts along cell seams. Deterministic per lot seed —
+  same technique, different item catalogue.
+- **P6.3 Paths as mini-roads.** Walking paths are Ramp-class-width ribbons on
+  the EXISTING road mesher (weld profiles, conform regions, all battle-tested)
+  with a paver surface and no markings — connecting slab edges to sidewalk
+  entry points and, on multi-level lots, to stair landings. No new conform
+  code.
+- **P6.4 Stairs + fencing at grade breaks.** Where the slab (or two adjacent
+  plaza cells) sits above the sidewalk/beach grade by > ~0.8m: emit a straight
+  stair run (steps = height/riser, from the grammar's existing stoop logic
+  generalized) and cap exposed slab edges with decorative fence segments
+  (instanced post + rail, one InstanceGroup per lot). Below the threshold the
+  slab just feathers with the plinth as today.
+- Gate (device): a financial-district block and one beach lot read as designed
+  public space at street level — slab + partition + at least one stair and
+  fence run — with zero pokes (the pad/conform machinery is already proven)
+  and no new per-frame cost class (all static instanced geometry).
+
+## 7. P1.5 expanded: streaming the city (build-on-demand + cache)
+
+Now justified: HLOD proxies keep the vista cheap, but a full 2.6km world still
+RESIDES in memory, and bigger worlds (or aerial → street dives) need residency
+management. Determinism is the foundation — every chunk's content is a pure
+function of (level params, seed, cell coords), which the conform/bedrock work
+guarantees, so a chunk can be REBUILT on demand instead of stored, and the
+content-hash cache (P4.1 pattern) makes rebuild ≈ disk read after first visit.
+
+**What streams (answering "does it include everything?"): yes — per cell:**
+- Building detail meshes + their HLOD mass-box proxies (proxy tier stays
+  resident always: it's tiny and owns the vista).
+- Road deck chunks (P1.3 binning) + markings; the WELD stays a global
+  load-time pass (it's cheap; only meshes stream).
+- Vegetation/rock InstanceGroups (already per-cell) and their capsule/box
+  colliders.
+- Jolt bodies for everything above — colliders stream WITH their render
+  chunk, one body-batch per cell, added/removed on residency change.
+- NOT streamed: terrain (CDLOD already streams detail by construction), water,
+  the road graph/lot data (small, resident — needed for AI/navigation later),
+  audio, global systems.
+
+**Shape:**
+- **P7.1 Chunk manifest at load.** The generation pass runs as today but stops
+  at DATA (graph, lots, per-cell work orders) — meshes/colliders per cell are
+  built lazily. Manifest = cell → content hash.
+- **P7.2 Residency controller.** Ring around the camera (R_detail ~ 700m =
+  today's drawDistance, R_release = R + 25%): on enter, request cell; on exit,
+  free GPU buffers + Jolt bodies. Budget in BYTES with an LRU beyond the ring.
+- **P7.3 Background bake + cache.** A worker thread runs the cell work order
+  (grammar emit → chunk mesh → upload staging; Jolt shapes built off-thread,
+  bodies added on main). First build writes `cache/city/<hash>.bin`; later
+  visits read it. Fade/pop policy: proxies are ALWAYS resident, so a late
+  chunk is a soft LOD switch, never a hole.
+- **P7.4 Determinism harness.** CI test: bake cell (i,j) cold, bake it again
+  via cache, byte-compare; and a soak that drives the camera across the map
+  asserting no chunk hash ever differs from the manifest.
+- Branch note: this is a build-pipeline restructure (loader split into
+  plan/bake phases + a residency system) — do it on a dedicated branch off
+  this one, landing P7.1 (manifest split) first since it's independently
+  useful for load time.
+
 ## Order of execution
 
-1. P1.1–P1.4 (chunking + mips) — perf floor for everything else.
-2. P3.1 (conform evidence) — cheap, unblocks the conform rework.
+1. P1.1–P1.4 (chunking + mips) — perf floor for everything else. **DONE**
+2. P3.1 (conform evidence) — cheap, unblocks the conform rework. **DONE**
 3. P2 (freeway ribbon) — needs a regen anyway; do after P1 so testing is fast.
-4. P4.1 (erosion cache) anytime — independent quick win.
-5. P3.2, P4.2/P4.3, P1.5 (streaming) after re-measuring.
+4. P4.1 (erosion cache) anytime — independent quick win. **DONE**
+5. P3.2 **DONE**; P4.2/P4.3 next.
+6. §6 plazas (small, self-contained, huge look win near hubs/beach).
+7. §7 streaming on its own branch (P7.1 manifest split first).

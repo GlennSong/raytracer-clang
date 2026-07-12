@@ -65,6 +65,13 @@ struct Renderable {
     MeshHandle mesh;   // null until assigned an uploaded mesh (ADR-0007)
     RenderMaterial material;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
+    // Distance policy (HLOD, metropolis-scale-plan P1.2). drawDistance > 0:
+    // cull when the camera is farther than this from the mesh bounds — the
+    // full-detail city chunks. minDistance > 0: cull when NEARER than this —
+    // the chunk's mass-box HLOD proxy, which takes over exactly where the
+    // detail chunk fades. 0 = always drawn (default, everything else).
+    Real drawDistance = 0;
+    Real minDistance = 0;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
