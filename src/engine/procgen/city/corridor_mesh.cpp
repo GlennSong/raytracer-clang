@@ -28,6 +28,15 @@ struct Rib {
     }
 };
 
+// §11: the gore band adapts to the room available — a street target close
+// to the corridor leaves the free clothoid enough length to make its turn
+// (a fixed 90 m band starved it into a folded needle).
+Real goreBandLen(const CorridorDef& c, const ExitDef& e, Real L) {
+    const Real sg = std::max(Real(1), std::min(e.station, L - 1));
+    const Real d = (e.target - c.horizontal.pos(sg)).length();
+    return std::min(Real(90), std::max(Real(40), d * 0.35));
+}
+
 }  // namespace
 
 CorridorMeshOut buildCorridorMesh(
@@ -203,12 +212,16 @@ CorridorMeshOut buildCorridorMesh(
         for (const ExitDef& e : c.exits) {
             const int ds = e.upStation ? -1 : 1;
             if (side != ds) continue;
-            // open ONLY across the nose + the parallel run: the decel/accel
-            // flare is still deck edge and keeps its wall (device: "some of
-            // the freeway walls are now missing parapets/rails")
-            const Real a = e.onRamp ? e.station - 75.0 : e.station - 25.0;
-            const Real b = e.onRamp ? e.station + 25.0 : e.station + 75.0;
-            if (s > a && s < b) return true;
+            // open exactly across the GORE BAND (the ramp piece that rides
+            // the deck edge, §11) — the flare approach keeps its wall
+            const Real dsf = e.upStation ? 1.0 : -1.0;
+            const Real sgx = std::max(Real(1),
+                                      std::min(e.station, Real(1e9)));
+            const Real Lg2 = goreBandLen(c, e, L);
+            const Real s0b = e.onRamp ? sgx - dsf * Lg2 : sgx;
+            const Real s1b = e.onRamp ? sgx : sgx + dsf * Lg2;
+            if (s > std::min(s0b, s1b) - 4.0 && s < std::max(s0b, s1b) + 4.0)
+                return true;
         }
         return false;
     };
@@ -316,7 +329,22 @@ CorridorMeshOut buildCorridorMesh(
     }
 
     // AT-GRADE flatten: windows of the deck footprint carve the terrain to
-    // the deck plane (the proven pad machinery does the blending).
+    // the deck plane (the proven pad machinery does the blending). The gore
+    // BAND (§11) widens the footprint on its side while it runs.
+    auto bandExtra = [&](Real s2, int sideSign) {
+        Real ex = 0;
+        for (const ExitDef& e2 : c.exits) {
+            if ((e2.upStation ? -1 : 1) != sideSign) continue;
+            const Real dsf = e2.upStation ? 1.0 : -1.0;
+            const Real sgx = std::max(Real(1), std::min(e2.station, L - 1.0));
+            const Real Lg2 = goreBandLen(c, e2, L);
+            const Real s0b = e2.onRamp ? sgx - dsf * Lg2 : sgx;
+            const Real s1b = e2.onRamp ? sgx : sgx + dsf * Lg2;
+            if (s2 >= std::min(s0b, s1b) && s2 <= std::max(s0b, s1b))
+                ex = std::max(ex, Real(5.8 + 1.5));
+        }
+        return ex;
+    };
     {
         // 4 m windows: a 12 m flat step vs a graded deck left the terrain
         // poking through in tiles (device: the dark rectangles); short steps
@@ -330,8 +358,10 @@ CorridorMeshOut buildCorridorMesh(
             if (!elevated[std::min(i0, n)]) {
                 const Vec2 p0 = c.horizontal.pos(s0), p1 = c.horizontal.pos(s1);
                 const Vec2 n0 = c.horizontal.normal(s0), n1 = c.horizontal.normal(s1);
-                const Real hp0 = c.halfWidthAt(s0, 1) + 2.0, hp1 = c.halfWidthAt(s1, 1) + 2.0;
-                const Real hn0 = c.halfWidthAt(s0, -1) + 2.0, hn1 = c.halfWidthAt(s1, -1) + 2.0;
+                const Real hp0 = c.halfWidthAt(s0, 1) + 2.0 + bandExtra(s0, 1);
+                const Real hp1 = c.halfWidthAt(s1, 1) + 2.0 + bandExtra(s1, 1);
+                const Real hn0 = c.halfWidthAt(s0, -1) + 2.0 + bandExtra(s0, -1);
+                const Real hn1 = c.halfWidthAt(s1, -1) + 2.0 + bandExtra(s1, -1);
                 std::vector<Vec3> poly{
                     Vec3(p0.x + n0.x * hp0, 0, p0.y + n0.y * hp0),
                     Vec3(p1.x + n1.x * hp1, 0, p1.y + n1.y * hp1),
@@ -350,27 +380,117 @@ CorridorMeshOut buildCorridorMesh(
     // the mainline tangent, and clothoids down to the street target on its
     // own crest/sag profile. It conforms (flattens terrain) ONLY over its
     // landing run — the body answers to its alignment, not the ground.
+    // Mainline samples for the never-under-the-deck check (§11).
+    std::vector<Vec2> corrPts;
+    for (Real s2 = 0; s2 <= L; s2 += 25.0) corrPts.push_back(c.horizontal.pos(s2));
+    Real corrGuard = 0;
+    for (int i = 0; i <= n; ++i)
+        corrGuard = std::max(corrGuard, std::max(halfN[i], halfP[i]));
+    corrGuard += 1.5;
     for (const ExitDef& e : c.exits) {
+        out.rampPaths.emplace_back();                    // parallel to exits
+        std::vector<Vec3>& path = out.rampPaths.back().pts;
         const Real sg = std::max(Real(1), std::min(e.station, L - 1.0));
-        const int dirSign = e.upStation ? -1 : 1;
-        const Vec2 travel = c.horizontal.tangent(sg) * (e.upStation ? 1.0 : -1.0);
-        const Real off0 =
-            dirSign * (c.medianWidth * 0.5 + c.shoulderIn +
-                       (c.lanes.lanesAt(sg + (e.onRamp ? 1.0 : -1.0),
-                                        e.upStation) -
-                       0.5) * c.laneWidth);
-        const Vec2 P0 = c.horizontal.offset(sg, off0);
-        // an exit LEAVES down-stream; an on-ramp ARRIVES from up-stream —
-        // its parallel run extends backwards from the merge point
-        const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
+        const int dirSign = e.upStation ? -1 : 1;        // offset side
+        const Real ds = e.upStation ? 1.0 : -1.0;        // flow over stations
+        const Vec2 travel = c.horizontal.tangent(sg) * ds;
+        // ---- GORE BAND (§11 lego parts): the ramp's first piece is emitted
+        // from the MAINLINE'S OWN RIBS — its inner edge IS the deck edge,
+        // vertex for vertex, so the ramp can never detach from or slide
+        // under the deck. Width blends aux-lane -> full ramp along the run;
+        // all divergence happens in the free section beyond the band.
+        const Real Lg = goreBandLen(c, e, L);
+        const Real rampW = 5.8;
+        const int nb = 30;
+        const Real sBand0 = e.onRamp ? sg - ds * Lg : sg;   // flow-first end
+        std::vector<Vec3> bandIn(nb + 1), bandOut(nb + 1), bandPath;
+        std::vector<bool> bandUp(nb + 1);
+        for (int i = 0; i <= nb; ++i) {
+            const Real t = static_cast<Real>(i) / nb;
+            const Real si = std::min(L - 1.0, std::max(Real(1.0),
+                                                        sBand0 + ds * t * Lg));
+            const Real tw = e.onRamp
+                ? rampW + (c.laneWidth - rampW) * t     // arrive -> accel lane
+                : c.laneWidth + (rampW - c.laneWidth) * t;   // aux -> full ramp
+            Rib rb;
+            rb.c = c.horizontal.pos(si);
+            rb.n = c.horizontal.normal(si);
+            rb.z = c.vertical.elevation(si);
+            rb.slope = c.superelevationAt(si);
+            const Real innerOff = dirSign * c.halfWidthAt(si, dirSign);
+            bandIn[i] = rb.at(innerOff);
+            bandOut[i] = rb.at(innerOff + dirSign * tw);
+            bandUp[i] = rb.z - gy(rb.c) > 0.35;
+            bandPath.push_back(rb.at(innerOff + dirSign * tw * 0.5));
+        }
+        for (int i = 0; i < nb; ++i) {
+            MeshBuilder::emitQuad(out.deck, bandIn[i], bandOut[i],
+                                  bandOut[i + 1], bandIn[i + 1],
+                                  Vec3(0, 1, 0), kAsphalt);
+            // outer white edge line
+            const Vec3 lift(0, 0.02, 0);
+            Vec3 d0 = bandOut[i] - bandIn[i], d1 = bandOut[i + 1] - bandIn[i + 1];
+            const Real l0 = std::max(Real(0.4), Real(d0.length()));
+            const Real l1 = std::max(Real(0.4), Real(d1.length()));
+            auto edgeAt = [&](int k, Real back) {
+                const Vec3& o = k ? bandOut[i + 1] : bandOut[i];
+                const Vec3 dd = k ? d1 * (1.0 / l1) : d0 * (1.0 / l0);
+                return o - dd * back + lift;
+            };
+            MeshBuilder::emitQuad(out.markings, edgeAt(0, 0.5), edgeAt(0, 0.28),
+                                  edgeAt(1, 0.28), edgeAt(1, 0.5),
+                                  Vec3(0, 1, 0), kWhite);
+            // outer parapet + fascia (the deck-side needs nothing: it IS the deck)
+            const bool up2 = bandUp[i] || bandUp[i + 1];
+            Vec3 nrm(dirSign * (bandOut[i].x - bandIn[i].x),
+                     0, dirSign * (bandOut[i].z - bandIn[i].z));
+            nrm = nrm.lengthSquared() > 1e-12 ? normalize(nrm) : Vec3(1, 0, 0);
+            const Real f0 = up2 ? deckDepth
+                                : bandOut[i].y - (gy(Vec2(bandOut[i].x, bandOut[i].z)) - 0.6);
+            const Real f1 = up2 ? deckDepth
+                                : bandOut[i + 1].y - (gy(Vec2(bandOut[i + 1].x, bandOut[i + 1].z)) - 0.6);
+            MeshBuilder::emitQuad(out.deck,
+                                  bandOut[i] - Vec3(0, std::max(Real(0.3), f0), 0),
+                                  bandOut[i + 1] - Vec3(0, std::max(Real(0.3), f1), 0),
+                                  bandOut[i + 1], bandOut[i], nrm, kAsphalt * 1.6);
+            const Vec3 up3(0, 0.85, 0);
+            MeshBuilder::emitQuad(out.barrier, bandOut[i], bandOut[i + 1],
+                                  bandOut[i + 1] + up3, bandOut[i] + up3,
+                                  nrm, kConcrete);
+            MeshBuilder::emitQuad(out.barrier, bandOut[i + 1] + up3 * 0,
+                                  bandOut[i] + up3 * 0,
+                                  bandOut[i] + up3, bandOut[i + 1] + up3,
+                                  nrm * -1.0, kConcrete);
+        }
+        // ---- FREE SECTION: starts EXACTLY where the band ends (same pose),
+        // clothoids to the street. Never under the mainline: validated below.
+        const Real sFree = e.onRamp ? sBand0 : sg + ds * Lg;
+        const Real freeHalf = c.halfWidthAt(sFree, dirSign);
+        const Vec2 C0 = c.horizontal.offset(
+            sFree, dirSign * (freeHalf + rampW * 0.5));
+        const Vec2 away = c.horizontal.tangent(sFree) * ds *
+                          (e.onRamp ? -1.0 : 1.0);
         Alignment ra = Alignment::fromPolyline(
-            {P0, P0 + away * 35.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
-        if (ra.empty() || ra.length() < 48.0) {
+            {C0, C0 + away * 30.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
+        bool folded = false;
+        if (!ra.empty()) {
+            const Real rl2 = ra.length();
+            Vec2 tPrev = ra.tangent(0);
+            for (Real s2 = 6.0; s2 <= rl2; s2 += 6.0) {
+                const Vec2 tc = ra.tangent(std::min(s2, rl2 - 0.5));
+                if (dot(tPrev, tc) < 0.05) { folded = true; break; }
+                tPrev = tc;
+            }
+            if (rl2 > 2.4 * (e.target - C0).length()) folded = true;
+        }
+        if (ra.empty() || ra.length() < 48.0 || folded) {
             LOG_WARN << "[corridor] ramp at s=" << e.station
                      << (e.onRamp ? " (on-ramp)" : " (exit)")
-                     << " dropped: alignment "
+                     << " dropped: free run "
                      << (ra.empty() ? 0.0 : ra.length())
-                     << " m is too short — move the station or the target";
+                     << (folded ? " m FOLDS — street target too close/sharp"
+                                : " m is too short — move station or target");
+            out.rampPaths.back().pts.clear();
             continue;
         }
         // Full alignment reaches the street node; the RIBBON stops at the
@@ -382,7 +502,9 @@ CorridorMeshOut buildCorridorMesh(
         // for the exit to descend"): drop/climb over the first ~45% of the
         // ramp, then run at street grade to the junction.
         VerticalProfile rp;
-        const Real zDeck = c.vertical.elevation(sg);
+        const Real zDeck = c.vertical.elevation(sFree) +
+                           c.superelevationAt(sFree) * dirSign *
+                               (freeHalf + rampW * 0.5);
         const Real sKnee = std::max(Real(80), RL * 0.45);
         if (sKnee < RL - 10.0)
             rp.pvis = {{0, zDeck, 0},
@@ -406,12 +528,39 @@ CorridorMeshOut buildCorridorMesh(
             // some pillars underneath" — done)
             rUp[i] = rr[i].z - gy(rr[i].c) > 0.35;
         }
+        {   // §11 guard: the free run must stay OUT of the mainline footprint
+            bool crosses = false;
+            for (int i = 0; i <= rn && !crosses; ++i) {
+                const Real rs2 = RL * i / rn;
+                if (rs2 < 20.0) continue;
+                for (const Vec2& q : corrPts)
+                    if ((q - rr[i].c).length() < corrGuard) { crosses = true; break; }
+            }
+            if (crosses)
+                LOG_WARN << "[corridor] ramp at s=" << e.station
+                         << " runs through the mainline footprint — its street "
+                            "target sits on the wrong side; pick another";
+        }
+        std::vector<Vec3> freePath;
+        for (int i = 0; i <= rn; ++i)
+            freePath.push_back(Vec3(rr[i].c.x, rr[i].z, rr[i].c.y));
+        if (e.onRamp) {   // flow order: street -> arrival -> merge
+            path.assign(freePath.rbegin(), freePath.rend());
+            path.insert(path.end(), bandPath.begin() + 1, bandPath.end());
+        } else {          // flow order: gore -> band end -> street
+            path = bandPath;
+            path.insert(path.end(), freePath.begin() + 1, freePath.end());
+        }
         // The street end FLARES into a landing apron (device: "the onramp
         // needs to merge with the roads below nicer") — the last 8 m widen
         // toward the junction so the pavement reads as a mouth, not a stub.
+        // The MOUTH (device: "open the mouth of that road ribbon into a
+        // multilane road"): the last 45 m widen smoothly into a two-lane
+        // throat at the junction.
         auto rwAt = [&](int i) {
             const Real rs2 = RL * i / rn;
-            return rw + std::max(Real(0), (rs2 - (RL - 8.0)) / 8.0) * 2.2;
+            const Real m = std::max(Real(0), (rs2 - (RL - 45.0)) / 45.0);
+            return rw + (m * m * (3.0 - 2.0 * m)) * 3.2;
         };
         for (int i = 0; i < rn; ++i) {
             // deck
@@ -446,8 +595,8 @@ CorridorMeshOut buildCorridorMesh(
                 // junction mouth (street end) — but everywhere between, BOTH
                 // edges carry rail (device: "no railings along the
                 // entrance/exits to the onramp")
-                const bool skipParapet =
-                    (inner && rs < 42.0) || rs > RL - 14.0;
+                (void)inner;
+                const bool skipParapet = rs > RL - 14.0;
                 const Vec3 e0 = rr[i].at(sd * rwAt(i)), e1 = rr[i + 1].at(sd * rwAt(i + 1));
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
@@ -644,26 +793,7 @@ CorridorMeshOut buildCorridorMesh(
             }
         }
 
-        // GORE NOSE: the painted wedge between the mainline's outer edge and
-        // the ramp's inner edge as they diverge past the gore.
-        for (int k = 0; k < 5; ++k) {
-            const Real ds0 = k * 3.0, ds1 = ds0 + 3.0;
-            const Real dirAlong = (e.upStation ? 1.0 : -1.0) * (e.onRamp ? -1.0 : 1.0);
-            const Real sm0 = std::max(Real(0), std::min(L, sg + dirAlong * ds0));
-            const Real sm1 = std::max(Real(0), std::min(L, sg + dirAlong * ds1));
-            const Vec3 d0v = Vec3(0, 0.02, 0) +
-                Vec3(c.horizontal.offset(sm0, dirSign * c.halfWidthAt(sm0, dirSign)).x,
-                     c.vertical.elevation(sm0),
-                     c.horizontal.offset(sm0, dirSign * c.halfWidthAt(sm0, dirSign)).y);
-            const Vec3 d1v = Vec3(0, 0.02, 0) +
-                Vec3(c.horizontal.offset(sm1, dirSign * c.halfWidthAt(sm1, dirSign)).x,
-                     c.vertical.elevation(sm1),
-                     c.horizontal.offset(sm1, dirSign * c.halfWidthAt(sm1, dirSign)).y);
-            const Vec3 r0v = rr[std::min(rn, (int)(ds0 / RL * rn))].at(-dirSign * (rw - 0.3)) + Vec3(0, 0.02, 0);
-            const Vec3 r1v = rr[std::min(rn, (int)(ds1 / RL * rn))].at(-dirSign * (rw - 0.3)) + Vec3(0, 0.02, 0);
-            MeshBuilder::emitQuad(out.markings, d0v, r0v, r1v, d1v,
-                                  Vec3(0, 1, 0), kWhite);
-        }
+
     }
 
     return out;

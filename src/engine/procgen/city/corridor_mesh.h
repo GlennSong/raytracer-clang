@@ -27,6 +27,14 @@ struct CorridorMeshOut {
     // as USED ground (device: "turn those pylons into a used lot so nothing
     // else can be built there").
     std::vector<Vec2> pierBases;
+    // §11 (lego parts): the DRAWN centreline of each ramp — gore band riding
+    // the deck edge + free run to the street — with ABSOLUTE heights. The
+    // loader builds the nav chain from THESE points: one source of truth, the
+    // mesh and the graph can never disagree. Parallel to CorridorDef.exits;
+    // a dropped ramp leaves an empty path. Points run in FLOW order (an
+    // exit: deck -> street; an on-ramp: street -> deck).
+    struct RampPath { std::vector<Vec3> pts; };
+    std::vector<RampPath> rampPaths;
 };
 
 // `avoidRoads`: pier bents SLIDE along the corridor (or the span lengthens)

@@ -2519,7 +2519,8 @@ bool LevelLoader::load(const std::string& path,
                         if (e.onRamp ? along > -20.0 : along < 20.0)
                             return false;
                         const Real dg = (an.pos - gc).length();
-                        if (dg < 70.0 || dg > 340.0) return false;
+                        // the gore band + a turnable clothoid need ~130 m
+                        if (dg < 130.0 || dg > 360.0) return false;
                         if (needJunction && an.degree < 2) return false;
                         for (const Vec2& u : used)
                             if ((u - an.pos).length() < 45.0) return false;
@@ -2609,153 +2610,80 @@ bool LevelLoader::load(const std::string& path,
                     freewayEdge(downChain[k], downChain[k - 1]);   // high -> low s
                 for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
                     const engine::ExitDef& e = def.exits[xi];
-                    const Real sg = std::max(Real(1),
-                                             std::min(e.station, Lc - 1.0));
-                    // The merge is a LANE EVENT (§9.6): the ramp continues
-                    // ALONG the aux lane and joins the carriageway FORWARD of
-                    // the merge (behind the gore for exits) — never a
-                    // sideways/backward hop onto the centreline.
-                    const std::vector<int>& chain =
-                        e.upStation ? upChain : downChain;
-                    // FLOW-AWARE (device: "a car is still turning around once
-                    // it gets onto the freeway"): the down carriageway flows
-                    // toward LOWER stations — joins that assumed increasing
-                    // stations pointed AGAINST its traffic on that side.
-                    const Real flowDir = e.upStation ? 1.0 : -1.0;
-                    const Real joinS = std::max(Real(1), std::min(Lc - 1.0,
-                        sg + flowDir * (e.onRamp ? 1.0 : -1.0) *
-                                 e.decelLength * 0.75));
-                    int mainIdx = chain.front();
-                    Real bestDs = 1e30;
-                    for (std::size_t k = 0; k < chain.size(); ++k) {
-                        // on-ramp: first node AT/PAST joinS along the flow;
-                        // exit: last node BEFORE it (fall back to nearest)
-                        const Real d0 = (chainS[k] - joinS) * flowDir;
-                        const Real ds = (e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
-                                                  : (d0 <= 0 ? -d0 : 1e4 + d0));
-                        if (ds < bestDs) { bestDs = ds; mainIdx = chain[k]; }
-                    }
-                    // aux-lane stations between the merge point and the join
-                    const Real auxOff =
-                        (e.upStation ? -1.0 : 1.0) *
-                        (def.medianWidth * 0.5 + def.shoulderIn +
-                         (def.lanes.throughLanes + 0.5) * def.laneWidth);
-                    std::vector<int> auxChain;
-                    {
-                        // walk from the traffic's FIRST aux station toward its
-                        // last, in flow order, whatever the carriageway
-                        const Real sFrom = e.onRamp ? sg : joinS;
-                        const Real sTo = e.onRamp ? joinS : sg;
-                        const Real stepDir = (sTo >= sFrom) ? 1.0 : -1.0;
-                        for (Real sv = sFrom + stepDir * 26.0;
-                             (sTo - sv) * stepDir > 12.0; sv += stepDir * 26.0) {
-                            engine::RoadNode nd;
-                            nd.pos = def.horizontal.offset(sv, auxOff);
-                            nd.elev = def.vertical.elevation(sv) +
-                                      def.superelevationAt(sv) * auxOff;
-                            nd.elevAbsolute = true;
-                            auxChain.push_back(
-                                static_cast<int>(eg.graph.nodes.size()));
-                            eg.graph.nodes.push_back(nd);
-                        }
-                    }
-                    const Vec2 travel = def.horizontal.tangent(sg) *
-                                        (e.upStation ? 1.0 : -1.0);
-                    const int dirSign = e.upStation ? -1 : 1;
-                    const Real off0 =
-                        dirSign * (def.medianWidth * 0.5 + def.shoulderIn +
-                                   (def.lanes.lanesAt(
-                                        sg + (e.onRamp ? 1.0 : -1.0),
-                                        e.upStation) - 0.5) *
-                                       def.laneWidth);
-                    const Vec2 P0 = def.horizontal.offset(sg, off0);
-                    const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
-                    engine::Alignment ra = engine::Alignment::fromPolyline(
-                        {P0, P0 + away * 35.0, e.target}, e.rampRadius,
-                        e.rampSpiral, 2.0);
-                    if (ra.empty() || ra.length() < 48.0) {
-                        LOG_WARN << "[corridor] nav ramp at s=" << e.station
-                                 << " dropped (too short) — not drivable";
-                        continue;
-                    }
-                    const Real RLf = ra.length();
-                    // ribbon + nav stop at the landing setback; the street
-                    // net carries the last stretch via a grafted STUB (§10.3)
-                    const Real RL = std::max(Real(40), RLf - e.landingSetback);
-                    engine::VerticalProfile rp;
-                    const Real zDeck = def.vertical.elevation(sg);
-                    const Real sKnee = std::max(Real(80), RL * 0.45);
-                    if (sKnee < RLf - 10.0)
-                        rp.pvis = {{0, zDeck, 0},
-                                   {sKnee, e.targetY, std::min(sKnee, Real(80))},
-                                   {RLf, e.targetY, 0}};
-                    else
-                        rp.pvis = {{0, zDeck, 0},
-                                   {RLf, e.targetY, std::min(RLf * 0.5, Real(90))}};
+                    // §11 ONE SOURCE OF TRUTH: the nav chain is built from
+                    // the MESH'S OWN drawn centreline (gore band riding the
+                    // deck + free run to the street) — the geometry the
+                    // wheels see is the geometry the router sees.
+                    if (xi >= pc.mesh.rampPaths.size() ||
+                        pc.mesh.rampPaths[xi].pts.size() < 4)
+                        continue;   // dropped ramp (mesh already warned)
+                    const std::vector<Vec3>& pts = pc.mesh.rampPaths[xi].pts;
+                    // chain a node every ~8th sample (~24 m) + both ends
                     std::vector<int> chainR;
-                    const int rn2 = std::max(2, static_cast<int>(RL / 26.0));
-                    for (int k = 0; k <= rn2; ++k) {
-                        const Real sv = RL * k / rn2;
+                    for (std::size_t k = 0; k < pts.size();
+                         k = std::min(pts.size() - 1, k + 8)) {
                         engine::RoadNode nd;
-                        nd.pos = ra.pos(sv);
-                        nd.elev = rp.elevation(sv);
+                        nd.pos = Vec2(pts[k].x, pts[k].z);
+                        nd.elev = pts[k].y;
                         nd.elevAbsolute = true;
                         chainR.push_back(static_cast<int>(eg.graph.nodes.size()));
                         eg.graph.nodes.push_back(nd);
+                        if (k == pts.size() - 1) break;
                     }
                     auto ramp = [&](int a2, int b2) {
                         engine::RoadEdge e2;
                         e2.a = a2; e2.b = b2;
-                        e2.width = 6.5;
+                        e2.width = 5.0;   // ONE clean nav lane, centred (a
+                                          // 6.5 width rounded to two lanes and
+                                          // rode cars onto the shoulder)
                         e2.klass = engine::RoadClass::Ramp;
                         e2.provenance = engine::RoadProvenance::CorridorRamp;
                         eg.graph.edges.push_back(e2);
                     };
-                    if (e.onRamp) {
-                        // street -> climb -> merge point -> ACCEL LANE -> join
-                        for (int k = static_cast<int>(chainR.size()) - 1; k > 0; --k)
-                            ramp(chainR[k], chainR[k - 1]);
-                        int prev2 = chainR.front();
-                        for (int an : auxChain) { ramp(prev2, an); prev2 = an; }
-                        ramp(prev2, mainIdx);                // zipper join, forward
-                        eg.snapNodes.push_back(chainR.back());
-                    } else {
-                        // leave -> DECEL LANE -> gore -> descend -> street
-                        int prev2 = mainIdx;
-                        for (int an : auxChain) { ramp(prev2, an); prev2 = an; }
-                        ramp(prev2, chainR.front());
-                        for (int k = 0; k + 1 < static_cast<int>(chainR.size()); ++k)
-                            ramp(chainR[k], chainR[k + 1]);
-                        eg.snapNodes.push_back(chainR.back());
+                    for (std::size_t k = 0; k + 1 < chainR.size(); ++k)
+                        ramp(chainR[k], chainR[k + 1]);   // FLOW order already
+                    // hand off to the carriageway just past the band, along
+                    // the flow (never backward)
+                    const Real ds = e.upStation ? 1.0 : -1.0;
+                    const Real sg = std::max(Real(1),
+                                             std::min(e.station, Lc - 1.0));
+                    const Real sJoin = std::max(Real(1), std::min(Lc - 1.0,
+                        e.onRamp ? sg + ds * 24.0 : sg - ds * 24.0));
+                    const std::vector<int>& chain =
+                        e.upStation ? upChain : downChain;
+                    int mainIdx = chain.front();
+                    Real best = 1e30;
+                    for (std::size_t k = 0; k < chain.size(); ++k) {
+                        const Real d0 = (chainS[k] - sJoin) * ds;
+                        const Real dv = e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
+                                                 : (d0 <= 0 ? -d0 : 1e4 + d0);
+                        if (dv < best) { best = dv; mainIdx = chain[k]; }
                     }
-                    // §10.3 JUNCTION STUB: graft a short street edge from the
-                    // landing node back to the ribbon's setback point. The
-                    // street mesher then builds a REAL junction mouth at the
-                    // landing (blending, curb returns, signals), the stub
-                    // carries the pavement to the ribbon end, and the nav
-                    // terminal welds onto the stub's outer node exactly.
-                    if (rampAnchors[xi].first >= 0 && e.landingSetback > 1.0) {
+                    if (e.onRamp) {
+                        ramp(chainR.back(), mainIdx);   // merge, forward
+                        eg.snapNodes.push_back(chainR.front());   // street end
+                    } else {
+                        ramp(mainIdx, chainR.front());  // diverge onto the band
+                        eg.snapNodes.push_back(chainR.back());    // street end
+                    }
+                    // §10.3 JUNCTION STUB: graft a street edge from the
+                    // landing node back to the ribbon's mouth so the street
+                    // mesher builds a REAL junction there.
+                    if (rampAnchors[xi].first >= 0) {
                         engine::RoadNet& net = preNets[rampAnchors[xi].first];
-                        const Vec2 P = ra.pos(RL);
-                        // parallel arrays must STAY parallel: backfill any
-                        // optional array the net left empty before pushing
+                        const Vec3& pe = e.onRamp ? pts.front() : pts.back();
+                        const Vec2 P(pe.x, pe.z);
                         if (net.tangents.size() < net.nodes.size())
                             net.tangents.resize(net.nodes.size(), Vec2(0, 0));
-                        if (!net.edgeWidths.empty() &&
-                            net.edgeWidths.size() < net.edges.size())
+                        if (net.edgeWidths.size() < net.edges.size())
                             net.edgeWidths.resize(net.edges.size(), 0.0);
-                        if (net.edgeWidths.empty())
-                            net.edgeWidths.assign(net.edges.size(), 0.0);
-                        if (!net.edgeLayers.empty() &&
-                            net.edgeLayers.size() < net.edges.size())
+                        if (net.edgeLayers.size() < net.edges.size())
                             net.edgeLayers.resize(net.edges.size(), 0);
-                        if (net.edgeLayers.empty())
-                            net.edgeLayers.assign(net.edges.size(), 0);
                         const int pIdx = static_cast<int>(net.nodes.size());
                         net.nodes.push_back(P);
                         net.tangents.push_back(Vec2(0, 0));
                         net.edges.push_back({rampAnchors[xi].second, pIdx});
-                        net.edgeWidths.push_back(7.0);
+                        net.edgeWidths.push_back(9.0);   // the opened mouth
                         net.edgeLayers.push_back(0);
                         LOG_INFO << "[corridor] stub grafted at ("
                                  << e.target.x << ", " << e.target.y << ")";
