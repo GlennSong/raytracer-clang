@@ -32,11 +32,16 @@ struct RoadNode {
 // are the same intersection only when they share a layer; different layers pass over/under
 // (an overpass), so the crossing is NOT turned into a shared node. Default 0 = the old
 // all-at-grade behaviour.
+// Where an edge came from (§10): the unified level graph carries streets and
+// corridor-derived chains side by side; meshing and furniture dispatch on it.
+enum class RoadProvenance : uint8_t { Street = 0, CorridorMain, CorridorRamp };
+
 struct RoadEdge {
     int a = 0, b = 0;
     Real width = 8;
     RoadClass klass = RoadClass::Local;
     int layer = 0;
+    RoadProvenance provenance = RoadProvenance::Street;
     // One-way in stored direction (a -> b). A freeway CARRIAGEWAY is one-way
     // by construction (plan §8/§9): the corridor publishes two of these, one
     // per direction, so traffic can never take a link against the flow.

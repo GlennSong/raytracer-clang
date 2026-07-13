@@ -20,6 +20,10 @@ StreetFurniturePlan planStreetFurniture(
     // spread) so it never lands in a carriageway.
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
+        // §10: the unified graph includes the corridor — merges/gores are
+        // junctions in the graph but NEVER signalised street corners.
+        if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
+            continue;
         if (!nav.isJunction(L.to)) continue;
         Vec2 d = nav.direction(li);
         Vec2 node = nav.nodes[L.to];
@@ -46,6 +50,8 @@ StreetFurniturePlan planStreetFurniture(
     // stand on; junction mouths are left to the signal poles.
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
+        if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
+            continue;   // §10: corridor lighting is its own pass, not lamps
         if (L.width > p.maxLampRoadWidth) continue;
         Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
         const Real len = (b - a).length();

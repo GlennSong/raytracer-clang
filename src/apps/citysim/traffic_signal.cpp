@@ -14,6 +14,11 @@ void SignalController::build(const engine::NavGraph& graph, double greenTime,
 
     for (int li = 0; li < graph.linkCount(); ++li) {
         int to = graph.links[li].to;
+        // A freeway merge/gore is a junction in the unified graph (§10) but
+        // never a stoplight: mainline and ramp approaches stay uncontrolled.
+        if (graph.links[li].klass == engine::RoadClass::Freeway ||
+            graph.links[li].klass == engine::RoadClass::Ramp)
+            continue;
         if (!graph.isJunction(to)) continue;            // open road: no signal
         // Only signalise real crossings — a node with 4+ approaches (a proper
         // intersection). T-junctions and minor merges (degree 3) go uncontrolled,

@@ -364,16 +364,12 @@ struct CitySimConfig {
 // for where they are"). The loader plans and SPAWNS every signal pole and
 // street lamp from the roads' deterministic nav graph; this component tells
 // the sim where they stand. The sim animates lenses / reacts to phases only.
-// Extra road-graph pieces that JOIN the drivable network at build (plan §8
-// P8.4): a corridor publishes its mainline + ramp chains here (nodes carry
-// elev-above-ground so traffic rides the deck). The citysim bridge appends
-// them to the combined graph, SNAPPING the listed terminal nodes onto the
-// nearest street node so ramps truly connect (device: "does the freeway have
-// to be a part of the road network? I think it does").
-struct ExtraNavGraph {
+// THE level's road network (§10): streets and corridor chains welded into
+// ONE derived graph at load. Every consumer — the citysim nav build, street
+// furniture, editor queries — reads this; nothing merges graphs privately.
+// (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
+struct LevelRoadGraph {
     RoadGraph graph;
-    std::vector<int> snapNodes;   // node indices to weld onto nearby streets
-    Real snapRadius = 16.0;
 };
 
 struct StreetFurniture {

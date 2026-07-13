@@ -2264,6 +2264,13 @@ bool LevelLoader::load(const std::string& path,
     // carve set the roads use; the entities spawn after the terrain does.
     struct PendingCorridor { CorridorMeshOut mesh; };
     std::vector<PendingCorridor> preCorridors;
+    // Corridor graph fragments (§10): collected here and welded into THE
+    // level's one road graph after the pre-pass — no consumer-side merging.
+    struct CorridorFrag {
+        engine::RoadGraph graph;
+        std::vector<int> snapNodes;   // street-end terminals to weld
+    };
+    std::vector<CorridorFrag> corridorFrags;
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "corridor") continue;
@@ -2398,7 +2405,7 @@ bool LevelLoader::load(const std::string& path,
             // traffic rides the structure. Ramp street-ends are snap
             // terminals — the citysim bridge welds them onto the street graph.
             {
-                engine::ExtraNavGraph eg;
+                CorridorFrag eg;
                 auto ground = [&](const Vec2& p) {
                     return levelGround ? levelGround(p.x, p.y) : 0.0;
                 };
@@ -2439,6 +2446,7 @@ bool LevelLoader::load(const std::string& path,
                     e2.width = cw;
                     e2.klass = engine::RoadClass::Freeway;
                     e2.oneWay = true;
+                    e2.provenance = engine::RoadProvenance::CorridorMain;
                     eg.graph.edges.push_back(e2);
                 };
                 for (std::size_t k = 0; k + 1 < upChain.size(); ++k)
@@ -2542,6 +2550,7 @@ bool LevelLoader::load(const std::string& path,
                         e2.a = a2; e2.b = b2;
                         e2.width = 6.5;
                         e2.klass = engine::RoadClass::Ramp;
+                        e2.provenance = engine::RoadProvenance::CorridorRamp;
                         eg.graph.edges.push_back(e2);
                     };
                     if (e.onRamp) {
@@ -2562,7 +2571,7 @@ bool LevelLoader::load(const std::string& path,
                         eg.snapNodes.push_back(chainR.back());
                     }
                 }
-                                world.add<engine::ExtraNavGraph>(world.create(), std::move(eg));
+                corridorFrags.push_back(std::move(eg));
             }
             roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
                                pc.mesh.flatten.end());
@@ -2597,10 +2606,61 @@ bool LevelLoader::load(const std::string& path,
                 world.add<MeshCollider>(e, mc);
             }
         };
-        spawn(cm.deck, "deck", Vec3(1, 1, 1), 0.95, true);
         spawn(cm.markings, "markings", Vec3(1, 1, 1), 0.8, false);
         spawn(cm.barrier, "barrier", Vec3(1, 1, 1), 0.9, true);
     }
+    // §10: ONE derived road graph. Streets and corridor chains weld HERE, at
+    // build — the citysim nav, street furniture, and editor all read this
+    // single component instead of merging graphs privately.
+    if (!preNets.empty() || !corridorFrags.empty()) {
+        engine::LevelRoadGraph lrg;
+        for (const engine::RoadNet& net : preNets) {
+            engine::RoadGraph g = engine::navRoadGraph(net);
+            const int base = static_cast<int>(lrg.graph.nodes.size());
+            for (const engine::RoadNode& n : g.nodes)
+                lrg.graph.nodes.push_back(n);
+            for (engine::RoadEdge e : g.edges) {
+                e.a += base; e.b += base;
+                lrg.graph.edges.push_back(e);
+            }
+        }
+        const int streetNodeCount = static_cast<int>(lrg.graph.nodes.size());
+        for (const CorridorFrag& frag : corridorFrags) {
+            std::vector<int> map(frag.graph.nodes.size());
+            for (std::size_t i = 0; i < frag.graph.nodes.size(); ++i) {
+                const bool terminal =
+                    std::find(frag.snapNodes.begin(), frag.snapNodes.end(),
+                              static_cast<int>(i)) != frag.snapNodes.end();
+                int reuse = -1;
+                if (terminal) {   // weld street ends onto real street nodes
+                    Real best = 16.0;
+                    for (int j = 0; j < streetNodeCount; ++j) {
+                        const Real d = (lrg.graph.nodes[j].pos -
+                                        frag.graph.nodes[i].pos).length();
+                        if (d < best) { best = d; reuse = j; }
+                    }
+                }
+                if (reuse >= 0) {
+                    map[i] = reuse;
+                } else {
+                    map[i] = static_cast<int>(lrg.graph.nodes.size());
+                    lrg.graph.nodes.push_back(frag.graph.nodes[i]);
+                }
+            }
+            for (engine::RoadEdge e : frag.graph.edges) {
+                e.a = map[e.a];
+                e.b = map[e.b];
+                lrg.graph.edges.push_back(e);
+            }
+        }
+        if (!lrg.graph.edges.empty()) {
+            LOG_INFO << "[roadgraph] unified: " << lrg.graph.nodes.size()
+                     << " nodes, " << lrg.graph.edges.size() << " edges ("
+                     << corridorFrags.size() << " corridor fragments welded)";
+            world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
+        }
+    }
+
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
 
     // Terrain is parsed once into params + noise so vegetation can scatter on
@@ -2993,6 +3053,36 @@ bool LevelLoader::load(const std::string& path,
                      editorMode, cityEnt, &cityModel, &scriptCache,
                      entityGround ? &entityGround : nullptr,
                      roadCache.empty() ? nullptr : &roadCache);
+    // §10.4: the corridor DOCUMENT entity carries the deck mesh (+ collider),
+    // so the editor's picker selects the corridor like it selects a road —
+    // the deck used to live on an untagged runtime companion, invisible to
+    // click-select. Markings/piers stay companions (never serialized).
+    {
+        std::size_t ci = 0;
+        world.each<SourceSpec>([&](Entity e, SourceSpec& spec) {
+            if (spec.shape != "corridor" || ci >= preCorridors.size()) return;
+            const CorridorMeshOut& cm = preCorridors[ci].mesh;
+            if (!cm.deck.vertices.empty()) {
+                Renderable r;
+                r.material.albedo = Vec3(1, 1, 1);
+                r.material.roughness = 0.95f;
+                r.mesh = assets.acquireMesh(
+                    cm.deck, "corridor:deck:" + std::to_string(ci));
+                world.add<Renderable>(e, r);
+                if (!world.has<PrevTransform>(e))
+                    world.add<PrevTransform>(e, PrevTransform{});
+                MeshCollider mc;
+                mc.vertices.reserve(cm.deck.vertices.size());
+                for (const Vertex& v : cm.deck.vertices)
+                    mc.vertices.push_back(v.position);
+                mc.indices = cm.deck.indices;
+                mc.friction = 0.85;
+                world.add<MeshCollider>(e, mc);
+            }
+            ++ci;
+        });
+    }
+
     }
 
     // Drivable vehicles (ADR-0059) — play mode only (runtime actors, like the
@@ -3510,14 +3600,12 @@ bool LevelLoader::load(const std::string& path,
         root["citysim"].value("streetFurniture", true)) {
         engine::RoadGraph combined;
         std::function<Real(Real, Real)> furnGround;
+        // §10: furniture plans on THE unified graph (class filters keep
+        // lamps/signals off the corridor); ground still comes from the nets.
+        world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
+            if (combined.nodes.empty()) combined = g.graph;
+        });
         world.each<engine::RoadNet>([&](Entity, engine::RoadNet& net) {
-            engine::RoadGraph g = engine::navRoadGraph(net);
-            const int base = static_cast<int>(combined.nodes.size());
-            for (const engine::RoadNode& n : g.nodes) combined.nodes.push_back(n);
-            for (engine::RoadEdge e : g.edges) {
-                e.a += base; e.b += base;
-                combined.edges.push_back(e);
-            }
             if (!furnGround && net.heightAt) furnGround = net.heightAt;
         });
         if (!combined.edges.empty()) {
