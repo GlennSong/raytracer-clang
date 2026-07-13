@@ -2424,10 +2424,9 @@ bool LevelLoader::load(const std::string& path,
                         // centreline sits superelevation*offset above/below
                         // the profile — without it cars sank into the deck
                         // on every curve (device).
-                        nd.elev = std::max(
-                            0.0, def.vertical.elevation(sv) +
-                                     def.superelevationAt(sv) * sideSign * cOff -
-                                     ground(nd.pos));
+                        nd.elev = def.vertical.elevation(sv) +
+                                  def.superelevationAt(sv) * sideSign * cOff;
+                        nd.elevAbsolute = true;
                         const int idx = static_cast<int>(eg.graph.nodes.size());
                         eg.graph.nodes.push_back(nd);
                         (sideSign < 0 ? upChain : downChain).push_back(idx);
@@ -2455,15 +2454,20 @@ bool LevelLoader::load(const std::string& path,
                     // sideways/backward hop onto the centreline.
                     const std::vector<int>& chain =
                         e.upStation ? upChain : downChain;
-                    const Real joinS = e.onRamp
-                        ? std::min(Lc - 1.0, sg + e.decelLength * 0.75)
-                        : std::max(Real(1), sg - e.decelLength * 0.75);
+                    // FLOW-AWARE (device: "a car is still turning around once
+                    // it gets onto the freeway"): the down carriageway flows
+                    // toward LOWER stations — joins that assumed increasing
+                    // stations pointed AGAINST its traffic on that side.
+                    const Real flowDir = e.upStation ? 1.0 : -1.0;
+                    const Real joinS = std::max(Real(1), std::min(Lc - 1.0,
+                        sg + flowDir * (e.onRamp ? 1.0 : -1.0) *
+                                 e.decelLength * 0.75));
                     int mainIdx = chain.front();
                     Real bestDs = 1e30;
                     for (std::size_t k = 0; k < chain.size(); ++k) {
-                        // on-ramp: first node AT/AFTER joinS; exit: last
-                        // node AT/BEFORE joinS (both fall back to nearest)
-                        const Real d0 = chainS[k] - joinS;
+                        // on-ramp: first node AT/PAST joinS along the flow;
+                        // exit: last node BEFORE it (fall back to nearest)
+                        const Real d0 = (chainS[k] - joinS) * flowDir;
                         const Real ds = (e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
                                                   : (d0 <= 0 ? -d0 : 1e4 + d0));
                         if (ds < bestDs) { bestDs = ds; mainIdx = chain[k]; }
@@ -2475,13 +2479,18 @@ bool LevelLoader::load(const std::string& path,
                          (def.lanes.throughLanes + 0.5) * def.laneWidth);
                     std::vector<int> auxChain;
                     {
-                        const Real s0 = e.onRamp ? sg : joinS;
-                        const Real s1 = e.onRamp ? joinS : sg;
-                        for (Real sv = s0 + 26.0; sv < s1 - 12.0; sv += 26.0) {
+                        // walk from the traffic's FIRST aux station toward its
+                        // last, in flow order, whatever the carriageway
+                        const Real sFrom = e.onRamp ? sg : joinS;
+                        const Real sTo = e.onRamp ? joinS : sg;
+                        const Real stepDir = (sTo >= sFrom) ? 1.0 : -1.0;
+                        for (Real sv = sFrom + stepDir * 26.0;
+                             (sTo - sv) * stepDir > 12.0; sv += stepDir * 26.0) {
                             engine::RoadNode nd;
                             nd.pos = def.horizontal.offset(sv, auxOff);
-                            nd.elev = std::max(
-                                0.0, def.vertical.elevation(sv) - ground(nd.pos));
+                            nd.elev = def.vertical.elevation(sv) +
+                                      def.superelevationAt(sv) * auxOff;
+                            nd.elevAbsolute = true;
                             auxChain.push_back(
                                 static_cast<int>(eg.graph.nodes.size()));
                             eg.graph.nodes.push_back(nd);
@@ -2523,8 +2532,8 @@ bool LevelLoader::load(const std::string& path,
                         const Real sv = RL * k / rn2;
                         engine::RoadNode nd;
                         nd.pos = ra.pos(sv);
-                        nd.elev = std::max(
-                            0.0, rp.elevation(sv) - ground(nd.pos));
+                        nd.elev = rp.elevation(sv);
+                        nd.elevAbsolute = true;
                         chainR.push_back(static_cast<int>(eg.graph.nodes.size()));
                         eg.graph.nodes.push_back(nd);
                     }

@@ -80,11 +80,14 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
     // curve-sample nodes are untouched, so drawn road geometry is preserved.
     std::vector<Vec2> pos;
     std::vector<Real> elev;
+    std::vector<uint8_t> elevAbs;
     pos.reserve(roads.nodes.size());
     elev.reserve(roads.nodes.size());
+    elevAbs.reserve(roads.nodes.size());
     for (const RoadNode& rn : roads.nodes) {
         pos.push_back(rn.pos);
         elev.push_back(rn.elev);
+        elevAbs.push_back(rn.elevAbsolute ? 1 : 0);
     }
     std::vector<int> remap(pos.size());
     for (std::size_t i = 0; i < remap.size(); ++i) remap[i] = static_cast<int>(i);
@@ -156,6 +159,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         std::vector<int> compact(pos.size(), -1);
         std::vector<Vec2> packed;
         std::vector<Real> packedElev;
+        std::vector<uint8_t> packedElevAbs;
         std::vector<Real> packedSpread;
         packed.reserve(pos.size());
         for (std::size_t i = 0; i < pos.size(); ++i) {
@@ -163,6 +167,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
             compact[i] = static_cast<int>(packed.size());
             packed.push_back(pos[i]);
             packedElev.push_back(elev[i]);
+            packedElevAbs.push_back(elevAbs[i]);
             packedSpread.push_back(spreadOf[i]);
         }
         std::vector<Edge> kept;
@@ -180,6 +185,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         edges.swap(kept);
         pos.swap(packed);
         elev.swap(packedElev);
+        elevAbs.swap(packedElevAbs);
         spread.swap(packedSpread);
     }
 
@@ -206,6 +212,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         l.layer = e.layer;
         l.elevA = elev[a];
         l.elevB = elev[b];
+        l.elevAbsolute = elevAbs[a] || elevAbs[b];
         int idx = static_cast<int>(g.links.size());
         g.links.push_back(l);
         g.outLinks[a].push_back(idx);

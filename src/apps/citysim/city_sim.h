@@ -123,6 +123,11 @@ struct Agent {
     // pitches an ELEVATED car from this, since it cannot sample the deck the
     // way it samples the ground (device: "adhere ... with all 4 wheels").
     Real grade = 0;
+    // Absolute deck height (corridor decks/ramps): when set (> -1e29) the
+    // render places the car at deckY directly instead of ground+elevation —
+    // ground varies BETWEEN chain nodes on hilly terrain, which made deck
+    // traffic hover/sink by the difference (device: "still hovering").
+    Real deckY = -1e30;
     int lane = 0;
     // Fractional lane position CHASING `lane` (device: "see the cars change
     // lanes ... signal with their turn signals"): a lane change is laneF

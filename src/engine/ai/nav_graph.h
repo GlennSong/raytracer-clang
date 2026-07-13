@@ -30,6 +30,7 @@ struct NavLink {
     // agents lerp it along the link, so a corridor deck or a descending ramp
     // positions traffic continuously (layer stays for legacy bridges).
     Real elevA = 0, elevB = 0;
+    bool elevAbsolute = false;          // elevA/B are absolute deck Y
     // One-way link (freeway carriageway / ramp): its LANES span the full
     // link width centred on the chain, not the right half of a two-way road.
     bool oneWay = false;

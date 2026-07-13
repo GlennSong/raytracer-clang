@@ -21,10 +21,12 @@ enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp };
 
 struct RoadNode {
     Vec2 pos;
-    // Height ABOVE GROUND of the carriageway here (0 = at grade). Corridor
-    // decks/ramps set it so nav agents ride the structure, not the terrain
-    // (plan §8 P8.4); buildNavGraph carries it onto the links.
+    // Carriageway height here. elevAbsolute=false (default): height ABOVE
+    // GROUND (0 = at grade). elevAbsolute=true (corridor decks/ramps): the
+    // ABSOLUTE deck Y — ground varies between chain nodes on hills, so a
+    // ground-relative value made deck traffic hover/sink between nodes.
     Real elev = 0;
+    bool elevAbsolute = false;
 };
 // `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY
 // are the same intersection only when they share a layer; different layers pass over/under

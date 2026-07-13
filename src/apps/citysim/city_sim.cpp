@@ -695,8 +695,15 @@ void CitySim::refreshPose(Agent& a) {
         // node elevations along the link; layer keeps legacy bridges lifted
         const engine::NavLink& EL = nav_->links[li];
         const Real et = L > 1e-9 ? s / L : 0.0;
-        a.elevation = EL.layer * kLayerClearance +
-                      EL.elevA + (EL.elevB - EL.elevA) * et;
+        if (EL.elevAbsolute) {
+            a.deckY = EL.elevA + (EL.elevB - EL.elevA) * et;
+            a.elevation = a.deckY;   // sensors gate on RELATIVE height; an
+                                     // absolute deck vs a street reads > 3 m
+        } else {
+            a.deckY = -1e30;
+            a.elevation = EL.layer * kLayerClearance +
+                          EL.elevA + (EL.elevB - EL.elevA) * et;
+        }
         a.grade = (EL.elevB - EL.elevA) / std::max(Real(1), EL.length);
     }
 
@@ -1149,6 +1156,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 const engine::NavLink& newL = nav_->links[a.route.links[a.leg]];
                 int lanes = std::max(1, newL.lanes);
                 if (a.lane >= lanes) a.lane = lanes - 1;
+                // laneF must follow: it survived a narrow link untouched and
+                // POPPED back two lanes on the next wide one (device: "not
+                // changing to adjacent lanes, teleporting between lanes")
+                if (a.laneF > Real(lanes - 1)) a.laneF = Real(lanes - 1);
                 // Merging from a ramp: ENTER on the slow lane, gliding in
                 // from the accel-lane side (device: "cars should start on
                 // the lane they enter on").
@@ -1156,7 +1167,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     nav_->links[a.route.links[a.leg - 1]].klass ==
                         engine::RoadClass::Ramp) {
                     a.lane = lanes - 1;
-                    a.laneF = Real(lanes);   // one outside: the accel lane
+                    a.laneF = Real(lanes - 1);   // enter ON the slow lane
                 }
             }
         }

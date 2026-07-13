@@ -686,14 +686,17 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
     if (car && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()))
         bodyH = sim_.vehicles()[a.vehicle].height;
     Real halfH = bodyH * 0.5;
-    Real y = groundAt(x, z) + a.elevation + halfH;   // a.elevation lifts bridge traffic
+    // Absolute deck (corridor): the deck Y IS the surface; ground-relative
+    // placement hovered/sank between chain nodes on hills (device).
+    Real y = (a.deckY > -1e29) ? a.deckY + halfH
+                               : groundAt(x, z) + a.elevation + halfH;
     Real yaw = std::atan2(a.heading.x, a.heading.y); // box local +Z -> travel heading
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
     // graded street floats its nose or buries its tail). Sample the drive
     // surface a wheelbase fore/aft and a track left/right, build the tilted
     // frame from those slopes, and write the basis directly — no pitch/roll
     // sign gymnastics. Bridge traffic (elevation) rides a flat deck: skip.
-    if (car && a.elevation >= 0.5) {
+    if (car && (a.deckY > -1e29 || a.elevation >= 0.5)) {
         // ELEVATED (deck/ramp): the ground sampler below would read the
         // terrain UNDER the structure, so pitch from the link's grade
         // instead — all four wheels track the ramp (device feedback).
