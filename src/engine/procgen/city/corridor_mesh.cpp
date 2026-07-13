@@ -48,7 +48,7 @@ CorridorMeshOut buildCorridorMesh(
     std::vector<Real> halfN(n + 1), halfP(n + 1);   // per-side deck reach
     std::vector<bool> elevated(n + 1);   // tall enough for pier bents
     std::vector<bool> raised(n + 1);     // off the ground at all: structure box
-    const Real deckDepth = 1.1;            // structure depth of the viaduct box
+    const Real deckDepth = 1.9;            // deep box girder (device: a real slab)
     for (int i = 0; i <= n; ++i) {
         const Real s = L * i / n;
         Rib& r = ribs[i];
@@ -167,11 +167,25 @@ CorridorMeshOut buildCorridorMesh(
                               kConcrete * 0.8);
     }
     // EDGE RAILINGS (device): a low concrete parapet running BOTH outer
-    // edges, continuous over structure and at-grade alike — nothing drives
-    // off this deck.
+    // edges, continuous over structure and at-grade alike — EXCEPT across an
+    // exit's departure span, where the deck edge is the ramp's pavement and
+    // the wall would slice the gore (device: "intersects with the parapet
+    // awkwardly"). The ramp's own parapet takes over past the nose.
+    auto inExitOpening = [&](Real s, int side) {
+        for (const ExitDef& e : c.exits) {
+            const int ds = e.upStation ? -1 : 1;
+            if (side == ds && s > e.station - e.decelLength * 0.55 &&
+                s < e.station + 22.0)
+                return true;
+        }
+        return false;
+    };
     for (int side = -1; side <= 1; side += 2) {
         const Real ph = 0.85, pt = 0.28;   // parapet height / thickness
         for (int i = 0; i < n; ++i) {
+            if (inExitOpening(L * i / n, side) ||
+                inExitOpening(L * (i + 1) / n, side))
+                continue;
             auto o0 = [&](int k) { return side * (side < 0 ? halfN[k] : halfP[k]); };
             auto o1 = [&](int k) { return side * ((side < 0 ? halfN[k] : halfP[k]) - pt); };
             const Vec3 a0 = ribs[i].at(o0(i)), a1 = ribs[i + 1].at(o0(i + 1));
@@ -343,9 +357,13 @@ CorridorMeshOut buildCorridorMesh(
                                       rr[i + 1].at(o + 0.06) + Vec3(0, 0.015, 0),
                                       Vec3(0, 1, 0), kWhite);
             }
-            // fascia / skirts + parapets
+            // fascia / skirts + parapets (the deck-side wall starts past
+            // the nose so it never bars the gore opening)
             const bool up = rUp[i] || rUp[i + 1];
+            const Real rs = RL * i / rn;
             for (int sd = -1; sd <= 1; sd += 2) {
+                const bool inner = sd == -dirSign;
+                const bool skipParapet = inner && rs < 26.0;
                 const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
@@ -357,6 +375,7 @@ CorridorMeshOut buildCorridorMesh(
                                       e1 - Vec3(0, std::max(Real(0.3), d1), 0),
                                       e1, e0, nrm, kAsphalt * 1.6);
                 // parapet
+                if (skipParapet) continue;
                 const Vec3 up3(0, 0.85, 0);
                 const Vec3 b0 = rr[i].at(sd * (rw - 0.24));
                 const Vec3 b1 = rr[i + 1].at(sd * (rw - 0.24));
@@ -408,6 +427,85 @@ CorridorMeshOut buildCorridorMesh(
             out.flatten.push_back(
                 makeFlattenPad(std::move(poly), rp.elevation((s0 + s1) * 0.5), 5.0));
         }
+        // SIGNAGE (device: "signage above the freeway ... rounded corner
+        // placards (green)"): a gantry ~45 m before the gore — two posts, a
+        // beam across the deck, a wide green board over the through lanes
+        // (blank for now) and a smaller one over the exit lane wearing a
+        // white drop-arrow for directionality.
+        {
+            const Real ss = std::max(Real(10), sg - 45.0);
+            const Vec2 gc = c.horizontal.pos(ss);
+            const Vec2 gn = c.horizontal.normal(ss);
+            const Real gz2 = c.vertical.elevation(ss);
+            const Real hL = c.halfWidthAt(ss, 1) + 0.6;
+            const Real hR = c.halfWidthAt(ss, -1) + 0.6;
+            const Real beamY = gz2 + 6.2;
+            const Vec3 kGrey(0.45, 0.46, 0.48);
+            auto postAt = [&](Real off) {
+                const Vec2 p2 = gc + gn * off;
+                RenderMesh post = MeshBuilder::cylinder(0.24f, static_cast<float>(beamY - gz2 + 0.6), 8);
+                for (Vertex& v : post.vertices) v.color = kGrey;
+                MeshBuilder::transform(post, Mat4::translate(p2.x, gz2 + (beamY - gz2 + 0.6) * 0.5, p2.y));
+                MeshBuilder::append(out.barrier, post);
+            };
+            postAt(hL);
+            postAt(-hR);
+            RenderMesh beam = MeshBuilder::box(Vec3(hL + hR, 0.5, 0.5));
+            for (Vertex& v : beam.vertices) v.color = kGrey;
+            const Real byaw = std::atan2(-gn.y, gn.x);
+            MeshBuilder::transform(beam,
+                Mat4::trs(Vec3(gc.x + gn.x * (hL - hR) * 0.5, beamY,
+                               gc.y + gn.y * (hL - hR) * 0.5),
+                          Quat::fromAxisAngle(Vec3(0, 1, 0), byaw), Vec3(1, 1, 1)));
+            MeshBuilder::append(out.barrier, beam);
+            // a rounded-corner board facing approaching traffic
+            const Vec2 face2 = travel * -1.0;
+            auto board = [&](Real off, Real w, Real h, bool arrow) {
+                const Vec3 kGreen(0.03, 0.28, 0.12);
+                const Vec2 bc2 = gc + gn * off;
+                const Vec3 bc(bc2.x, beamY - 0.35 - h * 0.5, bc2.y);
+                const Vec3 right(gn.x, 0, gn.y);
+                const Vec3 up3(0, 1, 0);
+                const Vec3 nrm(face2.x, 0, face2.y);
+                // rounded rect ring (radius r at the corners)
+                const Real r = 0.35;
+                std::vector<Vec3> ring;
+                auto corner = [&](Real cx, Real cy, Real a0) {
+                    for (int k = 0; k <= 4; ++k) {
+                        const Real a = a0 + k * (3.14159265 * 0.5) / 4;
+                        ring.push_back(bc + right * (cx + r * std::cos(a)) +
+                                       up3 * (cy + r * std::sin(a)));
+                    }
+                };
+                corner(w * 0.5 - r, h * 0.5 - r, 0);
+                corner(-(w * 0.5 - r), h * 0.5 - r, 3.14159265 * 0.5);
+                corner(-(w * 0.5 - r), -(h * 0.5 - r), 3.14159265);
+                corner(w * 0.5 - r, -(h * 0.5 - r), 3.14159265 * 1.5);
+                RenderMesh bm;
+                for (std::size_t k = 1; k + 1 < ring.size(); ++k)
+                    MeshBuilder::emitTri(bm, ring[0] + nrm * 0.06,
+                                         ring[k] + nrm * 0.06,
+                                         ring[k + 1] + nrm * 0.06, nrm, kGreen);
+                for (std::size_t k = 1; k + 1 < ring.size(); ++k)
+                    MeshBuilder::emitTri(bm, ring[0], ring[k + 1], ring[k],
+                                         nrm * -1.0, kGreen * 0.55);
+                if (arrow) {   // white drop-arrow: "this lane leaves"
+                    MeshBuilder::emitTri(bm, bc + nrm * 0.09 + up3 * 0.55,
+                                         bc + nrm * 0.09 + right * 0.4 - up3 * 0.25,
+                                         bc + nrm * 0.09 - right * 0.4 - up3 * 0.25,
+                                         nrm, Vec3(0.9, 0.9, 0.9));
+                }
+                MeshBuilder::append(out.barrier, bm);
+            };
+            const int dsn = dirSign;
+            board(dsn * (c.medianWidth * 0.5 + c.shoulderIn +
+                         c.lanes.throughLanes * 0.5 * c.laneWidth),
+                  7.5, 2.2, false);
+            board(dsn * (c.halfWidthAt(ss, dsn) - c.shoulderOut -
+                         c.laneWidth * 0.5),
+                  3.4, 2.2, true);
+        }
+
         // GORE NOSE: the painted wedge between the mainline's outer edge and
         // the ramp's inner edge as they diverge past the gore.
         for (int k = 0; k < 5; ++k) {
