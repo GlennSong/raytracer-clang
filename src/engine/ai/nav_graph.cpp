@@ -73,8 +73,13 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
     // gridlock-prone smear of car-length stubs. Pure index remapping — degree-2
     // curve-sample nodes are untouched, so drawn road geometry is preserved.
     std::vector<Vec2> pos;
+    std::vector<Real> elev;
     pos.reserve(roads.nodes.size());
-    for (const RoadNode& rn : roads.nodes) pos.push_back(rn.pos);
+    elev.reserve(roads.nodes.size());
+    for (const RoadNode& rn : roads.nodes) {
+        pos.push_back(rn.pos);
+        elev.push_back(rn.elev);
+    }
     std::vector<int> remap(pos.size());
     for (std::size_t i = 0; i < remap.size(); ++i) remap[i] = static_cast<int>(i);
 
@@ -144,12 +149,14 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         // insertion order keeps this deterministic).
         std::vector<int> compact(pos.size(), -1);
         std::vector<Vec2> packed;
+        std::vector<Real> packedElev;
         std::vector<Real> packedSpread;
         packed.reserve(pos.size());
         for (std::size_t i = 0; i < pos.size(); ++i) {
             if (remap[i] != static_cast<int>(i)) continue;   // merged away
             compact[i] = static_cast<int>(packed.size());
             packed.push_back(pos[i]);
+            packedElev.push_back(elev[i]);
             packedSpread.push_back(spreadOf[i]);
         }
         std::vector<Edge> kept;
@@ -166,6 +173,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         }
         edges.swap(kept);
         pos.swap(packed);
+        elev.swap(packedElev);
         spread.swap(packedSpread);
     }
 
@@ -187,6 +195,8 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         int lanes = static_cast<int>(std::lround(e.width / (params.laneWidth * 2.0)));
         l.lanes = lanes < 1 ? 1 : lanes;
         l.layer = e.layer;
+        l.elevA = elev[a];
+        l.elevB = elev[b];
         int idx = static_cast<int>(g.links.size());
         g.links.push_back(l);
         g.outLinks[a].push_back(idx);

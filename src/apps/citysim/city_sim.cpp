@@ -676,7 +676,13 @@ void CitySim::refreshPose(Agent& a) {
                    : nav_->sidewalkPoint(link, t);
     };
     a.pos = sample(li, L > 1e-9 ? s / L : 0.0);
-    a.elevation = nav_->links[li].layer * kLayerClearance;
+    {   // continuous carriageway height: corridor decks/ramps lerp their
+        // node elevations along the link; layer keeps legacy bridges lifted
+        const engine::NavLink& EL = nav_->links[li];
+        const Real et = L > 1e-9 ? s / L : 0.0;
+        a.elevation = EL.layer * kLayerClearance +
+                      EL.elevA + (EL.elevB - EL.elevA) * et;
+    }
 
     // Corner-cut blending (device fix): the lane/sidewalk offset direction
     // rotates with each leg, so sampling only the CURRENT leg makes the pose
@@ -1071,7 +1077,8 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     int lastLink = a.route.links.back();
     // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
     // arrivals at ground level, under their own road.
-    a.elevation = nav_->links[lastLink].layer * kLayerClearance;
+    a.elevation = nav_->links[lastLink].layer * kLayerClearance +
+                  nav_->links[lastLink].elevB;
     const GoalTable& t = goalsFor(a.mode);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     if (a.mode == Agent::Mode::Driver && next >= 0 &&

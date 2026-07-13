@@ -2330,6 +2330,95 @@ bool LevelLoader::load(const std::string& path,
             pc.mesh = buildCorridorMesh(def, levelGround, 3.0,
                                         streetsBelow.edges.empty()
                                             ? nullptr : &streetsBelow);
+            // The corridor JOINS the drivable network (P8.4): mainline chain
+            // + one chain per ramp, nodes carrying deck height over ground so
+            // traffic rides the structure. Ramp street-ends are snap
+            // terminals — the citysim bridge welds them onto the street graph.
+            {
+                engine::ExtraNavGraph eg;
+                auto ground = [&](const Vec2& p) {
+                    return levelGround ? levelGround(p.x, p.y) : 0.0;
+                };
+                const Real Lc = def.horizontal.length();
+                const Real navW = def.lanes.throughLanes * def.laneWidth * 2.0;
+                int prev = -1;
+                for (Real sst = 0; ; sst += 30.0) {
+                    const bool last = sst >= Lc;
+                    const Real sv = last ? Lc : sst;
+                    engine::RoadNode nd;
+                    nd.pos = def.horizontal.pos(sv);
+                    nd.elev = std::max(
+                        0.0, def.vertical.elevation(sv) - ground(nd.pos));
+                    const int idx = static_cast<int>(eg.graph.nodes.size());
+                    eg.graph.nodes.push_back(nd);
+                    if (prev >= 0)
+                        eg.graph.edges.push_back(
+                            {prev, idx, navW, engine::RoadClass::Freeway, 0});
+                    prev = idx;
+                    if (last) break;
+                }
+                for (const engine::ExitDef& e : def.exits) {
+                    // mirror the mesh's ramp construction
+                    const Real sg = std::max(Real(1),
+                                             std::min(e.station, Lc - 1.0));
+                    const int mainIdx =
+                        static_cast<int>(std::lround(sg / 30.0));
+                    const Vec2 travel = def.horizontal.tangent(sg) *
+                                        (e.upStation ? 1.0 : -1.0);
+                    const int dirSign = e.upStation ? -1 : 1;
+                    const Real off0 =
+                        dirSign * (def.medianWidth * 0.5 + def.shoulderIn +
+                                   (def.lanes.lanesAt(sg - 1.0, e.upStation) - 0.5) *
+                                       def.laneWidth);
+                    const Vec2 P0 = def.horizontal.offset(sg, off0);
+                    const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
+                    engine::Alignment ra = engine::Alignment::fromPolyline(
+                        {P0, P0 + away * 50.0, e.target}, e.rampRadius,
+                        e.rampSpiral, 2.0);
+                    if (ra.empty() || ra.length() < 60.0) continue;
+                    const Real RL = ra.length();
+                    engine::VerticalProfile rp;
+                    const Real zDeck = def.vertical.elevation(sg);
+                    const Real sKnee = std::max(Real(80), RL * 0.45);
+                    if (sKnee < RL - 10.0)
+                        rp.pvis = {{0, zDeck, 0},
+                                   {sKnee, e.targetY, std::min(sKnee, Real(80))},
+                                   {RL, e.targetY, 0}};
+                    else
+                        rp.pvis = {{0, zDeck, 0},
+                                   {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
+                    // chain from the mainline node to the street terminal —
+                    // built gore->street for an EXIT, street->merge for an
+                    // ON-RAMP (Ramp edges are one-way in stored direction)
+                    std::vector<int> chain;
+                    const int rn2 = std::max(2, static_cast<int>(RL / 26.0));
+                    for (int k = 0; k <= rn2; ++k) {
+                        const Real sv = RL * k / rn2;
+                        engine::RoadNode nd;
+                        nd.pos = ra.pos(sv);
+                        nd.elev = std::max(
+                            0.0, rp.elevation(sv) - ground(nd.pos));
+                        chain.push_back(static_cast<int>(eg.graph.nodes.size()));
+                        eg.graph.nodes.push_back(nd);
+                    }
+                    auto ramp = [&](int a2, int b2) {
+                        eg.graph.edges.push_back(
+                            {a2, b2, 6.5, engine::RoadClass::Ramp, 0});
+                    };
+                    if (e.onRamp) {
+                        for (int k = static_cast<int>(chain.size()) - 1; k > 0; --k)
+                            ramp(chain[k], chain[k - 1]);
+                        ramp(chain.front(), mainIdx);       // merge into mainline
+                        eg.snapNodes.push_back(chain.back());   // street end
+                    } else {
+                        ramp(mainIdx, chain.front());       // leave the mainline
+                        for (int k = 0; k + 1 < static_cast<int>(chain.size()); ++k)
+                            ramp(chain[k], chain[k + 1]);
+                        eg.snapNodes.push_back(chain.back());   // street end
+                    }
+                }
+                world.add<engine::ExtraNavGraph>(world.create(), std::move(eg));
+            }
             roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
                                pc.mesh.flatten.end());
             preCorridors.push_back(std::move(pc));

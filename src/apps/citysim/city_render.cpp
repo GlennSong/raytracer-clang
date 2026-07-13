@@ -159,6 +159,39 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         if (!heightAt_ && net.heightAt) heightAt_ = net.heightAt;
         roadLift_ = std::max(roadLift_, static_cast<Real>(net.lift));
     });
+    // Corridor mainlines + ramps JOIN the network (plan §8 P8.4): append each
+    // published graph, welding its snap terminals onto the nearest existing
+    // street node so an exit truly lands on a street and an on-ramp truly
+    // leaves one.
+    world.each<engine::ExtraNavGraph>([&](Entity, engine::ExtraNavGraph& xg) {
+        const int base = static_cast<int>(combined.nodes.size());
+        std::vector<int> map(xg.graph.nodes.size());
+        for (std::size_t i = 0; i < xg.graph.nodes.size(); ++i) {
+            const bool terminal =
+                std::find(xg.snapNodes.begin(), xg.snapNodes.end(),
+                          static_cast<int>(i)) != xg.snapNodes.end();
+            int reuse = -1;
+            if (terminal) {
+                Real best = xg.snapRadius;
+                for (int j = 0; j < base; ++j) {
+                    const Real d =
+                        (combined.nodes[j].pos - xg.graph.nodes[i].pos).length();
+                    if (d < best) { best = d; reuse = j; }
+                }
+            }
+            if (reuse >= 0) {
+                map[i] = reuse;
+            } else {
+                map[i] = static_cast<int>(combined.nodes.size());
+                combined.nodes.push_back(xg.graph.nodes[i]);
+            }
+        }
+        for (engine::RoadEdge e : xg.graph.edges) {
+            e.a = map[e.a];
+            e.b = map[e.b];
+            combined.edges.push_back(e);
+        }
+    });
     if (combined.nodes.empty() || combined.edges.empty()) return false;
 
     nav_ = engine::buildNavGraph(combined);

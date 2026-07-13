@@ -26,6 +26,10 @@ struct NavLink {
     RoadClass klass = RoadClass::Local;
     int lanes = 1;                      // lanes available in THIS direction
     int layer = 0;                      // grade-separation level (0 = ground, >0 = bridge)
+    // Carriageway height above ground at each end (from RoadNode.elev):
+    // agents lerp it along the link, so a corridor deck or a descending ramp
+    // positions traffic continuously (layer stays for legacy bridges).
+    Real elevA = 0, elevB = 0;
 };
 
 struct NavGraph {

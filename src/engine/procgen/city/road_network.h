@@ -19,7 +19,13 @@ namespace engine {
 // parameters — ADR-0052.)
 enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp };
 
-struct RoadNode { Vec2 pos; };
+struct RoadNode {
+    Vec2 pos;
+    // Height ABOVE GROUND of the carriageway here (0 = at grade). Corridor
+    // decks/ramps set it so nav agents ride the structure, not the terrain
+    // (plan §8 P8.4); buildNavGraph carries it onto the links.
+    Real elev = 0;
+};
 // `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY
 // are the same intersection only when they share a layer; different layers pass over/under
 // (an overpass), so the crossing is NOT turned into a shared node. Default 0 = the old

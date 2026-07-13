@@ -7,6 +7,7 @@
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
+#include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/terrain.h"
 #include "world.h"
 #include <cstdint>
@@ -363,6 +364,18 @@ struct CitySimConfig {
 // for where they are"). The loader plans and SPAWNS every signal pole and
 // street lamp from the roads' deterministic nav graph; this component tells
 // the sim where they stand. The sim animates lenses / reacts to phases only.
+// Extra road-graph pieces that JOIN the drivable network at build (plan §8
+// P8.4): a corridor publishes its mainline + ramp chains here (nodes carry
+// elev-above-ground so traffic rides the deck). The citysim bridge appends
+// them to the combined graph, SNAPPING the listed terminal nodes onto the
+// nearest street node so ramps truly connect (device: "does the freeway have
+// to be a part of the road network? I think it does").
+struct ExtraNavGraph {
+    RoadGraph graph;
+    std::vector<int> snapNodes;   // node indices to weld onto nearby streets
+    Real snapRadius = 16.0;
+};
+
 struct StreetFurniture {
     struct Signal {
         Vec3 base;      // pole foot (on the road deck)
