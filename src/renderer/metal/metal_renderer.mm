@@ -2514,6 +2514,13 @@ void MetalRenderer::endFrame() {
         stats.trianglesDrawn += mesh->indexCount / 3;
     };
 
+    // ONE running offset for the whole frame: every pass encodes into the
+    // same per-frame instance buffer, and the GPU reads it only when the
+    // command buffer executes — a pass that restarted at 0 CLOBBERED the
+    // instances of the passes before it (device: the debug wedges rendered
+    // as big flickering blocks — those were the overlay pass overwriting
+    // the opaque pass's instance transforms).
+    uint32_t instanceOffset = 0;
     auto issuePass = [&](std::vector<Impl::DrawCall>& drawCalls,
                          id<MTLRenderPipelineState> singlePipeline,
                          id<MTLRenderPipelineState> instancedPipeline,
@@ -2533,7 +2540,6 @@ void MetalRenderer::endFrame() {
         id<MTLBuffer> instanceBuffer = impl->instanceBuffers[impl->frameIndex];
         GPUInstanceData* instanceBuf =
             static_cast<GPUInstanceData*>([instanceBuffer contents]);
-        uint32_t instanceOffset = 0;
 
         size_t i = 0;
         while (i < drawCalls.size()) {

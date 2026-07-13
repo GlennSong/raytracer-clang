@@ -2394,29 +2394,55 @@ bool LevelLoader::load(const std::string& path,
                     return levelGround ? levelGround(p.x, p.y) : 0.0;
                 };
                 const Real Lc = def.horizontal.length();
-                const Real navW = def.lanes.throughLanes * def.laneWidth * 2.0;
-                int prev = -1;
+                // TWO one-way chains, one per CARRIAGEWAY, each at its own
+                // centreline offset (device: cars rode the median and cut
+                // through the gore wall — the single two-way centreline chain
+                // could never model a divided highway). Up-station drives the
+                // negative offsets; the down chain's edges run high->low
+                // station so one-way means the right way.
+                const Real cw = def.lanes.throughLanes * def.laneWidth;
+                const Real cOff = def.medianWidth * 0.5 + def.shoulderIn + cw * 0.5;
+                std::vector<int> upChain, downChain;
+                std::vector<Real> chainS;
                 for (Real sst = 0; ; sst += 30.0) {
                     const bool last = sst >= Lc;
                     const Real sv = last ? Lc : sst;
-                    engine::RoadNode nd;
-                    nd.pos = def.horizontal.pos(sv);
-                    nd.elev = std::max(
-                        0.0, def.vertical.elevation(sv) - ground(nd.pos));
-                    const int idx = static_cast<int>(eg.graph.nodes.size());
-                    eg.graph.nodes.push_back(nd);
-                    if (prev >= 0)
-                        eg.graph.edges.push_back(
-                            {prev, idx, navW, engine::RoadClass::Freeway, 0});
-                    prev = idx;
+                    chainS.push_back(sv);
+                    for (int sideSign : {-1, +1}) {
+                        engine::RoadNode nd;
+                        nd.pos = def.horizontal.offset(sv, sideSign * cOff);
+                        nd.elev = std::max(
+                            0.0, def.vertical.elevation(sv) - ground(nd.pos));
+                        const int idx = static_cast<int>(eg.graph.nodes.size());
+                        eg.graph.nodes.push_back(nd);
+                        (sideSign < 0 ? upChain : downChain).push_back(idx);
+                    }
                     if (last) break;
                 }
+                auto freewayEdge = [&](int a2, int b2) {
+                    engine::RoadEdge e2;
+                    e2.a = a2; e2.b = b2;
+                    e2.width = cw;
+                    e2.klass = engine::RoadClass::Freeway;
+                    e2.oneWay = true;
+                    eg.graph.edges.push_back(e2);
+                };
+                for (std::size_t k = 0; k + 1 < upChain.size(); ++k)
+                    freewayEdge(upChain[k], upChain[k + 1]);       // low -> high s
+                for (std::size_t k = downChain.size(); k-- > 1;)
+                    freewayEdge(downChain[k], downChain[k - 1]);   // high -> low s
                 for (const engine::ExitDef& e : def.exits) {
-                    // mirror the mesh's ramp construction
                     const Real sg = std::max(Real(1),
                                              std::min(e.station, Lc - 1.0));
-                    const int mainIdx =
-                        static_cast<int>(std::lround(sg / 30.0));
+                    // nearest chain node ON THIS CARRIAGEWAY to the gore
+                    const std::vector<int>& chain =
+                        e.upStation ? upChain : downChain;
+                    int mainIdx = chain.front();
+                    Real bestDs = 1e30;
+                    for (std::size_t k = 0; k < chain.size(); ++k) {
+                        const Real ds = std::fabs(chainS[k] - sg);
+                        if (ds < bestDs) { bestDs = ds; mainIdx = chain[k]; }
+                    }
                     const Vec2 travel = def.horizontal.tangent(sg) *
                                         (e.upStation ? 1.0 : -1.0);
                     const int dirSign = e.upStation ? -1 : 1;
@@ -2441,10 +2467,7 @@ bool LevelLoader::load(const std::string& path,
                     else
                         rp.pvis = {{0, zDeck, 0},
                                    {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
-                    // chain from the mainline node to the street terminal —
-                    // built gore->street for an EXIT, street->merge for an
-                    // ON-RAMP (Ramp edges are one-way in stored direction)
-                    std::vector<int> chain;
+                    std::vector<int> chainR;
                     const int rn2 = std::max(2, static_cast<int>(RL / 26.0));
                     for (int k = 0; k <= rn2; ++k) {
                         const Real sv = RL * k / rn2;
@@ -2452,26 +2475,29 @@ bool LevelLoader::load(const std::string& path,
                         nd.pos = ra.pos(sv);
                         nd.elev = std::max(
                             0.0, rp.elevation(sv) - ground(nd.pos));
-                        chain.push_back(static_cast<int>(eg.graph.nodes.size()));
+                        chainR.push_back(static_cast<int>(eg.graph.nodes.size()));
                         eg.graph.nodes.push_back(nd);
                     }
                     auto ramp = [&](int a2, int b2) {
-                        eg.graph.edges.push_back(
-                            {a2, b2, 6.5, engine::RoadClass::Ramp, 0});
+                        engine::RoadEdge e2;
+                        e2.a = a2; e2.b = b2;
+                        e2.width = 6.5;
+                        e2.klass = engine::RoadClass::Ramp;
+                        eg.graph.edges.push_back(e2);
                     };
                     if (e.onRamp) {
-                        for (int k = static_cast<int>(chain.size()) - 1; k > 0; --k)
-                            ramp(chain[k], chain[k - 1]);
-                        ramp(chain.front(), mainIdx);       // merge into mainline
-                        eg.snapNodes.push_back(chain.back());   // street end
+                        for (int k = static_cast<int>(chainR.size()) - 1; k > 0; --k)
+                            ramp(chainR[k], chainR[k - 1]);
+                        ramp(chainR.front(), mainIdx);       // merge into carriageway
+                        eg.snapNodes.push_back(chainR.back());
                     } else {
-                        ramp(mainIdx, chain.front());       // leave the mainline
-                        for (int k = 0; k + 1 < static_cast<int>(chain.size()); ++k)
-                            ramp(chain[k], chain[k + 1]);
-                        eg.snapNodes.push_back(chain.back());   // street end
+                        ramp(mainIdx, chainR.front());       // leave the carriageway
+                        for (int k = 0; k + 1 < static_cast<int>(chainR.size()); ++k)
+                            ramp(chainR[k], chainR[k + 1]);
+                        eg.snapNodes.push_back(chainR.back());
                     }
                 }
-                world.add<engine::ExtraNavGraph>(world.create(), std::move(eg));
+                                world.add<engine::ExtraNavGraph>(world.create(), std::move(eg));
             }
             roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
                                pc.mesh.flatten.end());

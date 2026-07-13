@@ -119,6 +119,10 @@ struct Agent {
     int trips = 0;   // trips started so far — the ADR-0062 bridge rebuilds its
                      // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
+    // Carriageway grade (dY/m of travel) on the current link — the render
+    // pitches an ELEVATED car from this, since it cannot sample the deck the
+    // way it samples the ground (device: "adhere ... with all 4 wheels").
+    Real grade = 0;
     int lane = 0;
     // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The

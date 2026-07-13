@@ -37,7 +37,13 @@ Vec2 NavGraph::pointOnLink(int link, Real t) const {
 Vec2 NavGraph::laneCenter(int link, int lane, Real t, Real laneWidth) const {
     Vec2 c = pointOnLink(link, t);
     Vec2 r = rightOf(direction(link));
-    return c + r * ((0.5 + lane) * laneWidth);
+    // Two-way: lanes fill the RIGHT half. One-way (carriageway/ramp): lanes
+    // span the whole width, centred on the chain (device: cars rode the
+    // median because freeway lanes offset from the two-way centreline).
+    const Real off = links[link].oneWay
+        ? ((0.5 + lane) - links[link].lanes * 0.5) * laneWidth
+        : (0.5 + lane) * laneWidth;
+    return c + r * off;
 }
 
 Vec2 NavGraph::sidewalkPoint(int link, Real t, Real verge) const {
@@ -191,8 +197,11 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         l.length = (g.nodes[b] - g.nodes[a]).length();
         l.width = e.width;
         l.klass = e.klass;
-        // Lanes per direction from carriageway width (both directions share it).
-        int lanes = static_cast<int>(std::lround(e.width / (params.laneWidth * 2.0)));
+        // Lanes per direction from carriageway width. A ONE-WAY link owns its
+        // whole width; a two-way road splits it between the directions.
+        l.oneWay = e.oneWay || (params.oneWayRamps && e.klass == RoadClass::Ramp);
+        int lanes = static_cast<int>(std::lround(
+            e.width / (params.laneWidth * (l.oneWay ? 1.0 : 2.0))));
         l.lanes = lanes < 1 ? 1 : lanes;
         l.layer = e.layer;
         l.elevA = elev[a];
@@ -204,7 +213,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
 
     for (const Edge& e : edges) {
         addLink(e.a, e.b, e.e);                                // forward
-        if (!(params.oneWayRamps && e.e.klass == RoadClass::Ramp))
+        if (!(params.oneWayRamps && e.e.klass == RoadClass::Ramp) && !e.e.oneWay)
             addLink(e.b, e.a, e.e);                            // reverse (two-way)
     }
 

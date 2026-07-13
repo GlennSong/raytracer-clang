@@ -30,7 +30,16 @@ struct RoadNode {
 // are the same intersection only when they share a layer; different layers pass over/under
 // (an overpass), so the crossing is NOT turned into a shared node. Default 0 = the old
 // all-at-grade behaviour.
-struct RoadEdge { int a = 0, b = 0; Real width = 8; RoadClass klass = RoadClass::Local; int layer = 0; };
+struct RoadEdge {
+    int a = 0, b = 0;
+    Real width = 8;
+    RoadClass klass = RoadClass::Local;
+    int layer = 0;
+    // One-way in stored direction (a -> b). A freeway CARRIAGEWAY is one-way
+    // by construction (plan §8/§9): the corridor publishes two of these, one
+    // per direction, so traffic can never take a link against the flow.
+    bool oneWay = false;
+};
 
 struct RoadGraph {
     std::vector<RoadNode> nodes;

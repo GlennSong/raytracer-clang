@@ -653,6 +653,27 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
     // surface a wheelbase fore/aft and a track left/right, build the tilted
     // frame from those slopes, and write the basis directly — no pitch/roll
     // sign gymnastics. Bridge traffic (elevation) rides a flat deck: skip.
+    if (car && a.elevation >= 0.5) {
+        // ELEVATED (deck/ramp): the ground sampler below would read the
+        // terrain UNDER the structure, so pitch from the link's grade
+        // instead — all four wheels track the ramp (device feedback).
+        Vec2 f = a.heading;
+        const Real fl = f.length();
+        if (fl > 1e-6 && std::fabs(a.grade) > 1e-4) {
+            f = f * (1.0 / fl);
+            Vec3 fw = normalize(Vec3(f.x, a.grade, f.y));
+            Vec3 rt(f.y, 0, -f.x);
+            Vec3 up = normalize(cross(fw, rt));
+            if (up.y < 0) up = up * -1;
+            rt = normalize(cross(up, fw));
+            Mat4 m;
+            m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+            m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+            m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+            m.m[0][3] = x; m.m[1][3] = y; m.m[2][3] = z;
+            return m;
+        }
+    }
     if (car && a.elevation < 0.5) {
         Vec2 f = a.heading;
         const Real fl = f.length();

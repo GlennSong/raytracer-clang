@@ -78,7 +78,7 @@ constexpr Real kPedAnticipation = 0.4;  // walkers dodge where a neighbour WILL 
 // side. laneCenter places lane i at (0.5 + i) * spacing off the centreline.
 Real laneSpacing(const engine::NavLink& l) {
     int lanes = l.lanes < 1 ? 1 : l.lanes;
-    return (l.width * 0.5) / static_cast<Real>(lanes);
+    return (l.oneWay ? l.width : l.width * 0.5) / static_cast<Real>(lanes);
 }
 
 // Speed a follower may travel given the centre-to-centre gap to its leader.
@@ -682,6 +682,7 @@ void CitySim::refreshPose(Agent& a) {
         const Real et = L > 1e-9 ? s / L : 0.0;
         a.elevation = EL.layer * kLayerClearance +
                       EL.elevA + (EL.elevB - EL.elevA) * et;
+        a.grade = (EL.elevB - EL.elevA) / std::max(Real(1), EL.length);
     }
 
     // Corner-cut blending (device fix): the lane/sidewalk offset direction
