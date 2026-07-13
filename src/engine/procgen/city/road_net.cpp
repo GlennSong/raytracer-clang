@@ -944,6 +944,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.collectorWidth     = g.value("collector_width", 9.5);
         mp.collectorSpan      = g.value("collector_span", 0.0);
         mp.interchangeSpacing = g.value("interchange_spacing", 520.0);
+        mp.corridorFreeways   = g.value("corridor_freeways", false);
         // Growth spacing (the "room to breathe" dials): a big metro roughly
         // doubles the small-metro defaults so faces are parcel-sized.
         mp.segLength       = g.value("seg_length", mp.segLength);

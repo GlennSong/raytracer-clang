@@ -258,6 +258,68 @@ RoadGraph buildMetro(const MetroParams& p,
         // (freeways curve gently — DesignRules Freeway minRadius is 300 m), then
         // segments every ~36 m. Unbuildable anchors slide sideways to stay on
         // land (a coastal freeway hugs the shoreline instead of wading).
+        if (!p.corridorFreeways) {
+            // LEGACY freeway tier: the backbone stays street edges (proven,
+            // shipping) while the corridor path earns its lab proof.
+            for (auto& l : links) {
+                Vec2 A = hots[l.first].pos, B = hots[l.second].pos;
+                Vec2 dir = B - A;
+                double L = dir.length();
+                if (L < 1.0) continue;
+                dir = dir * (1.0 / L);
+                Vec2 nrm(-dir.y, dir.x);
+                int anchors = std::max(2, static_cast<int>(L / 220.0) + 1);
+                std::vector<Vec2> pts;
+                for (int k = 0; k <= anchors; ++k) {
+                    double t = static_cast<double>(k) / anchors;
+                    double sway = (k == 0 || k == anchors)
+                                      ? 0.0
+                                      : rng.range(-0.05, 0.05) * L;
+                    Vec2 q = A + dir * (t * L) + nrm * sway;
+                    if (!buildable(q.x, q.y)) {
+                        bool fixed = false;
+                        for (double off = 30; off <= 210 && !fixed; off += 30)
+                            for (double s : {+1.0, -1.0}) {
+                                Vec2 c2 = q + nrm * (off * s);
+                                if (inDomain(c2) && buildable(c2.x, c2.y)) { q = c2; fixed = true; break; }
+                            }
+                    }
+                    pts.push_back(q);
+                }
+                auto cr = [&](int i0) {
+                    Vec2 p0 = pts[std::max(0, i0 - 1)], p1 = pts[i0],
+                         p2 = pts[std::min<int>(pts.size() - 1, i0 + 1)],
+                         p3 = pts[std::min<int>(pts.size() - 1, i0 + 2)];
+                    return [=](double t) {
+                        double t2 = t * t, t3 = t2 * t;
+                        return (p1 * 2.0 + (p2 - p0) * t +
+                                (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 +
+                                ((p1 - p2) * 3.0 + p3 - p0) * t3) * 0.5;
+                    };
+                };
+                int prev = -1;
+                double along = 0, nextSeed = p.interchangeSpacing * 0.5;
+                for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+                    auto seg = cr(static_cast<int>(k));
+                    double segLen = (pts[k + 1] - pts[k]).length();
+                    int steps = std::max(1, static_cast<int>(segLen / 36.0));
+                    for (int s = (k == 0 ? 0 : 1); s <= steps; ++s) {
+                        Vec2 q = seg(static_cast<double>(s) / steps);
+                        int id = Ga.addNode(q, 8.0);
+                        if (prev >= 0 && id != prev)
+                            Ga.addEdge(prev, id, p.freewayWidth, RoadClass::Freeway);
+                        if (prev >= 0) {
+                            along += segLen / steps;
+                            if (along >= nextSeed) {
+                                seedPts.push_back(q);
+                                nextSeed += p.interchangeSpacing;
+                            }
+                        }
+                        prev = id;
+                    }
+                }
+            }
+        } else {
         // §10.6: chain the MST links into THROUGH-ROUTES — a freeway passes
         // through hubs, it doesn't stop at each one. Walk maximal paths,
         // preferring the straightest continuation at every hub, so 6 short
@@ -351,6 +413,7 @@ RoadGraph buildMetro(const MetroParams& p,
                 }
             }
         }
+        }   // corridorFreeways
     }
 
     // --- attractors: dense along inter-hotspot corridors + ambient wander that

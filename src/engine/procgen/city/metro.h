@@ -28,6 +28,13 @@ struct CityHub {
 };
 
 struct MetroParams {
+    // §10.6 corridor freeways are OPT-IN (generate: "corridor_freeways").
+    // Device verdict on the first integration: "a complete disaster, lol" —
+    // route chaining kinked, routes overlapped, ramps hit water. The system
+    // goes back to the LAB until a car provably drives an on-ramp; until
+    // then the metro keeps its legacy freeway-width street edges.
+    bool corridorFreeways = false;
+
     Vec2   center{0, 0};
     double radius      = 700.0;   // footprint half-extent (m)
     int    hotspots    = 6;       // number of hubs (>=2); one central, rest ringed
