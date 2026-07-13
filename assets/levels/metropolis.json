@@ -2,7 +2,7 @@
   "citysim": {
     "buildChance": 0.9,
     "buildLots": true,
-    "cars": 30,
+    "cars": 80,
     "debugWidgets": false,
     "detailDistance": 950,
     "downtownRadius": 160,

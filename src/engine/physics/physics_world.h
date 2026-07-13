@@ -107,6 +107,12 @@ public:
     // the step length. Call once per fixed update.
     void moveCharacter(CharacterId id, const Vec3& velocity, Real dt);
     Vec3 characterPosition(CharacterId id) const;
+
+    // Cast a ray against every body (static + dynamic). Returns true on hit
+    // and fills hitPoint. Powers point-and-teleport (device: "click somewhere
+    // and immediately jump there") and any future picking.
+    bool castRay(const Vec3& origin, const Vec3& dirAndLength,
+                 Vec3& hitPoint) const;
     Vec3 characterVelocity(CharacterId id) const;
     GroundState characterGroundState(CharacterId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);

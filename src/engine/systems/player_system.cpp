@@ -16,6 +16,11 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     shoulder.applyShoulderPreset();
     thirdPerson = ctx.settings.getBool("playerThirdPerson", false);
     ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn
+    // FAST TRAVEL (device: "click somewhere and immediately jump there and
+    // continue play"): T teleports the player to the surface point under the
+    // crosshair — fly somewhere in the freecam, look at a street, press T,
+    // and you are PLAYING there (the camera re-attaches automatically).
+    ctx.actions.bindButton("player_teleport", KeyCode::T);
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
@@ -82,6 +87,33 @@ void PlayerSystem::respawn(CharacterId characterId, bool manual) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
+    // Point-and-teleport (T): ray from the eye through the crosshair onto
+    // whatever physics surface it hits — deck, rooftop, terrain — then stand
+    // the player there and re-attach the camera so play continues in place.
+    if (ctx.actions.pressed("player_teleport") && ctx.world.alive(playerEntity)) {
+        if (auto* cc = ctx.world.get<CharacterController>(playerEntity)) {
+            if (cc->characterId != INVALID_CHARACTER) {
+                Vec3 hit;
+                if (physicsSys.physicsWorld().castRay(
+                        camera.eye, camera.forward() * 4000.0, hit)) {
+                    const Vec3 stand = hit + Vec3(0, 1.4, 0);
+                    physicsSys.physicsWorld().setCharacterPosition(
+                        cc->characterId, stand);
+                    if (auto* t = ctx.world.get<Transform>(playerEntity)) {
+                        t->position = stand;
+                        if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
+                            pt->value = *t;   // no interpolation streak
+                    }
+                    fall.onGrounded(stand.y);   // new baseline: a teleport is
+                                                // never a "fall" to respawn from
+                    camera.positionLocked = true;   // re-attach: back to playing
+                    LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
+                             << ", " << hit.z << ")";
+                }
+            }
+        }
+    }
+
     // Respawn: snap the character back to its spawn (and re-settle under gravity). Works even when
     // detached/flying, so you can always recover a player that has fallen off or through the level.
     if (ctx.actions.pressed("player_respawn") && spawnCaptured && ctx.world.alive(playerEntity)) {

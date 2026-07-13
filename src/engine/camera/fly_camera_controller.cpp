@@ -1,6 +1,7 @@
 #include "fly_camera_controller.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace engine {
 
@@ -46,9 +47,14 @@ void FlyCameraController::update(const CameraInput& input, Real dt) {
     eye += r * (input.moveRight * speed);
     eye += worldUp * (input.moveUp * speed);
 
-    // Scroll dollies along the view direction (editor scene-view feel; the
-    // wheel was previously unused in fly mode).
-    eye += f * (input.zoomDelta * 0.8);
+    // Scroll is the fly THROTTLE (device: WASD "feels slow"): each tick
+    // scales the base speed — a few flicks spans walking pace to crossing
+    // the metropolis in seconds. (It used to dolly 0.8 m/tick: useless at
+    // world scale, and boost already covers short bursts.)
+    if (input.zoomDelta != 0.0) {
+        moveSpeed *= std::pow(1.15, input.zoomDelta);
+        moveSpeed = std::clamp(moveSpeed, Real(2.0), Real(600.0));
+    }
 }
 
 CameraState FlyCameraController::cameraState(float aspect) const {

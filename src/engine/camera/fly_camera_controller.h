@@ -15,8 +15,8 @@ public:
     Real yaw = 0.0;     // degrees; 0 looks down -Z
     Real pitch = 0.0;   // degrees
     Real fovDegrees = 60.0;
-    Real moveSpeed = 5.0;
-    Real boostMultiplier = 4.0;
+    Real moveSpeed = 14.0;   // scroll wheel throttles this live
+    Real boostMultiplier = 6.0;
     Real nearPlane = 0.1;
     Real farPlane = 8000.0;   // large enough for distant LOD terrain (view distance)
     bool positionLocked = false;

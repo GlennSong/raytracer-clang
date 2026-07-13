@@ -2,10 +2,11 @@
   "_comment": "Plan \u00a78 test bed: one clothoid mainline over HILLY terrain (device: meshing vs terrain is part of the test), a small street grid running underneath the elevated span, NO buildings. Every corridor feature is judged here before the metro sees it.",
   "citysim": {
     "buildLots": false,
-    "cars": 28,
+    "cars": 64,
     "debugWidgets": false,
     "pedestrians": 0,
-    "seed": 4
+    "seed": 4,
+    "wander": true
   },
   "entities": [
     {

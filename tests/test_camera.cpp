@@ -143,14 +143,21 @@ TEST_CASE(orbit_projection_toggle) {
     CHECK(s.orthoHeight > 0.0f);
 }
 
-TEST_CASE(fly_scroll_dollies_along_view) {
+TEST_CASE(fly_scroll_throttles_speed) {
+    // Scroll is the fly THROTTLE (device: WASD "feels slow"): notches scale
+    // moveSpeed multiplicatively, clamped, and never move the eye directly.
     FlyCameraController fly;
     fly.eye = Vec3(0, 0, 0);
+    const Real base = fly.moveSpeed;
 
     CameraInput in;
     in.zoomDelta = 2.0;          // two wheel notches forward
     fly.update(in, 0.016);
-    CHECK(fly.eye.z < -1.0);     // moved along -Z (the view direction)
+    CHECK(fly.eye.length() < 1e-9);            // throttle, not a dolly
+    CHECK(fly.moveSpeed > base * 1.3);         // ~1.15^2 faster
+    in.zoomDelta = -60.0;                      // spin far down: clamps
+    fly.update(in, 0.016);
+    CHECK(fly.moveSpeed >= 2.0);
 
     fly.positionLocked = true;   // pinned first-person: scroll must not move it
     Vec3 before = fly.eye;

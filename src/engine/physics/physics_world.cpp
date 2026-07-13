@@ -13,6 +13,8 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -480,6 +482,20 @@ Vec3 PhysicsWorld::characterPosition(CharacterId id) const {
     if (!impl || id >= impl->characters.size()) return Vec3();
     const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
     return ch ? fromJolt(ch->GetPosition()) : Vec3();
+}
+
+bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
+                           Vec3& hitPoint) const {
+    JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
+                      JPH::Vec3(static_cast<float>(dirAndLength.x),
+                                static_cast<float>(dirAndLength.y),
+                                static_cast<float>(dirAndLength.z))};
+    JPH::RayCastResult hit;
+    if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit))
+        return false;
+    JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
+    hitPoint = Vec3(p.GetX(), p.GetY(), p.GetZ());
+    return true;
 }
 
 Vec3 PhysicsWorld::characterVelocity(CharacterId id) const {
