@@ -420,3 +420,70 @@ passing under, one curved partially-elevated mainline, NO buildings):**
 5. P3.2 **DONE**; P4.2/P4.3 next.
 6. §6 plazas (small, self-contained, huge look win near hubs/beach).
 7. §7 streaming on its own branch (P7.1 manifest split first).
+
+## §9 The corridor contract — how freeways live in the road graph
+
+Decided with the device rounds of 2026-07-12. One sentence: **the alignment
+is the document; everything else is derived.**
+
+### 9.1 Source of truth and editability
+A freeway is NOT authored as graph nodes. Its document is the CorridorDef —
+control polyline, design speed/radius/spiral, vertical profile PVIs, lane
+schedule, exits list. You edit THOSE (they round-trip through the editor as
+a first-class entity); the drivable graph, the mesh, the flatten, the
+furniture, and the piers all regenerate from them. Manipulating individual
+generated nodes would let the graph drift out of agreement with the
+concrete — the same bedrock rule as roads->blocks->lots.
+
+### 9.2 One graph, 3D by elevation, classes carry the semantics
+There is a single road graph. Freeway links are ordinary links whose
+RoadClass is Freeway/Ramp and whose nodes carry elev-above-ground; nav
+links lerp elevation, so the network is genuinely layered — same XY,
+different heights, no phantom junctions (chain nodes never knot-merge; only
+ramp terminals weld, explicitly). Nothing else in the sim special-cases
+freeways: the router prefers them purely through classSpeed (28 vs 8 m/s),
+signals skip them because no link ENTERS a junction on the mainline, and
+lane counts derive from width as everywhere else. Ramp links are one-way in
+stored direction. So: not a special case attached to the side — a class of
+links with richer provenance.
+
+### 9.3 Lanes per direction
+CorridorDef.lanes.throughLanes is per carriageway; aux spans add the
+exit/merge lanes per side with a 35 m taper. Changing throughLanes changes
+deck width, marking count, nav lane count (width/3.5/2), and gore offsets
+automatically — exits key off lanesAt(station, side), so the peel always
+comes off the OUTERMOST lane wherever the schedule puts it. Asymmetric
+carriageways (3 up, 4 down) are one refactor away: LaneSchedule already
+answers per side; CorridorDef needs a second throughLanes.
+
+### 9.4 Order of operations (metro integration, P8.6)
+1. TERRAIN exists.
+2. FREEWAY corridors route hub-to-hub over it (clothoid alignments, profile
+   solved against terrain: at-grade where possible, viaduct over dips/city).
+3. INTERCHANGE sites picked along each corridor (spacing param, must have
+   reachable street-node candidates on the needed side) — each site stamps
+   the 4-ramp diamond: exit + on-ramp per carriageway, PAIRED by
+   construction.
+4. STREET GROWTH runs with the corridor as a constraint: colonization may
+   cross UNDER a viaduct span (clearance >= 5 m) or be culled at grade;
+   ramp terminals are seeded as attractors so the network grows TO the
+   interchanges (connector roads emerge, then fan into grids/radials/
+   cul-de-sacs as the district kinds dictate).
+5. LOTS: the corridor EASEMENT (deck footprint at grade + pierBases discs +
+   a 12-18 m verge) is subtracted from blocks before parceling. Easement
+   land is not buildable: it hosts overgrowth scatter, chain-link fencing,
+   utility boxes, billboards — the "freeway margin" look — never buildings.
+6. FURNITURE/SIGNAGE from the final graph.
+
+### 9.5 Freeway-to-freeway (system interchanges)
+Where two corridors cross, connect them with DIRECTIONAL RAMPS built by the
+same exit machinery, except the ramp's target is a MERGE STATION on the
+other corridor instead of a street node (deck-to-deck splice: leave
+corridor A at its gore elevation, clothoid + profile to corridor B's merge
+elevation, join as an on-ramp). Four directional ramps = a simple system
+interchange; loops (cloverleaf quadrants) only where a left-turn movement
+would otherwise need a tight directional ramp. Needs: ramp-on-ramp piers
+(done), gore machinery on BOTH corridors (done), and a solver that picks
+merge stations far enough from each corridor's other ramps (the P8.6
+spacing rule reused). Deferred until one corridor + city integration is
+solid.

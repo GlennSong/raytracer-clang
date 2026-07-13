@@ -413,7 +413,12 @@ CorridorMeshOut buildCorridorMesh(
             const Real rs = RL * i / rn;
             for (int sd = -1; sd <= 1; sd += 2) {
                 const bool inner = sd == -dirSign;
-                const bool skipParapet = inner && rs < 55.0;
+                // no wall across the gore opening (deck end) NOR across the
+                // junction mouth (street end) — but everywhere between, BOTH
+                // edges carry rail (device: "no railings along the
+                // entrance/exits to the onramp")
+                const bool skipParapet =
+                    (inner && rs < 42.0) || rs > RL - 14.0;
                 const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
