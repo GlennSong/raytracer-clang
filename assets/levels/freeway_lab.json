@@ -120,7 +120,17 @@
           ]
         ],
         "radius": 240,
-        "spiral": 70
+        "spiral": 70,
+        "exits": [
+          {
+            "station": 1000,
+            "upStation": true,
+            "target": [330, 470],
+            "decel": 200,
+            "radius": 75,
+            "spiral": 30
+          }
+        ]
       },
       "id": 3,
       "name": "mainline",

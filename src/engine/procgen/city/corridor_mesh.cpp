@@ -30,16 +30,22 @@ struct Rib {
 }  // namespace
 
 CorridorMeshOut buildCorridorMesh(
-    const CorridorDef& c, const std::function<Real(Real, Real)>& ground,
+    const CorridorDef& cIn, const std::function<Real(Real, Real)>& ground,
     Real step, const RoadGraph* avoidRoads) {
     CorridorMeshOut out;
+    CorridorDef c = cIn;
+    // Each exit grows its deceleration AUX LANE into the schedule — the deck
+    // flares one lane on that side over the decel length, ending at the gore.
+    for (const ExitDef& e : c.exits)
+        c.lanes.aux.push_back({e.station - e.decelLength, e.station,
+                               e.upStation});
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
     auto gy = [&](const Vec2& p) { return ground ? ground(p.x, p.y) : Real(0); };
 
     const int n = std::max(2, static_cast<int>(std::ceil(L / step)));
     std::vector<Rib> ribs(n + 1);
-    std::vector<Real> half(n + 1);
+    std::vector<Real> halfN(n + 1), halfP(n + 1);   // per-side deck reach
     std::vector<bool> elevated(n + 1);   // tall enough for pier bents
     std::vector<bool> raised(n + 1);     // off the ground at all: structure box
     const Real deckDepth = 1.1;            // structure depth of the viaduct box
@@ -50,7 +56,8 @@ CorridorMeshOut buildCorridorMesh(
         r.n = c.horizontal.normal(s);
         r.z = c.vertical.elevation(s);
         r.slope = c.superelevationAt(s);
-        half[i] = c.halfWidthAt(s);
+        halfN[i] = c.halfWidthAt(s, -1);
+        halfP[i] = c.halfWidthAt(s, 1);
         elevated[i] = r.z - gy(r.c) > 2.0;
         raised[i] = r.z - gy(r.c) > 0.9;
     }
@@ -68,8 +75,8 @@ CorridorMeshOut buildCorridorMesh(
     };
 
     // DECK: one band, full width (median included — the barrier sits on it).
-    strip(out.deck, [&](int i) { return half[i]; },
-          [&](int i) { return -half[i]; }, kAsphalt, 0.0);
+    strip(out.deck, [&](int i) { return halfP[i]; },
+          [&](int i) { return -halfN[i]; }, kAsphalt, 0.0);
 
     // LANE MARKINGS as geometry strips floated 15mm over the deck — honest
     // lane count now; the shader can take over later (task 13). Per
@@ -88,7 +95,7 @@ CorridorMeshOut buildCorridorMesh(
         solidLine(medEdge, kYellow);
         // outer white edge line: inside the outer shoulder
         auto outEdge = [&, side](int i) {
-            return side * (half[i] - c.shoulderOut);
+            return side * ((side < 0 ? halfN[i] : halfP[i]) - c.shoulderOut);
         };
         solidLine(outEdge, kWhite);
         // dashed separators between lanes (lane count can vary by station —
@@ -102,7 +109,7 @@ CorridorMeshOut buildCorridorMesh(
             // gate: only draw where this separator is interior to the deck
             for (int i = 0; i < n; ++i) {
                 const Real s = L * i / n;
-                if (l >= c.lanes.lanesAt(s)) continue;
+                if (l >= c.lanes.lanesAt(s, side < 0)) continue;
                 if (std::fmod(s, 12.0) > 3.0) continue;
                 const Vec3 a0 = ribs[i].at(sep(i) + lw * 0.5) + Vec3(0, 0.015, 0);
                 const Vec3 b0 = ribs[i].at(sep(i) - lw * 0.5) + Vec3(0, 0.015, 0);
@@ -138,8 +145,8 @@ CorridorMeshOut buildCorridorMesh(
     // elevated, the deck becomes a box — fascia sides + underside — on piers.
     for (int side = -1; side <= 1; side += 2) {
         for (int i = 0; i < n; ++i) {
-            const Vec3 e0 = ribs[i].at(side * half[i]);
-            const Vec3 e1 = ribs[i + 1].at(side * half[i + 1]);
+            const Vec3 e0 = ribs[i].at(side * (side < 0 ? halfN[i] : halfP[i]));
+            const Vec3 e1 = ribs[i + 1].at(side * (side < 0 ? halfN[i + 1] : halfP[i + 1]));
             const bool up = raised[i] || raised[i + 1];
             const Real d0 = up ? deckDepth : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
             const Real d1 = up ? deckDepth : e1.y - (gy(Vec2(e1.x, e1.z)) - 0.6);
@@ -152,10 +159,10 @@ CorridorMeshOut buildCorridorMesh(
     // Underside where elevated (seen from streets below).
     for (int i = 0; i < n; ++i) {
         if (!(raised[i] || raised[i + 1])) continue;
-        const Vec3 a0 = ribs[i].at(half[i]) - Vec3(0, deckDepth, 0);
-        const Vec3 b0 = ribs[i].at(-half[i]) - Vec3(0, deckDepth, 0);
-        const Vec3 a1 = ribs[i + 1].at(half[i + 1]) - Vec3(0, deckDepth, 0);
-        const Vec3 b1 = ribs[i + 1].at(-half[i + 1]) - Vec3(0, deckDepth, 0);
+        const Vec3 a0 = ribs[i].at(halfP[i]) - Vec3(0, deckDepth, 0);
+        const Vec3 b0 = ribs[i].at(-halfN[i]) - Vec3(0, deckDepth, 0);
+        const Vec3 a1 = ribs[i + 1].at(halfP[i + 1]) - Vec3(0, deckDepth, 0);
+        const Vec3 b1 = ribs[i + 1].at(-halfN[i + 1]) - Vec3(0, deckDepth, 0);
         MeshBuilder::emitQuad(out.deck, b0, a0, a1, b1, Vec3(0, -1, 0),
                               kConcrete * 0.8);
     }
@@ -165,8 +172,8 @@ CorridorMeshOut buildCorridorMesh(
     for (int side = -1; side <= 1; side += 2) {
         const Real ph = 0.85, pt = 0.28;   // parapet height / thickness
         for (int i = 0; i < n; ++i) {
-            auto o0 = [&](int k) { return side * half[k]; };
-            auto o1 = [&](int k) { return side * (half[k] - pt); };
+            auto o0 = [&](int k) { return side * (side < 0 ? halfN[k] : halfP[k]); };
+            auto o1 = [&](int k) { return side * ((side < 0 ? halfN[k] : halfP[k]) - pt); };
             const Vec3 a0 = ribs[i].at(o0(i)), a1 = ribs[i + 1].at(o0(i + 1));
             const Vec3 b0 = ribs[i].at(o1(i)), b1 = ribs[i + 1].at(o1(i + 1));
             const Vec3 up3(0, ph, 0);
@@ -274,18 +281,154 @@ CorridorMeshOut buildCorridorMesh(
             if (!elevated[std::min(i0, n)]) {
                 const Vec2 p0 = c.horizontal.pos(s0), p1 = c.horizontal.pos(s1);
                 const Vec2 n0 = c.horizontal.normal(s0), n1 = c.horizontal.normal(s1);
-                const Real h0 = c.halfWidthAt(s0) + 2.0, h1 = c.halfWidthAt(s1) + 2.0;
+                const Real hp0 = c.halfWidthAt(s0, 1) + 2.0, hp1 = c.halfWidthAt(s1, 1) + 2.0;
+                const Real hn0 = c.halfWidthAt(s0, -1) + 2.0, hn1 = c.halfWidthAt(s1, -1) + 2.0;
                 std::vector<Vec3> poly{
-                    Vec3(p0.x + n0.x * h0, 0, p0.y + n0.y * h0),
-                    Vec3(p1.x + n1.x * h1, 0, p1.y + n1.y * h1),
-                    Vec3(p1.x - n1.x * h1, 0, p1.y - n1.y * h1),
-                    Vec3(p0.x - n0.x * h0, 0, p0.y - n0.y * h0)};
+                    Vec3(p0.x + n0.x * hp0, 0, p0.y + n0.y * hp0),
+                    Vec3(p1.x + n1.x * hp1, 0, p1.y + n1.y * hp1),
+                    Vec3(p1.x - n1.x * hn1, 0, p1.y - n1.y * hn1),
+                    Vec3(p0.x - n0.x * hn0, 0, p0.y - n0.y * hn0)};
                 out.flatten.push_back(
                     makeFlattenPad(std::move(poly), c.vertical.elevation(sm), 6.0));
             }
             s0 = s1;
         }
     }
+
+    // EXIT RAMPS (P8.3, device: "the exit should only have the last lane
+    // peel off and become a connecting road to a surface street"): the ramp
+    // centreline starts in the MIDDLE of the aux lane at the gore, inherits
+    // the mainline tangent, and clothoids down to the street target on its
+    // own crest/sag profile. It conforms (flattens terrain) ONLY over its
+    // landing run — the body answers to its alignment, not the ground.
+    for (const ExitDef& e : c.exits) {
+        const Real sg = std::max(Real(1), std::min(e.station, L - 1.0));
+        const int dirSign = e.upStation ? -1 : 1;
+        const Vec2 travel = c.horizontal.tangent(sg) * (e.upStation ? 1.0 : -1.0);
+        const Real off0 =
+            dirSign * (c.medianWidth * 0.5 + c.shoulderIn +
+                       (c.lanes.lanesAt(sg - 1.0, e.upStation) - 0.5) * c.laneWidth);
+        const Vec2 P0 = c.horizontal.offset(sg, off0);
+        Alignment ra = Alignment::fromPolyline(
+            {P0, P0 + travel * 45.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
+        if (ra.empty() || ra.length() < 60.0) continue;
+        const Real RL = ra.length();
+        VerticalProfile rp;
+        rp.pvis = {{0, c.vertical.elevation(sg), 0},
+                   {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
+        const Real rw = 2.9;                       // half-width: lane + shoulders
+        const int rn = std::max(2, static_cast<int>(RL / step));
+        std::vector<Rib> rr(rn + 1);
+        std::vector<bool> rUp(rn + 1);
+        for (int i = 0; i <= rn; ++i) {
+            const Real s = RL * i / rn;
+            rr[i].c = ra.pos(s);
+            rr[i].n = ra.normal(s);
+            rr[i].z = rp.elevation(s);
+            rr[i].slope = 0;
+            rUp[i] = rr[i].z - gy(rr[i].c) > 0.9;
+        }
+        for (int i = 0; i < rn; ++i) {
+            // deck
+            MeshBuilder::emitQuad(out.deck, rr[i].at(rw), rr[i].at(-rw),
+                                  rr[i + 1].at(-rw), rr[i + 1].at(rw),
+                                  Vec3(0, 1, 0), kAsphalt);
+            // edge lines
+            for (int sd = -1; sd <= 1; sd += 2) {
+                const Real o = sd * (rw - 0.35);
+                MeshBuilder::emitQuad(out.markings,
+                                      rr[i].at(o + 0.06) + Vec3(0, 0.015, 0),
+                                      rr[i].at(o - 0.06) + Vec3(0, 0.015, 0),
+                                      rr[i + 1].at(o - 0.06) + Vec3(0, 0.015, 0),
+                                      rr[i + 1].at(o + 0.06) + Vec3(0, 0.015, 0),
+                                      Vec3(0, 1, 0), kWhite);
+            }
+            // fascia / skirts + parapets
+            const bool up = rUp[i] || rUp[i + 1];
+            for (int sd = -1; sd <= 1; sd += 2) {
+                const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
+                const Real d0 = up ? deckDepth
+                                   : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
+                const Real d1 = up ? deckDepth
+                                   : e1.y - (gy(Vec2(e1.x, e1.z)) - 0.6);
+                Vec3 nrm(sd * rr[i].n.x, 0, sd * rr[i].n.y);
+                MeshBuilder::emitQuad(out.deck,
+                                      e0 - Vec3(0, std::max(Real(0.3), d0), 0),
+                                      e1 - Vec3(0, std::max(Real(0.3), d1), 0),
+                                      e1, e0, nrm, kAsphalt * 1.6);
+                // parapet
+                const Vec3 up3(0, 0.85, 0);
+                const Vec3 b0 = rr[i].at(sd * (rw - 0.24));
+                const Vec3 b1 = rr[i + 1].at(sd * (rw - 0.24));
+                MeshBuilder::emitQuad(out.barrier, e0, e1, e1 + up3, e0 + up3,
+                                      nrm, kConcrete);
+                MeshBuilder::emitQuad(out.barrier, b1, b0, b0 + up3, b1 + up3,
+                                      nrm * -1.0, kConcrete);
+                MeshBuilder::emitQuad(out.barrier, e0 + up3, e1 + up3, b1 + up3,
+                                      b0 + up3, Vec3(0, 1, 0), kConcrete);
+            }
+            if (up)   // underside
+                MeshBuilder::emitQuad(out.deck,
+                                      rr[i].at(-rw) - Vec3(0, deckDepth, 0),
+                                      rr[i].at(rw) - Vec3(0, deckDepth, 0),
+                                      rr[i + 1].at(rw) - Vec3(0, deckDepth, 0),
+                                      rr[i + 1].at(-rw) - Vec3(0, deckDepth, 0),
+                                      Vec3(0, -1, 0), kConcrete * 0.8);
+        }
+        // single round columns where the ramp rides high
+        Real since = 20.0;
+        for (int i = 0; i <= rn; ++i) {
+            since += i > 0 ? RL / rn : 0.0;
+            if (!rUp[i] || since < 24.0) continue;
+            since = 0;
+            const Vec2 f2 = rr[i].c;
+            const Real fgz = gy(f2);
+            const Real hgt = rr[i].z - deckDepth - (fgz - 1.0);
+            if (hgt < 0.8) continue;
+            RenderMesh col = MeshBuilder::cylinder(1.1f, static_cast<float>(hgt), 12);
+            for (Vertex& v : col.vertices) v.color = kConcrete;
+            MeshBuilder::transform(col,
+                Mat4::translate(f2.x, fgz - 1.0 + hgt * 0.5, f2.y));
+            MeshBuilder::append(out.barrier, col);
+            out.pierBases.push_back(f2);
+        }
+        // LANDING conform: flatten only the last stretch where it meets the
+        // street grade (device: "conform with the city roads it connects to
+        // but we probably don't need it to conform beyond that").
+        for (Real s0 = std::max(Real(0), RL - 70.0); s0 < RL; s0 += 12.0) {
+            const Real s1 = std::min(RL, s0 + 12.0);
+            const Vec2 p0 = ra.pos(s0), p1 = ra.pos(s1);
+            const Vec2 n0 = ra.normal(s0), n1 = ra.normal(s1);
+            const Real hw2 = rw + 1.6;
+            std::vector<Vec3> poly{
+                Vec3(p0.x + n0.x * hw2, 0, p0.y + n0.y * hw2),
+                Vec3(p1.x + n1.x * hw2, 0, p1.y + n1.y * hw2),
+                Vec3(p1.x - n1.x * hw2, 0, p1.y - n1.y * hw2),
+                Vec3(p0.x - n0.x * hw2, 0, p0.y - n0.y * hw2)};
+            out.flatten.push_back(
+                makeFlattenPad(std::move(poly), rp.elevation((s0 + s1) * 0.5), 5.0));
+        }
+        // GORE NOSE: the painted wedge between the mainline's outer edge and
+        // the ramp's inner edge as they diverge past the gore.
+        for (int k = 0; k < 5; ++k) {
+            const Real ds0 = k * 3.0, ds1 = ds0 + 3.0;
+            const Real sm0 = std::min(L, sg + (e.upStation ? ds0 : -ds0));
+            const Real sm1 = std::min(L, sg + (e.upStation ? ds1 : -ds1));
+            const Vec3 d0v = Vec3(0, 0.02, 0) +
+                Vec3(c.horizontal.offset(sm0, dirSign * c.halfWidthAt(sm0, dirSign)).x,
+                     c.vertical.elevation(sm0),
+                     c.horizontal.offset(sm0, dirSign * c.halfWidthAt(sm0, dirSign)).y);
+            const Vec3 d1v = Vec3(0, 0.02, 0) +
+                Vec3(c.horizontal.offset(sm1, dirSign * c.halfWidthAt(sm1, dirSign)).x,
+                     c.vertical.elevation(sm1),
+                     c.horizontal.offset(sm1, dirSign * c.halfWidthAt(sm1, dirSign)).y);
+            const Vec3 r0v = rr[std::min(rn, (int)(ds0 / RL * rn))].at(-dirSign * (rw - 0.3)) + Vec3(0, 0.02, 0);
+            const Vec3 r1v = rr[std::min(rn, (int)(ds1 / RL * rn))].at(-dirSign * (rw - 0.3)) + Vec3(0, 0.02, 0);
+            MeshBuilder::emitQuad(out.markings, d0v, r0v, r1v, d1v,
+                                  Vec3(0, 1, 0), kWhite);
+        }
+    }
+
     return out;
 }
 

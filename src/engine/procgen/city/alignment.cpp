@@ -278,16 +278,27 @@ Real VerticalProfile::grade(Real s) const {
     return (elevation(s + h) - elevation(s - h)) / (2 * h);
 }
 
-int LaneSchedule::lanesAt(Real s) const {
+int LaneSchedule::lanesAt(Real s, bool up) const {
     int n = throughLanes;
     for (const AuxSpan& a : aux)
-        if (s >= a.s0 && s <= a.s1) ++n;
+        if (a.upStation == up && s >= a.s0 && s <= a.s1) ++n;
     return n;
 }
 
+Real CorridorDef::halfWidthAt(Real s, int sideSign) const {
+    // Aux lanes fade in over ~35 m (deceleration-lane taper) and END at the
+    // gore station sharply — the ramp continues the pavement from there.
+    const bool up = sideSign < 0;   // up-station drives the negative offsets
+    Real extra = 0;
+    for (const LaneSchedule::AuxSpan& a : lanes.aux)
+        if (a.upStation == up && s >= a.s0 && s <= a.s1)
+            extra += laneWidth * std::min(Real(1), (s - a.s0) / Real(35));
+    return medianWidth * 0.5 + shoulderIn + lanes.throughLanes * laneWidth +
+           extra + shoulderOut;
+}
+
 Real CorridorDef::halfWidthAt(Real s) const {
-    return medianWidth * 0.5 + shoulderIn + lanes.lanesAt(s) * laneWidth +
-           shoulderOut;
+    return std::max(halfWidthAt(s, -1), halfWidthAt(s, 1));
 }
 
 Real CorridorDef::superelevationAt(Real s) const {

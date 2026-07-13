@@ -2286,6 +2286,22 @@ bool LevelLoader::load(const std::string& path,
                         def.vertical.pvis.push_back(
                             {pv[0].get<double>(), pv[1].get<double>(),
                              pv.size() > 2 ? pv[2].get<double>() : 0.0});
+            for (const auto& ex : cb.value("exits", json::array())) {
+                engine::ExitDef e;
+                e.station = ex.value("station", 0.0);
+                e.upStation = ex.value("upStation", true);
+                if (ex.contains("target") && ex["target"].is_array() &&
+                    ex["target"].size() >= 2)
+                    e.target = Vec2(ex["target"][0].get<double>(),
+                                    ex["target"][1].get<double>());
+                // landing grade defaults to the street's own terrain height
+                e.targetY = ex.value("targetY",
+                                     levelGround(e.target.x, e.target.y) + 0.4);
+                e.decelLength = ex.value("decel", 220.0);
+                e.rampRadius = ex.value("radius", 70.0);
+                e.rampSpiral = ex.value("spiral", 30.0);
+                def.exits.push_back(e);
+            }
             } else {
                 // No authored profile: follow the terrain at a smoothed grade
                 // (PVIs every 80 m at ground height + a small embankment).

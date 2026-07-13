@@ -79,12 +79,12 @@ struct LaneSchedule {
     int throughLanes = 3;               // per direction, continuous end-to-end
     struct AuxSpan {
         Real s0 = 0, s1 = 0;            // station range carrying the extra lane
-        bool rightSide = true;          // aux lanes live on the outer edge
+        bool upStation = true;          // which carriageway carries it
     };
     std::vector<AuxSpan> aux;
 
-    // Lane count for one direction at station s (through + active aux spans).
-    int lanesAt(Real s) const;
+    // Lane count for ONE carriageway at station s (through + its aux spans).
+    int lanesAt(Real s, bool upStation = true) const;
 };
 
 
@@ -122,7 +122,11 @@ struct CorridorDef {
     // (Declared below CorridorDef; stored here as the corridor OWNS them.)
     std::vector<ExitDef> exits;
 
-    // Total paved half-width at station s (median centre to outer edge).
+    // Paved half-width at station s (median centre to outer edge) for one
+    // side: -1 = the up-station carriageway (negative offsets), +1 = the
+    // down-station one. Aux lanes TAPER in over ~35 m so the deck edge
+    // flares smoothly instead of stepping. No-arg overload = widest side.
+    Real halfWidthAt(Real s, int sideSign) const;
     Real halfWidthAt(Real s) const;
     // Bank angle cross-slope at s (signed: positive tilts the LEFT edge up,
     // i.e. banking INTO a left curve).
