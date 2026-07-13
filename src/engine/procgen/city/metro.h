@@ -76,10 +76,15 @@ struct MetroParams {
     std::vector<CityHub>* outHubs = nullptr;
 };
 
-// Grow the metro and return its planarized RoadGraph (freeway backbone tagged
-// RoadClass::Freeway, arterials RoadClass::Arterial, collector cuts
-// RoadClass::Collector, local streets RoadClass::Local).
-RoadGraph buildMetro(const MetroParams& p);
+// Grow the metro and return its planarized RoadGraph (arterials
+// RoadClass::Arterial, collector cuts RoadClass::Collector, local streets
+// RoadClass::Local). §10.6: the freeway backbone is NO LONGER street edges —
+// each hub-to-hub route is returned in `freewayPlans` (anchor polylines) for
+// the loader to build as a real CORRIDOR (clothoid alignment, profile,
+// stamped interchanges). Interchange seeds still feed street growth so the
+// city grows TOWARD the future ramps.
+RoadGraph buildMetro(const MetroParams& p,
+                     std::vector<std::vector<Vec2>>* freewayPlans = nullptr);
 
 }  // namespace engine
 

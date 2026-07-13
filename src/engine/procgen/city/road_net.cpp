@@ -974,7 +974,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                     if (line.size() >= 2) mp.build.rivers.push_back(std::move(line));
                 }
         }
-        base = buildMetro(mp);
+        base = buildMetro(mp, &net.freewayPlans);
     } else {
         DistrictParams dp;
         if (g.contains("center")) {

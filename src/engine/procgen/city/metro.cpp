@@ -165,7 +165,8 @@ int components(const RoadGraph& g, std::vector<int>& comp) {
 
 }  // namespace
 
-RoadGraph buildMetro(const MetroParams& p) {
+RoadGraph buildMetro(const MetroParams& p,
+                     std::vector<std::vector<Vec2>>* freewayPlans) {
     Lcg rng{0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(p.seed) * 0x100000001B3ULL)};
     const double DOM = std::max(200.0, p.radius);
     const int H = std::max(2, p.hotspots);
@@ -257,62 +258,96 @@ RoadGraph buildMetro(const MetroParams& p) {
         // (freeways curve gently — DesignRules Freeway minRadius is 300 m), then
         // segments every ~36 m. Unbuildable anchors slide sideways to stay on
         // land (a coastal freeway hugs the shoreline instead of wading).
-        for (auto& l : links) {
-            Vec2 A = hots[l.first].pos, B = hots[l.second].pos;
-            Vec2 dir = B - A;
-            double L = dir.length();
-            if (L < 1.0) continue;
-            dir = dir * (1.0 / L);
-            Vec2 nrm(-dir.y, dir.x);
-            int anchors = std::max(2, static_cast<int>(L / 220.0) + 1);
-            std::vector<Vec2> pts;
-            for (int k = 0; k <= anchors; ++k) {
-                double t = static_cast<double>(k) / anchors;
-                double sway = (k == 0 || k == anchors)
-                                  ? 0.0
-                                  : rng.range(-0.05, 0.05) * L;
-                Vec2 q = A + dir * (t * L) + nrm * sway;
-                if (!buildable(q.x, q.y)) {
-                    bool fixed = false;
-                    for (double off = 30; off <= 210 && !fixed; off += 30)
-                        for (double s : {+1.0, -1.0}) {
-                            Vec2 c = q + nrm * (off * s);
-                            if (inDomain(c) && buildable(c.x, c.y)) { q = c; fixed = true; break; }
-                        }
+        // §10.6: chain the MST links into THROUGH-ROUTES — a freeway passes
+        // through hubs, it doesn't stop at each one. Walk maximal paths,
+        // preferring the straightest continuation at every hub, so 6 short
+        // hub-to-hub stubs become 2-3 corridors long enough for real
+        // interchanges.
+        std::vector<std::vector<int>> hubAdj(H);
+        for (std::size_t li2 = 0; li2 < links.size(); ++li2) {
+            hubAdj[links[li2].first].push_back(static_cast<int>(li2));
+            hubAdj[links[li2].second].push_back(static_cast<int>(li2));
+        }
+        std::vector<char> usedLink(links.size(), 0);
+        std::vector<std::vector<int>> routes;   // hub index sequences
+        auto walk = [&](int startHub, int firstLink) {
+            std::vector<int> seq{startHub};
+            int hub = startHub, link = firstLink;
+            while (link >= 0 && !usedLink[link]) {
+                usedLink[link] = 1;
+                hub = links[link].first == hub ? links[link].second
+                                               : links[link].first;
+                seq.push_back(hub);
+                // straightest unvisited continuation
+                const Vec2 inDir = normalize(hots[hub].pos -
+                                             hots[seq[seq.size() - 2]].pos);
+                int best = -1;
+                double bestDot = 0.2;   // never turn harder than ~78 degrees
+                for (int cand : hubAdj[hub]) {
+                    if (usedLink[cand]) continue;
+                    const int other = links[cand].first == hub
+                                          ? links[cand].second
+                                          : links[cand].first;
+                    const double d =
+                        dot(inDir, normalize(hots[other].pos - hots[hub].pos));
+                    if (d > bestDot) { bestDot = d; best = cand; }
                 }
-                pts.push_back(q);
+                link = best;
             }
-            // Catmull-Rom through the anchors, sampled every ~36 m.
-            auto cr = [&](int i0) {
-                Vec2 p0 = pts[std::max(0, i0 - 1)], p1 = pts[i0],
-                     p2 = pts[std::min<int>(pts.size() - 1, i0 + 1)],
-                     p3 = pts[std::min<int>(pts.size() - 1, i0 + 2)];
-                return [=](double t) {
-                    double t2 = t * t, t3 = t2 * t;
-                    return (p1 * 2.0 + (p2 - p0) * t +
-                            (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 +
-                            ((p1 - p2) * 3.0 + p3 - p0) * t3) * 0.5;
-                };
-            };
-            int prev = -1;
+            if (seq.size() >= 2) routes.push_back(std::move(seq));
+        };
+        {   // start at odd-degree hubs first (route ends), then leftovers
+            std::vector<int> order(H);
+            for (int i = 0; i < H; ++i) order[i] = i;
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return hubAdj[a].size() < hubAdj[b].size();
+            });
+            for (int hub : order)
+                for (int cand : hubAdj[hub])
+                    if (!usedLink[cand]) walk(hub, cand);
+        }
+        for (const std::vector<int>& seq : routes) {
+            // anchors every ~220 m along EACH leg with small sway, buildable
+            // slide as before — one polyline for the whole through-route
+            std::vector<Vec2> pts;
+            for (std::size_t si = 0; si + 1 < seq.size(); ++si) {
+                Vec2 A = hots[seq[si]].pos, B = hots[seq[si + 1]].pos;
+                Vec2 dir = B - A;
+                double L = dir.length();
+                if (L < 1.0) continue;
+                dir = dir * (1.0 / L);
+                Vec2 nrm(-dir.y, dir.x);
+                int anchors = std::max(2, static_cast<int>(L / 220.0) + 1);
+                for (int k = (si == 0 ? 0 : 1); k <= anchors; ++k) {
+                    double t = static_cast<double>(k) / anchors;
+                    double sway = (k == 0 || k == anchors)
+                                      ? 0.0
+                                      : rng.range(-0.05, 0.05) * L;
+                    Vec2 q = A + dir * (t * L) + nrm * sway;
+                    if (!buildable(q.x, q.y)) {
+                        bool fixed = false;
+                        for (double off = 30; off <= 210 && !fixed; off += 30)
+                            for (double s : {+1.0, -1.0}) {
+                                Vec2 c = q + nrm * (off * s);
+                                if (inDomain(c) && buildable(c.x, c.y)) { q = c; fixed = true; break; }
+                            }
+                    }
+                    pts.push_back(q);
+                }
+            }
+            if (pts.size() < 2) continue;
+            // §10.6: the route becomes a CORRIDOR PLAN — anchor polyline out,
+            // NO street edges (the freeway-as-fat-street era ends here). The
+            // interchange seeds stay: streets grow toward the future ramps.
+            if (freewayPlans) freewayPlans->push_back(pts);
             double along = 0, nextSeed = p.interchangeSpacing * 0.5;
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
-                auto seg = cr(static_cast<int>(k));
-                double segLen = (pts[k + 1] - pts[k]).length();
-                int steps = std::max(1, static_cast<int>(segLen / 36.0));
-                for (int s = (k == 0 ? 0 : 1); s <= steps; ++s) {
-                    Vec2 q = seg(static_cast<double>(s) / steps);
-                    int id = Ga.addNode(q, 8.0);
-                    if (prev >= 0 && id != prev)
-                        Ga.addEdge(prev, id, p.freewayWidth, RoadClass::Freeway);
-                    if (prev >= 0) {
-                        along += segLen / steps;
-                        if (along >= nextSeed) {   // interchange: arterial seed
-                            seedPts.push_back(q);
-                            nextSeed += p.interchangeSpacing;
-                        }
-                    }
-                    prev = id;
+                const double segLen = (pts[k + 1] - pts[k]).length();
+                along += segLen;
+                while (along >= nextSeed) {
+                    const double back = (along - nextSeed) / std::max(1.0, segLen);
+                    seedPts.push_back(pts[k + 1] - (pts[k + 1] - pts[k]) * back);
+                    nextSeed += p.interchangeSpacing;
                 }
             }
         }
@@ -449,9 +484,10 @@ RoadGraph buildMetro(const MetroParams& p) {
         }
         for (const auto& l : links) Ga.addEdge(l.first, l.second, p.arteryWidth, RoadClass::Arterial);
         if (p.ringRoad) {
-            // With the freeway tier on, the ring IS a freeway (an orbital).
-            const RoadClass rc = p.freeways ? RoadClass::Freeway : RoadClass::Arterial;
-            const double rw = p.freeways ? p.freewayWidth : p.arteryWidth;
+            // §10.6: the ring stays an ARTERIAL — an orbital freeway would be
+            // another corridor (future), never freeway-class street edges.
+            const RoadClass rc = RoadClass::Arterial;
+            const double rw = p.arteryWidth;
             double rr = DOM * 0.72; int segs = std::max(24, static_cast<int>(kTau * rr / 40.0));
             int prev = -1, first = -1;
             for (int k = 0; k <= segs; ++k) {

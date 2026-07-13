@@ -57,6 +57,10 @@ struct RoadNet {
     // Hubs the metro recipe grew this net around (with district kinds), so lot
     // growth can zone polycentrically. Empty for hand-authored/district nets.
     std::vector<CityHub> cityHubs;
+    // §10.6: freeway CORRIDOR plans the metro recipe routed hub-to-hub —
+    // anchor polylines the loader builds as real corridors (alignment,
+    // profile, interchanges). Never street edges.
+    std::vector<std::vector<Vec2>> freewayPlans;
 };
 
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).

@@ -2271,6 +2271,7 @@ bool LevelLoader::load(const std::string& path,
         std::vector<int> snapNodes;   // street-end terminals to weld
     };
     std::vector<CorridorFrag> corridorFrags;
+    std::vector<CorridorDef> corridorDefs;
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "corridor") continue;
@@ -2293,6 +2294,18 @@ bool LevelLoader::load(const std::string& path,
                         def.vertical.pvis.push_back(
                             {pv[0].get<double>(), pv[1].get<double>(),
                              pv.size() > 2 ? pv[2].get<double>() : 0.0});
+            } else {
+                // No authored profile: follow the terrain at a smoothed grade
+                // (PVIs every 80 m at ground height + a small embankment).
+                const Real len = def.horizontal.length();
+                for (Real s = 0; s <= len; s += 80.0) {
+                    const Vec2 p = def.horizontal.pos(std::min(s, len));
+                    def.vertical.pvis.push_back(
+                        {std::min(s, len), levelGround(p.x, p.y) + 0.4, 50.0});
+                }
+            }
+            // (exits parse used to hide inside the profile branch — a
+            // profile-less corridor silently lost its ramps)
             for (const auto& ex : cb.value("exits", json::array())) {
                 engine::ExitDef e;
                 e.station = ex.value("station", 0.0);
@@ -2310,16 +2323,143 @@ bool LevelLoader::load(const std::string& path,
                 e.rampSpiral = ex.value("spiral", 30.0);
                 def.exits.push_back(e);
             }
-            } else {
-                // No authored profile: follow the terrain at a smoothed grade
-                // (PVIs every 80 m at ground height + a small embankment).
+            corridorDefs.push_back(std::move(def));
+        }
+    }
+    // §10.6: metro-planned corridors. The generator routed the backbone as
+    // anchor POLYLINES (RoadNet.freewayPlans); each becomes a corridor with a
+    // terrain-eased profile and a stamped DIAMOND every interchange spacing —
+    // exit + on-ramp per carriageway, targets resolved onto real street
+    // nodes by the same anchor machinery authored ramps use.
+    if (levelGround) {
+        for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
+            const json& rootEnt = *preNetEnts[ni];
+            const json gen = rootEnt.contains("road") &&
+                                     rootEnt["road"].contains("generate")
+                                 ? rootEnt["road"]["generate"]
+                                 : json::object();
+            const Real spacing = gen.value("interchange_spacing", 700.0);
+            for (const std::vector<Vec2>& plan : preNets[ni].freewayPlans) {
+                if (plan.size() < 2) continue;
+                CorridorDef def;
+                def.horizontal = Alignment::fromPolyline(plan, 300.0, 90.0);
                 const Real len = def.horizontal.length();
-                for (Real s = 0; s <= len; s += 80.0) {
-                    const Vec2 p = def.horizontal.pos(std::min(s, len));
-                    def.vertical.pvis.push_back(
-                        {std::min(s, len), levelGround(p.x, p.y) + 0.4, 50.0});
+                if (len < 320.0) continue;
+                def.lanes.throughLanes = 3;
+                def.laneWidth = 3.6;
+                def.medianWidth = 1.4;
+                // eased profile: 3-tap smoothed terrain + small embankment —
+                // dips become viaducts on their own once the deck rides the
+                // smoothed line
+                std::vector<Real> ss, zs;
+                for (Real s = 0;; s += 120.0) {
+                    const Real sv = std::min(s, len);
+                    const Vec2 p = def.horizontal.pos(sv);
+                    ss.push_back(sv);
+                    zs.push_back(levelGround(p.x, p.y));
+                    if (sv >= len) break;
                 }
+                for (int pass = 0; pass < 3; ++pass) {
+                    std::vector<Real> sm = zs;
+                    for (std::size_t i = 1; i + 1 < zs.size(); ++i)
+                        sm[i] = (zs[i - 1] + zs[i] * 2.0 + zs[i + 1]) * 0.25;
+                    zs.swap(sm);
+                }
+                for (std::size_t i = 0; i < ss.size(); ++i)
+                    def.vertical.pvis.push_back({ss[i], zs[i] + 0.6, 60.0});
+                // hub-to-hub plans are often shorter than the spacing —
+                // every route >= 500 m earns at least ONE diamond, placed
+                // evenly so short links interchange at mid-route
+                const int nD = len >= 420.0
+                    ? std::max(1, static_cast<int>(std::floor(len / spacing)))
+                    : 0;
+                for (int di = 0; di < nD; ++di) {
+                    const Real sI = len * (di + 1) / (nD + 1);
+                    const Vec2 cI = def.horizontal.pos(sI);
+                    const Vec2 nI = def.horizontal.normal(sI);
+                    auto stamp = [&](Real st, bool up, bool on, Real side) {
+                        if (st < 60.0 || st > len - 60.0) return;
+                        engine::ExitDef e;
+                        e.station = st;
+                        e.upStation = up;
+                        e.onRamp = on;
+                        e.target = cI + nI * (side * 95.0);
+                        e.targetY =
+                            levelGround(e.target.x, e.target.y) + 0.4;
+                        e.decelLength = std::min(Real(200), len * 0.28);
+                        e.rampRadius = 65.0;
+                        e.rampSpiral = 28.0;
+                        def.exits.push_back(e);
+                    };
+                    stamp(sI - 80.0, true, false, -1.0);    // up exit
+                    stamp(sI + 110.0, true, true, -1.0);    // up on-ramp
+                    stamp(sI + 80.0, false, false, 1.0);    // down exit
+                    stamp(sI - 110.0, false, true, 1.0);    // down on-ramp
+                }
+                LOG_INFO << "[corridor] metro plan: len=" << len
+                         << " diamonds=" << nD
+                         << " exits=" << def.exits.size();
+                corridorDefs.push_back(std::move(def));
             }
+        }
+    }
+    // §10.6: streets may pass UNDER a viaduct, never THROUGH an at-grade
+    // corridor — cut street edges that cross a low span of any corridor.
+    if (levelGround && !corridorDefs.empty()) {
+        struct CorSample { Vec2 pos; Real clear; Real reach; };
+        std::vector<CorSample> cs;
+        for (const CorridorDef& def : corridorDefs) {
+            const Real len = def.horizontal.length();
+            for (Real s = 0; s <= len; s += 20.0) {
+                const Vec2 p = def.horizontal.pos(s);
+                cs.push_back({p,
+                              def.vertical.elevation(s) - levelGround(p.x, p.y),
+                              def.halfWidthAt(s) + 7.0});
+            }
+        }
+        int cut = 0;
+        for (engine::RoadNet& net : preNets) {
+            std::vector<std::array<int, 2>> keptE;
+            std::vector<double> keptW;
+            std::vector<int> keptL;
+            const bool hasW = !net.edgeWidths.empty();
+            const bool hasL = !net.edgeLayers.empty();
+            for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+                const auto& ed = net.edges[ei];
+                bool blocked = false;
+                if (ed[0] >= 0 && ed[1] >= 0 &&
+                    ed[0] < static_cast<int>(net.nodes.size()) &&
+                    ed[1] < static_cast<int>(net.nodes.size())) {
+                    const Vec2 A = net.nodes[ed[0]], B = net.nodes[ed[1]];
+                    for (int k = 0; k <= 8 && !blocked; ++k) {
+                        const Vec2 q = A + (B - A) * (k / 8.0);
+                        for (const CorSample& sm2 : cs) {
+                            if (sm2.clear >= 4.5) continue;   // viaduct: ok
+                            if ((q - sm2.pos).length() < sm2.reach) {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (blocked) { ++cut; continue; }
+                keptE.push_back(ed);
+                if (hasW)
+                    keptW.push_back(ei < net.edgeWidths.size()
+                                        ? net.edgeWidths[ei] : 0.0);
+                if (hasL)
+                    keptL.push_back(ei < net.edgeLayers.size()
+                                        ? net.edgeLayers[ei] : 0);
+            }
+            net.edges.swap(keptE);
+            if (hasW) net.edgeWidths.swap(keptW);
+            if (hasL) net.edgeLayers.swap(keptL);
+        }
+        if (cut) LOG_INFO << "[corridor] cut " << cut
+                          << " street edges crossing at-grade spans";
+    }
+    if (levelGround && !corridorDefs.empty()) {
+        for (CorridorDef& def : corridorDefs) {
             // Bents must not stand in the streets below: hand the sweep the
             // same sampled graph the road meshes are built from.
             engine::RoadGraph streetsBelow;
@@ -3131,6 +3271,31 @@ bool LevelLoader::load(const std::string& path,
             }
             ++ci;
         });
+        // §10.6: SYNTHESIZED corridors (metro-planned) have no document
+        // entity — their decks spawn as plain runtime entities, colliders
+        // included, or the metro freeways would be ghost markings with no
+        // asphalt under them.
+        for (; ci < preCorridors.size(); ++ci) {
+            const CorridorMeshOut& cm = preCorridors[ci].mesh;
+            if (cm.deck.vertices.empty()) continue;
+            Entity e = world.create();
+            Transform t2;
+            world.add<Transform>(e, t2);
+            world.add<PrevTransform>(e, PrevTransform{t2});
+            Renderable r;
+            r.material.albedo = Vec3(1, 1, 1);
+            r.material.roughness = 0.95f;
+            r.mesh = assets.acquireMesh(cm.deck,
+                                        "corridor:deck:" + std::to_string(ci));
+            world.add<Renderable>(e, r);
+            MeshCollider mc;
+            mc.vertices.reserve(cm.deck.vertices.size());
+            for (const Vertex& v : cm.deck.vertices)
+                mc.vertices.push_back(v.position);
+            mc.indices = cm.deck.indices;
+            mc.friction = 0.85;
+            world.add<MeshCollider>(e, mc);
+        }
     }
 
     }
