@@ -2326,12 +2326,28 @@ bool LevelLoader::load(const std::string& path,
             corridorDefs.push_back(std::move(def));
         }
     }
-    // §10.6: metro-planned corridors. The generator routed the backbone as
-    // anchor POLYLINES (RoadNet.freewayPlans); each becomes a corridor with a
-    // terrain-eased profile and a stamped DIAMOND every interchange spacing —
-    // exit + on-ramp per carriageway, targets resolved onto real street
-    // nodes by the same anchor machinery authored ramps use.
+    std::vector<std::vector<Vec2>> corridorGuides;   // §12: per built def, its
+                                                     // own dense centreline
+                                                     // (empty for authored)
+    // §10.6/§12: metro-planned corridors with NETWORK RULES (device: "It
+    // needs to have rules about elevation and not having the freeways
+    // intersect. on and off ramps should not criss-cross"):
+    //   rule 1 (generator): one route per hub — routes never touch.
+    //   rule 2 (here): residual geometric crossings force the SHORTER route
+    //          OVER on a bridge bump solved into its profile.
+    //   rule 3 (here): one GLOBAL landing/ramp registry — a ramp that would
+    //          crowd a landing, cross another ramp, or graze another
+    //          corridor at grade is never stamped.
     if (levelGround) {
+        struct PlannedRoute {
+            std::vector<Vec2> anchors;   // generator anchor polyline
+            std::vector<Vec2> dense;     // 20 m samples (crossing tests)
+            Real len = 0;
+            Real spacing = 700;
+            std::vector<Real> bridgeAt;  // stations that must fly over
+            bool dropped = false;        // parallel-overlap loser
+        };
+        std::vector<PlannedRoute> planned;
         for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
             const json& rootEnt = *preNetEnts[ni];
             const json gen = rootEnt.contains("road") &&
@@ -2341,66 +2357,164 @@ bool LevelLoader::load(const std::string& path,
             const Real spacing = gen.value("interchange_spacing", 700.0);
             for (const std::vector<Vec2>& plan : preNets[ni].freewayPlans) {
                 if (plan.size() < 2) continue;
-                CorridorDef def;
-                def.horizontal = Alignment::fromPolyline(plan, 300.0, 90.0);
-                const Real len = def.horizontal.length();
-                if (len < 320.0) continue;
-                def.lanes.throughLanes = 3;
-                def.laneWidth = 3.6;
-                def.medianWidth = 1.4;
-                // eased profile: 3-tap smoothed terrain + small embankment —
-                // dips become viaducts on their own once the deck rides the
-                // smoothed line
-                std::vector<Real> ss, zs;
-                for (Real s = 0;; s += 120.0) {
-                    const Real sv = std::min(s, len);
-                    const Vec2 p = def.horizontal.pos(sv);
-                    ss.push_back(sv);
-                    zs.push_back(levelGround(p.x, p.y));
-                    if (sv >= len) break;
+                PlannedRoute pr;
+                pr.anchors = plan;
+                pr.spacing = spacing;
+                for (std::size_t k = 0; k + 1 < plan.size(); ++k) {
+                    const Vec2 A = plan[k], B = plan[k + 1];
+                    const Real seg = (B - A).length();
+                    for (Real s2 = 0; s2 < seg; s2 += 20.0)
+                        pr.dense.push_back(A + (B - A) * (s2 / seg));
+                    pr.len += seg;
                 }
-                for (int pass = 0; pass < 3; ++pass) {
-                    std::vector<Real> sm = zs;
-                    for (std::size_t i = 1; i + 1 < zs.size(); ++i)
-                        sm[i] = (zs[i - 1] + zs[i] * 2.0 + zs[i + 1]) * 0.25;
-                    zs.swap(sm);
-                }
-                for (std::size_t i = 0; i < ss.size(); ++i)
-                    def.vertical.pvis.push_back({ss[i], zs[i] + 0.6, 60.0});
-                // hub-to-hub plans are often shorter than the spacing —
-                // every route >= 500 m earns at least ONE diamond, placed
-                // evenly so short links interchange at mid-route
-                const int nD = len >= 420.0
-                    ? std::max(1, static_cast<int>(std::floor(len / spacing)))
-                    : 0;
-                for (int di = 0; di < nD; ++di) {
-                    const Real sI = len * (di + 1) / (nD + 1);
-                    const Vec2 cI = def.horizontal.pos(sI);
-                    const Vec2 nI = def.horizontal.normal(sI);
-                    auto stamp = [&](Real st, bool up, bool on, Real side) {
-                        if (st < 60.0 || st > len - 60.0) return;
-                        engine::ExitDef e;
-                        e.station = st;
-                        e.upStation = up;
-                        e.onRamp = on;
-                        e.target = cI + nI * (side * 95.0);
-                        e.targetY =
-                            levelGround(e.target.x, e.target.y) + 0.4;
-                        e.decelLength = std::min(Real(200), len * 0.28);
-                        e.rampRadius = 65.0;
-                        e.rampSpiral = 28.0;
-                        def.exits.push_back(e);
-                    };
-                    stamp(sI - 80.0, true, false, -1.0);    // up exit
-                    stamp(sI + 110.0, true, true, -1.0);    // up on-ramp
-                    stamp(sI + 80.0, false, false, 1.0);    // down exit
-                    stamp(sI - 110.0, false, true, 1.0);    // down on-ramp
-                }
-                LOG_INFO << "[corridor] metro plan: len=" << len
-                         << " diamonds=" << nD
-                         << " exits=" << def.exits.size();
-                corridorDefs.push_back(std::move(def));
+                pr.dense.push_back(plan.back());
+                planned.push_back(std::move(pr));
             }
+        }
+        // rule 2: a short contact is a CROSSING (shorter route bridges
+        // over); a long contact is a PARALLEL OVERLAP (no vertical fix can
+        // save it — the shorter route is dropped, loudly).
+        for (std::size_t a2 = 0; a2 < planned.size(); ++a2)
+            for (std::size_t b2 = a2 + 1; b2 < planned.size(); ++b2) {
+                PlannedRoute& flyer = planned[a2].len <= planned[b2].len
+                                          ? planned[a2] : planned[b2];
+                const PlannedRoute& other = planned[a2].len <= planned[b2].len
+                                                ? planned[b2] : planned[a2];
+                if (flyer.dropped || other.dropped) continue;
+                std::vector<char> hit(flyer.dense.size(), 0);
+                for (std::size_t i = 0; i < flyer.dense.size(); ++i)
+                    for (const Vec2& q : other.dense)
+                        if ((q - flyer.dense[i]).length() < 24.0) {
+                            hit[i] = 1;
+                            break;
+                        }
+                Real lastBump = -1e9;
+                for (std::size_t i = 0; i < hit.size(); ++i) {
+                    if (!hit[i]) continue;
+                    std::size_t j = i;
+                    while (j + 1 < hit.size() && hit[j + 1]) ++j;
+                    const Real runLen = (j - i + 1) * 20.0;
+                    const Real st = (i + j) * 0.5 * 20.0;
+                    if (runLen > 140.0) {
+                        flyer.dropped = true;
+                        LOG_WARN << "[corridor] routes run PARALLEL for "
+                                 << runLen << " m near ("
+                                 << flyer.dense[i].x << ", "
+                                 << flyer.dense[i].y
+                                 << ") — shorter route dropped";
+                        break;
+                    }
+                    if (st - lastBump >= 260.0) {
+                        flyer.bridgeAt.push_back(st);
+                        lastBump = st;
+                        LOG_INFO << "[corridor] route crossing near ("
+                                 << flyer.dense[i].x << ", " << flyer.dense[i].y
+                                 << ") — shorter route bridges over";
+                    }
+                    i = j;
+                }
+            }
+        // rule 3 registries, shared by every stamped diamond
+        std::vector<Vec2> globalLandings;
+        std::vector<std::pair<Vec2, Vec2>> rampSegs;
+        auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
+            const Vec2 ab = b - a;
+            const Real l2 = ab.lengthSquared();
+            Real u = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
+            u = u < 0 ? 0 : (u > 1 ? 1 : u);
+            return (a + ab * u - p).length();
+        };
+        for (std::size_t pi2 = 0; pi2 < planned.size(); ++pi2) {
+            const PlannedRoute& pr = planned[pi2];
+            if (pr.dropped) continue;
+            CorridorDef def;
+            def.horizontal = Alignment::fromPolyline(pr.anchors, 300.0, 90.0);
+            const Real len = def.horizontal.length();
+            if (len < 320.0) continue;
+            def.lanes.throughLanes = 3;
+            def.laneWidth = 3.6;
+            def.medianWidth = 1.4;
+            // eased profile + rule-2 bridge bumps (5% tent, 60 m curves)
+            std::vector<Real> ss, zs;
+            for (Real s = 0;; s += 120.0) {
+                const Real sv = std::min(s, len);
+                const Vec2 p = def.horizontal.pos(sv);
+                ss.push_back(sv);
+                zs.push_back(levelGround(p.x, p.y));
+                if (sv >= len) break;
+            }
+            for (int pass = 0; pass < 3; ++pass) {
+                std::vector<Real> sm = zs;
+                for (std::size_t i = 1; i + 1 < zs.size(); ++i)
+                    sm[i] = (zs[i - 1] + zs[i] * 2.0 + zs[i + 1]) * 0.25;
+                zs.swap(sm);
+            }
+            for (const Real sb : pr.bridgeAt)
+                for (std::size_t i = 0; i < ss.size(); ++i) {
+                    // clearance 9 m at the crossing, falling at 5% away
+                    std::size_t bi = std::min(ss.size() - 1,
+                        static_cast<std::size_t>(sb / 120.0));
+                    const Real tent =
+                        zs[bi] + 9.0 - 0.05 * std::fabs(ss[i] - sb);
+                    zs[i] = std::max(zs[i], std::min(tent, zs[bi] + 9.0));
+                }
+            for (std::size_t i = 0; i < ss.size(); ++i)
+                def.vertical.pvis.push_back({ss[i], zs[i] + 0.6, 60.0});
+            // diamonds (rule 3 gated)
+            const int nD = len >= 420.0
+                ? std::max(1, static_cast<int>(std::floor(len / pr.spacing)))
+                : 0;
+            for (int di = 0; di < nD; ++di) {
+                const Real sI = len * (di + 1) / (nD + 1);
+                const Vec2 cI = def.horizontal.pos(sI);
+                const Vec2 nI = def.horizontal.normal(sI);
+                // no diamond in a bridge zone
+                bool nearBridge = false;
+                for (const Real sb : pr.bridgeAt)
+                    if (std::fabs(sb - sI) < 320.0) nearBridge = true;
+                if (nearBridge) continue;
+                auto stamp = [&](Real st, bool up, bool on, Real side) {
+                    if (st < 60.0 || st > len - 60.0) return;
+                    engine::ExitDef e;
+                    e.station = st;
+                    e.upStation = up;
+                    e.onRamp = on;
+                    e.target = cI + nI * (side * 95.0);
+                    const Vec2 gpos = def.horizontal.pos(st);
+                    // rule 3a: landings keep 60 m apart across ALL corridors
+                    for (const Vec2& u2 : globalLandings)
+                        if ((u2 - e.target).length() < 60.0) return;
+                    // rule 3b: the ramp run must not cross another ramp
+                    for (const auto& rs2 : rampSegs)
+                        if (segDist(gpos, rs2.first, rs2.second) < 30.0 ||
+                            segDist(e.target, rs2.first, rs2.second) < 30.0)
+                            return;
+                    // rule 3c: nor graze ANOTHER corridor at grade
+                    for (std::size_t pj = 0; pj < planned.size(); ++pj) {
+                        if (pj == pi2 || planned[pj].dropped) continue;
+                        for (const Vec2& q : planned[pj].dense)
+                            if (segDist(q, gpos, e.target) < 26.0) return;
+                    }
+                    e.targetY = levelGround(e.target.x, e.target.y) + 0.4;
+                    e.decelLength = std::min(Real(200), len * 0.28);
+                    e.rampRadius = 65.0;
+                    e.rampSpiral = 28.0;
+                    globalLandings.push_back(e.target);
+                    rampSegs.push_back({gpos, e.target});
+                    def.exits.push_back(e);
+                };
+                stamp(sI - 80.0, true, false, -1.0);    // up exit
+                stamp(sI + 110.0, true, true, -1.0);    // up on-ramp
+                stamp(sI + 80.0, false, false, 1.0);    // down exit
+                stamp(sI - 110.0, false, true, 1.0);    // down on-ramp
+            }
+            LOG_INFO << "[corridor] metro plan: len=" << len
+                     << " bridges=" << pr.bridgeAt.size()
+                     << " exits=" << def.exits.size();
+            while (corridorGuides.size() < corridorDefs.size())
+                corridorGuides.emplace_back();       // authored defs: no guide
+            corridorGuides.push_back(pr.dense);
+            corridorDefs.push_back(std::move(def));
         }
     }
     // §10.6: streets may pass UNDER a viaduct, never THROUGH an at-grade
@@ -2552,6 +2666,33 @@ bool LevelLoader::load(const std::string& path,
                     }
                     if (levelGround)
                         e.targetY = levelGround(e.target.x, e.target.y);
+                }
+            }
+            // §12: bents must dodge OTHER corridors too — append their
+            // centrelines as wide pseudo-edges so no column of a flyover
+            // lands on the deck below it.
+            {
+                const std::size_t di =
+                    static_cast<std::size_t>(&def - corridorDefs.data());
+                for (std::size_t gi = 0; gi < corridorGuides.size(); ++gi) {
+                    if (gi == di || corridorGuides[gi].empty()) continue;
+                    const std::vector<Vec2>& g2 = corridorGuides[gi];
+                    int prev2 = -1;
+                    for (std::size_t k = 0; k < g2.size(); k += 2) {
+                        engine::RoadNode nd;
+                        nd.pos = g2[k];
+                        const int idx =
+                            static_cast<int>(streetsBelow.nodes.size());
+                        streetsBelow.nodes.push_back(nd);
+                        if (prev2 >= 0) {
+                            engine::RoadEdge e2;
+                            e2.a = prev2;
+                            e2.b = idx;
+                            e2.width = 34.0;
+                            streetsBelow.edges.push_back(e2);
+                        }
+                        prev2 = idx;
+                    }
                 }
             }
             PendingCorridor pc;
