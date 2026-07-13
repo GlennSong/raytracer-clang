@@ -1408,48 +1408,48 @@
         "designSpeed": 30.0,
         "exits": [
           {
-            "decel": 200,
-            "radius": 75,
-            "spiral": 30,
-            "station": 1000,
+            "decel": 190,
+            "radius": 60,
+            "spiral": 26,
+            "station": 640,
             "target": [
-              255,
-              445
+              250,
+              260
             ],
             "upStation": true
           },
           {
-            "decel": 210,
+            "decel": 200,
             "onRamp": true,
-            "radius": 75,
-            "spiral": 30,
-            "station": 1220,
+            "radius": 60,
+            "spiral": 26,
+            "station": 850,
             "target": [
-              330,
-              555
+              290,
+              400
             ],
             "upStation": true
           },
           {
-            "decel": 200,
-            "radius": 75,
-            "spiral": 30,
-            "station": 1380,
+            "decel": 190,
+            "radius": 60,
+            "spiral": 26,
+            "station": 870,
             "target": [
-              430,
-              630
+              120,
+              430
             ],
             "upStation": false
           },
           {
-            "decel": 210,
+            "decel": 200,
             "onRamp": true,
-            "radius": 75,
-            "spiral": 30,
-            "station": 1140,
+            "radius": 60,
+            "spiral": 26,
+            "station": 650,
             "target": [
-              290,
-              500
+              40,
+              250
             ],
             "upStation": false
           }
