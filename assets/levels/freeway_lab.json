@@ -1,5 +1,5 @@
 {
-  "_comment": "Plan §8 test bed: one clothoid mainline over HILLY terrain (device: meshing vs terrain is part of the test), a small street grid running underneath the elevated span, NO buildings. Every corridor feature is judged here before the metro sees it.",
+  "_comment": "Plan \u00a78 test bed: one clothoid mainline over HILLY terrain (device: meshing vs terrain is part of the test), a small street grid running underneath the elevated span, NO buildings. Every corridor feature is judged here before the metro sees it.",
   "citysim": {
     "buildLots": false,
     "cars": 12,
@@ -64,10 +64,45 @@
             "spiral": 30,
             "station": 1000,
             "target": [
-              330,
-              470
+              255,
+              445
             ],
             "upStation": true
+          },
+          {
+            "decel": 210,
+            "onRamp": true,
+            "radius": 75,
+            "spiral": 30,
+            "station": 1220,
+            "target": [
+              330,
+              555
+            ],
+            "upStation": true
+          },
+          {
+            "decel": 200,
+            "radius": 75,
+            "spiral": 30,
+            "station": 1380,
+            "target": [
+              430,
+              630
+            ],
+            "upStation": false
+          },
+          {
+            "decel": 210,
+            "onRamp": true,
+            "radius": 75,
+            "spiral": 30,
+            "station": 1140,
+            "target": [
+              290,
+              500
+            ],
+            "upStation": false
           }
         ],
         "laneWidth": 3.6,
@@ -93,6 +128,10 @@
           [
             520,
             560
+          ],
+          [
+            820,
+            700
           ]
         ],
         "profile": [
@@ -128,6 +167,11 @@
           ],
           [
             1500,
+            10,
+            0
+          ],
+          [
+            1900,
             10,
             0
           ]

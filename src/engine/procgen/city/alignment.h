@@ -101,6 +101,11 @@ struct ExitDef {
     Real decelLength = 220;  // aux-lane length before the gore
     Real rampRadius = 70;    // ramp design radius (low speed)
     Real rampSpiral = 30;    // ramp clothoid length
+    // ON-RAMP: the mirror primitive (device: "if there's an exit there
+    // should be an onramp ... build these in pairs"). The aux lane becomes an
+    // ACCELERATION lane after the merge point and the ramp arrives from
+    // `target` instead of leaving for it. Same geometry machinery, reversed.
+    bool onRamp = false;
 };
 
 

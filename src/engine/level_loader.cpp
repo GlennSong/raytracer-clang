@@ -2298,6 +2298,7 @@ bool LevelLoader::load(const std::string& path,
                 e.targetY = ex.value("targetY",
                                      levelGround(e.target.x, e.target.y) + 0.4);
                 e.decelLength = ex.value("decel", 220.0);
+                e.onRamp = ex.value("onRamp", false);
                 e.rampRadius = ex.value("radius", 70.0);
                 e.rampSpiral = ex.value("spiral", 30.0);
                 def.exits.push_back(e);

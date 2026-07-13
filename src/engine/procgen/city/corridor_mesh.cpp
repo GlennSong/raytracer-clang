@@ -36,9 +36,14 @@ CorridorMeshOut buildCorridorMesh(
     CorridorDef c = cIn;
     // Each exit grows its deceleration AUX LANE into the schedule — the deck
     // flares one lane on that side over the decel length, ending at the gore.
-    for (const ExitDef& e : c.exits)
-        c.lanes.aux.push_back({e.station - e.decelLength, e.station,
-                               e.upStation});
+    for (const ExitDef& e : c.exits) {
+        if (e.onRamp)
+            c.lanes.aux.push_back({e.station, e.station + e.decelLength,
+                                   e.upStation});
+        else
+            c.lanes.aux.push_back({e.station - e.decelLength, e.station,
+                                   e.upStation});
+    }
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
     auto gy = [&](const Vec2& p) { return ground ? ground(p.x, p.y) : Real(0); };
@@ -174,9 +179,15 @@ CorridorMeshOut buildCorridorMesh(
     auto inExitOpening = [&](Real s, int side) {
         for (const ExitDef& e : c.exits) {
             const int ds = e.upStation ? -1 : 1;
-            if (side == ds && s > e.station - e.decelLength * 0.55 &&
-                s < e.station + 22.0)
-                return true;
+            if (side != ds) continue;
+            // the ramp runs PARALLEL to the deck for ~50 m past the nose —
+            // the opening must span all of it (device: "I still see the
+            // freeway rail going through the exit")
+            const Real a = e.onRamp ? e.station - 95.0
+                                    : e.station - e.decelLength * 0.55;
+            const Real b = e.onRamp ? e.station + e.decelLength * 0.55
+                                    : e.station + 95.0;
+            if (s > a && s < b) return true;
         }
         return false;
     };
@@ -323,13 +334,25 @@ CorridorMeshOut buildCorridorMesh(
             dirSign * (c.medianWidth * 0.5 + c.shoulderIn +
                        (c.lanes.lanesAt(sg - 1.0, e.upStation) - 0.5) * c.laneWidth);
         const Vec2 P0 = c.horizontal.offset(sg, off0);
+        // an exit LEAVES down-stream; an on-ramp ARRIVES from up-stream —
+        // its parallel run extends backwards from the merge point
+        const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
         Alignment ra = Alignment::fromPolyline(
-            {P0, P0 + travel * 45.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
+            {P0, P0 + away * 50.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
         if (ra.empty() || ra.length() < 60.0) continue;
         const Real RL = ra.length();
+        // Grade change happens NEAR THE DECK (device: "it takes way too long
+        // for the exit to descend"): drop/climb over the first ~45% of the
+        // ramp, then run at street grade to the junction.
         VerticalProfile rp;
-        rp.pvis = {{0, c.vertical.elevation(sg), 0},
-                   {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
+        const Real zDeck = c.vertical.elevation(sg);
+        const Real sKnee = std::max(Real(80), RL * 0.45);
+        if (sKnee < RL - 10.0)
+            rp.pvis = {{0, zDeck, 0},
+                       {sKnee, e.targetY, std::min(sKnee, Real(80))},
+                       {RL, e.targetY, 0}};
+        else
+            rp.pvis = {{0, zDeck, 0}, {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
         const Real rw = 2.9;                       // half-width: lane + shoulders
         const int rn = std::max(2, static_cast<int>(RL / step));
         std::vector<Rib> rr(rn + 1);
@@ -363,7 +386,7 @@ CorridorMeshOut buildCorridorMesh(
             const Real rs = RL * i / rn;
             for (int sd = -1; sd <= 1; sd += 2) {
                 const bool inner = sd == -dirSign;
-                const bool skipParapet = inner && rs < 26.0;
+                const bool skipParapet = inner && rs < 75.0;
                 const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
@@ -432,7 +455,7 @@ CorridorMeshOut buildCorridorMesh(
         // beam across the deck, a wide green board over the through lanes
         // (blank for now) and a smaller one over the exit lane wearing a
         // white drop-arrow for directionality.
-        {
+        if (!e.onRamp) {
             const Real ss = std::max(Real(10), sg - 45.0);
             const Vec2 gc = c.horizontal.pos(ss);
             const Vec2 gn = c.horizontal.normal(ss);
@@ -510,8 +533,9 @@ CorridorMeshOut buildCorridorMesh(
         // the ramp's inner edge as they diverge past the gore.
         for (int k = 0; k < 5; ++k) {
             const Real ds0 = k * 3.0, ds1 = ds0 + 3.0;
-            const Real sm0 = std::min(L, sg + (e.upStation ? ds0 : -ds0));
-            const Real sm1 = std::min(L, sg + (e.upStation ? ds1 : -ds1));
+            const Real dirAlong = (e.upStation ? 1.0 : -1.0) * (e.onRamp ? -1.0 : 1.0);
+            const Real sm0 = std::max(Real(0), std::min(L, sg + dirAlong * ds0));
+            const Real sm1 = std::max(Real(0), std::min(L, sg + dirAlong * ds1));
             const Vec3 d0v = Vec3(0, 0.02, 0) +
                 Vec3(c.horizontal.offset(sm0, dirSign * c.halfWidthAt(sm0, dirSign)).x,
                      c.vertical.elevation(sm0),
