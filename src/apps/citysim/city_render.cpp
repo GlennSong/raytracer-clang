@@ -182,6 +182,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             if (reuse >= 0) {
                 map[i] = reuse;
             } else {
+                if (terminal)
+                    LOG_WARN << "[citysim] ramp terminal at ("
+                             << xg.graph.nodes[i].pos.x << ", "
+                             << xg.graph.nodes[i].pos.y
+                             << ") found no street node within "
+                             << xg.snapRadius << " m — ramp is a dead end";
                 map[i] = static_cast<int>(combined.nodes.size());
                 combined.nodes.push_back(xg.graph.nodes[i]);
             }
@@ -196,6 +202,40 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+
+    // Connectivity truth (device: "I don't see the freeway connected yet"):
+    // walk the built nav and report whether a car can actually reach the
+    // corridor from the streets and come back. If either direction is zero,
+    // the weld failed and freeway traffic is impossible — say so loudly.
+    {
+        int fwLinks = 0, rampLinks = 0, onWelds = 0, offWelds = 0;
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            const engine::NavLink& L = nav_.links[li];
+            if (L.klass == engine::RoadClass::Freeway) ++fwLinks;
+            if (L.klass != engine::RoadClass::Ramp) continue;
+            ++rampLinks;
+            // a ramp link leaving a node that also has street links = on-weld
+            bool fromStreet = false, toStreet = false;
+            for (int ol : nav_.outLinks[L.from])
+                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
+                    nav_.links[ol].klass != engine::RoadClass::Freeway)
+                    fromStreet = true;
+            for (int ol : nav_.outLinks[L.to])
+                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
+                    nav_.links[ol].klass != engine::RoadClass::Freeway)
+                    toStreet = true;
+            if (fromStreet) ++onWelds;
+            if (toStreet) ++offWelds;
+        }
+        if (fwLinks > 0)
+            LOG_INFO << "[citysim] freeway in nav: " << fwLinks
+                     << " carriageway links, " << rampLinks << " ramp links, "
+                     << onWelds << " street->ramp welds, " << offWelds
+                     << " ramp->street welds"
+                     << ((onWelds == 0 || offWelds == 0)
+                             ? "  <-- NOT DRIVABLE"
+                             : "");
+    }
 
     // Places (ADR-0066): turn the level-authored destinations into a routable
     // PlaceMap now that the nav graph exists (each entrance snaps to a sidewalk).

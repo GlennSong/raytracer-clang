@@ -2455,7 +2455,11 @@ bool LevelLoader::load(const std::string& path,
                     engine::Alignment ra = engine::Alignment::fromPolyline(
                         {P0, P0 + away * 35.0, e.target}, e.rampRadius,
                         e.rampSpiral, 2.0);
-                    if (ra.empty() || ra.length() < 60.0) continue;
+                    if (ra.empty() || ra.length() < 48.0) {
+                        LOG_WARN << "[corridor] nav ramp at s=" << e.station
+                                 << " dropped (too short) — not drivable";
+                        continue;
+                    }
                     const Real RL = ra.length();
                     engine::VerticalProfile rp;
                     const Real zDeck = def.vertical.elevation(sg);

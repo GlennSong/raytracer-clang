@@ -1,4 +1,5 @@
 #include "corridor_mesh.h"
+#include "../../../log.h"
 
 #include "../../mesh_builder.h"
 
@@ -359,7 +360,14 @@ CorridorMeshOut buildCorridorMesh(
         const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
         Alignment ra = Alignment::fromPolyline(
             {P0, P0 + away * 35.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
-        if (ra.empty() || ra.length() < 60.0) continue;
+        if (ra.empty() || ra.length() < 48.0) {
+            LOG_WARN << "[corridor] ramp at s=" << e.station
+                     << (e.onRamp ? " (on-ramp)" : " (exit)")
+                     << " dropped: alignment "
+                     << (ra.empty() ? 0.0 : ra.length())
+                     << " m is too short — move the station or the target";
+            continue;
+        }
         const Real RL = ra.length();
         // Grade change happens NEAR THE DECK (device: "it takes way too long
         // for the exit to descend"): drop/climb over the first ~45% of the
@@ -385,10 +393,17 @@ CorridorMeshOut buildCorridorMesh(
             rr[i].slope = 0;
             rUp[i] = rr[i].z - gy(rr[i].c) > 0.9;
         }
+        // The street end FLARES into a landing apron (device: "the onramp
+        // needs to merge with the roads below nicer") — the last 8 m widen
+        // toward the junction so the pavement reads as a mouth, not a stub.
+        auto rwAt = [&](int i) {
+            const Real rs2 = RL * i / rn;
+            return rw + std::max(Real(0), (rs2 - (RL - 8.0)) / 8.0) * 2.2;
+        };
         for (int i = 0; i < rn; ++i) {
             // deck
-            MeshBuilder::emitQuad(out.deck, rr[i].at(rw), rr[i].at(-rw),
-                                  rr[i + 1].at(-rw), rr[i + 1].at(rw),
+            MeshBuilder::emitQuad(out.deck, rr[i].at(rwAt(i)), rr[i].at(-rwAt(i)),
+                                  rr[i + 1].at(-rwAt(i + 1)), rr[i + 1].at(rwAt(i + 1)),
                                   Vec3(0, 1, 0), kAsphalt);
             // edge lines (device: "no markings for the sides" — the old
             // 12 cm threads vanished at speed): wide painted edges, YELLOW
@@ -396,6 +411,7 @@ CorridorMeshOut buildCorridorMesh(
             // sits at the deck for exits and at the street for on-ramps, so
             // "left of travel" flips with the kind.
             for (int sd = -1; sd <= 1; sd += 2) {
+                if (RL * i / rn > RL - 9.0) break;   // apron: lines open out
                 const Real o = sd * (rw - 0.40);
                 const bool leftOfTravel = e.onRamp ? (sd == dirSign)
                                                    : (sd != dirSign);
@@ -419,7 +435,7 @@ CorridorMeshOut buildCorridorMesh(
                 // entrance/exits to the onramp")
                 const bool skipParapet =
                     (inner && rs < 42.0) || rs > RL - 14.0;
-                const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
+                const Vec3 e0 = rr[i].at(sd * rwAt(i)), e1 = rr[i + 1].at(sd * rwAt(i + 1));
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
                 const Real d1 = up ? deckDepth
@@ -570,6 +586,26 @@ CorridorMeshOut buildCorridorMesh(
             board(dsn * (c.halfWidthAt(ss, dsn) - c.shoulderOut -
                          c.laneWidth * 0.5),
                   3.4, 2.2, true);
+        }
+
+        // LANDING FAN: a flat asphalt disc under the junction mouth — the
+        // ramp, the street deck, and the apron all overlap it, so the seam
+        // between corridor pavement and street pavement never shows.
+        {
+            const Vec2 lc2 = ra.pos(RL);
+            const Real ly = rp.elevation(RL) + 0.04;
+            RenderMesh fan;
+            const int segs = 14;
+            for (int k = 0; k < segs; ++k) {
+                const Real a0 = 6.283185307179586 * k / segs;
+                const Real a1 = 6.283185307179586 * (k + 1) / segs;
+                MeshBuilder::emitTri(
+                    fan, Vec3(lc2.x, ly, lc2.y),
+                    Vec3(lc2.x + std::cos(a1) * 7.0, ly, lc2.y + std::sin(a1) * 7.0),
+                    Vec3(lc2.x + std::cos(a0) * 7.0, ly, lc2.y + std::sin(a0) * 7.0),
+                    Vec3(0, 1, 0), kAsphalt);
+            }
+            MeshBuilder::append(out.deck, fan);
         }
 
         // RAMP PIERS: an elevated ramp is a structure too — one round column
