@@ -1661,6 +1661,784 @@
   "version": 1
 }
 {
+ "_comment": "Freeway VARIANTS lab (device: 'break down the problem'): four isolated specimens west->east \u2014 A 2-lane at-grade, B 2-lane elevated, C 3-lane at-grade, D 3-lane elevated \u2014 each with one exit + one on-ramp landing on its own frontage street. Every corridor feature must read clean HERE before any level composes them.",
+ "name": "freeway_variants",
+ "version": 1,
+ "citysim": {
+  "buildLots": false,
+  "cars": 24,
+  "pedestrians": 0,
+  "seed": 3,
+  "wander": true,
+  "debugWidgets": false
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "street_A",
+   "shape": "road",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "nodes": [
+     {
+      "x": -510,
+      "z": -300
+     },
+     {
+      "x": -510,
+      "z": -240
+     },
+     {
+      "x": -510,
+      "z": -180
+     },
+     {
+      "x": -510,
+      "z": -120
+     },
+     {
+      "x": -510,
+      "z": -60
+     },
+     {
+      "x": -510,
+      "z": 0
+     },
+     {
+      "x": -510,
+      "z": 60
+     },
+     {
+      "x": -510,
+      "z": 120
+     },
+     {
+      "x": -510,
+      "z": 180
+     },
+     {
+      "x": -510,
+      "z": 240
+     },
+     {
+      "x": -510,
+      "z": 300
+     }
+    ],
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "width": 7.0,
+    "sidewalk": 3.0,
+    "markings": true,
+    "crosswalks": true,
+    "lift": 0.08,
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ]
+   }
+  },
+  {
+   "id": 3,
+   "name": "freeway_A",
+   "shape": "corridor",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "corridor": {
+    "points": [
+     [
+      -600,
+      -350
+     ],
+     [
+      -600,
+      350
+     ]
+    ],
+    "lanes": 2,
+    "laneWidth": 3.6,
+    "median": 1.4,
+    "radius": 300,
+    "spiral": 60,
+    "designSpeed": 28.0,
+    "exits": [
+     {
+      "station": 200,
+      "upStation": true,
+      "target": [
+       -510,
+       -60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24
+     },
+     {
+      "station": 500,
+      "upStation": true,
+      "target": [
+       -510,
+       60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24,
+      "onRamp": true
+     }
+    ]
+   }
+  },
+  {
+   "id": 4,
+   "name": "street_B",
+   "shape": "road",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "nodes": [
+     {
+      "x": -110,
+      "z": -300
+     },
+     {
+      "x": -110,
+      "z": -240
+     },
+     {
+      "x": -110,
+      "z": -180
+     },
+     {
+      "x": -110,
+      "z": -120
+     },
+     {
+      "x": -110,
+      "z": -60
+     },
+     {
+      "x": -110,
+      "z": 0
+     },
+     {
+      "x": -110,
+      "z": 60
+     },
+     {
+      "x": -110,
+      "z": 120
+     },
+     {
+      "x": -110,
+      "z": 180
+     },
+     {
+      "x": -110,
+      "z": 240
+     },
+     {
+      "x": -110,
+      "z": 300
+     }
+    ],
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "width": 7.0,
+    "sidewalk": 3.0,
+    "markings": true,
+    "crosswalks": true,
+    "lift": 0.08,
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ]
+   }
+  },
+  {
+   "id": 5,
+   "name": "freeway_B",
+   "shape": "corridor",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "corridor": {
+    "points": [
+     [
+      -200,
+      -350
+     ],
+     [
+      -200,
+      350
+     ]
+    ],
+    "lanes": 2,
+    "laneWidth": 3.6,
+    "median": 1.4,
+    "radius": 300,
+    "spiral": 60,
+    "designSpeed": 28.0,
+    "exits": [
+     {
+      "station": 200,
+      "upStation": true,
+      "target": [
+       -110,
+       -60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24
+     },
+     {
+      "station": 500,
+      "upStation": true,
+      "target": [
+       -110,
+       60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24,
+      "onRamp": true
+     }
+    ],
+    "profile": [
+     [
+      0,
+      3.5,
+      30
+     ],
+     [
+      130,
+      13.0,
+      60
+     ],
+     [
+      570,
+      13.0,
+      60
+     ],
+     [
+      700,
+      3.5,
+      30
+     ]
+    ]
+   }
+  },
+  {
+   "id": 6,
+   "name": "street_C",
+   "shape": "road",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "nodes": [
+     {
+      "x": 290,
+      "z": -300
+     },
+     {
+      "x": 290,
+      "z": -240
+     },
+     {
+      "x": 290,
+      "z": -180
+     },
+     {
+      "x": 290,
+      "z": -120
+     },
+     {
+      "x": 290,
+      "z": -60
+     },
+     {
+      "x": 290,
+      "z": 0
+     },
+     {
+      "x": 290,
+      "z": 60
+     },
+     {
+      "x": 290,
+      "z": 120
+     },
+     {
+      "x": 290,
+      "z": 180
+     },
+     {
+      "x": 290,
+      "z": 240
+     },
+     {
+      "x": 290,
+      "z": 300
+     }
+    ],
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "width": 7.0,
+    "sidewalk": 3.0,
+    "markings": true,
+    "crosswalks": true,
+    "lift": 0.08,
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ]
+   }
+  },
+  {
+   "id": 7,
+   "name": "freeway_C",
+   "shape": "corridor",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "corridor": {
+    "points": [
+     [
+      200,
+      -350
+     ],
+     [
+      200,
+      350
+     ]
+    ],
+    "lanes": 3,
+    "laneWidth": 3.6,
+    "median": 1.4,
+    "radius": 300,
+    "spiral": 60,
+    "designSpeed": 28.0,
+    "exits": [
+     {
+      "station": 200,
+      "upStation": true,
+      "target": [
+       290,
+       -60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24
+     },
+     {
+      "station": 500,
+      "upStation": true,
+      "target": [
+       290,
+       60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24,
+      "onRamp": true
+     }
+    ]
+   }
+  },
+  {
+   "id": 8,
+   "name": "street_D",
+   "shape": "road",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "nodes": [
+     {
+      "x": 690,
+      "z": -300
+     },
+     {
+      "x": 690,
+      "z": -240
+     },
+     {
+      "x": 690,
+      "z": -180
+     },
+     {
+      "x": 690,
+      "z": -120
+     },
+     {
+      "x": 690,
+      "z": -60
+     },
+     {
+      "x": 690,
+      "z": 0
+     },
+     {
+      "x": 690,
+      "z": 60
+     },
+     {
+      "x": 690,
+      "z": 120
+     },
+     {
+      "x": 690,
+      "z": 180
+     },
+     {
+      "x": 690,
+      "z": 240
+     },
+     {
+      "x": 690,
+      "z": 300
+     }
+    ],
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "width": 7.0,
+    "sidewalk": 3.0,
+    "markings": true,
+    "crosswalks": true,
+    "lift": 0.08,
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ]
+   }
+  },
+  {
+   "id": 9,
+   "name": "freeway_D",
+   "shape": "corridor",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "corridor": {
+    "points": [
+     [
+      600,
+      -350
+     ],
+     [
+      600,
+      350
+     ]
+    ],
+    "lanes": 3,
+    "laneWidth": 3.6,
+    "median": 1.4,
+    "radius": 300,
+    "spiral": 60,
+    "designSpeed": 28.0,
+    "exits": [
+     {
+      "station": 200,
+      "upStation": true,
+      "target": [
+       690,
+       -60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24
+     },
+     {
+      "station": 500,
+      "upStation": true,
+      "target": [
+       690,
+       60
+      ],
+      "decel": 150,
+      "radius": 55,
+      "spiral": 24,
+      "onRamp": true
+     }
+    ],
+    "profile": [
+     [
+      0,
+      3.5,
+      30
+     ],
+     [
+      130,
+      13.0,
+      60
+     ],
+     [
+      570,
+      13.0,
+      60
+     ],
+     [
+      700,
+      3.5,
+      30
+     ]
+    ]
+   }
+  }
+ ],
+ "environment": {
+  "fog": {
+   "color": [
+    0.72,
+    0.78,
+    0.88
+   ],
+   "density": 0.0006,
+   "heightFalloff": 0.01
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 0.5,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "player": {
+  "collider": {
+   "halfHeight": 0.8,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -690.0,
+   6.0,
+   0.0
+  ]
+ },
+ "terrain": {
+  "cdlod": {
+   "worldHalf": 900
+  },
+  "erode": false,
+  "heightScale": 3.5,
+  "noiseScale": 0.004,
+  "octaves": 4,
+  "resolution": 500,
+  "seed": 12,
+  "size": 1800,
+  "warp": 0.25,
+  "material": {
+   "albedo": [
+    1,
+    1,
+    1
+   ],
+   "roughness": 1.0
+  }
+ }
+}{
   "entities": [
     {
       "id": 1,
