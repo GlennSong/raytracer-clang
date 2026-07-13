@@ -38,12 +38,12 @@ CorridorMeshOut buildCorridorMesh(
     // Each exit grows its deceleration AUX LANE into the schedule — the deck
     // flares one lane on that side over the decel length, ending at the gore.
     for (const ExitDef& e : c.exits) {
-        if (e.onRamp)
+        if (e.onRamp)   // accel: full at the merge, tapers closed at the end
             c.lanes.aux.push_back({e.station, e.station + e.decelLength,
-                                   e.upStation});
-        else
+                                   e.upStation, false});
+        else            // decel: tapers open, full at the gore
             c.lanes.aux.push_back({e.station - e.decelLength, e.station,
-                                   e.upStation});
+                                   e.upStation, true});
     }
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
@@ -393,7 +393,11 @@ CorridorMeshOut buildCorridorMesh(
             rr[i].n = ra.normal(s);
             rr[i].z = rp.elevation(s);
             rr[i].slope = 0;
-            rUp[i] = rr[i].z - gy(rr[i].c) > 0.9;
+            // structure (box + piers) from 35 cm up: the old 0.9 m cutoff
+            // skirted mid-height runs down to ground as terrain-hugging
+            // berms the flatten could not slope nicely (device: "give it
+            // some pillars underneath" — done)
+            rUp[i] = rr[i].z - gy(rr[i].c) > 0.35;
         }
         // The street end FLARES into a landing apron (device: "the onramp
         // needs to merge with the roads below nicer") — the last 8 m widen

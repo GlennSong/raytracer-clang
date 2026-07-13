@@ -80,6 +80,11 @@ struct LaneSchedule {
     struct AuxSpan {
         Real s0 = 0, s1 = 0;            // station range carrying the extra lane
         bool upStation = true;          // which carriageway carries it
+        // A DECEL lane tapers open at s0 and is full at the gore (s1); an
+        // ACCEL lane is full at the merge (s0) and tapers closed at s1
+        // (device: the reversed flare left the merge point off the deck —
+        // "the on ramp is still under the freeway").
+        bool taperAtStart = true;
     };
     std::vector<AuxSpan> aux;
 

@@ -292,7 +292,9 @@ Real CorridorDef::halfWidthAt(Real s, int sideSign) const {
     Real extra = 0;
     for (const LaneSchedule::AuxSpan& a : lanes.aux)
         if (a.upStation == up && s >= a.s0 && s <= a.s1)
-            extra += laneWidth * std::min(Real(1), (s - a.s0) / Real(35));
+            extra += laneWidth *
+                     std::min(Real(1), (a.taperAtStart ? s - a.s0
+                                                       : a.s1 - s) / Real(35));
     return medianWidth * 0.5 + shoulderIn + lanes.throughLanes * laneWidth +
            extra + shoulderOut;
 }

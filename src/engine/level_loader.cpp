@@ -2349,8 +2349,17 @@ bool LevelLoader::load(const std::string& path,
                     const Vec2 gc = def.horizontal.pos(sg);
                     const Vec2 gn = def.horizontal.normal(sg);
                     const Real sideSign = e.upStation ? -1.0 : 1.0;
+                    const Vec2 travelDir = def.horizontal.tangent(sg) *
+                                           (e.upStation ? 1.0 : -1.0);
                     auto usable = [&](const engine::RoadNode& nd, bool needJunction) {
                         if (dot(nd.pos - gc, gn) * sideSign < 12.0) return false;
+                        // flow direction: an exit unloads DOWNSTREAM, an
+                        // on-ramp is fed from UPSTREAM — a feeder on the
+                        // wrong side makes the ramp double back (device:
+                        // "weirdly making cars do a U-turn")
+                        const Real along = dot(nd.pos - gc, travelDir);
+                        if (e.onRamp ? along > -20.0 : along < 20.0)
+                            return false;
                         const Real dg = (nd.pos - gc).length();
                         if (dg < 70.0 || dg > 340.0) return false;
                         if (needJunction &&
@@ -2411,8 +2420,14 @@ bool LevelLoader::load(const std::string& path,
                     for (int sideSign : {-1, +1}) {
                         engine::RoadNode nd;
                         nd.pos = def.horizontal.offset(sv, sideSign * cOff);
+                        // BANKED deck: the surface at this carriageway's
+                        // centreline sits superelevation*offset above/below
+                        // the profile — without it cars sank into the deck
+                        // on every curve (device).
                         nd.elev = std::max(
-                            0.0, def.vertical.elevation(sv) - ground(nd.pos));
+                            0.0, def.vertical.elevation(sv) +
+                                     def.superelevationAt(sv) * sideSign * cOff -
+                                     ground(nd.pos));
                         const int idx = static_cast<int>(eg.graph.nodes.size());
                         eg.graph.nodes.push_back(nd);
                         (sideSign < 0 ? upChain : downChain).push_back(idx);
