@@ -207,10 +207,10 @@
       // Cache-bust the engine binary with a BUILD token, not a per-visit one:
       // the ?v= changes only when the wasm bytes change, so repeat visits hit the
       // browser/CDN cache (~1.6 MB saved per load) while a deploy still busts.
-      // e023a4ea6efb is replaced with the wasm content hash by the CMake copy
+      // 446465611a56 is replaced with the wasm content hash by the CMake copy
       // step (cmake/inject_build_id.cmake). Serving the raw source (placeholder
       // intact, e.g. python3 -m http.server from web/) falls back to Date.now().
-      const BUILD = 'e023a4ea6efb';
+      const BUILD = '446465611a56';
       const V = BUILD.indexOf('RT_BUILD') >= 0 ? Date.now() : BUILD;
       try {
         await new Promise((res, rej) => {
