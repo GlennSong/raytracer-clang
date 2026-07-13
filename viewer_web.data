@@ -1527,7 +1527,7 @@
   },
   "name": "freeway_lab",
   "player": {
-    "_comment": "spawns beside the viaduct mid-span, looking at the piers + the street grid under the deck",
+    "_comment": "spawns ON the freeway deck just before the exit gore (station ~950): walk south along the right edge to take the ramp down",
     "collider": {
       "halfHeight": 0.8,
       "radius": 0.3,
@@ -1535,9 +1535,9 @@
     },
     "friction": 0.5,
     "position": [
-      300.0,
-      14.0,
-      230.0
+      175.0,
+      22.0,
+      330.0
     ]
   },
   "terrain": {
