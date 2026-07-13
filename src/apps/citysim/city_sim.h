@@ -124,6 +124,13 @@ struct Agent {
     // way it samples the ground (device: "adhere ... with all 4 wheels").
     Real grade = 0;
     int lane = 0;
+    // Fractional lane position CHASING `lane` (device: "see the cars change
+    // lanes ... signal with their turn signals"): a lane change is laneF
+    // easing toward the new integer lane over a couple of seconds; the render
+    // reads the gap to blink the correct indicator. laneTimer paces the next
+    // discretionary change.
+    Real laneF = 0;
+    Real laneTimer = 5.0;
     // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The
     // host feeds the car's real position each step, so the plan can never outrun

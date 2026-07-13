@@ -642,6 +642,8 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.lane = (a.mode == Agent::Mode::Driver && lanes > 1)
                  ? static_cast<int>(rnd() % static_cast<uint32_t>(lanes))
                  : 0;
+    a.laneF = a.lane;
+    a.laneTimer = 4.0 + (a.home % 11);
     ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
     a.crashTimer = 0;    // a fresh trip carries no wreck state: without this an
@@ -668,12 +670,23 @@ void CitySim::refreshPose(Agent& a) {
     // Sample this agent's own guide line (lane centre / sidewalk) on a link.
     auto sample = [&](int link, Real t) {
         if (t < 0) t = 0; else if (t > 1) t = 1;
-        // Clamp the lane PER LINK: the blend samples neighbouring legs whose
-        // lane counts can be smaller than the current lane index.
-        int lane = std::min(a.lane, std::max(1, nav_->links[link].lanes) - 1);
-        return (a.mode == Agent::Mode::Driver)
-                   ? nav_->laneCenter(link, lane, t, laneSpacing(nav_->links[link]))
-                   : nav_->sidewalkPoint(link, t);
+        if (a.mode != Agent::Mode::Driver) return nav_->sidewalkPoint(link, t);
+        const engine::NavLink& LL = nav_->links[link];
+        const int lanes = std::max(1, LL.lanes);
+        // FRACTIONAL lane (device: visible lane changes): laneF eases toward
+        // a.lane, so the car glides across the dashes instead of teleporting.
+        const Real fl = std::min(std::max(a.laneF, Real(0)), Real(lanes - 1));
+        const Real spacing = laneSpacing(LL);
+        Real off = (0.5 + fl) * spacing;
+        if (LL.oneWay) off -= lanes * 0.5 * spacing;
+        // WAVER (device): a human hand is never perfectly still — a slow,
+        // speed-scaled weave inside the lane. Deterministic per agent.
+        const Real phase = (a.home * 2.399 + a.work * 1.117);
+        off += 0.12 * std::sin(simSeconds_ * (0.5 + a.speed * 0.05) + phase) *
+               std::min(Real(1), a.speed / 4.0);
+        Vec2 cpt = nav_->pointOnLink(link, t);
+        const Vec2 d = nav_->direction(link);
+        return cpt + Vec2(d.y, -d.x) * off;
     };
     a.pos = sample(li, L > 1e-9 ? s / L : 0.0);
     {   // continuous carriageway height: corridor decks/ramps lerp their
@@ -937,6 +950,29 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
     int li = a.route.links[a.leg];
     bool car = a.mode == Agent::Mode::Driver;
+    if (car) {
+        // LANE LIFE (device: "see the cars change lanes ... signal with
+        // their turn signals"): laneF EASES toward a.lane (~2 s per lane) so
+        // the change is a visible glide the lamp bake can indicate; a paced
+        // discretionary change picks a neighbouring lane now and then on any
+        // multi-lane link. Deterministic: agent-keyed hash, sim-clock paced.
+        const Real ease = dt * 0.55;
+        const Real dl = Real(a.lane) - a.laneF;
+        a.laneF += std::max(-ease, std::min(ease, dl));
+        a.laneTimer -= dt;
+        if (a.laneTimer <= 0) {
+            const int lanes = std::max(1, nav_->links[li].lanes);
+            uint32_t h = static_cast<uint32_t>(a.home * 73 + a.work * 131 +
+                                               a.trips * 17 + a.leg) *
+                         2654435761u;
+            a.laneTimer = 7.0 + (h >> 8) % 9;
+            if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05) {
+                const int dir = (h & 1) ? 1 : -1;
+                const int want = a.lane + dir;
+                if (want >= 0 && want < lanes) a.lane = want;
+            }
+        }
+    }
     // Nominal pace scaled by personality (ADR-0062): drivers and walkers each
     // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
     // Junction/signal caps are shared road rules and stay unscaled.

@@ -827,8 +827,13 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
 
+        // A lane change signals the side it moves toward (device); the
+        // route-bend indicator covers junction turns as before.
+        int turnDir = carTurnDir(a);
+        if (std::fabs(Real(a.lane) - a.laneF) > 0.12)
+            turnDir = (Real(a.lane) > a.laneF) ? 1 : -1;
         CarLamps lamps = carLampState(a.state, a.speed, prev, sim_.timeOfDay(),
-                                      carTurnDir(a));
+                                      turnDir);
         if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
 
         const Mat4 pose = agentPose(a);
