@@ -675,7 +675,9 @@ void CitySim::refreshPose(Agent& a) {
         const int lanes = std::max(1, LL.lanes);
         // FRACTIONAL lane (device: visible lane changes): laneF eases toward
         // a.lane, so the car glides across the dashes instead of teleporting.
-        const Real fl = std::min(std::max(a.laneF, Real(0)), Real(lanes - 1));
+        const Real flMax = Real(lanes - 1) +
+            (LL.klass == engine::RoadClass::Freeway ? Real(1) : Real(0));
+        const Real fl = std::min(std::max(a.laneF, Real(0)), flMax);
         const Real spacing = laneSpacing(LL);
         Real off = (0.5 + fl) * spacing;
         if (LL.oneWay) off -= lanes * 0.5 * spacing;
@@ -961,15 +963,50 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         a.laneF += std::max(-ease, std::min(ease, dl));
         a.laneTimer -= dt;
         if (a.laneTimer <= 0) {
-            const int lanes = std::max(1, nav_->links[li].lanes);
+            const engine::NavLink& LL = nav_->links[li];
+            const int lanes = std::max(1, LL.lanes);
             uint32_t h = static_cast<uint32_t>(a.home * 73 + a.work * 131 +
                                                a.trips * 17 + a.leg) *
                          2654435761u;
-            a.laneTimer = 7.0 + (h >> 8) % 9;
+            a.laneTimer = 4.5 + (h >> 8) % 7;
             if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05) {
-                const int dir = (h & 1) ? 1 : -1;
-                const int want = a.lane + dir;
-                if (want >= 0 && want < lanes) a.lane = want;
+                // PURPOSEFUL lane choice (§9.6 device rules): fast drivers
+                // work toward the median (lane 0), slow ones stay right; an
+                // exit on the route within ~380 m pulls to the SLOW lane.
+                // One ADJACENT step at a time, and only when there is room.
+                int preferred = lanes - 1 -
+                    std::min(lanes - 1,
+                             std::max(0, static_cast<int>(
+                                             (a.speedFactor - 0.97) * 25)));
+                const int legCount = static_cast<int>(a.route.links.size());
+                Real ahead = LL.length - a.distOnLeg;
+                for (int lg = a.leg + 1; lg < legCount && ahead < 380.0; ++lg) {
+                    const engine::NavLink& NL = nav_->links[a.route.links[lg]];
+                    if (NL.klass == engine::RoadClass::Ramp) {
+                        preferred = lanes - 1;   // exit ahead: work right
+                        break;
+                    }
+                    if (NL.klass != engine::RoadClass::Freeway) break;
+                    ahead += NL.length;
+                }
+                const int dir = (preferred > a.lane) - (preferred < a.lane);
+                if (dir != 0) {
+                    const int want = a.lane + dir;
+                    // room check: nobody in the target lane alongside
+                    bool room = true;
+                    for (const Agent& b : agents_) {
+                        if (&b == &a || b.mode != Agent::Mode::Driver ||
+                            !b.moving || b.leg >= (int)b.route.links.size())
+                            continue;
+                        if (b.route.links[b.leg] != li) continue;
+                        if (std::fabs(b.laneF - Real(want)) > 0.6) continue;
+                        if (std::fabs(b.distOnLeg - a.distOnLeg) < 13.0) {
+                            room = false;
+                            break;
+                        }
+                    }
+                    if (room) a.lane = want;
+                }
             }
         }
     }
@@ -1065,21 +1102,62 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         if (motion > room) { motion = room; a.speed = 0; }
     }
 
-    const int legCount = static_cast<int>(a.route.links.size());
+    int legCount = static_cast<int>(a.route.links.size());
     while (motion > 0 && a.leg < legCount) {
         Real L = nav_->links[a.route.links[a.leg]].length;
         Real remain = L - a.distOnLeg;
         if (motion < remain) { a.distOnLeg += motion; motion = 0; }
         else {
             motion -= remain;
+            // MISSED EXIT (§9.6 device rule): about to turn onto an exit ramp
+            // but not in the slow lane — you miss it. Carry on with traffic
+            // and re-plan from the freeway continuation.
+            if (a.leg + 1 < legCount) {
+                const engine::NavLink& cur = nav_->links[a.route.links[a.leg]];
+                const engine::NavLink& nxt =
+                    nav_->links[a.route.links[a.leg + 1]];
+                if (cur.klass == engine::RoadClass::Freeway &&
+                    nxt.klass == engine::RoadClass::Ramp &&
+                    a.lane < cur.lanes - 1) {
+                    int cont = -1;   // the freeway link straight ahead
+                    for (int ol : nav_->outLinks[cur.to])
+                        if (nav_->links[ol].klass ==
+                                engine::RoadClass::Freeway &&
+                            nav_->links[ol].to != cur.from)
+                            cont = ol;
+                    if (cont >= 0) {
+                        const int goal = a.route.links.back();
+                        engine::Route r2 = engine::findRoute(
+                            *nav_, nav_->links[cont].to,
+                            nav_->links[goal].to);
+                        if (r2.valid()) {
+                            r2.links.insert(r2.links.begin(), cont);
+                            a.route = r2;
+                            a.leg = 0;
+                            a.distOnLeg = 0;
+                            legCount = static_cast<int>(a.route.links.size());
+                        }
+                    }
+                }
+            }
             ++a.leg;
             a.distOnLeg = 0;
             // Re-clamp the lane to the NEW leg's lane count: keeping lane 1 from
             // a two-lane arterial onto a one-lane local put the car on the kerb
             // and out of every same-link follower's gap key.
             if (a.leg < legCount) {
-                int lanes = std::max(1, nav_->links[a.route.links[a.leg]].lanes);
+                const engine::NavLink& newL = nav_->links[a.route.links[a.leg]];
+                int lanes = std::max(1, newL.lanes);
                 if (a.lane >= lanes) a.lane = lanes - 1;
+                // Merging from a ramp: ENTER on the slow lane, gliding in
+                // from the accel-lane side (device: "cars should start on
+                // the lane they enter on").
+                if (a.leg > 0 && newL.klass == engine::RoadClass::Freeway &&
+                    nav_->links[a.route.links[a.leg - 1]].klass ==
+                        engine::RoadClass::Ramp) {
+                    a.lane = lanes - 1;
+                    a.laneF = Real(lanes);   // one outside: the accel lane
+                }
             }
         }
     }

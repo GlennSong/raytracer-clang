@@ -353,7 +353,9 @@ CorridorMeshOut buildCorridorMesh(
         const Vec2 travel = c.horizontal.tangent(sg) * (e.upStation ? 1.0 : -1.0);
         const Real off0 =
             dirSign * (c.medianWidth * 0.5 + c.shoulderIn +
-                       (c.lanes.lanesAt(sg - 1.0, e.upStation) - 0.5) * c.laneWidth);
+                       (c.lanes.lanesAt(sg + (e.onRamp ? 1.0 : -1.0),
+                                        e.upStation) -
+                       0.5) * c.laneWidth);
         const Vec2 P0 = c.horizontal.offset(sg, off0);
         // an exit LEAVES down-stream; an on-ramp ARRIVES from up-stream —
         // its parallel run extends backwards from the merge point

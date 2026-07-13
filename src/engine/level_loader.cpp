@@ -2434,21 +2434,52 @@ bool LevelLoader::load(const std::string& path,
                 for (const engine::ExitDef& e : def.exits) {
                     const Real sg = std::max(Real(1),
                                              std::min(e.station, Lc - 1.0));
-                    // nearest chain node ON THIS CARRIAGEWAY to the gore
+                    // The merge is a LANE EVENT (§9.6): the ramp continues
+                    // ALONG the aux lane and joins the carriageway FORWARD of
+                    // the merge (behind the gore for exits) — never a
+                    // sideways/backward hop onto the centreline.
                     const std::vector<int>& chain =
                         e.upStation ? upChain : downChain;
+                    const Real joinS = e.onRamp
+                        ? std::min(Lc - 1.0, sg + e.decelLength * 0.75)
+                        : std::max(Real(1), sg - e.decelLength * 0.75);
                     int mainIdx = chain.front();
                     Real bestDs = 1e30;
                     for (std::size_t k = 0; k < chain.size(); ++k) {
-                        const Real ds = std::fabs(chainS[k] - sg);
+                        // on-ramp: first node AT/AFTER joinS; exit: last
+                        // node AT/BEFORE joinS (both fall back to nearest)
+                        const Real d0 = chainS[k] - joinS;
+                        const Real ds = (e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
+                                                  : (d0 <= 0 ? -d0 : 1e4 + d0));
                         if (ds < bestDs) { bestDs = ds; mainIdx = chain[k]; }
+                    }
+                    // aux-lane stations between the merge point and the join
+                    const Real auxOff =
+                        (e.upStation ? -1.0 : 1.0) *
+                        (def.medianWidth * 0.5 + def.shoulderIn +
+                         (def.lanes.throughLanes + 0.5) * def.laneWidth);
+                    std::vector<int> auxChain;
+                    {
+                        const Real s0 = e.onRamp ? sg : joinS;
+                        const Real s1 = e.onRamp ? joinS : sg;
+                        for (Real sv = s0 + 26.0; sv < s1 - 12.0; sv += 26.0) {
+                            engine::RoadNode nd;
+                            nd.pos = def.horizontal.offset(sv, auxOff);
+                            nd.elev = std::max(
+                                0.0, def.vertical.elevation(sv) - ground(nd.pos));
+                            auxChain.push_back(
+                                static_cast<int>(eg.graph.nodes.size()));
+                            eg.graph.nodes.push_back(nd);
+                        }
                     }
                     const Vec2 travel = def.horizontal.tangent(sg) *
                                         (e.upStation ? 1.0 : -1.0);
                     const int dirSign = e.upStation ? -1 : 1;
                     const Real off0 =
                         dirSign * (def.medianWidth * 0.5 + def.shoulderIn +
-                                   (def.lanes.lanesAt(sg - 1.0, e.upStation) - 0.5) *
+                                   (def.lanes.lanesAt(
+                                        sg + (e.onRamp ? 1.0 : -1.0),
+                                        e.upStation) - 0.5) *
                                        def.laneWidth);
                     const Vec2 P0 = def.horizontal.offset(sg, off0);
                     const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
@@ -2490,12 +2521,18 @@ bool LevelLoader::load(const std::string& path,
                         eg.graph.edges.push_back(e2);
                     };
                     if (e.onRamp) {
+                        // street -> climb -> merge point -> ACCEL LANE -> join
                         for (int k = static_cast<int>(chainR.size()) - 1; k > 0; --k)
                             ramp(chainR[k], chainR[k - 1]);
-                        ramp(chainR.front(), mainIdx);       // merge into carriageway
+                        int prev2 = chainR.front();
+                        for (int an : auxChain) { ramp(prev2, an); prev2 = an; }
+                        ramp(prev2, mainIdx);                // zipper join, forward
                         eg.snapNodes.push_back(chainR.back());
                     } else {
-                        ramp(mainIdx, chainR.front());       // leave the carriageway
+                        // leave -> DECEL LANE -> gore -> descend -> street
+                        int prev2 = mainIdx;
+                        for (int an : auxChain) { ramp(prev2, an); prev2 = an; }
+                        ramp(prev2, chainR.front());
                         for (int k = 0; k + 1 < static_cast<int>(chainR.size()); ++k)
                             ramp(chainR[k], chainR[k + 1]);
                         eg.snapNodes.push_back(chainR.back());
