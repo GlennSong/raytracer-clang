@@ -1375,13 +1375,13 @@
         "crosswalks": true,
         "curb": 0.16,
         "generate": {
-          "ambient_per_500": 60,
+          "ambient_per_500": 85,
           "artery_width": 12,
           "block_size": 110,
           "collector_width": 9,
           "corridor_spacing": 80,
           "freeway_width": 12,
-          "hotspots": 1,
+          "hotspots": 2,
           "influence": 300,
           "interchange_spacing": 4000,
           "kill_radius": 60,
@@ -1390,7 +1390,7 @@
           "loop_min": 120,
           "merge_radius": 44,
           "min_road_len": 22,
-          "radius": 260,
+          "radius": 400,
           "sea_level": -100.0,
           "seed": 4,
           "seg_length": 30,
@@ -1406,6 +1406,19 @@
     {
       "corridor": {
         "designSpeed": 30.0,
+        "exits": [
+          {
+            "decel": 200,
+            "radius": 75,
+            "spiral": 30,
+            "station": 1000,
+            "target": [
+              330,
+              470
+            ],
+            "upStation": true
+          }
+        ],
         "laneWidth": 3.6,
         "lanes": 4,
         "median": 1.4,
@@ -1469,17 +1482,7 @@
           ]
         ],
         "radius": 240,
-        "spiral": 70,
-        "exits": [
-          {
-            "station": 1000,
-            "upStation": true,
-            "target": [330, 470],
-            "decel": 200,
-            "radius": 75,
-            "spiral": 30
-          }
-        ]
+        "spiral": 70
       },
       "id": 3,
       "name": "mainline",
