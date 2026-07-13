@@ -2326,6 +2326,56 @@ bool LevelLoader::load(const std::string& path,
                     streetsBelow.edges.push_back(e);
                 }
             }
+            // Ramps land ON city roads (device): snap each ramp target to
+            // the nearest street-graph node so the pavement, the nav weld,
+            // and the drawn street agree on one junction.
+            for (engine::ExitDef& e : def.exits) {
+                // Only nodes on the RAMP'S side of the deck qualify — a
+                // target across the corridor makes the ramp dive under the
+                // mainline (device: "an onramp that's going up but it's
+                // under the freeway, lol").
+                const Real sg = std::max(
+                    Real(1), std::min(e.station, def.horizontal.length() - 1));
+                const Vec2 gc = def.horizontal.pos(sg);
+                const Vec2 gn = def.horizontal.normal(sg);
+                const Real sideSign = e.upStation ? -1.0 : 1.0;
+                auto onRampSide = [&](const Vec2& p) {
+                    return dot(p - gc, gn) * sideSign > 12.0;
+                };
+                Real best = 70.0;
+                Vec2 pick = e.target;
+                bool found = false;
+                for (const engine::RoadNode& nd : streetsBelow.nodes) {
+                    if (!onRampSide(nd.pos)) continue;
+                    const Real d = (nd.pos - e.target).length();
+                    if (d < best) { best = d; pick = nd.pos; found = true; }
+                }
+                if (!found) {   // widen the search rather than cross the deck
+                    best = 220.0;
+                    for (const engine::RoadNode& nd : streetsBelow.nodes) {
+                        if (!onRampSide(nd.pos)) continue;
+                        const Real d = (nd.pos - e.target).length();
+                        if (d < best) { best = d; pick = nd.pos; found = true; }
+                    }
+                }
+                if (!found) {   // last resort: nearest on-side node to the
+                                // GORE itself — also naturally the SHORTEST
+                                // ramp (device: "off ramps are too long")
+                    best = 420.0;
+                    for (const engine::RoadNode& nd : streetsBelow.nodes) {
+                        if (!onRampSide(nd.pos)) continue;
+                        const Real d = (nd.pos - gc).length();
+                        if (d < best) { best = d; pick = nd.pos; found = true; }
+                    }
+                }
+                if (found) e.target = pick;
+                else
+                    LOG_WARN << "[corridor] ramp at s=" << e.station
+                             << ": no street node on its side — keeping "
+                                "authored target";
+                if (levelGround)
+                    e.targetY = levelGround(e.target.x, e.target.y);
+            }
             PendingCorridor pc;
             pc.mesh = buildCorridorMesh(def, levelGround, 3.0,
                                         streetsBelow.edges.empty()
@@ -2373,7 +2423,7 @@ bool LevelLoader::load(const std::string& path,
                     const Vec2 P0 = def.horizontal.offset(sg, off0);
                     const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
                     engine::Alignment ra = engine::Alignment::fromPolyline(
-                        {P0, P0 + away * 50.0, e.target}, e.rampRadius,
+                        {P0, P0 + away * 35.0, e.target}, e.rampRadius,
                         e.rampSpiral, 2.0);
                     if (ra.empty() || ra.length() < 60.0) continue;
                     const Real RL = ra.length();

@@ -147,6 +147,28 @@ CorridorMeshOut buildCorridorMesh(
     }
 
     // EDGES to the world: at grade, skirts drop into the (flattened) ground;
+    // GIRDER (device: "supported by a concrete thing under it ... those
+    // slabs are connected to the pylons and braces and the freeway sits on
+    // top"): the SUPERSTRUCTURE — a narrower, deeper concrete band riding
+    // under the deck slab, carried by the bent caps.
+    for (int i = 0; i < n; ++i) {
+        if (!elevated[i] && !elevated[i + 1]) continue;
+        const Real gf = 0.72, gd = 0.85;   // width factor / extra depth
+        auto gq = [&](Real oA, Real oB, Real dA, Real dB, const Vec3& nn) {
+            MeshBuilder::emitQuad(out.barrier,
+                                  ribs[i].at(oA) + Vec3(0, dA, 0),
+                                  ribs[i + 1].at(oA) + Vec3(0, dA, 0),
+                                  ribs[i + 1].at(oB) + Vec3(0, dB, 0),
+                                  ribs[i].at(oB) + Vec3(0, dB, 0), nn,
+                                  kConcrete * 0.92);
+        };
+        const Real wL = halfP[i] * gf, wR = -halfN[i] * gf;
+        const Real top = -deckDepth, bot = -deckDepth - gd;
+        gq(wR, wL, bot, bot, Vec3(0, -1, 0));                        // soffit
+        gq(wL, wL, top, bot, Vec3(ribs[i].n.x, 0, ribs[i].n.y));     // side
+        gq(wR, wR, bot, top, Vec3(-ribs[i].n.x, 0, -ribs[i].n.y));   // side
+    }
+
     // elevated, the deck becomes a box — fascia sides + underside — on piers.
     for (int side = -1; side <= 1; side += 2) {
         for (int i = 0; i < n; ++i) {
@@ -180,13 +202,11 @@ CorridorMeshOut buildCorridorMesh(
         for (const ExitDef& e : c.exits) {
             const int ds = e.upStation ? -1 : 1;
             if (side != ds) continue;
-            // the ramp runs PARALLEL to the deck for ~50 m past the nose —
-            // the opening must span all of it (device: "I still see the
-            // freeway rail going through the exit")
-            const Real a = e.onRamp ? e.station - 95.0
-                                    : e.station - e.decelLength * 0.55;
-            const Real b = e.onRamp ? e.station + e.decelLength * 0.55
-                                    : e.station + 95.0;
+            // open ONLY across the nose + the parallel run: the decel/accel
+            // flare is still deck edge and keeps its wall (device: "some of
+            // the freeway walls are now missing parapets/rails")
+            const Real a = e.onRamp ? e.station - 75.0 : e.station - 25.0;
+            const Real b = e.onRamp ? e.station + 25.0 : e.station + 75.0;
             if (s > a && s < b) return true;
         }
         return false;
@@ -240,7 +260,7 @@ CorridorMeshOut buildCorridorMesh(
             const Vec2 nn = c.horizontal.normal(s);
             const Real z = c.vertical.elevation(s);
             const Real gz = gy(cc);
-            const Real capTop = z - deckDepth + 0.08;
+            const Real capTop = z - deckDepth - 0.80;   // cap meets the girder soffit
             if (capTop - gz < 0.8) return;
             const Real colOff = c.halfWidthAt(s) * 0.52;   // column pair spread
             const Real colR = 1.35;   // girthy (device: "tiny and scrawny")
@@ -338,7 +358,7 @@ CorridorMeshOut buildCorridorMesh(
         // its parallel run extends backwards from the merge point
         const Vec2 away = travel * (e.onRamp ? -1.0 : 1.0);
         Alignment ra = Alignment::fromPolyline(
-            {P0, P0 + away * 50.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
+            {P0, P0 + away * 35.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
         if (ra.empty() || ra.length() < 60.0) continue;
         const Real RL = ra.length();
         // Grade change happens NEAR THE DECK (device: "it takes way too long
@@ -370,15 +390,22 @@ CorridorMeshOut buildCorridorMesh(
             MeshBuilder::emitQuad(out.deck, rr[i].at(rw), rr[i].at(-rw),
                                   rr[i + 1].at(-rw), rr[i + 1].at(rw),
                                   Vec3(0, 1, 0), kAsphalt);
-            // edge lines
+            // edge lines (device: "no markings for the sides" — the old
+            // 12 cm threads vanished at speed): wide painted edges, YELLOW
+            // left of travel / WHITE right, US ramp convention. Ramp rib 0
+            // sits at the deck for exits and at the street for on-ramps, so
+            // "left of travel" flips with the kind.
             for (int sd = -1; sd <= 1; sd += 2) {
-                const Real o = sd * (rw - 0.35);
+                const Real o = sd * (rw - 0.40);
+                const bool leftOfTravel = e.onRamp ? (sd == dirSign)
+                                                   : (sd != dirSign);
+                const Vec3 lc = leftOfTravel ? Vec3(0.82, 0.72, 0.22) : kWhite;
                 MeshBuilder::emitQuad(out.markings,
-                                      rr[i].at(o + 0.06) + Vec3(0, 0.015, 0),
-                                      rr[i].at(o - 0.06) + Vec3(0, 0.015, 0),
-                                      rr[i + 1].at(o - 0.06) + Vec3(0, 0.015, 0),
-                                      rr[i + 1].at(o + 0.06) + Vec3(0, 0.015, 0),
-                                      Vec3(0, 1, 0), kWhite);
+                                      rr[i].at(o + 0.11) + Vec3(0, 0.025, 0),
+                                      rr[i].at(o - 0.11) + Vec3(0, 0.025, 0),
+                                      rr[i + 1].at(o - 0.11) + Vec3(0, 0.025, 0),
+                                      rr[i + 1].at(o + 0.11) + Vec3(0, 0.025, 0),
+                                      Vec3(0, 1, 0), lc);
             }
             // fascia / skirts + parapets (the deck-side wall starts past
             // the nose so it never bars the gore opening)
@@ -386,7 +413,7 @@ CorridorMeshOut buildCorridorMesh(
             const Real rs = RL * i / rn;
             for (int sd = -1; sd <= 1; sd += 2) {
                 const bool inner = sd == -dirSign;
-                const bool skipParapet = inner && rs < 75.0;
+                const bool skipParapet = inner && rs < 55.0;
                 const Vec3 e0 = rr[i].at(sd * rw), e1 = rr[i + 1].at(sd * rw);
                 const Real d0 = up ? deckDepth
                                    : e0.y - (gy(Vec2(e0.x, e0.z)) - 0.6);
@@ -473,7 +500,7 @@ CorridorMeshOut buildCorridorMesh(
             };
             postAt(hL);
             postAt(-hR);
-            RenderMesh beam = MeshBuilder::box(Vec3(hL + hR, 0.5, 0.5));
+            RenderMesh beam = MeshBuilder::box(Vec3(hL + hR, 0.75, 0.75));
             for (Vertex& v : beam.vertices) v.color = kGrey;
             const Real byaw = std::atan2(-gn.y, gn.x);
             MeshBuilder::transform(beam,
@@ -486,7 +513,7 @@ CorridorMeshOut buildCorridorMesh(
             auto board = [&](Real off, Real w, Real h, bool arrow) {
                 const Vec3 kGreen(0.03, 0.28, 0.12);
                 const Vec2 bc2 = gc + gn * off;
-                const Vec3 bc(bc2.x, beamY - 0.35 - h * 0.5, bc2.y);
+                const Vec3 bc(bc2.x, beamY - 0.28 - h * 0.5, bc2.y);
                 const Vec3 right(gn.x, 0, gn.y);
                 const Vec3 up3(0, 1, 0);
                 const Vec3 nrm(face2.x, 0, face2.y);
@@ -518,6 +545,17 @@ CorridorMeshOut buildCorridorMesh(
                                          bc + nrm * 0.09 - right * 0.4 - up3 * 0.25,
                                          nrm, Vec3(0.9, 0.9, 0.9));
                 }
+                // mounting struts tie the placard to the beam (device:
+                // "the signs just float with the overhanging pipe")
+                for (Real sx : {-w * 0.32, w * 0.32}) {
+                    RenderMesh strut = MeshBuilder::box(Vec3(0.12, 1.0, 0.12));
+                    for (Vertex& v : strut.vertices)
+                        v.color = Vec3(0.45, 0.46, 0.48);
+                    const Vec3 sp = bc + right * sx + up3 * (h * 0.5 + 0.2);
+                    MeshBuilder::transform(strut,
+                                           Mat4::translate(sp.x, sp.y, sp.z));
+                    MeshBuilder::append(out.barrier, strut);
+                }
                 MeshBuilder::append(out.barrier, bm);
             };
             const int dsn = dirSign;
@@ -527,6 +565,29 @@ CorridorMeshOut buildCorridorMesh(
             board(dsn * (c.halfWidthAt(ss, dsn) - c.shoulderOut -
                          c.laneWidth * 0.5),
                   3.4, 2.2, true);
+        }
+
+        // RAMP PIERS: an elevated ramp is a structure too — one round column
+        // every ~24 m of raised run, capped where it meets the ramp soffit.
+        {
+            Real since = 18.0;
+            for (int i = 0; i <= rn; ++i) {
+                since += i > 0 ? RL / rn : 0.0;
+                if (!rUp[i] || since < 24.0) continue;
+                since = 0;
+                const Vec2 foot2 = rr[i].c;
+                const Real fgz = gy(foot2);
+                const Real topY = rr[i].z - deckDepth - 0.15;
+                const Real hgt = topY - (fgz - 1.0);
+                if (hgt < 1.2) continue;
+                RenderMesh col = MeshBuilder::cylinder(0.8f,
+                    static_cast<float>(hgt), 10);
+                for (Vertex& v : col.vertices) v.color = kConcrete;
+                MeshBuilder::transform(col,
+                    Mat4::translate(foot2.x, fgz - 1.0 + hgt * 0.5, foot2.y));
+                MeshBuilder::append(out.barrier, col);
+                out.pierBases.push_back(foot2);
+            }
         }
 
         // GORE NOSE: the painted wedge between the mainline's outer edge and
