@@ -557,3 +557,98 @@ Acceptance: a warmed lab run where an on-ramp car visibly rides the accel
 lane, blinks left, glides into lane 3, works left to its preferred lane,
 then works right again and exits — without ever clipping a parapet or
 popping vertically.
+
+## §10 ONE road network — reconciling corridors, ramps, and streets
+(device round 2026-07-12: "The freeway should be a part of the road network
+... I imagine for an onramp there's a control point on the freeway
+entrance/exit and then another one connecting it to the road.")
+
+### 10.0 The decision
+Two AUTHORING documents, ONE derived graph, split MESHING by class.
+
+- Authoring stays heterogeneous because the design data is genuinely
+  different: a street is a node/edge net the mesher drapes; a corridor is an
+  alignment (control polyline + profile + lane schedule). Forcing either
+  into the other's document model loses information.
+- But everything DERIVED must come from one place: a single per-level
+  RoadGraph — nodes carry {pos, elev, elevAbsolute}, edges carry {width,
+  class, oneWay, provenance} — that nav, lots, growth, furniture, editor
+  picking, and junction logic ALL read. The citysim-side ExtraNavGraph
+  bolt-on is deleted once this lands (it was the prototype of this graph).
+- Provenance tag per edge: Street | CorridorMain(corridorId, station range)
+  | CorridorRamp(rampId). Meshing dispatches on it: the street mesher
+  ignores corridor provenance; the corridor sweep meshes only its own.
+  Junction geometry at shared nodes is ALWAYS street-mesher-owned.
+
+### 10.1 The RAMP is a first-class connection document
+Exactly the device intuition: a ramp is TWO ANCHORS + design params.
+    RampSpec {
+      corridor anchor: (corridorId, station, side, kind: exit|onramp)
+      street  anchor: (roadNet nodeId)         // a REAL street node, by id
+      params: decel/accel length, radius, spiral, laneWidth
+    }
+- Geometry (clothoid + profile + aux flare) derives from the two anchors —
+  never guessed from a target point again. The loader's node-snapping
+  heuristics become a PROCGEN policy that emits RampSpecs (the metro picks
+  the node; a human can re-pick it in the editor).
+- Editor: anchor A slides ALONG the ribbon (station scrubbing); anchor B
+  snaps street nodes. Both are gizmos on the corridor's document entity.
+- The street anchor's node becomes a REAL junction in the street net: the
+  ramp injects a short landing STUB edge into the RoadNet before meshing,
+  so the junction mouth, corner blending, stop bar, crosswalk suppression,
+  and signal placement all happen through the normal street machinery.
+  (Today the ramp pavement just lies on top of an unsuspecting node.)
+
+### 10.2 Elevation becomes native to the graph
+- RoadGraph nodes already carry elev/elevAbsolute (P8.4); RoadNet's authored
+  street nodes gain optional elevation too, replacing the integer `layer`
+  hack long-term (street overpasses become real). At-grade streets default
+  0/relative; corridor chains absolute; ramps absolute.
+- Rule: a shared (welded) node takes the STREET's elevation — ramps land at
+  street grade by construction.
+
+### 10.3 Meshing + carving interface contract
+- The corridor sweep stays the mesher for Freeway/Ramp provenance
+  (elevated structure is its whole point). The street mesher owns every
+  junction polygon, including ramp landings: the ramp ribbon TERMINATES at
+  the junction-mouth radius the street mesher reports; the mouth pavement,
+  curb returns, and markings are street work.
+- ONE carve pass: corridor + ramp flatten regions merge into
+  roadNetConformRegions so terrain conforming has a single owner (same
+  bedrock as §3: one profile source).
+- Deck COLLIDERS: elevated deck + ramps get static mesh colliders (players
+  and physical cars can drive the freeway; today only ghosts can).
+
+### 10.4 Editor integration
+- Corridor doc entity carries the deck Renderable -> click-select works
+  like streets (today the mesh lives on untagged runtime companions).
+- Gizmos: alignment control points (XZ), profile PVIs (Y at station), exit
+  stations (slide), ramp anchors (10.1). Every edit re-derives graph + mesh
+  + flatten through the same regenerate path roads use.
+
+### 10.5 Systems sweep (after the graph unifies)
+- Lots/growth: corridor easement + pier footprints come from the unified
+  graph (buildable mask); ramp terminals seed growth attractors.
+- Pedestrians: sidewalk routing EXCLUDES Freeway/Ramp classes (walkers
+  must never route along a carriageway; audit today's behaviour).
+- Furniture: signals become junction-aware of ramp landings; no lamps on
+  corridor provenance (class rule already holds).
+- Router: already class-speed-weighted; nothing to do.
+
+### 10.6 Metro integration (supersedes P8.6)
+The metro generator stops emitting freeway-WIDTH street edges entirely:
+it plans corridor alignments hub-to-hub, stamps interchange RampSpec pairs
+(exit + on-ramp per carriageway, spacing + feasibility checked against the
+grown street net), and the unified graph does the rest. The "freeway looks
+like a fat street" era ends.
+
+### Order of work + migration
+1. 10.2 graph schema (elev on RoadNet nodes; provenance tags) — additive.
+2. 10.1 RampSpec document + derived geometry, replacing ExitDef.target
+   (ExitDef stays as the serialized form, gains streetNodeId).
+3. 10.0 unified graph assembly in the loader; citysim reads it; DELETE
+   ExtraNavGraph.
+4. 10.3 junction stubs + mouth contract + single carve pass + colliders.
+5. 10.4 editor pickability + gizmos.
+6. 10.5 sweep, 10.6 metro.
+Each step keeps the lab green (drivable end-to-end) before the next.
