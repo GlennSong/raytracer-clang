@@ -487,3 +487,73 @@ would otherwise need a tight directional ramp. Needs: ramp-on-ramp piers
 merge stations far enough from each corridor's other ramps (the P8.6
 spacing rule reused). Deferred until one corridor + city integration is
 solid.
+
+## §9.6 The merge is a LANE EVENT, not a point splice (device round, 2026-07-12)
+
+### What is actually wrong today (verified in code)
+1. corridor_mesh.cpp:356 and level_loader.cpp:2451 both compute the ramp's
+   merge offset with lanesAt(sg - 1). For an EXIT that is correct (the decel
+   lane exists BEFORE the gore). For an ON-RAMP the accel lane exists AFTER
+   the merge station — at sg-1 there is no aux lane, so P0 lands in the
+   centre of the outermost THROUGH lane, INSIDE the deck. The whole parallel
+   run of the on-ramp ribbon is therefore tucked under the deck's shoulder:
+   "the ramps are below the freeway and the cars pop through the top".
+2. The ramp's final nav edge connects to the carriageway chain node nearest
+   the merge station IN EITHER DIRECTION (fabs(chainS[k]-sg)) and hops from
+   the ramp's parallel offset to the CARRIAGEWAY CENTRELINE in one link — a
+   sideways (sometimes slightly backward) lurch instead of a merge.
+3. Lane changes are adjacency-correct (+/-1 only) but PURPOSELESS: a paced
+   coin flip. No slow/fast semantics, no relationship to exits.
+
+### The construction that fixes all three
+**A ramp does not END at the freeway; it BECOMES the auxiliary lane.**
+
+Geometry (one ribbon, no overlap):
+- ON-RAMP: street -> climb -> arrive PARALLEL at the aux-lane offset
+  (lanesAt(sg + 1), i.e. one lane OUTSIDE the through lanes) exactly at the
+  merge station -> continue as the accel lane over [sg, sg + accelLen] (this
+  span is already meshed by the deck's aux flare — the ramp ribbon simply
+  ENDS at sg where the flare takes over; today they overlap wrongly) ->
+  the flare's taper closes the lane at the far end.
+- EXIT mirrored: the deck flare opens the decel lane at [sg - decel, sg];
+  the ramp ribbon begins at the gore where the flare ends.
+- Rule of thumb: the FLARE owns everything on the deck; the RAMP owns
+  everything off it; they meet at exactly one rib with identical offsets.
+
+Nav (the zipper):
+- The ramp chain does not stop at the merge point. It continues ALONG the
+  aux lane — nodes at the aux-lane offset, deck elevation — from sg to
+  sg + accelLen*0.8, and ONLY THEN joins the carriageway chain node just
+  DOWNSTREAM (never backward). The join edge is ~30 m long and nearly
+  parallel: geometrically a zipper.
+- A merging car is therefore ON the accel lane in its own nav link while
+  freeway traffic passes on its left; joining the flow is the existing
+  laneF glide (one lane left), indicator blinking, executed when the join
+  link hands over to the carriageway link.
+- EXIT mirrored: the carriageway hands over at sg - decel*0.8 to a
+  decel-lane chain, then the gore, then down.
+
+Lane semantics (slow right, fast left):
+- Lane 0 sits nearest the median (one-way links centre their lane set) =
+  the FAST lane; the highest index is the SLOW/EXIT lane. This matches the
+  device rule: "slow lanes closer to the exit ramps, fast lanes closer to
+  the median".
+- Each driver gets preferredLane from its personality (speedFactor
+  percentile): fast drivers prefer low indices, slow drivers high.
+- ROUTE-AWARE OVERRIDE: when the route leaves via a Ramp link within
+  ~350 m, preferredLane = rightmost — the car works its way back across,
+  one adjacent lane at a time, indicator on, before the gore.
+- Discretionary changes stop being coin flips: every paced decision moves
+  ONE step toward preferredLane (or holds). Adjacency is preserved by
+  construction; "random jumping" disappears because direction is now
+  purposeful.
+
+### Order of implementation (when approved)
+1. lanesAt(sg +/- 1) fix by ramp kind (mesh + nav must stay identical).
+2. Ramp ribbon ends at the flare boundary (kill the overlap).
+3. Nav accel/decel-lane chains + forward-only join nodes.
+4. preferredLane + route-aware exit seek on the existing laneF machinery.
+Acceptance: a warmed lab run where an on-ramp car visibly rides the accel
+lane, blinks left, glides into lane 3, works left to its preferred lane,
+then works right again and exits — without ever clipping a parapet or
+popping vertically.
