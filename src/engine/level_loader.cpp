@@ -2541,12 +2541,15 @@ bool LevelLoader::load(const std::string& path,
                         }
                         if (found) break;
                     }
-                    if (!found)
+                    if (!found) {
                         LOG_WARN << "[corridor] ramp at s=" << e.station
                                  << ": no usable street node on its side — "
-                                    "keeping authored target";
-                    else
+                                    "DROPPED (a ribbon to nowhere is worse "
+                                    "than no ramp)";
+                        e.station = -1;   // sentinel: mesh + nav skip it
+                    } else {
                         used.push_back(e.target);
+                    }
                     if (levelGround)
                         e.targetY = levelGround(e.target.x, e.target.y);
                 }
@@ -2673,6 +2676,32 @@ bool LevelLoader::load(const std::string& path,
                         engine::RoadNet& net = preNets[rampAnchors[xi].first];
                         const Vec3& pe = e.onRamp ? pts.front() : pts.back();
                         const Vec2 P(pe.x, pe.z);
+                        // §11 guard: a stub within ~20° of an existing arm
+                        // inverts the junction-pad polygon (device: the giant
+                        // asphalt fan). Weld-only landing in that case.
+                        {
+                            const int nn = rampAnchors[xi].second;
+                            const Vec2 sd = normalize(P - net.nodes[nn]);
+                            bool shallow = false;
+                            for (const auto& ed : net.edges) {
+                                int other = ed[0] == nn ? ed[1]
+                                          : ed[1] == nn ? ed[0] : -1;
+                                if (other < 0) continue;
+                                const Vec2 od =
+                                    normalize(net.nodes[other] - net.nodes[nn]);
+                                if (std::fabs(dot(sd, od)) > 0.94) {
+                                    shallow = true;
+                                    break;
+                                }
+                            }
+                            if (shallow) {
+                                LOG_WARN << "[corridor] stub at ("
+                                         << P.x << ", " << P.y
+                                         << ") too shallow vs street — "
+                                            "weld-only landing";
+                                continue;
+                            }
+                        }
                         if (net.tangents.size() < net.nodes.size())
                             net.tangents.resize(net.nodes.size(), Vec2(0, 0));
                         if (net.edgeWidths.size() < net.edges.size())

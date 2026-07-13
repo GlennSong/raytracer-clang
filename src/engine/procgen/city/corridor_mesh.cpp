@@ -47,12 +47,17 @@ CorridorMeshOut buildCorridorMesh(
     // Each exit grows its deceleration AUX LANE into the schedule — the deck
     // flares one lane on that side over the decel length, ending at the gore.
     for (const ExitDef& e : c.exits) {
+        if (e.station < 0) continue;   // dropped at resolution
+        // spans CLAMP inside the corridor: a decel lane that opened at the
+        // corridor's tip read as a peel-off to nowhere (device)
+        const Real La = c.horizontal.length();
         if (e.onRamp)   // accel: full at the merge, closes GRADUALLY (90 m)
-            c.lanes.aux.push_back({e.station, e.station + e.decelLength,
+            c.lanes.aux.push_back({e.station,
+                                   std::min(La - 30.0, e.station + e.decelLength),
                                    e.upStation, false, 90.0});
         else            // decel: opens over 40 m, full at the gore
-            c.lanes.aux.push_back({e.station - e.decelLength, e.station,
-                                   e.upStation, true, 40.0});
+            c.lanes.aux.push_back({std::max(Real(30), e.station - e.decelLength),
+                                   e.station, e.upStation, true, 40.0});
     }
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
@@ -390,6 +395,7 @@ CorridorMeshOut buildCorridorMesh(
     for (const ExitDef& e : c.exits) {
         out.rampPaths.emplace_back();                    // parallel to exits
         std::vector<Vec3>& path = out.rampPaths.back().pts;
+        if (e.station < 0) continue;   // dropped at resolution (no street)
         const Real sg = std::max(Real(1), std::min(e.station, L - 1.0));
         const int dirSign = e.upStation ? -1 : 1;        // offset side
         const Real ds = e.upStation ? 1.0 : -1.0;        // flow over stations
