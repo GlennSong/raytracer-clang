@@ -38,12 +38,12 @@ CorridorMeshOut buildCorridorMesh(
     // Each exit grows its deceleration AUX LANE into the schedule — the deck
     // flares one lane on that side over the decel length, ending at the gore.
     for (const ExitDef& e : c.exits) {
-        if (e.onRamp)   // accel: full at the merge, tapers closed at the end
+        if (e.onRamp)   // accel: full at the merge, closes GRADUALLY (90 m)
             c.lanes.aux.push_back({e.station, e.station + e.decelLength,
-                                   e.upStation, false});
-        else            // decel: tapers open, full at the gore
+                                   e.upStation, false, 90.0});
+        else            // decel: opens over 40 m, full at the gore
             c.lanes.aux.push_back({e.station - e.decelLength, e.station,
-                                   e.upStation, true});
+                                   e.upStation, true, 40.0});
     }
     const Real L = c.horizontal.length();
     if (L < step * 2) return out;
@@ -318,7 +318,10 @@ CorridorMeshOut buildCorridorMesh(
     // AT-GRADE flatten: windows of the deck footprint carve the terrain to
     // the deck plane (the proven pad machinery does the blending).
     {
-        const Real win = 12.0;
+        // 4 m windows: a 12 m flat step vs a graded deck left the terrain
+        // poking through in tiles (device: the dark rectangles); short steps
+        // + carving 18 cm under the deck keep the ground beneath everywhere.
+        const Real win = 4.0;
         Real s0 = 0;
         while (s0 < L) {
             const Real s1 = std::min(L, s0 + win);
@@ -335,7 +338,7 @@ CorridorMeshOut buildCorridorMesh(
                     Vec3(p1.x - n1.x * hn1, 0, p1.y - n1.y * hn1),
                     Vec3(p0.x - n0.x * hn0, 0, p0.y - n0.y * hn0)};
                 out.flatten.push_back(
-                    makeFlattenPad(std::move(poly), c.vertical.elevation(sm), 6.0));
+                    makeFlattenPad(std::move(poly), c.vertical.elevation(sm) - 0.18, 6.0));
             }
             s0 = s1;
         }

@@ -85,7 +85,14 @@ struct LaneSchedule {
         // (device: the reversed flare left the merge point off the deck —
         // "the on ramp is still under the freeway").
         bool taperAtStart = true;
+        // Taper run (m): how long the lane takes to grow/shrink. A merge is
+        // GRADUAL (device: "there should be a gradual merge") — accel lanes
+        // close over ~90 m; decel lanes open over ~40.
+        Real taper = 40.0;
     };
+    // Width fraction [0,1] of one aux span at station s (smoothstep over its
+    // taper) — shared by deck width, markings, and the merge dash gate.
+    static Real auxFraction(const AuxSpan& a, Real s);
     std::vector<AuxSpan> aux;
 
     // Lane count for ONE carriageway at station s (through + its aux spans).
@@ -116,7 +123,7 @@ struct ExitDef {
     // street net from the landing node back along the ramp, the street
     // mesher builds a real junction mouth there, and the ribbon (and its nav
     // chain) stop this many metres short. 0 = legacy point landing.
-    Real landingSetback = 12.0;
+    Real landingSetback = 20.0;
 };
 
 

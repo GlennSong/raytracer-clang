@@ -278,10 +278,21 @@ Real VerticalProfile::grade(Real s) const {
     return (elevation(s + h) - elevation(s - h)) / (2 * h);
 }
 
+Real LaneSchedule::auxFraction(const AuxSpan& a, Real s) {
+    if (s < a.s0 || s > a.s1) return 0.0;
+    const Real t = std::min(
+        Real(1), (a.taperAtStart ? s - a.s0 : a.s1 - s) /
+                     std::max(Real(1), a.taper));
+    return t * t * (3.0 - 2.0 * t);   // smoothstep: reads as a curve, not a wedge
+}
+
 int LaneSchedule::lanesAt(Real s, bool up) const {
+    // The aux lane COUNTS (separator dashes, gore offsets) only while it is
+    // at least half-width: past that the dashes stop and the narrowing
+    // pavement reads as the merge zone (device: gradual merge).
     int n = throughLanes;
     for (const AuxSpan& a : aux)
-        if (a.upStation == up && s >= a.s0 && s <= a.s1) ++n;
+        if (a.upStation == up && auxFraction(a, s) >= 0.5) ++n;
     return n;
 }
 
@@ -291,10 +302,8 @@ Real CorridorDef::halfWidthAt(Real s, int sideSign) const {
     const bool up = sideSign < 0;   // up-station drives the negative offsets
     Real extra = 0;
     for (const LaneSchedule::AuxSpan& a : lanes.aux)
-        if (a.upStation == up && s >= a.s0 && s <= a.s1)
-            extra += laneWidth *
-                     std::min(Real(1), (a.taperAtStart ? s - a.s0
-                                                       : a.s1 - s) / Real(35));
+        if (a.upStation == up)
+            extra += laneWidth * LaneSchedule::auxFraction(a, s);
     return medianWidth * 0.5 + shoulderIn + lanes.throughLanes * laneWidth +
            extra + shoulderOut;
 }
