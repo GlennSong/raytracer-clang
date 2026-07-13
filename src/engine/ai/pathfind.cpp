@@ -29,7 +29,8 @@ Real Route::length(const NavGraph& g) const {
     return total;
 }
 
-Route findRoute(const NavGraph& graph, int startNode, int goalNode) {
+Route findRoute(const NavGraph& graph, int startNode, int goalNode,
+                bool onFoot) {
     Route route;
     const int n = graph.nodeCount();
     if (startNode < 0 || goalNode < 0 || startNode >= n || goalNode >= n) return route;
@@ -69,6 +70,8 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode) {
 
         for (int li : graph.outLinks[u]) {
             const NavLink& link = graph.links[li];
+            if (onFoot && (link.klass == RoadClass::Freeway ||
+                       link.klass == RoadClass::Ramp)) continue;
             Real step = link.length / classSpeed(link.klass);
             Real tentative = g[u] + step;
             if (tentative + 1e-12 < g[link.to]) {

@@ -111,6 +111,12 @@ struct ExitDef {
     // ACCELERATION lane after the merge point and the ramp arrives from
     // `target` instead of leaving for it. Same geometry machinery, reversed.
     bool onRamp = false;
+    // §10.3: the last stretch before the street is NOT ramp ribbon — the
+    // street system owns it. The loader grafts a junction STUB edge into the
+    // street net from the landing node back along the ramp, the street
+    // mesher builds a real junction mouth there, and the ribbon (and its nav
+    // chain) stop this many metres short. 0 = legacy point landing.
+    Real landingSetback = 12.0;
 };
 
 

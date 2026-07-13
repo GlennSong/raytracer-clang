@@ -2340,16 +2340,27 @@ bool LevelLoader::load(const std::string& path,
             // no two ramps may share or crowd a landing (device: "two of
             // them overlap"), and a wrong-side node is never taken (it made
             // an on-ramp dive under the mainline).
-            {
-                std::vector<int> degree(streetsBelow.nodes.size(), 0);
-                for (const engine::RoadEdge& re : streetsBelow.edges) {
-                    if (re.a >= 0 && re.a < static_cast<int>(degree.size()))
-                        ++degree[re.a];
-                    if (re.b >= 0 && re.b < static_cast<int>(degree.size()))
-                        ++degree[re.b];
+            // §10.3: candidates are AUTHORED street-net nodes (not curve
+            // samples) — the landing must be a node the street net can grow a
+            // junction STUB from. rampAnchors records (net, node) per exit.
+            struct StreetAnchor { int net; int node; engine::Vec2 pos; int degree; };
+            std::vector<StreetAnchor> anchors;
+            for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
+                std::vector<int> deg(preNets[ni].nodes.size(), 0);
+                for (const auto& ed : preNets[ni].edges) {
+                    if (ed[0] >= 0 && ed[0] < static_cast<int>(deg.size())) ++deg[ed[0]];
+                    if (ed[1] >= 0 && ed[1] < static_cast<int>(deg.size())) ++deg[ed[1]];
                 }
+                for (std::size_t k = 0; k < preNets[ni].nodes.size(); ++k)
+                    anchors.push_back({static_cast<int>(ni), static_cast<int>(k),
+                                       preNets[ni].nodes[k], deg[k]});
+            }
+            std::vector<std::pair<int, int>> rampAnchors(def.exits.size(),
+                                                         {-1, -1});
+            {
                 std::vector<engine::Vec2> used;
-                for (engine::ExitDef& e : def.exits) {
+                for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
+                    engine::ExitDef& e = def.exits[xi];
                     const Real sg = std::max(
                         Real(1),
                         std::min(e.station, def.horizontal.length() - 1));
@@ -2358,31 +2369,34 @@ bool LevelLoader::load(const std::string& path,
                     const Real sideSign = e.upStation ? -1.0 : 1.0;
                     const Vec2 travelDir = def.horizontal.tangent(sg) *
                                            (e.upStation ? 1.0 : -1.0);
-                    auto usable = [&](const engine::RoadNode& nd, bool needJunction) {
-                        if (dot(nd.pos - gc, gn) * sideSign < 12.0) return false;
+                    auto usable = [&](const StreetAnchor& an, bool needJunction) {
+                        if (dot(an.pos - gc, gn) * sideSign < 12.0) return false;
                         // flow direction: an exit unloads DOWNSTREAM, an
                         // on-ramp is fed from UPSTREAM — a feeder on the
                         // wrong side makes the ramp double back (device:
                         // "weirdly making cars do a U-turn")
-                        const Real along = dot(nd.pos - gc, travelDir);
+                        const Real along = dot(an.pos - gc, travelDir);
                         if (e.onRamp ? along > -20.0 : along < 20.0)
                             return false;
-                        const Real dg = (nd.pos - gc).length();
+                        const Real dg = (an.pos - gc).length();
                         if (dg < 70.0 || dg > 340.0) return false;
-                        if (needJunction &&
-                            degree[&nd - &streetsBelow.nodes[0]] < 2)
-                            return false;
+                        if (needJunction && an.degree < 2) return false;
                         for (const Vec2& u : used)
-                            if ((u - nd.pos).length() < 45.0) return false;
+                            if ((u - an.pos).length() < 45.0) return false;
                         return true;
                     };
                     bool found = false;
                     for (const bool needJ : {true, false}) {
                         Real best = 1e30;
-                        for (const engine::RoadNode& nd : streetsBelow.nodes) {
-                            if (!usable(nd, needJ)) continue;
-                            const Real d = (nd.pos - gc).length();
-                            if (d < best) { best = d; e.target = nd.pos; found = true; }
+                        for (const StreetAnchor& an : anchors) {
+                            if (!usable(an, needJ)) continue;
+                            const Real d = (an.pos - gc).length();
+                            if (d < best) {
+                                best = d;
+                                e.target = an.pos;
+                                rampAnchors[xi] = {an.net, an.node};
+                                found = true;
+                            }
                         }
                         if (found) break;
                     }
@@ -2453,7 +2467,8 @@ bool LevelLoader::load(const std::string& path,
                     freewayEdge(upChain[k], upChain[k + 1]);       // low -> high s
                 for (std::size_t k = downChain.size(); k-- > 1;)
                     freewayEdge(downChain[k], downChain[k - 1]);   // high -> low s
-                for (const engine::ExitDef& e : def.exits) {
+                for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
+                    const engine::ExitDef& e = def.exits[xi];
                     const Real sg = std::max(Real(1),
                                              std::min(e.station, Lc - 1.0));
                     // The merge is a LANE EVENT (§9.6): the ramp continues
@@ -2523,17 +2538,20 @@ bool LevelLoader::load(const std::string& path,
                                  << " dropped (too short) — not drivable";
                         continue;
                     }
-                    const Real RL = ra.length();
+                    const Real RLf = ra.length();
+                    // ribbon + nav stop at the landing setback; the street
+                    // net carries the last stretch via a grafted STUB (§10.3)
+                    const Real RL = std::max(Real(40), RLf - e.landingSetback);
                     engine::VerticalProfile rp;
                     const Real zDeck = def.vertical.elevation(sg);
                     const Real sKnee = std::max(Real(80), RL * 0.45);
-                    if (sKnee < RL - 10.0)
+                    if (sKnee < RLf - 10.0)
                         rp.pvis = {{0, zDeck, 0},
                                    {sKnee, e.targetY, std::min(sKnee, Real(80))},
-                                   {RL, e.targetY, 0}};
+                                   {RLf, e.targetY, 0}};
                     else
                         rp.pvis = {{0, zDeck, 0},
-                                   {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
+                                   {RLf, e.targetY, std::min(RLf * 0.5, Real(90))}};
                     std::vector<int> chainR;
                     const int rn2 = std::max(2, static_cast<int>(RL / 26.0));
                     for (int k = 0; k <= rn2; ++k) {
@@ -2569,6 +2587,38 @@ bool LevelLoader::load(const std::string& path,
                         for (int k = 0; k + 1 < static_cast<int>(chainR.size()); ++k)
                             ramp(chainR[k], chainR[k + 1]);
                         eg.snapNodes.push_back(chainR.back());
+                    }
+                    // §10.3 JUNCTION STUB: graft a short street edge from the
+                    // landing node back to the ribbon's setback point. The
+                    // street mesher then builds a REAL junction mouth at the
+                    // landing (blending, curb returns, signals), the stub
+                    // carries the pavement to the ribbon end, and the nav
+                    // terminal welds onto the stub's outer node exactly.
+                    if (rampAnchors[xi].first >= 0 && e.landingSetback > 1.0) {
+                        engine::RoadNet& net = preNets[rampAnchors[xi].first];
+                        const Vec2 P = ra.pos(RL);
+                        // parallel arrays must STAY parallel: backfill any
+                        // optional array the net left empty before pushing
+                        if (net.tangents.size() < net.nodes.size())
+                            net.tangents.resize(net.nodes.size(), Vec2(0, 0));
+                        if (!net.edgeWidths.empty() &&
+                            net.edgeWidths.size() < net.edges.size())
+                            net.edgeWidths.resize(net.edges.size(), 0.0);
+                        if (net.edgeWidths.empty())
+                            net.edgeWidths.assign(net.edges.size(), 0.0);
+                        if (!net.edgeLayers.empty() &&
+                            net.edgeLayers.size() < net.edges.size())
+                            net.edgeLayers.resize(net.edges.size(), 0);
+                        if (net.edgeLayers.empty())
+                            net.edgeLayers.assign(net.edges.size(), 0);
+                        const int pIdx = static_cast<int>(net.nodes.size());
+                        net.nodes.push_back(P);
+                        net.tangents.push_back(Vec2(0, 0));
+                        net.edges.push_back({rampAnchors[xi].second, pIdx});
+                        net.edgeWidths.push_back(7.0);
+                        net.edgeLayers.push_back(0);
+                        LOG_INFO << "[corridor] stub grafted at ("
+                                 << e.target.x << ", " << e.target.y << ")";
                     }
                 }
                 corridorFrags.push_back(std::move(eg));

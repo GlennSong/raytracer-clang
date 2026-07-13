@@ -370,7 +370,11 @@ CorridorMeshOut buildCorridorMesh(
                      << " m is too short — move the station or the target";
             continue;
         }
-        const Real RL = ra.length();
+        // Full alignment reaches the street node; the RIBBON stops at the
+        // landing setback (§10.3) — the street mesher owns the junction
+        // mouth, and the loader grafts a stub edge that carries the pavement
+        // from the setback point to the node.
+        const Real RL = std::max(Real(40), ra.length() - e.landingSetback);
         // Grade change happens NEAR THE DECK (device: "it takes way too long
         // for the exit to descend"): drop/climb over the first ~45% of the
         // ramp, then run at street grade to the junction.

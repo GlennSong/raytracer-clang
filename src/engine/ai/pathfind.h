@@ -24,7 +24,11 @@ Real classSpeed(RoadClass klass);
 // driving; the heuristic is straight-line time at the fastest class speed
 // (admissible -> optimal). Deterministic: ties broken by link index. Returns an
 // empty Route if the goal is unreachable (or equals the start).
-Route findRoute(const NavGraph& graph, int startNode, int goalNode);
+// `onFoot`: skip Freeway/Ramp-class links — a pedestrian must never route
+// along a carriageway (§10.5; the unified graph made those links visible to
+// every consumer, including walkers).
+Route findRoute(const NavGraph& graph, int startNode, int goalNode,
+                bool onFoot = false);
 
 // Convenience: snap world points to their nearest nodes, then route.
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal);

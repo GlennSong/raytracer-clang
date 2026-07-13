@@ -625,7 +625,8 @@ bool CitySim::launchClear(const Agent& a, int node) const {
 }
 
 void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
-    a.route = engine::findRoute(*nav_, origin, goal);
+    a.route = engine::findRoute(*nav_, origin, goal,
+                                a.mode == Agent::Mode::Pedestrian);
     a.leg = 0;
     a.distOnLeg = 0;
     a.speed = 0;
