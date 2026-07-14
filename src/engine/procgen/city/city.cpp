@@ -641,6 +641,8 @@ CityModel generateCity(const CityParams& cp) {
         model.lotCount += static_cast<int>(lots.size());
 
         for (const Lot& lot : lots) {
+            if (lot.court) continue;   // block-interior court (v2 step 10) is
+                                       // open space, never a building lot
             if (rng.unit() > cp.buildChance) continue;        // plaza / empty
             if (lot.area < 50) continue;
             // Reject sliver lots — a long, thin footprint extrudes into an
@@ -648,9 +650,12 @@ CityModel generateCity(const CityParams& cp) {
             // bounded aspect ratio, or an irregular block's off-cuts become
             // knife-edge buildings (user feedback).
             {
-                Vec2 llo, lhi; bounds(lot.footprint, llo, lhi);
-                Real w = lhi.x - llo.x, dpt = lhi.y - llo.y;
-                Real shortSide = std::min(w, dpt), longSide = std::max(w, dpt);
+                // Real short side via the OBB — an axis-aligned bbox misses a
+                // thin DIAGONAL sliver (both bbox sides look large), which then
+                // shrink-fits to a degenerate box far from its site.
+                const OBB2 lo = orientedBoundingBox(lot.footprint);
+                const Real shortSide = lo.half[1 - lo.longAxis()] * 2.0;
+                const Real longSide = lo.half[lo.longAxis()] * 2.0;
                 if (shortSide < 9.0) continue;                  // too skinny to be a building
                 if (longSide > shortSide * 3.5) continue;       // long thin blade
             }
@@ -700,7 +705,12 @@ CityModel generateCity(const CityParams& cp) {
 
             Vec3 footC = scope.corner(0.5, 0, 0.5);
             CityBuilding cb;
-            cb.site = centroid(site);
+            // The building's SITE is where the building actually sits (its
+            // scope centre), not the lot centroid — on a triangular/trapezoid
+            // corner lot the inscribed building legitimately offsets from the
+            // lot centroid, and agents should route to the building, not the
+            // empty corner.
+            cb.site = Vec2(footC.x, footC.z);
             cb.baseY = baseY;
             cb.height = bm.height;
             cb.district = dist;

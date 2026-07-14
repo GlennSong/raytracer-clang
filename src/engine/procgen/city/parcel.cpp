@@ -53,67 +53,105 @@ void subdivide(const Poly2& poly, const ParcelParams& p, Rng& rng,
     subdivide(right, p, rng, out, depth + 1);
 }
 
-// Frontage-first parceling (city-pipeline v2 step 10): cut a ring of
-// street-fronting lots inward from the block edges; the leftover core becomes a
-// court. Returns false (caller falls back to bisection) when the block is too
-// shallow to leave a court, or the inset is degenerate.
+// Clip a convex cell polygon to a (convex) block by each block edge's inward
+// half-plane. Grid sub-blocks are convex, so the result stays a clean convex
+// piece (a rectangle where the cell is interior, trimmed at the block edge).
+Poly2 clipToBlock(const Poly2& cell, const Poly2& block) {
+    Poly2 piece = cell;
+    const int n = static_cast<int>(block.size());
+    for (int i = 0; i < n && piece.size() >= 3; ++i) {
+        const Vec2 a = block[i], b = block[(i + 1) % n];
+        const Vec2 d = b - a;
+        const Vec2 outward(d.y, -d.x);   // CCW block: interior is left of a->b
+        piece = clipHalfPlane(piece, outward, outward.x * a.x + outward.y * a.y);
+    }
+    return piece;
+}
+
+// Frontage-first parceling (city-pipeline v2 step 10, RECTANGULAR): lay lots as
+// rows down the block's short axis (each row fronts a long street), each row
+// divided into ~frontWidth rectangles down the long axis — the classic
+// back-to-back city block. A block deep enough for a middle court keeps two
+// edge rows + an interior court (reachable from the cross streets at the block
+// ends); otherwise the two rows meet in the middle. Rectangles are OBB-aligned
+// and clipped to the block, so they read as real lots, not trapezoids.
+// A CCW polygon is convex when every consecutive turn is a left turn.
+bool isConvexCCW(const Poly2& poly) {
+    const int n = static_cast<int>(poly.size());
+    if (n < 3) return false;
+    for (int i = 0; i < n; ++i) {
+        const Vec2 a = poly[i], b = poly[(i + 1) % n], c = poly[(i + 2) % n];
+        if (cross(b - a, c - b) < -1e-6) return false;   // a right turn => concave
+    }
+    return true;
+}
+
 bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
                     std::vector<Lot>& out) {
-    const int n = static_cast<int>(b.size());
-    if (n < 3) return false;
-    Poly2 I = inset(b, p.lotDepth);
-    // The inset must survive with the SAME edge count (so block edge i pairs
-    // with inset edge i) and leave a real interior — otherwise it's a shallow
-    // block, handled by the bisection fallback.
-    if (I.size() != static_cast<std::size_t>(n) || area(I) < p.courtMinArea)
-        return false;
-    ensureCCW(I);   // inset() preserves winding, but normalize to be safe
+    if (b.size() < 3) return false;
+    // The row-split clips cells by each block edge's half-plane, which only
+    // reconstructs the block for a CONVEX face. Concave blocks (rare — some
+    // off-cut faces) fall back to bisection, which still street-fronts.
+    if (!isConvexCCW(b)) return false;
+    const OBB2 o = orientedBoundingBox(b);
+    const int la = o.longAxis(), sa = 1 - la;
+    const Vec2 U = o.axis[la];    // long axis (rows run along this)
+    const Vec2 V = o.axis[sa];    // short axis (rows stack along this)
+    const Real HL = o.half[la], HS = o.half[sa];
+    if (HL < 5.0 || HS < 5.0) return false;
 
-    // Pick ONE alley: a gap in the longest street strip so the court is
-    // reachable (city-pipeline v2 "reachable court"). Skip the middle lot of
-    // that strip.
-    int alleyEdge = 0;
-    Real longest = 0;
-    for (int i = 0; i < n; ++i) {
-        Real l = (b[(i + 1) % n] - b[i]).length();
-        if (l > longest) { longest = l; alleyEdge = i; }
+    // Rows across the short axis. Deep block: two lotDepth rows + a court
+    // between them; otherwise two rows meeting in the middle (or one if thin).
+    const bool court = 2.0 * HS > 2.0 * p.lotDepth + 22.0;
+    const int rows = (2.0 * HS < 1.35 * p.lotDepth) ? 1 : 2;
+    const int cols = std::max(1, static_cast<int>(std::lround(2.0 * HL / p.frontWidth)));
+
+    auto emitCell = [&](Real u0, Real u1, Real v0, Real v1, const Vec2& fdir,
+                        bool isCourt) {
+        Poly2 rect{o.center + U * u0 + V * v0, o.center + U * u1 + V * v0,
+                   o.center + U * u1 + V * v1, o.center + U * u0 + V * v1};
+        Poly2 piece = clipToBlock(rect, b);
+        if (piece.size() < 3) return;
+        ensureCCW(piece);
+        if (area(piece) < (isCourt ? 1.0 : p.minArea * 0.5)) return;
+        if (!isCourt) {
+            // Reject THIN diagonal slivers a corner clip can leave — their
+            // axis-aligned bbox looks fine but the real (OBB) short side is
+            // knife-thin, and a building shrink-fit to one collapses to a
+            // degenerate box far from its site.
+            const OBB2 lo = orientedBoundingBox(piece);
+            if (lo.half[1 - lo.longAxis()] * 2.0 < p.minEdge) return;
+        }
+        Lot lot;
+        lot.area = area(piece);
+        lot.footprint = std::move(piece);
+        lot.district = district;
+        lot.frontage = fdir;
+        lot.court = isCourt;
+        out.push_back(std::move(lot));
+    };
+
+    // v-bands of the rows (and the court) in OBB short-axis coordinates.
+    struct Band { Real v0, v1; Vec2 fdir; bool court; };
+    std::vector<Band> bands;
+    if (rows == 1) {
+        bands.push_back({-HS, HS, V, false});
+    } else if (court) {
+        bands.push_back({-HS, -HS + p.lotDepth, V * -1.0, false});   // front row
+        bands.push_back({HS - p.lotDepth, HS, V, false});            // back row
+        bands.push_back({-HS + p.lotDepth, HS - p.lotDepth, V, true}); // court
+    } else {
+        bands.push_back({-HS, 0, V * -1.0, false});
+        bands.push_back({0, HS, V, false});
     }
-
-    for (int i = 0; i < n; ++i) {
-        const Vec2 B0 = b[i], B1 = b[(i + 1) % n];
-        const Vec2 I0 = I[i], I1 = I[(i + 1) % n];
-        const Real flen = (B1 - B0).length();
-        if (flen < 1.0) continue;
-        // Outward frontage normal (CCW block: interior is left of B0->B1, so
-        // outward is the right normal).
-        Vec2 edir = normalize(B1 - B0);
-        Vec2 fwd(edir.y, -edir.x);
-        const int k = std::max(1, static_cast<int>(std::lround(flen / p.frontWidth)));
-        const int alleyLot = (i == alleyEdge && k >= 3) ? k / 2 : -1;
-        for (int j = 0; j < k; ++j) {
-            if (j == alleyLot) continue;   // the alley gap
-            const Real t0 = static_cast<Real>(j) / k;
-            const Real t1 = static_cast<Real>(j + 1) / k;
-            Poly2 lotP{lerp(B0, B1, t0), lerp(B0, B1, t1),
-                       lerp(I0, I1, t1), lerp(I0, I1, t0)};
-            ensureCCW(lotP);
-            if (area(lotP) < 1.0) continue;
-            Lot lot;
-            lot.footprint = std::move(lotP);
-            lot.area = area(lot.footprint);
-            lot.district = district;
-            lot.frontage = fwd;
-            out.push_back(std::move(lot));
+    for (const Band& bd : bands) {
+        if (bd.court) { emitCell(-HL, HL, bd.v0, bd.v1, V, true); continue; }
+        for (int c = 0; c < cols; ++c) {
+            const Real u0 = -HL + 2.0 * HL * c / cols;
+            const Real u1 = -HL + 2.0 * HL * (c + 1) / cols;
+            emitCell(u0, u1, bd.v0, bd.v1, bd.fdir, false);
         }
     }
-    // The court: the interior polygon, flagged non-buildable.
-    Lot court;
-    court.footprint = I;
-    court.area = area(I);
-    court.district = district;
-    court.court = true;
-    court.frontage = Vec2(0, 1);
-    out.push_back(std::move(court));
     (void)rng;
     return !out.empty();
 }
