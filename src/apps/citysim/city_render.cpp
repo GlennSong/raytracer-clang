@@ -256,6 +256,23 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // and spread onto the roads instead of standing still for the first minute.
     for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);
 
+    {   // Freeway usage check (companion to the weld report above): the welds
+        // prove the corridor is REACHABLE; this proves cars actually ROUTE
+        // onto it — count drivers whose current link is Freeway/Ramp class.
+        // 0 here with welds > 0 means the router never prefers the corridor.
+        int onFw = 0, drivers = 0;
+        for (const Agent& a : sim_.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            ++drivers;
+            if (a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const engine::RoadClass k = nav_.links[a.route.links[a.leg]].klass;
+            if (k == engine::RoadClass::Freeway || k == engine::RoadClass::Ramp)
+                ++onFw;
+        }
+        LOG_INFO << "[freeway-use] " << onFw << " of " << drivers
+                 << " moving drivers currently on a freeway/ramp link";
+    }
+
     MeshHandle pedMesh{}, lensMesh{};
     if (assets) {
         pedMesh = assets->acquireMesh(buildPersonMesh(0.0, 0), "city:ped");
