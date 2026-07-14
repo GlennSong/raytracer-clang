@@ -71,6 +71,12 @@ struct MetroParams {
     double loopMin         = 80.0;   // loop-closing link length range (m)
     double loopMax         = 190.0;
 
+    // ARTERIALS-ONLY (city-pipeline v2 stage 1): emit ONLY the arterial
+    // skeleton + freeway seeds; skip the per-face local/collector fabric fill.
+    // The two-tier rebuild fills blocks from district templates instead of
+    // colonization, so the local grid is generated downstream, not here.
+    bool   arterialsOnly = false;
+
     // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
     // growth and blocks are gated on the buildability of the ground: the city
     // hugs buildable land and avoids water / steep mountain, instead of marching

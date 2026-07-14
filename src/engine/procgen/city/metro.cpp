@@ -613,6 +613,14 @@ RoadGraph buildMetro(const MetroParams& p,
     }
     Ga = planarize(Ga, 1.0);
 
+    // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
+    // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
+    // loop below is their sole generator). Returning here yields the bare
+    // skeleton — the two-tier rebuild fills the fabric from district templates
+    // downstream. freewayPlans (corridor anchors) are populated upstream and
+    // untouched by the fill, so the freeway backbone survives.
+    if (p.arterialsOnly) return Ga;
+
     // --- fill each enclosed block: subdivide (grid) or rings+spokes (radial hub).
     std::vector<Poly2> faces = extractBlocks(Ga, std::max(200.0, p.blockSize * p.blockSize * 0.08));
     RoadGraph full = Ga;
