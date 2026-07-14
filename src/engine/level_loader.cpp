@@ -2348,6 +2348,31 @@ bool LevelLoader::load(const std::string& path,
             bool dropped = false;        // parallel-overlap loser
         };
         std::vector<PlannedRoute> planned;
+        // RULES LAB hook: a level may author raw route PLANS directly
+        // ("freewayPlans": [[[x,z],...], ...]) so every planner rule can be
+        // exercised in ISOLATION, with a known expected outcome, without the
+        // metro generator in the loop (docs/freeway-rules.md).
+        if (root.contains("freewayPlans") && root["freewayPlans"].is_array()) {
+            for (const auto& jp : root["freewayPlans"]) {
+                PlannedRoute pr;
+                pr.spacing = root.value("interchangeSpacing", 700.0);
+                std::vector<Vec2> plan;
+                for (const auto& q : jp)
+                    if (q.is_array() && q.size() >= 2)
+                        plan.emplace_back(q[0].get<double>(), q[1].get<double>());
+                if (plan.size() < 2) continue;
+                pr.anchors = plan;
+                for (std::size_t k = 0; k + 1 < plan.size(); ++k) {
+                    const Vec2 A = plan[k], B = plan[k + 1];
+                    const Real seg = (B - A).length();
+                    for (Real s2 = 0; s2 < seg; s2 += 20.0)
+                        pr.dense.push_back(A + (B - A) * (s2 / seg));
+                    pr.len += seg;
+                }
+                pr.dense.push_back(plan.back());
+                planned.push_back(std::move(pr));
+            }
+        }
         for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
             const json& rootEnt = *preNetEnts[ni];
             const json gen = rootEnt.contains("road") &&
