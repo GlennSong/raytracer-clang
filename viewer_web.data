@@ -3638,7 +3638,7 @@
      "arterials_only": false,
      "artery_width": 13,
      "beach_rise": 2.5,
-     "block_size": 150,
+     "block_size": 120,
      "collector_width": 9.5,
      "corridor_freeways": true,
      "corridor_spacing": 90,
