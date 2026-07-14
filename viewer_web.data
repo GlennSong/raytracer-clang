@@ -3634,7 +3634,7 @@
     "crosswalks": true,
     "curb": 0.16,
     "generate": {
-     "ambient_per_500": 40,
+     "ambient_per_500": 22,
      "artery_width": 13,
      "beach_rise": 2.5,
      "block_size": 150,
@@ -3655,7 +3655,8 @@
      "sea_level": -5.0,
      "seed": 9,
      "seg_length": 32,
-     "street_width": 7
+     "street_width": 7,
+     "arterials_only": true
     },
     "lift": 0.08,
     "markings": true,
