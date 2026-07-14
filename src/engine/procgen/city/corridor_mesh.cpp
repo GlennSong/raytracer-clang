@@ -468,7 +468,7 @@ CorridorMeshOut buildCorridorMesh(
             MeshBuilder::emitQuad(out.deck,
                                   bandOut[i] - Vec3(0, std::max(Real(0.3), f0), 0),
                                   bandOut[i + 1] - Vec3(0, std::max(Real(0.3), f1), 0),
-                                  bandOut[i + 1], bandOut[i], nrm, kAsphalt * 1.6);
+                                  bandOut[i + 1], bandOut[i], nrm, kConcrete * 0.88);
             const Vec3 up3(0, 0.85, 0);
             MeshBuilder::emitQuad(out.barrier, bandOut[i], bandOut[i + 1],
                                   bandOut[i + 1] + up3, bandOut[i] + up3,
@@ -622,7 +622,7 @@ CorridorMeshOut buildCorridorMesh(
                 MeshBuilder::emitQuad(out.deck,
                                       e0 - Vec3(0, std::max(Real(0.3), d0), 0),
                                       e1 - Vec3(0, std::max(Real(0.3), d1), 0),
-                                      e1, e0, nrm, kAsphalt * 1.6);
+                                      e1, e0, nrm, kConcrete * 0.88);
                 // parapet
                 if (skipParapet) continue;
                 const Vec3 up3(0, 0.85, 0);
@@ -663,11 +663,16 @@ CorridorMeshOut buildCorridorMesh(
         // LANDING conform: flatten only the last stretch where it meets the
         // street grade (device: "conform with the city roads it connects to
         // but we probably don't need it to conform beyond that").
-        for (Real s0 = std::max(Real(0), RL - 70.0); s0 < RL; s0 += 12.0) {
-            const Real s1 = std::min(RL, s0 + 12.0);
+        for (Real s0 = 0; s0 < RL; s0 += 10.0) {
+            const Real s1 = std::min(RL, s0 + 12.0);   // 2 m overlap: curved
+                                                        // windows leave slivers
+            {   // only carve where the ramp is AT GRADE (structure spans fly)
+                const int i2 = std::min(rn, static_cast<int>(s0 / RL * rn));
+                if (rUp[i2]) continue;
+            }
             const Vec2 p0 = ra.pos(s0), p1 = ra.pos(s1);
             const Vec2 n0 = ra.normal(s0), n1 = ra.normal(s1);
-            const Real hw2 = rw + 1.6;
+            const Real hw2 = rw + 2.4;
             std::vector<Vec3> poly{
                 Vec3(p0.x + n0.x * hw2, 0, p0.y + n0.y * hw2),
                 Vec3(p1.x + n1.x * hw2, 0, p1.y + n1.y * hw2),

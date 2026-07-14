@@ -2316,7 +2316,7 @@ bool LevelLoader::load(const std::string& path,
                                     ex["target"][1].get<double>());
                 // landing grade defaults to the street's own terrain height
                 e.targetY = ex.value("targetY",
-                                     levelGround(e.target.x, e.target.y) + 0.4);
+                                     levelGround(e.target.x, e.target.y) + 0.12);
                 e.decelLength = ex.value("decel", 220.0);
                 e.onRamp = ex.value("onRamp", false);
                 e.rampRadius = ex.value("radius", 70.0);
@@ -2547,7 +2547,7 @@ bool LevelLoader::load(const std::string& path,
                         for (const Vec2& q : planned[pj].dense)
                             if (segDist(q, gpos, e.target) < 26.0) return;
                     }
-                    e.targetY = levelGround(e.target.x, e.target.y) + 0.4;
+                    e.targetY = levelGround(e.target.x, e.target.y) + 0.12;
                     e.decelLength = std::min(Real(200), len * 0.28);
                     e.rampRadius = 65.0;
                     e.rampSpiral = 28.0;
@@ -2718,7 +2718,7 @@ bool LevelLoader::load(const std::string& path,
                         used.push_back(e.target);
                     }
                     if (levelGround)
-                        e.targetY = levelGround(e.target.x, e.target.y);
+                        e.targetY = levelGround(e.target.x, e.target.y) + 0.12;
                 }
             }
             // §12: bents must dodge OTHER corridors too — append their
@@ -2908,6 +2908,32 @@ bool LevelLoader::load(const std::string& path,
                         net.edges.push_back({rampAnchors[xi].second, pIdx});
                         net.edgeWidths.push_back(9.0);   // the opened mouth
                         net.edgeLayers.push_back(0);
+                        // the stub is grafted AFTER the road conform pass —
+                        // carve its ground here or it pokes through the seam
+                        // (device: "the ground pokes up ... at points where
+                        // the road and freeway are meant to connect")
+                        {
+                            const Vec2 A2 =
+                                net.nodes[rampAnchors[xi].second];
+                            Vec2 d2 = P - A2;
+                            const Real dl2 = d2.length();
+                            if (dl2 > 1e-3) {
+                                d2 = d2 * (1.0 / dl2);
+                                const Vec2 p2(-d2.y, d2.x);
+                                const Real hw2 = 9.5;
+                                const Vec2 A3 = A2 - d2 * 4.0, P3 = P + d2 * 4.0;
+                                std::vector<Vec3> poly{
+                                    Vec3(A3.x + p2.x * hw2, 0, A3.y + p2.y * hw2),
+                                    Vec3(P3.x + p2.x * hw2, 0, P3.y + p2.y * hw2),
+                                    Vec3(P3.x - p2.x * hw2, 0, P3.y - p2.y * hw2),
+                                    Vec3(A3.x - p2.x * hw2, 0, A3.y - p2.y * hw2)};
+                                roadFlatten.push_back(engine::makeFlattenPad(
+                                    std::move(poly),
+                                    levelGround((A2.x + P.x) * 0.5,
+                                                (A2.y + P.y) * 0.5) - 0.04,
+                                    5.0));
+                            }
+                        }
                         LOG_INFO << "[corridor] stub grafted at ("
                                  << e.target.x << ", " << e.target.y << ")";
                     }
@@ -2952,6 +2978,28 @@ bool LevelLoader::load(const std::string& path,
                         net2.edges.push_back({bestNode, pIdx});
                         net2.edgeWidths.push_back(13.0);   // arterial approach
                         net2.edgeLayers.push_back(0);
+                        {   // carve under the grafted approach (same as stubs)
+                            const Vec2 A2 = net2.nodes[bestNode];
+                            Vec2 d2 = endPos - A2;
+                            const Real dl2 = d2.length();
+                            if (dl2 > 1e-3) {
+                                d2 = d2 * (1.0 / dl2);
+                                const Vec2 p2(-d2.y, d2.x);
+                                const Real hw2 = 11.0;
+                                const Vec2 A3 = A2 - d2 * 4.0,
+                                           P3 = endPos + d2 * 4.0;
+                                std::vector<Vec3> poly{
+                                    Vec3(A3.x + p2.x * hw2, 0, A3.y + p2.y * hw2),
+                                    Vec3(P3.x + p2.x * hw2, 0, P3.y + p2.y * hw2),
+                                    Vec3(P3.x - p2.x * hw2, 0, P3.y - p2.y * hw2),
+                                    Vec3(A3.x - p2.x * hw2, 0, A3.y - p2.y * hw2)};
+                                roadFlatten.push_back(engine::makeFlattenPad(
+                                    std::move(poly),
+                                    levelGround((A2.x + endPos.x) * 0.5,
+                                                (A2.y + endPos.y) * 0.5) - 0.04,
+                                    5.0));
+                            }
+                        }
                         engine::RoadNode nd;
                         nd.pos = endPos;
                         nd.elev = def.vertical.elevation(sE);
