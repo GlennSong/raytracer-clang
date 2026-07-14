@@ -1028,6 +1028,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             for (const Lot& lot : lots) debug->lots.push_back(lot.footprint);
         binfos.push_back(bf);
         for (std::size_t li = 0; li < lots.size(); ++li) {
+            // A block-interior COURT (frontage parceler, v2 step 10) is open
+            // space, never a building lot — nothing landlocked gets built.
+            if (lots[li].court) continue;
             if (area(lots[li].footprint) < bf.pp.minArea) continue;
             cands.push_back({li, static_cast<int>(binfos.size()) - 1,
                              lots[li], -1});
@@ -1411,23 +1414,28 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // the rest of the parcel reads as its yard (residential realism).
             bool yardApplied = false;
             if (planOk && rec.massing == BuildingRecipe::Massing::RectYard) {
-                const Real hw2 = std::min(obb.half[0] - 1.6, rec.yardHalfWMax);
-                const Real hd2 = std::min(obb.half[1] - 1.6, rec.yardHalfDMax);
-                // 3.5 m half-extents keep the house itself above the 7 m
-                // urban sliver floor the lot pass guarantees for buildings.
-                if (hw2 > 3.5 && hd2 > 3.5) {
-                    Vec2 c = obb.center;
+                Real hw2 = std::min(obb.half[0] - 1.6, rec.yardHalfWMax);
+                Real hd2 = std::min(obb.half[1] - 1.6, rec.yardHalfDMax);
+                // Frontage-first lots are TRAPEZOIDS (v2 step 10), so a house
+                // sized to the OBB pokes past the tapered edges. SHRINK-TO-FIT:
+                // retry smaller (centred on the lot centroid, which lies inside
+                // a trapezoid) until every corner sits on the lot and off the
+                // road — a tapered lot just gets a smaller house + more yard.
+                Vec2 c = centroid(site);
+                if (!pointInPolygon(site, c)) c = obb.center;
+                for (int attempt = 0; attempt < 5 && hw2 > 3.5 && hd2 > 3.5;
+                     ++attempt) {
                     Poly2 house{c - obb.axis[0] * hw2 - obb.axis[1] * hd2,
                                 c + obb.axis[0] * hw2 - obb.axis[1] * hd2,
                                 c + obb.axis[0] * hw2 + obb.axis[1] * hd2,
                                 c - obb.axis[0] * hw2 + obb.axis[1] * hd2};
-                    // The house must sit ON its own lot (a low-fill off-cut's
-                    // OBB centre can be outside the polygon) and off the road.
                     bool clear = true;
                     for (const Vec2& v : house)
                         if (!pointInPolygon(site, v) ||
                             (roads && !clearOfRoads(v))) { clear = false; break; }
-                    if (clear) { plan = house; yardApplied = true; }
+                    if (clear) { plan = house; yardApplied = true; break; }
+                    hw2 *= 0.82;
+                    hd2 *= 0.82;
                 }
             }
             // The architect's ROUND towers: a chord-tessellated circle plan

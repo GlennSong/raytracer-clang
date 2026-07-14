@@ -695,12 +695,20 @@ TEST_CASE(parcel_subdivides_into_lots_conserving_area) {
     std::vector<Lot> lots = subdivideBlock(block, pp);
     CHECK(lots.size() > 5);
     Real total = 0;
+    int courts = 0;
     for (const Lot& l : lots) {
         total += l.area;
         CHECK(l.area > 0);
         CHECK_APPROX(l.frontage.length(), 1.0, 1e-6);
+        if (l.court) ++courts;
     }
-    CHECK_APPROX(total, 10000.0, 1.0);           // partition conserves area
+    // Frontage-first parceling (v2 step 10): lots ring the block + one
+    // interior court, with a single alley gap — so they NEVER overlap
+    // (total <= block area) and cover most of it, but no longer partition it
+    // exactly. A deep square block yields exactly one court.
+    CHECK(total <= 10000.0 + 1.0);               // no overlap / no area created
+    CHECK(total >= 10000.0 * 0.85);              // most of the block is parcelled
+    CHECK(courts == 1);                          // the reachable interior court
 }
 
 TEST_CASE(parcel_is_deterministic) {

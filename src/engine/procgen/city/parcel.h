@@ -18,6 +18,9 @@ struct Lot {
     Vec2  frontage{0, 1};   // unit outward direction toward the nearest street
     Real  area = 0;
     int   district = 0;     // inherited from the block
+    bool  court = false;    // a block-interior court (plaza/park), not buildable —
+                            // the frontage parceler emits this for the leftover
+                            // core of a deep block (city-pipeline v2 step 10)
 };
 
 struct ParcelParams {
@@ -25,6 +28,14 @@ struct ParcelParams {
     Real minArea = 110;     // don't split below this
     Real minEdge = 7;       // don't produce lots thinner than this (m)
     Real jitter = 0.18;     // split-position randomization (fraction of extent)
+    // Frontage-first parceling (city-pipeline v2 step 10): every lot faces a
+    // street. Lots are cut as a ring of `lotDepth`-deep strips inward from the
+    // block edges, each ~`frontWidth` wide along the street; the leftover core
+    // of a deep block becomes a court. A block too shallow to leave a court
+    // falls back to back-to-back bisection (still street-fronting).
+    Real frontWidth = 16;   // target lot width along the street (m)
+    Real lotDepth   = 28;   // lot depth inward from the street (m)
+    Real courtMinArea = 400; // interior smaller than this => shallow block
     uint32_t seed = 0;
 };
 
