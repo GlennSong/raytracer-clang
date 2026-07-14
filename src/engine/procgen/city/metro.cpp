@@ -335,6 +335,10 @@ RoadGraph buildMetro(const MetroParams& p,
         auto walk = [&](int startHub, int firstLink) {
             std::vector<int> seq{startHub};
             int hub = startHub, link = firstLink;
+            double turnBudget = 0;   // §12 R1.2: windowed curvature budget —
+                                     // enough gentle bends compound into a
+                                     // LOOP; cap total turning per 3 hops
+            std::vector<double> turns;
             while (link >= 0 && !usedLink[link]) {
                 usedLink[link] = 1;
                 hub = links[link].first == hub ? links[link].second
@@ -353,6 +357,15 @@ RoadGraph buildMetro(const MetroParams& p,
                     const double d =
                         dot(inDir, normalize(hots[other].pos - hots[hub].pos));
                     if (d > bestDot) { bestDot = d; best = cand; }
+                }
+                if (best >= 0) {
+                    const double turn = std::acos(std::min(1.0, std::max(-1.0, bestDot)));
+                    turns.push_back(turn);
+                    turnBudget += turn;
+                    if (turns.size() > 3) {
+                        turnBudget -= turns[turns.size() - 4];
+                    }
+                    if (turnBudget > 2.1) break;   // ~120° per 3 hops: stop
                 }
                 link = best;
             }

@@ -304,8 +304,17 @@ Real CorridorDef::halfWidthAt(Real s, int sideSign) const {
     for (const LaneSchedule::AuxSpan& a : lanes.aux)
         if (a.upStation == up)
             extra += laneWidth * LaneSchedule::auxFraction(a, s);
-    return medianWidth * 0.5 + shoulderIn + lanes.throughLanes * laneWidth +
-           extra + shoulderOut;
+    Real w = medianWidth * 0.5 + shoulderIn + lanes.throughLanes * laneWidth +
+             extra + shoulderOut;
+    if (taperEnds) {
+        // R1.3: funnel each end down to an arterial half-width over 50 m
+        const Real Lc = horizontal.length();
+        const Real endDist = std::min(s, Lc - s);
+        const Real endHalf = 7.0;
+        if (endDist < 50.0 && w > endHalf)
+            w = endHalf + (w - endHalf) * (endDist / 50.0);
+    }
+    return w;
 }
 
 Real CorridorDef::halfWidthAt(Real s) const {

@@ -28,8 +28,8 @@ then streets grow around them, seeded toward the ramp landings.
 | Rule | Statement | Applied | Expected outcome | Verified in |
 |------|-----------|---------|------------------|-------------|
 | R1.1 | A route continues through a hub only via the straightest unvisited link, never turning > ~78° | `metro.cpp` walk() | routes read as through-routes, not zigzags | metropolis_roads (aerial) |
-| R1.2 (PLANNED) | Curvature budget + self-intersection check per route | — | no teardrop/loop-back routes | rules_lab specimen L |
-| R1.3 (PLANNED) | Terminus rule: a route may not just stop — it downgrades into an arterial at a terminal junction | — | every freeway end connects to the network | rules_lab specimen T |
+| R1.2 | Turn budget (~120°/3 hops) in the walk + self-approach TRUNCATION on final polylines | `metro.cpp` walk / loader planner | no generated loop routes; an authored curl truncates with a warn | rules_lab specimen L |
+| R1.3 | Terminus rule: ends TAPER to arterial width (50 m funnel, median stops 45 m out) and graft an arterial edge into the nearest street junction (≤350 m), joined in nav both directions | alignment/mesh/loader | every freeway end connects to the network or warns "dead end" | rules_lab (route ends) |
 
 ### Stage-2 rules (network deconfliction)
 | Rule | Statement | Applied | Expected outcome | Verified in |

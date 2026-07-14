@@ -131,6 +131,10 @@ CorridorMeshOut buildCorridorMesh(
                 const Real s = L * i / n;
                 if (l >= c.lanes.lanesAt(s, side < 0)) continue;
                 if (std::fmod(s, 12.0) > 3.0) continue;
+                // R1.3 taper: never paint a separator off the deck edge
+                if (c.medianWidth * 0.5 + c.shoulderIn + l * c.laneWidth >
+                    c.halfWidthAt(s, side) - 0.4)
+                    continue;
                 const Vec3 a0 = ribs[i].at(sep(i) + lw * 0.5) + Vec3(0, 0.015, 0);
                 const Vec3 b0 = ribs[i].at(sep(i) - lw * 0.5) + Vec3(0, 0.015, 0);
                 const Vec3 a1 = ribs[i + 1].at(sep(i + 1) + lw * 0.5) + Vec3(0, 0.015, 0);
@@ -141,12 +145,18 @@ CorridorMeshOut buildCorridorMesh(
         }
     }
 
-    // MEDIAN BARRIER: a low continuous Jersey-profile box down the centre.
+    // MEDIAN BARRIER: a low continuous Jersey-profile box down the centre —
+    // stopping 45 m before a TAPERED end (R1.3): a terminus junction with a
+    // wall through it would be no junction at all.
     {
         const Real bw = std::min(c.medianWidth * 0.5, Real(0.45));
         const Real bh = 0.85;
         auto face = [&](Real oA, Real oB, Real yA, Real yB) {
             for (int i = 0; i < n; ++i) {
+                if (c.taperEnds) {
+                    const Real s2 = L * i / n;
+                    if (s2 < 45.0 || s2 > L - 45.0) continue;
+                }
                 const Vec3 a0 = ribs[i].at(oA) + Vec3(0, yA, 0);
                 const Vec3 b0 = ribs[i].at(oB) + Vec3(0, yB, 0);
                 const Vec3 a1 = ribs[i + 1].at(oA) + Vec3(0, yA, 0);

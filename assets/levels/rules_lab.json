@@ -1,7 +1,471 @@
 {
- "_comment": "RULES LAB (docs/freeway-rules.md): planner rules in isolation. Specimen X (west): 90-degree crossing -> R2a shorter route bridges over, R3d no diamonds in the bridge zone. Specimen P (middle): parallel overlap -> R2b shorter route dropped (its absence IS the pass). Specimen R (east): shallow crossers -> R2a bridge + R3a-c gates keep every stamped ramp conflict-free.",
- "name": "rules_lab",
- "version": 1,
+ "_comment": "RULES LAB (docs/freeway-rules.md): planner rules in isolation. Specimen X (west): 90-degree crossing -> R2a shorter route bridges over, R3d no diamonds in the bridge zone. Specimen P (middle): parallel overlap -> R2b shorter route dropped (its absence IS the pass). Specimen R (east): shallow crossers -> R2a bridge + R3a-c gates keep every stamped ramp conflict-free. Specimen L (southwest): a plan that curls back on itself -> R1.2 truncated at the self-approach (no teardrop). All ends taper + graft into streets where one is near (R1.3).",
+ "citysim": {
+  "buildLots": false,
+  "cars": 16,
+  "debugWidgets": false,
+  "pedestrians": 0,
+  "seed": 5,
+  "wander": true
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "frontage_X",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "crosswalks": true,
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "lift": 0.08,
+    "markings": true,
+    "nodes": [
+     {
+      "x": -510,
+      "z": -300
+     },
+     {
+      "x": -510,
+      "z": -240
+     },
+     {
+      "x": -510,
+      "z": -180
+     },
+     {
+      "x": -510,
+      "z": -120
+     },
+     {
+      "x": -510,
+      "z": -60
+     },
+     {
+      "x": -510,
+      "z": 0
+     },
+     {
+      "x": -510,
+      "z": 60
+     },
+     {
+      "x": -510,
+      "z": 120
+     },
+     {
+      "x": -510,
+      "z": 180
+     },
+     {
+      "x": -510,
+      "z": 240
+     },
+     {
+      "x": -510,
+      "z": 300
+     }
+    ],
+    "sidewalk": 3.0,
+    "width": 7.0
+   },
+   "shape": "road"
+  },
+  {
+   "id": 3,
+   "name": "frontage_P",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "crosswalks": true,
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "lift": 0.08,
+    "markings": true,
+    "nodes": [
+     {
+      "x": 90,
+      "z": -300
+     },
+     {
+      "x": 90,
+      "z": -240
+     },
+     {
+      "x": 90,
+      "z": -180
+     },
+     {
+      "x": 90,
+      "z": -120
+     },
+     {
+      "x": 90,
+      "z": -60
+     },
+     {
+      "x": 90,
+      "z": 0
+     },
+     {
+      "x": 90,
+      "z": 60
+     },
+     {
+      "x": 90,
+      "z": 120
+     },
+     {
+      "x": 90,
+      "z": 180
+     },
+     {
+      "x": 90,
+      "z": 240
+     },
+     {
+      "x": 90,
+      "z": 300
+     }
+    ],
+    "sidewalk": 3.0,
+    "width": 7.0
+   },
+   "shape": "road"
+  },
+  {
+   "id": 4,
+   "name": "frontage_R_west",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "crosswalks": true,
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "lift": 0.08,
+    "markings": true,
+    "nodes": [
+     {
+      "x": 430,
+      "z": -300
+     },
+     {
+      "x": 430,
+      "z": -240
+     },
+     {
+      "x": 430,
+      "z": -180
+     },
+     {
+      "x": 430,
+      "z": -120
+     },
+     {
+      "x": 430,
+      "z": -60
+     },
+     {
+      "x": 430,
+      "z": 0
+     },
+     {
+      "x": 430,
+      "z": 60
+     },
+     {
+      "x": 430,
+      "z": 120
+     },
+     {
+      "x": 430,
+      "z": 180
+     },
+     {
+      "x": 430,
+      "z": 240
+     },
+     {
+      "x": 430,
+      "z": 300
+     }
+    ],
+    "sidewalk": 3.0,
+    "width": 7.0
+   },
+   "shape": "road"
+  },
+  {
+   "id": 5,
+   "name": "frontage_R_east",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "crosswalks": true,
+    "edges": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      2
+     ],
+     [
+      2,
+      3
+     ],
+     [
+      3,
+      4
+     ],
+     [
+      4,
+      5
+     ],
+     [
+      5,
+      6
+     ],
+     [
+      6,
+      7
+     ],
+     [
+      7,
+      8
+     ],
+     [
+      8,
+      9
+     ],
+     [
+      9,
+      10
+     ]
+    ],
+    "lift": 0.08,
+    "markings": true,
+    "nodes": [
+     {
+      "x": 770,
+      "z": -300
+     },
+     {
+      "x": 770,
+      "z": -240
+     },
+     {
+      "x": 770,
+      "z": -180
+     },
+     {
+      "x": 770,
+      "z": -120
+     },
+     {
+      "x": 770,
+      "z": -60
+     },
+     {
+      "x": 770,
+      "z": 0
+     },
+     {
+      "x": 770,
+      "z": 60
+     },
+     {
+      "x": 770,
+      "z": 120
+     },
+     {
+      "x": 770,
+      "z": 180
+     },
+     {
+      "x": 770,
+      "z": 240
+     },
+     {
+      "x": 770,
+      "z": 300
+     }
+    ],
+    "sidewalk": 3.0,
+    "width": 7.0
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "fog": {
+   "color": [
+    0.72,
+    0.78,
+    0.88
+   ],
+   "density": 0.0005,
+   "heightFalloff": 0.01
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
  "freewayPlans": [
   [
    [
@@ -62,475 +526,31 @@
     520,
     340
    ]
+  ],
+  [
+   [
+    -600,
+    -900
+   ],
+   [
+    -350,
+    -750
+   ],
+   [
+    -400,
+    -550
+   ],
+   [
+    -650,
+    -600
+   ],
+   [
+    -610,
+    -880
+   ]
   ]
  ],
  "interchangeSpacing": 380,
- "citysim": {
-  "buildLots": false,
-  "cars": 16,
-  "pedestrians": 0,
-  "seed": 5,
-  "wander": true,
-  "debugWidgets": false
- },
- "entities": [
-  {
-   "id": 2,
-   "name": "frontage_X",
-   "shape": "road",
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "road": {
-    "nodes": [
-     {
-      "x": -510,
-      "z": -300
-     },
-     {
-      "x": -510,
-      "z": -240
-     },
-     {
-      "x": -510,
-      "z": -180
-     },
-     {
-      "x": -510,
-      "z": -120
-     },
-     {
-      "x": -510,
-      "z": -60
-     },
-     {
-      "x": -510,
-      "z": 0
-     },
-     {
-      "x": -510,
-      "z": 60
-     },
-     {
-      "x": -510,
-      "z": 120
-     },
-     {
-      "x": -510,
-      "z": 180
-     },
-     {
-      "x": -510,
-      "z": 240
-     },
-     {
-      "x": -510,
-      "z": 300
-     }
-    ],
-    "edges": [
-     [
-      0,
-      1
-     ],
-     [
-      1,
-      2
-     ],
-     [
-      2,
-      3
-     ],
-     [
-      3,
-      4
-     ],
-     [
-      4,
-      5
-     ],
-     [
-      5,
-      6
-     ],
-     [
-      6,
-      7
-     ],
-     [
-      7,
-      8
-     ],
-     [
-      8,
-      9
-     ],
-     [
-      9,
-      10
-     ]
-    ],
-    "width": 7.0,
-    "sidewalk": 3.0,
-    "markings": true,
-    "crosswalks": true,
-    "lift": 0.08,
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ]
-   }
-  },
-  {
-   "id": 3,
-   "name": "frontage_P",
-   "shape": "road",
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "road": {
-    "nodes": [
-     {
-      "x": 90,
-      "z": -300
-     },
-     {
-      "x": 90,
-      "z": -240
-     },
-     {
-      "x": 90,
-      "z": -180
-     },
-     {
-      "x": 90,
-      "z": -120
-     },
-     {
-      "x": 90,
-      "z": -60
-     },
-     {
-      "x": 90,
-      "z": 0
-     },
-     {
-      "x": 90,
-      "z": 60
-     },
-     {
-      "x": 90,
-      "z": 120
-     },
-     {
-      "x": 90,
-      "z": 180
-     },
-     {
-      "x": 90,
-      "z": 240
-     },
-     {
-      "x": 90,
-      "z": 300
-     }
-    ],
-    "edges": [
-     [
-      0,
-      1
-     ],
-     [
-      1,
-      2
-     ],
-     [
-      2,
-      3
-     ],
-     [
-      3,
-      4
-     ],
-     [
-      4,
-      5
-     ],
-     [
-      5,
-      6
-     ],
-     [
-      6,
-      7
-     ],
-     [
-      7,
-      8
-     ],
-     [
-      8,
-      9
-     ],
-     [
-      9,
-      10
-     ]
-    ],
-    "width": 7.0,
-    "sidewalk": 3.0,
-    "markings": true,
-    "crosswalks": true,
-    "lift": 0.08,
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ]
-   }
-  },
-  {
-   "id": 4,
-   "name": "frontage_R_west",
-   "shape": "road",
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "road": {
-    "nodes": [
-     {
-      "x": 430,
-      "z": -300
-     },
-     {
-      "x": 430,
-      "z": -240
-     },
-     {
-      "x": 430,
-      "z": -180
-     },
-     {
-      "x": 430,
-      "z": -120
-     },
-     {
-      "x": 430,
-      "z": -60
-     },
-     {
-      "x": 430,
-      "z": 0
-     },
-     {
-      "x": 430,
-      "z": 60
-     },
-     {
-      "x": 430,
-      "z": 120
-     },
-     {
-      "x": 430,
-      "z": 180
-     },
-     {
-      "x": 430,
-      "z": 240
-     },
-     {
-      "x": 430,
-      "z": 300
-     }
-    ],
-    "edges": [
-     [
-      0,
-      1
-     ],
-     [
-      1,
-      2
-     ],
-     [
-      2,
-      3
-     ],
-     [
-      3,
-      4
-     ],
-     [
-      4,
-      5
-     ],
-     [
-      5,
-      6
-     ],
-     [
-      6,
-      7
-     ],
-     [
-      7,
-      8
-     ],
-     [
-      8,
-      9
-     ],
-     [
-      9,
-      10
-     ]
-    ],
-    "width": 7.0,
-    "sidewalk": 3.0,
-    "markings": true,
-    "crosswalks": true,
-    "lift": 0.08,
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ]
-   }
-  },
-  {
-   "id": 5,
-   "name": "frontage_R_east",
-   "shape": "road",
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "road": {
-    "nodes": [
-     {
-      "x": 770,
-      "z": -300
-     },
-     {
-      "x": 770,
-      "z": -240
-     },
-     {
-      "x": 770,
-      "z": -180
-     },
-     {
-      "x": 770,
-      "z": -120
-     },
-     {
-      "x": 770,
-      "z": -60
-     },
-     {
-      "x": 770,
-      "z": 0
-     },
-     {
-      "x": 770,
-      "z": 60
-     },
-     {
-      "x": 770,
-      "z": 120
-     },
-     {
-      "x": 770,
-      "z": 180
-     },
-     {
-      "x": 770,
-      "z": 240
-     },
-     {
-      "x": 770,
-      "z": 300
-     }
-    ],
-    "edges": [
-     [
-      0,
-      1
-     ],
-     [
-      1,
-      2
-     ],
-     [
-      2,
-      3
-     ],
-     [
-      3,
-      4
-     ],
-     [
-      4,
-      5
-     ],
-     [
-      5,
-      6
-     ],
-     [
-      6,
-      7
-     ],
-     [
-      7,
-      8
-     ],
-     [
-      8,
-      9
-     ],
-     [
-      9,
-      10
-     ]
-    ],
-    "width": 7.0,
-    "sidewalk": 3.0,
-    "markings": true,
-    "crosswalks": true,
-    "lift": 0.08,
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ]
-   }
-  }
- ],
- "environment": {
-  "fog": {
-   "color": [
-    0.72,
-    0.78,
-    0.88
-   ],
-   "density": 0.0005,
-   "heightFalloff": 0.01
-  },
-  "skyColor": [
-   0.55,
-   0.68,
-   0.86
-  ]
- },
  "lighting": {
   "ambientMultiplier": 0.6,
   "exposure": 0.5,
@@ -549,6 +569,7 @@
    "intensity": 8.0
   }
  },
+ "name": "rules_lab",
  "player": {
   "collider": {
    "halfHeight": 0.8,
@@ -568,12 +589,6 @@
   },
   "erode": false,
   "heightScale": 3.0,
-  "noiseScale": 0.004,
-  "octaves": 4,
-  "resolution": 500,
-  "seed": 9,
-  "size": 2000,
-  "warp": 0.2,
   "material": {
    "albedo": [
     1,
@@ -581,6 +596,13 @@
     1
    ],
    "roughness": 1.0
-  }
- }
+  },
+  "noiseScale": 0.004,
+  "octaves": 4,
+  "resolution": 500,
+  "seed": 9,
+  "size": 2000,
+  "warp": 0.2
+ },
+ "version": 1
 }

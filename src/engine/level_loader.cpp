@@ -2396,6 +2396,33 @@ bool LevelLoader::load(const std::string& path,
                 planned.push_back(std::move(pr));
             }
         }
+        // §12 R1.2b: a route may not approach ITSELF — enough compound
+        // curvature makes a teardrop. Truncate at the first self-approach
+        // (non-adjacent samples within 24 m), keeping the prefix.
+        for (PlannedRoute& pr : planned) {
+            std::size_t cut = pr.dense.size();
+            for (std::size_t i = 0; i < pr.dense.size() && cut == pr.dense.size(); ++i)
+                for (std::size_t j = i + 8; j < pr.dense.size(); ++j)
+                    if ((pr.dense[j] - pr.dense[i]).length() < 24.0) {
+                        cut = j;
+                        break;
+                    }
+            if (cut < pr.dense.size()) {
+                LOG_WARN << "[corridor] route curls back on itself near ("
+                         << pr.dense[cut].x << ", " << pr.dense[cut].y
+                         << ") — truncated (R1.2)";
+                pr.dense.resize(cut);
+                // rebuild anchors from the surviving samples (every ~160 m)
+                pr.anchors.clear();
+                for (std::size_t k = 0; k < pr.dense.size(); k += 8)
+                    pr.anchors.push_back(pr.dense[k]);
+                if (pr.anchors.size() < 2 ||
+                    (pr.anchors.back() - pr.dense.back()).length() > 1.0)
+                    pr.anchors.push_back(pr.dense.back());
+                pr.len = (pr.dense.size() - 1) * 20.0;
+                if (pr.anchors.size() < 2) pr.dropped = true;
+            }
+        }
         // rule 2: a short contact is a CROSSING (shorter route bridges
         // over); a long contact is a PARALLEL OVERLAP (no vertical fix can
         // save it — the shorter route is dropped, loudly).
@@ -2533,6 +2560,7 @@ bool LevelLoader::load(const std::string& path,
                 stamp(sI + 80.0, false, false, 1.0);    // down exit
                 stamp(sI - 110.0, false, true, 1.0);    // down on-ramp
             }
+            def.taperEnds = true;   // R1.3: ends funnel + graft into streets
             LOG_INFO << "[corridor] metro plan: len=" << len
                      << " bridges=" << pr.bridgeAt.size()
                      << " exits=" << def.exits.size();
@@ -2882,6 +2910,70 @@ bool LevelLoader::load(const std::string& path,
                         net.edgeLayers.push_back(0);
                         LOG_INFO << "[corridor] stub grafted at ("
                                  << e.target.x << ", " << e.target.y << ")";
+                    }
+                }
+                // §12 R1.3 TERMINUS: each tapered end grafts an ARTERIAL
+                // street edge into the nearest junction and joins the nav —
+                // a freeway that "just stops" is now impossible by
+                // construction (it either connects or warns).
+                if (def.taperEnds && !upChain.empty() && !downChain.empty()) {
+                    const Real Lc2 = def.horizontal.length();
+                    for (int endI = 0; endI < 2; ++endI) {
+                        const Real sE = endI ? Lc2 - 0.5 : 0.5;
+                        const Vec2 endPos = def.horizontal.pos(sE);
+                        int bestNet = -1, bestNode = -1;
+                        Real best = 350.0;
+                        for (const StreetAnchor& an : anchors) {
+                            if (an.degree < 2) continue;
+                            const Real d = (an.pos - endPos).length();
+                            if (d < best) {
+                                best = d;
+                                bestNet = an.net;
+                                bestNode = an.node;
+                            }
+                        }
+                        if (bestNet < 0) {
+                            LOG_WARN << "[corridor] terminus at (" << endPos.x
+                                     << ", " << endPos.y
+                                     << ") finds no street junction within "
+                                        "350 m — dead end (R1.3)";
+                            continue;
+                        }
+                        engine::RoadNet& net2 = preNets[bestNet];
+                        if (net2.tangents.size() < net2.nodes.size())
+                            net2.tangents.resize(net2.nodes.size(), Vec2(0, 0));
+                        if (net2.edgeWidths.size() < net2.edges.size())
+                            net2.edgeWidths.resize(net2.edges.size(), 0.0);
+                        if (net2.edgeLayers.size() < net2.edges.size())
+                            net2.edgeLayers.resize(net2.edges.size(), 0);
+                        const int pIdx = static_cast<int>(net2.nodes.size());
+                        net2.nodes.push_back(endPos);
+                        net2.tangents.push_back(Vec2(0, 0));
+                        net2.edges.push_back({bestNode, pIdx});
+                        net2.edgeWidths.push_back(13.0);   // arterial approach
+                        net2.edgeLayers.push_back(0);
+                        engine::RoadNode nd;
+                        nd.pos = endPos;
+                        nd.elev = def.vertical.elevation(sE);
+                        nd.elevAbsolute = true;
+                        const int E = static_cast<int>(eg.graph.nodes.size());
+                        eg.graph.nodes.push_back(nd);
+                        auto tEdge = [&](int a3, int b3) {
+                            engine::RoadEdge e3;
+                            e3.a = a3;
+                            e3.b = b3;
+                            e3.width = 6.0;
+                            e3.klass = engine::RoadClass::Ramp;
+                            eg.graph.edges.push_back(e3);
+                        };
+                        if (endI) {   // s=L: up-chain arrives, down-chain departs
+                            tEdge(upChain.back(), E);
+                            tEdge(E, downChain.back());
+                        } else {      // s=0: down-chain arrives, up-chain departs
+                            tEdge(downChain.front(), E);
+                            tEdge(E, upChain.front());
+                        }
+                        eg.snapNodes.push_back(E);
                     }
                 }
                 corridorFrags.push_back(std::move(eg));

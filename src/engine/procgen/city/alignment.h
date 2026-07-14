@@ -144,6 +144,12 @@ struct CorridorDef {
     // the schedule and emits its ramp as a single-carriageway sweep.
     // (Declared below CorridorDef; stored here as the corridor OWNS them.)
     std::vector<ExitDef> exits;
+    // §12 R1.3 terminus rule: a freeway may not just STOP. When set (metro
+    // synth routes), the deck tapers to arterial width over the last 50 m of
+    // each end and the loader grafts an arterial street edge from the end
+    // into the nearest street junction — every route finishes INTO the
+    // network.
+    bool taperEnds = false;
 
     // Paved half-width at station s (median centre to outer edge) for one
     // side: -1 = the up-station carriageway (negative offsets), +1 = the
