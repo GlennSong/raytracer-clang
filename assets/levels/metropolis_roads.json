@@ -1,21 +1,24 @@
 {
+ "_comment": "ROADS-ONLY metropolis sandbox (device: \"dupe the road network of metropolis and add these freeways ... no buildings, just the roads and freeways\"): corridor generation OPT-IN here so the chained routes + stamped diamonds can be judged on the real network before the real level re-earns them.",
  "citysim": {
   "buildChance": 0.9,
   "buildLots": false,
-  "cars": 40,
-  "debugWidgets": false,
+  "cars": 0,
+  "debugWidgets": true,
   "detailDistance": 950,
   "downtownRadius": 160,
   "hoursPerSecond": 0.05,
   "hubRadius": 240,
   "midtownRadius": 340,
-  "pedestrians": 30,
+  "pedestrians": 0,
   "perceptionReliability": 1.0,
   "plinth": 0.45,
   "seed": 9,
   "sidewalk": 4.0,
   "vehicles": "vehicles.lua",
-  "wander": false
+  "wander": false,
+  "planOnly": true,
+  "showPlan": true
  },
  "entities": [
   {
@@ -41,6 +44,7 @@
      "beach_rise": 2.5,
      "block_size": 150,
      "collector_width": 9.5,
+     "corridor_freeways": true,
      "corridor_spacing": 90,
      "freeway_width": 22,
      "hotspots": 9,
@@ -56,8 +60,7 @@
      "sea_level": -5.0,
      "seed": 9,
      "seg_length": 32,
-     "street_width": 7,
-     "corridor_freeways": true
+     "street_width": 7
     },
     "lift": 0.08,
     "markings": true,
@@ -185,6 +188,5 @@
   "region": 1900,
   "roughness": 0.04,
   "seaLevel": -5.0
- },
- "_comment": "ROADS-ONLY metropolis sandbox (device: \"dupe the road network of metropolis and add these freeways ... no buildings, just the roads and freeways\"): corridor generation OPT-IN here so the chained routes + stamped diamonds can be judged on the real network before the real level re-earns them."
+ }
 }

@@ -340,6 +340,8 @@ struct CitySimConfig {
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err
     bool debugWidgets = false;           // start with the agent-state HUD on
+    bool showPlan = false;               // boot with block/lot outlines on
+                                         // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's

@@ -3253,7 +3253,9 @@ bool LevelLoader::load(const std::string& path,
         // pad (at its own plane) into the flatten set. The citysim build below
         // reuses these exact lots.
         if (root.contains("citysim") &&
-            root["citysim"].value("buildLots", false) && !preNets.empty()) {
+            (root["citysim"].value("buildLots", false) ||
+             root["citysim"].value("planOnly", false)) &&
+            !preNets.empty()) {
             auto lotTp = std::make_shared<TerrainParams>(terrainParams);
             auto lotNoise = std::make_shared<Noise>(terrainSeed);
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
@@ -3701,6 +3703,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
         // goal-table script; its TEXT rides the config so the citysim bridge
@@ -3781,6 +3784,26 @@ bool LevelLoader::load(const std::string& path,
         // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
         // (floors/windows/roof, fitting the lot), each tagged as a place agents
         // start/end their schedules at. Runs on the RoadNet(s) already in the world.
+        if (!cs.value("buildLots", false) && cs.value("planOnly", false)) {
+            // PLAN-ONLY (device: "show me the city blocks and then the
+            // individual lots — no buildings, just the demarcation lines"):
+            // grow the full block/lot plan and publish ONLY the outlines.
+            GrownLots grown = std::move(preLots);
+            if (!grown.grown) {
+                std::vector<engine::RoadNet> nets;
+                world.each<engine::RoadNet>(
+                    [&](Entity, engine::RoadNet& net) { nets.push_back(net); });
+                grown = growCityLots(nets, cs, levelDir, entityGround);
+            }
+            if (!grown.plan.blocks.empty() || !grown.plan.lots.empty()) {
+                engine::CityPlanDebug dbg;
+                dbg.blocks = std::move(grown.plan.blocks);
+                dbg.lots = std::move(grown.plan.lots);
+                world.add<engine::CityPlanDebug>(world.create(), std::move(dbg));
+                LOG_INFO << "[plan-only] " << dbg.blocks.size() << " blocks, "
+                         << dbg.lots.size() << " lots (outlines only)";
+            }
+        }
         if (cs.value("buildLots", false)) {
             // The lots: grown by the terrain pre-pass (city-on-terrain — their
             // graded pads are already baked into the ground), or grown here for

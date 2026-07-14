@@ -139,6 +139,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
         debugWidgets_ = c.debugWidgets;
+        showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
     });
 
