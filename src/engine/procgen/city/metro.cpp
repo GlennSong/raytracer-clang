@@ -788,7 +788,13 @@ RoadGraph buildMetro(const MetroParams& p,
             // irregular streets vs downtown's crisp grid). Robust on every
             // block shape; no fragile inset.
             (void)mn; (void)mx;
-            const double cell = p.blockSize * kindBlockMul[kind];
+            // CELL CAP (device: "a block has too many lots and they're
+            // inaccessible"): a cell must be small enough that its lots parcel
+            // into ~2 street-fronting rows — a bigger cell leaves a landlocked
+            // interior grid. ~72 m fits two ~28 m lot rows + a thin street.
+            // Districts still vary BELOW the cap (financial tight); big-block
+            // districts (industrial) await the court-robust parceler.
+            const double cell = std::min(p.blockSize * kindBlockMul[kind], 72.0);
             const double crook = kindCrook[kind];
             gridFill(f, cell, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
