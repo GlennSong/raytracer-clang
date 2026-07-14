@@ -2489,10 +2489,10 @@ bool LevelLoader::load(const std::string& path,
                       [&](std::size_t a2, std::size_t b2) {
                           return planned[a2].len > planned[b2].len;
                       });
-            for (std::size_t k = 2; k < alive.size(); ++k) {
+            for (std::size_t k = 1; k < alive.size(); ++k) {
                 planned[alive[k]].dropped = true;
                 LOG_INFO << "[corridor] route len=" << planned[alive[k]].len
-                         << " dropped: the city keeps its two best (R1.4)";
+                         << " dropped: ONE spine freeway (R1.4, device)";
             }
         }
         // §12 R3f: street-anchor snapshot for FEASIBILITY-driven placement
@@ -2549,6 +2549,13 @@ bool LevelLoader::load(const std::string& path,
                     sm[i] = (zs[i - 1] + zs[i] * 2.0 + zs[i + 1]) * 0.25;
                 zs.swap(sm);
             }
+            // §12 R2e (device: "one elevated highway that heads toward the
+            // ground at either end"): the spine RIDES STRUCTURE through the
+            // city — a +7.5 m viaduct floor over the middle run — and
+            // descends to grade over its last ~300 m each side.
+            for (std::size_t i = 0; i < ss.size(); ++i)
+                if (ss[i] > 300.0 && ss[i] < len - 300.0)
+                    zs[i] = std::max(zs[i], tz[i] + 7.5);
             for (int it2 = 0; it2 < 3; ++it2) {
                 for (std::size_t i = 0; i < zs.size(); ++i)
                     zs[i] = std::max(zs[i], tz[i] + 0.6);   // clear the ground
