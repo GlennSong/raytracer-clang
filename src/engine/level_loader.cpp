@@ -2466,6 +2466,35 @@ bool LevelLoader::load(const std::string& path,
                     i = j;
                 }
             }
+        // §12 R1.4 (device: "1-2 freeways crossing the city"): a metro
+        // earns FEW, GOOD freeways — twisted routes die to a straightness
+        // test (endpoint distance / arc length), and only the two longest
+        // survivors build. More freeway is not better freeway.
+        {
+            for (PlannedRoute& pr : planned) {
+                if (pr.dropped || pr.dense.size() < 2) continue;
+                const Real chord =
+                    (pr.dense.back() - pr.dense.front()).length();
+                if (chord / std::max(Real(1), pr.len) < 0.55) {
+                    pr.dropped = true;
+                    LOG_WARN << "[corridor] route len=" << pr.len
+                             << " is twisted (straightness "
+                             << chord / pr.len << ") — dropped (R1.4)";
+                }
+            }
+            std::vector<std::size_t> alive;
+            for (std::size_t i = 0; i < planned.size(); ++i)
+                if (!planned[i].dropped) alive.push_back(i);
+            std::sort(alive.begin(), alive.end(),
+                      [&](std::size_t a2, std::size_t b2) {
+                          return planned[a2].len > planned[b2].len;
+                      });
+            for (std::size_t k = 2; k < alive.size(); ++k) {
+                planned[alive[k]].dropped = true;
+                LOG_INFO << "[corridor] route len=" << planned[alive[k]].len
+                         << " dropped: the city keeps its two best (R1.4)";
+            }
+        }
         // §12 R3f: street-anchor snapshot for FEASIBILITY-driven placement
         struct SynthAnchor { Vec2 pos; int degree; };
         std::vector<SynthAnchor> synthAnchors;
@@ -2507,11 +2536,26 @@ bool LevelLoader::load(const std::string& path,
                 zs.push_back(levelGround(p.x, p.y));
                 if (sv >= len) break;
             }
-            for (int pass = 0; pass < 3; ++pass) {
+            // §12 R2d (device: "freeways don't conform to the terrain —
+            // they should be elevated over it ... smooth, cars go fast"):
+            // the profile is ENGINEERED, not draped. Heavy smoothing fits a
+            // stiff line; then a clearance-and-grade loop RAISES it wherever
+            // the ground pokes near it and re-caps grades at 3.5% — bumps
+            // become underpasses beneath structure, dips become viaducts.
+            const std::vector<Real> tz = zs;   // raw terrain line
+            for (int pass = 0; pass < 8; ++pass) {
                 std::vector<Real> sm = zs;
                 for (std::size_t i = 1; i + 1 < zs.size(); ++i)
                     sm[i] = (zs[i - 1] + zs[i] * 2.0 + zs[i + 1]) * 0.25;
                 zs.swap(sm);
+            }
+            for (int it2 = 0; it2 < 3; ++it2) {
+                for (std::size_t i = 0; i < zs.size(); ++i)
+                    zs[i] = std::max(zs[i], tz[i] + 0.6);   // clear the ground
+                for (std::size_t i = 1; i < zs.size(); ++i)   // grade cap fwd
+                    zs[i] = std::max(zs[i], zs[i - 1] - 0.035 * 120.0);
+                for (std::size_t i = zs.size() - 1; i-- > 0;)  // and back
+                    zs[i] = std::max(zs[i], zs[i + 1] - 0.035 * 120.0);
             }
             for (const Real sb : pr.bridgeAt)
                 for (std::size_t i = 0; i < ss.size(); ++i) {
