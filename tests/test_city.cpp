@@ -876,11 +876,13 @@ TEST_CASE(city_buildings_have_valid_box_colliders) {
         CHECK(b.boxHalf.x > 0.1 && b.boxHalf.y > 0.1 && b.boxHalf.z > 0.1);
         // Box centre sits half the height above the foundation.
         CHECK_APPROX(b.boxCenter.y, b.baseY + b.height * 0.5, 1e-6);
-        // Box centre (the OBB centre) is near the footprint site. Not exact:
-        // scopeFromFootprint anchors its shrink-fit at the lot OBB's centre,
-        // which on an L/wedge off-cut can sit several metres from the polygon
-        // centroid — 8 m still catches a real misplacement (roads are further).
-        CHECK(distance(Vec2(b.boxCenter.x, b.boxCenter.z), b.site) < 8.0);
+        // cb.site IS the box centre now (a building's site is where the
+        // building actually sits — a triangular corner lot's inscribed
+        // building legitimately offsets from the lot centroid), so a
+        // "box near site" check would be vacuous. Guard the failure it used
+        // to catch — a degenerate sub-metre building shrink-fit into a
+        // sliver lot — with a real minimum footprint instead.
+        CHECK(b.boxHalf.x >= 1.4 && b.boxHalf.z >= 1.4);
     }
 }
 

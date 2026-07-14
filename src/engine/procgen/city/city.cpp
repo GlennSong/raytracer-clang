@@ -694,6 +694,11 @@ CityModel generateCity(const CityParams& cp) {
             // + retaining skirt already level the site.
             Real baseY = gradeY;
             Scope scope = scopeFromFootprint(site, baseY, 10.0 /*unused*/);
+            // A triangular / thin-parallelogram lot can pass the OBB
+            // short-side gate yet inscribe a sub-metre building (the shrink-fit
+            // rectangle fits in the lot's narrow throat). Skip it — a 0.8 m
+            // "building" is a wall, not a structure.
+            if (scope.size.x < 3.0 || scope.size.z < 3.0) continue;
             BuildingMesh bm = growBuilding(scope, bp);
 
             for (const RenderMesh& part : bm.parts) {
