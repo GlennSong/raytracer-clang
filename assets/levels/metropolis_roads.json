@@ -1,193 +1,193 @@
 {
- "_comment": "ROADS-ONLY metropolis sandbox (device: \"dupe the road network of metropolis and add these freeways ... no buildings, just the roads and freeways\"): corridor generation OPT-IN here so the chained routes + stamped diamonds can be judged on the real network before the real level re-earns them.",
- "citysim": {
-  "buildChance": 0.9,
-  "buildLots": false,
-  "cars": 0,
-  "debugWidgets": true,
-  "detailDistance": 950,
-  "downtownRadius": 160,
-  "hoursPerSecond": 0.05,
-  "hubRadius": 240,
-  "midtownRadius": 340,
-  "pedestrians": 0,
-  "perceptionReliability": 1.0,
-  "planOnly": true,
-  "plinth": 0.45,
-  "seed": 9,
-  "showPlan": true,
-  "sidewalk": 4.0,
-  "vehicles": "vehicles.lua",
-  "wander": false
- },
- "entities": [
-  {
-   "id": 2,
-   "name": "streets",
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "road": {
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ],
-    "corner_radius": 3.0,
-    "crosswalks": true,
-    "curb": 0.16,
-    "generate": {
-     "ambient_per_500": 22,
-     "arterials_only": false,
-     "artery_width": 13,
-     "beach_rise": 2.5,
-     "block_size": 120,
-     "collector_width": 9.5,
-     "corridor_freeways": true,
-     "corridor_spacing": 90,
-     "freeway_width": 22,
-     "hotspots": 9,
-     "influence": 340,
-     "interchange_spacing": 700,
-     "kill_radius": 70,
-     "kind": "metro",
-     "loop_max": 330,
-     "loop_min": 140,
-     "merge_radius": 52,
-     "min_road_len": 24,
-     "radius": 1000,
-     "sea_level": -5.0,
-     "seed": 9,
-     "seg_length": 32,
-     "street_width": 7
+  "_comment": "ROADS-ONLY metropolis sandbox (device: \"dupe the road network of metropolis and add these freeways ... no buildings, just the roads and freeways\"): corridor generation OPT-IN here so the chained routes + stamped diamonds can be judged on the real network before the real level re-earns them.",
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": false,
+    "cars": 0,
+    "debugWidgets": true,
+    "detailDistance": 950,
+    "downtownRadius": 160,
+    "hoursPerSecond": 0.05,
+    "hubRadius": 240,
+    "midtownRadius": 340,
+    "pedestrians": 0,
+    "perceptionReliability": 1.0,
+    "planOnly": true,
+    "plinth": 0.45,
+    "seed": 9,
+    "showPlan": true,
+    "sidewalk": 4.0,
+    "vehicles": "vehicles.lua",
+    "wander": false
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "generate": {
+          "ambient_per_500": 22,
+          "arterials_only": false,
+          "artery_width": 13,
+          "beach_rise": 2.5,
+          "block_size": 120,
+          "collector_width": 9.5,
+          "corridor_freeways": true,
+          "corridor_spacing": 90,
+          "freeway_width": 22,
+          "hotspots": 9,
+          "influence": 340,
+          "interchange_spacing": 700,
+          "kill_radius": 70,
+          "kind": "metro",
+          "loop_max": 330,
+          "loop_min": 140,
+          "merge_radius": 52,
+          "min_road_len": 24,
+          "radius": 1000,
+          "sea_level": -5.0,
+          "seed": 9,
+          "seg_length": 32,
+          "street_width": 7
+        },
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.5,
+        "width": 7.0
+      },
+      "shape": "road"
+    }
+  ],
+  "environment": {
+    "fog": {
+      "color": [
+        0.7,
+        0.78,
+        0.88
+      ],
+      "density": 0.0011,
+      "heightFalloff": 0.016
     },
-    "lift": 0.08,
-    "markings": true,
-    "sidewalk": 3.5,
-    "width": 7.0
-   },
-   "shape": "road"
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.6,
+    "exposure": 0.5,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
+    }
+  },
+  "name": "metropolis_roads",
+  "player": {
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.2,
+      150.0
+    ]
+  },
+  "terrain": {
+    "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
+    "cdlod": {
+      "worldHalf": 1300
+    },
+    "erode": true,
+    "erodeDroplets": 500000,
+    "erodeRadius": 4,
+    "erodeRes": 800,
+    "erodeTalus": 1.0,
+    "erodeThermal": 14,
+    "heightScale": 13,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainAlongRange": true,
+    "mountainHeight": 180,
+    "mountainMaskHi": 0.4,
+    "mountainMaskLo": -0.1,
+    "mountainMaskScale": 0.001,
+    "mountainScale": 0.002,
+    "noiseScale": 0.0026,
+    "octaves": 6,
+    "rangeHeight": 260,
+    "rangeSpine": [
+      [
+        -1180,
+        -900
+      ],
+      [
+        -1120,
+        -300
+      ],
+      [
+        -1180,
+        300
+      ],
+      [
+        -1120,
+        900
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 300,
+    "resolution": 900,
+    "rockLine": 90,
+    "seed": 11,
+    "size": 2600,
+    "snowLine": 230,
+    "tiltX": -0.045,
+    "warp": 0.35
+  },
+  "version": 1,
+  "water": {
+    "cell": 12,
+    "color": [
+      0.012,
+      0.05,
+      0.08
+    ],
+    "foamBand": 40,
+    "opacity": 0.82,
+    "region": 1900,
+    "roughness": 0.04,
+    "seaLevel": -5.0
   }
- ],
- "environment": {
-  "fog": {
-   "color": [
-    0.7,
-    0.78,
-    0.88
-   ],
-   "density": 0.0011,
-   "heightFalloff": 0.016
-  },
-  "skyColor": [
-   0.55,
-   0.68,
-   0.86
-  ]
- },
- "lighting": {
-  "ambientMultiplier": 0.6,
-  "exposure": 0.5,
-  "sun": {
-   "castsShadow": true,
-   "color": [
-    1.0,
-    0.96,
-    0.86
-   ],
-   "direction": [
-    0.42,
-    0.52,
-    -0.5
-   ],
-   "intensity": 8.0
-  }
- },
- "name": "metropolis_roads",
- "player": {
-  "collider": {
-   "halfHeight": 0.8,
-   "radius": 0.3,
-   "shape": "capsule"
-  },
-  "friction": 0.5,
-  "position": [
-   0.0,
-   1.2,
-   150.0
-  ]
- },
- "terrain": {
-  "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
-  "cdlod": {
-   "worldHalf": 1300
-  },
-  "erode": true,
-  "erodeDroplets": 500000,
-  "erodeRadius": 4,
-  "erodeRes": 800,
-  "erodeTalus": 1.0,
-  "erodeThermal": 14,
-  "heightScale": 13,
-  "material": {
-   "albedo": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "roughness": 1.0
-  },
-  "mountainAlongRange": true,
-  "mountainHeight": 180,
-  "mountainMaskHi": 0.4,
-  "mountainMaskLo": -0.1,
-  "mountainMaskScale": 0.001,
-  "mountainScale": 0.002,
-  "noiseScale": 0.0026,
-  "octaves": 6,
-  "rangeHeight": 260,
-  "rangeSpine": [
-   [
-    -1180,
-    -900
-   ],
-   [
-    -1120,
-    -300
-   ],
-   [
-    -1180,
-    300
-   ],
-   [
-    -1120,
-    900
-   ]
-  ],
-  "rangeVariation": 0.6,
-  "rangeWidth": 300,
-  "resolution": 900,
-  "rockLine": 90,
-  "seed": 11,
-  "size": 2600,
-  "snowLine": 230,
-  "tiltX": -0.045,
-  "warp": 0.35
- },
- "version": 1,
- "water": {
-  "cell": 12,
-  "color": [
-   0.012,
-   0.05,
-   0.08
-  ],
-  "foamBand": 40,
-  "opacity": 0.82,
-  "region": 1900,
-  "roughness": 0.04,
-  "seaLevel": -5.0
- }
 }
