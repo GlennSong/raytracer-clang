@@ -86,13 +86,67 @@ bool isConvexCCW(const Poly2& poly) {
     return true;
 }
 
+// Concave-block parceling: a ring of street-fronting strips inset one lotDepth
+// from each edge, plus an interior court. Trapezoidal, not rectangular — but
+// every lot touches a block edge (a street), so NOTHING is landlocked. Used
+// only for the rare non-convex arterial off-cut; convex blocks get the crisp
+// rectangular row-split. This is what makes the parceler court-robust for ANY
+// block, so the grid-cell cap can relax and big districts keep big blocks.
+bool parcelRing(const Poly2& b, const ParcelParams& p, int district,
+                std::vector<Lot>& out) {
+    const int n = static_cast<int>(b.size());
+    if (n < 3) return false;
+    Poly2 I = inset(b, p.lotDepth);
+    // inset must survive with the same edge count (edge i pairs with inset
+    // edge i); a collapse/self-intersection means too-deep for this block.
+    if (I.size() != static_cast<std::size_t>(n) || area(I) < 1.0) {
+        // Shallow concave block: inset one HALF the depth so the ring still
+        // forms, meeting near the middle (no court).
+        I = inset(b, p.lotDepth * 0.5);
+        if (I.size() != static_cast<std::size_t>(n) || area(I) < 1.0) return false;
+    }
+    ensureCCW(I);
+    for (int i = 0; i < n; ++i) {
+        const Vec2 B0 = b[i], B1 = b[(i + 1) % n];
+        const Vec2 I0 = I[i], I1 = I[(i + 1) % n];
+        const Real flen = (B1 - B0).length();
+        if (flen < 1.0) continue;
+        const Vec2 edir = normalize(B1 - B0);
+        const Vec2 fwd(edir.y, -edir.x);   // outward (CCW: interior is left)
+        const int k = std::max(1, static_cast<int>(std::lround(flen / p.frontWidth)));
+        for (int j = 0; j < k; ++j) {
+            const Real t0 = static_cast<Real>(j) / k, t1 = static_cast<Real>(j + 1) / k;
+            Poly2 lotP{lerp(B0, B1, t0), lerp(B0, B1, t1),
+                       lerp(I0, I1, t1), lerp(I0, I1, t0)};
+            ensureCCW(lotP);
+            if (area(lotP) < p.minArea * 0.4) continue;
+            Lot lot;
+            lot.footprint = std::move(lotP);
+            lot.area = area(lot.footprint);
+            lot.district = district;
+            lot.frontage = fwd;
+            out.push_back(std::move(lot));
+        }
+    }
+    if (area(I) >= p.courtMinArea) {   // a real interior => a court
+        Lot court;
+        court.footprint = I;
+        court.area = area(I);
+        court.district = district;
+        court.court = true;
+        court.frontage = Vec2(0, 1);
+        out.push_back(std::move(court));
+    }
+    return !out.empty();
+}
+
 bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
                     std::vector<Lot>& out) {
     if (b.size() < 3) return false;
-    // The row-split clips cells by each block edge's half-plane, which only
-    // reconstructs the block for a CONVEX face. Concave blocks (rare — some
-    // off-cut faces) fall back to bisection, which still street-fronts.
-    if (!isConvexCCW(b)) return false;
+    // The row-split clips cells by each block edge's half-plane, valid only for
+    // a CONVEX face. Concave blocks take the ring method (also accessible) —
+    // never the landlocking bisection.
+    if (!isConvexCCW(b)) return parcelRing(b, p, district, out);
     const OBB2 o = orientedBoundingBox(b);
     const int la = o.longAxis(), sa = 1 - la;
     const Vec2 U = o.axis[la];    // long axis (rows run along this)
