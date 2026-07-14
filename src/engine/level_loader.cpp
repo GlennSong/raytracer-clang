@@ -2560,7 +2560,12 @@ bool LevelLoader::load(const std::string& path,
                 stamp(sI + 80.0, false, false, 1.0);    // down exit
                 stamp(sI - 110.0, false, true, 1.0);    // down on-ramp
             }
-            def.taperEnds = true;   // R1.3: ends funnel + graft into streets
+            // R1.3 REVISED (device): the mainline is ITS OWN SYSTEM — it
+            // runs across the map and ENDS, full-width, as a dead end. No
+            // taper into surface streets, no terminus graft: ramps are the
+            // only couplings between the two systems. (taperEnds stays
+            // available for hand-authored corridors that want the funnel.)
+            def.taperEnds = false;
             LOG_INFO << "[corridor] metro plan: len=" << len
                      << " bridges=" << pr.bridgeAt.size()
                      << " exits=" << def.exits.size();

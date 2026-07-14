@@ -29,7 +29,9 @@ then streets grow around them, seeded toward the ramp landings.
 |------|-----------|---------|------------------|-------------|
 | R1.1 | A route continues through a hub only via the straightest unvisited link, never turning > ~78° | `metro.cpp` walk() | routes read as through-routes, not zigzags | metropolis_roads (aerial) |
 | R1.2 | Turn budget (~120°/3 hops) in the walk + self-approach TRUNCATION on final polylines | `metro.cpp` walk / loader planner | no generated loop routes; an authored curl truncates with a warn | rules_lab specimen L |
-| R1.3 | Terminus rule: ends TAPER to arterial width (50 m funnel, median stops 45 m out) and graft an arterial edge into the nearest street junction (≤350 m), joined in nav both directions | alignment/mesh/loader | every freeway end connects to the network or warns "dead end" | rules_lab (route ends) |
+| R1.3 | Terminus rule (REVISED on-device): the mainline is its own system — it ends FULL-WIDTH as a dead end; ramps are the ONLY couplings to streets. (The taper+graft machinery exists but is off for generated routes.) | loader synth (`taperEnds=false`) | freeway ends read as intentional stubs, never a fake dissolve into a street | all labs (route ends) |
+| R1.3b (PLANNED) | Generated routes EXTEND their end legs to the domain boundary, so dead ends live at the map edge, not mid-city | — | freeways read as passing THROUGH the region | metropolis_roads |
+| R1.3c (PLANNED) | Wander/trip goals never snap to Freeway/Ramp nodes (a corridor tip is not a destination) | — | no cars parked at dead-end tips | any lab (warmed) |
 
 ### Stage-2 rules (network deconfliction)
 | Rule | Statement | Applied | Expected outcome | Verified in |
