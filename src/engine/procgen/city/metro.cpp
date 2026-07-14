@@ -1,6 +1,7 @@
 #include "metro.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
 #include <utility>
@@ -10,6 +11,85 @@ namespace engine {
 namespace {
 
 constexpr double kTau = 6.283185307179586;
+
+// Clean the arterial skeleton (city-pipeline v2): colonization grows JITTERY
+// chains and short dangling stubs — the "degenerate roads" the device flagged.
+// Two topology-preserving passes:
+//   SMOOTH: Laplacian on degree-2 chain nodes (junctions/endpoints pinned) —
+//           straightens the high-frequency wobble while keeping real curves.
+//   PRUNE:  drop short degree-1 stubs iteratively — kills the dead-end
+//           fragments that parcel into garbage slivers.
+RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0) {
+    RoadGraph g = in;
+    const auto liveAdj = [&](std::vector<int>& deg,
+                             std::vector<std::array<int, 2>>& nbr,
+                             const std::vector<char>& dead) {
+        deg.assign(g.nodes.size(), 0);
+        nbr.assign(g.nodes.size(), {-1, -1});
+        for (std::size_t e = 0; e < g.edges.size(); ++e) {
+            if (dead[e]) continue;
+            const RoadEdge& ed = g.edges[e];
+            if (ed.a < 0 || ed.b < 0 || ed.a == ed.b ||
+                ed.a >= static_cast<int>(g.nodes.size()) ||
+                ed.b >= static_cast<int>(g.nodes.size())) continue;
+            for (int end : {ed.a, ed.b}) {
+                const int other = end == ed.a ? ed.b : ed.a;
+                if (deg[end] < 2) nbr[end][deg[end]] = other;
+                ++deg[end];
+            }
+        }
+    };
+    std::vector<char> dead(g.edges.size(), 0);
+    std::vector<int> deg;
+    std::vector<std::array<int, 2>> nbr;
+    // SMOOTH — Laplacian, gentle step so large curves survive.
+    for (int pass = 0; pass < 5; ++pass) {
+        liveAdj(deg, nbr, dead);
+        std::vector<Vec2> np(g.nodes.size());
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) np[i] = g.nodes[i].pos;
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+            if (deg[i] != 2 || nbr[i][0] < 0 || nbr[i][1] < 0 ||
+                nbr[i][0] == nbr[i][1]) continue;   // pin junctions/endpoints
+            const Vec2 mid = (g.nodes[nbr[i][0]].pos + g.nodes[nbr[i][1]].pos) * 0.5;
+            np[i] = g.nodes[i].pos * 0.7 + mid * 0.3;
+        }
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) g.nodes[i].pos = np[i];
+    }
+    // PRUNE — short dangling stubs, iterated so whole short chains unwind.
+    for (int iter = 0; iter < 4; ++iter) {
+        liveAdj(deg, nbr, dead);
+        bool any = false;
+        for (std::size_t e = 0; e < g.edges.size(); ++e) {
+            if (dead[e]) continue;
+            const RoadEdge& ed = g.edges[e];
+            if (ed.a < 0 || ed.b < 0) continue;
+            const bool tip = deg[ed.a] == 1 || deg[ed.b] == 1;
+            if (tip && (g.nodes[ed.a].pos - g.nodes[ed.b].pos).length() < stubLen) {
+                dead[e] = 1;
+                any = true;
+            }
+        }
+        if (!any) break;
+    }
+    // Rebuild compacted (surviving edges + the nodes they reference).
+    RoadGraph out;
+    std::vector<int> remap(g.nodes.size(), -1);
+    auto mapNode = [&](int old) {
+        if (remap[old] < 0) {
+            remap[old] = static_cast<int>(out.nodes.size());
+            out.nodes.push_back(g.nodes[old]);
+        }
+        return remap[old];
+    };
+    for (std::size_t e = 0; e < g.edges.size(); ++e) {
+        if (dead[e]) continue;
+        RoadEdge ed = g.edges[e];
+        ed.a = mapNode(ed.a);
+        ed.b = mapNode(ed.b);
+        out.edges.push_back(ed);
+    }
+    return out;
+}
 
 // Uniform hash grid over Vec2 point sets: the spatial accelerator that lifts
 // the space-colonization inner loops (nearest-node, merge, kill) from O(n) per
@@ -612,6 +692,9 @@ RoadGraph buildMetro(const MetroParams& p,
         }
     }
     Ga = planarize(Ga, 1.0);
+    // v2: de-wobble + de-stub the skeleton, then re-planarize so any nodes the
+    // smoothing pulled together fuse into clean junctions.
+    Ga = planarize(cleanSkeleton(Ga), 1.0);
 
     // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
     // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
