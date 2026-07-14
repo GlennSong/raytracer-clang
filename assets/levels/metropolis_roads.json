@@ -12,13 +12,13 @@
   "midtownRadius": 340,
   "pedestrians": 0,
   "perceptionReliability": 1.0,
+  "planOnly": true,
   "plinth": 0.45,
   "seed": 9,
+  "showPlan": true,
   "sidewalk": 4.0,
   "vehicles": "vehicles.lua",
-  "wander": false,
-  "planOnly": true,
-  "showPlan": true
+  "wander": false
  },
  "entities": [
   {
@@ -40,6 +40,7 @@
     "curb": 0.16,
     "generate": {
      "ambient_per_500": 22,
+     "arterials_only": false,
      "artery_width": 13,
      "beach_rise": 2.5,
      "block_size": 150,
@@ -60,8 +61,7 @@
      "sea_level": -5.0,
      "seed": 9,
      "seg_length": 32,
-     "street_width": 7,
-     "arterials_only": true
+     "street_width": 7
     },
     "lift": 0.08,
     "markings": true,

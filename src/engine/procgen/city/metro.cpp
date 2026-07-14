@@ -224,6 +224,34 @@ void subdivide(const Poly2& poly, double mn, double mx, double jitter,
     subdivide(right, mn, mx, jitter, collectorSpan, rng, streets, depth + 1);
 }
 
+// GRID template (city-pipeline v2 stage 3): fill a block with a clean rotated
+// grid aligned to its own OBB axes, so every sub-block is a rectangle that
+// parcels into street-fronting lots. Streets are full chords across the block
+// at ~`cell` spacing, evenly distributed; the widest-spanning direction seeds
+// the collector tier. Replaces the jittered recursive bisection, which made
+// the irregular faces the device flagged as degenerate.
+void gridFill(const Poly2& poly, double cell, double collectorSpan,
+              std::vector<Cut>& streets) {
+    if (poly.size() < 3 || cell < 8.0) return;
+    OBB2 o = orientedBoundingBox(poly);
+    for (int axis = 0; axis < 2; ++axis) {
+        const Vec2 along = o.axis[axis];         // spacing runs along this axis
+        const Vec2 cutDir = o.axis[1 - axis];    // streets run along this one
+        const double half = o.half[axis];
+        const int lines = static_cast<int>(std::floor(2.0 * half / cell));
+        if (lines < 1) continue;
+        const double step = 2.0 * half / (lines + 1);
+        const bool collectorAxis =
+            collectorSpan > 0 && o.half[1 - axis] * 2.0 > collectorSpan;
+        for (int i = 1; i <= lines; ++i) {
+            const Vec2 sp = o.center + along * (-half + i * step);
+            Vec2 a, b;
+            if (cutSpan(poly, sp, cutDir, a, b))
+                streets.push_back({a, b, collectorAxis && (i % 3 == 0)});
+        }
+    }
+}
+
 // Connected components of a graph over its edges. Fills `comp` (−1 for isolated
 // nodes) and returns the component count.
 int components(const RoadGraph& g, std::vector<int>& comp) {
@@ -746,7 +774,11 @@ RoadGraph buildMetro(const MetroParams& p,
                 }
         } else {
             std::vector<Cut> streets;
-            subdivide(f, mn, mx, kindJitter[kind], collectorSpan, rng, streets);
+            // v2 stage 3: clean district GRID (aligned rectangles that parcel
+            // into street-fronting lots) replaces the jittered bisection.
+            (void)mn; (void)mx;
+            const double cell = p.blockSize * kindBlockMul[kind];
+            gridFill(f, cell, collectorSpan, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)
