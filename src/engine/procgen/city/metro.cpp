@@ -422,6 +422,31 @@ RoadGraph buildMetro(const MetroParams& p,
                 }
             }
             if (pts.size() < 2) continue;
+            // §12 R1.3b: a freeway PASSES THROUGH a region — extend both end
+            // legs outward until the domain boundary (or the water/beach/
+            // mountain line) so dead ends live at the map's edge, never
+            // mid-city (device: "the freeways start and stop kind of
+            // randomly").
+            for (int endI = 0; endI < 2; ++endI) {
+                Vec2 tip = endI ? pts.back() : pts.front();
+                const Vec2 prev = endI ? pts[pts.size() - 2] : pts[1];
+                Vec2 dir = tip - prev;
+                const double dl = dir.length();
+                if (dl < 1.0) continue;
+                dir = dir * (1.0 / dl);
+                for (int k = 0; k < 14; ++k) {
+                    Vec2 q = tip + dir * 130.0;
+                    if (!inDomain(q) || !freewayOk(q.x, q.y)) break;
+                    tip = q;
+                    if (endI) pts.push_back(q); else pts.insert(pts.begin(), q);
+                }
+            }
+            // runt fragments read as random stubs — a route must EARN its
+            // place with real length
+            double planLen = 0;
+            for (std::size_t k = 0; k + 1 < pts.size(); ++k)
+                planLen += (pts[k + 1] - pts[k]).length();
+            if (planLen < 560.0) continue;
             // §10.6: the route becomes a CORRIDOR PLAN — anchor polyline out,
             // NO street edges (the freeway-as-fat-street era ends here). The
             // interchange seeds stay: streets grow toward the future ramps.
