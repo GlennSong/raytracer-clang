@@ -2599,8 +2599,12 @@ bool LevelLoader::load(const std::string& path,
                     const Real sideSign = up ? -1.0 : 1.0;
                     const Vec2 travelDir =
                         def.horizontal.tangent(st) * (up ? 1.0 : -1.0);
+                    // ANY street node nearby (not just a junction) makes the
+                    // site feasible — the resolution below connects via the
+                    // nearest junction OR by splitting the nearest edge into a
+                    // new T-junction (device: "connect to the closest road
+                    // even if they have to make a new road graph node").
                     for (const SynthAnchor& an : synthAnchors) {
-                        if (an.degree < 2) continue;
                         if (dot(an.pos - gc, gn) * sideSign < 12.0) continue;
                         const Real along = dot(an.pos - gc, travelDir);
                         if (on ? along > -20.0 : along < 20.0) continue;
@@ -2833,10 +2837,76 @@ bool LevelLoader::load(const std::string& path,
                         if (found) break;
                     }
                     if (!found) {
+                        // T-JUNCTION FALLBACK (device: "they should connect to
+                        // the closest road even if they have to make a new
+                        // road graph node"): no existing junction is reachable,
+                        // so project the ideal landing onto the nearest street
+                        // EDGE on the ramp's own side + flow and SPLIT it,
+                        // inserting a new node there (a real T-junction the
+                        // stub then grafts to).
+                        const Vec2 ideal = gc + gn * (sideSign * 165.0);
+                        Real best = 1e30;
+                        int bNet = -1, bEdge = -1;
+                        Vec2 bProj;
+                        for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
+                            const engine::RoadNet& net = preNets[ni];
+                            for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+                                const auto& ed = net.edges[ei];
+                                if (ed[0] < 0 || ed[1] < 0 ||
+                                    ed[0] >= (int)net.nodes.size() ||
+                                    ed[1] >= (int)net.nodes.size()) continue;
+                                const Vec2 A = net.nodes[ed[0]];
+                                const Vec2 B = net.nodes[ed[1]];
+                                const Vec2 AB = B - A;
+                                const Real l2 = AB.lengthSquared();
+                                if (l2 < 400.0) continue;   // skip short stubs
+                                Real t = dot(ideal - A, AB) / l2;
+                                if (t < 0.12 || t > 0.88) continue;   // not at a node
+                                const Vec2 q = A + AB * t;
+                                if (dot(q - gc, gn) * sideSign < 12.0) continue;
+                                const Real along = dot(q - gc, travelDir);
+                                if (e.onRamp ? along > -20.0 : along < 20.0) continue;
+                                const Real dg = (q - gc).length();
+                                if (dg < 110.0 || dg > 380.0) continue;
+                                bool clash = false;
+                                for (const Vec2& u : used)
+                                    if ((u - q).length() < 45.0) { clash = true; break; }
+                                if (clash) continue;
+                                const Real d = (ideal - q).length();
+                                if (d < best) { best = d; bNet = (int)ni; bEdge = (int)ei; bProj = q; }
+                            }
+                        }
+                        if (bNet >= 0) {
+                            engine::RoadNet& net = preNets[bNet];
+                            if (net.tangents.size() < net.nodes.size())
+                                net.tangents.resize(net.nodes.size(), Vec2(0, 0));
+                            if (net.edgeWidths.size() < net.edges.size())
+                                net.edgeWidths.resize(net.edges.size(), 0.0);
+                            if (net.edgeLayers.size() < net.edges.size())
+                                net.edgeLayers.resize(net.edges.size(), 0);
+                            const std::array<int, 2> ab = net.edges[bEdge];
+                            const double ew = net.edgeWidths[bEdge];
+                            const int el = net.edgeLayers[bEdge];
+                            const int N = (int)net.nodes.size();
+                            net.nodes.push_back(bProj);
+                            net.tangents.push_back(Vec2(0, 0));
+                            net.edges[bEdge] = {ab[0], N};    // (a -> new)
+                            net.edges.push_back({N, ab[1]});  // (new -> b)
+                            net.edgeWidths.push_back(ew);
+                            net.edgeLayers.push_back(el);
+                            rampAnchors[xi] = {bNet, N};
+                            e.target = bProj;
+                            found = true;   // the final else records `used`
+                            LOG_INFO << "[corridor] ramp at s=" << e.station
+                                     << ": split nearest street edge -> new "
+                                        "T-junction at (" << bProj.x << ", "
+                                     << bProj.y << ")";
+                        }
+                    }
+                    if (!found) {
                         LOG_WARN << "[corridor] ramp at s=" << e.station
-                                 << ": no usable street node on its side — "
-                                    "DROPPED (a ribbon to nowhere is worse "
-                                    "than no ramp)";
+                                 << ": no street edge reachable on its side — "
+                                    "DROPPED";
                         e.station = -1;   // sentinel: mesh + nav skip it
                     } else {
                         used.push_back(e.target);
