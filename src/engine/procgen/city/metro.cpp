@@ -381,6 +381,17 @@ RoadGraph buildMetro(const MetroParams& p,
                 for (int cand : hubAdj[hub])
                     if (!usedLink[cand]) walk(hub, cand);
         }
+        // §12: freeways stay OFF THE BEACH (device: "I don't think anyone
+        // wants that, lol") — anchors demand real elevation over the sea,
+        // not merely "buildable", so routes swing inland and cross the
+        // terrain (bridging each other where they must).
+        auto freewayOk = [&](double x, double y) {
+            if (!buildable(x, y)) return false;
+            if (p.ground && p.build.seaLevel > -1e29 &&
+                p.ground(x, y) < p.build.seaLevel + p.build.beachRise + 4.0)
+                return false;
+            return true;
+        };
         for (const std::vector<int>& seq : routes) {
             // anchors every ~220 m along EACH leg with small sway, buildable
             // slide as before — one polyline for the whole through-route
@@ -399,12 +410,12 @@ RoadGraph buildMetro(const MetroParams& p,
                                       ? 0.0
                                       : rng.range(-0.05, 0.05) * L;
                     Vec2 q = A + dir * (t * L) + nrm * sway;
-                    if (!buildable(q.x, q.y)) {
+                    if (!freewayOk(q.x, q.y)) {
                         bool fixed = false;
-                        for (double off = 30; off <= 210 && !fixed; off += 30)
+                        for (double off = 30; off <= 330 && !fixed; off += 30)
                             for (double s : {+1.0, -1.0}) {
                                 Vec2 c = q + nrm * (off * s);
-                                if (inDomain(c) && buildable(c.x, c.y)) { q = c; fixed = true; break; }
+                                if (inDomain(c) && freewayOk(c.x, c.y)) { q = c; fixed = true; break; }
                             }
                     }
                     pts.push_back(q);

@@ -2466,6 +2466,18 @@ bool LevelLoader::load(const std::string& path,
                     i = j;
                 }
             }
+        // §12 R3f: street-anchor snapshot for FEASIBILITY-driven placement
+        struct SynthAnchor { Vec2 pos; int degree; };
+        std::vector<SynthAnchor> synthAnchors;
+        for (const engine::RoadNet& net2 : preNets) {
+            std::vector<int> deg(net2.nodes.size(), 0);
+            for (const auto& ed : net2.edges) {
+                if (ed[0] >= 0 && ed[0] < static_cast<int>(deg.size())) ++deg[ed[0]];
+                if (ed[1] >= 0 && ed[1] < static_cast<int>(deg.size())) ++deg[ed[1]];
+            }
+            for (std::size_t k = 0; k < net2.nodes.size(); ++k)
+                synthAnchors.push_back({net2.nodes[k], deg[k]});
+        }
         // rule 3 registries, shared by every stamped diamond
         std::vector<Vec2> globalLandings;
         std::vector<std::pair<Vec2, Vec2>> rampSegs;
@@ -2512,19 +2524,68 @@ bool LevelLoader::load(const std::string& path,
                 }
             for (std::size_t i = 0; i < ss.size(); ++i)
                 def.vertical.pvis.push_back({ss[i], zs[i] + 0.6, 60.0});
-            // diamonds (rule 3 gated)
-            const int nD = len >= 420.0
-                ? std::max(1, static_cast<int>(std::floor(len / pr.spacing)))
-                : 0;
-            for (int di = 0; di < nD; ++di) {
-                const Real sI = len * (di + 1) / (nD + 1);
-                const Vec2 cI = def.horizontal.pos(sI);
-                const Vec2 nI = def.horizontal.normal(sI);
-                // no diamond in a bridge zone
+            // §12 R3f FEASIBILITY-DRIVEN placement (device: "the road graph
+            // could be built around it using the exit and entrance points"):
+            // scan for stations where a diamond is PROVABLY possible —
+            // outside bridge zones, with a street junction anchor available
+            // on each carriageway's side within ramp reach — and place
+            // diamonds at the BEST such stations. Even-spacing
+            // stamp-then-veto left whole routes rampless.
+            struct Site { Real s; int feasible; };
+            std::vector<Site> sites;
+            for (Real sC = 90.0; sC <= len - 90.0; sC += 60.0) {
                 bool nearBridge = false;
                 for (const Real sb : pr.bridgeAt)
-                    if (std::fabs(sb - sI) < 320.0) nearBridge = true;
+                    if (std::fabs(sb - sC) < 320.0) nearBridge = true;
                 if (nearBridge) continue;
+                // per-RAMP feasibility with the SAME filters resolution
+                // applies (side, flow direction, 70-340 m from the gore) —
+                // checking only the site centre still left ramps unresolvable
+                auto rampFeasible = [&](Real st, bool up, bool on) {
+                    if (st < 60.0 || st > len - 60.0) return false;
+                    const Vec2 gc = def.horizontal.pos(st);
+                    const Vec2 gn = def.horizontal.normal(st);
+                    const Real sideSign = up ? -1.0 : 1.0;
+                    const Vec2 travelDir =
+                        def.horizontal.tangent(st) * (up ? 1.0 : -1.0);
+                    for (const SynthAnchor& an : synthAnchors) {
+                        if (an.degree < 2) continue;
+                        if (dot(an.pos - gc, gn) * sideSign < 12.0) continue;
+                        const Real along = dot(an.pos - gc, travelDir);
+                        if (on ? along > -20.0 : along < 20.0) continue;
+                        const Real d = (an.pos - gc).length();
+                        if (d >= 70.0 && d <= 340.0) return true;
+                    }
+                    return false;
+                };
+                int feas = 0;
+                if (rampFeasible(sC - 80.0, true, false)) ++feas;
+                if (rampFeasible(sC + 110.0, true, true)) ++feas;
+                if (rampFeasible(sC + 80.0, false, false)) ++feas;
+                if (rampFeasible(sC - 110.0, false, true)) ++feas;
+                if (feas >= 2) sites.push_back({sC, feas});
+            }
+            std::sort(sites.begin(), sites.end(),
+                      [](const Site& a, const Site& b) {
+                          return a.feasible > b.feasible;
+                      });
+            std::vector<Real> chosen;
+            const int maxD = std::max(1, static_cast<int>(
+                std::floor(len / std::max(Real(300), pr.spacing * 0.6))));
+            for (const Site& st : sites) {
+                if (static_cast<int>(chosen.size()) >= maxD) break;
+                bool clear2 = true;
+                for (const Real cs : chosen)
+                    if (std::fabs(cs - st.s) < pr.spacing * 0.55) clear2 = false;
+                if (clear2) chosen.push_back(st.s);
+            }
+            if (sites.empty() && len >= 420.0)
+                LOG_WARN << "[corridor] route len=" << len
+                         << " has NO feasible interchange site (streets out "
+                            "of reach everywhere)";
+            for (const Real sI : chosen) {
+                const Vec2 cI = def.horizontal.pos(sI);
+                const Vec2 nI = def.horizontal.normal(sI);
                 auto stamp = [&](Real st, bool up, bool on, Real side) {
                     if (st < 60.0 || st > len - 60.0) return;
                     engine::ExitDef e;
