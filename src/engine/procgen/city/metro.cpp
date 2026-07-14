@@ -230,8 +230,11 @@ void subdivide(const Poly2& poly, double mn, double mx, double jitter,
 // at ~`cell` spacing, evenly distributed; the widest-spanning direction seeds
 // the collector tier. Replaces the jittered recursive bisection, which made
 // the irregular faces the device flagged as degenerate.
+// `crook` (0 = perfectly regular) jitters each grid line's position, so OLD
+// TOWN reads as irregular streets while downtown stays crisp — robust on ANY
+// block shape (chords via cutSpan, no fragile inset).
 void gridFill(const Poly2& poly, double cell, double collectorSpan,
-              std::vector<Cut>& streets) {
+              double crook, Lcg& rng, std::vector<Cut>& streets) {
     if (poly.size() < 3 || cell < 8.0) return;
     OBB2 o = orientedBoundingBox(poly);
     for (int axis = 0; axis < 2; ++axis) {
@@ -244,13 +247,15 @@ void gridFill(const Poly2& poly, double cell, double collectorSpan,
         const bool collectorAxis =
             collectorSpan > 0 && o.half[1 - axis] * 2.0 > collectorSpan;
         for (int i = 1; i <= lines; ++i) {
-            const Vec2 sp = o.center + along * (-half + i * step);
+            const double j = crook > 0 ? (rng.unit() - 0.5) * crook * step : 0.0;
+            const Vec2 sp = o.center + along * (-half + i * step + j);
             Vec2 a, b;
             if (cutSpan(poly, sp, cutDir, a, b))
                 streets.push_back({a, b, collectorAxis && (i % 3 == 0)});
         }
     }
 }
+
 
 // Connected components of a graph over its edges. Fills `comp` (−1 for isolated
 // nodes) and returns the component count.
@@ -743,7 +748,9 @@ RoadGraph buildMetro(const MetroParams& p,
     // District flavor drives the grain: financial cores parcel tight, industry
     // parcels wide; old town is small and crooked. (Indexed by CityHub::kind.)
     const double kindBlockMul[5] = {0.72, 0.95, 1.15, 0.60, 1.70};
-    const double kindJitter[5]   = {0.08, 0.14, 0.16, 0.30, 0.12};
+    // Per-district grid crook (0 = crisp): OLD TOWN(3) crooked, industry(4)
+    // slightly loose, the rest crisp — the visible district character.
+    const double kindCrook[5]    = {0.0, 0.05, 0.10, 0.45, 0.18};
     const double collectorSpan = p.collectorSpan > 0 ? p.collectorSpan : p.blockSize * 3.0;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
@@ -774,11 +781,16 @@ RoadGraph buildMetro(const MetroParams& p,
                 }
         } else {
             std::vector<Cut> streets;
-            // v2 stage 3: clean district GRID (aligned rectangles that parcel
-            // into street-fronting lots) replaces the jittered bisection.
+            // v2 stage 3/3b: a district-appropriate GRID TEMPLATE fills the
+            // block — clean by construction (replacing the jittered
+            // bisection). District character comes from CELL SIZE (downtown
+            // tight, industrial coarse — kindBlockMul) and CROOK (old town's
+            // irregular streets vs downtown's crisp grid). Robust on every
+            // block shape; no fragile inset.
             (void)mn; (void)mx;
             const double cell = p.blockSize * kindBlockMul[kind];
-            gridFill(f, cell, collectorSpan, streets);
+            const double crook = kindCrook[kind];
+            gridFill(f, cell, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)
