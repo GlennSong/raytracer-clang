@@ -2639,12 +2639,19 @@ bool LevelLoader::load(const std::string& path,
                 const Vec2 nI = def.horizontal.normal(sI);
                 auto stamp = [&](Real st, bool up, bool on, Real side) {
                     if (st < 60.0 || st > len - 60.0) return;
+                    const Vec2 gpos = def.horizontal.pos(st);
+                    const Vec2 gn2 = def.horizontal.normal(st);
                     engine::ExitDef e;
                     e.station = st;
                     e.upStation = up;
                     e.onRamp = on;
-                    e.target = cI + nI * (side * 95.0);
-                    const Vec2 gpos = def.horizontal.pos(st);
+                    // Landing at THIS ramp's own station (not the shared
+                    // interchange centre) — a carriageway's exit and on-ramp
+                    // sit ~190 m apart along the corridor, so each claims a
+                    // DISTINCT street landing. Sharing cI made the on-ramp
+                    // land on the exit's spot, which rule 3a (60 m apart) then
+                    // rejected — the audit's "0 on-ramps survive" bug.
+                    e.target = gpos + gn2 * (side * 95.0);
                     // rule 3a: landings keep 60 m apart across ALL corridors
                     for (const Vec2& u2 : globalLandings)
                         if ((u2 - e.target).length() < 60.0) return;
@@ -2973,12 +2980,40 @@ bool LevelLoader::load(const std::string& path,
                                                  : (d0 <= 0 ? -d0 : 1e4 + d0);
                         if (dv < best) { best = dv; mainIdx = chain[k]; }
                     }
+                    // The mesh ribbon stops at the landing SETBACK (the street
+                    // mesher owns the junction mouth), but the NAV graph must
+                    // reach the actual street JUNCTION node or cars can't get
+                    // on/off — the setback point sits 20 m out, past the 16 m
+                    // weld radius, so a chain ending there never welds (device
+                    // audit: "0 street->ramp welds"). Add a nav node AT the
+                    // junction and make IT the weld terminal.
+                    int termIdx = -1;
+                    if (rampAnchors[xi].first >= 0) {
+                        const Vec2 jp = preNets[rampAnchors[xi].first]
+                                            .nodes[rampAnchors[xi].second];
+                        engine::RoadNode jn;
+                        jn.pos = jp;
+                        jn.elev = e.targetY;
+                        jn.elevAbsolute = true;
+                        termIdx = static_cast<int>(eg.graph.nodes.size());
+                        eg.graph.nodes.push_back(jn);
+                    }
                     if (e.onRamp) {
                         ramp(chainR.back(), mainIdx);   // merge, forward
-                        eg.snapNodes.push_back(chainR.front());   // street end
+                        if (termIdx >= 0) {
+                            ramp(termIdx, chainR.front());   // junction -> ramp
+                            eg.snapNodes.push_back(termIdx);
+                        } else {
+                            eg.snapNodes.push_back(chainR.front());
+                        }
                     } else {
                         ramp(mainIdx, chainR.front());  // diverge onto the band
-                        eg.snapNodes.push_back(chainR.back());    // street end
+                        if (termIdx >= 0) {
+                            ramp(chainR.back(), termIdx);    // ramp -> junction
+                            eg.snapNodes.push_back(termIdx);
+                        } else {
+                            eg.snapNodes.push_back(chainR.back());
+                        }
                     }
                     // §10.3 JUNCTION STUB: graft a street edge from the
                     // landing node back to the ribbon's mouth so the street
