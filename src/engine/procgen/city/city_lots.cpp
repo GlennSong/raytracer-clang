@@ -979,20 +979,31 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         bf.tag = districts.tagAt(centroid(foot));
         bf.lotSetback = p.lotSetback;
         bf.buildChance = p.buildChance;
+        // Lot DIMENSIONS drive the row-split parceler now (frontWidth along
+        // the street, lotDepth back from it), so each district reads as its
+        // own grain: narrow-deep retail on Main St, wide-shallow tower plates
+        // downtown, big industrial parcels, house lots in the suburbs. (The
+        // town/city scale knob is p.blockSize upstream — a town parcels the
+        // same district a touch bigger.)
         switch (bf.tag) {
-            case DistrictTag::Financial:
+            case DistrictTag::Financial:   // wide tower plates
+                bf.pp.frontWidth = 30; bf.pp.lotDepth = 34;
                 bf.pp.targetArea = 560; bf.lotSetback = 1.0;
                 bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
-            case DistrictTag::Commercial:
+            case DistrictTag::Commercial:  // narrow, deep retail frontage
+                bf.pp.frontWidth = 13; bf.pp.lotDepth = 30;
                 bf.pp.targetArea = 300; bf.lotSetback = 0.7;
                 bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
-            case DistrictTag::OldTown:
+            case DistrictTag::OldTown:     // small, tight, narrow
+                bf.pp.frontWidth = 11; bf.pp.lotDepth = 22;
                 bf.pp.targetArea = 210;
                 bf.pp.minArea = std::min(p.minLotArea, Real(80));
                 bf.lotSetback = 0.5; bf.buildChance = 0.98; break;
-            case DistrictTag::Industrial:
+            case DistrictTag::Industrial:  // big parcels
+                bf.pp.frontWidth = 42; bf.pp.lotDepth = 52;
                 bf.pp.targetArea = 700; bf.lotSetback = 1.2; break;
-            case DistrictTag::Residential:
+            case DistrictTag::Residential: // house lots with yards
+                bf.pp.frontWidth = 18; bf.pp.lotDepth = 27;
                 bf.pp.targetArea = 400; break;
         }
         // Sometimes a WHOLE small block is a park (device: "the green space
