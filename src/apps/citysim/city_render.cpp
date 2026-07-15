@@ -6,6 +6,7 @@
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/road_net.h"
+#include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../log.h"                               // LOG_WARN (place-type validation)
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
@@ -588,31 +589,48 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
-    // Bake the CITY-PLAN outlines once (ADR-0066): every block interior and lot
-    // polygon (published by the loader as CityPlanDebug) becomes a loop of thin
-    // ground strips — one strip per polygon edge, the navgraph strip pattern.
+    // Bake the CITY-PLAN outlines once (ADR-0066): every block/lot polygon
+    // (published by the loader as CityPlanDebug) is stroked as ONE CLOSED
+    // RIBBON (device: "use the ribbon library ... form polygon shapes
+    // properly") — a continuous mitred loop, not per-edge strips with corner
+    // gaps. Draped at each polygon's local ground height (a block is small vs
+    // the terrain, so one height reads flat). The group shows the merged mesh
+    // via a single identity transform; the show/hide toggle stays the same.
     blockBake_.clear();
     lotBake_.clear();
-    {
-        auto outline = [&](const engine::Poly2& poly, Real width, Real lift,
-                           std::vector<Mat4>& out) {
-            const std::size_t n = poly.size();
-            if (n < 3) return;
-            for (std::size_t i = 0; i < n; ++i) {
-                Vec2 a = poly[i], b = poly[(i + 1) % n];
-                Vec2 d(b.x - a.x, b.y - a.y);
-                Real len = std::sqrt(d.x * d.x + d.y * d.y);
-                if (len < 1e-6) continue;
-                Real yaw = std::atan2(d.x, d.y);
-                out.push_back(Mat4::trs(
-                    Vec3(a.x, groundAt(a.x, a.y) + lift, a.y),
-                    Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(width, 1, len)));
-            }
+    if (assets) {
+        engine::RenderMesh blockRib, lotRib;
+        auto strokePoly = [&](const engine::Poly2& poly, double halfW,
+                              double lift, engine::RenderMesh& into) {
+            if (poly.size() < 3) return;
+            std::vector<engine::Vec2> pts(poly.begin(), poly.end());
+            const engine::Vec2 c = engine::centroid(poly);
+            engine::MeshBuilder::append(
+                into, engine::strokeRibbon(pts, {halfW}, groundAt(c.x, c.y) + lift,
+                                           engine::Vec3(1, 1, 1), /*closed=*/true));
         };
         world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
-            for (const engine::Poly2& b : plan.blocks) outline(b, 0.35, 0.06, blockBake_);
-            for (const engine::Poly2& l : plan.lots) outline(l, 0.16, 0.05, lotBake_);
+            for (const engine::Poly2& b : plan.blocks) strokePoly(b, 0.45, 0.06, blockRib);
+            for (const engine::Poly2& l : plan.lots) strokePoly(l, 0.26, 0.05, lotRib);
         });
+        if (!blockRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(blockRib, "city:blockoutline");
+            if (auto* g = world.get<InstanceGroup>(blockGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;   // city-wide merged mesh: never cull
+            }
+            blockBake_ = {Mat4()};
+        }
+        if (!lotRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(lotRib, "city:lotoutline");
+            if (auto* g = world.get<InstanceGroup>(lotGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;
+            }
+            lotBake_ = {Mat4()};
+        }
     }
 
     // Bake the COLLIDER-PRISM outlines once (device: "a physics hull
