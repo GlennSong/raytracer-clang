@@ -571,12 +571,13 @@ CorridorMeshOut buildCorridorMesh(
         // needs to merge with the roads below nicer") — the last 8 m widen
         // toward the junction so the pavement reads as a mouth, not a stub.
         // The MOUTH (device: "open the mouth of that road ribbon into a
-        // multilane road"): the last 45 m widen smoothly into a two-lane
-        // throat at the junction.
+        // multilane road"): the last 26 m widen smoothly into a modest throat
+        // at the junction — tightened from 45 m x 3.2 which bulged into the
+        // big paved apron blob (device: "onramps that block roads").
         auto rwAt = [&](int i) {
             const Real rs2 = RL * i / rn;
-            const Real m = std::max(Real(0), (rs2 - (RL - 45.0)) / 45.0);
-            return rw + (m * m * (3.0 - 2.0 * m)) * 3.2;
+            const Real m = std::max(Real(0), (rs2 - (RL - 26.0)) / 26.0);
+            return rw + (m * m * (3.0 - 2.0 * m)) * 2.0;
         };
         for (int i = 0; i < rn; ++i) {
             // deck
@@ -771,21 +772,23 @@ CorridorMeshOut buildCorridorMesh(
                   3.4, 2.2, true);
         }
 
-        // LANDING FAN: a flat asphalt disc under the junction mouth — the
-        // ramp, the street deck, and the apron all overlap it, so the seam
-        // between corridor pavement and street pavement never shows.
+        // LANDING PATCH: a SMALL asphalt disc right at the ramp mouth to hide
+        // the seam where the ramp meets the street. Kept tight (device: the
+        // 7 m fans overlapped into one big paved blob at coastal
+        // interchanges) — the stub graft + junction mouth carry the rest.
         {
             const Vec2 lc2 = ra.pos(RL);
             const Real ly = rp.elevation(RL) + 0.04;
             RenderMesh fan;
-            const int segs = 14;
+            const int segs = 12;
+            const Real fanR = 4.0;
             for (int k = 0; k < segs; ++k) {
                 const Real a0 = 6.283185307179586 * k / segs;
                 const Real a1 = 6.283185307179586 * (k + 1) / segs;
                 MeshBuilder::emitTri(
                     fan, Vec3(lc2.x, ly, lc2.y),
-                    Vec3(lc2.x + std::cos(a1) * 7.0, ly, lc2.y + std::sin(a1) * 7.0),
-                    Vec3(lc2.x + std::cos(a0) * 7.0, ly, lc2.y + std::sin(a0) * 7.0),
+                    Vec3(lc2.x + std::cos(a1) * fanR, ly, lc2.y + std::sin(a1) * fanR),
+                    Vec3(lc2.x + std::cos(a0) * fanR, ly, lc2.y + std::sin(a0) * fanR),
                     Vec3(0, 1, 0), kAsphalt);
             }
             MeshBuilder::append(out.deck, fan);

@@ -2914,6 +2914,45 @@ bool LevelLoader::load(const std::string& path,
                     if (levelGround)
                         e.targetY = levelGround(e.target.x, e.target.y) + 0.12;
                 }
+                // §12 CRISS-CROSS GUARD (device: "I see criss-crossing
+                // onramps"): the independent landing snap can leave two ramps'
+                // gore->landing runs crossing each other. Test the RESOLVED
+                // segments pairwise and drop the lower-priority ramp (on-ramps
+                // before exits, then later station) so no two ramp runs X.
+                auto segsCross = [](const Vec2& p1, const Vec2& p2,
+                                    const Vec2& p3, const Vec2& p4) {
+                    auto ori = [](const Vec2& a, const Vec2& b, const Vec2& c) {
+                        const Real v = (b.x - a.x) * (c.y - a.y) -
+                                       (b.y - a.y) * (c.x - a.x);
+                        return v > 1e-6 ? 1 : (v < -1e-6 ? -1 : 0);
+                    };
+                    return ori(p1, p2, p3) != ori(p1, p2, p4) &&
+                           ori(p3, p4, p1) != ori(p3, p4, p2);
+                };
+                for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
+                    if (def.exits[xi].station < 0) continue;
+                    const Real si = std::max(Real(1),
+                        std::min(def.exits[xi].station, def.horizontal.length() - 1));
+                    const Vec2 gi2 = def.horizontal.pos(si);
+                    for (std::size_t xj = 0; xj < xi; ++xj) {
+                        if (def.exits[xj].station < 0) continue;
+                        const Real sj = std::max(Real(1),
+                            std::min(def.exits[xj].station, def.horizontal.length() - 1));
+                        const Vec2 gj = def.horizontal.pos(sj);
+                        if (!segsCross(gi2, def.exits[xi].target,
+                                       gj, def.exits[xj].target)) continue;
+                        // drop the lower priority: on-ramp over exit, else later
+                        std::size_t drop = def.exits[xi].onRamp && !def.exits[xj].onRamp
+                                               ? xi
+                                           : (!def.exits[xi].onRamp && def.exits[xj].onRamp
+                                                  ? xj : xi);
+                        LOG_INFO << "[corridor] ramp at s="
+                                 << def.exits[drop].station
+                                 << " crosses another ramp — dropped";
+                        def.exits[drop].station = -1;
+                        if (drop == xi) break;
+                    }
+                }
             }
             // §12: bents must dodge OTHER corridors too — append their
             // centrelines as wide pseudo-edges so no column of a flyover
