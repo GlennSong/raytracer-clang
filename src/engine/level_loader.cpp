@@ -2810,6 +2810,19 @@ bool LevelLoader::load(const std::string& path,
                                                          {-1, -1});
             {
                 std::vector<engine::Vec2> used;
+                // Segment crossing test (shared by landing selection and the
+                // criss-cross guard below): do gore->target runs p1p2 and p3p4
+                // properly intersect?
+                auto segsCross = [](const Vec2& p1, const Vec2& p2,
+                                    const Vec2& p3, const Vec2& p4) {
+                    auto ori = [](const Vec2& a, const Vec2& b, const Vec2& c) {
+                        const Real v = (b.x - a.x) * (c.y - a.y) -
+                                       (b.y - a.y) * (c.x - a.x);
+                        return v > 1e-6 ? 1 : (v < -1e-6 ? -1 : 0);
+                    };
+                    return ori(p1, p2, p3) != ori(p1, p2, p4) &&
+                           ori(p3, p4, p1) != ori(p3, p4, p2);
+                };
                 for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
                     engine::ExitDef& e = def.exits[xi];
                     const Real sg = std::max(
@@ -2842,9 +2855,50 @@ bool LevelLoader::load(const std::string& path,
                         Real best = 1e30;
                         for (const StreetAnchor& an : anchors) {
                             if (!usable(an, needJ)) continue;
-                            const Real d = (an.pos - gc).length();
-                            if (d < best) {
-                                best = d;
+                            // Don't pick a target whose gore->landing run would
+                            // cross an ALREADY-resolved ramp's run — otherwise
+                            // the criss-cross guard drops one of them later,
+                            // costing an on-ramp. Re-target to a non-crossing
+                            // node instead of losing the ramp.
+                            bool crossesResolved = false;
+                            for (std::size_t xj = 0; xj < xi && !crossesResolved;
+                                 ++xj) {
+                                if (def.exits[xj].station < 0) continue;
+                                const Real sj = std::max(Real(1),
+                                    std::min(def.exits[xj].station,
+                                             def.horizontal.length() - 1));
+                                if (segsCross(gc, an.pos,
+                                              def.horizontal.pos(sj),
+                                              def.exits[xj].target))
+                                    crossesResolved = true;
+                            }
+                            if (crossesResolved) continue;
+                            // Rank by the TURN the ramp must make to reach the
+                            // node, not raw distance: the nearest node on a
+                            // sparse (e.g. coastal) grid is often near-
+                            // perpendicular, forcing the ramp into a ~90-116
+                            // deg cul-de-sac loop (measured). A target aligned
+                            // with the flow lets the ramp peel off gently. Keep
+                            // a light distance term so a marginally-smoother but
+                            // far node isn't chased across the map.
+                            const Vec2 rel = an.pos - gc;
+                            const Real along = std::fabs(dot(rel, travelDir));
+                            const Real lateral = std::fabs(dot(rel, gn));
+                            const Real turn = std::atan2(lateral, along);
+                            // Keep the nearest-node ranking (which preserves
+                            // connectivity on a sparse grid) but add a steep
+                            // penalty for EXTREME peel-off angles (> ~60 deg):
+                            // those are the ~90-116 deg cul-de-sac loops. This
+                            // straightens the worst landings when a better-angled
+                            // node is not much farther, without aggressively
+                            // re-targeting every ramp (which caused crossings and
+                            // dropped on-ramps).
+                            const Real dist = rel.length();
+                            const Real loopPenalty =
+                                std::max(Real(0), turn - Real(1.05)) * 260.0;
+                            const Real cost = dist + loopPenalty;
+                            if (cost < best) {
+                                best = cost;
                                 e.target = an.pos;
                                 rampAnchors[xi] = {an.net, an.node};
                                 found = true;
@@ -2935,16 +2989,8 @@ bool LevelLoader::load(const std::string& path,
                 // gore->landing runs crossing each other. Test the RESOLVED
                 // segments pairwise and drop the lower-priority ramp (on-ramps
                 // before exits, then later station) so no two ramp runs X.
-                auto segsCross = [](const Vec2& p1, const Vec2& p2,
-                                    const Vec2& p3, const Vec2& p4) {
-                    auto ori = [](const Vec2& a, const Vec2& b, const Vec2& c) {
-                        const Real v = (b.x - a.x) * (c.y - a.y) -
-                                       (b.y - a.y) * (c.x - a.x);
-                        return v > 1e-6 ? 1 : (v < -1e-6 ? -1 : 0);
-                    };
-                    return ori(p1, p2, p3) != ori(p1, p2, p4) &&
-                           ori(p3, p4, p1) != ori(p3, p4, p2);
-                };
+                // (segsCross defined above, shared with landing selection —
+                // which already avoids most crossings at pick time.)
                 for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
                     if (def.exits[xi].station < 0) continue;
                     const Real si = std::max(Real(1),
@@ -3197,7 +3243,15 @@ bool LevelLoader::load(const std::string& path,
                         net.nodes.push_back(P);
                         net.tangents.push_back(Vec2(0, 0));
                         net.edges.push_back({rampAnchors[xi].second, pIdx});
-                        net.edgeWidths.push_back(9.0);   // the opened mouth
+                        // A ramp merges into the street as ONE lane. The old
+                        // 9 m "opened mouth" inflated the junction disc
+                        // (radius = half the widest arm) and paved a wide arm,
+                        // which — summed with the fan + terrain carve —
+                        // read as the ~40 m apron blob at clustered coastal
+                        // landings. Match the ramp ribbon width (~5.8 m) so
+                        // the landing reads as a lane, not a plaza.
+                        const double kStubWidth = 6.0;
+                        net.edgeWidths.push_back(kStubWidth);
                         net.edgeLayers.push_back(0);
                         // the stub is grafted AFTER the road conform pass —
                         // carve its ground here or it pokes through the seam
@@ -3211,7 +3265,10 @@ bool LevelLoader::load(const std::string& path,
                             if (dl2 > 1e-3) {
                                 d2 = d2 * (1.0 / dl2);
                                 const Vec2 p2(-d2.y, d2.x);
-                                const Real hw2 = 9.5;
+                                // Hug the stub road (half = kStubWidth/2 = 3 m)
+                                // plus a 2 m seam margin — not the old 9.5 m
+                                // that graded a 19 m flat halo per landing.
+                                const Real hw2 = kStubWidth * 0.5 + 2.0;
                                 const Vec2 A3 = A2 - d2 * 4.0, P3 = P + d2 * 4.0;
                                 std::vector<Vec3> poly{
                                     Vec3(A3.x + p2.x * hw2, 0, A3.y + p2.y * hw2),

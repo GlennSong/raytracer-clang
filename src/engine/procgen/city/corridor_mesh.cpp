@@ -781,7 +781,7 @@ CorridorMeshOut buildCorridorMesh(
             const Real ly = rp.elevation(RL) + 0.04;
             RenderMesh fan;
             const int segs = 12;
-            const Real fanR = 4.0;
+            const Real fanR = rw + 0.5;   // just covers the 5.8 m mouth + seam
             for (int k = 0; k < segs; ++k) {
                 const Real a0 = 6.283185307179586 * k / segs;
                 const Real a1 = 6.283185307179586 * (k + 1) / segs;
