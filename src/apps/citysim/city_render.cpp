@@ -1071,8 +1071,15 @@ void CityRenderSystem::syncGroups(World& world) {
         for (int mi = 0; mi < 2; ++mi) refreshBounds(cone[mi]);
         refreshBounds(navL);
         refreshBounds(navN);
-        refreshBounds(blk);
-        refreshBounds(lot);
+        // Block/lot outlines are ONE city-wide merged mesh drawn at a single
+        // identity transform, so their extent lives in the MESH geometry, not
+        // the transforms. refreshBounds derives the cull sphere from the
+        // transforms, which for one identity instance collapses to a ~5 m
+        // sphere at the origin — so the whole overlay popped in and out with
+        // view direction (device: "they're glued together as one object and
+        // the origin determines if it appears"). Give them a city-wide sphere.
+        if (blk) { blk->boundsCenter = Vec3(0, 0, 0); blk->boundsRadius = 6000.0; }
+        if (lot) { lot->boundsCenter = Vec3(0, 0, 0); lot->boundsRadius = 6000.0; }
     }
 
     // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
