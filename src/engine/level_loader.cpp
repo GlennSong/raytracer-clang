@@ -2554,12 +2554,16 @@ bool LevelLoader::load(const std::string& path,
                 zs.swap(sm);
             }
             // §12 R2e (device: "one elevated highway that heads toward the
-            // ground at either end"): the spine RIDES STRUCTURE through the
-            // city — a +7.5 m viaduct floor over the middle run — and
-            // descends to grade over its last ~300 m each side.
+            // ground at either end" + "the elevation is way too short ... no
+            // clearance"): the spine RIDES STRUCTURE through the city and
+            // descends to grade over its last ~300 m each side. The floor is
+            // sized for REAL headroom: deck surface = ground + girder depth
+            // (2.75 m) + the 5 m roadway clearance + a 1.25 m margin = +9 m,
+            // so a city street passes cleanly UNDER the deck's underside.
+            const Real kViaductFloor = 2.75 + 5.0 + 1.25;   // = 9.0 m
             for (std::size_t i = 0; i < ss.size(); ++i)
                 if (ss[i] > 300.0 && ss[i] < len - 300.0)
-                    zs[i] = std::max(zs[i], tz[i] + 7.5);
+                    zs[i] = std::max(zs[i], tz[i] + kViaductFloor);
             for (int it2 = 0; it2 < 3; ++it2) {
                 for (std::size_t i = 0; i < zs.size(); ++i)
                     zs[i] = std::max(zs[i], tz[i] + 0.6);   // clear the ground
@@ -2705,6 +2709,13 @@ bool LevelLoader::load(const std::string& path,
     // §10.6: streets may pass UNDER a viaduct, never THROUGH an at-grade
     // corridor — cut street edges that cross a low span of any corridor.
     if (levelGround && !corridorDefs.empty()) {
+        // A street passes UNDER only with real headroom: the clearance is the
+        // deck UNDERSIDE (deck surface minus the box girder depth), not the
+        // deck surface, and it must clear the ~5 m highway standard — the old
+        // check used the deck surface at 4.5 m, so a street rammed the girder
+        // (device: "literally no clearance with the things on the ground").
+        const Real kDeckStruct = 2.75;    // deckDepth 1.9 + girder band 0.85
+        const Real kMinUnderClear = 5.0;  // AASHTO ~16 ft over the roadway
         struct CorSample { Vec2 pos; Real clear; Real reach; };
         std::vector<CorSample> cs;
         for (const CorridorDef& def : corridorDefs) {
@@ -2712,7 +2723,8 @@ bool LevelLoader::load(const std::string& path,
             for (Real s = 0; s <= len; s += 20.0) {
                 const Vec2 p = def.horizontal.pos(s);
                 cs.push_back({p,
-                              def.vertical.elevation(s) - levelGround(p.x, p.y),
+                              def.vertical.elevation(s) - kDeckStruct -
+                                  levelGround(p.x, p.y),
                               def.halfWidthAt(s) + 7.0});
             }
         }
@@ -2733,7 +2745,7 @@ bool LevelLoader::load(const std::string& path,
                     for (int k = 0; k <= 8 && !blocked; ++k) {
                         const Vec2 q = A + (B - A) * (k / 8.0);
                         for (const CorSample& sm2 : cs) {
-                            if (sm2.clear >= 4.5) continue;   // viaduct: ok
+                            if (sm2.clear >= kMinUnderClear) continue;   // clears: ok
                             if ((q - sm2.pos).length() < sm2.reach) {
                                 blocked = true;
                                 break;
