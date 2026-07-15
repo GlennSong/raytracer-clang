@@ -261,17 +261,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         // prove the corridor is REACHABLE; this proves cars actually ROUTE
         // onto it — count drivers whose current link is Freeway/Ramp class.
         // 0 here with welds > 0 means the router never prefers the corridor.
-        int onFw = 0, drivers = 0;
+        int onDeck = 0, onRamp = 0, drivers = 0;
         for (const Agent& a : sim_.agents()) {
             if (a.mode != Agent::Mode::Driver || !a.moving) continue;
             ++drivers;
             if (a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
             const engine::RoadClass k = nav_.links[a.route.links[a.leg]].klass;
-            if (k == engine::RoadClass::Freeway || k == engine::RoadClass::Ramp)
-                ++onFw;
+            // Count DECK and RAMP separately: a driver on a ramp has entered
+            // the interchange but may never reach the mainline, so lumping the
+            // two hid whether cars actually ride the elevated deck.
+            if (k == engine::RoadClass::Freeway) ++onDeck;
+            else if (k == engine::RoadClass::Ramp) ++onRamp;
         }
-        LOG_INFO << "[freeway-use] " << onFw << " of " << drivers
-                 << " moving drivers currently on a freeway/ramp link";
+        LOG_INFO << "[freeway-use] " << onDeck << " on deck, " << onRamp
+                 << " on ramp, of " << drivers << " moving drivers";
     }
 
     MeshHandle pedMesh{}, lensMesh{};

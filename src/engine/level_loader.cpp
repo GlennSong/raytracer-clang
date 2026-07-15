@@ -3097,9 +3097,23 @@ bool LevelLoader::load(const std::string& path,
                         e.onRamp ? sg + ds * 24.0 : sg - ds * 24.0));
                     const std::vector<int>& chain =
                         e.upStation ? upChain : downChain;
+                    // Never merge onto / diverge from a chain END: up edges run
+                    // low->high station, down high->low, so the terminal node in
+                    // the flow direction owns no through-edge and the merge would
+                    // dead-end (a car reaches the deck and has nowhere to go). A
+                    // merge (on-ramp) needs an OUTGOING deck edge at mainIdx; a
+                    // diverge (exit) needs an INCOMING one.
+                    const std::size_t nChain = chain.size();
+                    auto deadEnd = [&](std::size_t k) -> bool {
+                        if (nChain < 3) return false;   // too short to trim
+                        if (e.onRamp)
+                            return e.upStation ? (k + 1 == nChain) : (k == 0);
+                        return e.upStation ? (k == 0) : (k + 1 == nChain);
+                    };
                     int mainIdx = chain.front();
                     Real best = 1e30;
                     for (std::size_t k = 0; k < chain.size(); ++k) {
+                        if (deadEnd(k)) continue;
                         const Real d0 = (chainS[k] - sJoin) * ds;
                         const Real dv = e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
                                                  : (d0 <= 0 ? -d0 : 1e4 + d0);
