@@ -33,9 +33,14 @@ public:
     // and spiral length `spiralLen` (clamped per corner when the deflection
     // is too small for the full spiral pair). `step` is the sampling
     // interval along the curve (m).
+    // `minRadius` (>0) FLOORS the fillet radius: rather than shrink the curve
+    // into a hairpin to fit short legs (which railroads fast traffic), the fit
+    // stops at minRadius. A freeway passes its design-speed minimum here; the
+    // route planner is expected to have already spread any bend too sharp for
+    // it, so the floor is a safety net, not the primary limit.
     static Alignment fromPolyline(const std::vector<Vec2>& control,
                                   Real radius, Real spiralLen,
-                                  Real step = 2.0);
+                                  Real step = 2.0, Real minRadius = 0.0);
 
     Real length() const { return samples_.empty() ? 0 : samples_.back().station; }
     bool empty() const { return samples_.size() < 2; }

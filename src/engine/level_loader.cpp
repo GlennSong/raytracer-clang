@@ -2521,7 +2521,11 @@ bool LevelLoader::load(const std::string& path,
             const PlannedRoute& pr = planned[pi2];
             if (pr.dropped) continue;
             CorridorDef def;
-            def.horizontal = Alignment::fromPolyline(pr.anchors, 300.0, 90.0);
+            // R 300 desired, floor 200 — the plan was already bend-limited
+            // (chamfered) in the generator, so this rarely bites; it just
+            // guarantees no residual corner becomes a hairpin.
+            def.horizontal = Alignment::fromPolyline(pr.anchors, 300.0, 90.0,
+                                                     2.0, 200.0);
             const Real len = def.horizontal.length();
             if (len < 320.0) continue;
             def.lanes.throughLanes = 3;

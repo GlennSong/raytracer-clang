@@ -71,7 +71,8 @@ CanonicalFillet traceFillet(Real R, Real Ls, Real arcAngle, Real step) {
 }  // namespace
 
 Alignment Alignment::fromPolyline(const std::vector<Vec2>& control,
-                                  Real radius, Real spiralLen, Real step) {
+                                  Real radius, Real spiralLen, Real step,
+                                  Real minRadius) {
     Alignment out;
     if (control.size() < 2) return out;
 
@@ -146,7 +147,43 @@ Alignment Alignment::fromPolyline(const std::vector<Vec2>& control,
                 cursor = B + outD * f.tanOut;
                 break;
             }
+            // Floor the radius at the design minimum: never shrink into a
+            // hairpin. If the min-radius fillet still won't fit the 0.5-leg
+            // reservation, take it anyway on the LAST guard step (a bounded
+            // bend that borrows a little more of the legs beats a hairpin or
+            // a raw kink).
+            if (minRadius > 0 && R * 0.72 < minRadius) {
+                R = minRadius;
+                Real spiralDefl = Ls / (2 * R);
+                if (2 * spiralDefl > defl * 0.9) Ls = defl * 0.9 * R;
+                spiralDefl = Ls / (2 * R);
+                const Real arcAngle = defl - 2 * spiralDefl;
+                CanonicalFillet f = traceFillet(R, Ls, arcAngle, step);
+                if (f.tanIn <= inLen * 0.9 + 1e-6 &&
+                    f.tanOut <= outLen * 0.9 + 1e-6) {
+                    const Vec2 start = B - inD * f.tanIn;
+                    emitTangent(cursor, start);
+                    const Vec2 ux = inD, uy(-inD.y, inD.x);
+                    for (std::size_t k = 0; k + 1 < f.pts.size(); ++k) {
+                        const Vec2& cp = f.pts[k];
+                        const Vec2& cn = f.pts[k + 1];
+                        AlignmentSample s;
+                        s.pos = start + ux * cp.x + uy * (side * cp.y);
+                        Vec2 d = cn - cp;
+                        const Real dl = d.length();
+                        if (dl < 1e-12) continue;
+                        d = d * (1.0 / dl);
+                        s.tangent = normalize(Vec2(ux.x * d.x + uy.x * (side * d.y),
+                                                   ux.y * d.x + uy.y * (side * d.y)));
+                        s.curvature = side * f.curv[k];
+                        out.samples_.push_back(s);
+                    }
+                    cursor = B + outD * f.tanOut;
+                    break;
+                }
+            }
             R *= 0.72;                                     // tighten and retry
+            R = std::max(R, minRadius);                    // but never below the floor
             Ls = std::min(Ls, R);                          // keep spirals sane
         }
         if ((cursor - B).length() < 1e-9) {                // fit never succeeded

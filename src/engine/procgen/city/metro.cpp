@@ -554,6 +554,40 @@ RoadGraph buildMetro(const MetroParams& p,
                     if (endI) pts.push_back(q); else pts.insert(pts.begin(), q);
                 }
             }
+            // §12 FREEWAY BEND LIMIT (device: "a freeway wouldn't bend at
+            // such an angle ... cars move fast ... rules about how much a
+            // freeway can bend"). A min-radius curve (~R m for the design
+            // speed) needs a long tangent, so a sharp hub angle must be
+            // SPREAD, not force-fit into a hairpin. Chamfer any vertex
+            // deflecting more than ~32 deg into two gentler corners; a few
+            // passes converge the route to a freeway-legal sweep. Endpoints
+            // (the map-edge dead-ends) are preserved.
+            for (int pass = 0; pass < 5; ++pass) {
+                std::vector<Vec2> sm;
+                sm.push_back(pts.front());
+                bool changed = false;
+                for (std::size_t k = 1; k + 1 < pts.size(); ++k) {
+                    Vec2 inD = pts[k] - pts[k - 1], outD = pts[k + 1] - pts[k];
+                    const double li = inD.length(), lo = outD.length();
+                    if (li < 1e-6 || lo < 1e-6) { sm.push_back(pts[k]); continue; }
+                    inD = inD * (1.0 / li);
+                    outD = outD * (1.0 / lo);
+                    const double defl = std::acos(std::max(
+                        -1.0, std::min(1.0, dot(inD, outD))));
+                    if (defl > 0.56) {   // > ~32 deg: too sharp for a freeway
+                        const double cut =
+                            std::min(std::min(li * 0.34, lo * 0.34), 130.0);
+                        sm.push_back(pts[k] - inD * cut);
+                        sm.push_back(pts[k] + outD * cut);
+                        changed = true;
+                    } else {
+                        sm.push_back(pts[k]);
+                    }
+                }
+                sm.push_back(pts.back());
+                pts.swap(sm);
+                if (!changed) break;
+            }
             // runt fragments read as random stubs — a route must EARN its
             // place with real length
             double planLen = 0;
