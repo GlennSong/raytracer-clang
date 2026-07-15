@@ -76,77 +76,9 @@ Poly2 clipToBlock(const Poly2& cell, const Poly2& block) {
 // ends); otherwise the two rows meet in the middle. Rectangles are OBB-aligned
 // and clipped to the block, so they read as real lots, not trapezoids.
 // A CCW polygon is convex when every consecutive turn is a left turn.
-bool isConvexCCW(const Poly2& poly) {
-    const int n = static_cast<int>(poly.size());
-    if (n < 3) return false;
-    for (int i = 0; i < n; ++i) {
-        const Vec2 a = poly[i], b = poly[(i + 1) % n], c = poly[(i + 2) % n];
-        if (cross(b - a, c - b) < -1e-6) return false;   // a right turn => concave
-    }
-    return true;
-}
-
-// Concave-block parceling: a ring of street-fronting strips inset one lotDepth
-// from each edge, plus an interior court. Trapezoidal, not rectangular — but
-// every lot touches a block edge (a street), so NOTHING is landlocked. Used
-// only for the rare non-convex arterial off-cut; convex blocks get the crisp
-// rectangular row-split. This is what makes the parceler court-robust for ANY
-// block, so the grid-cell cap can relax and big districts keep big blocks.
-bool parcelRing(const Poly2& b, const ParcelParams& p, int district,
-                std::vector<Lot>& out) {
-    const int n = static_cast<int>(b.size());
-    if (n < 3) return false;
-    Poly2 I = inset(b, p.lotDepth);
-    // inset must survive with the same edge count (edge i pairs with inset
-    // edge i); a collapse/self-intersection means too-deep for this block.
-    if (I.size() != static_cast<std::size_t>(n) || area(I) < 1.0) {
-        // Shallow concave block: inset one HALF the depth so the ring still
-        // forms, meeting near the middle (no court).
-        I = inset(b, p.lotDepth * 0.5);
-        if (I.size() != static_cast<std::size_t>(n) || area(I) < 1.0) return false;
-    }
-    ensureCCW(I);
-    for (int i = 0; i < n; ++i) {
-        const Vec2 B0 = b[i], B1 = b[(i + 1) % n];
-        const Vec2 I0 = I[i], I1 = I[(i + 1) % n];
-        const Real flen = (B1 - B0).length();
-        if (flen < 1.0) continue;
-        const Vec2 edir = normalize(B1 - B0);
-        const Vec2 fwd(edir.y, -edir.x);   // outward (CCW: interior is left)
-        const int k = std::max(1, static_cast<int>(std::lround(flen / p.frontWidth)));
-        for (int j = 0; j < k; ++j) {
-            const Real t0 = static_cast<Real>(j) / k, t1 = static_cast<Real>(j + 1) / k;
-            Poly2 lotP{lerp(B0, B1, t0), lerp(B0, B1, t1),
-                       lerp(I0, I1, t1), lerp(I0, I1, t0)};
-            ensureCCW(lotP);
-            if (area(lotP) < p.minArea * 0.4) continue;
-            Lot lot;
-            lot.footprint = std::move(lotP);
-            lot.area = area(lot.footprint);
-            lot.district = district;
-            lot.frontage = fwd;
-            out.push_back(std::move(lot));
-        }
-    }
-    if (area(I) >= p.courtMinArea) {   // a real interior => a court
-        Lot court;
-        court.footprint = I;
-        court.area = area(I);
-        court.district = district;
-        court.court = true;
-        court.frontage = Vec2(0, 1);
-        out.push_back(std::move(court));
-    }
-    return !out.empty();
-}
-
 bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
                     std::vector<Lot>& out) {
     if (b.size() < 3) return false;
-    // The row-split clips cells by each block edge's half-plane, valid only for
-    // a CONVEX face. Concave blocks take the ring method (also accessible) —
-    // never the landlocking bisection.
-    if (!isConvexCCW(b)) return parcelRing(b, p, district, out);
     const OBB2 o = orientedBoundingBox(b);
     const int la = o.longAxis(), sa = 1 - la;
     const Vec2 U = o.axis[la];    // long axis (rows run along this)
@@ -167,14 +99,22 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
         Poly2 piece = clipToBlock(rect, b);
         if (piece.size() < 3) return;
         ensureCCW(piece);
-        if (area(piece) < (isCourt ? 1.0 : p.minArea * 0.5)) return;
-        if (!isCourt) {
-            // Reject THIN diagonal slivers a corner clip can leave — their
-            // axis-aligned bbox looks fine but the real (OBB) short side is
-            // knife-thin, and a building shrink-fit to one collapses to a
-            // degenerate box far from its site.
-            const OBB2 lo = orientedBoundingBox(piece);
-            if (lo.half[1 - lo.longAxis()] * 2.0 < p.minEdge) return;
+        const Real full = std::fabs((u1 - u0) * (v1 - v0));   // U,V orthonormal
+        const Real a = area(piece);
+        if (isCourt) {
+            if (a < 1.0) return;   // the central plaza: whatever interior remains
+        } else {
+            // AABB-ONLY (device: "AABB lots ... no trapezoids; the empty
+            // middle is a plaza"): keep a lot ONLY where the rectangular cell
+            // clips to a (near-)full rectangle. A significantly clipped cell
+            // would be a trapezoid, so it's left as open ground that reads as
+            // setback/plaza rather than a wedge lot. Emit the clean RECT (not
+            // the clipped piece) so the lot is a true axis-aligned rectangle.
+            if (a < 0.90 * full) return;
+            if (!pointInPolygon(b, o.center + U * ((u0 + u1) * 0.5) +
+                                       V * ((v0 + v1) * 0.5)))
+                return;
+            piece = rect;
         }
         Lot lot;
         lot.area = area(piece);
@@ -185,18 +125,19 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
         out.push_back(std::move(lot));
     };
 
-    // v-bands of the rows (and the court) in OBB short-axis coordinates.
+    // v-bands: two street-fronting rows + a central PLAZA between them (device
+    // model). Rows shrink to keep a real plaza even on a medium block; a thin
+    // block gets a single row and no plaza.
     struct Band { Real v0, v1; Vec2 fdir; bool court; };
     std::vector<Band> bands;
+    (void)court;
     if (rows == 1) {
         bands.push_back({-HS, HS, V, false});
-    } else if (court) {
-        bands.push_back({-HS, -HS + p.lotDepth, V * -1.0, false});   // front row
-        bands.push_back({HS - p.lotDepth, HS, V, false});            // back row
-        bands.push_back({-HS + p.lotDepth, HS - p.lotDepth, V, true}); // court
     } else {
-        bands.push_back({-HS, 0, V * -1.0, false});
-        bands.push_back({0, HS, V, false});
+        const Real rd = std::min(p.lotDepth, HS * 0.82);   // >= ~36% stays plaza
+        bands.push_back({-HS, -HS + rd, V * -1.0, false});   // front row
+        bands.push_back({HS - rd, HS, V, false});            // back row
+        bands.push_back({-HS + rd, HS - rd, V, true});       // central plaza
     }
     for (const Band& bd : bands) {
         if (bd.court) { emitCell(-HL, HL, bd.v0, bd.v1, V, true); continue; }
