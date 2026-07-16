@@ -416,7 +416,7 @@ CorridorMeshOut buildCorridorMesh(
         // under the deck. Width blends aux-lane -> full ramp along the run;
         // all divergence happens in the free section beyond the band.
         const Real Lg = goreBandLen(c, e, L);
-        const Real rampW = 5.8;
+        const Real rampW = 7.2;   // AASHTO 1-lane ramp: 12 ft lane + 4/8 ft shoulders
         const int nb = 30;
         const Real sBand0 = e.onRamp ? sg - ds * Lg : sg;   // flow-first end
         std::vector<Vec3> bandIn(nb + 1), bandOut(nb + 1), bandPath;
@@ -528,7 +528,7 @@ CorridorMeshOut buildCorridorMesh(
                        {RL, e.targetY, 0}};
         else
             rp.pvis = {{0, zDeck, 0}, {RL, e.targetY, std::min(RL * 0.5, Real(90))}};
-        const Real rw = 2.9;                       // half-width: lane + shoulders
+        const Real rw = 3.6;                       // half-width: 12 ft lane + shoulders (7.2 m)
         const int rn = std::max(2, static_cast<int>(RL / step));
         std::vector<Rib> rr(rn + 1);
         std::vector<bool> rUp(rn + 1);
