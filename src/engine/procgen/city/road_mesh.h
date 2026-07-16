@@ -256,6 +256,10 @@ struct WeldSolidParams {
     double thickness = 0.5;                     // top-to-bottom extrude depth (m)
     double cornerRadius = 0.0;                  // junction curb-return fillet
     double maxGrade = 0.08;                     // profile slope limit (rise/run) for smoothing
+    // Grade-separation clearance (m): two carriageways overlapping in plan weld
+    // into one surface only where their decks are within this height of each
+    // other; beyond it they are separate surfaces (a deck flies over a road).
+    double clearance = 5.0;
     Vec3   topColor{0.10, 0.10, 0.11};          // asphalt deck
     Vec3   sideColor{0.18, 0.18, 0.19};         // curb / road edge
     Vec3   bottomColor{0.05, 0.05, 0.05};       // underside

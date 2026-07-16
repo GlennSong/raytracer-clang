@@ -423,6 +423,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.heightAt = net.heightAt;
     wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
     wp.crosswalkMaxWidth = 18.0;      // ...but never across a freeway-width chain
+    wp.clearance = defaultDesign().clearance;   // grade-separation Δz threshold (P4)
     // Junction pads (device: mesh holes at skewed T-junctions): chains end square
     // to their own direction, so where a through-road BENDS at a junction the two
     // arm caps disagree by the bend angle and a wedge of ground shows through. A

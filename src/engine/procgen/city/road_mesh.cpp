@@ -1236,7 +1236,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; int group; };
     std::vector<Prof> profs;
     // Per-chain-END junction MOUTH depth: how far the junction pad reaches along
     // this arm. The shipping pad is a disc of radius = the WIDEST incident arm's
@@ -1288,18 +1288,26 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             bool closed = sp.closed ||
                 (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
             profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass,
-                             frontMouth[si], backMouth[si], !sp.yAbs.empty()});
+                             frontMouth[si], backMouth[si], !sp.yAbs.empty(), 0});
         }
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
     // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
     // from it), mv = arc-length along the road (for dashed dividers). Junctions agree where spines
     // meet. Off the carriageway (no spine) mu stays 0 so no paint lands there.
+    // Grade-separation grouping: each Prof carries a `group`; the weld runs its
+    // union/deck/wall/sidewalk/markings stages once PER group so two roads that
+    // overlap in plan at different heights (a deck over a street) never merge.
+    // `curGroup` scopes the nearest-spine sample to the group being welded (a low
+    // street can't set the deck's height at a crossing); -1 = all groups (piers).
+    int nGroups = 1;
+    int curGroup = -1;
     auto sample = [&](double x, double z, double& oh, double& omu, double& omv, int& oSpine) {
         oh = p.topY; omu = 0.0; omv = 0.0; oSpine = -1;
         Vec2 q(x, z); double bestD2 = 1e30;
         for (std::size_t pi = 0; pi < profs.size(); ++pi) {
             const Prof& pr = profs[pi];
+            if (curGroup >= 0 && pr.group != curGroup) continue;   // group-local weld
             for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
                 const Vec2& a = pr.cl[i]; Vec2 ab = pr.cl[i + 1] - a;
                 double L2 = ab.lengthSquared();
@@ -1328,20 +1336,42 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         return si >= 0 && si < static_cast<int>(profs.size()) && profs[si].authored;
     };
 
+    // Route each junction pad to the weld group of its nearest arm endpoint, so a
+    // pad welds into the surface it belongs to (a ground pad never fuses a deck).
+    std::vector<int> padGroup(p.padCenters.size(), 0);
+    for (std::size_t pc = 0; pc < p.padCenters.size(); ++pc) {
+        double best = 1e30;
+        for (const Prof& pr : profs) {
+            if (pr.cl.empty()) continue;
+            for (const Vec2& end : {pr.cl.front(), pr.cl.back()}) {
+                double d = (p.padCenters[pc] - end).lengthSquared();
+                if (d < best) { best = d; padGroup[pc] = pr.group; }
+            }
+        }
+    }
+
+    // Weld each grade group independently: two roads overlapping in plan at
+    // different heights land in different groups, so their ribbons never union
+    // into one surface (a deck flies over a street; no curtain wall). At
+    // nGroups==1 (no elevated deck, or increment-1 no-op) this is the old single
+    // union, byte for byte. sample/heightOf/authoredAt above are scoped by
+    // curGroup so the deck's height wins over its own group and the street's over
+    // its own. Piers (after the loop) keep a GLOBAL view of all roads.
+    RenderMesh mesh;                                  // accumulates across groups
+    for (int g = 0; g < nGroups; ++g) {
+      curGroup = g;
     // 2. The welded outline (same join engine as weldRibbons), rounded at junctions. A CLOSED
     //    spine (a roundabout ring) becomes an annulus: its outer rail welds with the spokes, its
     //    inner rail is punched as a central island hole.
     std::vector<Poly2> ribbons, forcedHoles;
-    for (const UnionSpine& s : spines) {
-        if (s.points.size() < 2) continue;
-        bool closed = s.closed ||
-            (s.points.size() >= 4 && (s.points.front() - s.points.back()).length() < 1e-6);
-        if (closed) {
-            Poly2 outer, inner; ringRibbon(s.points, s.halfWidth, outer, inner);
+    for (const Prof& pr : profs) {
+        if (pr.group != g || pr.cl.size() < 2) continue;
+        if (pr.closed) {
+            Poly2 outer, inner; ringRibbon(pr.cl, pr.hw, outer, inner);
             if (outer.size() >= 3) ribbons.push_back(std::move(outer));
             if (inner.size() >= 3) forcedHoles.push_back(std::move(inner));
         } else {
-            Poly2 r = ribbonOutline(s.points, s.halfWidth);
+            Poly2 r = ribbonOutline(pr.cl, pr.hw);
             if (r.size() >= 3) ribbons.push_back(std::move(r));
         }
     }
@@ -1349,6 +1379,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // outline (walls + sidewalk) wraps the pad and no wedge of ground shows
     // between off-square arm caps (see WeldSolidParams::padCenters).
     for (std::size_t pi = 0; pi < p.padCenters.size() && pi < p.padRadii.size(); ++pi) {
+        if (pi < padGroup.size() && padGroup[pi] != g) continue;
         const double r = p.padRadii[pi];
         if (r <= 0.0) continue;
         Poly2 disc;
@@ -1368,7 +1399,6 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     }
     for (Poly2& h : forcedHoles) holes.push_back(std::move(h));   // roundabout islands
 
-    RenderMesh mesh;
     auto P3 = [&](const Vec2& v, double dh) { return Vec3(v.x, heightOf(v.x, v.y) + dh, v.y); };
     // A vertical wall along a boundary loop: the outward normal is the RIGHT normal of each
     // directed edge (away from the solid for a CCW outer; into the shaft for a CW hole loop).
@@ -1543,6 +1573,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     };
     for (std::size_t pi = 0; pi < profs.size(); ++pi) {
         const Prof& pr = profs[pi];
+        if (pr.group != g) continue;                 // paint only this group's roads
         const double hw = pr.hw;
         const int n = static_cast<int>(pr.cl.size());
         if (n < 2) continue;
@@ -1593,7 +1624,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 Vec2 mid = (c0 + c1) * 0.5;
                 bool junction = false;
                 for (std::size_t pj = 0; pj < profs.size() && !junction; ++pj)
-                    if (pj != pi && distToSpine(mid, profs[pj]) < profs[pj].hw + 0.5) junction = true;
+                    if (pj != pi && profs[pj].group == g &&
+                        distToSpine(mid, profs[pj]) < profs[pj].hw + 0.5) junction = true;
                 if (junction) continue;
                 Vec3 mL0 = P(c0, o0, h0 + markLift, +1), mR0 = P(c0, o0, h0 + markLift, -1),
                      mL1 = P(c1, o1, h1 + markLift, +1), mR1 = P(c1, o1, h1 + markLift, -1);
@@ -1668,6 +1700,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // (Junction pad interiors are part of the welded union boundary, so the
     // triangulated deck above already surfaces them as one sheet with the arms —
     // no separate pad fan is needed, and none is emitted to overlap it.)
+    }   // end per-group weld
+    curGroup = -1;                                    // piers see all groups
 
     // PIERS under authored elevated decks (welder-goes-3D): a viaduct rides on
     // columns, not a curtain wall (the slab underside is aloft; something must
