@@ -1,6 +1,7 @@
 #include "road_mesh.h"
 #include "road_rules.h"
 
+#include "../../../log.h"          // LOG_WARN (grade-sep corkscrew guardrail)
 #include "../../mesh_builder.h"
 #include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
 #include "street_kit.h"           // roundPolygonCorners (the unified corner-fillet pass)
@@ -1291,6 +1292,119 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                              frontMouth[si], backMouth[si], !sp.yAbs.empty(), 0});
         }
     }
+    // ---- Grade separation (P4): split authored decks + assign weld groups ----
+    // A deck that flies over a live road must not fuse with it in the 2-D union.
+    // SPLIT each authored spine at the clearance-above-ground crossing: the LOW
+    // foot of a ramp (deck < clearance over the ground) is reclassified to ground
+    // so it welds into the street grid at its junction (and piers avoid it), while
+    // the HIGH span stays a viaduct on piers. The seam vertex at deck==clearance
+    // is shared bit-identically so the driving surface stays continuous.
+    {
+        auto groundY = [&](const Vec2& q) { return p.heightAt ? p.heightAt(q.x, q.y) : p.topY; };
+        const double kNoCross = 1e4;   // seam-end mouth sentinel: no crosswalk mid-ramp
+        std::vector<Prof> split;
+        split.reserve(profs.size());
+        for (const Prof& pr : profs) {
+            if (!pr.authored || pr.closed || pr.cl.size() < 2) { split.push_back(pr); continue; }
+            const int n = static_cast<int>(pr.cl.size());
+            std::vector<Vec2> ac; std::vector<double> ah, asx, ae;
+            auto pushA = [&](const Vec2& c, double h, double s, double e) {
+                ac.push_back(c); ah.push_back(h); asx.push_back(s); ae.push_back(e); };
+            pushA(pr.cl[0], pr.h[0], pr.s[0], pr.h[0] - groundY(pr.cl[0]));
+            for (int i = 0; i + 1 < n; ++i) {
+                const double e0 = pr.h[i]   - groundY(pr.cl[i]);
+                const double e1 = pr.h[i+1] - groundY(pr.cl[i+1]);
+                if ((e0 < p.clearance) != (e1 < p.clearance)) {   // crosses the band
+                    const double t = (p.clearance - e0) / (e1 - e0);
+                    pushA(pr.cl[i] + (pr.cl[i+1] - pr.cl[i]) * t,
+                          pr.h[i] + (pr.h[i+1] - pr.h[i]) * t,
+                          pr.s[i] + (pr.s[i+1] - pr.s[i]) * t, p.clearance);
+                }
+                pushA(pr.cl[i+1], pr.h[i+1], pr.s[i+1], e1);
+            }
+            const int m = static_cast<int>(ac.size());
+            auto segHigh = [&](int k) { return (ae[k] + ae[k+1]) * 0.5 >= p.clearance; };
+            int s = 0;
+            while (s < m - 1) {
+                const bool hi = segHigh(s);
+                int e = s;
+                while (e < m - 1 && segHigh(e) == hi) ++e;        // segments [s..e-1]
+                Prof q;
+                q.cl.assign(ac.begin() + s, ac.begin() + e + 1);
+                q.h.assign(ah.begin() + s, ah.begin() + e + 1);
+                q.s.assign(asx.begin() + s, asx.begin() + e + 1);
+                q.hw = pr.hw; q.closed = false; q.klass = pr.klass;
+                q.authored = hi;                                 // LOW -> ground weld; HIGH -> viaduct
+                q.mouthFront = (s == 0)     ? pr.mouthFront : kNoCross;
+                q.mouthBack  = (e == m - 1) ? pr.mouthBack  : kNoCross;
+                q.group = 0;
+                split.push_back(std::move(q));
+                s = e;
+            }
+        }
+        profs.swap(split);
+    }
+    // Assign weld groups: ground (non-authored) = 0; authored spines cluster by
+    // affinity (share an endpoint, or overlap within clearance) so a continuous
+    // elevated road stays one deck while a road it flies over lands in a
+    // different group and never fuses. A stacked overlap forced into one group
+    // (corkscrew / stacked interchange) is DETECTED and warned, not silently
+    // shipped as a merged surface.
+    int nGroups = 1;
+    {
+        const int P = static_cast<int>(profs.size());
+        std::vector<int> uf(P);
+        for (int i = 0; i < P; ++i) uf[i] = i;
+        auto find = [&](int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+        auto uni  = [&](int a, int b) { uf[find(a)] = find(b); };
+        auto key  = [](const Vec2& q) {
+            return std::make_pair(static_cast<long long>(std::llround(q.x * 8)),
+                                  static_cast<long long>(std::llround(q.y * 8))); };
+        auto nearestOn = [&](const Vec2& pt, const Prof& B, double& outH) {
+            double best = 1e30; outH = 0.0;
+            for (std::size_t k = 0; k + 1 < B.cl.size(); ++k) {
+                Vec2 a = B.cl[k], ab = B.cl[k+1] - a; double L2 = ab.lengthSquared();
+                double t = L2 < 1e-12 ? 0.0 : std::max(0.0, std::min(1.0, dot(pt - a, ab) / L2));
+                double d = (pt - (a + ab * t)).length();
+                if (d < best) { best = d; outH = B.h[k] + (B.h[k+1] - B.h[k]) * t; }
+            }
+            return best;
+        };
+        std::vector<int> auth;
+        for (int i = 0; i < P; ++i) if (profs[i].authored) auth.push_back(i);
+        int conflicts = 0;
+        for (std::size_t ai = 0; ai < auth.size(); ++ai)
+            for (std::size_t aj = ai + 1; aj < auth.size(); ++aj) {
+                const Prof& A = profs[auth[ai]]; const Prof& B = profs[auth[aj]];
+                bool affinity = key(A.cl.front()) == key(B.cl.front()) ||
+                                key(A.cl.front()) == key(B.cl.back())  ||
+                                key(A.cl.back())  == key(B.cl.front()) ||
+                                key(A.cl.back())  == key(B.cl.back());
+                bool conflict = false;
+                for (std::size_t k = 0; k < A.cl.size(); ++k) {
+                    double bh; double d = nearestOn(A.cl[k], B, bh);
+                    if (d < A.hw + B.hw) {
+                        if (std::fabs(A.h[k] - bh) < p.clearance) affinity = true;
+                        else conflict = true;
+                    }
+                }
+                if (affinity) uni(auth[ai], auth[aj]);
+                if (affinity && conflict) ++conflicts;           // stacked yet forced together
+            }
+        std::map<int, int> rootGroup;
+        int next = 1;
+        for (int i = 0; i < P; ++i) {
+            if (!profs[i].authored) { profs[i].group = 0; continue; }
+            int r = find(i);
+            auto it = rootGroup.find(r);
+            if (it == rootGroup.end()) { rootGroup[r] = next; profs[i].group = next++; }
+            else profs[i].group = it->second;
+        }
+        nGroups = next;
+        if (conflicts > 0)
+            LOG_WARN << "[weld3d] " << conflicts << " stacked overlap(s) forced into one weld "
+                        "group (corkscrew/stacked interchange) — may render merged; needs sub-split";
+    }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
     // — mu = 2 + lateral/halfWidth in [1,3] (centre 2, curbs 1 & 3; the RoadMarkings shader paints
     // from it), mv = arc-length along the road (for dashed dividers). Junctions agree where spines
@@ -1300,7 +1414,6 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // overlap in plan at different heights (a deck over a street) never merge.
     // `curGroup` scopes the nearest-spine sample to the group being welded (a low
     // street can't set the deck's height at a crossing); -1 = all groups (piers).
-    int nGroups = 1;
     int curGroup = -1;
     auto sample = [&](double x, double z, double& oh, double& omu, double& omv, int& oSpine) {
         oh = p.topY; omu = 0.0; omv = 0.0; oSpine = -1;

@@ -4,6 +4,8 @@
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"
 
+#include <limits>
+
 using namespace engine;
 using namespace mesh_invariants;
 
@@ -231,4 +233,131 @@ TEST_CASE(road_net_without_node_elev_stays_at_grade) {
     double minY, maxY;
     bboxY(m, minY, maxY);
     CHECK(maxY < 4.0);                             // near the 3.0 ground (+ lift), not lifted
+}
+
+// --- Grade separation (P4): a deck flies OVER a live road ---------------------
+// The 2-D weld used to fuse a deck and the street it crosses into one surface +
+// a curtain wall to the ground. weldSolid now welds each grade group separately,
+// so the deck and the street beneath it are two independent surfaces with clear
+// air between. Height-band assertions are robust to the thin marking overlay.
+
+namespace {
+// A constant +9 m deck (along Z) crossing an at-grade street (along X) at origin.
+RenderMesh flyover() {
+    UnionSpine deck;
+    deck.points = { Vec2(0, -40), Vec2(0, 40) };
+    deck.halfWidth = 6.0; deck.klass = RoadClass::Freeway;
+    deck.yAbs = { 9.0, 9.0 };
+    UnionSpine street;                             // no yAbs -> draped at grade
+    street.points = { Vec2(-40, 0), Vec2(40, 0) };
+    street.halfWidth = 5.0;
+    WeldSolidParams p;
+    p.thickness = 0.5; p.clearance = 5.0;
+    p.heightAt = [](double, double) { return 0.0; };
+    return weldSolid({ deck, street }, p);
+}
+}  // namespace
+
+// N — two surfaces over the crossing, clear air between (not one merged sheet).
+TEST_CASE(gradesep_two_surfaces_over_the_crossing) {
+    RenderMesh m = flyover();
+    CHECK(!hasNonFinite(m));
+    CHECK(indicesInRange(m));
+    CHECK(degenerateTriangles(m) == 0);
+    CHECK(upwardFraction(m) > 0.3);
+    int low = 0, high = 0, mid = 0;
+    for (double h : surfaceHitsAt(m, 0.0, 0.0)) {
+        if (h < 0.6) ++low; else if (h > 8.0) ++high; else ++mid;
+    }
+    CHECK(low >= 1);                                // the street at grade
+    CHECK(high >= 1);                               // the deck aloft
+    CHECK(mid == 0);                                // nothing merged in between
+    CHECK(hasClearSpanAt(m, 0.0, 0.0, 0.6, 8.0));   // clear air / sky under the deck
+}
+
+// O — no curtain wall: no geometry in the mid-height band over the crossing.
+TEST_CASE(gradesep_no_curtain_wall) {
+    RenderMesh m = flyover();
+    CHECK(verticesInBox(m, -5.0, 5.0, 1.0, 8.0, -5.0, 5.0) == 0);
+}
+
+// P — the street is continuous UNDER the deck and the deck continuous OVER it.
+TEST_CASE(gradesep_continuous_under_and_over) {
+    RenderMesh m = flyover();
+    for (double x = -30; x <= 30; x += 5.0) {       // march the street under the deck
+        bool grade = false;
+        for (double h : surfaceHitsAt(m, x, 0.0)) if (h < 1.0) grade = true;
+        CHECK(grade);
+    }
+    for (double z = -30; z <= 30; z += 5.0) {       // march over the deck
+        bool deck = false;
+        for (double h : surfaceHitsAt(m, 0.0, z)) if (h > 8.0) deck = true;
+        CHECK(deck);
+    }
+}
+
+// Q — piers straddle the street: columns on both approaches, none on the road.
+TEST_CASE(gradesep_piers_straddle_the_street) {
+    RenderMesh m = flyover();
+    int onRoad = 0, north = 0, south = 0;
+    for (const Vertex& v : m.vertices) {
+        if (std::fabs(v.position.y) > 0.02 || std::fabs(v.position.x) > 1.2) continue;
+        const double z = v.position.z;
+        if (std::fabs(z) < 6.0) ++onRoad; else if (z < -6.0) ++north; else if (z > 6.0) ++south;
+    }
+    CHECK(onRoad == 0);
+    CHECK(north > 0);
+    CHECK(south > 0);
+}
+
+// R — end-to-end through buildRoadNetMesh: an authored elevated E-W road and a
+// SEPARATE at-grade N-S street (no shared node) grade-separate at their crossing.
+TEST_CASE(gradesep_end_to_end_via_road_net) {
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    RoadNet n;
+    n.nodes = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0),   // E-W: 0,1,2 (deck at +9)
+                Vec2(0, -40), Vec2(0, 40) };             // N-S: 3,4 (at grade)
+    n.edges = { {0, 1}, {1, 2}, {3, 4} };
+    n.nodeElev = { 9.0, 9.0, 9.0, NaN, NaN };
+    n.heightAt = [](double, double) { return 0.0; };
+    RenderMesh m = buildRoadNetMesh(n);
+    CHECK(!hasNonFinite(m));
+    CHECK(degenerateTriangles(m) == 0);
+    bool grade = false, deck = false;
+    for (double h : surfaceHitsAt(m, 0.0, 0.0)) { if (h < 1.0) grade = true; if (h > 8.0) deck = true; }
+    CHECK(grade);                                   // the street passes under
+    CHECK(deck);                                    // the deck flies over
+    CHECK(verticesInBox(m, -4.0, 4.0, 1.0, 8.0, -4.0, 4.0) == 0);   // no curtain wall
+}
+
+// S — ramp foot welds while the crest grade-separates. An E-W road climbs 0->9,
+// stays elevated, descends; a cross street meets its WEST foot at grade, and a
+// street passes UNDER the elevated crest. The split reclassifies the low ramp
+// feet to ground (welding the cross street) while the crest stays a viaduct that
+// grade-separates from the flown-over street.
+TEST_CASE(gradesep_ramp_foot_welds_crest_separates) {
+    const double NaN = std::numeric_limits<double>::quiet_NaN();
+    RoadNet n;
+    n.nodes = {
+        Vec2(-150, 0), Vec2(-80, 0), Vec2(80, 0), Vec2(150, 0),   // 0..3: E-W 0->9->9->0
+        Vec2(-150, -40), Vec2(-150, 40),                          // 4,5: cross street at west foot
+        Vec2(0, -50), Vec2(0, 50) };                              // 6,7: street under the crest
+    n.edges = { {0,1}, {1,2}, {2,3}, {4,0}, {0,5}, {6,7} };
+    n.nodeElev = { 0.0, 9.0, 9.0, 0.0, NaN, NaN, NaN, NaN };
+    n.heightAt = [](double, double) { return 0.0; };
+    RenderMesh m = buildRoadNetMesh(n);
+    CHECK(!hasNonFinite(m));
+    CHECK(degenerateTriangles(m) == 0);
+    // Crest over the flown-over street (x=0): deck aloft + street at grade, clear between.
+    bool grade = false, deck = false;
+    for (double h : surfaceHitsAt(m, 0.0, 0.0)) { if (h < 1.0) grade = true; if (h > 8.0) deck = true; }
+    CHECK(grade);
+    CHECK(deck);
+    CHECK(verticesInBox(m, -4.0, 4.0, 1.0, 8.0, -4.0, 4.0) == 0);
+    // West foot (x=-150): at grade, one welded surface with the cross street (no
+    // second surface aloft, no curtain wall there).
+    bool foot = false;
+    for (double h : surfaceHitsAt(m, -150.0, 0.0)) if (h < 1.5) foot = true;
+    CHECK(foot);
+    CHECK(hasClearSpanAt(m, -150.0, 0.0, 2.0, 100.0));   // nothing elevated over the foot
 }

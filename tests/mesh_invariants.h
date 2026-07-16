@@ -7,8 +7,10 @@
 
 #include "../src/renderer/renderer.h"
 #include "../src/rt_math.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace mesh_invariants {
 using namespace engine;   // RenderMesh, Vertex, Vec3, cross
@@ -92,6 +94,61 @@ inline double upwardFraction(const RenderMesh& m) {
         if (ny > 0.7) ++up;
     }
     return tot > 0 ? static_cast<double>(up) / tot : 0.0;
+}
+
+// Count vertices inside an axis-aligned box (world space). The grade-sep
+// "no curtain wall" check: a deck flying over a street must have NO geometry in
+// the mid-height band directly over the crossing.
+inline int verticesInBox(const RenderMesh& m, double x0, double x1, double y0,
+                         double y1, double z0, double z1) {
+    int n = 0;
+    for (const Vertex& v : m.vertices) {
+        const double x = v.position.x, y = v.position.y, z = v.position.z;
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1 && z >= z0 && z <= z1) ++n;
+    }
+    return n;
+}
+
+// The Y heights of every UP-facing triangle whose XZ projection covers (x,z),
+// sorted ascending. At a clean grade-separated crossing this returns TWO hits —
+// the street (~grade) and the deck (~+9) — with clear air between; a merged
+// (curtain-wall) weld returns a continuous ramp of hits instead. `upOnly` gates
+// on averaged vertex-normal y so only drivable/deck faces count (not undersides).
+inline std::vector<double> surfaceHitsAt(const RenderMesh& m, double x, double z,
+                                         double upThresh = 0.5) {
+    std::vector<double> hits;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        uint32_t ia = m.indices[t], ib = m.indices[t + 1], ic = m.indices[t + 2];
+        if (ia >= m.vertices.size() || ib >= m.vertices.size() || ic >= m.vertices.size())
+            continue;
+        const Vertex& A = m.vertices[ia]; const Vertex& B = m.vertices[ib];
+        const Vertex& C = m.vertices[ic];
+        const double ny = (A.normal.y + B.normal.y + C.normal.y) / 3.0;
+        if (ny < upThresh) continue;                 // not an up-facing surface
+        // Barycentric test in the XZ plane.
+        const double ax = A.position.x, az = A.position.z;
+        const double bx = B.position.x, bz = B.position.z;
+        const double cx = C.position.x, cz = C.position.z;
+        const double d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+        if (std::fabs(d) < 1e-9) continue;
+        const double l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+        const double l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+        const double l3 = 1.0 - l1 - l2;
+        const double e = -1e-6;
+        if (l1 < e || l2 < e || l3 < e) continue;    // (x,z) outside this triangle
+        hits.push_back(l1 * A.position.y + l2 * B.position.y + l3 * C.position.y);
+    }
+    std::sort(hits.begin(), hits.end());
+    return hits;
+}
+
+// True if NO up-facing surface sits in the open height band (yLo,yHi) at (x,z) —
+// i.e. clear air/sky between a low road and a high deck over the same footprint.
+inline bool hasClearSpanAt(const RenderMesh& m, double x, double z, double yLo,
+                           double yHi) {
+    for (double h : surfaceHitsAt(m, x, z))
+        if (h > yLo && h < yHi) return false;
+    return true;
 }
 
 }  // namespace mesh_invariants

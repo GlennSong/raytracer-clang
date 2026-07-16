@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "3D Weld Lab",
-  "_comment": "ONE road entity, ONE welder (buildRoadNetMesh): an east-west road at grade at its ends (welding into two cross streets at nodes 1 and 8), rising on ramps to a +9 m elevated deck and descending again. node_elev authors the deck height; the unified welder builds the ramps, the elevated deck, and the piers — the SAME welder that builds the flat streets. Proof-in-code that a road can be 3D and its ramps mesh with the ground streets, with no separate corridor/bridge mesher. (Grade-separated crossings — a deck flying over a LIVE road with a clean underpass — are the next increment: the 2-D weld union can't yet represent two roads overlapping at different heights.)",
+  "_comment": "ONE road entity, ONE welder (buildRoadNetMesh): an east-west road at grade at its ends (welding into two cross streets at nodes 1 and 8), rising on ramps to a +9 m elevated deck, FLYING OVER a north-south surface street (edge [14,15]) with a clean underpass, and descending again. node_elev authors the deck height; the unified welder builds the ramps, the elevated deck, the piers, AND grade-separates the deck from the street it crosses (weld-or-cross by Δz) — the SAME welder that builds the flat streets, no separate corridor/bridge mesher. Proof-in-code that the road graph is 3D: ramps mesh with the ground streets, and a deck flies over a live road without merging into it.",
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "terrain": {
     "seed": 1, "size": 600, "resolution": 300,
@@ -18,12 +18,13 @@
           {"x": -30, "z": 0}, {"x": 30, "z": 0}, {"x": 70, "z": 0}, {"x": 110, "z": 0},
           {"x": 150, "z": 0}, {"x": 200, "z": 0},
           {"x": -150, "z": -60}, {"x": -150, "z": 60},
-          {"x": 150, "z": -60}, {"x": 150, "z": 60}
+          {"x": 150, "z": -60}, {"x": 150, "z": 60},
+          {"x": 0, "z": -70}, {"x": 0, "z": 70}
         ],
-        "node_elev": [ 0, 0, 3, 7, 9, 9, 7, 3, 0, 0, null, null, null, null ],
+        "node_elev": [ 0, 0, 3, 7, 9, 9, 7, 3, 0, 0, null, null, null, null, null, null ],
         "edges": [
           [0,1], [1,2], [2,3], [3,4], [4,5], [5,6], [6,7], [7,8], [8,9],
-          [10,1], [1,11], [12,8], [8,13]
+          [10,1], [1,11], [12,8], [8,13], [14,15]
         ],
         "width": 12, "sidewalk": 3.0, "markings": true, "crosswalks": true } }
   ],
