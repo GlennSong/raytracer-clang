@@ -2733,8 +2733,10 @@ bool LevelLoader::load(const std::string& path,
             std::vector<std::array<int, 2>> keptE;
             std::vector<double> keptW;
             std::vector<int> keptL;
+            std::vector<engine::RoadClass> keptC;
             const bool hasW = !net.edgeWidths.empty();
             const bool hasL = !net.edgeLayers.empty();
+            const bool hasC = !net.edgeClasses.empty();
             for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
                 const auto& ed = net.edges[ei];
                 bool blocked = false;
@@ -2761,10 +2763,14 @@ bool LevelLoader::load(const std::string& path,
                 if (hasL)
                     keptL.push_back(ei < net.edgeLayers.size()
                                         ? net.edgeLayers[ei] : 0);
+                if (hasC)
+                    keptC.push_back(ei < net.edgeClasses.size()
+                                        ? net.edgeClasses[ei] : engine::RoadClass::Local);
             }
             net.edges.swap(keptE);
             if (hasW) net.edgeWidths.swap(keptW);
             if (hasL) net.edgeLayers.swap(keptL);
+            if (hasC) net.edgeClasses.swap(keptC);
         }
         if (cut) LOG_INFO << "[corridor] cut " << cut
                           << " street edges crossing at-grade spans";
