@@ -41,6 +41,7 @@
           "beach_rise": 2.5,
           "block_size": 150,
           "collector_width": 9.5,
+          "corridor_freeways": true,
           "corridor_spacing": 90,
           "freeway_width": 22,
           "hotspots": 9,
