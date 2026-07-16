@@ -841,6 +841,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         return true;
     };
+    // Under a FREEWAY/RAMP deck? The clearance graph carries the freeway
+    // right-of-way as RoadClass::Freeway / ::Ramp edges whose width is the deck
+    // SHADOW (set by the loader). A point within that shadow can't host a normal
+    // building (it would clip the elevated structure) — the lot pass turns it
+    // into deck-fitting open space instead (see PASS C).
+    auto underFreeway = [&](const Vec2& c) {
+        if (!roads) return false;
+        for (const RoadEdge& e : roads->edges) {
+            if (e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp) continue;
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                e.b >= static_cast<int>(roads->nodes.size())) continue;
+            const Vec2& a = roads->nodes[e.a].pos;
+            const Vec2& b = roads->nodes[e.b].pos;
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            if ((c - q).length() < e.width * 0.5) return true;   // within the deck shadow
+        }
+        return false;
+    };
+    int underFwCount = 0;
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
     // downhill corner never floats, embedded slightly on real slopes so the
     // uphill side beds in instead of hovering behind a knife-edge gap.
@@ -1169,6 +1192,32 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // ground; the lot polygon still marks it for planting.
                 out.push_back(std::move(g));
             };
+            // UNDER A FREEWAY DECK: a normal building would clip the elevated
+            // structure, so this lot becomes something that FITS beneath it — a
+            // landscaped open space (paths, shrubs, benches; the tall trees are
+            // stripped so nothing hits the deck). The block/lot pipeline thus
+            // builds the RIGHT thing under the freeway instead of a rejected
+            // stub. Landmarks are exempt (they were placed on purpose).
+            if (cand.landmark < 0 && underFreeway(centroid(lot.footprint))) {
+                OBB2 gb = orientedBoundingBox(lot.footprint);
+                LotBuilding u;
+                u.site = centroid(lot.footprint);
+                u.width = 2 * gb.half[0];
+                u.depth = 2 * gb.half[1];
+                u.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                u.height = 0.16;                 // low — tucks under the deck lift
+                u.type = "park";                 // host: terrain ground + sculpted parts
+                u.recipe = "underfreeway_open";
+                u.pad = lot.footprint;
+                u.color = Vec3(0.30, 0.50, 0.26);
+                sculptPark(u, u.pad, u.height, p.ground,
+                           mix(pp.seed, static_cast<uint32_t>(li) * 17u + 11u),
+                           outParts);
+                u.treeSpots.clear();             // no canopy under the deck
+                ++underFwCount;
+                out.push_back(std::move(u));
+                continue;
+            }
             if (cand.landmark < 0 && rng.unit() > buildChance) {
                 if (debug) debug->rejChance++;
                 emitGreen(); continue;   // plaza / gap (landmarks always build)
@@ -1640,6 +1689,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             out.push_back(std::move(b));
         }
     }
+    if (underFwCount > 0)
+        LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
+                 << " re-zoned to open space (fit beneath the deck)";
     return out;
 }
 
