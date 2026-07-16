@@ -778,6 +778,7 @@ RoadNet roadNetFromJson(const json& j) {
     net.lift = j.value("lift", net.lift);
     net.markings = j.value("markings", net.markings);
     net.crosswalks = j.value("crosswalks", net.crosswalks);
+    net.autoRoundabout = j.value("auto_roundabout", net.autoRoundabout);
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
                          j["color"][2].get<double>());

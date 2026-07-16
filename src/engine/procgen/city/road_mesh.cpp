@@ -1239,13 +1239,16 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
     struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; int group; };
     std::vector<Prof> profs;
-    // Per-chain-END junction MOUTH depth: how far the junction pad reaches along
-    // this arm. The shipping pad is a disc of radius = the WIDEST incident arm's
-    // half-width (road_net.cpp:384), so the mouth is that radius, NOT this arm's
-    // own hw. Crosswalks set back by this (below) so they land just OUTSIDE the
-    // pad even when a crossing road is wider — fixing the jut where a narrow arm
-    // met a wider one. Chains meet at a junction by sharing an exact endpoint
-    // position (the graph node), so group endpoints by quantized position.
+    // Per-chain-END junction MOUTH depth: how far the crosswalk on this arm sets
+    // back so it lands just OUTSIDE the intersection, never jutting in. Two
+    // effects stack: (1) the pad is a disc of the WIDEST incident arm's half-width
+    // (road_net.cpp:384), so clear at least that; (2) a CROSSING arm of half-width
+    // hw_j meeting at angle θ occupies THIS arm's centreline out to hw_j/sinθ — so
+    // a SKEWED crossing (an on-ramp, an oblique tee) needs a deeper setback than a
+    // plain disc gives. Collinear through-road continuations (angle ~0/180°) are
+    // NOT crossings and are excluded, else a straight through-road would shove its
+    // own crosswalk back. Chains meet by sharing an exact endpoint (the graph
+    // node), so group endpoints by quantized position.
     std::vector<double> frontMouth(spines.size()), backMouth(spines.size());
     {
         for (std::size_t si = 0; si < spines.size(); ++si) {
@@ -1265,12 +1268,32 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             cells[key(pts.back())].push_back({si, 1});
         }
         for (const auto& kv : cells) {
-            if (kv.second.size() < 2) continue;                 // not a junction
+            const auto& eps = kv.second;
+            const int m = static_cast<int>(eps.size());
+            if (m < 2) continue;                                // not a junction
+            std::vector<Vec2> dir(m);                           // arm heading, AWAY from node
+            std::vector<double> hw(m);
             double widest = 0.0;
-            for (const EP& e : kv.second) widest = std::max(widest, spines[e.si].halfWidth);
-            const double mouth = widest * 1.02;                 // matches the pad radius
-            for (const EP& e : kv.second)
-                (e.end == 0 ? frontMouth : backMouth)[e.si] = mouth;
+            for (int i = 0; i < m; ++i) {
+                const auto& pts = spines[eps[i].si].points;
+                const Vec2 d = eps[i].end == 0
+                    ? (pts[1] - pts.front())
+                    : (pts[pts.size() - 2] - pts.back());
+                const double L = d.length();
+                dir[i] = L > 1e-9 ? d * (1.0 / L) : Vec2(1, 0);
+                hw[i] = spines[eps[i].si].halfWidth;
+                widest = std::max(widest, hw[i]);
+            }
+            for (int i = 0; i < m; ++i) {
+                double mouth = widest;                          // clear the disc pad
+                for (int j = 0; j < m; ++j) {
+                    if (j == i) continue;
+                    if (std::fabs(dot(dir[i], dir[j])) > 0.94) continue;   // collinear: not a crossing
+                    const double sinT = std::max(std::fabs(cross(dir[i], dir[j])), 0.30);
+                    mouth = std::max(mouth, hw[j] / sinT);      // clear arm j's ribbon
+                }
+                (eps[i].end == 0 ? frontMouth : backMouth)[eps[i].si] = mouth * 1.02;
+            }
         }
     }
     {
