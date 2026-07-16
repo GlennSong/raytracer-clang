@@ -1224,8 +1224,42 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; };
     std::vector<Prof> profs;
+    // Per-chain-END junction MOUTH depth: how far the junction pad reaches along
+    // this arm. The shipping pad is a disc of radius = the WIDEST incident arm's
+    // half-width (road_net.cpp:384), so the mouth is that radius, NOT this arm's
+    // own hw. Crosswalks set back by this (below) so they land just OUTSIDE the
+    // pad even when a crossing road is wider — fixing the jut where a narrow arm
+    // met a wider one. Chains meet at a junction by sharing an exact endpoint
+    // position (the graph node), so group endpoints by quantized position.
+    std::vector<double> frontMouth(spines.size()), backMouth(spines.size());
+    {
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            frontMouth[si] = spines[si].halfWidth;   // fallback = old behaviour
+            backMouth[si]  = spines[si].halfWidth;
+        }
+        auto key = [](const Vec2& q) {
+            return (static_cast<long long>(std::llround(q.x * 20.0)) << 21) ^
+                   static_cast<long long>(std::llround(q.y * 20.0));   // 5 cm cells
+        };
+        struct EP { std::size_t si; int end; };
+        std::unordered_map<long long, std::vector<EP>> cells;
+        for (std::size_t si = 0; si < spines.size(); ++si) {
+            const auto& pts = spines[si].points;
+            if (pts.size() < 2 || spines[si].closed) continue;
+            cells[key(pts.front())].push_back({si, 0});
+            cells[key(pts.back())].push_back({si, 1});
+        }
+        for (const auto& kv : cells) {
+            if (kv.second.size() < 2) continue;                 // not a junction
+            double widest = 0.0;
+            for (const EP& e : kv.second) widest = std::max(widest, spines[e.si].halfWidth);
+            const double mouth = widest * 1.02;                 // matches the pad radius
+            for (const EP& e : kv.second)
+                (e.end == 0 ? frontMouth : backMouth)[e.si] = mouth;
+        }
+    }
     {
         // Junction-RECONCILED deck profiles (shared with the terrain-conform
         // pass, so the ground is carved to the same surface the deck rides).
@@ -1241,7 +1275,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
             bool closed = sp.closed ||
                 (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
-            profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass});
+            profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass,
+                             frontMouth[si], backMouth[si]});
         }
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
@@ -1553,7 +1588,12 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                     // the planned street-widening would trip.
                     if (pr.klass == RoadClass::Freeway || pr.klass == RoadClass::Ramp)
                         return 1e4f;
-                    return static_cast<float>(std::min(s, chainLen - s) - hw);
+                    // Set back by the true junction MOUTH (widest-arm pad radius)
+                    // at the NEARER end, not this arm's own hw — so the band lands
+                    // just outside the pad and never juts into the intersection.
+                    const double distF = s, distB = chainLen - s;
+                    const double mouth = (distF < distB) ? pr.mouthFront : pr.mouthBack;
+                    return static_cast<float>(std::min(distF, distB) - mouth);
                 };
                 float v0 = cwV(s0), v1 = cwV(s1);
                 MeshBuilder::emitTriUV(mesh, mL0, mR0, mR1, Vec3(0, 1, 0), p.topColor,
