@@ -1248,8 +1248,13 @@ std::vector<Vec3> roadNodeHandles(World& world, Entity e) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return handles;
     handles.reserve(net->nodes.size());
-    for (const Vec2& n : net->nodes) {
-        double y = (net->heightAt ? net->heightAt(n.x, n.y) : 0.0) + net->lift + 0.05;
+    for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
+        const Vec2& n = net->nodes[i];
+        // An authored ELEVATED node (nodeElev, an absolute world Y) puts its
+        // drag-handle ON the deck, not on the ground beneath the viaduct.
+        double y = (i < static_cast<int>(net->nodeElev.size()) && std::isfinite(net->nodeElev[i]))
+                       ? net->nodeElev[i] + 0.05
+                       : (net->heightAt ? net->heightAt(n.x, n.y) : 0.0) + net->lift + 0.05;
         handles.push_back(Vec3(n.x, y, n.y));
     }
     return handles;
@@ -1269,7 +1274,9 @@ std::vector<Vec3> roadTangentHandles(World& world, Entity e) {
     handles.reserve(net->nodes.size());
     for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
         Vec2 h = net->nodes[i] + roadNetTangentAt(*net, i);   // node + tangent vector
-        double y = (net->heightAt ? net->heightAt(h.x, h.y) : 0.0) + net->lift + 0.05;
+        double y = (i < static_cast<int>(net->nodeElev.size()) && std::isfinite(net->nodeElev[i]))
+                       ? net->nodeElev[i] + 0.05
+                       : (net->heightAt ? net->heightAt(h.x, h.y) : 0.0) + net->lift + 0.05;
         handles.push_back(Vec3(h.x, y, h.y));
     }
     return handles;
