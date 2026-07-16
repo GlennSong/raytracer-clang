@@ -34,7 +34,10 @@ void checkWeld(const RoadNet& net, const char* /*label*/) {
     CHECK(!hasNonFinite(m));                       // no NaN/Inf blow-up
     CHECK(indicesInRange(m));                      // every index is real
     CHECK(degenerateTriangles(m) == 0);            // no zero-area / dup-index tris
-    CHECK(upwardFraction(m) > 0.4);                // a real up-facing deck (not flipped)
+    // A real up-facing deck exists (not flipped). Valid junctions run ~0.37-0.71
+    // up (acute corners add sidewall, lowering it); a flipped/missing deck
+    // collapses toward ~0.15, which this catches.
+    CHECK(upwardFraction(m) > 0.3);
     // vertices stay within a sane box around the ~90 m fixture (no vertex flung off)
     double minX, maxX, minZ, maxZ;
     bboxXZ(m, minX, maxX, minZ, maxZ);
@@ -76,4 +79,17 @@ TEST_CASE(weld_wide_meets_narrow_is_clean) {
                          /*classes*/ {RoadClass::Arterial, RoadClass::Arterial,
                                       RoadClass::Local});
     checkWeld(n, "wide_meets_narrow");
+}
+
+// F — a very ACUTE Y: two arms nearly parallel (~15 deg apart). The audit flags
+// acute corners as the sidewalk-tear / ground-wedge case; assert the weld stays
+// geometrically clean here too.
+TEST_CASE(weld_acute_y_is_clean) {
+    checkWeld(junction({Vec2(1, 0), Vec2(1, 0.27), Vec2(-1, 0.05)}, 40.0), "acute_y");
+}
+
+// G — a shallow-angle T: the stem meets the through road at ~20 deg (a slip road
+// tee-ing into a street), the classic acute-junction stress.
+TEST_CASE(weld_shallow_tee_is_clean) {
+    checkWeld(junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0.94, 0.34)}, 40.0), "shallow_tee");
 }
