@@ -2954,9 +2954,16 @@ bool LevelLoader::load(const std::string& path,
                                 net.edgeWidths.resize(net.edges.size(), 0.0);
                             if (net.edgeLayers.size() < net.edges.size())
                                 net.edgeLayers.resize(net.edges.size(), 0);
+                            if (!net.edgeClasses.empty() &&
+                                net.edgeClasses.size() < net.edges.size())
+                                net.edgeClasses.resize(net.edges.size(),
+                                                       engine::RoadClass::Local);
                             const std::array<int, 2> ab = net.edges[bEdge];
                             const double ew = net.edgeWidths[bEdge];
                             const int el = net.edgeLayers[bEdge];
+                            const engine::RoadClass ek =
+                                (bEdge < (int)net.edgeClasses.size())
+                                    ? net.edgeClasses[bEdge] : engine::RoadClass::Local;
                             const int N = (int)net.nodes.size();
                             net.nodes.push_back(bProj);
                             net.tangents.push_back(Vec2(0, 0));
@@ -2964,6 +2971,8 @@ bool LevelLoader::load(const std::string& path,
                             net.edges.push_back({N, ab[1]});  // (new -> b)
                             net.edgeWidths.push_back(ew);
                             net.edgeLayers.push_back(el);
+                            if (!net.edgeClasses.empty())
+                                net.edgeClasses.push_back(ek);   // both halves keep the class
                             rampAnchors[xi] = {bNet, N};
                             e.target = bProj;
                             found = true;   // the final else records `used`
@@ -3239,6 +3248,10 @@ bool LevelLoader::load(const std::string& path,
                             net.edgeWidths.resize(net.edges.size(), 0.0);
                         if (net.edgeLayers.size() < net.edges.size())
                             net.edgeLayers.resize(net.edges.size(), 0);
+                        if (!net.edgeClasses.empty() &&
+                            net.edgeClasses.size() < net.edges.size())
+                            net.edgeClasses.resize(net.edges.size(),
+                                                   engine::RoadClass::Local);
                         const int pIdx = static_cast<int>(net.nodes.size());
                         net.nodes.push_back(P);
                         net.tangents.push_back(Vec2(0, 0));
@@ -3253,6 +3266,11 @@ bool LevelLoader::load(const std::string& path,
                         const double kStubWidth = 6.0;
                         net.edgeWidths.push_back(kStubWidth);
                         net.edgeLayers.push_back(0);
+                        // The landing arm IS a ramp — type it so it welds and
+                        // styles as one (class-aware markings, and P1's
+                        // crosswalk-by-class correctly skips a zebra on it).
+                        if (!net.edgeClasses.empty())
+                            net.edgeClasses.push_back(engine::RoadClass::Ramp);
                         // the stub is grafted AFTER the road conform pass —
                         // carve its ground here or it pokes through the seam
                         // (device: "the ground pokes up ... at points where
@@ -3320,12 +3338,18 @@ bool LevelLoader::load(const std::string& path,
                             net2.edgeWidths.resize(net2.edges.size(), 0.0);
                         if (net2.edgeLayers.size() < net2.edges.size())
                             net2.edgeLayers.resize(net2.edges.size(), 0);
+                        if (!net2.edgeClasses.empty() &&
+                            net2.edgeClasses.size() < net2.edges.size())
+                            net2.edgeClasses.resize(net2.edges.size(),
+                                                    engine::RoadClass::Local);
                         const int pIdx = static_cast<int>(net2.nodes.size());
                         net2.nodes.push_back(endPos);
                         net2.tangents.push_back(Vec2(0, 0));
                         net2.edges.push_back({bestNode, pIdx});
                         net2.edgeWidths.push_back(13.0);   // arterial approach
                         net2.edgeLayers.push_back(0);
+                        if (!net2.edgeClasses.empty())     // freeway end -> arterial approach
+                            net2.edgeClasses.push_back(engine::RoadClass::Arterial);
                         {   // carve under the grafted approach (same as stubs)
                             const Vec2 A2 = net2.nodes[bestNode];
                             Vec2 d2 = endPos - A2;
