@@ -136,10 +136,10 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
     for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
 }
 
-// J — weldSolid MESHES the elevated deck: the same solid welder that builds
-// streets seats the deck at the authored height as a fixed-thickness slab
-// riding aloft, NOT a curtain wall skirted down to the terrain below. This is
-// the "one mesher carries the corridor" proof.
+// J — weldSolid MESHES the elevated deck as a SLAB: the same solid welder that
+// builds streets seats the deck at the authored height as a fixed-thickness slab
+// riding aloft, NOT a curtain wall skirted down. (No terrain here, so no piers —
+// this isolates the deck; fixture M covers the piers that hold it up.)
 TEST_CASE(weld_solid_meshes_elevated_deck) {
     UnionSpine s;
     s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
@@ -147,8 +147,7 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     s.klass = RoadClass::Freeway;
     s.yAbs = { 9.0, 9.0, 9.0 };
     WeldSolidParams p;
-    p.thickness = 0.5;
-    p.heightAt = [](double, double) { return -15.0; };   // ground well below the deck
+    p.thickness = 0.5;                             // no heightAt -> no piers/drape
     RenderMesh m = weldSolid({ s }, p);
     CHECK(triangleCount(m) > 0);
     CHECK(!hasNonFinite(m));
@@ -157,12 +156,45 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     CHECK(upwardFraction(m) > 0.3);
     double minY, maxY;
     bboxY(m, minY, maxY);
-    // Deck top rode to ~+9; underside is a fixed slab a hair below (deck -
-    // thickness ~= 8.5), NOT skirted to the -15 ground. If drape had won, the
-    // top would sit at -15; if the at-grade skirt fired, minY would plunge to
-    // ~-15.5. Both stay aloft.
+    // Deck top ~+9; underside a fixed slab a hair below (~8.5). A thin slab aloft.
     CHECK(maxY > 8.0 && maxY < 10.0);
     CHECK(minY > 8.0);
+}
+
+// M — PIERS hold up the deck and AVOID the road below. An elevated deck runs
+// along Z; a street runs along X and passes under it at the origin. Piers march
+// down the deck to the ground EXCEPT where the street passes beneath — the
+// obstruction-clearance rule (no column dropped onto the carriageway).
+TEST_CASE(weld_solid_piers_hold_deck_and_avoid_road) {
+    UnionSpine deck;                               // along Z, elevated to +9
+    deck.points = { Vec2(0, -40), Vec2(0, 40) };
+    deck.halfWidth = 6.0;
+    deck.klass = RoadClass::Freeway;
+    deck.yAbs = { 9.0, 9.0 };
+    UnionSpine street;                             // along X, at grade, halfWidth 5
+    street.points = { Vec2(-40, 0), Vec2(40, 0) };
+    street.halfWidth = 5.0;
+    WeldSolidParams p;
+    p.thickness = 0.5;
+    p.heightAt = [](double, double) { return 0.0; };   // flat ground at y=0
+    RenderMesh m = weldSolid({ deck, street }, p);
+    CHECK(!hasNonFinite(m));
+    CHECK(indicesInRange(m));
+    CHECK(degenerateTriangles(m) == 0);
+    // A pier is a box from the deck underside (~8.5) down to the ground (y=0);
+    // its BOTTOM vertices sit exactly on the ground plane. Nothing else lands
+    // there: the street deck rides at ~+0.06 and its underside at ~-0.5, the
+    // deck slab is at ~8.5/9. So |y|<0.02 on the deck centreline (|x|<1.2)
+    // isolates pier feet. z=-4 is over the street; z=-22/+14/+32 are clear.
+    int pierAwayFromRoad = 0, pierOverRoad = 0;
+    for (const Vertex& v : m.vertices) {
+        const double y = v.position.y, x = v.position.x, z = v.position.z;
+        if (std::fabs(y) > 0.02 || std::fabs(x) > 1.2) continue;   // not a pier foot
+        if (std::fabs(z) < 5.0) ++pierOverRoad;    // within the street corridor
+        else if (std::fabs(z) > 10.0) ++pierAwayFromRoad;
+    }
+    CHECK(pierOverRoad == 0);                       // no column dropped on the street
+    CHECK(pierAwayFromRoad > 0);                    // but the deck IS held up elsewhere
 }
 
 // K — the WHOLE authoring path: a RoadNet with per-node absolute elevation
@@ -185,7 +217,7 @@ TEST_CASE(road_net_meshes_an_authored_elevated_span) {
     double minY, maxY;
     bboxY(m, minY, maxY);
     CHECK(maxY > 8.0 && maxY < 10.0);              // deck rode to the authored +9
-    CHECK(minY > 8.0);                             // slab underside aloft, not on -12 ground
+    CHECK(minY < -8.0);                            // piers reach down toward the -12 ground
 }
 
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and

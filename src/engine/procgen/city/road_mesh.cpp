@@ -1668,6 +1668,64 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // (Junction pad interiors are part of the welded union boundary, so the
     // triangulated deck above already surfaces them as one sheet with the arms —
     // no separate pad fan is needed, and none is emitted to overlap it.)
+
+    // PIERS under authored elevated decks (welder-goes-3D): a viaduct rides on
+    // columns, not a curtain wall (the slab underside is aloft; something must
+    // hold it up). Drop a column every ~18 m along each authored deck, from the
+    // deck underside to the ground — but NEVER onto a street passing beneath: a
+    // candidate within (pierHalf + street halfWidth + shy) of any at-grade
+    // carriageway is skipped, the obstruction-clearance rule the audit flagged
+    // ("ramp piers drop a column on the road below with zero road-avoidance").
+    if (p.heightAt) {
+        auto merge = [&](const RenderMesh& src) {
+            uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.insert(mesh.vertices.end(), src.vertices.begin(), src.vertices.end());
+            for (uint32_t i : src.indices) mesh.indices.push_back(base + i);
+        };
+        const double pierSpacing = 18.0, pierW = 1.8, shy = 0.6;
+        const Vec3 pierColor(0.34, 0.34, 0.36);
+        // Nearest distance from q to a non-authored (street) carriageway edge; a
+        // pier must clear it. Returns +inf if no street is near.
+        auto streetGap = [&](const Vec2& q) {
+            double best = 1e30;
+            for (const Prof& pj : profs) {
+                if (pj.authored) continue;                 // only avoid at-grade roads
+                for (std::size_t i = 0; i + 1 < pj.cl.size(); ++i) {
+                    const Vec2& a = pj.cl[i]; Vec2 ab = pj.cl[i + 1] - a;
+                    double L2 = ab.lengthSquared();
+                    double t = L2 < 1e-12 ? 0.0
+                                          : std::max(0.0, std::min(1.0, dot(q - a, ab) / L2));
+                    double d = (q - (a + ab * t)).length() - pj.hw;   // to carriageway edge
+                    best = std::min(best, d);
+                }
+            }
+            return best;
+        };
+        for (const Prof& pr : profs) {
+            if (!pr.authored || pr.cl.size() < 2) continue;
+            // Densify the centreline at pierSpacing; carry the deck Y alongside.
+            std::vector<Vec2> dense; std::vector<double> denseY;
+            double arc = 0.0, target = pierSpacing;        // first pier a span in
+            for (std::size_t i = 0; i + 1 < pr.cl.size(); ++i) {
+                Vec2 seg = pr.cl[i + 1] - pr.cl[i];
+                double segLen = seg.length();
+                while (segLen > 1e-9 && target <= arc + segLen) {
+                    double t = (target - arc) / segLen;
+                    dense.push_back(pr.cl[i] + seg * t);
+                    denseY.push_back(pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t);
+                    target += pierSpacing;
+                }
+                arc += segLen;
+            }
+            if (dense.size() < 2) continue;
+            std::vector<int> at;
+            for (std::size_t k = 0; k < dense.size(); ++k)
+                if (streetGap(dense[k]) > pierW * 0.5 + shy) at.push_back(static_cast<int>(k));
+            if (at.empty()) continue;
+            merge(bridgePiers(dense, denseY, at, pierW, pierW, p.thickness,
+                              pierColor, p.heightAt));
+        }
+    }
     return mesh;
 }
 
