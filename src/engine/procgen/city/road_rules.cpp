@@ -69,6 +69,16 @@ int drivingLaneCount(const CrossSection& xs) {
     return n;
 }
 
+int lanesForClass(RoadClass c, bool perDirection) {
+    const int total = std::max(1, drivingLaneCount(defaultDesign().crossSectionFor(c)));
+    if (!perDirection) return total;
+    // A divided road already separates directions; an undivided two-way road
+    // splits its lanes across the centreline. Ramps/freeway carriageways are
+    // one-way, so their per-direction count is the whole thing.
+    if (c == RoadClass::Ramp) return total;
+    return std::max(1, total / 2);
+}
+
 const DesignRules& defaultDesign() {
     static const DesignRules rules;             // member defaults above
     return rules;

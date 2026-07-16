@@ -103,3 +103,25 @@ TEST_CASE(generated_net_carries_classes) {
     for (const RoadEdge& e : g.edges) if (e.klass != RoadClass::Local) ++nonLocal;
     CHECK(nonLocal > 0);
 }
+
+// P1 gate: ONE lane-count source (lanesForClass) that markings/junction/nav all
+// call. Assert the per-direction counts the nav uses match what the design
+// class implies, and total = 2x per-direction for undivided two-way classes.
+TEST_CASE(lanes_for_class_single_source) {
+    // total (across the whole carriageway) — what markings draw dividers for.
+    CHECK(lanesForClass(RoadClass::Local)     == 2);
+    CHECK(lanesForClass(RoadClass::Collector) == 2);
+    CHECK(lanesForClass(RoadClass::Arterial)  == 4);
+    CHECK(lanesForClass(RoadClass::Freeway)   == 6);
+    CHECK(lanesForClass(RoadClass::Ramp)      == 1);
+    // per-direction — what a nav link (one carriageway-direction) follows.
+    CHECK(lanesForClass(RoadClass::Local,     true) == 1);
+    CHECK(lanesForClass(RoadClass::Collector, true) == 1);
+    CHECK(lanesForClass(RoadClass::Arterial,  true) == 2);
+    CHECK(lanesForClass(RoadClass::Freeway,   true) == 3);   // one carriageway of 6
+    CHECK(lanesForClass(RoadClass::Ramp,      true) == 1);   // one-way, whole width
+    // matches drivingLaneCount(crossSection) directly (no divergent constant).
+    for (RoadClass c : {RoadClass::Local, RoadClass::Collector, RoadClass::Arterial,
+                        RoadClass::Freeway, RoadClass::Ramp})
+        CHECK(lanesForClass(c) == drivingLaneCount(defaultDesign().crossSectionFor(c)));
+}

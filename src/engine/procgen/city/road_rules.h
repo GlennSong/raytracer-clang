@@ -42,6 +42,13 @@ double totalWidth(const CrossSection& xs);
 // so painted dividers, junction dashes, and nav lanes never disagree.
 int    drivingLaneCount(const CrossSection& xs);
 
+// THE single lane-count query keyed on road CLASS (via its default cross-section).
+// Markings, junction dashes, and nav all call this instead of re-deriving lanes
+// from width with three different constants (road_mesh.cpp:969/1563 laneWidth 3.5,
+// nav_graph.cpp:209 params) — so lane k is the same lane everywhere. Callers that
+// need PER-DIRECTION lanes on a two-way road pass `perDirection` (half, min 1).
+int    lanesForClass(RoadClass c, bool perDirection = false);
+
 // The road DESIGN RULES, in one place (ADR-0052/0053). Before this, the numbers that govern a
 // road network were scattered: min arm angle / max degree in road_constraints' RoadRules; the
 // bridge clearance, deck thickness and ramp grade hardcoded inline in buildLayeredRoadNetMesh;

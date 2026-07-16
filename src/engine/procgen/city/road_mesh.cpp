@@ -1,4 +1,5 @@
 #include "road_mesh.h"
+#include "road_rules.h"
 
 #include "../../mesh_builder.h"
 #include "road_offset.h"          // ribbonOutline, polygonUnion (the unified join engine)
@@ -1223,7 +1224,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; };
     std::vector<Prof> profs;
     {
         // Junction-RECONCILED deck profiles (shared with the terrain-conform
@@ -1240,7 +1241,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
             bool closed = sp.closed ||
                 (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
-            profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed});
+            profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass});
         }
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
@@ -1560,7 +1561,10 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 // double yellow), tagged u = 4 with v carrying RAW arc-length so
                 // the shader phases 3 m dashes. Suppressed through the crosswalk
                 // zone like the rest of the approach paint.
-                const int lanes = std::max(1, static_cast<int>(std::lround(2.0 * hw / 3.5)));
+                // Lane count from the road's CLASS (the single lanesForClass
+                // source), not a width guess with a hardcoded 3.5 — so the
+                // dashed dividers match the design lane count and the nav lanes.
+                const int lanes = lanesForClass(pr.klass);
                 if (lanes >= 4) {
                     const double laneW = 2.0 * hw / lanes;
                     const bool nearCw = p.crosswalks && !pr.closed &&

@@ -271,6 +271,7 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
     auto traceFrom = [&](int v, int e0, bool closed) {
         UnionSpine s;
         s.halfWidth = g.edges[e0].width * 0.5;
+        s.klass = g.edges[e0].klass;             // carry class into the weld (P1)
         s.closed = closed;
         s.points.push_back(g.nodes[v].pos);
         int prev = v, e = e0, startNode = v;

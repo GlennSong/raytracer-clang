@@ -1,4 +1,5 @@
 #include "nav_graph.h"
+#include "../procgen/city/road_rules.h"
 
 #include <algorithm>
 #include <cmath>
@@ -206,9 +207,11 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         // Lanes per direction from carriageway width. A ONE-WAY link owns its
         // whole width; a two-way road splits it between the directions.
         l.oneWay = e.oneWay || (params.oneWayRamps && e.klass == RoadClass::Ramp);
-        int lanes = static_cast<int>(std::lround(
-            e.width / (params.laneWidth * (l.oneWay ? 1.0 : 2.0))));
-        l.lanes = lanes < 1 ? 1 : lanes;
+        // Lanes per direction from the road's CLASS (the single lanesForClass
+        // source), not width / laneWidth — so nav lanes agree with the painted
+        // dividers and junction dashes. Every link is one carriageway-direction,
+        // so the per-direction count is what a car follows.
+        l.lanes = std::max(1, lanesForClass(e.klass, /*perDirection=*/true));
         l.layer = e.layer;
         l.elevA = elev[a];
         l.elevB = elev[b];

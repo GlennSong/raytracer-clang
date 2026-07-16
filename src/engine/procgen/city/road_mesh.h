@@ -221,6 +221,10 @@ struct UnionSpine {
     std::vector<Vec2> points;
     double halfWidth = 4.0;
     bool   closed = false;
+    // The road class this chain carries (from the graph edge). Lets the welder's
+    // markings, crosswalk gate, and lane dashes vary by CLASS instead of guessing
+    // from width — the single lanesForClass() source (road-unification-plan P1).
+    RoadClass klass = RoadClass::Local;
 };
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);
