@@ -489,22 +489,29 @@ CorridorMeshOut buildCorridorMesh(
         Alignment ra = Alignment::fromPolyline(
             {C0, C0 + away * 30.0, e.target}, e.rampRadius, e.rampSpiral, 2.0);
         bool folded = false;
+        Real totalTurn = 0;
         if (!ra.empty()) {
             const Real rl2 = ra.length();
             Vec2 tPrev = ra.tangent(0);
             for (Real s2 = 6.0; s2 <= rl2; s2 += 6.0) {
                 const Vec2 tc = ra.tangent(std::min(s2, rl2 - 0.5));
                 if (dot(tPrev, tc) < 0.05) { folded = true; break; }
+                totalTurn += std::acos(std::max(Real(-1), std::min(Real(1), dot(tPrev, tc))));
                 tPrev = tc;
             }
             if (rl2 > 2.4 * (e.target - C0).length()) folded = true;
+            // A ramp that curls more than ~100 deg total is a HOOK: no clean
+            // target exists on this (sparse) grid, so it reads as a broken loop
+            // (device: "the onramps ... criss cross"). Drop it — a clean, fewer
+            // set of ramps beats a hooking one.
+            if (totalTurn > 1.75) folded = true;
         }
         if (ra.empty() || ra.length() < 48.0 || folded) {
             LOG_WARN << "[corridor] ramp at s=" << e.station
                      << (e.onRamp ? " (on-ramp)" : " (exit)")
                      << " dropped: free run "
                      << (ra.empty() ? 0.0 : ra.length())
-                     << (folded ? " m FOLDS — street target too close/sharp"
+                     << (folded ? " m FOLDS/HOOKS — no clean street target"
                                 : " m is too short — move station or target");
             out.rampPaths.back().pts.clear();
             continue;
