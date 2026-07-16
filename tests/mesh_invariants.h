@@ -67,6 +67,14 @@ inline void bboxXZ(const RenderMesh& m, double& minX, double& maxX,
     }
 }
 
+inline void bboxY(const RenderMesh& m, double& minY, double& maxY) {
+    minY = 1e30; maxY = -1e30;
+    for (const Vertex& v : m.vertices) {
+        minY = std::min(minY, static_cast<double>(v.position.y));
+        maxY = std::max(maxY, static_cast<double>(v.position.y));
+    }
+}
+
 // Fraction of triangles whose surface is oriented UP by its VERTEX normals (the
 // mesh lights single-sided off vertex normals, so geometric winding is not the
 // orientation of record). A road deck + its markings are strongly up-facing; if

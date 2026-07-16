@@ -274,18 +274,29 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         s.klass = g.edges[e0].klass;             // carry class into the weld (P1)
         s.closed = closed;
         s.points.push_back(g.nodes[v].pos);
+        // 3-D channel (welder-goes-3D): a chain whose nodes ALL carry an
+        // ABSOLUTE deck Y (corridor decks / ramps, elevAbsolute) rides those
+        // heights through weldChainProfiles instead of draping. Streets keep
+        // elevAbsolute=false, so ys stays discarded and the drape path is
+        // unchanged. Chains are homogeneous by construction: a ramp-to-street
+        // transition is a degree change, which breaks the chain here.
+        std::vector<double> ys{ g.nodes[v].elev };
+        bool allAbs = g.nodes[v].elevAbsolute;
         int prev = v, e = e0, startNode = v;
         while (!used[e]) {
             used[e] = 1;
             int nx = (g.edges[e].a == prev) ? g.edges[e].b : g.edges[e].a;
             if (closed && nx == startNode) break;
             s.points.push_back(g.nodes[nx].pos);
+            ys.push_back(g.nodes[nx].elev);
+            allAbs = allAbs && g.nodes[nx].elevAbsolute;
             if (!closed && breaksChain(nx)) break;
             int ne = -1;
             for (int ee : inc[nx]) if (ee != e && !used[ee]) { ne = ee; break; }
             if (ne < 0) break;
             prev = nx; e = ne;
         }
+        if (allAbs && ys.size() == s.points.size()) s.yAbs = std::move(ys);
         return s;
     };
     for (int v = 0; v < n; ++v) {                  // open chains: start at every junction/dead-end

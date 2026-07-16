@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "mesh_invariants.h"
 
+#include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"
 
 using namespace engine;
@@ -92,4 +93,70 @@ TEST_CASE(weld_acute_y_is_clean) {
 // tee-ing into a street), the classic acute-junction stress.
 TEST_CASE(weld_shallow_tee_is_clean) {
     checkWeld(junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0.94, 0.34)}, 40.0), "shallow_tee");
+}
+
+// --- 3-D channel (welder-goes-3D): an ELEVATED deck rides its authored
+// absolute Y through the SAME welder that meshes streets. This is the unit-level
+// proof that one mesher can carry a corridor/ramp — the fork's whole reason for
+// existing (a single-valued drape can't lift a deck) is what UnionSpine.yAbs and
+// weldChainProfiles' authored-height path retire.
+
+// H — weldChainProfiles hands back the authored deck Y UNTOUCHED: not draped to
+// terrain, not pulled to a junction min, not offset by topY. A spine at a
+// constant +9 m must come back at +9 m regardless of the ground beneath it.
+TEST_CASE(weld_authored_deck_rides_its_own_height) {
+    UnionSpine s;
+    s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
+    s.halfWidth = 6.0;
+    s.klass = RoadClass::Freeway;
+    s.yAbs = { 9.0, 9.0, 9.0 };                    // absolute deck Y
+    // A sloped ground far BELOW the deck: drape would put the road here, not +9.
+    auto ground = [](double x, double) { return -20.0 + 0.05 * x; };
+    auto profs = weldChainProfiles({ s }, ground, /*topY*/ 0.06, /*maxGrade*/ 0.08);
+    CHECK(profs.size() == 1);
+    CHECK(profs[0].size() == 3);
+    for (double h : profs[0]) CHECK(std::fabs(h - 9.0) < 1e-6);   // rode yAbs exactly
+}
+
+// I — a draped spine in the SAME batch still drapes: the authored-height path is
+// per-spine, so mixing an elevated deck with an at-grade street leaves the street
+// on the ground. Proves the 3-D path is additive, not a global mode switch.
+TEST_CASE(weld_authored_and_draped_spines_coexist) {
+    UnionSpine deck;
+    deck.points = { Vec2(-40, 0), Vec2(40, 0) };
+    deck.halfWidth = 6.0;
+    deck.yAbs = { 9.0, 9.0 };
+    UnionSpine street;                             // no yAbs -> drapes
+    street.points = { Vec2(0, -40), Vec2(0, 40) };
+    street.halfWidth = 4.0;
+    auto ground = [](double, double) { return 2.5; };
+    auto profs = weldChainProfiles({ deck, street }, ground, 0.06, 0.08);
+    CHECK(profs.size() == 2);
+    for (double h : profs[0]) CHECK(std::fabs(h - 9.0) < 1e-6);   // deck: authored
+    for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
+}
+
+// J — weldSolid MESHES the elevated deck: the same solid welder that builds
+// streets seats the DECK TOP at the authored height, not on the terrain below.
+// This is the "one mesher carries the corridor" proof. (The underside currently
+// skirts down to the ground — an at-grade assumption; a fixed slab-on-piers
+// underside for authored decks is the next welder-goes-3D increment.)
+TEST_CASE(weld_solid_meshes_elevated_deck) {
+    UnionSpine s;
+    s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
+    s.halfWidth = 6.0;
+    s.klass = RoadClass::Freeway;
+    s.yAbs = { 9.0, 9.0, 9.0 };
+    WeldSolidParams p;
+    p.heightAt = [](double, double) { return -15.0; };   // ground well below the deck
+    RenderMesh m = weldSolid({ s }, p);
+    CHECK(triangleCount(m) > 0);
+    CHECK(!hasNonFinite(m));
+    CHECK(indicesInRange(m));
+    CHECK(degenerateTriangles(m) == 0);
+    CHECK(upwardFraction(m) > 0.3);
+    double minY, maxY;
+    bboxY(m, minY, maxY);
+    // Deck top rode to ~+9. If drape had won, the top would sit at the -15 ground.
+    CHECK(maxY > 8.0 && maxY < 10.0);
 }
