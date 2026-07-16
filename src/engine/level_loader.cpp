@@ -2051,7 +2051,8 @@ struct GrownLots {
 
 static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
                               const json& cs, const std::string& levelDir,
-                              const HeightField& ground) {
+                              const HeightField& ground,
+                              const engine::RoadGraph* freewayROW = nullptr) {
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
     // synthesize rectangular blocks on boundary roads' open sides so the
@@ -2105,7 +2106,8 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
     // margin, so nothing overhangs the concrete or pokes into the street.
     const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
-    engine::NetLotResult r = engine::growLotBuildingsOnNets(nets, lp, ep, roadClear);
+    engine::NetLotResult r =
+        engine::growLotBuildingsOnNets(nets, lp, ep, roadClear, freewayROW);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
@@ -3501,6 +3503,28 @@ bool LevelLoader::load(const std::string& path,
 
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
 
+    // The routed freeway RIGHT-OF-WAY for the lot pass to build (and re-zone)
+    // around: the corridor fragments' dual carriageways + ramps, in world XZ
+    // with real classes/widths — the SAME geometry welded into the level graph
+    // above. Gathered here (once) so blocks under a deck become open/utility
+    // space instead of clipped buildings, for ramps and gores too — not just
+    // the mainline proxy.
+    engine::RoadGraph freewayROW;
+    for (const CorridorFrag& frag : corridorFrags) {
+        const int base = static_cast<int>(freewayROW.nodes.size());
+        for (const engine::RoadNode& n : frag.graph.nodes)
+            freewayROW.nodes.push_back(n);
+        for (engine::RoadEdge e : frag.graph.edges) {
+            if (e.klass != engine::RoadClass::Freeway &&
+                e.klass != engine::RoadClass::Ramp)
+                continue;
+            e.a += base; e.b += base;
+            freewayROW.edges.push_back(e);
+        }
+    }
+    const engine::RoadGraph* freewayROWp =
+        freewayROW.edges.empty() ? nullptr : &freewayROW;
+
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
@@ -3534,7 +3558,8 @@ bool LevelLoader::load(const std::string& path,
             // no faces (a terrain-gated metro is tree-like) or the graded ground
             // interacted badly with lot/pad placement. gradeBlocks + the priority
             // mechanism stay in-tree; re-enable behind a measured device pass.
-            preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround);
+            preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
+                                   freewayROWp);
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||
                     lb.plan.size() < 3) continue;
@@ -4061,7 +4086,7 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadNet> nets;
                 world.each<engine::RoadNet>(
                     [&](Entity, engine::RoadNet& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround);
+                grown = growCityLots(nets, cs, levelDir, entityGround, freewayROWp);
             }
             if (!grown.plan.blocks.empty() || !grown.plan.lots.empty()) {
                 engine::CityPlanDebug dbg;
@@ -4081,7 +4106,7 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadNet> nets;
                 world.each<engine::RoadNet>(
                     [&](Entity, engine::RoadNet& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround);
+                grown = growCityLots(nets, cs, levelDir, entityGround, freewayROWp);
             }
             engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
             // The buildings' geometry, merged by shape-grammar PartId across the

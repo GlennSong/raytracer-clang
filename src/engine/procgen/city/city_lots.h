@@ -164,10 +164,18 @@ struct NetLotResult {
     LotPlanDebug plan;               // blocks + lots, for debug overlays
     std::vector<RenderMesh> parts;   // grown geometry merged by PartId
 };
+// `freewayROW` (optional): the ACTUAL freeway right-of-way — the corridor's
+// dual carriageways (RoadClass::Freeway) and its ramps (RoadClass::Ramp), in
+// world XZ with real per-edge widths, gathered from the unified road graph
+// AFTER the corridor is routed. When given it supersedes each net's
+// freewayPlans mainline proxy, so the city clears (and, under a deck, re-zones)
+// around the WHOLE freeway footprint — ramps and gores included, not just the
+// mainline centreline.
 NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
-                                    Real roadClearance);
+                                    Real roadClearance,
+                                    const RoadGraph* freewayROW = nullptr);
 
 }  // namespace engine
 

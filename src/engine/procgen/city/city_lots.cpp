@@ -1787,7 +1787,8 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
 NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
-                                    Real roadClearance) {
+                                    Real roadClearance,
+                                    const RoadGraph* freewayROW) {
     NetLotResult r;
     // One combined raw planar graph across every net (the sampled navRoadGraph
     // loses faces, so the block extraction uses the nets' own nodes/edges) —
@@ -1814,28 +1815,48 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     }
     // Keep buildings clear of the FREEWAY corridor, not just the streets
     // (device: "buildings and the freeway overlapping ... if the road graph was
-    // true that wouldn't happen"). The corridor is meshed later as a separate
-    // elevated structure, but its ROUTE is already known here as
-    // net.freewayPlans — feed it into the SAME clearance graph the building
-    // pass reads (rgSampled) as wide edges, so the city builds AROUND the
-    // freeway's right-of-way instead of placing masses under/through it.
-    const float kFreewayKeepWidth = 34.0f;   // deck + shoulders + a shy margin
+    // true that wouldn't happen"). Feed the freeway right-of-way into the SAME
+    // clearance graph the building pass reads (rgSampled) as wide edges, so the
+    // city builds AROUND it (and, under a deck, re-zones — see the under-freeway
+    // pass in growLotBuildings) instead of placing masses under/through it.
     int fwKeep = 0;
-    for (const RoadNet& net : nets) {
-        for (const std::vector<Vec2>& plan : net.freewayPlans) {
-            for (std::size_t i = 0; i + 1 < plan.size(); ++i) {
-                const int a = static_cast<int>(rgSampled.nodes.size());
-                rgSampled.nodes.push_back({plan[i]});
-                const int b = static_cast<int>(rgSampled.nodes.size());
-                rgSampled.nodes.push_back({plan[i + 1]});
-                rgSampled.edges.push_back(
-                    RoadEdge{a, b, kFreewayKeepWidth, RoadClass::Freeway, 0});
-                ++fwKeep;
+    if (freewayROW && !freewayROW->edges.empty()) {
+        // PREFERRED: the real, routed ROW — dual carriageways AND ramps/gores,
+        // from the unified graph. Each edge keeps its true class so the
+        // under-deck re-zoning can tell freeway shadow from street frontage;
+        // the keep width is the deck/ramp SHADOW (wider than the drivable lane).
+        for (const RoadEdge& e : freewayROW->edges) {
+            const bool ramp = e.klass == RoadClass::Ramp;
+            const float keepW = ramp ? 14.0f : 24.0f;   // shadow half ~7 / ~12 m
+            const int a = static_cast<int>(rgSampled.nodes.size());
+            rgSampled.nodes.push_back({freewayROW->nodes[e.a].pos});
+            const int b = static_cast<int>(rgSampled.nodes.size());
+            rgSampled.nodes.push_back({freewayROW->nodes[e.b].pos});
+            rgSampled.edges.push_back(RoadEdge{a, b, keepW, e.klass, 0});
+            ++fwKeep;
+        }
+        LOG_INFO << "[citylots] freeway keep-out: " << fwKeep
+                 << " ROW segments (carriageways + ramps) from the unified graph";
+    } else {
+        // FALLBACK: the mainline centreline proxy (net.freewayPlans) — used when
+        // no corridor was routed (e.g. a level that authors only freewayPlans).
+        const float kFreewayKeepWidth = 34.0f;   // deck + shoulders + a shy margin
+        for (const RoadNet& net : nets) {
+            for (const std::vector<Vec2>& plan : net.freewayPlans) {
+                for (std::size_t i = 0; i + 1 < plan.size(); ++i) {
+                    const int a = static_cast<int>(rgSampled.nodes.size());
+                    rgSampled.nodes.push_back({plan[i]});
+                    const int b = static_cast<int>(rgSampled.nodes.size());
+                    rgSampled.nodes.push_back({plan[i + 1]});
+                    rgSampled.edges.push_back(
+                        RoadEdge{a, b, kFreewayKeepWidth, RoadClass::Freeway, 0});
+                    ++fwKeep;
+                }
             }
         }
+        LOG_INFO << "[citylots] freeway keep-out: " << fwKeep
+                 << " mainline-proxy segments (no routed ROW)";
     }
-    LOG_INFO << "[citylots] freeway keep-out: " << fwKeep
-             << " segments added to the building-clearance graph";
     std::vector<Poly2> blocks = extractBlocks(rg);
     // Rim blocks: the town edge has no enclosed faces — synthesize rectangles
     // on the boundary roads' open sides so the outskirts build up too.
