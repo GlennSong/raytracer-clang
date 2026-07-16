@@ -424,6 +424,7 @@ add_executable(run_tests
     tests/test_road_offset.cpp
     tests/test_road_crossings.cpp
     tests/test_road_net.cpp
+    tests/test_road_rules.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp
