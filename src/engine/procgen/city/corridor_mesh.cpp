@@ -544,18 +544,27 @@ CorridorMeshOut buildCorridorMesh(
             // some pillars underneath" — done)
             rUp[i] = rr[i].z - gy(rr[i].c) > 0.35;
         }
-        {   // §11 guard: the free run must stay OUT of the mainline footprint
+        {   // §11 guard: the free run must stay OUT of the mainline footprint.
+            // A ramp whose path re-enters the deck (within corrGuard of the
+            // mainline centreline, past the peel-off) OVERLAPS the freeway —
+            // its target sits on the wrong side and the ribbon draws on top of
+            // the deck (device: "the onramps ... overlap"). DROP it: clear the
+            // path so the loader skips it (no ribbon, no dangling stub), rather
+            // than emit a ramp lying across the freeway.
             bool crosses = false;
             for (int i = 0; i <= rn && !crosses; ++i) {
                 const Real rs2 = RL * i / rn;
-                if (rs2 < 20.0) continue;
+                if (rs2 < 35.0) continue;        // the legit peel-off hugs the deck
                 for (const Vec2& q : corrPts)
                     if ((q - rr[i].c).length() < corrGuard) { crosses = true; break; }
             }
-            if (crosses)
-                LOG_WARN << "[corridor] ramp at s=" << e.station
-                         << " runs through the mainline footprint — its street "
-                            "target sits on the wrong side; pick another";
+            if (crosses) {
+                LOG_INFO << "[corridor] ramp at s=" << e.station
+                         << " overlaps the mainline footprint — dropped "
+                            "(target on the wrong side)";
+                out.rampPaths.back().pts.clear();
+                continue;
+            }
         }
         std::vector<Vec3> freePath;
         for (int i = 0; i <= rn; ++i)

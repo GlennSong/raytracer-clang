@@ -3222,32 +3222,16 @@ bool LevelLoader::load(const std::string& path,
                         engine::RoadNet& net = preNets[rampAnchors[xi].first];
                         const Vec3& pe = e.onRamp ? pts.front() : pts.back();
                         const Vec2 P(pe.x, pe.z);
-                        // §11 guard: a stub within ~20° of an existing arm
-                        // inverts the junction-pad polygon (device: the giant
-                        // asphalt fan). Weld-only landing in that case.
-                        {
-                            const int nn = rampAnchors[xi].second;
-                            const Vec2 sd = normalize(P - net.nodes[nn]);
-                            bool shallow = false;
-                            for (const auto& ed : net.edges) {
-                                int other = ed[0] == nn ? ed[1]
-                                          : ed[1] == nn ? ed[0] : -1;
-                                if (other < 0) continue;
-                                const Vec2 od =
-                                    normalize(net.nodes[other] - net.nodes[nn]);
-                                if (std::fabs(dot(sd, od)) > 0.94) {
-                                    shallow = true;
-                                    break;
-                                }
-                            }
-                            if (shallow) {
-                                LOG_WARN << "[corridor] stub at ("
-                                         << P.x << ", " << P.y
-                                         << ") too shallow vs street — "
-                                            "weld-only landing";
-                                continue;
-                            }
-                        }
+                        // The stub ALWAYS grafts now, so the ramp physically
+                        // reaches the street — a "weld-only" landing (the old
+                        // shallow-angle skip) left the ramp ending in the grass
+                        // with a gap to the street (device: "the ramps ... don't
+                        // look like they're a part of the street"). The old skip
+                        // guarded the ANALYTIC junction pad (a polygon that
+                        // self-inverts at a near-parallel arm); the shipping weld
+                        // uses a disc pad that does not invert, and the stub is
+                        // now a slim 6 m arm with a mouth-set-back crosswalk, so
+                        // the apron blob it once feared no longer forms.
                         if (net.tangents.size() < net.nodes.size())
                             net.tangents.resize(net.nodes.size(), Vec2(0, 0));
                         if (net.edgeWidths.size() < net.edges.size())
