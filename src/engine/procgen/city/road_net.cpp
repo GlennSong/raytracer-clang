@@ -478,6 +478,13 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         if (profiles[si].size() < 2) continue;
+        // AUTHORED elevated decks ride on piers — the ground must NOT be graded
+        // up to them, or the terrain balloons into a ridge that buries the
+        // flyover (weldChainProfiles returns the +Y deck for these). Skip their
+        // conform; the piers span deck-to-ground and the surface roads they fly
+        // over keep their own at-grade carve. (Ramp feet on sloped ground want a
+        // partial carve — a later refinement; on flat ground none is needed.)
+        if (!sp.yAbs.empty()) continue;
         std::vector<double> profile = profiles[si];
         // Carve a step BELOW the drivable profile, not exactly to it: the
         // terrain grid interpolates between its samples and can overshoot the

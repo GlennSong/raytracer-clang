@@ -1,0 +1,21 @@
+{
+  "cameras": [
+    {
+      "name": "overview",
+      "position": [140, 95, 190],
+      "forward": [-0.555, -0.353, -0.753],
+      "lens": { "focalLength": 35.0, "sensorHeight": 24.0, "fStop": 0.0,
+                "focusDistance": 200.0, "near": 0.1, "far": 8000.0,
+                "k1": 0.0, "k2": 0.0, "chromaticAberration": 0.0, "vignette": 0.0 }
+    },
+    {
+      "name": "ramp_foot",
+      "position": [-250, 42, 85],
+      "forward": [0.851, -0.195, -0.487],
+      "lens": { "focalLength": 45.0, "sensorHeight": 24.0, "fStop": 0.0,
+                "focusDistance": 160.0, "near": 0.1, "far": 8000.0,
+                "k1": 0.0, "k2": 0.0, "chromaticAberration": 0.0, "vignette": 0.0 }
+    }
+  ],
+  "version": 1
+}
