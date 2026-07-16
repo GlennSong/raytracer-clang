@@ -13,7 +13,7 @@
     "perceptionReliability": 1.0,
     "plinth": 0.45,
     "seed": 9,
-    "sidewalk": 4.0,
+    "sidewalk": 5.0,
     "vehicles": "vehicles.lua",
     "wander": false
   },
@@ -37,10 +37,10 @@
         "curb": 0.16,
         "generate": {
           "ambient_per_500": 40,
-          "artery_width": 13,
+          "artery_width": 17,
           "beach_rise": 2.5,
           "block_size": 150,
-          "collector_width": 9.5,
+          "collector_width": 13,
           "corridor_freeways": true,
           "corridor_spacing": 90,
           "freeway_width": 22,
@@ -53,11 +53,11 @@
           "loop_min": 140,
           "merge_radius": 52,
           "min_road_len": 24,
-          "radius": 1000,
+          "radius": 1075,
           "sea_level": -5.0,
           "seed": 9,
           "seg_length": 32,
-          "street_width": 7
+          "street_width": 11
         },
         "lift": 0.08,
         "markings": true,
@@ -118,7 +118,7 @@
   "terrain": {
     "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
     "cdlod": {
-      "worldHalf": 1300
+      "worldHalf": 1380
     },
     "erode": true,
     "erodeDroplets": 500000,
@@ -167,7 +167,7 @@
     "resolution": 900,
     "rockLine": 90,
     "seed": 11,
-    "size": 2600,
+    "size": 2760,
     "snowLine": 230,
     "tiltX": -0.045,
     "warp": 0.35

@@ -828,7 +828,12 @@ RoadGraph buildMetro(const MetroParams& p,
             // own lots. Industrial keeps big blocks for big parcels; the tight
             // districts stay tight. (Indexed by CityHub::kind: financial,
             // commercial, residential, oldtown, industrial.)
-            const double kindCellCap[5] = {78.0, 82.0, 92.0, 64.0, 150.0};
+            // Raised +6 m (road-unification: wider streets keep block AREA by
+            // enlarging the cell so the developable interior holds, not shrinks —
+            // device: "streets widen, blocks stay the same area, the city
+            // expands"). The wider cross-section is paid for by a bigger cell,
+            // and the level scales radius/terrain to match.
+            const double kindCellCap[5] = {84.0, 88.0, 98.0, 70.0, 156.0};
             const double cell =
                 std::min(p.blockSize * kindBlockMul[kind], kindCellCap[kind]);
             const double crook = kindCrook[kind];
