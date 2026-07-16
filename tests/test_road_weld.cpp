@@ -262,6 +262,36 @@ TEST_CASE(road_net_meshes_an_authored_elevated_span) {
     CHECK(minY < -8.0);                            // piers reach down toward the -12 ground
 }
 
+// P1 (one mesher) — a FREEWAY-class deck gets divided-highway BARRIERS from the
+// SAME welder that meshes streets: edge parapets + a solid median box standing
+// above the deck. A Local street of the identical shape gets NONE. This is the
+// weld gaining a freeway feature that used to live only in corridor_mesh.
+TEST_CASE(weld_freeway_deck_gets_barriers) {
+    auto makeNet = [](RoadClass k) {
+        RoadNet n;
+        for (int i = 0; i <= 8; ++i) n.nodes.push_back(Vec2(-140 + i * 35, 0));
+        n.nodeElev = { 0, 3, 7, 9, 9, 9, 7, 3, 0 };    // elevated span, +9 in the middle
+        for (int i = 0; i < 8; ++i) { n.edges.push_back({i, i + 1}); n.edgeClasses.push_back(k); }
+        n.width = 22.0; n.sidewalk = 0.0; n.markings = true; n.autoRoundabout = false;
+        return n;
+    };
+    RenderMesh fw = buildRoadNetMesh(makeNet(RoadClass::Freeway));
+    RenderMesh st = buildRoadNetMesh(makeNet(RoadClass::Local));
+    CHECK(!hasNonFinite(fw));
+    CHECK(degenerateTriangles(fw) == 0);
+    double fwMinY, fwMaxY, stMinY, stMaxY;
+    bboxY(fw, fwMinY, fwMaxY); bboxY(st, stMinY, stMaxY);
+    // Count vertices standing clearly above the deck: barrier walls on the
+    // freeway, none on the street of the same shape.
+    auto above = [](const RenderMesh& m, double y) {
+        int c = 0; for (const Vertex& v : m.vertices) if (v.position.y > y) ++c; return c;
+    };
+    CHECK(fwMaxY > 9.3);
+    CHECK(stMaxY < 9.3);                                // a Local deck tops out at the asphalt (+9)
+    CHECK(above(fw, 9.3) > 0);
+    CHECK(above(st, 9.3) == 0);
+}
+
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
 // per-node, so an ordinary street with no elevation drapes exactly as before.
 TEST_CASE(road_net_without_node_elev_stays_at_grade) {

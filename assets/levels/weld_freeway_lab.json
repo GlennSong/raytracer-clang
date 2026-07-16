@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "Weld Freeway Lab",
+  "_comment": "A divided elevated FREEWAY authored as a RoadNet (node_elev + edge_classes:freeway) meshed by the ONE welder (weldSolid) — edge parapets + a solid median box + piers, no corridor_mesh. The proof that a freeway comes out of the same mesher as the streets.",
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "terrain": {
+    "seed": 7, "size": 400, "resolution": 220, "heightScale": 0.0, "noiseScale": 0.01,
+    "octaves": 3, "warp": 0.0, "erode": false, "cdlod": { "worldHalf": 200 },
+    "material": { "albedo": [0.34, 0.42, 0.30], "roughness": 1.0 }
+  },
+  "entities": [
+    { "name": "freeway", "shape": "road", "position": [0, 0, 0],
+      "road": {
+        "nodes": [
+          { "x": -140, "z": 0 }, { "x": -105, "z": 0 }, { "x": -70, "z": 0 },
+          { "x": -35, "z": 0 }, { "x": 0, "z": 0 }, { "x": 35, "z": 0 },
+          { "x": 70, "z": 0 }, { "x": 105, "z": 0 }, { "x": 140, "z": 0 }
+        ],
+        "node_elev": [0, 3, 7, 9, 9, 9, 7, 3, 0],
+        "edges": [ [0,1], [1,2], [2,3], [3,4], [4,5], [5,6], [6,7], [7,8] ],
+        "edge_classes": ["freeway","freeway","freeway","freeway","freeway","freeway","freeway","freeway"],
+        "curved": false,
+        "width": 22, "sidewalk": 0.0, "curb": 0.0,
+        "lift": 0.2, "markings": true, "crosswalks": false, "auto_roundabout": false
+      } }
+  ],
+  "lighting": {
+    "sun": { "direction": [0.35, 0.8, -0.25], "color": [1.0, 1.0, 1.0], "intensity": 6.0, "castsShadow": true },
+    "exposure": 0.7, "ambientMultiplier": 0.75
+  }
+}

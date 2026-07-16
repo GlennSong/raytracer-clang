@@ -394,6 +394,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
     wp.crosswalkMaxWidth = 18.0;      // ...but never across a freeway-width chain
     wp.clearance = defaultDesign().clearance;   // grade-separation Δz threshold (P4)
+    wp.barriers = true;               // Freeway-class chains get parapets + median (one mesher)
     // Junction pads (device: mesh holes at skewed T-junctions): chains end square
     // to their own direction, so where a through-road BENDS at a junction the two
     // arm caps disagree by the bend angle and a wedge of ground shows through. A
@@ -754,6 +755,19 @@ RoadNet roadNetFromJson(const json& j) {
         const json& el = j["edge_layers"];
         for (std::size_t i = 0; i < el.size() && i < net.edgeLayers.size(); ++i)
             net.edgeLayers[i] = el[i].get<int>();
+    }
+    if (j.contains("edge_classes") && j["edge_classes"].is_array()) {
+        net.edgeClasses.assign(net.edges.size(), RoadClass::Local);
+        const json& ec = j["edge_classes"];
+        auto parseClass = [](const std::string& s) {
+            if (s == "freeway")   return RoadClass::Freeway;
+            if (s == "arterial")  return RoadClass::Arterial;
+            if (s == "collector") return RoadClass::Collector;
+            if (s == "ramp")      return RoadClass::Ramp;
+            return RoadClass::Local;
+        };
+        for (std::size_t i = 0; i < ec.size() && i < net.edgeClasses.size(); ++i)
+            net.edgeClasses[i] = parseClass(ec[i].get<std::string>());
     }
     if (j.contains("tangents") && j["tangents"].is_array())
         for (const json& t : j["tangents"]) {

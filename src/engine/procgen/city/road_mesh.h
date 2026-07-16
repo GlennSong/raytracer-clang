@@ -192,6 +192,10 @@ RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<d
 // Per-point half-width overload: barriers follow a tapering deck edge.
 RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
                         const std::vector<double>& halfWidths, double height, const Vec3& color);
+// A solid median barrier BOX (two side walls + top cap) of half-width `halfWidth`
+// down the centreline — the divided-highway centre divider.
+RenderMesh deckMedian(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
+                      double halfWidth, double height, const Vec3& color);
 
 // Lane markings painted on a deck/road that rides a vertical profile: solid edge lines, a
 // solid centreline (`centerColor`, e.g. yellow — set `center=false` for a one-way ramp), and
@@ -287,6 +291,15 @@ struct WeldSolidParams {
     // laid as a plain deck fan — covers every such wedge at any arm angle.
     std::vector<Vec2>   padCenters;
     std::vector<double> padRadii;
+    // FREEWAY BARRIERS (road-unification: one mesher): when true, every
+    // RoadClass::Freeway spine gets divided-highway furniture on its deck — edge
+    // parapets at the verge + a solid median box down the centre — trimmed to
+    // stop at junction mouths. Off by default so streets and existing fixtures
+    // are unaffected; the street mesher turns it on.
+    bool   barriers = false;
+    double barrierHeight = 0.85;                  // parapet / median wall height (m)
+    double medianHalfWidth = 0.7;                 // solid centre-divider half-width (m)
+    Vec3   barrierColor{0.60, 0.60, 0.58};        // concrete
 };
 RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
 

@@ -936,6 +936,33 @@ RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>&
     return mesh;
 }
 
+RenderMesh deckMedian(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
+                      double halfWidth, double height, const Vec3& color) {
+    // A solid MEDIAN barrier box down the centreline — two side walls at
+    // ±halfWidth plus a top cap, from deckY to deckY+height. The divided-highway
+    // centre divider that separates the two one-way carriageways.
+    RenderMesh mesh;
+    const int n = static_cast<int>(pts.size());
+    if (n < 2 || static_cast<int>(deckY.size()) != n || halfWidth <= 0.0) return mesh;
+    for (int i = 0; i + 1 < n; ++i) {
+        Vec2 ab = pts[i + 1] - pts[i]; double L = ab.length();
+        if (L < 1e-9) continue;
+        Vec2 nrm = perp(ab / L);
+        const double ya = deckY[i], yb = deckY[i + 1];
+        Vec2 al = pts[i] + nrm * halfWidth, bl = pts[i + 1] + nrm * halfWidth;
+        Vec2 ar = pts[i] - nrm * halfWidth, br = pts[i + 1] - nrm * halfWidth;
+        Vec3 alb(al.x, ya, al.y), blb(bl.x, yb, bl.y),
+             alt(al.x, ya + height, al.y), blt(bl.x, yb + height, bl.y);
+        Vec3 arb(ar.x, ya, ar.y), brb(br.x, yb, br.y),
+             art(ar.x, ya + height, ar.y), brt(br.x, yb + height, br.y);
+        const Vec3 nl(nrm.x, 0, nrm.y);
+        MeshBuilder::emitQuad(mesh, alb, blb, blt, alt, nl, color);         // left face (+nrm)
+        MeshBuilder::emitQuad(mesh, arb, brb, brt, art, -nl, color);        // right face (-nrm)
+        MeshBuilder::emitQuad(mesh, alt, blt, brt, art, Vec3(0, 1, 0), color);  // top cap
+    }
+    return mesh;
+}
+
 namespace {
 // A thin painted stripe `off` to the side of the centerline, riding `deckY + lift`, optionally
 // dashed by arc length. Used for edge lines, lane dividers, and the centreline.
@@ -1898,6 +1925,31 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             if (at.empty()) continue;
             merge(bridgePiers(dense, denseY, at, pierW, pierW, p.thickness,
                               pierColor, pierGround));
+        }
+        // FREEWAY BARRIERS: divided-highway furniture on every Freeway deck —
+        // edge parapets at the verge + a solid median box down the centre. Trimmed
+        // to [mouthFront, L-mouthBack] so a barrier never juts into an interchange
+        // where a ramp or street meets the deck.
+        if (p.barriers) {
+            for (const Prof& pr : profs) {
+                if (pr.klass != RoadClass::Freeway || pr.closed || pr.cl.size() < 2) continue;
+                const double L = pr.s.back();
+                // Trim to the junction mouths, but a grade-split SEAM end carries the
+                // kNoCross sentinel (a huge value) meaning "the deck continues here" —
+                // treat that as no trim so the barrier runs to the seam, not vanishes.
+                const double mf = pr.mouthFront > 100.0 ? 0.0 : pr.mouthFront;
+                const double mb = pr.mouthBack  > 100.0 ? 0.0 : pr.mouthBack;
+                const double s0 = mf, s1 = L - mb;
+                if (s1 - s0 < 2.0) continue;               // nothing left after trimming
+                std::vector<Vec2> cl; std::vector<double> Y;
+                for (std::size_t i = 0; i < pr.cl.size(); ++i)
+                    if (pr.s[i] >= s0 - 1e-6 && pr.s[i] <= s1 + 1e-6) {
+                        cl.push_back(pr.cl[i]); Y.push_back(pr.h[i]);
+                    }
+                if (cl.size() < 2) continue;
+                merge(deckBarriers(cl, Y, pr.hw, p.barrierHeight, p.barrierColor));
+                merge(deckMedian(cl, Y, p.medianHalfWidth, p.barrierHeight, p.barrierColor));
+            }
         }
     }
     return mesh;
