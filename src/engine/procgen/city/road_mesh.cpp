@@ -1547,7 +1547,12 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 double chainLen = pr.s.back();
                 auto cwV = [&](double s) -> float {
                     if (!p.crosswalks || pr.closed) return 1e4f;
-                    if (hw * 2.0 >= p.crosswalkMaxWidth) return 1e4f;   // freeway: no zebra
+                    // Skip zebras by CLASS (freeways/ramps have no pedestrians),
+                    // not by a width threshold — the old hw*2 >= 18 also wrongly
+                    // suppressed crosswalks on a legitimately wide arterial, which
+                    // the planned street-widening would trip.
+                    if (pr.klass == RoadClass::Freeway || pr.klass == RoadClass::Ramp)
+                        return 1e4f;
                     return static_cast<float>(std::min(s, chainLen - s) - hw);
                 };
                 float v0 = cwV(s0), v1 = cwV(s1);
