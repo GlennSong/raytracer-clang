@@ -694,7 +694,16 @@ CorridorMeshOut buildCorridorMesh(
             const Real gz2 = c.vertical.elevation(ss);
             const Real hL = c.halfWidthAt(ss, 1) + 0.6;
             const Real hR = c.halfWidthAt(ss, -1) + 0.6;
-            const Real beamY = gz2 + 6.2;
+            // Derive the beam height from the REQUIRED headroom, not a guess: the
+            // sign board (2.2 m tall) hangs 0.28 m below the beam, so the old
+            // beamY = gz2 + 6.2 put the board bottom at gz2 + 3.72 m — below the
+            // MUTCD overhead-sign minimum (17 ft / 5.18 m) and the 5 m this
+            // engine already enforces for streets passing under a deck
+            // (level_loader.cpp kMinUnderClear), so a vehicle hit it. Pin the
+            // board bottom to 5.4 m (18 ft) of clearance over the deck.
+            const Real kSignBottomClearance = 5.4;   // MUTCD 17 ft min + margin
+            const Real kBoardHeight = 2.2, kBoardHang = 0.28;
+            const Real beamY = gz2 + kSignBottomClearance + kBoardHang + kBoardHeight;
             const Vec3 kGrey(0.45, 0.46, 0.48);
             auto postAt = [&](Real off) {
                 const Vec2 p2 = gc + gn * off;
