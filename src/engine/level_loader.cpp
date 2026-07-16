@@ -3249,11 +3249,11 @@ bool LevelLoader::load(const std::string& path,
                         // A ramp merges into the street as ONE lane. The old
                         // 9 m "opened mouth" inflated the junction disc
                         // (radius = half the widest arm) and paved a wide arm,
-                        // which — summed with the fan + terrain carve —
-                        // read as the ~40 m apron blob at clustered coastal
-                        // landings. Match the ramp ribbon width (~5.8 m) so
-                        // the landing reads as a lane, not a plaza.
-                        const double kStubWidth = 6.0;
+                        // which — summed with the fan + terrain carve — read as
+                        // the ~40 m apron blob. Match the widened ramp ribbon
+                        // (7.2 m, AASHTO 24-ft) so the at-grade connector is the
+                        // SAME width as the ramp feeding it — no thin-strip step.
+                        const double kStubWidth = 7.2;
                         net.edgeWidths.push_back(kStubWidth);
                         net.edgeLayers.push_back(0);
                         // The landing arm IS a ramp — type it so it welds and
