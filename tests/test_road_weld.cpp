@@ -97,6 +97,47 @@ TEST_CASE(weld_shallow_tee_is_clean) {
     checkWeld(junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0.94, 0.34)}, 40.0), "shallow_tee");
 }
 
+// H — CROSSWALK-JUT regression: a narrow local (hw 3) crossing a WIDE arterial
+// (hw 7) at a SHALLOW angle must set its zebra back past the arterial's OBLIQUE
+// ribbon (mouth = hw/sin θ), not by the ~7 m disc radius (which would jut onto
+// the arterial). The setback is baked into the road-local v UV (v = distToEnd −
+// mouth), so the crosswalk band (v ≈ 0) on the stub starts at world distance
+// ≈ mouth from the node — measure where it lands.
+namespace {
+double stubBandDistance(const std::vector<UnionSpine>& sp) {
+    WeldSolidParams p; p.crosswalks = true;
+    RenderMesh m = weldSolid(sp, p);
+    const Vec2 raw = sp[2].points.back() - sp[2].points.front();
+    const Vec2 dir = raw * (1.0 / raw.length());       // stub heading from the node
+    double band = 1e9;
+    for (const Vertex& vx : m.vertices) {
+        if (vx.u <= 0.5) continue;                     // painted strip only
+        const Vec2 q(vx.position.x, vx.position.z);
+        const double along = q.x * dir.x + q.y * dir.y;
+        const double lat = std::fabs(q.x * -dir.y + q.y * dir.x);
+        if (along < 2.0 || lat > 4.0) continue;        // on the stub, clear of the node
+        if (std::fabs(static_cast<double>(vx.v)) < 0.6) band = std::min(band, along);
+    }
+    return band;   // world distance from node to the stub's crosswalk band
+}
+std::vector<UnionSpine> tJunction(Vec2 stub, double armHW, double stubHW) {
+    auto arm = [](Vec2 a, Vec2 b, double hw, RoadClass k) {
+        UnionSpine s; s.halfWidth = hw; s.klass = k;
+        for (int i = 0; i <= 24; ++i) s.points.push_back(a + (b - a) * (i / 24.0));
+        return s;
+    };
+    const Vec2 stubEnd = stub * (72.0 / stub.length());
+    return { arm(Vec2(-70, 0), Vec2(0, 0), armHW, RoadClass::Arterial),
+             arm(Vec2(0, 0), Vec2(70, 0), armHW, RoadClass::Arterial),
+             arm(Vec2(0, 0), stubEnd, stubHW, RoadClass::Local) };
+}
+}  // namespace
+TEST_CASE(weld_crosswalk_clears_skewed_arm) {
+    // Oblique local meets the wide arterial at ~26°: mouth = 7/sin(26°) ≈ 16 m.
+    const double band = stubBandDistance(tJunction(Vec2(0.90, 0.44), 7.0, 3.0));
+    CHECK(band > 12.0 && band < 22.0);   // skew-aware setback, NOT the ~7 m disc radius
+}
+
 // --- 3-D channel (welder-goes-3D): an ELEVATED deck rides its authored
 // absolute Y through the SAME welder that meshes streets. This is the unit-level
 // proof that one mesher can carry a corridor/ramp — the fork's whole reason for
