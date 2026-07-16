@@ -28,6 +28,13 @@ struct RoadNet {
     // dead-end. Editing a tangent overrides the auto for that knot, so any road is shapeable by
     // dragging its handles.
     std::vector<Vec2> tangents;
+    // Optional per-node ABSOLUTE deck elevation (parallel to `nodes`; NaN or
+    // missing = at-grade, drape on terrain). A finite value authors an ELEVATED
+    // road: the node rides at that world Y and the ONE welder meshes it as a deck
+    // (UnionSpine.yAbs) — the same welder that meshes streets, no separate bridge
+    // mesher. Interior spline samples interpolate between two authored endpoints;
+    // a chain with any at-grade node drapes (welder needs a homogeneous chain).
+    std::vector<double> nodeElev;
     double width = 10.0;                        // default carriageway width (m) — widen control
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.

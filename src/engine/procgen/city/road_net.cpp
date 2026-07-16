@@ -8,6 +8,7 @@
 #include "metro.h"              // MetroParams, buildMetro ("kind":"metro" recipe)
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstdlib>
 
 namespace engine {
@@ -53,10 +54,19 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
                                                                : RoadClass::Local;
     };
+    // Optional per-node ABSOLUTE deck Y (authored elevated roads). Finite = the
+    // node rides at that world Y; the weld carries it as UnionSpine.yAbs.
+    auto nhasElev = [&](int i) {
+        return i < static_cast<int>(net.nodeElev.size()) && std::isfinite(net.nodeElev[i]);
+    };
 
     RoadGraph g;
     g.nodes.resize(n);
-    for (int i = 0; i < n; ++i) g.nodes[i].pos = net.nodes[i];
+    for (int i = 0; i < n; ++i) {
+        g.nodes[i].pos = net.nodes[i];
+        if (nhasElev(i)) { g.nodes[i].elev = static_cast<Real>(net.nodeElev[i]);
+                           g.nodes[i].elevAbsolute = true; }
+    }
 
     // Per-node neighbours (for degree + the Catmull-Rom "other" neighbour).
     std::vector<std::vector<int>> nbr(n);
@@ -123,10 +133,29 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
 
         int lay = elayer(ei);
         RoadClass kls = eclass(ei);
+        // Elevated span: interior samples ride the authored deck, interpolated by
+        // arc-length between the two authored endpoints. Only when BOTH ends are
+        // authored — a span with an at-grade end drapes (a homogeneous chain is
+        // what the weld's yAbs path needs; a mixed one falls back to the ground).
+        const bool elevSpan = nhasElev(a) && nhasElev(b);
+        double ea = 0.0, eb = 0.0;
+        std::vector<double> arc;
+        if (elevSpan) {
+            ea = net.nodeElev[a]; eb = net.nodeElev[b];
+            arc.assign(poly.size(), 0.0);
+            for (std::size_t s = 1; s < poly.size(); ++s)
+                arc[s] = arc[s - 1] + (poly[s] - poly[s - 1]).length();
+        }
         int prev = a;
         for (std::size_t s = 1; s + 1 < poly.size(); ++s) {     // interior -> new nodes
             int idx = static_cast<int>(g.nodes.size());
-            g.nodes.push_back(RoadNode{poly[s]});
+            RoadNode nd{poly[s]};
+            if (elevSpan) {
+                const double f = arc.back() > 1e-9 ? arc[s] / arc.back() : 0.0;
+                nd.elev = static_cast<Real>(ea + (eb - ea) * f);
+                nd.elevAbsolute = true;
+            }
+            g.nodes.push_back(nd);
             g.edges.push_back(RoadEdge{prev, idx, w, kls, lay});
             prev = idx;
         }
@@ -755,6 +784,15 @@ RoadNet roadNetFromJson(const json& j) {
             else if (t.is_object())
                 net.tangents.push_back(Vec2(t.value("x", 0.0), t.value("z", 0.0)));
         }
+    // Per-node absolute deck Y (elevated roads). Parallel to nodes; a null (or a
+    // non-number) entry means at-grade, stored as NaN so netGraph drapes it.
+    if (j.contains("node_elev") && j["node_elev"].is_array()) {
+        const json& ne = j["node_elev"];
+        net.nodeElev.assign(net.nodes.size(),
+                            std::numeric_limits<double>::quiet_NaN());
+        for (std::size_t i = 0; i < ne.size() && i < net.nodeElev.size(); ++i)
+            if (ne[i].is_number()) net.nodeElev[i] = ne[i].get<double>();
+    }
     net.width = j.value("width", net.width);
     net.sidewalk = j.value("sidewalk", net.sidewalk);
     net.curb = j.value("curb", net.curb);
@@ -793,6 +831,17 @@ json roadNetToJson(const RoadNet& net) {
         json tans = json::array();
         for (const Vec2& t : net.tangents) tans.push_back(json::array({t.x, t.y}));
         j["tangents"] = std::move(tans);
+    }
+    bool anyElev = false;
+    for (double e : net.nodeElev) if (std::isfinite(e)) { anyElev = true; break; }
+    if (anyElev) {
+        json elev = json::array();
+        for (std::size_t i = 0; i < net.nodes.size(); ++i)
+            if (i < net.nodeElev.size() && std::isfinite(net.nodeElev[i]))
+                elev.push_back(net.nodeElev[i]);
+            else
+                elev.push_back(nullptr);           // at-grade node
+        j["node_elev"] = std::move(elev);
     }
     j["width"] = net.width;
     j["sidewalk"] = net.sidewalk;

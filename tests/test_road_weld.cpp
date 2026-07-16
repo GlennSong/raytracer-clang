@@ -164,3 +164,39 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     CHECK(maxY > 8.0 && maxY < 10.0);
     CHECK(minY > 8.0);
 }
+
+// K — the WHOLE authoring path: a RoadNet with per-node absolute elevation
+// (nodeElev) is meshed by buildRoadNetMesh — the SAME entry point streets use —
+// into an elevated deck. Proves an author (or a future corridor publisher) can
+// express a 3-D road as graph data and the one welder builds it; no separate
+// bridge mesher, no layer>0 bail.
+TEST_CASE(road_net_meshes_an_authored_elevated_span) {
+    RoadNet n;
+    n.nodes = { Vec2(-40, 0), Vec2(40, 0) };
+    n.edges = { {0, 1} };
+    n.nodeElev = { 9.0, 9.0 };                     // both ends at +9 -> elevated span
+    n.heightAt = [](double, double) { return -12.0; };   // ground far below
+    RenderMesh m = buildRoadNetMesh(n);
+    CHECK(triangleCount(m) > 0);
+    CHECK(!hasNonFinite(m));
+    CHECK(indicesInRange(m));
+    CHECK(degenerateTriangles(m) == 0);
+    CHECK(upwardFraction(m) > 0.3);
+    double minY, maxY;
+    bboxY(m, minY, maxY);
+    CHECK(maxY > 8.0 && maxY < 10.0);              // deck rode to the authored +9
+    CHECK(minY > 8.0);                             // slab underside aloft, not on -12 ground
+}
+
+// L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
+// per-node, so an ordinary street with no elevation drapes exactly as before.
+TEST_CASE(road_net_without_node_elev_stays_at_grade) {
+    RoadNet n;
+    n.nodes = { Vec2(-40, 0), Vec2(40, 0) };
+    n.edges = { {0, 1} };
+    n.heightAt = [](double, double) { return 3.0; };
+    RenderMesh m = buildRoadNetMesh(n);
+    double minY, maxY;
+    bboxY(m, minY, maxY);
+    CHECK(maxY < 4.0);                             // near the 3.0 ground (+ lift), not lifted
+}

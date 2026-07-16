@@ -5,6 +5,7 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
+#include <limits>
 
 using namespace engine;
 using json = nlohmann::json;
@@ -156,6 +157,19 @@ TEST_CASE(road_net_tangents_round_trip) {
     CHECK(r.tangents.size() == n.tangents.size());
     CHECK_APPROX(r.tangents[1].x, 5.0, 1e-9);
     CHECK_APPROX(r.tangents[1].y, 9.0, 1e-9);
+}
+
+TEST_CASE(road_net_node_elev_round_trips) {
+    RoadNet n = sampleNet();                          // 4 nodes
+    n.nodeElev.assign(n.nodes.size(), std::numeric_limits<double>::quiet_NaN());
+    n.nodeElev[0] = 9.0;                              // node 0 elevated, others at-grade
+    n.nodeElev[2] = 4.5;
+    RoadNet r = roadNetFromJson(roadNetToJson(n));
+    CHECK(r.nodeElev.size() == n.nodes.size());
+    CHECK_APPROX(r.nodeElev[0], 9.0, 1e-9);
+    CHECK_APPROX(r.nodeElev[2], 4.5, 1e-9);
+    CHECK(!std::isfinite(r.nodeElev[1]));             // null survives as at-grade
+    CHECK(!std::isfinite(r.nodeElev[3]));
 }
 
 TEST_CASE(road_net_per_edge_width_overrides_default) {
