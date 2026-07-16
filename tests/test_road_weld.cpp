@@ -137,10 +137,9 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
 }
 
 // J — weldSolid MESHES the elevated deck: the same solid welder that builds
-// streets seats the DECK TOP at the authored height, not on the terrain below.
-// This is the "one mesher carries the corridor" proof. (The underside currently
-// skirts down to the ground — an at-grade assumption; a fixed slab-on-piers
-// underside for authored decks is the next welder-goes-3D increment.)
+// streets seats the deck at the authored height as a fixed-thickness slab
+// riding aloft, NOT a curtain wall skirted down to the terrain below. This is
+// the "one mesher carries the corridor" proof.
 TEST_CASE(weld_solid_meshes_elevated_deck) {
     UnionSpine s;
     s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
@@ -148,6 +147,7 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     s.klass = RoadClass::Freeway;
     s.yAbs = { 9.0, 9.0, 9.0 };
     WeldSolidParams p;
+    p.thickness = 0.5;
     p.heightAt = [](double, double) { return -15.0; };   // ground well below the deck
     RenderMesh m = weldSolid({ s }, p);
     CHECK(triangleCount(m) > 0);
@@ -157,6 +157,10 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     CHECK(upwardFraction(m) > 0.3);
     double minY, maxY;
     bboxY(m, minY, maxY);
-    // Deck top rode to ~+9. If drape had won, the top would sit at the -15 ground.
+    // Deck top rode to ~+9; underside is a fixed slab a hair below (deck -
+    // thickness ~= 8.5), NOT skirted to the -15 ground. If drape had won, the
+    // top would sit at -15; if the at-grade skirt fired, minY would plunge to
+    // ~-15.5. Both stay aloft.
     CHECK(maxY > 8.0 && maxY < 10.0);
+    CHECK(minY > 8.0);
 }

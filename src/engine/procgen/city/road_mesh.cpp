@@ -1167,6 +1167,7 @@ std::vector<std::vector<double>> weldChainProfiles(
         }
         for (std::size_t si = 0; si < spines.size(); ++si) {
             if (out[si].empty() || spines[si].closed) continue;
+            if (!spines[si].yAbs.empty()) continue;   // authored deck: fixed
             const auto& pts = spines[si].points;
             if ((pts.front() - pts.back()).length() < 1e-6) continue;
             const double dA = nodes.at(key(pts.front())) - out[si].front();
@@ -1235,7 +1236,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; };
     std::vector<Prof> profs;
     // Per-chain-END junction MOUTH depth: how far the junction pad reaches along
     // this arm. The shipping pad is a disc of radius = the WIDEST incident arm's
@@ -1287,7 +1288,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             bool closed = sp.closed ||
                 (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
             profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass,
-                             frontMouth[si], backMouth[si]});
+                             frontMouth[si], backMouth[si], !sp.yAbs.empty()});
         }
     }
     // Sample anywhere from the NEAREST spine: surface height (smoothed profile), and road-local UV
@@ -1318,6 +1319,13 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     };
     auto heightOf = [&](double x, double z) -> double {
         double h, mu, mv; int si; sample(x, z, h, mu, mv, si); return h;
+    };
+    // Is the nearest carriageway an AUTHORED elevated deck (yAbs)? Its underside
+    // is a fixed slab (open air / piers beneath), NOT skirted to the ground —
+    // the at-grade skirt would wall a viaduct off to the terrain far below.
+    auto authoredAt = [&](double x, double z) -> bool {
+        double h, mu, mv; int si; sample(x, z, h, mu, mv, si);
+        return si >= 0 && si < static_cast<int>(profs.size()) && profs[si].authored;
     };
 
     // 2. The welded outline (same join engine as weldRibbons), rounded at junctions. A CLOSED
@@ -1377,7 +1385,11 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             // of the sampled ground under its two ends, minus a margin, but
             // never less than the old thickness.
             double drop = p.thickness;
-            if (p.heightAt) {
+            // An AUTHORED elevated deck rides on piers with open air beneath, so
+            // its edge is a fixed-thickness slab — never skirted down to the
+            // terrain (which would curtain-wall a viaduct to the ground below).
+            const bool onDeck = authoredAt(a.x, a.y) || authoredAt(b.x, b.y);
+            if (p.heightAt && !onDeck) {
                 const double gA = heightOf(a.x, a.y) - p.heightAt(a.x, a.y);
                 const double gB = heightOf(b.x, b.y) - p.heightAt(b.x, b.y);
                 drop = std::max(drop, std::max(gA, gB) + 0.5);
