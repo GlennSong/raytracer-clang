@@ -36,6 +36,12 @@ struct RoadNet {
     // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
     // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
     std::vector<int> edgeLayers;
+    // Optional per-edge road CLASS (parallel to `edges`; missing/short = Local).
+    // The generator writes the arterial/collector/local class its recipe grew so
+    // the mesher, markings, and nav can vary by class instead of treating every
+    // surface edge as a bare Local — the first step of the graph unification
+    // (road-unification-plan P1). Hand-authored/edited edges default to Local.
+    std::vector<RoadClass> edgeClasses;
     double sidewalk = 3.5;                      // raised sidewalk width per verge (m)
                                                 // (device: "sidewalks should be wider")
     double curb = 0.16;                         // curb height (m)

@@ -49,6 +49,10 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     auto elayer = [&](int ei) {
         return (ei < static_cast<int>(net.edgeLayers.size())) ? net.edgeLayers[ei] : 0;
     };
+    auto eclass = [&](int ei) {
+        return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
+                                                               : RoadClass::Local;
+    };
 
     RoadGraph g;
     g.nodes.resize(n);
@@ -118,14 +122,15 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         }
 
         int lay = elayer(ei);
+        RoadClass kls = eclass(ei);
         int prev = a;
         for (std::size_t s = 1; s + 1 < poly.size(); ++s) {     // interior -> new nodes
             int idx = static_cast<int>(g.nodes.size());
             g.nodes.push_back(RoadNode{poly[s]});
-            g.edges.push_back(RoadEdge{prev, idx, w, RoadClass::Local, lay});
+            g.edges.push_back(RoadEdge{prev, idx, w, kls, lay});
             prev = idx;
         }
-        g.edges.push_back(RoadEdge{prev, b, w, RoadClass::Local, lay});   // last -> shared node b
+        g.edges.push_back(RoadEdge{prev, b, w, kls, lay});   // last -> shared node b
     }
     return g;
 }
@@ -634,6 +639,7 @@ bool roadNetAddEdge(RoadNet& net, int a, int b) {
         if ((e[0] == a && e[1] == b) || (e[0] == b && e[1] == a)) return false;   // already joined
     net.edges.push_back({a, b});
     if (!net.edgeWidths.empty()) net.edgeWidths.push_back(0.0);   // default width
+    if (!net.edgeClasses.empty()) net.edgeClasses.push_back(RoadClass::Local);
     return true;
 }
 
@@ -653,6 +659,9 @@ int roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos) {
     if (!net.edgeWidths.empty())              // both halves inherit the split edge's width
         net.edgeWidths.push_back(edgeIndex < static_cast<int>(net.edgeWidths.size())
                                      ? net.edgeWidths[edgeIndex] : 0.0);
+    if (!net.edgeClasses.empty())             // ...and its class
+        net.edgeClasses.push_back(edgeIndex < static_cast<int>(net.edgeClasses.size())
+                                      ? net.edgeClasses[edgeIndex] : RoadClass::Local);
     return ni;
 }
 
@@ -661,16 +670,21 @@ bool roadNetDeleteNode(RoadNet& net, int i) {
     if (i < 0 || i >= n) return false;
     std::vector<std::array<int, 2>> kept;
     std::vector<double> keptW;
+    std::vector<RoadClass> keptC;
     const bool hasW = !net.edgeWidths.empty();
+    const bool hasC = !net.edgeClasses.empty();
     for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
         const std::array<int, 2>& e = net.edges[ei];
         if (e[0] == i || e[1] == i) continue;                 // drop incident edges
         kept.push_back({ e[0] > i ? e[0] - 1 : e[0], e[1] > i ? e[1] - 1 : e[1] });
         if (hasW) keptW.push_back(ei < static_cast<int>(net.edgeWidths.size())
                                       ? net.edgeWidths[ei] : 0.0);
+        if (hasC) keptC.push_back(ei < static_cast<int>(net.edgeClasses.size())
+                                      ? net.edgeClasses[ei] : RoadClass::Local);
     }
     net.edges = std::move(kept);
     if (hasW) net.edgeWidths = std::move(keptW);              // stay parallel to edges
+    if (hasC) net.edgeClasses = std::move(keptC);
     net.nodes.erase(net.nodes.begin() + i);
     if (i < static_cast<int>(net.tangents.size()))
         net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
@@ -1036,10 +1050,13 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // passes don't re-promote roundabouts it deliberately disabled (ADR-0075 P0).
     net.autoRoundabout = rules.autoRoundabout;
     net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
+    net.edgeClasses.clear(); net.edgeLayers.clear();
     for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
     for (const RoadEdge& e : cg.edges) {
         net.edges.push_back({e.a, e.b});
         net.edgeWidths.push_back(e.width);          // arterials wider than local streets
+        net.edgeClasses.push_back(e.klass);         // carry the grown class (P1 unification)
+        net.edgeLayers.push_back(e.layer);          // and its grade-separation tier
     }
 }
 

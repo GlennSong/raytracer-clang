@@ -1,6 +1,8 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/road_rules.h"
+#include "../src/engine/procgen/city/road_net.h"
+#include <nlohmann/json.hpp>
 #include <cmath>
 
 using namespace engine;
@@ -72,4 +74,32 @@ TEST_CASE(cross_section_ramp) {
     CHECK(xs.front().type == LaneType::Shoulder);
     CHECK(xs.back().type == LaneType::Shoulder);
     CHECK(xs.back().width > xs.front().width);
+}
+
+// P1 unification: a GENERATED district must carry real road classes end-to-end
+// (generator -> planarize/capDegree/cleanup -> netGraph), not collapse every
+// surface edge to Local. Regression for the netGraph RoadClass::Local hardcode.
+TEST_CASE(generated_net_carries_classes) {
+    RoadNet net;
+    nlohmann::json recipe = {
+        {"kind", "district"}, {"radius", 160.0}, {"arterials", 3},
+        {"block_size", 40.0}, {"seed", 3},
+    };
+    applyGenerateRecipe(net, recipe);
+    CHECK(!net.edges.empty());
+    // the district generator distinguishes arterials from local streets.
+    CHECK(net.edgeClasses.size() == net.edges.size());   // parallel array kept in sync
+    int arterials = 0, locals = 0;
+    for (RoadClass c : net.edgeClasses) {
+        if (c == RoadClass::Arterial) ++arterials;
+        if (c == RoadClass::Local) ++locals;
+    }
+    CHECK(arterials > 0);                                 // arterials survived the pipeline
+    CHECK(locals > 0);                                    // and so did local streets
+
+    // And the class reaches the meshing graph (netGraph no longer hardcodes Local).
+    const RoadGraph g = navRoadGraph(net);
+    int nonLocal = 0;
+    for (const RoadEdge& e : g.edges) if (e.klass != RoadClass::Local) ++nonLocal;
+    CHECK(nonLocal > 0);
 }
