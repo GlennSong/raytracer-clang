@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include <cstdlib>
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -3472,6 +3473,28 @@ bool LevelLoader::load(const std::string& path,
             LOG_INFO << "[roadgraph] unified: " << lrg.graph.nodes.size()
                      << " nodes, " << lrg.graph.edges.size() << " edges ("
                      << corridorFrags.size() << " corridor fragments welded)";
+            // PROOF DUMP (RT_DUMP_ROADGRAPH=path): write the ONE unified graph —
+            // every street, arterial, freeway carriageway and ramp — so its
+            // connectivity and cross-class reachability can be checked and drawn.
+            if (const char* dp = std::getenv("RT_DUMP_ROADGRAPH")) {
+                std::ofstream f(dp);
+                f << "{\"nodes\":[";
+                for (std::size_t i = 0; i < lrg.graph.nodes.size(); ++i) {
+                    const engine::RoadNode& n = lrg.graph.nodes[i];
+                    f << (i ? "," : "") << "[" << n.pos.x << "," << n.pos.y
+                      << "," << n.elev << "]";
+                }
+                f << "],\"edges\":[";
+                for (std::size_t i = 0; i < lrg.graph.edges.size(); ++i) {
+                    const engine::RoadEdge& e = lrg.graph.edges[i];
+                    f << (i ? "," : "") << "[" << e.a << "," << e.b << ","
+                      << static_cast<int>(e.klass) << "," << e.layer << ","
+                      << static_cast<int>(e.provenance) << "]";
+                }
+                f << "]}";
+                LOG_INFO << "[roadgraph] dumped " << lrg.graph.nodes.size()
+                         << " nodes to " << dp;
+            }
             world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
         }
     }
