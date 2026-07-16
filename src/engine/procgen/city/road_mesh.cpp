@@ -1127,6 +1127,13 @@ std::vector<std::vector<double>> weldChainProfiles(
         for (int i = 1; i < n; ++i)
             sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
         arcs[si] = sArc;
+        // AUTHORED absolute heights (corridor deck / ramp): ride them as-is,
+        // untouched by drape, junction-min, overlap-min, or the topY offset
+        // below — they are already the real world Y. This is the 3-D path.
+        if (!sp.yAbs.empty() && static_cast<int>(sp.yAbs.size()) == n) {
+            out[si] = sp.yAbs;
+            continue;
+        }
         if (!heightAt) { out[si].assign(n, 0.0); continue; }   // += topY below
         std::vector<double> ground(n);
         for (int i = 0; i < n; ++i)
@@ -1147,6 +1154,7 @@ std::vector<std::vector<double>> weldChainProfiles(
         std::map<std::pair<long long, long long>, double> nodes;
         for (std::size_t si = 0; si < spines.size(); ++si) {
             if (out[si].empty() || spines[si].closed) continue;
+            if (!spines[si].yAbs.empty()) continue;   // authored deck: fixed
             const auto& pts = spines[si].points;
             if ((pts.front() - pts.back()).length() < 1e-6) continue;   // ring
             auto foldMin = [&](const Vec2& v, double h) {
@@ -1178,6 +1186,7 @@ std::vector<std::vector<double>> weldChainProfiles(
         const std::vector<std::vector<double>> snap = out;
         for (std::size_t si = 0; si < spines.size(); ++si) {
             if (out[si].size() < 2) continue;
+            if (!spines[si].yAbs.empty()) continue;   // authored deck: not lowered
             const auto& pts = spines[si].points;
             for (std::size_t k = 0; k < out[si].size(); ++k) {
                 const Vec2& q = pts[k];
@@ -1215,8 +1224,10 @@ std::vector<std::vector<double>> weldChainProfiles(
                                       out[si][k + 1] + maxGrade * (sArc[k + 1] - sArc[k]));
         }
     }
-    for (auto& h : out)
-        for (double& v : h) v += topY;
+    for (std::size_t si = 0; si < out.size(); ++si) {
+        if (!spines[si].yAbs.empty()) continue;   // authored deck: already absolute
+        for (double& v : out[si]) v += topY;
+    }
     return out;
 }
 

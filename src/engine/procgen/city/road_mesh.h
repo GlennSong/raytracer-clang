@@ -225,6 +225,12 @@ struct UnionSpine {
     // markings, crosswalk gate, and lane dashes vary by CLASS instead of guessing
     // from width — the single lanesForClass() source (road-unification-plan P1).
     RoadClass klass = RoadClass::Local;
+    // ABSOLUTE per-point deck Y (parallel to `points`; EMPTY = drape on terrain
+    // as before). This is the 3-D channel that lets ONE welder carry a ramp or an
+    // elevated deck through the same flat-street pipeline: a chain with authored
+    // heights (corridor decks/ramps) rides them; a plain street leaves it empty
+    // and the profile is derived from the ground (road-unification: welder→3D).
+    std::vector<double> yAbs;
 };
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);
