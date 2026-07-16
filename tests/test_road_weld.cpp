@@ -138,10 +138,10 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
     for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
 }
 
-// J — weldSolid MESHES the elevated deck as a SLAB: the same solid welder that
-// builds streets seats the deck at the authored height as a fixed-thickness slab
-// riding aloft, NOT a curtain wall skirted down. (No terrain here, so no piers —
-// this isolates the deck; fixture M covers the piers that hold it up.)
+// J — weldSolid MESHES the elevated deck: the same solid welder that builds
+// streets seats the deck at the authored +9 and carries it on piers down to the
+// ground reference (topY when no terrain is given). Deck top aloft, piers reach
+// down — not draped to grade, not a solid curtain wall from deck to ground.
 TEST_CASE(weld_solid_meshes_elevated_deck) {
     UnionSpine s;
     s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
@@ -149,7 +149,7 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     s.klass = RoadClass::Freeway;
     s.yAbs = { 9.0, 9.0, 9.0 };
     WeldSolidParams p;
-    p.thickness = 0.5;                             // no heightAt -> no piers/drape
+    p.thickness = 0.5; p.topY = 0.06;
     RenderMesh m = weldSolid({ s }, p);
     CHECK(triangleCount(m) > 0);
     CHECK(!hasNonFinite(m));
@@ -158,9 +158,8 @@ TEST_CASE(weld_solid_meshes_elevated_deck) {
     CHECK(upwardFraction(m) > 0.3);
     double minY, maxY;
     bboxY(m, minY, maxY);
-    // Deck top ~+9; underside a fixed slab a hair below (~8.5). A thin slab aloft.
-    CHECK(maxY > 8.0 && maxY < 10.0);
-    CHECK(minY > 8.0);
+    CHECK(maxY > 8.0 && maxY < 10.0);              // deck rode to the authored +9
+    CHECK(minY < 1.0);                             // piers reach down to the ground ref
 }
 
 // M — PIERS hold up the deck and AVOID the road below. An elevated deck runs

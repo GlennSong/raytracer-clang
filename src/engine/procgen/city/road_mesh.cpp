@@ -1823,7 +1823,11 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // candidate within (pierHalf + street halfWidth + shy) of any at-grade
     // carriageway is skipped, the obstruction-clearance rule the audit flagged
     // ("ramp piers drop a column on the road below with zero road-avoidance").
-    if (p.heightAt) {
+    {
+        // Ground reference for the pier feet: the terrain if we have it, else a
+        // flat plane at topY (an overpass on a box/flat level still gets piers).
+        std::function<double(double, double)> pierGround = p.heightAt;
+        if (!pierGround) { const double y0 = p.topY; pierGround = [y0](double, double) { return y0; }; }
         auto merge = [&](const RenderMesh& src) {
             uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
             mesh.vertices.insert(mesh.vertices.end(), src.vertices.begin(), src.vertices.end());
@@ -1870,7 +1874,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 if (streetGap(dense[k]) > pierW * 0.5 + shy) at.push_back(static_cast<int>(k));
             if (at.empty()) continue;
             merge(bridgePiers(dense, denseY, at, pierW, pierW, p.thickness,
-                              pierColor, p.heightAt));
+                              pierColor, pierGround));
         }
     }
     return mesh;

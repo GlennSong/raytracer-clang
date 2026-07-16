@@ -113,11 +113,15 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         // ribbon can't fold on an over-tight bend. Endpoints — the shared junction nodes —
         // are preserved, so the graph stays stitched.
         std::vector<Vec2> poly = fairHermite(P(a), m0, P(b), m1, segs, minTurnRadius);
+        int lay = elayer(ei);
         // Adaptive tessellation: an edge that never leaves its chord (a straight run — the grid's
         // junction-to-junction edges, whose tangents ARE the chord) collapses back to ONE segment.
         // Densifying straight edges into len/5 collinear samples was the real cause of the overlap and
         // terrain gaps at junctions (road-network-v2-plan T3.2); a genuine bend keeps its samples.
-        {
+        // EXCEPT a bridge (layer>0): it keeps its samples so the overpass elevation pre-pass has the
+        // resolution to raise a flat clearing span over the roads it crosses (else a straight bridge
+        // collapses to two endpoints and the crossing in the middle has no node to lift).
+        if (lay == 0) {
             Vec2 ab = P(b) - P(a);
             double abl = ab.length();
             double maxDev = 0.0;
@@ -131,7 +135,6 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             if (maxDev < 0.06) poly = {P(a), P(b)};
         }
 
-        int lay = elayer(ei);
         RoadClass kls = eclass(ei);
         // Elevated span: interior samples ride the authored deck, interpolated by
         // arc-length between the two authored endpoints. Only when BOTH ends are
@@ -172,110 +175,6 @@ RoadGraph constrainedNetGraph(const RoadNet& net) {
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
     return applyConstraints(netGraph(net, minR), rules);
-}
-
-// Append `src` triangles into `dst`, offsetting indices.
-void appendMesh(RenderMesh& dst, const RenderMesh& src) {
-    uint32_t base = static_cast<uint32_t>(dst.vertices.size());
-    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
-    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
-}
-
-// Proper interior crossing of segments p1p2 and p3p4 (shared endpoints excluded); on a hit
-// `t` is the parameter along p1p2 (so the crossing's arc position can be interpolated).
-bool segCrossAt(const Vec2& p1, const Vec2& p2, const Vec2& p3, const Vec2& p4, double& t) {
-    Vec2 d1 = p2 - p1, d2 = p4 - p3;
-    double den = cross(d1, d2);
-    if (std::fabs(den) < 1e-9) return false;
-    Vec2 d13 = p3 - p1;
-    t = cross(d13, d2) / den;
-    double u = cross(d13, d1) / den;
-    // t in (0, 1]: include the far endpoint so a crossing that lands exactly on a sample
-    // vertex is caught once (by the segment ending there), not missed by both neighbours.
-    // u strictly interior: the bridge must cross the ground road's span, not its endpoint.
-    return t > 1e-9 && t <= 1.0 + 1e-9 && u > 1e-9 && u < 1.0 - 1e-9;
-}
-
-// Build a road graph that carries grade separations (ADR-0051/0054). Ground edges (layer 0)
-// are the normal flat road surface; each higher-layer chain is a BRIDGE — its centerline is
-// lifted onto a FLAT deck (a level span over the roads it crosses, with ramps down at grade
-// to either side), carried on abutment piers, the way a real overpass sits. The visible
-// overpass: a flat structure on supports, not an inclined hump.
-RenderMesh buildLayeredRoadNetMesh(const RoadNet& net, const RoadGraph& g) {
-    const DesignRules& rules = defaultDesign();          // one source for the grade-sep numbers
-    const double clearance = rules.clearance, deckThk = rules.deckThickness, rampGrade = rules.rampGrade;
-    const double groundSurf = net.lift;                 // flat road surface height (approx)
-    double hw = net.width * 0.5;
-    auto groundFn = [&](double x, double z) { return net.heightAt ? net.heightAt(x, z) : 0.0; };
-
-    int maxLayer = 0;
-    for (const RoadEdge& e : g.edges) maxLayer = std::max(maxLayer, e.layer);
-
-    // Ground roads (layer 0): the existing analytic surface, with multilane markings baked as
-    // geometry (lane count from width) so the road under the bridge reads as multilane.
-    RoadGraph ground;
-    ground.nodes = g.nodes;
-    for (const RoadEdge& e : g.edges) if (e.layer == 0) ground.edges.push_back(e);
-    RoadMeshParams p;
-    p.lift = net.lift; p.color = net.color; p.sidewalkWidth = net.sidewalk;
-    p.curbHeight = net.curb; p.cornerRadius = net.cornerRadius;
-    p.laneMarkings = net.markings; p.shaderMarkings = false;
-    p.crosswalks = false; p.minSetback = net.width * 0.5 + 0.5; p.heightAt = net.heightAt;
-    RenderMesh mesh = buildRoadMesh(ground, p);
-
-    // Each upper layer: trace its chains and lift each onto a flat clearing deck + piers.
-    for (int L = 1; L <= maxLayer; ++L) {
-        RoadGraph up;
-        up.nodes = g.nodes;
-        for (const RoadEdge& e : g.edges) if (e.layer == L) up.edges.push_back(e);
-        for (const std::vector<Vec2>& chain : traceChains(up)) {
-            if (chain.size() < 2) continue;
-            // Densify so the ramps and the flat span have enough samples.
-            const double step = 3.0;
-            std::vector<Vec2> dense;
-            for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
-                Vec2 a = chain[i], b = chain[i + 1];
-                int sub = std::max(1, static_cast<int>(std::ceil((b - a).length() / step)));
-                for (int k = 0; k < sub; ++k) dense.push_back(a + (b - a) * (double(k) / sub));
-            }
-            dense.push_back(chain.back());
-            int n = static_cast<int>(dense.size());
-            std::vector<double> s(n), minH(n);
-            for (int i = 0; i < n; ++i) minH[i] = groundFn(dense[i].x, dense[i].y) + groundSurf;
-            s[0] = 0.0;
-            for (int i = 1; i < n; ++i) s[i] = s[i - 1] + (dense[i] - dense[i - 1]).length();
-            // For each ground road crossed, hold the deck FLAT over a span window centred on the
-            // crossing (lower-road half-width + an overhang), so the deck is level across the road
-            // below and only ramps on the approaches. Record the window edges for pier placement.
-            std::vector<double> support;
-            for (int i = 0; i + 1 < n; ++i)
-                for (const RoadEdge& e : ground.edges) {
-                    double t;
-                    if (!segCrossAt(dense[i], dense[i + 1], g.nodes[e.a].pos, g.nodes[e.b].pos, t))
-                        continue;
-                    double sCross = s[i] + t * (s[i + 1] - s[i]);
-                    double spanHalf = e.width * 0.5 + 5.0;
-                    double H = groundFn(dense[i].x, dense[i].y) + groundSurf + clearance + deckThk;
-                    for (int k = 0; k < n; ++k)
-                        if (std::fabs(s[k] - sCross) <= spanHalf) minH[k] = std::max(minH[k], H);
-                    support.push_back(sCross - spanHalf);
-                    support.push_back(sCross + spanHalf);
-                }
-            std::vector<double> deckY = clearanceProfile(s, minH, rampGrade);
-            appendMesh(mesh, bridgeDeck(dense, deckY, hw, net.color, deckThk));
-            // Abutment piers at the span edges (just outside the road below, where the flat deck
-            // meets the ramps) — the nearest sample to each recorded window edge.
-            std::vector<int> at;
-            for (double sp : support) {
-                int best = 0; double bd = 1e30;
-                for (int k = 0; k < n; ++k) { double d = std::fabs(s[k] - sp); if (d < bd) { bd = d; best = k; } }
-                at.push_back(best);
-            }
-            appendMesh(mesh, bridgePiers(dense, deckY, at, net.width, 3.0, deckThk,
-                                         Vec3(0.34, 0.34, 0.36), net.heightAt));
-        }
-    }
-    return mesh;
 }
 
 }  // namespace
@@ -360,10 +259,81 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
         if (nodeNeedsRoundabout(raw, v, rules)) { roundabout = true; break; }
     RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= constrainedNetGraph)
 
-    // Grade separations (ADR-0051/0054): if any edge is on a higher layer, the net carries an
-    // overpass — build the ground roads flat and lift each bridge chain onto a clearing deck.
-    for (const RoadEdge& e : g.edges)
-        if (e.layer > 0) return buildLayeredRoadNetMesh(net, g);
+    // Grade separations (ADR-0051/0054): an edge on a higher layer is an overpass.
+    // Instead of a separate bridge mesher, STAMP an absolute deck elevation onto
+    // each higher-layer chain (a flat clearing span over the roads it crosses,
+    // ramping down at rampGrade to grade) and let the ONE welder build it — deck,
+    // piers, and the Δz grade-separation from the roads below — the same weld that
+    // meshes the streets. (Retires buildLayeredRoadNetMesh; unifies the fork.)
+    {
+        int maxLayer = 0;
+        for (const RoadEdge& e : g.edges) maxLayer = std::max(maxLayer, e.layer);
+        if (maxLayer > 0) {
+            const DesignRules& dr = defaultDesign();
+            const double clearance = dr.clearance, deckThk = dr.deckThickness,
+                         rampGrade = dr.rampGrade, groundSurf = net.lift;
+            auto groundFn = [&](const Vec2& q) { return net.heightAt ? net.heightAt(q.x, q.y) : 0.0; };
+            const int N = static_cast<int>(g.nodes.size());
+            std::vector<std::vector<int>> incL(N);
+            for (int L = 1; L <= maxLayer; ++L) {
+                for (auto& v : incL) v.clear();
+                for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei)
+                    if (g.edges[ei].layer == L) {
+                        incL[g.edges[ei].a].push_back(ei); incL[g.edges[ei].b].push_back(ei);
+                    }
+                auto degL = [&](int v) { return static_cast<int>(incL[v].size()); };
+                auto other = [&](int e, int v) { return g.edges[e].a == v ? g.edges[e].b : g.edges[e].a; };
+                std::vector<char> used(g.edges.size(), 0);
+                auto walk = [&](int startV, int startE) {
+                    std::vector<int> ns{startV};
+                    int cur = startV, ce = startE;
+                    for (;;) {
+                        used[ce] = 1; int nx = other(ce, cur); ns.push_back(nx);
+                        if (degL(nx) != 2) break;
+                        int ne = -1;
+                        for (int e2 : incL[nx]) if (e2 != ce && !used[e2]) { ne = e2; break; }
+                        if (ne < 0) break; cur = nx; ce = ne;
+                    }
+                    return ns;
+                };
+                std::vector<std::vector<int>> chains;
+                for (int v = 0; v < N; ++v)
+                    if (degL(v) != 2 && degL(v) > 0)
+                        for (int e0 : incL[v]) if (!used[e0]) chains.push_back(walk(v, e0));
+                for (int e0 = 0; e0 < static_cast<int>(g.edges.size()); ++e0)   // pure rings
+                    if (g.edges[e0].layer == L && !used[e0]) chains.push_back(walk(g.edges[e0].a, e0));
+                for (const std::vector<int>& ns : chains) {
+                    const int n = static_cast<int>(ns.size());
+                    if (n < 2) continue;
+                    std::vector<double> s(n, 0.0), minH(n);
+                    for (int i = 1; i < n; ++i)
+                        s[i] = s[i - 1] + (g.nodes[ns[i]].pos - g.nodes[ns[i - 1]].pos).length();
+                    // Hold the deck FLAT over each LOWER road it passes above, clearing it by
+                    // `clearance`. A chain node within (lower half-width + overhang) of a lower
+                    // road's centreline is over the crossing — proximity, not a strict segment
+                    // cross, because the sampler puts a shared vertex exactly at the crossing.
+                    for (int i = 0; i < n; ++i) {
+                        const Vec2 q = g.nodes[ns[i]].pos;
+                        minH[i] = groundFn(q) + groundSurf;
+                        for (const RoadEdge& e : g.edges) {
+                            if (e.layer >= L) continue;                        // only clear roads below
+                            const Vec2 a = g.nodes[e.a].pos, ab = g.nodes[e.b].pos - a;
+                            const double L2 = ab.lengthSquared();
+                            const double t = L2 < 1e-12 ? 0.0
+                                : std::max(0.0, std::min(1.0, dot(q - a, ab) / L2));
+                            if ((q - (a + ab * t)).length() > e.width * 0.5 + 5.0) continue;
+                            minH[i] = std::max(minH[i], groundFn(q) + groundSurf + clearance + deckThk);
+                        }
+                    }
+                    std::vector<double> deckY = clearanceProfile(s, minH, rampGrade);
+                    for (int i = 0; i < n; ++i) {
+                        g.nodes[ns[i]].elev = static_cast<Real>(deckY[i]);
+                        g.nodes[ns[i]].elevAbsolute = true;                     // ride it through the weld
+                    }
+                }
+            }
+        }
+    }
 
     // Three road meshers. The polygon-union WELD is the default — each road welded into ONE surface
     // (no double-coverage, so sidewalks can't overlap at any junction angle), crisp, fast, UV-native.
