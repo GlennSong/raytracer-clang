@@ -369,6 +369,84 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     g.color = Vec3(1, 1, 1);   // vertex colours carry the lawn/path look
 }
 
+// A paved pad that FITS beneath a freeway deck: an asphalt lot with painted
+// stalls for a PARKING lot, or a concrete yard with equipment cabinets + a post
+// fence for a UTILITY lot. Draped on the terrain with a curb skirt so it never
+// floats on a slope; the "furniture" is what makes the land-use read. Stored in
+// g.padMesh like a park, so the host renders it on the terrain (no prism).
+static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
+                           const std::function<Real(Real, Real)>& ground,
+                           uint32_t seed, bool utility) {
+    if (poly.size() < 3) return;
+    Hash rng(mix(seed, utility ? 0xC0FFEEu : 0x5A1A5Au));
+    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    const Real lift = 0.05;
+    const Vec3 slab = utility ? Vec3(0.50, 0.50, 0.48)     // concrete
+                              : Vec3(0.24, 0.24, 0.26);    // asphalt
+    RenderMesh m;
+    Poly2 pad = inset(poly, 1.4);
+    if (pad.size() < 3) pad = poly;
+    for (const auto& t : triangulatePolygon(pad)) {                    // slab
+        const Vec2& a = pad[t[0]]; const Vec2& b = pad[t[1]]; const Vec2& c = pad[t[2]];
+        MeshBuilder::emitTri(m, Vec3(a.x, gy(a) + lift, a.y),
+                             Vec3(b.x, gy(b) + lift, b.y),
+                             Vec3(c.x, gy(c) + lift, c.y), Vec3(0, 1, 0), slab);
+    }
+    for (std::size_t i = 0; i < pad.size(); ++i) {                     // curb skirt
+        const Vec2& a = pad[i]; const Vec2& b = pad[(i + 1) % pad.size()];
+        Vec2 n2 = normalize(Vec2(b.y - a.y, a.x - b.x));
+        MeshBuilder::emitQuad(m, Vec3(a.x, gy(a) + lift - 0.4, a.y),
+                              Vec3(b.x, gy(b) + lift - 0.4, b.y),
+                              Vec3(b.x, gy(b) + lift, b.y),
+                              Vec3(a.x, gy(a) + lift, a.y),
+                              Vec3(n2.x, 0, n2.y), slab * 0.8);
+    }
+    const OBB2 ob = orientedBoundingBox(pad);
+    const Vec2 ax = ob.axis[0], ay = ob.axis[1], ctr = ob.center;
+    const Real hx = ob.half[0], hy = ob.half[1];
+    auto emitBoxRM = [&](const Vec2& p, Real bw, Real bd, Real bh, const Vec3& col) {
+        const Vec2 cs[4] = { p - ax * bw - ay * bd, p + ax * bw - ay * bd,
+                             p + ax * bw + ay * bd, p - ax * bw + ay * bd };
+        const Real g0 = gy(p), top = g0 + bh;
+        MeshBuilder::emitQuad(m, Vec3(cs[0].x, top, cs[0].y), Vec3(cs[1].x, top, cs[1].y),
+                              Vec3(cs[2].x, top, cs[2].y), Vec3(cs[3].x, top, cs[3].y),
+                              Vec3(0, 1, 0), col);
+        for (int k = 0; k < 4; ++k) {
+            const Vec2& a = cs[k]; const Vec2& b = cs[(k + 1) % 4];
+            Vec2 n2 = normalize(Vec2(b.y - a.y, a.x - b.x));
+            MeshBuilder::emitQuad(m, Vec3(a.x, g0, a.y), Vec3(b.x, g0, b.y),
+                                  Vec3(b.x, top, b.y), Vec3(a.x, top, a.y),
+                                  Vec3(n2.x, 0, n2.y), col);
+        }
+    };
+    if (utility) {
+        const int nb = 2 + static_cast<int>(rng.unit() * 3);          // cabinets
+        for (int i = 0; i < nb; ++i) {
+            const Vec2 p = ctr + ax * rng.range(-hx * 0.6, hx * 0.6) +
+                                 ay * rng.range(-hy * 0.6, hy * 0.6);
+            emitBoxRM(p, rng.range(0.8, 1.6), rng.range(0.6, 1.2),
+                      rng.range(1.4, 2.2), Vec3(0.42, 0.44, 0.46));
+        }
+        for (const Vec2& c : pad) emitBoxRM(c, 0.12, 0.12, 1.1, Vec3(0.30, 0.30, 0.32));
+    } else {
+        const Vec3 white(0.82, 0.82, 0.82);                           // parking stalls
+        const Real stall = 2.7;
+        const int rows = std::max(1, static_cast<int>(2 * hx / stall));
+        for (int r = 0; r <= rows; ++r) {
+            const Vec2 base = ctr - ax * hx + ax * (2 * hx * r / rows);
+            const Vec2 a = base - ay * (hy * 0.8), b = base + ay * (hy * 0.8);
+            const Vec2 w = ax * 0.12;
+            const Real y0 = gy(base) + lift + 0.02;
+            MeshBuilder::emitQuad(m, Vec3((a - w).x, y0, (a - w).y),
+                                  Vec3((a + w).x, y0, (a + w).y),
+                                  Vec3((b + w).x, y0, (b + w).y),
+                                  Vec3((b - w).x, y0, (b - w).y), Vec3(0, 1, 0), white);
+        }
+    }
+    g.padMesh = std::move(m);
+    g.color = Vec3(1, 1, 1);
+}
+
 // YARD SCULPTING: a house lot earns a FRONT WALK from its door to the street
 // boundary, a clipped hedge along the front lot line (with a gap where the
 // walk crosses), and a back-yard tree spot or two.
@@ -846,8 +924,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // SHADOW (set by the loader). A point within that shadow can't host a normal
     // building (it would clip the elevated structure) — the lot pass turns it
     // into deck-fitting open space instead (see PASS C).
-    auto underFreeway = [&](const Vec2& c) {
+    auto underFreeway = [&](const Vec2& c, bool* nearestIsRamp) {
         if (!roads) return false;
+        bool under = false; Real best = 1e30;
         for (const RoadEdge& e : roads->edges) {
             if (e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp) continue;
             if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
@@ -859,9 +938,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
             t = t < 0 ? 0 : (t > 1 ? 1 : t);
             Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
-            if ((c - q).length() < e.width * 0.5) return true;   // within the deck shadow
+            const Real d = (c - q).length();
+            if (d < e.width * 0.5) {                             // within the deck shadow
+                under = true;
+                if (d < best) { best = d; if (nearestIsRamp) *nearestIsRamp = e.klass == RoadClass::Ramp; }
+            }
         }
-        return false;
+        return under;
     };
     int underFwCount = 0;
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
@@ -1193,30 +1276,50 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 out.push_back(std::move(g));
             };
             // UNDER A FREEWAY DECK: a normal building would clip the elevated
-            // structure, so this lot becomes something that FITS beneath it — a
-            // landscaped open space (paths, shrubs, benches; the tall trees are
-            // stripped so nothing hits the deck). The block/lot pipeline thus
-            // builds the RIGHT thing under the freeway instead of a rejected
-            // stub. Landmarks are exempt (they were placed on purpose).
-            if (cand.landmark < 0 && underFreeway(centroid(lot.footprint))) {
-                OBB2 gb = orientedBoundingBox(lot.footprint);
-                LotBuilding u;
-                u.site = centroid(lot.footprint);
-                u.width = 2 * gb.half[0];
-                u.depth = 2 * gb.half[1];
-                u.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
-                u.height = 0.16;                 // low — tucks under the deck lift
-                u.type = "park";                 // host: terrain ground + sculpted parts
-                u.recipe = "underfreeway_open";
-                u.pad = lot.footprint;
-                u.color = Vec3(0.30, 0.50, 0.26);
-                sculptPark(u, u.pad, u.height, p.ground,
-                           mix(pp.seed, static_cast<uint32_t>(li) * 17u + 11u),
-                           outParts);
-                u.treeSpots.clear();             // no canopy under the deck
-                ++underFwCount;
-                out.push_back(std::move(u));
-                continue;
+            // structure, so this lot becomes something that FITS beneath it. The
+            // block/lot pipeline thus builds the RIGHT thing under the freeway
+            // instead of a rejected stub. Landmarks are exempt (placed on
+            // purpose). A high FREEWAY deck also admits a single-storey building;
+            // a variable-height RAMP shadow gets only low uses.
+            int ufShort = 0;   // build a one-storey mass that clears the deck
+            {
+                bool nearestIsRamp = false;
+                if (cand.landmark < 0 &&
+                    underFreeway(centroid(lot.footprint), &nearestIsRamp)) {
+                    const uint32_t s =
+                        mix(pp.seed, static_cast<uint32_t>(li) * 17u + 11u);
+                    const Real roll = Hash(s).unit();
+                    // 0 open space, 1 parking, 2 utility, 3 short building
+                    const int kind = nearestIsRamp
+                        ? (roll < 0.45 ? 0 : (roll < 0.75 ? 1 : 2))
+                        : (roll < 0.30 ? 0 : (roll < 0.55 ? 1 : (roll < 0.80 ? 2 : 3)));
+                    if (kind == 3) {
+                        ufShort = 1;   // fall through to the building path, capped
+                    } else {
+                        OBB2 gb = orientedBoundingBox(lot.footprint);
+                        LotBuilding u;
+                        u.site = centroid(lot.footprint);
+                        u.width = 2 * gb.half[0];
+                        u.depth = 2 * gb.half[1];
+                        u.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                        u.height = 0.16;         // low — tucks under the deck lift
+                        u.type = "park";         // host: terrain ground + padMesh (no prism)
+                        u.recipe = kind == 0 ? "underfreeway_open"
+                                 : kind == 1 ? "underfreeway_parking"
+                                             : "underfreeway_utility";
+                        u.pad = lot.footprint;
+                        u.color = Vec3(0.30, 0.50, 0.26);
+                        if (kind == 0) {         // landscaped open space, no canopy
+                            sculptPark(u, u.pad, u.height, p.ground, s, outParts);
+                            u.treeSpots.clear();
+                        } else {                 // paved parking / utility yard
+                            sculptUnderPad(u, u.pad, p.ground, s, /*utility=*/kind == 2);
+                        }
+                        ++underFwCount;
+                        out.push_back(std::move(u));
+                        continue;
+                    }
+                }
             }
             if (cand.landmark < 0 && rng.unit() > buildChance) {
                 if (debug) debug->rejChance++;
@@ -1297,6 +1400,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // into outParts so the caller binds the SAME PBR material recipes the
             // shape:"city" pipeline uses — not a flattened vertex-colour blob.
             BuildingParams bp = rec.params;   // the architect's recipe
+            // Under a high freeway deck: one storey only, so the mass clears the
+            // structure (a low outbuilding beneath the viaduct, not a tower).
+            if (ufShort) { bp.floors = 1; b.type = "underfreeway"; ++underFwCount; }
             // The STYLE BOOK (Lua data layer) overlays look overrides by
             // recipe name — cladding, windows, colours — before growth.
             if (p.styleHook) p.styleHook(rec.name, bp);
@@ -1691,7 +1797,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     }
     if (underFwCount > 0)
         LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
-                 << " re-zoned to open space (fit beneath the deck)";
+                 << " re-zoned to fit beneath the deck (open space / parking / "
+                    "utility / short building)";
     return out;
 }
 
