@@ -18,6 +18,7 @@ struct Ring {
     double hw;       // half-width here (the deck flares with it)
     double cs;       // cross-slope (superelevation) here
     double s;        // arc length from the chain start
+    double miter = 1.0;   // lateral scale at a bend: 1/cos(halfAngle), clamped
 };
 
 double lerp(double a, double b, double t) { return a + (b - a) * t; }
@@ -43,9 +44,28 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
     }
     if (total < 1e-6) return rings;
 
-    const int R = std::max(1, static_cast<int>(std::ceil(total / std::max(0.25, ringStep))));
-    for (int k = 0; k <= R; ++k) {
-        const double s = total * k / R;
+    // Ring stations. A SPARSE spine (authored street graph, segments much longer
+    // than the ring pitch) gets a ring at EVERY vertex — a kink between stations
+    // would have its corner chopped by the spanning quad (the unmitered look) —
+    // plus even fill between vertices. A DENSE spine (corridor decks/ramps
+    // already sampled at ~ring pitch) keeps pure even spacing: its vertices are
+    // sampling artifacts, not kinks, and re-phasing rings there shifts tuned
+    // arc-length features (parapet gore gaps).
+    std::vector<double> stations;
+    const double avgSeg = total / (n - 1);
+    if (avgSeg < ringStep * 1.5) {
+        const int R = std::max(1, static_cast<int>(std::ceil(total / std::max(0.25, ringStep))));
+        for (int k = 0; k <= R; ++k) stations.push_back(total * k / R);
+    } else {
+        double cum = 0;
+        stations.push_back(0.0);
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            const int fill = std::max(1, static_cast<int>(std::ceil(segLen[i] / std::max(0.25, ringStep))));
+            for (int k = 1; k <= fill; ++k) stations.push_back(cum + segLen[i] * k / fill);
+            cum += segLen[i];
+        }
+    }
+    for (double s : stations) {
         // locate the segment
         double acc = 0; std::size_t si = 0;
         while (si + 1 < segLen.size() && acc + segLen[si] < s) { acc += segLen[si]; ++si; }
@@ -59,7 +79,11 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
         rg.s = s;
         rings.push_back(rg);
     }
-    // Central-difference tangents; left = tangent rotated +90 in XZ.
+    // Central-difference tangents; left = tangent rotated +90 in XZ. At a bend
+    // the central difference IS the miter direction, but offsetting by the raw
+    // width along it NARROWS the ribbon by cos(halfAngle) — the unmitered
+    // sidewalk. Scale lateral offsets by the miter length 1/cos(halfAngle),
+    // clamped so acute kinks cannot spike.
     for (std::size_t i = 0; i < rings.size(); ++i) {
         const Vec2 prev = rings[i == 0 ? 0 : i - 1].c;
         const Vec2 next = rings[i + 1 < rings.size() ? i + 1 : i].c;
@@ -67,6 +91,17 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
         if (d.lengthSquared() < 1e-12) d = Vec2(1, 0);
         rings[i].fwd = normalize(d);
         rings[i].left = Vec2(-rings[i].fwd.y, rings[i].fwd.x);
+        // Miter only DRAPED street spines: authored-yAbs chains (freeway decks,
+        // ramps) are smooth clothoids that never kink — and an acute artifact
+        // vertex there would flare a parapet into the travel lane. Clamp at 2x
+        // so even a sharp street corner widens, never spikes.
+        if (!hasY) {
+            Vec2 dSeg = next - rings[i].c;                   // local segment dir
+            if (dSeg.lengthSquared() < 1e-12) dSeg = rings[i].c - prev;
+            if (dSeg.lengthSquared() > 1e-12)
+                rings[i].miter = std::min(2.0,
+                    1.0 / std::max(0.5, (double)dot(rings[i].fwd, normalize(dSeg))));
+        }
     }
     return rings;
 }
@@ -96,7 +131,7 @@ RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
         const Vec3 bankedUp = normalize(Vec3(0, 1, 0) - left3 * rg.cs);
         for (int j = 0; j < P; ++j) {
             const ProfileCol& col = profile.cols[j];
-            const double lateral = col.edgeFrac * rg.hw + col.absOffset;
+            const double lateral = (col.edgeFrac * rg.hw + col.absOffset) * rg.miter;
             const double deckY = rg.yBase + lateral * rg.cs;    // banked deck plane
             Vertex& v = verts[i * P + j];
             v.position = c3 + left3 * lateral;

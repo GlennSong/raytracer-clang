@@ -315,6 +315,39 @@ TEST_CASE(street_body_conforms_to_hills) {
     CHECK(steep == 0);            // and no bump the terrain didn't put there
 }
 
+// A chain with a 90-degree KINK must MITER: a ring sits exactly at the corner
+// and its lateral offsets stretch by 1/cos(45) so the outer sidewalk edge stays
+// continuous. Unmitered, the corner is chopped and the outer edge shows a wedge
+// of ground (Glenn: "sidewalks aren't mitered in some cases").
+TEST_CASE(street_body_miters_a_right_angle_bend) {
+    UnionSpine s;
+    s.klass = RoadClass::Local;
+    for (int i = 0; i <= 5; ++i) s.points.push_back(Vec2(i * 10.0, 0));      // east 50
+    for (int i = 1; i <= 5; ++i) s.points.push_back(Vec2(50.0, i * 10.0));   // north 50
+    s.halfWidth = 4.0;
+    auto flat = [](double, double) { return 0.0; };
+    RenderMesh m = sweepRoadLattice(s, streetProfile(1, 3.0, 0.15), flat, 2.0);
+    CHECK(!m.vertices.empty());
+
+    // The OUTER sidewalk corner of the bend: full half-width (4+3) mitered by
+    // 1/cos(45deg) ~ 1.414 along the corner bisector (outer side = -left = SE).
+    const double full = 7.0 * std::sqrt(2.0);
+    const Vec2 bisect = normalize(Vec2(1, -1));            // outward at the corner
+    const Vec2 corner = Vec2(50, 0) + bisect * (full * 0.985);   // just inside the rim
+    const std::vector<double> hits = driveprobe::surfacesAt(m, corner.x, corner.y);
+    CHECK(!hits.empty());                                   // covered only if mitered
+
+    // And the mesh stays sane through the bend.
+    int degen = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        if (cross(b - a, c - a).length() < 1e-9) ++degen;
+    }
+    CHECK(degen == 0);
+}
+
 // Stage 3b: node -> Coons patch. Four arms meet at DIFFERENT heights (the exact
 // hilly-cross case that steps to 164% under nearest-spine). The adapter orders
 // them, snaps the kerb corners, and hands the four mouths to coonsPatch, so the
