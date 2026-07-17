@@ -427,6 +427,9 @@ add_executable(run_tests
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
     tests/test_weld_deck_surface.cpp
+    tests/test_junction_surface.cpp
+    tests/test_drive_freeway.cpp
+    tests/test_mesh_quality.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp
