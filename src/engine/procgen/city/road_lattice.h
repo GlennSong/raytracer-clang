@@ -58,7 +58,9 @@ struct GapWindow { double s0 = 0, s1 = 0; };
 RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
                             const std::function<double(double, double)>& ground,
                             double ringStep = 3.0,
-                            const std::vector<GapWindow>* gaps = nullptr);
+                            const std::vector<GapWindow>* gaps = nullptr,
+                            std::vector<Vec3>* ring0Out = nullptr,
+                            std::vector<Vec3>* ringNOut = nullptr);
 
 // The whole cross-section of a divided elevated freeway, meshed as a set of
 // shared-vertex lattices: the drivable deck top + the viaduct underside

@@ -79,6 +79,15 @@ struct RoadNet {
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).
 RenderMesh buildRoadNetMesh(const RoadNet& net);
 
+// Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain
+// as a lattice body trimmed to the junction boundary, and fill each deg>=3 node
+// with a Coons junction patch that shares the bodies' mouth rings — so the
+// surface is quads with interior vertices (conforms to terrain) and junctions
+// interpolate height (no medial-axis step). Not yet the buildRoadNetMesh default;
+// proven on its own first. `heightAt` drapes the streets (null = flat).
+RenderMesh buildRoadNetLattice(const RoadGraph& g,
+                               const std::function<Real(Real, Real)>& heightAt);
+
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a
 // straight run collapses back to one), with the local roundabout constraints

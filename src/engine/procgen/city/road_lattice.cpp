@@ -76,7 +76,9 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
 RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
                             const std::function<double(double, double)>& ground,
                             double ringStep,
-                            const std::vector<GapWindow>* gaps) {
+                            const std::vector<GapWindow>* gaps,
+                            std::vector<Vec3>* ring0Out,
+                            std::vector<Vec3>* ringNOut) {
     RenderMesh mesh;
     const int P = static_cast<int>(profile.cols.size());
     if (P < 2) return mesh;
@@ -108,6 +110,13 @@ RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
             v.color = col.color;
         }
     }
+
+    // Expose the end rings (all columns) so a junction patch can reuse the body's
+    // own mouth vertices — the body and the patch then share the seam exactly.
+    if (ring0Out) { ring0Out->clear();
+        for (int j = 0; j < P; ++j) ring0Out->push_back(verts[j].position); }
+    if (ringNOut) { ringNOut->clear();
+        for (int j = 0; j < P; ++j) ringNOut->push_back(verts[(R - 1) * P + j].position); }
 
     // Which rings survive the gap windows. A gapped profile (an edge parapet
     // over a ramp gore) is emitted as several lattices, one per active run, so

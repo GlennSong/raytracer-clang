@@ -1,5 +1,7 @@
 #include "road_net.h"
 #include "../../../log.h"
+#include "road_lattice.h"        // swept-lattice street mesher (stage 3)
+#include "../../mesh_builder.h"  // MeshBuilder::append
 
 #include "road_network.h"       // RoadGraph, RoadEdge
 #include "road_constraints.h"   // applyConstraints, capDegree, RoadRules
@@ -241,6 +243,92 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
             if (s.points.size() >= 3) spines.push_back(std::move(s));
         }
     return spines;
+}
+
+namespace {
+// Trim a chain to start `rA` / end `rB` into it (arc length), so its ends stop at
+// the junction boundary and its swept end rings become the arm mouths.
+UnionSpine trimSpine(const UnionSpine& s, double rA, double rB) {
+    const int n = static_cast<int>(s.points.size());
+    if (n < 2) return s;
+    std::vector<double> cum(n, 0.0);
+    for (int i = 1; i < n; ++i) cum[i] = cum[i - 1] + (s.points[i] - s.points[i - 1]).length();
+    const double L = cum.back();
+    const double a = std::min(rA, L * 0.45);
+    const double b = std::max(L - std::min(rB, L * 0.45), a + 0.5);
+    const bool hasY = static_cast<int>(s.yAbs.size()) == n;
+    auto at = [&](double d, Vec2& p, double& y) {
+        int i = 0; while (i + 1 < n && cum[i + 1] < d) ++i;
+        const double seg = cum[i + 1] - cum[i];
+        const double t = seg > 1e-9 ? (d - cum[i]) / seg : 0.0;
+        p = s.points[i] + (s.points[i + 1] - s.points[i]) * t;
+        if (hasY) y = s.yAbs[i] + (s.yAbs[i + 1] - s.yAbs[i]) * t;
+    };
+    UnionSpine o; o.halfWidth = s.halfWidth; o.klass = s.klass;
+    Vec2 p; double y = 0;
+    at(a, p, y); o.points.push_back(p); if (hasY) o.yAbs.push_back(y);
+    for (int i = 0; i < n; ++i)
+        if (cum[i] > a + 1e-6 && cum[i] < b - 1e-6) {
+            o.points.push_back(s.points[i]); if (hasY) o.yAbs.push_back(s.yAbs[i]);
+        }
+    at(b, p, y); o.points.push_back(p); if (hasY) o.yAbs.push_back(y);
+    return o;
+}
+}  // namespace
+
+RenderMesh buildRoadNetLattice(const RoadGraph& g,
+                               const std::function<Real(Real, Real)>& heightAt) {
+    const int N = static_cast<int>(g.nodes.size());
+    std::vector<int> deg(N, 0);
+    std::vector<double> rad(N, 0.0);
+    for (const RoadEdge& e : g.edges) {
+        ++deg[e.a]; ++deg[e.b];
+        rad[e.a] = std::max(rad[e.a], static_cast<double>(e.width) * 0.5);
+        rad[e.b] = std::max(rad[e.b], static_cast<double>(e.width) * 0.5);
+    }
+    auto ground = [&](double x, double z) { return heightAt ? (double)heightAt(x, z) : 0.0; };
+    auto nodeAt = [&](const Vec2& q) {
+        int best = -1; double bd = 1e18;
+        for (int v = 0; v < N; ++v) {
+            const double d = (g.nodes[v].pos - q).lengthSquared();
+            if (d < bd) { bd = d; best = v; }
+        }
+        return bd < 1.0 ? best : -1;
+    };
+
+    RenderMesh out;
+    std::vector<std::vector<JunctionArm>> arms(N);
+    for (const UnionSpine& s : weldChainSpines(g)) {
+        if (s.points.size() < 2) continue;
+        const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
+        const double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
+        const double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
+        UnionSpine t = trimSpine(s, rA, rB);
+        if (t.points.size() < 2) continue;
+
+        const int lanesPerSide = std::max(1, static_cast<int>(std::lround(s.halfWidth / 3.6)));
+        const int cw = 2 * lanesPerSide + 1;
+        std::vector<Vec3> ring0, ringN;
+        MeshBuilder::append(out, sweepRoadLattice(t, streetProfile(lanesPerSide, 3.0, 0.15),
+                                                  ground, 2.0, nullptr, &ring0, &ringN));
+        // The carriageway columns of the profile are [2, 2+cw); reversed they run
+        // left-verge -> right-verge looking OUTWARD, which junctionPatch expects.
+        auto mouth = [&](const std::vector<Vec3>& ring) {
+            std::vector<Vec3> m;
+            for (int j = 2 + cw - 1; j >= 2; --j)
+                if (j < static_cast<int>(ring.size())) m.push_back(ring[j]);
+            return m;
+        };
+        const std::size_t tn = t.points.size();
+        if (a >= 0 && deg[a] >= 3 && ring0.size() >= static_cast<std::size_t>(2 + cw))
+            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0) });
+        if (b >= 0 && deg[b] >= 3 && ringN.size() >= static_cast<std::size_t>(2 + cw))
+            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
+    }
+    for (int v = 0; v < N; ++v)
+        if (deg[v] >= 3 && arms[v].size() >= 3)
+            MeshBuilder::append(out, junctionPatch(arms[v]));
+    return out;
 }
 
 RenderMesh buildRoadNetMesh(const RoadNet& net) {
