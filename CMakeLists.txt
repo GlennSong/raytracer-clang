@@ -85,6 +85,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/alignment.cpp
     src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
+    src/engine/procgen/city/road_lattice.cpp
     src/engine/procgen/city/triangulate.cpp
     src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
@@ -431,6 +432,7 @@ add_executable(run_tests
     tests/test_drive_freeway.cpp
     tests/test_mesh_quality.cpp
     tests/test_mesh_lattice.cpp
+    tests/test_road_lattice.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp
