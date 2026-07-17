@@ -67,6 +67,7 @@ std::vector<UnionSpine> corridorDeckSpines(
     deck.points.reserve(n + 1);
     deck.yAbs.reserve(n + 1);
     deck.hw.reserve(n + 1);
+    deck.crossSlope.reserve(n + 1);
     Real maxHw = 0.0;
     for (int i = 0; i <= n; ++i) {
         const Real s = L * i / n;
@@ -74,6 +75,7 @@ std::vector<UnionSpine> corridorDeckSpines(
         deck.points.push_back(c.horizontal.pos(s));
         deck.yAbs.push_back(c.vertical.elevation(s));
         deck.hw.push_back(hw);
+        deck.crossSlope.push_back(c.superelevationAt(s));   // bank through the curves (P6)
         maxHw = std::max(maxHw, hw);
     }
     deck.halfWidth = maxHw;   // scalar representative (mouth / barriers / piers)

@@ -240,6 +240,11 @@ struct UnionSpine {
     // freeway diverge (road-unification one-mesher P5). The weld strokes a
     // variable-offset ribbon from it and the lateral UV normalises against it.
     std::vector<double> hw;
+    // Per-point CROSS-SLOPE (superelevation, dy per metre of lateral offset,
+    // + = deck rises to the LEFT; parallel to `points`; EMPTY = laterally flat).
+    // Banks the deck through a curve (one-mesher P6): the height sampler adds
+    // signedLateral * crossSlope so the whole deck/wall/underside tilts.
+    std::vector<double> crossSlope;
 };
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);

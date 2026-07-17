@@ -322,6 +322,33 @@ TEST_CASE(corridor_deck_spines_match_the_corridor_mesher) {
     CHECK(std::fabs((cz1 - cz0) - (wz1 - wz0)) < 4.0);       // same deck width (across Z)
 }
 
+// P6 (one mesher) — a CURVED corridor banks: corridorDeckSpines pulls the
+// alignment's superelevation into the deck spine's crossSlope, so the SAME
+// banking the corridor mesher applied is now driven through the weld. A curve
+// tight enough to superelevate must yield a non-zero cross-slope somewhere.
+TEST_CASE(curved_corridor_deck_spine_carries_superelevation) {
+    CorridorDef c;
+    c.horizontal = Alignment::fromPolyline(
+        { Vec2(-200, 0), Vec2(0, 0), Vec2(120, 120), Vec2(120, 320) }, 180.0, 40.0);
+    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };
+    c.lanes.throughLanes = 3;
+    auto ground = [](Real, Real) { return 0.0; };
+    std::vector<UnionSpine> sp = corridorDeckSpines(c, ground, 3.0);
+    CHECK(sp.size() == 1);
+    CHECK(sp[0].crossSlope.size() == sp[0].points.size());   // banking channel populated
+    double maxBank = 0.0;
+    for (double cs : sp[0].crossSlope) maxBank = std::max(maxBank, std::fabs(cs));
+    CHECK(maxBank > 0.01);   // the curve superelevates — deck tilts through the bend
+
+    // ...and the weld honours it: the banked deck is no longer a flat plane.
+    WeldSolidParams wp; wp.barriers = false;
+    RenderMesh m = weldSolid(sp, wp);
+    CHECK(!m.vertices.empty());
+    CHECK(!hasNonFinite(m));
+    double minY, maxY; bboxY(m, minY, maxY);
+    CHECK(maxY - minY > 0.05);   // a flat +9 deck would be a razor slab; banking gives it relief
+}
+
 // P4 (one mesher) — a corridor RAMP centreline (rampPaths, the same authored
 // polyline the nav graph reads) becomes a ramp UnionSpine the ONE welder meshes:
 // it rides the deck at the top (+9) and the grade-sep split descends its low
@@ -391,6 +418,34 @@ TEST_CASE(weld_deck_flares_with_per_point_width) {
     }
     CHECK(zNarrow > 2.0 && zNarrow < 4.5);   // ~hw 3 at the narrow end
     CHECK(zWide  > 6.0 && zWide  < 9.5);     // ~hw 8 — the deck flared
+}
+
+// P6 (one mesher) — SUPERELEVATION: a deck with a cross-slope BANKS, its left
+// edge riding higher than its right (the corridor's curve banking, now in the
+// weld). Empty crossSlope is flat (all other decks unchanged).
+TEST_CASE(weld_deck_banks_with_cross_slope) {
+    UnionSpine s;
+    s.klass = RoadClass::Freeway;
+    for (int i = 0; i <= 8; ++i) {
+        s.points.push_back(Vec2(-40 + i * 10.0, 0));
+        s.yAbs.push_back(9.0);                 // flat centreline at +9
+        s.crossSlope.push_back(0.06);          // 6% cross-slope, rises to the LEFT
+    }
+    s.halfWidth = 8.0;
+    WeldSolidParams wp;
+    wp.barriers = false;
+    wp.heightAt = [](Real, Real) { return 0.0; };
+    RenderMesh m = weldSolid({ s }, wp);
+    CHECK(!m.vertices.empty());
+    CHECK(!hasNonFinite(m));
+    double yLeft = -1e9, yRight = -1e9;         // max deck Y at each edge
+    for (const Vertex& v : m.vertices) {
+        if (v.position.z > 6.0) yLeft = std::max(yLeft, (double)v.position.y);
+        if (v.position.z < -6.0) yRight = std::max(yRight, (double)v.position.y);
+    }
+    // At |z| = 8, banking = 8 * 0.06 = 0.48: left edge ~9.48, right edge ~8.52.
+    CHECK(yLeft > 9.2);    // left edge banked UP
+    CHECK(yRight < 8.9);   // right edge banked DOWN
 }
 
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
