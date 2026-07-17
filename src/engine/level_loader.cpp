@@ -3962,6 +3962,12 @@ bool LevelLoader::load(const std::string& path,
                 Renderable r;
                 r.material.albedo = Vec3(1, 1, 1);
                 r.material.roughness = 0.95f;
+                // A WELD-meshed corridor deck carries road-local marking UV, so
+                // the SAME surface shader that paints street lane lines paints it
+                // (the corridor_mesh deck instead ships separate cm.markings
+                // geometry, so it stays plain here).
+                if (ci < corridorWeld.size() && corridorWeld[ci])
+                    r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
                 r.mesh = assets.acquireMesh(
                     cm.deck, "corridor:deck:" + std::to_string(ci));
                 world.add<Renderable>(e, r);
