@@ -1626,8 +1626,15 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 drop = std::max(drop, std::max(gA, gB) + 0.5);
             }
             Vec3 tA = P3(a, 0), tB = P3(b, 0), bA = P3(a, -drop), bB = P3(b, -drop);
-            MeshBuilder::emitTri(mesh, tA, tB, bB, nrm, p.sideColor);
-            MeshBuilder::emitTri(mesh, tA, bB, bA, nrm, p.sideColor);
+            // Is this face STRUCTURE or a kerb? A viaduct's slab edge is a fascia,
+            // and so is any skirt tall enough to be a retaining wall / embankment
+            // face — e.g. a ramp descending off the deck, whose low foot the
+            // grade-split reclassifies to ground and which therefore skirts down
+            // to terrain. Both are concrete. Only a shallow kerb stays dark.
+            const bool structural = onDeck || drop > 1.2;
+            const Vec3& face = structural ? p.viaductSideColor : p.sideColor;
+            MeshBuilder::emitTri(mesh, tA, tB, bB, nrm, face);
+            MeshBuilder::emitTri(mesh, tA, bB, bA, nrm, face);
         }
     };
 
@@ -1754,7 +1761,13 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.topColor);        // deck up
             Vec3 aB = P3(t[0], -p.thickness), bB = P3(t[1], -p.thickness),
                  cB = P3(t[2], -p.thickness);
-            MeshBuilder::emitTri(mesh, aB, bB, cB, Vec3(0, -1, 0), p.bottomColor);  // underside
+            // A flown span's SOFFIT is the concrete box girder seen from beneath;
+            // at grade it's an unseen slab bottom that stays dark.
+            const Vec2 ctr((t[0].x + t[1].x + t[2].x) / 3.0,
+                           (t[0].y + t[1].y + t[2].y) / 3.0);
+            const Vec3& soffit =
+                authoredAt(ctr.x, ctr.y) ? p.viaductBottomColor : p.bottomColor;
+            MeshBuilder::emitTri(mesh, aB, bB, cB, Vec3(0, -1, 0), soffit);  // underside
         }
     }
 

@@ -282,6 +282,14 @@ struct WeldSolidParams {
     Vec3   topColor{0.10, 0.10, 0.11};          // asphalt deck
     Vec3   sideColor{0.18, 0.18, 0.19};         // curb / road edge
     Vec3   bottomColor{0.05, 0.05, 0.05};       // underside
+    // VIADUCT STRUCTURE (one-mesher P8b). At grade, a road's edge is a curb and
+    // its underside is a slab bottom nobody ever sees — both stay near-black. But
+    // an AUTHORED elevated deck's edge and soffit ARE the structure: the fascia
+    // and box girder a viaduct is seen from below and beside. Painting those with
+    // the pavement colour turned every flown span into a black wedge; the corridor
+    // mesher this replaces drew them concrete, like the piers holding them up.
+    Vec3   viaductSideColor{0.56, 0.55, 0.53};    // fascia / slab edge (concrete)
+    Vec3   viaductBottomColor{0.44, 0.43, 0.42};  // soffit (concrete, self-shaded)
     // Raised sidewalk: a curbed concrete band run along the welded boundary loops (the
     // outer carriageway edge + every block-interior/island hole), offset outward by
     // sidewalkWidth and standing curbHeight above the deck. 0 width = no sidewalks.

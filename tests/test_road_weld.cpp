@@ -555,6 +555,53 @@ TEST_CASE(weld_deck_banks_with_cross_slope) {
     CHECK(yRight < 8.9);   // right edge banked DOWN
 }
 
+// P8b (one mesher) — a VIADUCT IS A STRUCTURE: an authored elevated deck's
+// fascia and soffit are the concrete box girder you see from beside and below,
+// not pavement. The corridor mesher this replaces drew them concrete; the weld
+// was painting them with the road's near-black kerb/underside colours, turning
+// every flown span into a black wedge. At grade those same faces stay dark —
+// there they really are an unseen kerb edge and slab bottom.
+TEST_CASE(weld_viaduct_wears_concrete_fascia_and_soffit) {
+    auto ground = [](Real, Real) { return 0.0; };
+    auto minChannel = [](const Vec3& c) { return std::min(c.x, std::min(c.y, c.z)); };
+
+    UnionSpine deck;                       // authored +9 viaduct
+    deck.klass = RoadClass::Freeway;
+    for (int i = 0; i <= 10; ++i) {
+        deck.points.push_back(Vec2(-50 + i * 10.0, 0));
+        deck.yAbs.push_back(9.0);
+    }
+    deck.halfWidth = 8.0;
+    WeldSolidParams wp;
+    wp.heightAt = ground;
+    RenderMesh viaduct = weldSolid({ deck }, wp);
+    CHECK(!viaduct.vertices.empty());
+    // The soffit (downward-facing, up at deck height) must be concrete-bright.
+    int soffit = 0, darkSoffit = 0;
+    for (std::size_t i = 0; i + 2 < viaduct.indices.size(); i += 3) {
+        const Vertex& v = viaduct.vertices[viaduct.indices[i]];
+        if (v.normal.y > -0.5 || v.position.y < 7.0) continue;   // deck soffit only
+        ++soffit;
+        if (minChannel(v.color) < 0.2) ++darkSoffit;
+    }
+    CHECK(soffit > 0);          // the fixture really does emit a soffit...
+    CHECK(darkSoffit == 0);     // ...and none of it is painted pavement-black
+
+    // An AT-GRADE road keeps the dark underside: this is deck-only styling.
+    UnionSpine street;
+    street.klass = RoadClass::Local;
+    for (int i = 0; i <= 10; ++i) street.points.push_back(Vec2(-50 + i * 10.0, 0));
+    street.halfWidth = 5.0;
+    RenderMesh flat = weldSolid({ street }, wp);
+    int darkFlat = 0;
+    for (std::size_t i = 0; i + 2 < flat.indices.size(); i += 3) {
+        const Vertex& v = flat.vertices[flat.indices[i]];
+        if (v.normal.y > -0.5) continue;
+        if (minChannel(v.color) < 0.2) ++darkFlat;
+    }
+    CHECK(darkFlat > 0);        // streets are unchanged
+}
+
 // P6 (one mesher) — the deck's own FURNITURE banks with it: a superelevated
 // freeway's edge parapets ride the raised/lowered verge instead of floating at
 // the flat centreline height. The high (left, +z) rail tops out above the low

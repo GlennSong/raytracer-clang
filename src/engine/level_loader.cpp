@@ -2328,6 +2328,11 @@ bool LevelLoader::load(const std::string& path,
                 def.exits.push_back(e);
             }
             corridorDefs.push_back(std::move(def));
+            // One-mesher P8: still OPT-IN for authored corridors. Flipping this
+            // to true is a prerequisite for deleting the corridor mesher, but
+            // the weld renders freeway_lab's gores differently from the geometry
+            // it would replace (unexplained dark wedges), and the deletion gate
+            // is "no regression" — so this stays false until that is understood.
             corridorWeld.push_back(cb.value("weld", false) ? 1 : 0);
         }
     }
