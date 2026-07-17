@@ -434,7 +434,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // so the whole-city switch can be DRIVEN before it becomes the default. Not a
     // standing flag — it comes out when the lattice reaches parity and weldSolid
     // is deleted.
-    if (std::getenv("RT_LATTICE_STREETS"))
+    if (net.latticeStreets || std::getenv("RT_LATTICE_STREETS"))
         return buildRoadNetLattice(g, net.heightAt);
 
     // Three road meshers. The polygon-union WELD is the default — each road welded into ONE surface
@@ -895,6 +895,7 @@ RoadNet roadNetFromJson(const json& j) {
     net.markings = j.value("markings", net.markings);
     net.crosswalks = j.value("crosswalks", net.crosswalks);
     net.autoRoundabout = j.value("auto_roundabout", net.autoRoundabout);
+    net.latticeStreets = j.value("lattice", net.latticeStreets);
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
                          j["color"][2].get<double>());

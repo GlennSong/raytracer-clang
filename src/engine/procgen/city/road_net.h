@@ -65,6 +65,11 @@ struct RoadNet {
     // generator never intended (buildRoadNetMesh + constrainedNetGraph used to
     // re-run applyConstraints with default rules). Hand-authored nets keep true.
     bool   autoRoundabout = true;
+    // Swept-lattice street mesher (street-lattice-plan.md stage 3): mesh streets as
+    // quad-strip bodies + Coons junction patches instead of the earcut union weld.
+    // Per-level opt-in while it reaches parity; the whole engine flips at 3d and
+    // this field (and weldSolid) go away. `RT_LATTICE_STREETS` forces it globally.
+    bool   latticeStreets = false;
     Vec3   color{0.09, 0.09, 0.10};
     std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
     // Hubs the metro recipe grew this net around (with district kinds), so lot
