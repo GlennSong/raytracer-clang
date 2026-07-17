@@ -433,6 +433,7 @@ add_executable(run_tests
     tests/test_mesh_quality.cpp
     tests/test_mesh_lattice.cpp
     tests/test_road_lattice.cpp
+    tests/test_road_join.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp

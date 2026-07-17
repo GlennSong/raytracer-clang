@@ -346,9 +346,17 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         MeshBuilder::append(out, junctionPatch(arms[v]));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
+        int degen = 0;
+        for (std::size_t t = 0; t + 2 < out.indices.size(); t += 3) {
+            const Vec3& a = out.vertices[out.indices[t]].position;
+            const Vec3& b = out.vertices[out.indices[t + 1]].position;
+            const Vec3& c = out.vertices[out.indices[t + 2]].position;
+            if (cross(b - a, c - a).length() < 1e-9) ++degen;
+        }
         LOG_INFO << "[lattice] nodes=" << N << " deg2chains=" << nDeg2
                  << " coons4=" << nCoons << " coonsT=" << nT << " fan(5+)=" << nFan
-                 << " stub(arms<3)=" << nStub << " armMismatch=" << nMismatch;
+                 << " stub(arms<3)=" << nStub << " armMismatch=" << nMismatch
+                 << " | tris=" << (out.indices.size() / 3) << " degenerate=" << degen;
         std::string h;
         for (int d = 0; d < 12; ++d) if (degHist[d]) h += " d" + std::to_string(d) + "=" + std::to_string(degHist[d]);
         LOG_INFO << "[lattice] degree histogram:" << h;

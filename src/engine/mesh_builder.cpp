@@ -546,14 +546,26 @@ void MeshBuilder::emitLattice(RenderMesh& mesh, const LatticeSpec& spec) {
 
     mesh.indices.reserve(mesh.indices.size() +
                          static_cast<size_t>(R - 1) * (P - 1) * 6);
+    // Skip a zero-area TRIANGLE rather than emit it: a swept profile with a
+    // pinched column (a collapsed curb, a Coons pad whose interior folds where a
+    // branch is embedded) yields a needle a car never sees but the mesh-quality
+    // and degenerate checks rightly flag. Each cell is two tris; drop only those
+    // that collapse, keeping the rest of the quad.
+    auto area2 = [&](uint32_t x, uint32_t y, uint32_t z) {
+        const Vec3& A = mesh.vertices[x].position;
+        const Vec3& B = mesh.vertices[y].position;
+        const Vec3& C = mesh.vertices[z].position;
+        return cross(B - A, C - A).lengthSquared();
+    };
+    auto emit = [&](uint32_t x, uint32_t y, uint32_t z) {
+        if (area2(x, y, z) > 1e-14) mesh.indices.insert(mesh.indices.end(), {x, y, z});
+    };
     for (int i = 0; i + 1 < R; ++i) {
         for (int j = 0; j + 1 < P; ++j) {
             const uint32_t a = at(i, j), b = at(i, j + 1),
                            c = at(i + 1, j), d = at(i + 1, j + 1);
-            if (!flip)
-                mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-            else
-                mesh.indices.insert(mesh.indices.end(), {a, d, b, a, c, d});
+            if (!flip) { emit(a, b, d); emit(a, d, c); }
+            else       { emit(a, d, b); emit(a, c, d); }
         }
     }
 }
