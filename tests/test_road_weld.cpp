@@ -448,6 +448,34 @@ TEST_CASE(weld_deck_banks_with_cross_slope) {
     CHECK(yRight < 8.9);   // right edge banked DOWN
 }
 
+// P6 (one mesher) — the deck's own FURNITURE banks with it: a superelevated
+// freeway's edge parapets ride the raised/lowered verge instead of floating at
+// the flat centreline height. The high (left, +z) rail tops out above the low
+// (right, -z) rail — proof the barrier baseline picked up the cross-slope.
+TEST_CASE(weld_freeway_barriers_bank_with_the_deck) {
+    UnionSpine s;
+    s.klass = RoadClass::Freeway;
+    for (int i = 0; i <= 8; ++i) {
+        s.points.push_back(Vec2(-40 + i * 10.0, 0));
+        s.yAbs.push_back(9.0);
+        s.crossSlope.push_back(0.06);          // 6% bank, rises to the LEFT (+z)
+    }
+    s.halfWidth = 8.0;
+    WeldSolidParams wp;
+    wp.barriers = true;
+    wp.heightAt = [](Real, Real) { return 0.0; };
+    RenderMesh m = weldSolid({ s }, wp);
+    CHECK(!m.vertices.empty());
+    CHECK(!hasNonFinite(m));
+    double topLeft = -1e9, topRight = -1e9;    // highest vertex at each verge
+    for (const Vertex& v : m.vertices) {
+        if (v.position.z > 7.0) topLeft = std::max(topLeft, (double)v.position.y);
+        if (v.position.z < -7.0) topRight = std::max(topRight, (double)v.position.y);
+    }
+    // Left verge ~9.48+0.85 rail, right ~8.52+0.85 rail: ~0.96 apart.
+    CHECK(topLeft > topRight + 0.5);
+}
+
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
 // per-node, so an ordinary street with no elevation drapes exactly as before.
 TEST_CASE(road_net_without_node_elev_stays_at_grade) {

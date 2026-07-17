@@ -910,19 +910,24 @@ RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>&
 }
 
 RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
-                        const std::vector<double>& halfW, double height, const Vec3& color) {
+                        const std::vector<double>& halfW, double height, const Vec3& color,
+                        const std::vector<double>& crossSlope) {
     RenderMesh mesh;
     const int n = static_cast<int>(pts.size());
     if (n < 2 || static_cast<int>(deckY.size()) != n || halfW.empty()) return mesh;
     auto W = [&](int i) { return halfW[std::min<int>(static_cast<int>(halfW.size()) - 1,
                                                      std::max(0, i))]; };
+    const bool banked = static_cast<int>(crossSlope.size()) == n;
     auto wall = [&](double side) {                       // side = +1 (left) / -1 (right)
         for (int i = 0; i + 1 < n; ++i) {
             Vec2 ab = pts[i + 1] - pts[i]; double L = ab.length();
             if (L < 1e-9) continue;
             Vec2 nrm = perp(ab / L) * side;
             Vec2 a = pts[i] + nrm * W(i), b = pts[i + 1] + nrm * W(i + 1);
-            double ya = deckY[i], yb = deckY[i + 1];
+            // Bank the rail onto the deck edge: the +nrm (side>0) verge of a
+            // superelevated deck rides HIGHER by halfWidth*crossSlope, the -nrm lower.
+            double ya = deckY[i]     + (banked ? side * W(i)     * crossSlope[i]     : 0.0);
+            double yb = deckY[i + 1] + (banked ? side * W(i + 1) * crossSlope[i + 1] : 0.0);
             Vec3 nv(nrm.x, 0, nrm.y);                     // face inward (toward the road)
             Vec3 ba(a.x, ya, a.y), bb(b.x, yb, b.y);
             Vec3 ta(a.x, ya + height, a.y), tb(b.x, yb + height, b.y);
@@ -937,24 +942,31 @@ RenderMesh deckBarriers(const std::vector<Vec2>& pts, const std::vector<double>&
 }
 
 RenderMesh deckMedian(const std::vector<Vec2>& pts, const std::vector<double>& deckY,
-                      double halfWidth, double height, const Vec3& color) {
+                      double halfWidth, double height, const Vec3& color,
+                      const std::vector<double>& crossSlope) {
     // A solid MEDIAN barrier box down the centreline — two side walls at
     // ±halfWidth plus a top cap, from deckY to deckY+height. The divided-highway
     // centre divider that separates the two one-way carriageways.
     RenderMesh mesh;
     const int n = static_cast<int>(pts.size());
     if (n < 2 || static_cast<int>(deckY.size()) != n || halfWidth <= 0.0) return mesh;
+    const bool banked = static_cast<int>(crossSlope.size()) == n;
     for (int i = 0; i + 1 < n; ++i) {
         Vec2 ab = pts[i + 1] - pts[i]; double L = ab.length();
         if (L < 1e-9) continue;
         Vec2 nrm = perp(ab / L);
-        const double ya = deckY[i], yb = deckY[i + 1];
+        // The box straddles the crown, so each face sits on the banked deck: the
+        // +nrm side rides +halfWidth*crossSlope, the -nrm side the same amount lower.
+        const double bnk0 = banked ? halfWidth * crossSlope[i]     : 0.0;
+        const double bnk1 = banked ? halfWidth * crossSlope[i + 1] : 0.0;
+        const double yaL = deckY[i] + bnk0, ybL = deckY[i + 1] + bnk1;   // left (+nrm)
+        const double yaR = deckY[i] - bnk0, ybR = deckY[i + 1] - bnk1;   // right (-nrm)
         Vec2 al = pts[i] + nrm * halfWidth, bl = pts[i + 1] + nrm * halfWidth;
         Vec2 ar = pts[i] - nrm * halfWidth, br = pts[i + 1] - nrm * halfWidth;
-        Vec3 alb(al.x, ya, al.y), blb(bl.x, yb, bl.y),
-             alt(al.x, ya + height, al.y), blt(bl.x, yb + height, bl.y);
-        Vec3 arb(ar.x, ya, ar.y), brb(br.x, yb, br.y),
-             art(ar.x, ya + height, ar.y), brt(br.x, yb + height, br.y);
+        Vec3 alb(al.x, yaL, al.y), blb(bl.x, ybL, bl.y),
+             alt(al.x, yaL + height, al.y), blt(bl.x, ybL + height, bl.y);
+        Vec3 arb(ar.x, yaR, ar.y), brb(br.x, ybR, br.y),
+             art(ar.x, yaR + height, ar.y), brt(br.x, ybR + height, br.y);
         const Vec3 nl(nrm.x, 0, nrm.y);
         MeshBuilder::emitQuad(mesh, alb, blb, blt, alt, nl, color);         // left face (+nrm)
         MeshBuilder::emitQuad(mesh, arb, brb, brt, art, -nl, color);        // right face (-nrm)
@@ -1973,14 +1985,20 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 const double mb = pr.mouthBack  > 100.0 ? 0.0 : pr.mouthBack;
                 const double s0 = mf, s1 = L - mb;
                 if (s1 - s0 < 2.0) continue;               // nothing left after trimming
-                std::vector<Vec2> cl; std::vector<double> Y;
+                const bool hasBank = pr.cs.size() == pr.cl.size();
+                const bool hasVarW = pr.hws.size() == pr.cl.size();
+                std::vector<Vec2> cl; std::vector<double> Y, cs, hws;
                 for (std::size_t i = 0; i < pr.cl.size(); ++i)
                     if (pr.s[i] >= s0 - 1e-6 && pr.s[i] <= s1 + 1e-6) {
                         cl.push_back(pr.cl[i]); Y.push_back(pr.h[i]);
+                        if (hasBank) cs.push_back(pr.cs[i]);
+                        if (hasVarW) hws.push_back(pr.hws[i]);
                     }
                 if (cl.size() < 2) continue;
-                merge(deckBarriers(cl, Y, pr.hw, p.barrierHeight, p.barrierColor));
-                merge(deckMedian(cl, Y, p.medianHalfWidth, p.barrierHeight, p.barrierColor));
+                // Edge parapets follow the (possibly flaring) deck verge and bank with it.
+                const std::vector<double> edgeW = hasVarW ? hws : std::vector<double>(cl.size(), pr.hw);
+                merge(deckBarriers(cl, Y, edgeW, p.barrierHeight, p.barrierColor, cs));
+                merge(deckMedian(cl, Y, p.medianHalfWidth, p.barrierHeight, p.barrierColor, cs));
             }
         }
     }

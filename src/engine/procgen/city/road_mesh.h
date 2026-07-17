@@ -189,13 +189,18 @@ RenderMesh bridgePiers(const std::vector<Vec2>& centerline, const std::vector<do
 // the deck on each verge, the full length — the safety rail of an overpass/viaduct.
 RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
                         double halfWidth, double height, const Vec3& color);
-// Per-point half-width overload: barriers follow a tapering deck edge.
+// Per-point half-width overload: barriers follow a tapering deck edge. `crossSlope`
+// (per-point dy/m, empty = flat) banks each parapet's baseline with the deck so the
+// rail rides the raised/lowered edge of a superelevated curve, not the flat centreline.
 RenderMesh deckBarriers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
-                        const std::vector<double>& halfWidths, double height, const Vec3& color);
+                        const std::vector<double>& halfWidths, double height, const Vec3& color,
+                        const std::vector<double>& crossSlope = {});
 // A solid median barrier BOX (two side walls + top cap) of half-width `halfWidth`
-// down the centreline — the divided-highway centre divider.
+// down the centreline — the divided-highway centre divider. `crossSlope` banks the
+// box with the deck crown (empty = flat).
 RenderMesh deckMedian(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
-                      double halfWidth, double height, const Vec3& color);
+                      double halfWidth, double height, const Vec3& color,
+                      const std::vector<double>& crossSlope = {});
 
 // Lane markings painted on a deck/road that rides a vertical profile: solid edge lines, a
 // solid centreline (`centerColor`, e.g. yellow — set `center=false` for a one-way ramp), and
