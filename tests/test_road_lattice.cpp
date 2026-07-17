@@ -125,3 +125,67 @@ TEST_CASE(freeway_deck_flares_with_half_width) {
     CHECK(wStart > 7.0 && wStart < 9.0);      // ~8 m half-width at the start
     CHECK(wEnd > 15.0 && wEnd < 17.0);        // ~16 m at the flared end
 }
+
+// The whole viaduct cross-section: the deck reads as a STRUCTURE, not black
+// pavement — it has a down-facing soffit under it and vertical fascia/parapet
+// faces, none of them degenerate. A lane is drivable (parapets at the verge and
+// the median at the centre don't block an offset lane), and banking/flare still
+// hold with the furniture attached.
+TEST_CASE(freeway_full_section_has_structure_and_drives) {
+    RenderMesh m = sweepFreewayDeck(deckSpine(0.0, 14, 14), nullptr);
+    const std::size_t tris = m.indices.size() / 3;
+    CHECK(tris > 0);
+
+    int up = 0, down = 0, lateral = 0, degenerate = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        Vec3 gn = cross(b - a, c - a);
+        if (gn.length() < 1e-9) { ++degenerate; continue; }
+        gn = normalize(gn);
+        if (gn.y > 0.5) ++up;
+        else if (gn.y < -0.5) ++down;     // soffit underside
+        else ++lateral;                    // fascia / parapet faces
+    }
+    CHECK(degenerate == 0);
+    CHECK(up > 0);
+    CHECK(down > 0);          // it has an underside
+    CHECK(lateral > 0);       // it has walls
+
+    // Drive a LANE (offset from centre), the way the nav's one-way carriageway
+    // chains do: clear of the median at centre and the parapets at the verge.
+    std::vector<Vec3> lane;
+    for (int i = 0; i <= 24; ++i) lane.push_back(Vec3(i * 10.0, 9.0, 6.0));  // +6 m off centre
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, lane, rep);
+    CHECK(rep.samples > 50);
+    CHECK(rep.holes == 0);
+    CHECK(rep.blocked == 0);      // no wall in the lane
+}
+
+// The blocked-merge fix, as data: an edge parapet GAPS over a gore window, so a
+// ramp can merge where otherwise a 0.85 m wall stood across its path. With the
+// gap, no parapet geometry exists over that arc-length; without it, the wall is
+// continuous.
+TEST_CASE(freeway_parapet_gaps_over_a_gore) {
+    // Parapets ride the +Z / -Z verges (hw = 14). Count wall-height vertices
+    // (y ~ deck+0.85) in an x-window, with and without a gap there.
+    auto wallVertsInWindow = [](const RenderMesh& m, double x0, double x1) {
+        int n = 0;
+        for (const Vertex& v : m.vertices)
+            if (v.position.x > x0 && v.position.x < x1 && v.position.y > 9.5 &&
+                std::fabs(v.position.z) > 12.0)
+                ++n;
+        return n;
+    };
+    const UnionSpine s = deckSpine(0.0, 14, 14);   // 0..240 m along X
+
+    RenderMesh solid = sweepFreewayDeck(s, nullptr);
+    CHECK(wallVertsInWindow(solid, 100, 140) > 0);       // continuous wall
+
+    std::vector<GapWindow> gaps = { { 100.0, 140.0 } };  // gore window (arc length)
+    RenderMesh gapped = sweepFreewayDeck(s, nullptr, 3.0, 0.5, &gaps);
+    CHECK(wallVertsInWindow(gapped, 105, 135) == 0);     // parapet opened for the merge
+    CHECK(wallVertsInWindow(gapped, 0, 40) > 0);         // still there elsewhere
+}

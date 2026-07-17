@@ -36,36 +36,52 @@ struct ProfileCol {
     double cnVert = 1.0;
     float mu = 2.0f;                 // shader lateral paint coord (carriageway 1..3)
     Vec3 color{0.10, 0.10, 0.11};
-    // Index into the per-station barrier-scale array (see sweepRoadLattice), or
-    // -1 for a column whose height is fixed. A parapet/median column keys its
-    // height off a channel so it can be GAPPED (scale 0) across a ramp gore —
-    // the blocked-merge fix as data, not geometry surgery.
-    int barrier = -1;
 };
 
 struct RoadProfile {
     std::vector<ProfileCol> cols;   // ordered across the section, one side to the other
-    int barrierChannels = 0;        // how many independent gappable height channels
 };
 
-// Sweep `spine` through `profile` into ONE lattice. Rings are placed by arc
-// length along the chain (dense in curves / where the deck sags), so the surface
-// conforms without the earcut mesher's after-the-fact refinement. `ground(x,z)`
-// sets the base deck Y where `spine.yAbs` is empty (a draped street); an authored
-// deck (a freeway/ramp) rides yAbs exactly. `barrierScale`, if given, is indexed
-// [ring][channel] and scales each barrier column's height per station — 0 opens a
-// gap. UV: u = the column's mu, v = arc length in metres.
+// An arc-length window [s0, s1] along the chain where a profile is SUPPRESSED —
+// a parapet gapped over a ramp gore, say (the blocked-merge fix as data). The
+// sweep simply does not place the profile's rings inside the window, so there is
+// a clean opening, no zero-area geometry.
+struct GapWindow { double s0 = 0, s1 = 0; };
+
+// Sweep `spine` through `profile` into a lattice (several, if `gaps` splits it).
+// Rings are placed by arc length, so the surface conforms without the earcut
+// mesher's after-the-fact refinement. `ground(x,z)` sets the base deck Y where
+// `spine.yAbs` is empty (a draped street); an authored deck (freeway/ramp) rides
+// yAbs exactly. Banking from crossSlope, flare from per-point hw. UV: u = the
+// column's mu, v = arc length. `gaps` (optional) opens the profile over each
+// window — each surviving run is its own shared-vertex lattice.
 RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
                             const std::function<double(double, double)>& ground,
                             double ringStep = 3.0,
-                            const std::vector<std::vector<double>>* barrierScale = nullptr);
+                            const std::vector<GapWindow>* gaps = nullptr);
 
-// The drivable DECK-TOP profile of a divided freeway: two carriageways of
-// `lanesPerSide` lanes with a paved median gap and outer verges, parameterised so
-// the RoadMarkings shader paints asphalt + lane lines (mu in [1,3]) instead of
-// sidewalk concrete. Structure (fascia/soffit) and furniture (parapets/median
-// wall) are added as further profiles/columns in later stages.
+// The whole cross-section of a divided elevated freeway, meshed as a set of
+// shared-vertex lattices: the drivable deck top + the viaduct underside
+// (fascia + soffit) + edge parapets + the median wall. `gaps` gaps the edge
+// parapets over each ramp gore so a car can merge (the blocked-merge fix).
+// `deckThickness` is the slab depth; parapet/median heights follow the kit.
+RenderMesh sweepFreewayDeck(const UnionSpine& spine,
+                            const std::function<double(double, double)>& ground,
+                            double ringStep = 3.0, double deckThickness = 0.5,
+                            const std::vector<GapWindow>* gaps = nullptr);
+
+// --- Component profiles (exposed for tests / reuse) --------------------------
+// The drivable deck top: carriageway columns at mu in [1,3], centre 2, so the
+// shader paints asphalt + lane lines instead of sidewalk concrete.
 RoadProfile freewayDeckProfile(int lanesPerSide = 3, double laneWidth = 3.6);
+// The viaduct underside: down the near fascia, across the soffit, up the far
+// fascia — a down-facing structural band `thickness` below the deck.
+RoadProfile freewayUndersideProfile(double thickness = 0.5);
+// An edge parapet standing `height` above the deck at the `+1` (left) or `-1`
+// (right) verge, `thickness` inboard of it.
+RoadProfile parapetProfile(double side, double height = 0.85, double thickness = 0.28);
+// The solid median wall down the centreline, `halfWidth` each way, `height` tall.
+RoadProfile medianProfile(double halfWidth = 0.35, double height = 0.85);
 
 }  // namespace engine
 

@@ -76,7 +76,7 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
 RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
                             const std::function<double(double, double)>& ground,
                             double ringStep,
-                            const std::vector<std::vector<double>>* barrierScale) {
+                            const std::vector<GapWindow>* gaps) {
     RenderMesh mesh;
     const int P = static_cast<int>(profile.cols.size());
     if (P < 2) return mesh;
@@ -95,15 +95,10 @@ RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
         for (int j = 0; j < P; ++j) {
             const ProfileCol& col = profile.cols[j];
             const double lateral = col.edgeFrac * rg.hw + col.absOffset;
-            double scale = 1.0;
-            if (col.barrier >= 0 && barrierScale &&
-                i < static_cast<int>(barrierScale->size()) &&
-                col.barrier < static_cast<int>((*barrierScale)[i].size()))
-                scale = (*barrierScale)[i][col.barrier];
             const double deckY = rg.yBase + lateral * rg.cs;    // banked deck plane
             Vertex& v = verts[i * P + j];
             v.position = c3 + left3 * lateral;
-            v.position.y = deckY + col.height * scale;
+            v.position.y = deckY + col.height;
             // Cross-section normal (cnLat along +left, cnVert along up), banked.
             Vec3 nrm = left3 * col.cnLat + bankedUp * col.cnVert;
             v.normal = nrm.lengthSquared() > 1e-12 ? normalize(nrm) : Vec3(0, 1, 0);
@@ -113,7 +108,28 @@ RenderMesh sweepRoadLattice(const UnionSpine& spine, const RoadProfile& profile,
             v.color = col.color;
         }
     }
-    MeshBuilder::emitLattice(mesh, { R, P, verts.data() });
+
+    // Which rings survive the gap windows. A gapped profile (an edge parapet
+    // over a ramp gore) is emitted as several lattices, one per active run, so
+    // the opening is a clean break with no zero-area geometry across it.
+    auto ringActive = [&](int i) {
+        if (!gaps) return true;
+        for (const GapWindow& g : *gaps)
+            if (rings[i].s > g.s0 && rings[i].s < g.s1) return false;
+        return true;
+    };
+    int runStart = -1;
+    auto flushRun = [&](int endExclusive) {
+        if (runStart < 0 || endExclusive - runStart < 2) { runStart = -1; return; }
+        MeshBuilder::emitLattice(
+            mesh, { endExclusive - runStart, P, verts.data() + static_cast<std::size_t>(runStart) * P });
+        runStart = -1;
+    };
+    for (int i = 0; i < R; ++i) {
+        if (ringActive(i)) { if (runStart < 0) runStart = i; }
+        else flushRun(i);
+    }
+    flushRun(R);
     return mesh;
 }
 
@@ -126,9 +142,6 @@ RoadProfile freewayDeckProfile(int lanesPerSide, double laneWidth) {
         const double frac = -1.0 + 2.0 * j / (cols - 1);    // -1 (right) .. +1 (left)
         ProfileCol col;
         col.edgeFrac = frac;
-        col.absOffset = 0.0;
-        col.height = 0.0;
-        col.cnLat = 0.0;
         col.cnVert = 1.0;                                    // drivable, faces up
         // Carriageway paint coord: lateral -hw..+hw -> mu 1..3, centre = 2.
         col.mu = static_cast<float>(2.0 + frac);
@@ -136,6 +149,72 @@ RoadProfile freewayDeckProfile(int lanesPerSide, double laneWidth) {
         prof.cols.push_back(col);
     }
     return prof;
+}
+
+namespace {
+const Vec3 kConcrete(0.45, 0.46, 0.48);
+ProfileCol pc(double edgeFrac, double absOffset, double height,
+              double cnLat, double cnVert, float mu, const Vec3& col) {
+    ProfileCol c;
+    c.edgeFrac = edgeFrac; c.absOffset = absOffset; c.height = height;
+    c.cnLat = cnLat; c.cnVert = cnVert; c.mu = mu; c.color = col;
+    return c;
+}
+}  // namespace
+
+RoadProfile freewayUndersideProfile(double thickness) {
+    // Down the near fascia, across the soffit, up the far fascia. Crease columns
+    // are beveled (not duplicated), so there is no zero-area connector band; a
+    // viaduct's underside edges don't need a razor crease.
+    RoadProfile p;
+    p.cols = {
+        pc(+1, 0, 0, +1.0, 0.0, 0.5f, kConcrete),                 // near fascia top
+        pc(+1, 0, -thickness, +0.6, -0.8, 0.5f, kConcrete),       // near fascia foot
+        pc(-1, 0, -thickness, -0.6, -0.8, 0.5f, kConcrete),       // far soffit corner
+        pc(-1, 0, 0, -1.0, 0.0, 0.5f, kConcrete),                 // far fascia top
+    };
+    return p;
+}
+
+RoadProfile parapetProfile(double side, double height, double thickness) {
+    // A wall standing at the `side` verge (+1 left / -1 right), `thickness`
+    // inboard. Inner face toward the road, top, outer face toward the edge.
+    RoadProfile p;
+    p.cols = {
+        pc(side, -side * thickness, 0, -side, 0.0, 0.5f, kConcrete),        // inner base
+        pc(side, -side * thickness, height, -side * 0.7, 0.7, 0.5f, kConcrete),  // inner top
+        pc(side, 0, height, side * 0.7, 0.7, 0.5f, kConcrete),              // outer top
+        pc(side, 0, 0, side, 0.0, 0.5f, kConcrete),                        // outer base
+    };
+    return p;
+}
+
+RoadProfile medianProfile(double halfWidth, double height) {
+    RoadProfile p;
+    p.cols = {
+        pc(0, +halfWidth, 0, +1.0, 0.0, 0.5f, kConcrete),          // left face base
+        pc(0, +halfWidth, height, +0.7, 0.7, 0.5f, kConcrete),     // left top
+        pc(0, -halfWidth, height, -0.7, 0.7, 0.5f, kConcrete),     // right top
+        pc(0, -halfWidth, 0, -1.0, 0.0, 0.5f, kConcrete),          // right face base
+    };
+    return p;
+}
+
+RenderMesh sweepFreewayDeck(const UnionSpine& spine,
+                            const std::function<double(double, double)>& ground,
+                            double ringStep, double deckThickness,
+                            const std::vector<GapWindow>* gaps) {
+    RenderMesh mesh;
+    // Drivable deck + structural underside run the full length.
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, freewayDeckProfile(), ground, ringStep));
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, freewayUndersideProfile(deckThickness),
+                                               ground, ringStep));
+    // Edge parapets gap over each ramp gore so a car can merge.
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, parapetProfile(+1), ground, ringStep, gaps));
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, parapetProfile(-1), ground, ringStep, gaps));
+    // Median wall runs the full length (ramps meet the edges, not the centre).
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, medianProfile(), ground, ringStep));
+    return mesh;
 }
 
 }  // namespace engine
