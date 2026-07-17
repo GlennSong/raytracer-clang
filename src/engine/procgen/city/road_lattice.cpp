@@ -442,7 +442,8 @@ RenderMesh junctionPatchT(const std::vector<JunctionArm>& a, float mu, const Vec
 }
 }  // namespace
 
-RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
+RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color,
+                         const std::function<double(double, double)>* ground) {
     RenderMesh mesh;
     const int N = static_cast<int>(arms.size());
     if (N <= 2) return mesh;                          // body runs straight through
@@ -451,6 +452,46 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
     std::sort(arms.begin(), arms.end(), [](const JunctionArm& a, const JunctionArm& b) {
         return std::atan2(a.dir.y, a.dir.x) < std::atan2(b.dir.y, b.dir.x);
     });
+
+    // FULL rings: kerb-return sidewalk strips around each corner, then the pad
+    // fills the CARRIAGEWAY columns only (the configuration that drives clean —
+    // curb tops in the pad boundary injected 0.17 m mouth bumps last attempt).
+    if (arms[0].fullRing) {
+        const Vec3 walk(0.62, 0.62, 0.60);
+        for (int i = 0; i < N; ++i) {
+            const JunctionArm& A = arms[i];
+            const JunctionArm& B = arms[(i + 1) % N];
+            if (A.mouth.size() < 6 || B.mouth.size() < 6) continue;
+            const Vec3 aOut = A.mouth.front(), aCurb = A.mouth[1];
+            const Vec3 bOut = B.mouth.back(),  bCurb = B.mouth[B.mouth.size() - 2];
+            const int S = 4;
+            std::vector<Vertex> verts((S + 1) * 2);
+            for (int k = 0; k <= S; ++k) {
+                const double t = static_cast<double>(k) / S;
+                Vertex& vo = verts[k * 2];
+                Vertex& vi = verts[k * 2 + 1];
+                vo.position = aOut + (bOut - aOut) * t;
+                vi.position = aCurb + (bCurb - aCurb) * t;
+                if (ground) {   // never cut under a terrain bump between corners
+                    const double go = (*ground)(vo.position.x, vo.position.z) + 0.13;
+                    const double gi = (*ground)(vi.position.x, vi.position.z) + 0.13;
+                    if (vo.position.y < go) vo.position.y = static_cast<Real>(go);
+                    if (vi.position.y < gi) vi.position.y = static_cast<Real>(gi);
+                }
+                vo.normal = vi.normal = Vec3(0, 1, 0);
+                vo.tangent = vi.tangent = Vec3(1, 0, 0);
+                vo.u = -0.6f; vi.u = -0.05f;
+                vo.v = vi.v = 0.0f;
+                vo.color = vi.color = walk;
+            }
+            MeshBuilder::emitLattice(mesh, { S + 1, 2, verts.data() });
+        }
+        for (JunctionArm& a : arms) {                 // pad = carriageway columns
+            if (a.mouth.size() >= 6)
+                a.mouth = std::vector<Vec3>(a.mouth.begin() + 2, a.mouth.end() - 2);
+            a.fullRing = false;
+        }
+    }
     for (const JunctionArm& arm : arms) if (arm.mouth.size() < 2) return mesh;
 
     // A T / Y (3 arms): a Coons grid with the branch embedded in one side — the

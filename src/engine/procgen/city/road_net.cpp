@@ -336,6 +336,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     }
 
     RenderMesh out;
+    const std::function<double(double, double)> groundFn = ground;   // for strips
     std::vector<std::vector<JunctionArm>> arms(N);
     for (const UnionSpine& s : weldChainSpines(g)) {
         if (s.points.size() < 2) continue;
@@ -364,9 +365,9 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (chainTriEndsOut) chainTriEndsOut->push_back(out.indices.size());
         const std::size_t tn = t.points.size();
         if (a >= 0 && deg[a] >= 3 && ring0.size() >= 4)
-            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0) });
+            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0), true });
         if (b >= 0 && deg[b] >= 3 && ringN.size() >= 4)
-            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
+            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN), true });
     }
 
     int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0;
@@ -380,7 +381,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (na == 3) ++nT;                           // Coons T patch
         else if (na == 4) ++nCoons;                  // Coons grid
         else ++nFan;                                 // N>=5: still the fan stopgap
-        MeshBuilder::append(out, junctionPatch(arms[v]));
+        MeshBuilder::append(out, junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11), &groundFn));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;

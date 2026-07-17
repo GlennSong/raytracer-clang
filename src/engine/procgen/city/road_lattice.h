@@ -137,6 +137,12 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
 struct JunctionArm {
     Vec2 dir{1, 0};              // outward unit direction from the node
     std::vector<Vec3> mouth;     // K+1 cross-section points, left verge -> right verge
+    // True when `mouth` is a FULL profile ring (sidewalk|curb|lanes|curb|sidewalk):
+    // the pad then fills the CARRIAGEWAY columns only, and each corner between
+    // adjacent arms gets a raised sidewalk STRIP joining their sidewalk bands —
+    // the kerb return ("where it joins, the sidewalk gets extended"). Strips are
+    // clamped to ground+curb so they never cut under a terrain bump.
+    bool fullRing = false;
 };
 
 // The drivable junction pad for a node, from its incident arms (any order —
@@ -146,7 +152,8 @@ struct JunctionArm {
 // height-interpolated centroid fan for now (the T / N>=5 quad templates follow).
 // Returns empty for degree <= 2 (the body runs straight through).
 RenderMesh junctionPatch(std::vector<JunctionArm> arms,
-                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
+                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11),
+                         const std::function<double(double, double)>* ground = nullptr);
 
 }  // namespace engine
 
