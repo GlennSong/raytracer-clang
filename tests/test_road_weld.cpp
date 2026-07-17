@@ -349,6 +349,82 @@ TEST_CASE(curved_corridor_deck_spine_carries_superelevation) {
     CHECK(maxY - minY > 0.05);   // a flat +9 deck would be a razor slab; banking gives it relief
 }
 
+// P8b (one mesher) — THE DELETION RATCHET. corridorAuthor is the geometry-free
+// half of buildCorridorMesh; it must produce byte-identical rampPaths (the nav
+// graph AND the weld's ramp spines are both built from them) and equivalent
+// flatten windows. While the old mesher still lives, pin them against each
+// other: if this holds, its geometry can be deleted without moving the world.
+// Exercised on a corridor with real exits, on-ramps, hilly ground, and a ramp
+// that gets DROPPED — so the drop rules are compared too, not just happy paths.
+TEST_CASE(corridor_author_matches_the_corridor_meshers_authoring) {
+    CorridorDef c;
+    c.horizontal = Alignment::fromPolyline(
+        { Vec2(-400, 0), Vec2(0, 0), Vec2(500, 0) }, 260.0, 40.0);
+    const Real L = c.horizontal.length();
+    // Ends AT GRADE (flatten carves), middle flown on a viaduct (no carve) —
+    // so the elevated[] gate is exercised in both states.
+    c.vertical.pvis = { {0.0, 0.0, 0.0}, {L * 0.5, 12.0, 120.0}, {L, 0.0, 0.0} };
+    c.lanes.throughLanes = 3;
+    {   // Exits on BOTH sides so one survives whichever side upStation picks,
+        // plus one aimed onto the mainline itself so a DROP rule fires.
+        ExitDef a; a.station = 300.0; a.upStation = true;
+        a.target = Vec2(150, -180); a.targetY = 0.0;
+        c.exits.push_back(a);
+        ExitDef b; b.station = 300.0; b.upStation = false;
+        b.target = Vec2(150, 180); b.targetY = 0.0;
+        c.exits.push_back(b);
+        ExitDef o; o.station = 620.0; o.upStation = false; o.onRamp = true;
+        o.target = Vec2(430, 190); o.targetY = 0.0;
+        c.exits.push_back(o);
+        ExitDef bad; bad.station = 500.0; bad.upStation = true;
+        bad.target = Vec2(505, 2);           // sits on the mainline: must drop
+        bad.targetY = 0.0;
+        c.exits.push_back(bad);
+    }
+    auto ground = [](Real x, Real z) {
+        return 1.0 * std::sin(x * 0.01) + 0.8 * std::cos(z * 0.013);   // gentle hills
+    };
+    CorridorMeshOut cm = buildCorridorMesh(c, ground, 3.0, nullptr);
+    CorridorAuthoring au = corridorAuthor(c, ground, 3.0);
+
+    // rampPaths: index-parallel to exits, EMPTY for a dropped ramp, and every
+    // surviving point identical — nav and the weld both read these verbatim.
+    CHECK(au.rampPaths.size() == cm.rampPaths.size());
+    CHECK(au.rampPaths.size() == c.exits.size());
+    bool sawDrop = false, sawPath = false;
+    for (std::size_t i = 0; i < au.rampPaths.size(); ++i) {
+        CHECK(au.rampPaths[i].pts.size() == cm.rampPaths[i].pts.size());
+        if (cm.rampPaths[i].pts.empty()) sawDrop = true; else sawPath = true;
+        for (std::size_t k = 0; k < au.rampPaths[i].pts.size(); ++k) {
+            const Vec3& a = au.rampPaths[i].pts[k];
+            const Vec3& b = cm.rampPaths[i].pts[k];
+            CHECK(std::fabs(a.x - b.x) < 1e-9);
+            CHECK(std::fabs(a.y - b.y) < 1e-9);
+            CHECK(std::fabs(a.z - b.z) < 1e-9);
+        }
+    }
+    CHECK(sawPath);   // the fixture really does author ramps...
+    CHECK(sawDrop);   // ...and really does exercise a drop
+
+    // flatten: same window count, same order, same carve PLANE (c + dx*x + dz*z)
+    // and the same footprint polygon — the terrain must grade identically.
+    CHECK(au.flatten.size() == cm.flatten.size());
+    CHECK(!au.flatten.empty());
+    for (std::size_t i = 0; i < au.flatten.size(); ++i) {
+        const TerrainFlatten& a = au.flatten[i];
+        const TerrainFlatten& b = cm.flatten[i];
+        CHECK(std::fabs(a.c - b.c) < 1e-9);
+        CHECK(std::fabs(a.dx - b.dx) < 1e-9);
+        CHECK(std::fabs(a.dz - b.dz) < 1e-9);
+        CHECK(std::fabs(a.falloff - b.falloff) < 1e-9);
+        CHECK(a.polygon.size() == b.polygon.size());
+        for (std::size_t k = 0; k < a.polygon.size(); ++k) {
+            CHECK(std::fabs(a.polygon[k].x - b.polygon[k].x) < 1e-9);
+            CHECK(std::fabs(a.polygon[k].z - b.polygon[k].z) < 1e-9);
+        }
+    }
+}
+
 // P7 (one mesher) — SIGNAGE survives the fold: the gantry pass is fed by the
 // CorridorDef alone, so a deck meshed by weldSolid (which builds its own
 // parapets/median/piers and drops the corridor's barrier mesh) still gets its

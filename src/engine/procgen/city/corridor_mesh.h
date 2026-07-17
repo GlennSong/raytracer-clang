@@ -66,6 +66,33 @@ std::vector<UnionSpine> corridorDeckSpines(
 std::vector<UnionSpine> corridorRampSpines(
     const std::vector<CorridorMeshOut::RampPath>& rampPaths, Real halfWidth = 3.6);
 
+// Everything buildCorridorMesh authors that ISN'T drawn geometry (one-mesher
+// P8b): the ramp centrelines and the terrain-flatten windows. These are the two
+// outputs the weld path still needs from the old mesher — the nav graph and the
+// ramp spines are both built from `rampPaths`, and `flatten` carves the ground
+// to the deck where it runs at grade. Splitting them out is what lets the
+// corridor's geometry pass be deleted while the authoring survives.
+struct CorridorAuthoring {
+    // DRAWN ramp centrelines with ABSOLUTE heights, in FLOW order (an exit:
+    // deck -> street; an on-ramp: street -> deck). STRICTLY index-parallel to
+    // CorridorDef::exits — a dropped ramp leaves an EMPTY entry rather than
+    // shrinking the vector, because the loader indexes rampPaths[exitIndex].
+    std::vector<CorridorMeshOut::RampPath> rampPaths;
+    // At-grade windows that carve terrain to the deck/ramp plane. Elevated
+    // spans emit none — the ground must stay under a viaduct, not follow it.
+    std::vector<TerrainFlatten> flatten;
+};
+
+// Author a corridor's ramp centrelines + flatten windows WITHOUT emitting any
+// geometry (one-mesher P8b). Byte-identical to the rampPaths/flatten that
+// buildCorridorMesh produces — the ramp drop rules (too-short / folds-or-hooks /
+// overlaps-the-mainline) and the aux-lane synthesis are reproduced exactly, and
+// `tests/test_road_weld.cpp` pins the equivalence. No `avoidRoads`: that only
+// ever steered pier bents, which are geometry the weld now owns.
+CorridorAuthoring corridorAuthor(const CorridorDef& corridor,
+                                 const std::function<Real(Real, Real)>& ground,
+                                 Real step = 3.0);
+
 // Overhead SIGN GANTRIES for a corridor (one-mesher P7): at each exit gore, two
 // posts, a beam across the deck, a wide green placard over the through lanes and a
 // smaller drop-arrow placard over the peeling exit lane. Re-homed from
