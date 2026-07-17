@@ -1264,7 +1264,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // 1. Per-spine profile: cumulative arc length + a smoothed, grade-limited height. Terrain is
     //    sampled along each centerline and ironed by roadProfile (follows hills, not every bump);
     //    with no terrain the height is the flat topY. These also carry the road-local UV.
-    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; int group; };
+    struct Prof { std::vector<Vec2> cl; std::vector<double> s; std::vector<double> h; double hw; bool closed; RoadClass klass; double mouthFront; double mouthBack; bool authored; int group; std::vector<double> hws; };
     std::vector<Prof> profs;
     // Per-chain-END junction MOUTH depth: how far the crosswalk on this arm sets
     // back so it lands just OUTSIDE the intersection, never jutting in. Two
@@ -1339,7 +1339,8 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             bool closed = sp.closed ||
                 (n >= 4 && (sp.points.front() - sp.points.back()).length() < 1e-6);
             profs.push_back({sp.points, sArc, hs[si], sp.halfWidth, closed, sp.klass,
-                             frontMouth[si], backMouth[si], !sp.yAbs.empty(), 0});
+                             frontMouth[si], backMouth[si], !sp.yAbs.empty(), 0,
+                             (sp.hw.size() == sp.points.size() ? sp.hw : std::vector<double>{})});
         }
     }
     // ---- Grade separation (P4): split authored decks + assign weld groups ----
@@ -1357,10 +1358,13 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
         for (const Prof& pr : profs) {
             if (!pr.authored || pr.closed || pr.cl.size() < 2) { split.push_back(pr); continue; }
             const int n = static_cast<int>(pr.cl.size());
-            std::vector<Vec2> ac; std::vector<double> ah, asx, ae;
-            auto pushA = [&](const Vec2& c, double h, double s, double e) {
-                ac.push_back(c); ah.push_back(h); asx.push_back(s); ae.push_back(e); };
-            pushA(pr.cl[0], pr.h[0], pr.s[0], pr.h[0] - groundY(pr.cl[0]));
+            const bool hasW = static_cast<int>(pr.hws.size()) == n;   // per-point width to carry
+            std::vector<Vec2> ac; std::vector<double> ah, asx, ae, aw;
+            auto wAt = [&](int i) { return hasW ? pr.hws[i] : pr.hw; };
+            auto pushA = [&](const Vec2& c, double h, double s, double e, double w) {
+                ac.push_back(c); ah.push_back(h); asx.push_back(s); ae.push_back(e);
+                if (hasW) aw.push_back(w); };
+            pushA(pr.cl[0], pr.h[0], pr.s[0], pr.h[0] - groundY(pr.cl[0]), wAt(0));
             for (int i = 0; i + 1 < n; ++i) {
                 const double e0 = pr.h[i]   - groundY(pr.cl[i]);
                 const double e1 = pr.h[i+1] - groundY(pr.cl[i+1]);
@@ -1368,9 +1372,10 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                     const double t = (p.clearance - e0) / (e1 - e0);
                     pushA(pr.cl[i] + (pr.cl[i+1] - pr.cl[i]) * t,
                           pr.h[i] + (pr.h[i+1] - pr.h[i]) * t,
-                          pr.s[i] + (pr.s[i+1] - pr.s[i]) * t, p.clearance);
+                          pr.s[i] + (pr.s[i+1] - pr.s[i]) * t, p.clearance,
+                          wAt(i) + (wAt(i+1) - wAt(i)) * t);
                 }
-                pushA(pr.cl[i+1], pr.h[i+1], pr.s[i+1], e1);
+                pushA(pr.cl[i+1], pr.h[i+1], pr.s[i+1], e1, wAt(i+1));
             }
             const int m = static_cast<int>(ac.size());
             auto segHigh = [&](int k) { return (ae[k] + ae[k+1]) * 0.5 >= p.clearance; };
@@ -1384,6 +1389,7 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                 q.h.assign(ah.begin() + s, ah.begin() + e + 1);
                 q.s.assign(asx.begin() + s, asx.begin() + e + 1);
                 q.hw = pr.hw; q.closed = false; q.klass = pr.klass;
+                if (hasW) q.hws.assign(aw.begin() + s, aw.begin() + e + 1);
                 q.authored = hi;                                 // LOW -> ground weld; HIGH -> viaduct
                 q.mouthFront = (s == 0)     ? pr.mouthFront : kNoCross;
                 q.mouthBack  = (e == m - 1) ? pr.mouthBack  : kNoCross;
@@ -1480,7 +1486,11 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
                     bestD2 = d2;
                     oh = pr.h[i] + (pr.h[i + 1] - pr.h[i]) * t;
                     double sgn = cross(ab, d) >= 0 ? 1.0 : -1.0;        // side of the centerline
-                    double latN = std::sqrt(d2) / std::max(1e-6, pr.hw);
+                    const double hwHere =
+                        static_cast<int>(pr.hws.size()) == static_cast<int>(pr.cl.size())
+                            ? pr.hws[i] + (pr.hws[i + 1] - pr.hws[i]) * t   // flaring deck
+                            : pr.hw;
+                    double latN = std::sqrt(d2) / std::max(1e-6, hwHere);
                     omu = 2.0 + sgn * std::min(1.0, latN);
                     omv = pr.s[i] + (pr.s[i + 1] - pr.s[i]) * t;         // arc-length (height sampler only)
                     oSpine = static_cast<int>(pi);
@@ -1534,7 +1544,9 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             if (outer.size() >= 3) ribbons.push_back(std::move(outer));
             if (inner.size() >= 3) forcedHoles.push_back(std::move(inner));
         } else {
-            Poly2 r = ribbonOutline(pr.cl, pr.hw);
+            Poly2 r = (static_cast<int>(pr.hws.size()) == static_cast<int>(pr.cl.size()))
+                          ? ribbonOutline(pr.cl, pr.hws)   // flaring deck (aux/gore)
+                          : ribbonOutline(pr.cl, pr.hw);
             if (r.size() >= 3) ribbons.push_back(std::move(r));
         }
     }

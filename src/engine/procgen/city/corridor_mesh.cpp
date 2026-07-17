@@ -40,30 +40,43 @@ Real goreBandLen(const CorridorDef& c, const ExitDef& e, Real L) {
 }  // namespace
 
 std::vector<UnionSpine> corridorDeckSpines(
-    const CorridorDef& c, const std::function<Real(Real, Real)>& /*ground*/, Real step) {
+    const CorridorDef& cIn, const std::function<Real(Real, Real)>& /*ground*/, Real step) {
     std::vector<UnionSpine> spines;
+    CorridorDef c = cIn;
+    // Synthesise the exits' AUX lanes into the schedule (the SAME rule
+    // buildCorridorMesh uses) so `halfWidthAt` flares one lane at each gore.
+    for (const ExitDef& e : c.exits) {
+        if (e.station < 0) continue;
+        const Real La = c.horizontal.length();
+        if (e.onRamp)
+            c.lanes.aux.push_back({e.station, std::min(La - 30.0, e.station + e.decelLength),
+                                   e.upStation, false, 90.0});
+        else
+            c.lanes.aux.push_back({std::max(Real(30), e.station - e.decelLength),
+                                   e.station, e.upStation, true, 40.0});
+    }
     const Real L = c.horizontal.length();
     if (L < step * 2) return spines;
     const int n = std::max(2, static_cast<int>(std::ceil(L / step)));
     // ONE deck spine down the alignment centreline: per-point absolute Y from the
-    // vertical profile (the same `vertical.elevation(s)` the corridor deck rides),
-    // constant symmetric half-width (P3 — no aux flares yet), class Freeway so the
-    // welder gives it barriers + the freeway marking rules.
+    // vertical profile (the same `vertical.elevation(s)` the corridor deck rides)
+    // and PER-POINT symmetric half-width (P5 — the deck now flares at aux/gore
+    // spans), class Freeway so the welder gives it barriers + freeway markings.
     UnionSpine deck;
     deck.klass = RoadClass::Freeway;
-    Real hw = 0.0;
-    for (int i = 0; i <= n; ++i) {
-        const Real s = L * i / n;
-        hw = std::max(hw, 0.5 * (c.halfWidthAt(s, -1) + c.halfWidthAt(s, 1)));
-    }
-    deck.halfWidth = hw;
     deck.points.reserve(n + 1);
     deck.yAbs.reserve(n + 1);
+    deck.hw.reserve(n + 1);
+    Real maxHw = 0.0;
     for (int i = 0; i <= n; ++i) {
         const Real s = L * i / n;
+        const Real hw = 0.5 * (c.halfWidthAt(s, -1) + c.halfWidthAt(s, 1));
         deck.points.push_back(c.horizontal.pos(s));
         deck.yAbs.push_back(c.vertical.elevation(s));
+        deck.hw.push_back(hw);
+        maxHw = std::max(maxHw, hw);
     }
+    deck.halfWidth = maxHw;   // scalar representative (mouth / barriers / piers)
     spines.push_back(std::move(deck));
     return spines;
 }

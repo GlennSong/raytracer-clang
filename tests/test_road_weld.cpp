@@ -4,6 +4,7 @@
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/corridor_mesh.h"
+#include "../src/engine/procgen/city/road_offset.h"
 
 #include <limits>
 
@@ -346,6 +347,50 @@ TEST_CASE(corridor_ramp_spine_descends_from_deck_to_grade) {
     bboxY(m, minY, maxY);
     CHECK(maxY > 8.0);   // rides the deck (+9) at the top
     CHECK(minY < 1.0);   // welds down to street grade (0) at the bottom
+}
+
+// P5 (one mesher) — VARIABLE-WIDTH ribbon outline: a centreline whose per-vertex
+// half-width grows produces a FLARING ribbon (the aux-lane / gore widening). The
+// hard piece that lets a freeway deck diverge instead of running one width.
+TEST_CASE(variable_ribbon_outline_flares) {
+    std::vector<Vec2> cl = { Vec2(0, 0), Vec2(30, 0), Vec2(60, 0) };
+    std::vector<double> hw = { 3.0, 3.0, 8.0 };            // widens toward the end
+    Poly2 out = ribbonOutline(cl, hw);
+    CHECK(out.size() >= 4);
+    double maxLat = 0.0, startLat = 0.0;
+    for (const Vec2& p : out) {
+        maxLat = std::max(maxLat, std::fabs(p.y));
+        if (std::fabs(p.x) < 1.0) startLat = std::max(startLat, std::fabs(p.y));
+    }
+    CHECK(maxLat > 7.0 && maxLat < 9.0);      // flared to the hw 8 end
+    CHECK(startLat > 2.0 && startLat < 4.0);  // still hw 3 at the start
+}
+
+// The weld consumes the per-point width: an elevated deck spine whose hw ramps
+// 3 -> 8 comes out WIDER at the wide end. Empty hw is unchanged (all other tests).
+TEST_CASE(weld_deck_flares_with_per_point_width) {
+    UnionSpine s;
+    s.klass = RoadClass::Freeway;
+    for (int i = 0; i <= 10; ++i) {
+        s.points.push_back(Vec2(-50 + i * 10.0, 0));
+        s.hw.push_back(3.0 + 5.0 * (i / 10.0));           // 3 -> 8
+        s.yAbs.push_back(9.0);                            // authored elevated deck
+    }
+    s.halfWidth = 8.0;
+    WeldSolidParams wp;
+    wp.barriers = false;
+    wp.heightAt = [](Real, Real) { return 0.0; };
+    RenderMesh m = weldSolid({ s }, wp);
+    CHECK(!m.vertices.empty());
+    CHECK(!hasNonFinite(m));
+    double zNarrow = 0.0, zWide = 0.0;
+    for (const Vertex& v : m.vertices) {
+        if (v.position.y < 8.98 || v.position.y > 9.02) continue;   // deck top (excl. markings at 9.03)
+        if (v.position.x < -40) zNarrow = std::max(zNarrow, std::fabs((double)v.position.z));
+        if (v.position.x >  40) zWide   = std::max(zWide,   std::fabs((double)v.position.z));
+    }
+    CHECK(zNarrow > 2.0 && zNarrow < 4.5);   // ~hw 3 at the narrow end
+    CHECK(zWide  > 6.0 && zWide  < 9.5);     // ~hw 8 — the deck flared
 }
 
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and

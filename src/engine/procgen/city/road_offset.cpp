@@ -138,6 +138,50 @@ Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterL
     return poly;
 }
 
+std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, const std::vector<double>& d,
+                                 double miterLimit) {
+    const int n = static_cast<int>(cl.size());
+    std::vector<Vec2> out;
+    if (n < 2 || static_cast<int>(d.size()) != n) return out;
+    out.reserve(n);
+    auto segNormal = [&](int i) -> Vec2 {
+        Vec2 t = cl[i + 1] - cl[i];
+        double L = t.length();
+        return (L > 1e-12) ? perp(t / L) : Vec2(0, 0);
+    };
+    out.push_back(cl[0] + segNormal(0) * d[0]);                   // start cap
+    for (int i = 1; i + 1 < n; ++i) {
+        Vec2 nPrev = segNormal(i - 1), nNext = segNormal(i);
+        Vec2 bis = nPrev + nNext;
+        double bl = bis.length();
+        if (bl < 1e-9) { out.push_back(cl[i] + nPrev * d[i]); continue; }
+        bis = bis / bl;
+        double cosHalf = dot(bis, nPrev);
+        double miter = (std::fabs(cosHalf) > 1e-6) ? d[i] / cosHalf : d[i];
+        double cap = miterLimit * std::fabs(d[i]);
+        if (std::fabs(miter) > cap) miter = (miter < 0 ? -cap : cap);
+        out.push_back(cl[i] + bis * miter);
+    }
+    out.push_back(cl[n - 1] + segNormal(n - 2) * d[n - 1]);       // end cap
+    return out;
+}
+
+Poly2 ribbonOutline(const std::vector<Vec2>& cl, const std::vector<double>& halfWidth,
+                    double miterLimit) {
+    Poly2 poly;
+    const int n = static_cast<int>(cl.size());
+    if (n < 2 || static_cast<int>(halfWidth.size()) != n) return poly;
+    std::vector<double> neg(n);
+    for (int i = 0; i < n; ++i) neg[i] = -halfWidth[i];
+    std::vector<Vec2> left = offsetPolyline(cl, halfWidth, miterLimit);
+    std::vector<Vec2> right = offsetPolyline(cl, neg, miterLimit);
+    poly.reserve(left.size() + right.size());
+    for (const Vec2& p : left) poly.push_back(p);
+    for (auto it = right.rbegin(); it != right.rend(); ++it) poly.push_back(*it);
+    if (signedArea(poly) < 0) ensureCCW(poly);
+    return poly;
+}
+
 void ringRibbon(const std::vector<Vec2>& cl, double halfWidth, Poly2& outer, Poly2& inner,
                 double miterLimit) {
     outer.clear(); inner.clear();

@@ -235,6 +235,11 @@ struct UnionSpine {
     // heights (corridor decks/ramps) rides them; a plain street leaves it empty
     // and the profile is derived from the ground (road-unification: welder→3D).
     std::vector<double> yAbs;
+    // Per-point HALF-WIDTH (parallel to `points`; EMPTY = constant `halfWidth`).
+    // Lets ONE deck WIDEN along its length — an aux-lane / gore flare at a
+    // freeway diverge (road-unification one-mesher P5). The weld strokes a
+    // variable-offset ribbon from it and the lateral UV normalises against it.
+    std::vector<double> hw;
 };
 RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
                         double y, const Vec3& color);

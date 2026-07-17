@@ -18,10 +18,21 @@ namespace engine {
 // normal. Returns `cl.size()` points (one per input vertex). Empty for < 2 points.
 std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, double d, double miterLimit = 4.0);
 
+// PER-VERTEX variable offset: vertex i is offset by its own signed distance `d[i]` (miter is
+// automatic — each vertex uses its own d). `d.size()` must equal `cl.size()`. Lets a road/deck
+// WIDEN along its length — an aux-lane / gore flare (road-unification one-mesher P5).
+std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& cl, const std::vector<double>& d,
+                                 double miterLimit = 4.0);
+
 // A closed ribbon OUTLINE for centerline `cl` at the given half-width: the left rail forward
 // then the right rail back, wound CCW. The polygon a single road edge contributes to the
 // network before junction welding. `miterLimit` clamps corner spikes.
 Poly2 ribbonOutline(const std::vector<Vec2>& cl, double halfWidth, double miterLimit = 4.0);
+
+// Variable-width ribbon outline: half-width `halfWidth[i]` per centerline vertex (a tapering /
+// flaring deck). `halfWidth.size()` must equal `cl.size()`. CCW, like the scalar overload.
+Poly2 ribbonOutline(const std::vector<Vec2>& cl, const std::vector<double>& halfWidth,
+                    double miterLimit = 4.0);
 
 // Annular ribbon for a CLOSED loop centerline `cl` (a roundabout ring): the road band between an
 // OUTER rail (centerline + halfWidth) and an INNER rail (centerline − halfWidth), each offset with
