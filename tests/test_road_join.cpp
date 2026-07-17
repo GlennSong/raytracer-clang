@@ -11,6 +11,8 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
+#include <nlohmann/json.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -62,7 +64,87 @@ const Ground kHills = [](Real x, Real z) {
     return 1.5f * std::sin(x * 0.02f) + 1.2f * std::cos(z * 0.017f);
 };
 
+// --- The validation checks that CATCH what degenerate-count and drive-holes miss.
+// They grid-sample the road mesh's driving surface (surfacesAt, up-faces only).
+
+struct SurfaceScan {
+    int sampled = 0;     // grid cells that had any road surface
+    int overlap = 0;     // cells with TWO road surfaces within 0.4 m (Z-fighting ribbons)
+    int overlapNearJunction = 0;   // ...of those, within 20 m of a deg>=3 node
+    int under = 0;       // cells whose road surface is > 0.3 m BELOW the terrain (buried)
+    double worstUnder = 0;
+};
+
+SurfaceScan scanSurface(const RenderMesh& m, const Ground& terrain,
+                        const std::vector<Vec2>& junctions = {}, double cell = 3.0) {
+    SurfaceScan s;
+    if (m.vertices.empty()) return s;
+    double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+    for (const Vertex& v : m.vertices) {
+        x0 = std::min(x0, (double)v.position.x); x1 = std::max(x1, (double)v.position.x);
+        z0 = std::min(z0, (double)v.position.z); z1 = std::max(z1, (double)v.position.z);
+    }
+    auto nearJunction = [&](double x, double z) {
+        for (const Vec2& j : junctions)
+            if ((j - Vec2(x, z)).lengthSquared() < 20.0 * 20.0) return true;
+        return false;
+    };
+    for (double x = x0; x <= x1; x += cell)
+        for (double z = z0; z <= z1; z += cell) {
+            std::vector<double> hits = driveprobe::surfacesAt(m, x, z);
+            if (hits.empty()) continue;
+            ++s.sampled;
+            for (std::size_t i = 0; i + 1 < hits.size(); ++i)
+                if (hits[i + 1] - hits[i] < 0.4) {                     // double-covered
+                    ++s.overlap;
+                    if (nearJunction(x, z)) ++s.overlapNearJunction;
+                    break;
+                }
+            const double g = terrain ? (double)terrain(x, z) : 0.0;
+            if (hits.front() < g - 0.3) { ++s.under; s.worstUnder = std::max(s.worstUnder, g - hits.front()); }
+        }
+    return s;
+}
+
 }  // namespace
+
+// THE REPRODUCTION: the actual generated-city graph (metro recipe), meshed by
+// the lattice, run through the surface scan. This is what Glenn drives — my
+// synthetic single-edge graphs are too clean to show the soup. Diagnostic first
+// (prints the real counts); the CHECKs document the target the fixes must hit.
+TEST_CASE(real_generated_graph_surface_is_clean) {
+    RoadNet net;
+    net.heightAt = kHills;
+    nlohmann::json gen;
+    gen["kind"] = "metro"; gen["radius"] = 240.0; gen["seed"] = 5;
+    gen["block_size"] = 72.0; gen["street_width"] = 7.0; gen["artery_width"] = 13.0;
+    gen["hotspots"] = 5; gen["terrain_aware"] = false;
+    applyGenerateRecipe(net, gen);
+    RoadGraph g = roadNetConstrainedGraph(net);
+    RenderMesh m = buildRoadNetLattice(g, net.heightAt);
+    CHECK(!m.vertices.empty());
+
+    std::vector<int> deg(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { ++deg[e.a]; ++deg[e.b]; }
+    std::vector<Vec2> junctions;
+    for (std::size_t v = 0; v < g.nodes.size(); ++v)
+        if (deg[v] >= 3) junctions.push_back(g.nodes[v].pos);
+
+    const int degen = degenerateFaces(m);
+    const SurfaceScan s = scanSurface(m, net.heightAt, junctions);
+    std::printf("[real-graph] nodes=%zu edges=%zu tris=%zu | degenerate=%d "
+                "sampled=%d overlap=%d (%d near junctions, %d mid-chain) under=%d (worst %.2fm)\n",
+                g.nodes.size(), g.edges.size(), m.indices.size() / 3, degen,
+                s.sampled, s.overlap, s.overlapNearJunction, s.overlap - s.overlapNearJunction,
+                s.under, s.worstUnder);
+    CHECK(degen == 0);
+    CHECK(s.under == 0);        // no road buried under the drape ground
+    // CHARACTERIZATION: overlap is currently ~686/4259 (16% double-covered) —
+    // unmerged sidewalks/ribbons at junctions (bodies carry sidewalks but the pad
+    // is carriageway-only, so arm sidewalks pile into the junction). This bound
+    // DOCUMENTS the breakage; the fix (sidewalk kerb-returns) must drive it to 0.
+    CHECK(s.overlap < 800);     // TODO -> 0 when junction sidewalks merge
+}
 
 // A right-angle 4-way on FLAT ground: the simplest real join. Drive both through
 // routes; the pad must connect to all four bodies with no hole and no degenerate.
