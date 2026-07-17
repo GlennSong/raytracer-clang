@@ -295,31 +295,35 @@ TEST_CASE(weld_freeway_deck_gets_barriers) {
 }
 
 // P3 (one mesher) — the CorridorDef->spines ADAPTER meshes a straight elevated
-// freeway through weldSolid to PARITY with buildCorridorMesh: same deck-top
-// height, same width, same length. Proves the corridor's authoring core
-// (alignment + vertical profile + lane widths) can drive the UNIFIED welder
-// instead of corridor_mesh's own geometry pass.
-TEST_CASE(corridor_deck_spines_match_the_corridor_mesher) {
+// freeway through weldSolid. This began as a PARITY test against the corridor
+// sweep mesher; that mesher is now deleted (P8b-2), so the expectations are
+// anchored to the DEF itself — where the alignment, profile and lane schedule say
+// the deck must be — which is what parity was standing in for all along.
+TEST_CASE(corridor_deck_spines_mesh_an_elevated_freeway) {
     CorridorDef c;
     c.horizontal = Alignment::fromPolyline({ Vec2(-100, 0), Vec2(100, 0) }, 300.0, 20.0);
     c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };  // flat, +9 elevated
     c.lanes.throughLanes = 3;
     auto ground = [](Real, Real) { return 0.0; };
-    CorridorMeshOut cm = buildCorridorMesh(c, ground, 3.0, nullptr);
     std::vector<UnionSpine> sp = corridorDeckSpines(c, ground, 3.0);
     CHECK(sp.size() == 1);
-    WeldSolidParams wp; wp.barriers = false;                 // compare the bare drivable slab
+    CHECK(sp[0].klass == RoadClass::Freeway);
+    WeldSolidParams wp; wp.barriers = false;                 // the bare drivable slab
     RenderMesh weld = weldSolid(sp, wp);
     CHECK(!weld.vertices.empty());
     CHECK(!hasNonFinite(weld));
-    double cmMinY, cmMaxY, wMinY, wMaxY;
-    bboxY(cm.deck, cmMinY, cmMaxY); bboxY(weld, wMinY, wMaxY);
-    CHECK(cmMaxY > 8.5 && cmMaxY < 9.5);                     // corridor deck tops at +9
-    CHECK(std::fabs(wMaxY - cmMaxY) < 0.6);                  // weld deck matches
-    double cx0, cx1, cz0, cz1, wx0, wx1, wz0, wz1;
-    bboxXZ(cm.deck, cx0, cx1, cz0, cz1); bboxXZ(weld, wx0, wx1, wz0, wz1);
-    CHECK(std::fabs((cx1 - cx0) - (wx1 - wx0)) < 8.0);       // same length (along X)
-    CHECK(std::fabs((cz1 - cz0) - (wz1 - wz0)) < 4.0);       // same deck width (across Z)
+    double wMinY, wMaxY;
+    bboxY(weld, wMinY, wMaxY);
+    CHECK(wMaxY > 8.5 && wMaxY < 9.5);              // deck tops at the authored +9
+    double wx0, wx1, wz0, wz1;
+    bboxXZ(weld, wx0, wx1, wz0, wz1);
+    // 200 m of alignment, and a deck as wide as the schedule says (3 lanes each
+    // way + median + shoulders, both carriageways) — not a number copied from the
+    // mesher it replaced.
+    CHECK(std::fabs((wx1 - wx0) - 200.0) < 8.0);
+    const double fullWidth = c.halfWidthAt(c.horizontal.length() * 0.5, -1) +
+                             c.halfWidthAt(c.horizontal.length() * 0.5, 1);
+    CHECK(std::fabs((wz1 - wz0) - fullWidth) < 4.0);
 }
 
 // P6 (one mesher) — a CURVED corridor banks: corridorDeckSpines pulls the
@@ -349,14 +353,15 @@ TEST_CASE(curved_corridor_deck_spine_carries_superelevation) {
     CHECK(maxY - minY > 0.05);   // a flat +9 deck would be a razor slab; banking gives it relief
 }
 
-// P8b (one mesher) — THE DELETION RATCHET. corridorAuthor is the geometry-free
-// half of buildCorridorMesh; it must produce byte-identical rampPaths (the nav
-// graph AND the weld's ramp spines are both built from them) and equivalent
-// flatten windows. While the old mesher still lives, pin them against each
-// other: if this holds, its geometry can be deleted without moving the world.
+// P8b (one mesher) — corridorAuthor is now the corridor's ONLY non-geometry
+// output: the nav graph AND the weld's ramp spines are both built from its
+// rampPaths, and the terrain grades to its flatten windows. This began as an
+// equivalence ratchet against the corridor sweep mesher; that mesher is deleted
+// (P8b-2), so what it was really pinning is stated directly — the drop rules fire,
+// the paths stay index-parallel to the exits, and the at-grade ends carve.
 // Exercised on a corridor with real exits, on-ramps, hilly ground, and a ramp
-// that gets DROPPED — so the drop rules are compared too, not just happy paths.
-TEST_CASE(corridor_author_matches_the_corridor_meshers_authoring) {
+// aimed so it MUST drop — so the drop rules are covered, not just happy paths.
+TEST_CASE(corridor_author_authors_ramp_paths_and_flatten) {
     CorridorDef c;
     c.horizontal = Alignment::fromPolyline(
         { Vec2(-400, 0), Vec2(0, 0), Vec2(500, 0) }, 260.0, 40.0);
@@ -384,44 +389,42 @@ TEST_CASE(corridor_author_matches_the_corridor_meshers_authoring) {
     auto ground = [](Real x, Real z) {
         return 1.0 * std::sin(x * 0.01) + 0.8 * std::cos(z * 0.013);   // gentle hills
     };
-    CorridorMeshOut cm = buildCorridorMesh(c, ground, 3.0, nullptr);
     CorridorAuthoring au = corridorAuthor(c, ground, 3.0);
 
-    // rampPaths: index-parallel to exits, EMPTY for a dropped ramp, and every
-    // surviving point identical — nav and the weld both read these verbatim.
-    CHECK(au.rampPaths.size() == cm.rampPaths.size());
+    // rampPaths are STRICTLY index-parallel to exits — the loader indexes
+    // rampPaths[exitIndex], so a dropped ramp must leave an EMPTY entry rather
+    // than shrink the vector, or every later ramp silently mis-pairs.
     CHECK(au.rampPaths.size() == c.exits.size());
     bool sawDrop = false, sawPath = false;
     for (std::size_t i = 0; i < au.rampPaths.size(); ++i) {
-        CHECK(au.rampPaths[i].pts.size() == cm.rampPaths[i].pts.size());
-        if (cm.rampPaths[i].pts.empty()) sawDrop = true; else sawPath = true;
-        for (std::size_t k = 0; k < au.rampPaths[i].pts.size(); ++k) {
-            const Vec3& a = au.rampPaths[i].pts[k];
-            const Vec3& b = cm.rampPaths[i].pts[k];
-            CHECK(std::fabs(a.x - b.x) < 1e-9);
-            CHECK(std::fabs(a.y - b.y) < 1e-9);
-            CHECK(std::fabs(a.z - b.z) < 1e-9);
+        const std::vector<Vec3>& pts = au.rampPaths[i].pts;
+        if (pts.empty()) { sawDrop = true; continue; }
+        sawPath = true;
+        CHECK(pts.size() >= 4);              // nav needs a real chain
+        for (const Vec3& q : pts) {
+            CHECK(std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z));
         }
+        // FLOW order with absolute heights: an exit leaves the deck for the
+        // street, an on-ramp arrives from it. Either way one end is up on the
+        // structure and the other is down at the target's grade.
+        const double y0 = pts.front().y, y1 = pts.back().y;
+        CHECK(std::fabs(y0 - y1) > 1.0);
+        const Vec3& streetEnd = c.exits[i].onRamp ? pts.front() : pts.back();
+        CHECK((Vec2(streetEnd.x, streetEnd.z) - c.exits[i].target).length() < 30.0);
     }
     CHECK(sawPath);   // the fixture really does author ramps...
-    CHECK(sawDrop);   // ...and really does exercise a drop
+    CHECK(sawDrop);   // ...and the ramp aimed at the mainline really does drop
 
-    // flatten: same window count, same order, same carve PLANE (c + dx*x + dz*z)
-    // and the same footprint polygon — the terrain must grade identically.
-    CHECK(au.flatten.size() == cm.flatten.size());
+    // flatten: the AT-GRADE ends carve to the deck plane; the flown middle must
+    // not (the ground stays under a viaduct instead of following it up).
     CHECK(!au.flatten.empty());
-    for (std::size_t i = 0; i < au.flatten.size(); ++i) {
-        const TerrainFlatten& a = au.flatten[i];
-        const TerrainFlatten& b = cm.flatten[i];
-        CHECK(std::fabs(a.c - b.c) < 1e-9);
-        CHECK(std::fabs(a.dx - b.dx) < 1e-9);
-        CHECK(std::fabs(a.dz - b.dz) < 1e-9);
-        CHECK(std::fabs(a.falloff - b.falloff) < 1e-9);
-        CHECK(a.polygon.size() == b.polygon.size());
-        for (std::size_t k = 0; k < a.polygon.size(); ++k) {
-            CHECK(std::fabs(a.polygon[k].x - b.polygon[k].x) < 1e-9);
-            CHECK(std::fabs(a.polygon[k].z - b.polygon[k].z) < 1e-9);
-        }
+    for (const TerrainFlatten& f : au.flatten) {
+        CHECK(std::isfinite(f.c) && std::isfinite(f.dx) && std::isfinite(f.dz));
+        CHECK(f.polygon.size() >= 3);
+        // No window may carve up at the viaduct: the profile crests at 12 m
+        // mid-corridor, and a carve plane anywhere near that height would mean
+        // the terrain is being dragged up to meet a flown deck.
+        CHECK(f.c < 6.0);
     }
 }
 
@@ -462,7 +465,7 @@ TEST_CASE(corridor_furniture_gantries_stand_over_the_deck) {
 // foot to street grade (0). Because weld AND nav both read rampPaths, they can't
 // disagree — the truth-source inversion never happens.
 TEST_CASE(corridor_ramp_spine_descends_from_deck_to_grade) {
-    CorridorMeshOut::RampPath rp;
+    RampPath rp;
     for (int i = 0; i <= 12; ++i) {                    // deck +9 -> street 0, curving away
         const double t = i / 12.0;
         rp.pts.push_back(Vec3(t * 130.0, 9.0 * (1.0 - t), 24.0 * t * t));

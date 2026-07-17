@@ -301,6 +301,13 @@ struct WeldSolidParams {
     // road however earcut happened to carve it. 0 disables (raw earcut).
     double deckSag = 0.10;
     int    deckSagMaxDepth = 8;                   // recursion cap (4^d worst case)
+    // PIER FOOTPRINTS (world XZ), reported out if non-null. The lot/vegetation
+    // passes treat a bent's ground as USED ("turn those pylons into a used lot so
+    // nothing else can be built there"): nothing may be planted or built inside a
+    // column. The weld is the only thing that knows where its piers actually land
+    // — it slides them clear of the streets below — so it is the only honest
+    // source for this.
+    std::vector<Vec2>* pierBasesOut = nullptr;
     // Raised sidewalk: a curbed concrete band run along the welded boundary loops (the
     // outer carriageway edge + every block-interior/island hole), offset outward by
     // sidewalkWidth and standing curbHeight above the deck. 0 width = no sidewalks.

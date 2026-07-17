@@ -2026,6 +2026,10 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
             if (at.empty()) continue;
             merge(bridgePiers(dense, denseY, at, pierW, pierW, p.thickness,
                               pierColor, pierGround));
+            // Report where the columns actually landed (after the street dodge),
+            // so the lot/vegetation passes can treat that ground as USED.
+            if (p.pierBasesOut)
+                for (int k : at) p.pierBasesOut->push_back(dense[k]);
         }
         // FREEWAY BARRIERS: divided-highway furniture on every Freeway deck —
         // edge parapets at the verge + a solid median box down the centre. Trimmed

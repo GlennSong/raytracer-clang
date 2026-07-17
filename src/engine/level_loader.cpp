@@ -2265,7 +2265,16 @@ bool LevelLoader::load(const std::string& path,
     // CORRIDORS (plan §8): freeway-grade alignments. The mesh is built here
     // against the BASE terrain so its at-grade flatten windows join the same
     // carve set the roads use; the entities spawn after the terrain does.
-    struct PendingCorridor { CorridorMeshOut mesh; };
+    // One corridor, ready to spawn. The corridor AUTHORS its ramp centrelines and
+    // flatten windows (corridorAuthor); weldSolid draws the deck/ramps/piers and
+    // corridorFurniture the signage. There is no second mesher any more.
+    struct PendingCorridor {
+        RenderMesh deck;                       // welded deck + ramps + piers
+        RenderMesh barrier;                    // sign gantries (weld owns parapets/median)
+        std::vector<TerrainFlatten> flatten;   // at-grade windows carve to the deck
+        std::vector<Vec2> pierBases;           // where the weld's columns landed (USED ground)
+        std::vector<engine::RampPath> rampPaths;   // nav + ramp spines read these
+    };
     std::vector<PendingCorridor> preCorridors;
     // Corridor graph fragments (§10): collected here and welded into THE
     // level's one road graph after the pre-pass — no consumer-side merging.
@@ -2275,7 +2284,6 @@ bool LevelLoader::load(const std::string& path,
     };
     std::vector<CorridorFrag> corridorFrags;
     std::vector<CorridorDef> corridorDefs;
-    std::vector<char> corridorWeld;   // parallel: mesh this corridor with the ONE welder
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "corridor") continue;
@@ -2333,7 +2341,6 @@ bool LevelLoader::load(const std::string& path,
             // the weld renders freeway_lab's gores differently from the geometry
             // it would replace (unexplained dark wedges), and the deletion gate
             // is "no regression" — so this stays false until that is understood.
-            corridorWeld.push_back(cb.value("weld", false) ? 1 : 0);
         }
     }
     std::vector<std::vector<Vec2>> corridorGuides;   // §12: per built def, its
@@ -2356,11 +2363,6 @@ bool LevelLoader::load(const std::string& path,
             Real spacing = 700;
             std::vector<Real> bridgeAt;  // stations that must fly over
             bool dropped = false;        // parallel-overlap loser
-            // One-mesher P8: SYNTHESIZED corridors are meshed by weldSolid like
-            // every other road. The authored path reads this per-entity from the
-            // corridor block; the synth path has no such block, so it rides this
-            // flag (kill switch: road.generate.corridor_weld = false).
-            bool weld = true;
         };
         std::vector<PlannedRoute> planned;
         // RULES LAB hook: a level may author raw route PLANS directly
@@ -2371,7 +2373,6 @@ bool LevelLoader::load(const std::string& path,
             for (const auto& jp : root["freewayPlans"]) {
                 PlannedRoute pr;
                 pr.spacing = root.value("interchangeSpacing", 700.0);
-                pr.weld = root.value("corridorWeld", true);
                 std::vector<Vec2> plan;
                 for (const auto& q : jp)
                     if (q.is_array() && q.size() >= 2)
@@ -2396,13 +2397,11 @@ bool LevelLoader::load(const std::string& path,
                                  ? rootEnt["road"]["generate"]
                                  : json::object();
             const Real spacing = gen.value("interchange_spacing", 700.0);
-            const bool weldRoutes = gen.value("corridor_weld", true);   // P8 kill switch
             for (const std::vector<Vec2>& plan : preNets[ni].freewayPlans) {
                 if (plan.size() < 2) continue;
                 PlannedRoute pr;
                 pr.anchors = plan;
                 pr.spacing = spacing;
-                pr.weld = weldRoutes;
                 for (std::size_t k = 0; k + 1 < plan.size(); ++k) {
                     const Vec2 A = plan[k], B = plan[k + 1];
                     const Real seg = (B - A).length();
@@ -2721,15 +2720,6 @@ bool LevelLoader::load(const std::string& path,
             while (corridorGuides.size() < corridorDefs.size())
                 corridorGuides.emplace_back();       // authored defs: no guide
             corridorGuides.push_back(pr.dense);
-            // One-mesher P8: keep corridorWeld PARALLEL to corridorDefs. Until
-            // now only the authored path pushed here, so every synthesized
-            // corridor sat past corridorWeld's end and the `di < size()` weld
-            // gate read false — the flagship's freeways could never be welded,
-            // whatever the JSON said. Pad for the authored defs (which are all
-            // pushed before this loop), then record this route's flag.
-            while (corridorWeld.size() < corridorDefs.size())
-                corridorWeld.push_back(0);           // authored defs: already decided
-            corridorWeld.push_back(pr.weld ? 1 : 0);
             corridorDefs.push_back(std::move(def));
         }
     }
@@ -3085,41 +3075,36 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
             }
+            // ONE MESHER: the corridor AUTHORS (ramp centrelines + flatten windows)
+            // and weldSolid DRAWS — deck spine + ramp spines (the same rampPaths the
+            // nav chain reads) give deck + parapets + median + descending ramps
+            // welded into the streets below, on piers that dodge them. The old
+            // corridor sweep is gone; `streetsBelow` steered its pier bents and the
+            // weld now does that itself from the spines it can already see.
             PendingCorridor pc;
-            pc.mesh = buildCorridorMesh(def, levelGround, 3.0,
-                                        streetsBelow.edges.empty()
-                                            ? nullptr : &streetsBelow);
-            // ONE MESHER (P4 integration): re-mesh this corridor's DECK with the
-            // unified welder — deck spine + ramp spines (from the same rampPaths
-            // nav reads) -> weldSolid gives deck + parapets + median + descending
-            // ramps welded into the streets below, on piers. Nav/flatten stay on
-            // buildCorridorMesh's output; only the drawn deck geometry swaps.
+            auto groundFn = [lg = levelGround](double x, double z) {
+                return lg ? lg(x, z) : 0.0;
+            };
             {
-                const std::size_t di =
-                    static_cast<std::size_t>(&def - corridorDefs.data());
-                if (di < corridorWeld.size() && corridorWeld[di]) {
-                    auto groundFn = [lg = levelGround](double x, double z) {
-                        return lg ? lg(x, z) : 0.0;
-                    };
-                    std::vector<engine::UnionSpine> spines =
-                        engine::corridorDeckSpines(def, groundFn, 3.0);
-                    std::vector<engine::UnionSpine> ramps =
-                        engine::corridorRampSpines(pc.mesh.rampPaths);
-                    spines.insert(spines.end(), ramps.begin(), ramps.end());
-                    engine::WeldSolidParams wp;
-                    wp.barriers = true;
-                    wp.thickness = 0.5;
-                    wp.heightAt = groundFn;
-                    pc.mesh.deck = engine::weldSolid(spines, wp);
-                    // The weld builds its own parapets/median/piers, so drop the
-                    // corridor's — but KEEP the overhead sign gantries, which the
-                    // weld has no notion of (they're authored off the exit gores).
-                    pc.mesh.barrier = engine::corridorFurniture(def);   // P7
-                    pc.mesh.markings = RenderMesh{};   // (weld markings are UV-baked; shader path P5)
-                    LOG_INFO << "[corridor] meshed by the ONE welder (weld=true): "
-                             << spines.size() << " spines (deck + " << ramps.size()
-                             << " ramps) via weldSolid";
-                }
+                engine::CorridorAuthoring au = engine::corridorAuthor(def, levelGround, 3.0);
+                pc.rampPaths = std::move(au.rampPaths);
+                pc.flatten = std::move(au.flatten);
+                std::vector<engine::UnionSpine> spines =
+                    engine::corridorDeckSpines(def, groundFn, 3.0);
+                std::vector<engine::UnionSpine> ramps =
+                    engine::corridorRampSpines(pc.rampPaths);
+                spines.insert(spines.end(), ramps.begin(), ramps.end());
+                engine::WeldSolidParams wp;
+                wp.barriers = true;
+                wp.thickness = 0.5;
+                wp.heightAt = groundFn;
+                wp.pierBasesOut = &pc.pierBases;
+                pc.deck = engine::weldSolid(spines, wp);
+                // The weld owns parapets/median/piers; the corridor still owns its
+                // overhead SIGNAGE, which is authored off the exit gores.
+                pc.barrier = engine::corridorFurniture(def);
+                LOG_INFO << "[corridor] " << spines.size() << " spines (deck + "
+                         << ramps.size() << " ramps) via weldSolid";
             }
             // The corridor JOINS the drivable network (P8.4): mainline chain
             // + one chain per ramp, nodes carrying deck height over ground so
@@ -3180,10 +3165,10 @@ bool LevelLoader::load(const std::string& path,
                     // the MESH'S OWN drawn centreline (gore band riding the
                     // deck + free run to the street) — the geometry the
                     // wheels see is the geometry the router sees.
-                    if (xi >= pc.mesh.rampPaths.size() ||
-                        pc.mesh.rampPaths[xi].pts.size() < 4)
+                    if (xi >= pc.rampPaths.size() ||
+                        pc.rampPaths[xi].pts.size() < 4)
                         continue;   // dropped ramp (mesh already warned)
-                    const std::vector<Vec3>& pts = pc.mesh.rampPaths[xi].pts;
+                    const std::vector<Vec3>& pts = pc.rampPaths[xi].pts;
                     // chain a node every ~8th sample (~24 m) + both ends
                     std::vector<int> chainR;
                     for (std::size_t k = 0; k < pts.size();
@@ -3447,8 +3432,8 @@ bool LevelLoader::load(const std::string& path,
                 }
                 corridorFrags.push_back(std::move(eg));
             }
-            roadFlatten.insert(roadFlatten.end(), pc.mesh.flatten.begin(),
-                               pc.mesh.flatten.end());
+            roadFlatten.insert(roadFlatten.end(), pc.flatten.begin(),
+                               pc.flatten.end());
             preCorridors.push_back(std::move(pc));
         }
     }
@@ -3456,7 +3441,7 @@ bool LevelLoader::load(const std::string& path,
     // elevated spans included, same guarantee the road decks make), painted
     // markings, and the concrete barrier + piers.
     for (std::size_t ci = 0; ci < preCorridors.size(); ++ci) {
-        CorridorMeshOut& cm = preCorridors[ci].mesh;
+        PendingCorridor& cm = preCorridors[ci];
         const std::string tag = std::to_string(ci);
         auto spawn = [&](const RenderMesh& mesh, const std::string& name,
                          const Vec3& albedo, Real rough, bool collide) {
@@ -3480,7 +3465,6 @@ bool LevelLoader::load(const std::string& path,
                 world.add<MeshCollider>(e, mc);
             }
         };
-        spawn(cm.markings, "markings", Vec3(1, 1, 1), 0.8, false);
         spawn(cm.barrier, "barrier", Vec3(1, 1, 1), 0.9, true);
     }
     // §10: ONE derived road graph. Streets and corridor chains weld HERE, at
@@ -3982,17 +3966,14 @@ bool LevelLoader::load(const std::string& path,
         std::size_t ci = 0;
         world.each<SourceSpec>([&](Entity e, SourceSpec& spec) {
             if (spec.shape != "corridor" || ci >= preCorridors.size()) return;
-            const CorridorMeshOut& cm = preCorridors[ci].mesh;
+            const PendingCorridor& cm = preCorridors[ci];
             if (!cm.deck.vertices.empty()) {
                 Renderable r;
                 r.material.albedo = Vec3(1, 1, 1);
                 r.material.roughness = 0.95f;
-                // A WELD-meshed corridor deck carries road-local marking UV, so
-                // the SAME surface shader that paints street lane lines paints it
-                // (the corridor_mesh deck instead ships separate cm.markings
-                // geometry, so it stays plain here).
-                if (ci < corridorWeld.size() && corridorWeld[ci])
-                    r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
+                // The welded deck carries road-local marking UV, so the SAME
+                // surface shader that paints street lane lines paints it.
+                r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
                 r.mesh = assets.acquireMesh(
                     cm.deck, "corridor:deck:" + std::to_string(ci));
                 world.add<Renderable>(e, r);
@@ -4013,7 +3994,7 @@ bool LevelLoader::load(const std::string& path,
         // included, or the metro freeways would be ghost markings with no
         // asphalt under them.
         for (; ci < preCorridors.size(); ++ci) {
-            const CorridorMeshOut& cm = preCorridors[ci].mesh;
+            const PendingCorridor& cm = preCorridors[ci];
             if (cm.deck.vertices.empty()) continue;
             Entity e = world.create();
             Transform t2;
@@ -4022,12 +4003,9 @@ bool LevelLoader::load(const std::string& path,
             Renderable r;
             r.material.albedo = Vec3(1, 1, 1);
             r.material.roughness = 0.95f;
-            // Same rule as the authored deck above: a WELD-meshed deck carries
-            // marking UV and is painted by the surface shader (its cm.markings
-            // is cleared), so without this a welded synth freeway renders as
-            // blank asphalt — no lane lines at all.
-            if (ci < corridorWeld.size() && corridorWeld[ci])
-                r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
+            // Same rule as the authored deck above: the welded deck's lane
+            // lines are painted by the surface shader off its baked UV.
+            r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
             r.mesh = assets.acquireMesh(cm.deck,
                                         "corridor:deck:" + std::to_string(ci));
             world.add<Renderable>(e, r);
