@@ -17,6 +17,18 @@
 
 namespace engine {
 
+// The curvature cap must clear the WIDEST ribbon in the net, not the default
+// width: the metro recipe writes 13 m arterials beside 7 m streets, and a bend
+// with radius between the two folds the arterial's band over itself (the
+// "side of the road raised up vertically" flap). Half-width + sidewalk + margin
+// of the widest edge.
+static double netMinTurnRadius(const RoadNet& net) {
+    double maxW = net.width;
+    for (double w : net.edgeWidths) if (w > 0) maxW = std::max(maxW, w);
+    return maxW * 0.5 + net.sidewalk + 0.5;
+}
+
+
 using json = nlohmann::json;
 
 namespace {
@@ -175,7 +187,7 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
 // through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
 RoadGraph constrainedNetGraph(const RoadNet& net) {
-    double minR = net.width * 0.5 + net.sidewalk + 0.5;
+    double minR = netMinTurnRadius(net);
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
     return applyConstraints(netGraph(net, minR), rules);
@@ -392,7 +404,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
 RenderMesh buildRoadNetMesh(const RoadNet& net) {
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
-    double minR = net.width * 0.5 + net.sidewalk + 0.5;
+    double minR = netMinTurnRadius(net);
     RoadGraph raw = netGraph(net, minR);
     // Does the local-constraints pass (ADR-0052) promote any node to a roundabout?
     // Honour the net's junction policy (ADR-0075 P0): a generated net set
