@@ -4470,28 +4470,13 @@ bool LevelLoader::load(const std::string& path,
                     RenderMesh& pmesh =
                         proxies[{(int)std::floor(lb.site.x / cell),
                                  (int)std::floor(lb.site.y / cell)}];
-                    const Real hw = lb.width * 0.5, hd = lb.depth * 0.5;
-                    const Vec3 ax(std::cos(lb.yaw), 0, std::sin(lb.yaw));
-                    const Vec3 az(-std::sin(lb.yaw), 0, std::cos(lb.yaw));
-                    const Vec3 base(lb.site.x, lb.baseY, lb.site.y);
-                    const Vec3 top = base + Vec3(0, lb.height, 0);
-                    const Vec3 c[4] = {ax * -hw + az * -hd, ax * hw + az * -hd,
-                                       ax * hw + az * hd, ax * -hw + az * hd};
                     // Value-match the detail look (device: pop at the swap):
                     // real facades read darker than their wall colour because
                     // of the window grid, and every roof deck is near-charcoal
                     // — sides bake that window duty cycle in, the cap takes
                     // the roof material's tone.
-                    const Vec3 sideCol = lb.color * 0.84;
-                    const Vec3 roofCol(0.20, 0.20, 0.22);
-                    for (int e = 0; e < 4; ++e) {
-                        const Vec3 &a = c[e], &b = c[(e + 1) % 4];
-                        Vec3 n = normalize(Vec3(a.z - b.z, 0, b.x - a.x));
-                        MeshBuilder::emitQuad(pmesh, base + a, base + b, top + b,
-                                              top + a, n, sideCol);
-                    }
-                    MeshBuilder::emitQuad(pmesh, top + c[0], top + c[1], top + c[2],
-                                          top + c[3], Vec3(0, 1, 0), roofCol);
+                    engine::appendLotMassBox(pmesh, lb, lb.color * 0.84,
+                                             Vec3(0.20, 0.20, 0.22));
                 }
                 for (auto& [key, pmesh] : proxies) {
                     if (pmesh.vertices.empty()) continue;

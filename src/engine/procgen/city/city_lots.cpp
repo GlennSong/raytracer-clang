@@ -2026,4 +2026,30 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     return r;
 }
 
+void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
+                      const Vec3& sideColor, const Vec3& roofColor) {
+    const Real hw = lot.width * 0.5, hd = lot.depth * 0.5;
+    const Vec3 ax(std::cos(lot.yaw), 0, std::sin(lot.yaw));
+    const Vec3 az(-std::sin(lot.yaw), 0, std::cos(lot.yaw));
+    const Vec3 base(lot.site.x, lot.baseY, lot.site.y);
+    const Vec3 top = base + Vec3(0, lot.height, 0);
+    // Corners run CCW in XZ: (-,-) -> (+,-) -> (+,+) -> (-,+).
+    const Vec3 c[4] = {ax * -hw + az * -hd, ax * hw + az * -hd,
+                       ax * hw + az * hd, ax * -hw + az * hd};
+    for (int e = 0; e < 4; ++e) {
+        const Vec3 &a = c[e], &b = c[(e + 1) % 4];
+        // OUTWARD normal of edge a->b. For this CCW winding that is the RIGHT
+        // normal (d.z, 0, -d.x); the LEFT normal (-d.z, 0, d.x) points back into
+        // the box. Getting this backwards builds every distant building
+        // inside-out — and it hides from the facing debug view, because emitQuad
+        // winds geometry to agree with the normal it is handed, so the near wall
+        // is culled and you see the far wall with its flipped normal aimed at you.
+        const Vec3 d = b - a;
+        const Vec3 n = normalize(Vec3(d.z, 0, -d.x));
+        MeshBuilder::emitQuad(out, base + a, base + b, top + b, top + a, n, sideColor);
+    }
+    MeshBuilder::emitQuad(out, top + c[0], top + c[1], top + c[2], top + c[3],
+                          Vec3(0, 1, 0), roofColor);
+}
+
 }  // namespace engine

@@ -177,6 +177,14 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     Real roadClearance,
                                     const RoadGraph* freewayROW = nullptr);
 
+// The HLOD mass box for one lot (metropolis-scale-plan P1.2): the building's
+// oriented box, ground to roof, four walls + a roof cap. This is what the DISTANT
+// city is actually made of — past `detailDistance` the full facades are dropped
+// and a chunk becomes a handful of these — so its normals decide how the whole
+// skyline shades. Appends to `out` (one mesh per render cell).
+void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
+                      const Vec3& sideColor, const Vec3& roofColor);
+
 }  // namespace engine
 
 #endif

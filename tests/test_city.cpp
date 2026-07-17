@@ -6,6 +6,7 @@
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/city.h"
+#include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
 #include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -637,6 +638,89 @@ TEST_CASE(grammar_grows_a_multipart_building) {
     CHECK_APPROX(bm.height, 5 * 3.2 + 4.5 + 1.1, 1e-6);
     CHECK(!bm.proxy.vertices.empty());           // coarse LOD proxy emitted
     CHECK(!bm.attaches.empty());
+}
+
+// The DISTANT city is made of these mass boxes (past detailDistance the facades
+// are dropped and a render cell becomes a handful of them), so their normals
+// decide how the whole skyline shades. This shipped INVERTED: the side normal
+// used the LEFT normal (-d.z, 0, d.x) of a CCW box, pointing into the box, so
+// every far building was lit inside-out. It hid from the `facing` debug view
+// because emitQuad winds geometry to agree with the normal it is handed — the
+// near wall gets culled and you see the far wall with its flipped normal aimed
+// back at the camera, which reads as front-facing. Only a geometric test catches
+// it: on a closed convex box every face must point away from the centre.
+TEST_CASE(city_lot_mass_box_faces_outward) {
+    for (Real yaw : {Real(0), Real(0.7), Real(2.9), Real(-1.3)}) {
+        LotBuilding lot;
+        lot.site = Vec2(12, -30);
+        lot.width = 18; lot.depth = 10; lot.height = 24;
+        lot.yaw = yaw; lot.baseY = 3.0;
+        RenderMesh m;
+        appendLotMassBox(m, lot, Vec3(0.6, 0.5, 0.4), Vec3(0.2, 0.2, 0.22));
+        CHECK(!m.vertices.empty());
+
+        const Vec3 c(lot.site.x, lot.baseY + lot.height * 0.5, lot.site.y);
+        int inward = 0, shadeInward = 0, tris = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vec3& a = m.vertices[m.indices[i]].position;
+            const Vec3& b = m.vertices[m.indices[i + 1]].position;
+            const Vec3& d = m.vertices[m.indices[i + 2]].position;
+            // The engine winds front faces CLOCKWISE: outward = cross(c-a, b-a).
+            Vec3 gn = cross(d - a, b - a);
+            if (gn.length() < 1e-6f) continue;
+            gn = normalize(gn);
+            ++tris;
+            const Vec3 mid = (a + b + d) * (1.0f / 3.0f);
+            if (dot(gn, mid - c) < 0.0) ++inward;                     // winding
+            if (dot(m.vertices[m.indices[i]].normal, mid - c) < 0.0)  // shading
+                ++shadeInward;
+        }
+        CHECK(tris >= 10);        // 4 walls + a cap, two triangles each
+        CHECK(inward == 0);
+        CHECK(shadeInward == 0);
+    }
+}
+
+// The HLOD proxy is what the DISTANT city is made of, so a wrong-facing proxy
+// shows up as inside-out buildings on the horizon. It is the one place a
+// building's mass is built from orientedBoundingBox axes (axis[1] = perp(axis[0]))
+// rather than by extruding the plan — a basis whose handedness is easy to get
+// wrong — so pin it: a proxy is a closed convex box, therefore EVERY triangle's
+// geometric normal must point away from the box centroid, and the shading normal
+// must agree with it (the viewer culls by winding; the path tracer is two-sided
+// and would silently tolerate a flip).
+TEST_CASE(grammar_hlod_proxy_faces_outward) {
+    for (int seed : {3, 11, 29}) {
+        BuildingParams p; p.floors = 5; p.seed = seed;
+        Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
+        BuildingMesh bm = growBuilding(s, p);
+        const RenderMesh& m = bm.proxy;
+        CHECK(!m.vertices.empty());
+        CHECK(m.indices.size() >= 3);
+
+        Vec3 c(0, 0, 0);
+        for (const Vertex& v : m.vertices) c = c + v.position;
+        c = c * (1.0f / static_cast<float>(m.vertices.size()));
+
+        int inward = 0, disagree = 0, tris = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vec3& a = m.vertices[m.indices[i]].position;
+            const Vec3& b = m.vertices[m.indices[i + 1]].position;
+            const Vec3& d = m.vertices[m.indices[i + 2]].position;
+            // The engine winds front faces CLOCKWISE: outward = cross(c-a, b-a).
+            Vec3 gn = cross(d - a, b - a);
+            if (gn.length() < 1e-6f) continue;      // degenerate: not a facing
+            gn = normalize(gn);
+            ++tris;
+            const Vec3 mid = (a + b + d) * (1.0f / 3.0f);
+            if (dot(gn, mid - c) < 0.0) ++inward;   // winding faces the interior
+            // the baked shading normal must agree with the winding
+            if (dot(gn, m.vertices[m.indices[i]].normal) < 0.0) ++disagree;
+        }
+        CHECK(tris > 0);
+        CHECK(inward == 0);
+        CHECK(disagree == 0);
+    }
 }
 
 TEST_CASE(grammar_wall_part_picks_procedural_material) {

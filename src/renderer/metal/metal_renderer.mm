@@ -287,6 +287,11 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
     if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);  // headless wire view
+    // Headless debug views (same ids as the ImGui overlay's View combo):
+    // 1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades.
+    // Without this the facing/normals views are reachable only from an
+    // interactive ImGui build — useless for verifying a frame dump.
+    if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
     impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
     impl->metalLayer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
