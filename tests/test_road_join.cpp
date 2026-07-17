@@ -108,6 +108,58 @@ SurfaceScan scanSurface(const RenderMesh& m, const Ground& terrain,
 
 }  // namespace
 
+namespace {
+// Classify WHICH surfaces stack: bodies are appended before pads in
+// buildRoadNetLattice, so a triangle's index range says which side it is.
+// (Needs the body/pad triangle split; we recover it by meshing bodies alone.)
+struct OverlapKinds { int selfFold = 0, crossChain = 0, bodyPad = 0, padPad = 0; };
+OverlapKinds classifyOverlaps(const RenderMesh& m, const std::vector<std::size_t>& chainEnds,
+                              double cell = 3.0) {
+    OverlapKinds k;
+    const std::size_t bodyTriEnd = chainEnds.empty() ? 0 : chainEnds.back();
+    auto chainOf = [&](std::size_t t) {          // which chain owns tri index t
+        return std::upper_bound(chainEnds.begin(), chainEnds.end(), t) - chainEnds.begin();
+    };
+    double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+    for (const Vertex& v : m.vertices) {
+        x0 = std::min(x0, (double)v.position.x); x1 = std::max(x1, (double)v.position.x);
+        z0 = std::min(z0, (double)v.position.z); z1 = std::max(z1, (double)v.position.z);
+    }
+    for (double x = x0; x <= x1; x += cell)
+        for (double z = z0; z <= z1; z += cell) {
+            // (height, tri index) hits at this XZ
+            std::vector<std::pair<double, std::size_t>> hits;
+            for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                const Vertex& A = m.vertices[m.indices[t]];
+                const Vertex& B = m.vertices[m.indices[t + 1]];
+                const Vertex& C = m.vertices[m.indices[t + 2]];
+                if ((A.normal.y + B.normal.y + C.normal.y) / 3.0 < 0.5) continue;
+                const double ax = A.position.x, az = A.position.z, bx = B.position.x,
+                             bz = B.position.z, cx = C.position.x, cz = C.position.z;
+                const double d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+                if (std::fabs(d) < 1e-9) continue;
+                const double l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+                const double l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+                const double l3 = 1.0 - l1 - l2;
+                if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+                hits.push_back({ l1 * A.position.y + l2 * B.position.y + l3 * C.position.y, t });
+            }
+            std::sort(hits.begin(), hits.end());
+            for (std::size_t i = 0; i + 1 < hits.size(); ++i)
+                if (hits[i + 1].first - hits[i].first < 0.4) {
+                    const bool p0 = hits[i].second >= bodyTriEnd;
+                    const bool p1 = hits[i + 1].second >= bodyTriEnd;
+                    if (p0 && p1) ++k.padPad;
+                    else if (p0 != p1) ++k.bodyPad;
+                    else if (chainOf(hits[i].second) == chainOf(hits[i + 1].second)) ++k.selfFold;
+                    else ++k.crossChain;
+                    break;
+                }
+        }
+    return k;
+}
+}  // namespace
+
 // THE REPRODUCTION: the actual generated-city graph (metro recipe), meshed by
 // the lattice, run through the surface scan. This is what Glenn drives — my
 // synthetic single-edge graphs are too clean to show the soup. Diagnostic first
@@ -121,7 +173,8 @@ TEST_CASE(real_generated_graph_surface_is_clean) {
     gen["hotspots"] = 5; gen["terrain_aware"] = false;
     applyGenerateRecipe(net, gen);
     RoadGraph g = roadNetConstrainedGraph(net);
-    RenderMesh m = buildRoadNetLattice(g, net.heightAt);
+    std::vector<std::size_t> chainEnds;
+    RenderMesh m = buildRoadNetLattice(g, net.heightAt, &chainEnds);
     CHECK(!m.vertices.empty());
 
     std::vector<int> deg(g.nodes.size(), 0);
@@ -137,6 +190,37 @@ TEST_CASE(real_generated_graph_surface_is_clean) {
                 g.nodes.size(), g.edges.size(), m.indices.size() / 3, degen,
                 s.sampled, s.overlap, s.overlapNearJunction, s.overlap - s.overlapNearJunction,
                 s.under, s.worstUnder);
+    const OverlapKinds k = classifyOverlaps(m, chainEnds);
+    std::printf("[real-graph] overlap kinds: self-fold=%d cross-chain=%d body-pad=%d pad-pad=%d\n",
+                k.selfFold, k.crossChain, k.bodyPad, k.padPad);
+
+    // GRAPH-LEVEL check: DUPLICATE departures — two edges leaving one node in
+    // nearly the SAME direction (a collinear stub riding a longer edge, the
+    // double-stoplight root). Chain continuations (opposite directions through a
+    // node) are fine and NOT flagged. No mesher can fix these; they need a
+    // planarize/merge pass upstream.
+    int dupDepartures = 0;
+    {
+        std::vector<std::vector<int>> inc(g.nodes.size());
+        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+            inc[g.edges[e].a].push_back(e);
+            inc[g.edges[e].b].push_back(e);
+        }
+        for (std::size_t v = 0; v < g.nodes.size(); ++v) {
+            const Vec2 p = g.nodes[v].pos;
+            for (std::size_t x = 0; x < inc[v].size(); ++x)
+                for (std::size_t y = x + 1; y < inc[v].size(); ++y) {
+                    const RoadEdge& e1 = g.edges[inc[v][x]];
+                    const RoadEdge& e2 = g.edges[inc[v][y]];
+                    const Vec2 q1 = g.nodes[e1.a == (int)v ? e1.b : e1.a].pos;
+                    const Vec2 q2 = g.nodes[e2.a == (int)v ? e2.b : e2.a].pos;
+                    if ((q1 - p).length() < 1e-6 || (q2 - p).length() < 1e-6) continue;
+                    if (dot(normalize(q1 - p), normalize(q2 - p)) > 0.966)  // < 15 deg apart
+                        ++dupDepartures;
+                }
+        }
+    }
+    std::printf("[real-graph] duplicate same-direction departures: %d\n", dupDepartures);
     CHECK(degen == 0);
     CHECK(s.under == 0);        // no road buried under the drape ground
     // CHARACTERIZATION: overlap is currently ~686/4259 (16% double-covered) —

@@ -90,8 +90,13 @@ RenderMesh buildRoadNetMesh(const RoadNet& net);
 // surface is quads with interior vertices (conforms to terrain) and junctions
 // interpolate height (no medial-axis step). Not yet the buildRoadNetMesh default;
 // proven on its own first. `heightAt` drapes the streets (null = flat).
+// `chainTriEndsOut` (optional, diagnostics): index-buffer position after each
+// swept chain BODY, in order; back() is where bodies end and junction PADS
+// begin. The surface-scan tests use it to classify which surfaces stack
+// (same-chain self-fold / cross-chain / body-pad / pad-pad).
 RenderMesh buildRoadNetLattice(const RoadGraph& g,
-                               const std::function<Real(Real, Real)>& heightAt);
+                               const std::function<Real(Real, Real)>& heightAt,
+                               std::vector<std::size_t>* chainTriEndsOut = nullptr);
 
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a

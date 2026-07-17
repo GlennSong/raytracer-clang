@@ -279,14 +279,21 @@ UnionSpine trimSpine(const UnionSpine& s, double rA, double rB) {
 }  // namespace
 
 RenderMesh buildRoadNetLattice(const RoadGraph& g,
-                               const std::function<Real(Real, Real)>& heightAt) {
+                               const std::function<Real(Real, Real)>& heightAt,
+                               std::vector<std::size_t>* chainTriEndsOut) {
     const int N = static_cast<int>(g.nodes.size());
+    // Stage 1 of the junction re-architecture (docs/junction-weld-decision.md):
+    // the junction owns the FULL cross-section. Trim each body by its full
+    // half-width (carriageway + sidewalk), so an arm's raised sidewalk pulls
+    // back out of the junction disc instead of sweeping into the pad and
+    // double-covering it — the measured 85% of the 16% overlap.
+    const double kSidewalkW = 3.0;   // matches the streetProfile(..) call below
     std::vector<int> deg(N, 0);
     std::vector<double> rad(N, 0.0);
     for (const RoadEdge& e : g.edges) {
         ++deg[e.a]; ++deg[e.b];
-        rad[e.a] = std::max(rad[e.a], static_cast<double>(e.width) * 0.5);
-        rad[e.b] = std::max(rad[e.b], static_cast<double>(e.width) * 0.5);
+        rad[e.a] = std::max(rad[e.a], static_cast<double>(e.width) * 0.5 + kSidewalkW);
+        rad[e.b] = std::max(rad[e.b], static_cast<double>(e.width) * 0.5 + kSidewalkW);
     }
     auto ground = [&](double x, double z) { return heightAt ? (double)heightAt(x, z) : 0.0; };
     // Position -> node, O(1): the chain endpoints ARE node positions (weldChainSpines
@@ -331,20 +338,25 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         std::vector<Vec3> ring0, ringN;
         MeshBuilder::append(out, sweepRoadLattice(t, streetProfile(lanesPerSide, 3.0, 0.15),
                                                   ground, 2.0, nullptr, &ring0, &ringN));
-        // The carriageway columns of the profile are [2, 2+cw); reversed they run
-        // left-verge -> right-verge looking OUTWARD, which junctionPatch expects.
+        // The mouth is the FULL profile ring (sidewalk|curb|lanes|curb|sidewalk),
+        // reversed to run left -> right looking OUTWARD. Slicing only the
+        // carriageway here was the boundary bug: each arm swept its raised
+        // sidewalk into a pad that covered carriageway only, so sidewalks
+        // double-covered at every corner. The pad now spans verge to verge and
+        // its corner points sit at the sidewalk outer edge, where the kerb
+        // returns will fillet (stage 2).
         auto mouth = [&](const std::vector<Vec3>& ring) {
-            std::vector<Vec3> m;
-            for (int j = 2 + cw - 1; j >= 2; --j)
-                if (j < static_cast<int>(ring.size())) m.push_back(ring[j]);
-            return m;
+            return std::vector<Vec3>(ring.rbegin(), ring.rend());
         };
+        (void)cw;
+        if (chainTriEndsOut) chainTriEndsOut->push_back(out.indices.size());
         const std::size_t tn = t.points.size();
-        if (a >= 0 && deg[a] >= 3 && ring0.size() >= static_cast<std::size_t>(2 + cw))
+        if (a >= 0 && deg[a] >= 3 && ring0.size() >= 4)
             arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0) });
-        if (b >= 0 && deg[b] >= 3 && ringN.size() >= static_cast<std::size_t>(2 + cw))
+        if (b >= 0 && deg[b] >= 3 && ringN.size() >= 4)
             arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
     }
+
     int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0;
     std::vector<int> degHist(12, 0);
     for (int v = 0; v < N; ++v) {
