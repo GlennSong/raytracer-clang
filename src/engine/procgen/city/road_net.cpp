@@ -12,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdlib>
+#include <unordered_map>
 
 namespace engine {
 
@@ -287,13 +288,19 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         rad[e.b] = std::max(rad[e.b], static_cast<double>(e.width) * 0.5);
     }
     auto ground = [&](double x, double z) { return heightAt ? (double)heightAt(x, z) : 0.0; };
+    // Position -> node, O(1): the chain endpoints ARE node positions (weldChainSpines
+    // uses g.nodes[v].pos), so a 0.5 m-cell hash finds them without the O(N) scan
+    // that would make this O(chains * N) on a city.
+    auto key = [](const Vec2& p) {
+        return (static_cast<long long>(std::llround(p.x * 2.0)) << 32) ^
+               (static_cast<long long>(std::llround(p.y * 2.0)) & 0xffffffffLL);
+    };
+    std::unordered_map<long long, int> nodeIndex;
+    nodeIndex.reserve(N * 2);
+    for (int v = 0; v < N; ++v) nodeIndex.emplace(key(g.nodes[v].pos), v);
     auto nodeAt = [&](const Vec2& q) {
-        int best = -1; double bd = 1e18;
-        for (int v = 0; v < N; ++v) {
-            const double d = (g.nodes[v].pos - q).lengthSquared();
-            if (d < bd) { bd = d; best = v; }
-        }
-        return bd < 1.0 ? best : -1;
+        auto it = nodeIndex.find(key(q));
+        return it == nodeIndex.end() ? -1 : it->second;
     };
 
     RenderMesh out;
@@ -422,6 +429,13 @@ RenderMesh buildRoadNetMesh(const RoadNet& net) {
             }
         }
     }
+
+    // Swept-lattice streets (street-lattice-plan.md stage 3c): temporary env gate
+    // so the whole-city switch can be DRIVEN before it becomes the default. Not a
+    // standing flag — it comes out when the lattice reaches parity and weldSolid
+    // is deleted.
+    if (std::getenv("RT_LATTICE_STREETS"))
+        return buildRoadNetLattice(g, net.heightAt);
 
     // Three road meshers. The polygon-union WELD is the default — each road welded into ONE surface
     // (no double-coverage, so sidewalks can't overlap at any junction angle), crisp, fast, UV-native.
