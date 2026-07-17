@@ -68,6 +68,25 @@ std::vector<UnionSpine> corridorDeckSpines(
     return spines;
 }
 
+std::vector<UnionSpine> corridorRampSpines(
+    const std::vector<CorridorMeshOut::RampPath>& rampPaths, Real halfWidth) {
+    std::vector<UnionSpine> spines;
+    for (const CorridorMeshOut::RampPath& rp : rampPaths) {
+        if (rp.pts.size() < 2) continue;              // dropped ramp: no spine
+        UnionSpine s;
+        s.klass = RoadClass::Ramp;
+        s.halfWidth = halfWidth;
+        s.points.reserve(rp.pts.size());
+        s.yAbs.reserve(rp.pts.size());
+        for (const Vec3& p : rp.pts) {
+            s.points.push_back(Vec2(p.x, p.z));
+            s.yAbs.push_back(p.y);                     // absolute deck/street Y — grade-sep splits it
+        }
+        spines.push_back(std::move(s));
+    }
+    return spines;
+}
+
 CorridorMeshOut buildCorridorMesh(
     const CorridorDef& cIn, const std::function<Real(Real, Real)>& ground,
     Real step, const RoadGraph* avoidRoads) {

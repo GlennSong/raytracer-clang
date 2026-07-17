@@ -321,6 +321,33 @@ TEST_CASE(corridor_deck_spines_match_the_corridor_mesher) {
     CHECK(std::fabs((cz1 - cz0) - (wz1 - wz0)) < 4.0);       // same deck width (across Z)
 }
 
+// P4 (one mesher) — a corridor RAMP centreline (rampPaths, the same authored
+// polyline the nav graph reads) becomes a ramp UnionSpine the ONE welder meshes:
+// it rides the deck at the top (+9) and the grade-sep split descends its low
+// foot to street grade (0). Because weld AND nav both read rampPaths, they can't
+// disagree — the truth-source inversion never happens.
+TEST_CASE(corridor_ramp_spine_descends_from_deck_to_grade) {
+    CorridorMeshOut::RampPath rp;
+    for (int i = 0; i <= 12; ++i) {                    // deck +9 -> street 0, curving away
+        const double t = i / 12.0;
+        rp.pts.push_back(Vec3(t * 130.0, 9.0 * (1.0 - t), 24.0 * t * t));
+    }
+    std::vector<UnionSpine> sp = corridorRampSpines({ rp }, 3.6);
+    CHECK(sp.size() == 1);
+    CHECK(sp[0].klass == RoadClass::Ramp);
+    CHECK(sp[0].yAbs.size() == rp.pts.size());
+    auto ground = [](Real, Real) { return 0.0; };
+    WeldSolidParams wp; wp.heightAt = ground;
+    RenderMesh m = weldSolid(sp, wp);
+    CHECK(!m.vertices.empty());
+    CHECK(!hasNonFinite(m));
+    CHECK(degenerateTriangles(m) == 0);
+    double minY, maxY;
+    bboxY(m, minY, maxY);
+    CHECK(maxY > 8.0);   // rides the deck (+9) at the top
+    CHECK(minY < 1.0);   // welds down to street grade (0) at the bottom
+}
+
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
 // per-node, so an ordinary street with no elevation drapes exactly as before.
 TEST_CASE(road_net_without_node_elev_stays_at_grade) {

@@ -56,6 +56,16 @@ std::vector<UnionSpine> corridorDeckSpines(
     const CorridorDef& corridor,
     const std::function<Real(Real, Real)>& ground, Real step = 3.0);
 
+// Turn the corridor's authored ramp centrelines (rampPaths — the DRAWN gore-band
+// + free-run polyline with absolute heights that the nav graph is also built
+// from) into ramp UnionSpines the ONE welder meshes: class Ramp, per-point
+// absolute Y (`yAbs`), constant half-width. Because the weld and the nav chain
+// BOTH consume rampPaths, they can never disagree — no truth-source inversion.
+// The grade-sep split then descends each ramp from the deck and welds its low
+// foot into the street grid below. A dropped ramp (empty pts) yields no spine.
+std::vector<UnionSpine> corridorRampSpines(
+    const std::vector<CorridorMeshOut::RampPath>& rampPaths, Real halfWidth = 3.6);
+
 }  // namespace engine
 
 #endif
