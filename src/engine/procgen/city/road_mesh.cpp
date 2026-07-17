@@ -1751,24 +1751,68 @@ RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParam
     // same heightOf() the walls/sidewalk use — the boundary is shared exactly, so
     // deck, skirt and curb weld watertight. Markings ride a separate overlay pass
     // below (they need per-road UV, which the flat sheet does not carry).
+    // Emit one deck face (top + soffit) at its final subdivision.
+    auto emitDeckFace = [&](const Vec2& A, const Vec2& B, const Vec2& C) {
+        Vec3 a = P3(A, 0.0), b = P3(B, 0.0), c = P3(C, 0.0);
+        MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.topColor);        // deck up
+        Vec3 aB = P3(A, -p.thickness), bB = P3(B, -p.thickness),
+             cB = P3(C, -p.thickness);
+        // A flown span's SOFFIT is the concrete box girder seen from beneath;
+        // at grade it's an unseen slab bottom that stays dark.
+        const Vec2 ctr((A.x + B.x + C.x) / 3.0, (A.y + B.y + C.y) / 3.0);
+        const Vec3& soffit =
+            authoredAt(ctr.x, ctr.y) ? p.viaductBottomColor : p.bottomColor;
+        MeshBuilder::emitTri(mesh, aB, bB, cB, Vec3(0, -1, 0), soffit);  // underside
+    };
+    // Does the straight chord across this edge miss the road by more than the
+    // allowed sag? The test reads ONLY the edge's two endpoints, so two triangles
+    // sharing an edge always reach the SAME verdict and split it at the same
+    // midpoint — the refinement stays crack-free without any neighbour bookkeeping.
+    auto edgeSags = [&](const Vec2& u, const Vec2& v) {
+        const Vec2 m((u.x + v.x) * 0.5, (u.y + v.y) * 0.5);
+        const double chord = 0.5 * (heightOf(u.x, u.y) + heightOf(v.x, v.y));
+        return std::fabs(heightOf(m.x, m.y) - chord) > p.deckSag;
+    };
+    // Split every sagging edge and recurse. Earcut hands us a valid but arbitrarily
+    // shaped triangulation; this makes the SHEET follow the road regardless of how
+    // it was carved, instead of chording across hundreds of metres of profile.
+    std::function<void(const Vec2&, const Vec2&, const Vec2&, int)> refineDeck =
+        [&](const Vec2& A, const Vec2& B, const Vec2& C, int depth) {
+            if (p.deckSag > 0.0 && depth < p.deckSagMaxDepth) {
+                const bool sAB = edgeSags(A, B), sBC = edgeSags(B, C), sCA = edgeSags(C, A);
+                const int n = (sAB ? 1 : 0) + (sBC ? 1 : 0) + (sCA ? 1 : 0);
+                if (n > 0) {
+                    const Vec2 mAB((A.x + B.x) * 0.5, (A.y + B.y) * 0.5);
+                    const Vec2 mBC((B.x + C.x) * 0.5, (B.y + C.y) * 0.5);
+                    const Vec2 mCA((C.x + A.x) * 0.5, (C.y + A.y) * 0.5);
+                    const int d = depth + 1;
+                    if (n == 3) {                      // red: four children
+                        refineDeck(A, mAB, mCA, d);   refineDeck(mAB, B, mBC, d);
+                        refineDeck(mCA, mBC, C, d);   refineDeck(mAB, mBC, mCA, d);
+                    } else if (n == 1) {               // green: bisect the one edge
+                        if (sAB)      { refineDeck(A, mAB, C, d); refineDeck(mAB, B, C, d); }
+                        else if (sBC) { refineDeck(B, mBC, A, d); refineDeck(mBC, C, A, d); }
+                        else          { refineDeck(C, mCA, B, d); refineDeck(mCA, A, B, d); }
+                    } else {                           // two edges -> three children
+                        if (!sCA)      { refineDeck(A, mAB, mBC, d); refineDeck(A, mBC, C, d);
+                                         refineDeck(mAB, B, mBC, d); }
+                        else if (!sAB) { refineDeck(B, mBC, mCA, d); refineDeck(B, mCA, A, d);
+                                         refineDeck(mBC, C, mCA, d); }
+                        else           { refineDeck(C, mCA, mAB, d); refineDeck(C, mAB, B, d);
+                                         refineDeck(mCA, A, mAB, d); }
+                    }
+                    return;
+                }
+            }
+            emitDeckFace(A, B, C);
+        };
     for (const Poly2& outer : outers) {
         std::vector<Poly2> deckHoles;
         for (const Poly2& h : holes)
             if (h.size() >= 3 && pointInPolygon(outer, centroid(h)))
                 deckHoles.push_back(h);
-        for (const std::array<Vec2, 3>& t : triangulateWithHoles(outer, deckHoles)) {
-            Vec3 a = P3(t[0], 0.0), b = P3(t[1], 0.0), c = P3(t[2], 0.0);
-            MeshBuilder::emitTri(mesh, a, b, c, Vec3(0, 1, 0), p.topColor);        // deck up
-            Vec3 aB = P3(t[0], -p.thickness), bB = P3(t[1], -p.thickness),
-                 cB = P3(t[2], -p.thickness);
-            // A flown span's SOFFIT is the concrete box girder seen from beneath;
-            // at grade it's an unseen slab bottom that stays dark.
-            const Vec2 ctr((t[0].x + t[1].x + t[2].x) / 3.0,
-                           (t[0].y + t[1].y + t[2].y) / 3.0);
-            const Vec3& soffit =
-                authoredAt(ctr.x, ctr.y) ? p.viaductBottomColor : p.bottomColor;
-            MeshBuilder::emitTri(mesh, aB, bB, cB, Vec3(0, -1, 0), soffit);  // underside
-        }
+        for (const std::array<Vec2, 3>& t : triangulateWithHoles(outer, deckHoles))
+            refineDeck(t[0], t[1], t[2], 0);
     }
 
     // Lane MARKINGS as a thin overlay just above the welded deck, laid per-spine so

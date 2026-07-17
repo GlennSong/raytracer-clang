@@ -290,6 +290,17 @@ struct WeldSolidParams {
     // mesher this replaces drew them concrete, like the piers holding them up.
     Vec3   viaductSideColor{0.56, 0.55, 0.53};    // fascia / slab edge (concrete)
     Vec3   viaductBottomColor{0.44, 0.43, 0.42};  // soffit (concrete, self-shaded)
+    // Deck-surface CHORD SAG (m). The deck top is earcut over the union's 2D
+    // outline, then each vertex is lifted to heightOf(). Ear clipping guarantees a
+    // VALID triangulation but never a well-shaped one: on a long spine it emits
+    // slivers spanning hundreds of metres, and a triangle's interior is a flat
+    // plane through its corners — so such a sliver cuts THROUGH a climbing deck
+    // instead of following it (a 48% cliff in the driving surface; the "dark
+    // wedges" at freeway_lab's gores). Any edge whose midpoint the chord misses by
+    // more than this is bisected and its triangle re-split, so the sheet tracks the
+    // road however earcut happened to carve it. 0 disables (raw earcut).
+    double deckSag = 0.10;
+    int    deckSagMaxDepth = 8;                   // recursion cap (4^d worst case)
     // Raised sidewalk: a curbed concrete band run along the welded boundary loops (the
     // outer carriageway edge + every block-interior/island hole), offset outward by
     // sidewalkWidth and standing curbHeight above the deck. 0 width = no sidewalks.
