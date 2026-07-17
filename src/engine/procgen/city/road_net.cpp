@@ -1269,7 +1269,16 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                     const Vec2 a2 = cg.nodes[cg.edges[j].a].pos, b2 = cg.nodes[cg.edges[j].b].pos;
                     const Vec2 d2v = b2 - a2;
                     const double L2 = d2v.lengthSquared();
-                    if (L2 < 1e-9 || std::sqrt(L2) <= len1) continue;   // only vs LONGER
+                    const double len2 = std::sqrt(L2);
+                    if (L2 < 1e-9) continue;
+                    // Keep the longer/wider of a shadowed pair; equal -> lower
+                    // index survives (deterministic, never drops both).
+                    const bool jWins =
+                        len2 > len1 * 1.05 ||
+                        (len2 > len1 * 0.7 &&
+                         (cg.edges[j].width > cg.edges[i].width ||
+                          (cg.edges[j].width == cg.edges[i].width && j < i)));
+                    if (!jWins) continue;
                     const double thr =
                         (cg.edges[i].width + cg.edges[j].width) * 0.5 * clear;
                     bool inside = true;
