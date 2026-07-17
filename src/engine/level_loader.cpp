@@ -2275,6 +2275,7 @@ bool LevelLoader::load(const std::string& path,
     };
     std::vector<CorridorFrag> corridorFrags;
     std::vector<CorridorDef> corridorDefs;
+    std::vector<char> corridorWeld;   // parallel: mesh this corridor with the ONE welder
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "corridor") continue;
@@ -2327,6 +2328,7 @@ bool LevelLoader::load(const std::string& path,
                 def.exits.push_back(e);
             }
             corridorDefs.push_back(std::move(def));
+            corridorWeld.push_back(cb.value("weld", false) ? 1 : 0);
         }
     }
     std::vector<std::vector<Vec2>> corridorGuides;   // §12: per built def, its
@@ -3065,6 +3067,35 @@ bool LevelLoader::load(const std::string& path,
             pc.mesh = buildCorridorMesh(def, levelGround, 3.0,
                                         streetsBelow.edges.empty()
                                             ? nullptr : &streetsBelow);
+            // ONE MESHER (P4 integration): re-mesh this corridor's DECK with the
+            // unified welder — deck spine + ramp spines (from the same rampPaths
+            // nav reads) -> weldSolid gives deck + parapets + median + descending
+            // ramps welded into the streets below, on piers. Nav/flatten stay on
+            // buildCorridorMesh's output; only the drawn deck geometry swaps.
+            {
+                const std::size_t di =
+                    static_cast<std::size_t>(&def - corridorDefs.data());
+                if (di < corridorWeld.size() && corridorWeld[di]) {
+                    auto groundFn = [lg = levelGround](double x, double z) {
+                        return lg ? lg(x, z) : 0.0;
+                    };
+                    std::vector<engine::UnionSpine> spines =
+                        engine::corridorDeckSpines(def, groundFn, 3.0);
+                    std::vector<engine::UnionSpine> ramps =
+                        engine::corridorRampSpines(pc.mesh.rampPaths);
+                    spines.insert(spines.end(), ramps.begin(), ramps.end());
+                    engine::WeldSolidParams wp;
+                    wp.barriers = true;
+                    wp.thickness = 0.5;
+                    wp.heightAt = groundFn;
+                    pc.mesh.deck = engine::weldSolid(spines, wp);
+                    pc.mesh.barrier = RenderMesh{};    // barriers now live in the weld deck
+                    pc.mesh.markings = RenderMesh{};   // (weld markings are UV-baked; shader path P5)
+                    LOG_INFO << "[corridor] meshed by the ONE welder (weld=true): "
+                             << spines.size() << " spines (deck + " << ramps.size()
+                             << " ramps) via weldSolid";
+                }
+            }
             // The corridor JOINS the drivable network (P8.4): mainline chain
             // + one chain per ramp, nodes carrying deck height over ground so
             // traffic rides the structure. Ramp street-ends are snap
