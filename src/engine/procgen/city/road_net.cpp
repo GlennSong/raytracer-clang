@@ -1249,6 +1249,46 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         // 4.94 m) that ride other edges' ribbons. 10 m is well under the ~70 m
         // blocks (no subdivision shredding) and well over stub scale.
         cg = mergeShortEdges(cg, g.value("min_road_len", 10.0), rules.maxDegree);
+        // MINIMUM ROAD CLEARANCE (Glenn, repeatedly: "why are there two multilane
+        // roads literally right next to each other?"). The growth radii are
+        // width-BLIND, so the generator can route chains closer than their
+        // ribbons are wide — measured as 46% of all surface overlap. Drop any
+        // edge whose interior rides INSIDE a longer edge's ribbon: interior
+        // samples projecting onto the other edge's INTERIOR (u in 0.05..0.95 —
+        // chain continuations project onto endpoints and are never flagged)
+        // within clearance * the combined half-widths.
+        {
+            const double clear = g.value("min_road_clearance", 0.8);
+            std::vector<char> drop(cg.edges.size(), 0);
+            for (std::size_t i = 0; i < cg.edges.size(); ++i) {
+                const Vec2 a1 = cg.nodes[cg.edges[i].a].pos, b1 = cg.nodes[cg.edges[i].b].pos;
+                const double len1 = (b1 - a1).length();
+                if (len1 < 1e-6) continue;
+                for (std::size_t j = 0; j < cg.edges.size() && !drop[i]; ++j) {
+                    if (i == j || drop[j]) continue;
+                    const Vec2 a2 = cg.nodes[cg.edges[j].a].pos, b2 = cg.nodes[cg.edges[j].b].pos;
+                    const Vec2 d2v = b2 - a2;
+                    const double L2 = d2v.lengthSquared();
+                    if (L2 < 1e-9 || std::sqrt(L2) <= len1) continue;   // only vs LONGER
+                    const double thr =
+                        (cg.edges[i].width + cg.edges[j].width) * 0.5 * clear;
+                    bool inside = true;
+                    for (double t = 0.25; t <= 0.76 && inside; t += 0.25) {
+                        const Vec2 p = a1 + (b1 - a1) * t;
+                        const double u = dot(p - a2, d2v) / L2;
+                        if (u < 0.05 || u > 0.95) { inside = false; break; }
+                        if ((p - (a2 + d2v * u)).length() > thr) inside = false;
+                    }
+                    if (inside) drop[i] = 1;
+                }
+            }
+            RoadGraph kept;
+            kept.nodes = cg.nodes;
+            int nDrop = 0;
+            for (std::size_t e = 0; e < cg.edges.size(); ++e)
+                if (!drop[e]) kept.edges.push_back(cg.edges[e]); else ++nDrop;
+            if (nDrop > 0) cg = std::move(kept);
+        }
     } else {
         // Minimum road length (device: "really short roads ... should be merged"):
         // fold crossings that landed close together into one junction, or stretch a
