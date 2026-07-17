@@ -335,4 +335,66 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
     return mesh;
 }
 
+namespace {
+Vec3 ringCentre(const std::vector<Vec3>& r) {
+    Vec3 c(0, 0, 0);
+    for (const Vec3& p : r) c = c + p;
+    return r.empty() ? c : c * (1.0 / r.size());
+}
+}  // namespace
+
+RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
+    RenderMesh mesh;
+    const int N = static_cast<int>(arms.size());
+    if (N <= 2) return mesh;                          // body runs straight through
+
+    // Order arms CCW by bearing so adjacent arms share a kerb corner.
+    std::sort(arms.begin(), arms.end(), [](const JunctionArm& a, const JunctionArm& b) {
+        return std::atan2(a.dir.y, a.dir.x) < std::atan2(b.dir.y, b.dir.x);
+    });
+    // Kerb corner between arm i and its CCW neighbour i+1: arm i's LEFT verge
+    // (mouth.front()) meets arm i+1's RIGHT verge (mouth.back()).
+    std::vector<Vec3> corner(N);
+    for (int i = 0; i < N; ++i) {
+        const Vec3& a = arms[i].mouth.front();
+        const Vec3& b = arms[(i + 1) % N].mouth.back();
+        corner[i] = (a + b) * 0.5;
+    }
+    // Snap each arm's verge endpoints to the shared kerb corners (arm i's left ->
+    // corner[i], right -> corner[i-1]) so adjacent sides meet exactly.
+    for (int i = 0; i < N; ++i) {
+        if (arms[i].mouth.size() < 2) return mesh;
+        arms[i].mouth.front() = corner[i];
+        arms[i].mouth.back() = corner[(i - 1 + N) % N];
+    }
+
+    // N == 4, opposite arms equal length: a Coons grid, no extraordinary vertex.
+    if (N == 4 && arms[0].mouth.size() == arms[2].mouth.size() &&
+        arms[1].mouth.size() == arms[3].mouth.size()) {
+        auto rev = [](std::vector<Vec3> v) { std::reverse(v.begin(), v.end()); return v; };
+        // Corners c0=a0/a1, c1=a1/a2, c2=a2/a3, c3=a3/a0 -> NE,NW,SW,SE.
+        // bottom=SW->SE=rev(a3), right=SE->NE=rev(a0), top=NW->NE=a1, left=SW->NW=a2.
+        return coonsPatch(rev(arms[3].mouth), rev(arms[0].mouth), arms[1].mouth,
+                          arms[2].mouth, mu, color);
+    }
+
+    // Stopgap for T (N=3) and N>=5: a centroid fan with INTERPOLATED height, so
+    // the pad still doesn't step even though it isn't all-quad yet (the mapped
+    // templates are the follow-up). Boundary = arm mouths + kerb corners, CCW.
+    std::vector<Vec3> loop;
+    for (int i = 0; i < N; ++i) {
+        for (const Vec3& p : arms[i].mouth) loop.push_back(p);
+        loop.push_back(corner[i]);
+    }
+    Vec3 c(0, 0, 0);
+    for (int i = 0; i < N; ++i) c = c + ringCentre(arms[i].mouth);
+    c = c * (1.0 / N);                                // centre at the mean arm centre
+    for (std::size_t i = 0; i < loop.size(); ++i) {
+        const Vec3& p0 = loop[i];
+        const Vec3& p1 = loop[(i + 1) % loop.size()];
+        MeshBuilder::emitTri(mesh, c, p0, p1, Vec3(0, 1, 0), color);
+    }
+    return mesh;
+}
+
 }  // namespace engine

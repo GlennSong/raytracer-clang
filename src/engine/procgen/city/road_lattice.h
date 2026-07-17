@@ -128,6 +128,24 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
                       const std::vector<Vec3>& top, const std::vector<Vec3>& left,
                       float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
 
+// One road arriving at a junction node: its outward direction and its mouth ring
+// — the carriageway cross-section (left verge -> right verge, looking OUTWARD
+// along the arm) at the junction boundary. The mouth IS the body's end ring, so
+// the patch and the body share it.
+struct JunctionArm {
+    Vec2 dir{1, 0};              // outward unit direction from the node
+    std::vector<Vec3> mouth;     // K+1 cross-section points, left verge -> right verge
+};
+
+// The drivable junction pad for a node, from its incident arms (any order —
+// sorted by bearing internally). A 4-arm node gets a Coons grid whose four sides
+// are the arm mouths (corners snapped to the shared kerb points), so the height
+// interpolates and the pad matches every arm exactly. Other degrees get a
+// height-interpolated centroid fan for now (the T / N>=5 quad templates follow).
+// Returns empty for degree <= 2 (the body runs straight through).
+RenderMesh junctionPatch(std::vector<JunctionArm> arms,
+                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
+
 }  // namespace engine
 
 #endif

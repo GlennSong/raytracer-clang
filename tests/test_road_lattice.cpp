@@ -314,3 +314,56 @@ TEST_CASE(street_body_conforms_to_hills) {
     CHECK(ymax - ymin > 0.5);     // the surface follows the ~1.5 m of relief
     CHECK(steep == 0);            // and no bump the terrain didn't put there
 }
+
+// Stage 3b: node -> Coons patch. Four arms meet at DIFFERENT heights (the exact
+// hilly-cross case that steps to 164% under nearest-spine). The adapter orders
+// them, snaps the kerb corners, and hands the four mouths to coonsPatch, so the
+// pad is a smooth all-quad grid that matches every arm.
+TEST_CASE(junction_patch_4way_is_smooth_all_quad) {
+    auto arm = [](Vec2 d, double R, double hw, double h, int K) {
+        JunctionArm a;
+        a.dir = normalize(d);
+        const Vec2 c = a.dir * R;               // mouth centre on the junction boundary
+        const Vec2 pp(-a.dir.y, a.dir.x);       // +perp = left verge
+        for (int i = 0; i <= K; ++i) {
+            const double t = i / static_cast<double>(K);   // left -> right
+            const Vec2 p = c + pp * (hw * (1 - 2 * t));
+            a.mouth.push_back(Vec3(p.x, h, p.y));
+        }
+        return a;
+    };
+    const double hw = 10.0;
+    std::vector<JunctionArm> arms = {
+        arm(Vec2(0, 1), hw, hw, 1.0, 6),    // N
+        arm(Vec2(1, 0), hw, hw, 0.5, 6),    // E
+        arm(Vec2(0, -1), hw, hw, 0.0, 6),   // S
+        arm(Vec2(-1, 0), hw, hw, 0.5, 6),   // W
+    };
+    RenderMesh m = junctionPatch(arms);
+    const std::size_t tris = m.indices.size() / 3;
+    CHECK(tris > 0);
+    CHECK(static_cast<double>(m.vertices.size()) / tris < 0.7);   // all-quad grid
+
+    int steep = 0, degenerate = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        const Vec3 nrm = cross(b - a, c - a);
+        const double ny = std::fabs(nrm.y);
+        if (ny < 1e-9) { ++degenerate; continue; }
+        if (std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / ny > 0.25) ++steep;
+    }
+    CHECK(degenerate == 0);
+    CHECK(steep == 0);            // matches the arms' gentle slope, no medial-axis step
+
+    // The pad reaches each arm: a vertex sits at each arm's mouth centre height.
+    auto sawHeightNear = [&](double x, double z, double y) {
+        for (const Vertex& v : m.vertices)
+            if (std::fabs(v.position.x - x) < 0.6 && std::fabs(v.position.z - z) < 0.6 &&
+                std::fabs(v.position.y - y) < 0.1) return true;
+        return false;
+    };
+    CHECK(sawHeightNear(0, hw, 1.0));      // N mouth centre at y=1
+    CHECK(sawHeightNear(0, -hw, 0.0));     // S mouth centre at y=0
+}
