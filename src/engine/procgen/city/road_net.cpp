@@ -332,9 +332,27 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (b >= 0 && deg[b] >= 3 && ringN.size() >= static_cast<std::size_t>(2 + cw))
             arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
     }
-    for (int v = 0; v < N; ++v)
-        if (deg[v] >= 3 && arms[v].size() >= 3)
-            MeshBuilder::append(out, junctionPatch(arms[v]));
+    int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0;
+    std::vector<int> degHist(12, 0);
+    for (int v = 0; v < N; ++v) {
+        if (deg[v] < 12) ++degHist[deg[v]];
+        if (deg[v] < 3) { if (deg[v] == 2) ++nDeg2; continue; }
+        const int na = static_cast<int>(arms[v].size());
+        if (na < 3) { ++nStub; continue; }          // arms not gathered (trim/lookup failed)
+        if (na != deg[v]) ++nMismatch;               // gathered != incident: a real bug
+        if (na == 3) ++nT;                           // Coons T patch
+        else if (na == 4) ++nCoons;                  // Coons grid
+        else ++nFan;                                 // N>=5: still the fan stopgap
+        MeshBuilder::append(out, junctionPatch(arms[v]));
+    }
+    if (std::getenv("RT_LATTICE_DEBUG")) {
+        LOG_INFO << "[lattice] nodes=" << N << " deg2chains=" << nDeg2
+                 << " coons4=" << nCoons << " coonsT=" << nT << " fan(5+)=" << nFan
+                 << " stub(arms<3)=" << nStub << " armMismatch=" << nMismatch;
+        std::string h;
+        for (int d = 0; d < 12; ++d) if (degHist[d]) h += " d" + std::to_string(d) + "=" + std::to_string(degHist[d]);
+        LOG_INFO << "[lattice] degree histogram:" << h;
+    }
     return out;
 }
 

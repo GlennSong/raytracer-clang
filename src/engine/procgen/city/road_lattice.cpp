@@ -350,6 +350,61 @@ Vec3 ringCentre(const std::vector<Vec3>& r) {
     for (const Vec3& p : r) c = c + p;
     return r.empty() ? c : c * (1.0 / r.size());
 }
+std::vector<Vec3> resampleLine(const Vec3& a, const Vec3& b, int n) {
+    std::vector<Vec3> out;
+    for (int i = 0; i < n; ++i) {
+        const double t = n > 1 ? i / static_cast<double>(n - 1) : 0.0;
+        out.push_back(a + (b - a) * t);
+    }
+    return out;
+}
+
+// A T (or Y): 3 arms sorted CCW. The two most-opposite arms are the through
+// road, the third tees into one side. Mesh it as a Coons grid whose opposite
+// sides are the two through mouths, one side is the continuous FAR kerb edge,
+// and the fourth side carries the BRANCH mouth embedded between two kerb corners.
+// All-quad, interior vertices, NO hub — unlike the centroid fan.
+RenderMesh junctionPatchT(const std::vector<JunctionArm>& a, float mu, const Vec3& color) {
+    int bi = 0; double best = 1e9;                       // branch = excluded from the opposite pair
+    for (int k = 0; k < 3; ++k) {
+        const double d = dot(a[(k + 1) % 3].dir, a[(k + 2) % 3].dir);
+        if (d < best) { best = d; bi = k; }
+    }
+    const JunctionArm& B = a[bi];
+    const JunctionArm& T0 = a[(bi + 1) % 3];
+    const JunctionArm& T1 = a[(bi + 2) % 3];
+    if (T0.mouth.size() < 2 || T1.mouth.size() < 2 || B.mouth.size() < 2) return {};
+    if (T0.mouth.size() != T1.mouth.size()) return {};   // through arms share K
+    // Orient each through mouth FAR->NEAR, where NEAR is the verge toward the
+    // branch (larger projection on the branch direction) — the branch tees into
+    // the through road on the NEAR side; the FAR side is the continuous kerb.
+    auto towardB = [&](const Vec3& p) { return p.x * B.dir.x + p.z * B.dir.y; };
+    auto orient = [&](std::vector<Vec3> mouth) {
+        if (towardB(mouth.front()) > towardB(mouth.back()))
+            std::reverse(mouth.begin(), mouth.end());     // front := far (smaller projection)
+        return mouth;
+    };
+    const std::vector<Vec3> m0 = orient(T0.mouth);        // far -> near
+    const std::vector<Vec3> m1 = orient(T1.mouth);        // far -> near
+    // Branch mouth ordered from the T0 side to the T1 side.
+    std::vector<Vec3> bm = B.mouth;
+    if ((bm.front() - m0.back()).lengthSquared() > (bm.back() - m0.back()).lengthSquared())
+        std::reverse(bm.begin(), bm.end());
+    const Vec3 cTB = (m0.back() + bm.front()) * 0.5;      // T0.near ~ branch start
+    const Vec3 cBT = (bm.back() + m1.back()) * 0.5;       // branch end ~ T1.near
+    std::vector<Vec3> bottom = m0;                        // SW(far) -> SE(near)
+    std::vector<Vec3> top = m1;                           // NW(far) -> NE(near)
+    std::vector<Vec3> right;                              // SE -> NE, branch embedded
+    right.push_back(m0.back());
+    right.push_back(cTB);
+    for (const Vec3& p : bm) right.push_back(p);
+    right.push_back(cBT);
+    right.push_back(m1.back());
+    // The continuous FAR kerb: a straight edge SW -> NW, resampled to match.
+    std::vector<Vec3> left = resampleLine(m0.front(), m1.front(),
+                                          static_cast<int>(right.size()));
+    return coonsPatch(bottom, right, top, left, mu, color);
+}
 }  // namespace
 
 RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
@@ -361,6 +416,13 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
     std::sort(arms.begin(), arms.end(), [](const JunctionArm& a, const JunctionArm& b) {
         return std::atan2(a.dir.y, a.dir.x) < std::atan2(b.dir.y, b.dir.x);
     });
+    for (const JunctionArm& arm : arms) if (arm.mouth.size() < 2) return mesh;
+
+    // A T / Y (3 arms): a Coons grid with the branch embedded in one side — the
+    // dominant junction in a generated city, and the case the centroid fan turns
+    // to spoke soup.
+    if (N == 3) return junctionPatchT(arms, mu, color);
+
     // Kerb corner between arm i and its CCW neighbour i+1: arm i's LEFT verge
     // (mouth.front()) meets arm i+1's RIGHT verge (mouth.back()).
     std::vector<Vec3> corner(N);
@@ -372,7 +434,6 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
     // Snap each arm's verge endpoints to the shared kerb corners (arm i's left ->
     // corner[i], right -> corner[i-1]) so adjacent sides meet exactly.
     for (int i = 0; i < N; ++i) {
-        if (arms[i].mouth.size() < 2) return mesh;
         arms[i].mouth.front() = corner[i];
         arms[i].mouth.back() = corner[(i - 1 + N) % N];
     }

@@ -367,3 +367,57 @@ TEST_CASE(junction_patch_4way_is_smooth_all_quad) {
     CHECK(sawHeightNear(0, hw, 1.0));      // N mouth centre at y=1
     CHECK(sawHeightNear(0, -hw, 0.0));     // S mouth centre at y=0
 }
+
+// Stage 3b: the T-junction — the dominant junction in a generated city (measured
+// 15 T vs 2 four-way on metro_hills), and the case the centroid fan turned to
+// spoke soup. The through road (E/W) plus a branch (N) at three heights must be
+// an ALL-QUAD Coons grid, no degenerate face, drivable straight through.
+TEST_CASE(junction_patch_T_is_smooth_all_quad) {
+    auto arm = [](Vec2 d, double R, double hw, double h, int K) {
+        JunctionArm a;
+        a.dir = normalize(d);
+        const Vec2 c = a.dir * R;
+        const Vec2 pp(-a.dir.y, a.dir.x);
+        for (int i = 0; i <= K; ++i) {
+            const double t = i / static_cast<double>(K);
+            const Vec2 p = c + pp * (hw * (1 - 2 * t));
+            a.mouth.push_back(Vec3(p.x, h, p.y));
+        }
+        return a;
+    };
+    const double hw = 8.0;
+    // Realistic: all three arms drape on the same gentle ground near the node, so
+    // heights vary only a little (a big branch-vs-through gap is un-joinable by
+    // ANY mesher and never happens — every arm meets at one graded pad).
+    std::vector<JunctionArm> arms = {
+        arm(Vec2(1, 0), hw, hw, 0.30, 6),    // E  (through)
+        arm(Vec2(0, 1), hw, hw, 0.42, 6),    // N  (branch)
+        arm(Vec2(-1, 0), hw, hw, 0.50, 6),   // W  (through)
+    };
+    RenderMesh m = junctionPatch(arms);
+    const std::size_t tris = m.indices.size() / 3;
+    CHECK(tris > 0);
+    CHECK(static_cast<double>(m.vertices.size()) / tris < 0.7);   // all-quad, not a fan
+
+    int steep = 0, degenerate = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        const Vec3 nrm = cross(b - a, c - a);
+        const double ny = std::fabs(nrm.y);
+        if (nrm.length() < 1e-9) { ++degenerate; continue; }
+        if (ny > 1e-6 && std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / ny > 0.25) ++steep;
+    }
+    CHECK(degenerate == 0);
+    CHECK(steep == 0);
+
+    // Drive the through road straight across the junction (E <-> W at z=0).
+    std::vector<Vec3> path;
+    for (double x = -7; x <= 7; x += 2) path.push_back(Vec3(x, 0.4, 0));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, path, rep);
+    CHECK(rep.samples > 5);
+    CHECK(rep.holes == 0);      // the patch covers the through road with no gap
+    CHECK(rep.blocked == 0);
+}
