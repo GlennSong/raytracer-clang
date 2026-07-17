@@ -66,6 +66,14 @@ std::vector<UnionSpine> corridorDeckSpines(
 std::vector<UnionSpine> corridorRampSpines(
     const std::vector<CorridorMeshOut::RampPath>& rampPaths, Real halfWidth = 3.6);
 
+// Overhead SIGN GANTRIES for a corridor (one-mesher P7): at each exit gore, two
+// posts, a beam across the deck, a wide green placard over the through lanes and a
+// smaller drop-arrow placard over the peeling exit lane. Re-homed from
+// buildCorridorMesh and fed by the CorridorDef alone (no ribs) so the ONE welder's
+// deck — which already builds its own parapets, median, and piers — can wear the
+// same signage. Returns a single furniture mesh (concrete + green + white).
+RenderMesh corridorFurniture(const CorridorDef& corridor);
+
 }  // namespace engine
 
 #endif

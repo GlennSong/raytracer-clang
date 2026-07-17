@@ -349,6 +349,37 @@ TEST_CASE(curved_corridor_deck_spine_carries_superelevation) {
     CHECK(maxY - minY > 0.05);   // a flat +9 deck would be a razor slab; banking gives it relief
 }
 
+// P7 (one mesher) — SIGNAGE survives the fold: the gantry pass is fed by the
+// CorridorDef alone, so a deck meshed by weldSolid (which builds its own
+// parapets/median/piers and drops the corridor's barrier mesh) still gets its
+// overhead signs. Posts+beam+placards stand ABOVE the deck with real headroom.
+TEST_CASE(corridor_furniture_gantries_stand_over_the_deck) {
+    CorridorDef c;
+    c.horizontal = Alignment::fromPolyline({ Vec2(-200, 0), Vec2(200, 0) }, 300.0, 20.0);
+    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };  // flat +9 deck
+    c.lanes.throughLanes = 3;
+    ExitDef e;
+    e.station = 220.0;
+    e.upStation = true;
+    e.target = Vec2(240, 90);
+    c.exits.push_back(e);
+
+    RenderMesh f = corridorFurniture(c);
+    CHECK(!f.vertices.empty());              // the exit gets a gantry
+    CHECK(!hasNonFinite(f));
+    double minY, maxY;
+    bboxY(f, minY, maxY);
+    // Board bottom is pinned to 5.4 m over the deck (MUTCD 17 ft), so the beam
+    // and boards live well above the +9 deck — nothing hangs into traffic.
+    CHECK(minY > 8.0);                       // stands on the deck, not the ground
+    CHECK(maxY > 9.0 + 5.4);                 // clears the mandated headroom
+
+    // An on-ramp gets no gantry (signs announce exits, not merges).
+    CorridorDef onlyOn = c;
+    onlyOn.exits[0].onRamp = true;
+    CHECK(corridorFurniture(onlyOn).vertices.empty());
+}
+
 // P4 (one mesher) — a corridor RAMP centreline (rampPaths, the same authored
 // polyline the nav graph reads) becomes a ramp UnionSpine the ONE welder meshes:
 // it rides the deck at the top (+9) and the grade-sep split descends its low

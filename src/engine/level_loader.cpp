@@ -3089,7 +3089,10 @@ bool LevelLoader::load(const std::string& path,
                     wp.thickness = 0.5;
                     wp.heightAt = groundFn;
                     pc.mesh.deck = engine::weldSolid(spines, wp);
-                    pc.mesh.barrier = RenderMesh{};    // barriers now live in the weld deck
+                    // The weld builds its own parapets/median/piers, so drop the
+                    // corridor's — but KEEP the overhead sign gantries, which the
+                    // weld has no notion of (they're authored off the exit gores).
+                    pc.mesh.barrier = engine::corridorFurniture(def);   // P7
                     pc.mesh.markings = RenderMesh{};   // (weld markings are UV-baked; shader path P5)
                     LOG_INFO << "[corridor] meshed by the ONE welder (weld=true): "
                              << spines.size() << " spines (deck + " << ramps.size()
