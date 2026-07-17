@@ -13,6 +13,7 @@
 #include <limits>
 #include <cstdlib>
 #include <unordered_map>
+#include <cstdio>
 
 namespace engine {
 
@@ -302,6 +303,18 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         auto it = nodeIndex.find(key(q));
         return it == nodeIndex.end() ? -1 : it->second;
     };
+
+    // Dump junction WORLD positions so a camera can be aimed at each one (we know
+    // where every intersection is — no coordinate-guessing). Format: "x z degree".
+    if (const char* path = std::getenv("RT_DUMP_JUNCTIONS")) {
+        if (std::FILE* f = std::fopen(path, "w")) {
+            for (int v = 0; v < N; ++v)
+                if (deg[v] >= 3)
+                    std::fprintf(f, "%.3f %.3f %d\n", (double)g.nodes[v].pos.x,
+                                 (double)g.nodes[v].pos.y, deg[v]);
+            std::fclose(f);
+        }
+    }
 
     RenderMesh out;
     std::vector<std::vector<JunctionArm>> arms(N);
