@@ -3,6 +3,7 @@
 
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/corridor_mesh.h"
 
 #include <limits>
 
@@ -290,6 +291,34 @@ TEST_CASE(weld_freeway_deck_gets_barriers) {
     CHECK(stMaxY < 9.3);                                // a Local deck tops out at the asphalt (+9)
     CHECK(above(fw, 9.3) > 0);
     CHECK(above(st, 9.3) == 0);
+}
+
+// P3 (one mesher) — the CorridorDef->spines ADAPTER meshes a straight elevated
+// freeway through weldSolid to PARITY with buildCorridorMesh: same deck-top
+// height, same width, same length. Proves the corridor's authoring core
+// (alignment + vertical profile + lane widths) can drive the UNIFIED welder
+// instead of corridor_mesh's own geometry pass.
+TEST_CASE(corridor_deck_spines_match_the_corridor_mesher) {
+    CorridorDef c;
+    c.horizontal = Alignment::fromPolyline({ Vec2(-100, 0), Vec2(100, 0) }, 300.0, 20.0);
+    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };  // flat, +9 elevated
+    c.lanes.throughLanes = 3;
+    auto ground = [](Real, Real) { return 0.0; };
+    CorridorMeshOut cm = buildCorridorMesh(c, ground, 3.0, nullptr);
+    std::vector<UnionSpine> sp = corridorDeckSpines(c, ground, 3.0);
+    CHECK(sp.size() == 1);
+    WeldSolidParams wp; wp.barriers = false;                 // compare the bare drivable slab
+    RenderMesh weld = weldSolid(sp, wp);
+    CHECK(!weld.vertices.empty());
+    CHECK(!hasNonFinite(weld));
+    double cmMinY, cmMaxY, wMinY, wMaxY;
+    bboxY(cm.deck, cmMinY, cmMaxY); bboxY(weld, wMinY, wMaxY);
+    CHECK(cmMaxY > 8.5 && cmMaxY < 9.5);                     // corridor deck tops at +9
+    CHECK(std::fabs(wMaxY - cmMaxY) < 0.6);                  // weld deck matches
+    double cx0, cx1, cz0, cz1, wx0, wx1, wz0, wz1;
+    bboxXZ(cm.deck, cx0, cx1, cz0, cz1); bboxXZ(weld, wx0, wx1, wz0, wz1);
+    CHECK(std::fabs((cx1 - cx0) - (wx1 - wx0)) < 8.0);       // same length (along X)
+    CHECK(std::fabs((cz1 - cz0) - (wz1 - wz0)) < 4.0);       // same deck width (across Z)
 }
 
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and

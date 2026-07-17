@@ -3,6 +3,7 @@
 
 #include "alignment.h"
 #include "road_network.h"           // RoadGraph (piers dodge the streets below)
+#include "road_mesh.h"              // UnionSpine (fold the corridor into the one welder)
 #include "../terrain.h"                    // TerrainFlatten
 #include "../../../renderer/renderer.h"    // RenderMesh
 #include <functional>
@@ -43,6 +44,17 @@ CorridorMeshOut buildCorridorMesh(
     const CorridorDef& corridor,
     const std::function<Real(Real, Real)>& ground,
     Real step = 3.0, const RoadGraph* avoidRoads = nullptr);
+
+// Fold the corridor into the ONE welder (road-unification, one-mesher P3): sample
+// the corridor's alignment + vertical profile into UnionSpine(s) that `weldSolid`
+// meshes — the deck's centreline with per-point absolute Y (`yAbs`) and class
+// Freeway. P3 authors a CONSTANT half-width (the widest station's symmetric
+// half); per-point width for aux/gore flares (P5) and banking (P6) come later.
+// This is the adapter that lets the corridor's authoring core drive the unified
+// mesher instead of buildCorridorMesh's geometry.
+std::vector<UnionSpine> corridorDeckSpines(
+    const CorridorDef& corridor,
+    const std::function<Real(Real, Real)>& ground, Real step = 3.0);
 
 }  // namespace engine
 
