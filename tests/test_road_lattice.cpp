@@ -235,3 +235,82 @@ TEST_CASE(junction_coons_patch_is_smooth_and_all_quad) {
         if (std::fabs(v.position.x) < 1e-6 && std::fabs(v.position.z) < 1e-6) cy = v.position.y;
     CHECK(std::fabs(cy - 0.5) < 1e-6);
 }
+
+namespace {
+UnionSpine straightStreet(double hw) {
+    UnionSpine s;
+    s.klass = RoadClass::Local;
+    for (int i = 0; i <= 24; ++i) s.points.push_back(Vec2(i * 8.0, 0.0));
+    s.halfWidth = hw;
+    return s;                                     // no yAbs -> drapes on the ground
+}
+}  // namespace
+
+// Stage 3a: the swept STREET body — a clean shared-vertex lattice with a drivable
+// carriageway and a raised sidewalk + curb, not the 2-triangle earcut ribbon.
+TEST_CASE(street_body_is_clean_drivable_with_sidewalk) {
+    auto flat = [](double, double) { return 0.0; };
+    RenderMesh m = sweepRoadLattice(straightStreet(3.6), streetProfile(1, 3.0, 0.15), flat, 2.0);
+
+    const std::size_t tris = m.indices.size() / 3;
+    CHECK(tris > 0);
+    CHECK(static_cast<double>(m.vertices.size()) / tris < 0.7);
+    std::map<uint32_t, int> valence;
+    for (uint32_t idx : m.indices) ++valence[idx];
+    int worstFan = 0, slivers = 0, degenerate = 0;
+    for (const auto& [k, n] : valence) worstFan = std::max(worstFan, n);
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        if (cross(b - a, c - a).length() < 1e-9) ++degenerate;
+        else if (triAspect(a, b, c) > 20.0) ++slivers;
+    }
+    CHECK(worstFan <= 6);
+    CHECK(degenerate == 0);
+    CHECK(100.0 * slivers / static_cast<double>(tris) < 5.0);
+
+    // A lane drives clean (offset half the carriageway off centre).
+    std::vector<Vec3> lane;
+    for (int i = 0; i <= 24; ++i) lane.push_back(Vec3(i * 8.0, 0.0, 1.8));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, lane, rep);
+    CHECK(rep.samples > 40);
+    CHECK(rep.holes == 0);
+    CHECK(rep.steps == 0);
+    CHECK(rep.blocked == 0);      // sidewalk/curb are at the verge, not the lane
+
+    // The raised sidewalk exists: concrete (mu<1) vertices lifted above the road.
+    bool sawSidewalk = false;
+    for (const Vertex& v : m.vertices)
+        if (v.position.y > 0.1 && std::fabs(v.position.z) > 3.7 && v.u < 1.0) sawSidewalk = true;
+    CHECK(sawSidewalk);
+}
+
+// The whole point of the rewrite (Glenn: "no geo to conform"): on rolling terrain
+// the street surface now UNDULATES with the ground, because it has interior
+// vertices to drape — and stays gentle where the ground is gentle.
+TEST_CASE(street_body_conforms_to_hills) {
+    auto hills = [](double x, double z) {
+        return 1.5 * std::sin(x * 0.02) + 1.2 * std::cos(z * 0.017);
+    };
+    RenderMesh m = sweepRoadLattice(straightStreet(3.6), streetProfile(1, 3.0, 0.15), hills, 2.0);
+
+    double ymin = 1e9, ymax = -1e9;
+    int steep = 0;
+    for (const Vertex& v : m.vertices) {
+        ymin = std::min(ymin, static_cast<double>(v.position.y));
+        ymax = std::max(ymax, static_cast<double>(v.position.y));
+    }
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        const Vec3 nrm = cross(b - a, c - a);
+        if (nrm.y < 1e-6) continue;                        // curb faces / walls
+        const double g = std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / std::fabs(nrm.y);
+        if (g > 0.25) ++steep;
+    }
+    CHECK(ymax - ymin > 0.5);     // the surface follows the ~1.5 m of relief
+    CHECK(steep == 0);            // and no bump the terrain didn't put there
+}

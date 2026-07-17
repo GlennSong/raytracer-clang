@@ -83,6 +83,15 @@ RoadProfile parapetProfile(double side, double height = 0.85, double thickness =
 // The solid median wall down the centreline, `halfWidth` each way, `height` tall.
 RoadProfile medianProfile(double halfWidth = 0.35, double height = 0.85);
 
+// A draped STREET cross-section: raised sidewalk + curb on each side, then the
+// carriageway (`lanesPerSide` each way) at mu in [1,3]. The carriageway edge ->
+// curb-top is a vertical curb face; the sidewalk sits `curbHeight` above the
+// road. Enough lateral columns (one per lane boundary) that, with rings placed
+// near the lane width, the quads are ~square — so the surface has interior
+// vertices to conform to terrain instead of a 2-triangle ribbon.
+RoadProfile streetProfile(int lanesPerSide = 1, double sidewalkWidth = 3.0,
+                          double curbHeight = 0.15);
+
 // A one-way RAMP deck: carriageway + underside + edge parapets, no median. The
 // ramp rides its spine's authored yAbs from the deck down to the street.
 RenderMesh sweepRampDeck(const UnionSpine& spine,

@@ -200,6 +200,26 @@ RoadProfile medianProfile(double halfWidth, double height) {
     return p;
 }
 
+RoadProfile streetProfile(int lanesPerSide, double sidewalkWidth, double curbHeight) {
+    RoadProfile p;
+    const Vec3 asphalt(0.10, 0.10, 0.11), walk(0.62, 0.62, 0.60);
+    // Left: sidewalk (raised) -> curb top -> down the curb face to the carriageway.
+    p.cols.push_back(pc(-1, -sidewalkWidth, curbHeight, 0.0, 1.0, -0.6f, walk));  // sidewalk outer
+    p.cols.push_back(pc(-1, 0, curbHeight, -0.4, 0.9, -0.05f, walk));             // curb top (crease)
+    const int cw = std::max(3, 2 * std::max(1, lanesPerSide) + 1);
+    for (int j = 0; j < cw; ++j) {
+        const double f = -1.0 + 2.0 * j / (cw - 1);
+        // curb-face crease at the verges: tilt the edge column's normal a little
+        // so the 0.15 m curb reads as a step rather than flat asphalt.
+        const double nl = (j == 0) ? 0.4 : (j == cw - 1 ? -0.4 : 0.0);
+        p.cols.push_back(pc(f, 0, 0, nl, j == 0 || j == cw - 1 ? 0.9 : 1.0,
+                            static_cast<float>(2.0 + f), asphalt));
+    }
+    p.cols.push_back(pc(+1, 0, curbHeight, 0.4, 0.9, -0.05f, walk));              // curb top (crease)
+    p.cols.push_back(pc(+1, +sidewalkWidth, curbHeight, 0.0, 1.0, -0.6f, walk));  // sidewalk outer
+    return p;
+}
+
 RenderMesh sweepFreewayDeck(const UnionSpine& spine,
                             const std::function<double(double, double)>& ground,
                             double ringStep, double deckThickness,
