@@ -511,6 +511,53 @@ void MeshBuilder::gridIndices(RenderMesh& mesh, int cols, int rows,
     }
 }
 
+void MeshBuilder::emitLattice(RenderMesh& mesh, const LatticeSpec& spec) {
+    const int R = spec.rings, P = spec.profilePts;
+    if (R < 2 || P < 2 || !spec.verts) return;
+
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    mesh.vertices.insert(mesh.vertices.end(), spec.verts,
+                         spec.verts + static_cast<size_t>(R) * P);
+    auto at = [&](int i, int j) { return base + static_cast<uint32_t>(i * P + j); };
+    auto pos = [&](int i, int j) { return spec.verts[i * P + j].position; };
+
+    // Fix winding ONCE for the whole lattice. The canonical cell winding is
+    // {a,b,d, a,d,c} with a=(i,j), b=(i,j+1) [+column], c=(i+1,j) [+ring]; its
+    // geometric front normal is cross(d-a, b-a). Whether that agrees with the
+    // surface the caller built (banked, curving, either handedness of column
+    // order) is data, not something to assume — so read it from the supplied
+    // vertex normals of the first non-degenerate cell and apply that one choice
+    // to every cell. A per-face test can't live on shared vertices.
+    bool flip = false;
+    for (int i = 0; i + 1 < R && flip == false; ++i) {
+        bool decided = false;
+        for (int j = 0; j + 1 < P && !decided; ++j) {
+            const Vec3 a = pos(i, j), b = pos(i, j + 1), d = pos(i + 1, j + 1);
+            const Vec3 gn = cross(d - a, b - a);
+            if (gn.lengthSquared() < 1e-12) continue;        // degenerate cell
+            Vec3 sn = spec.verts[i * P + j].normal + spec.verts[i * P + j + 1].normal +
+                      spec.verts[(i + 1) * P + j].normal + spec.verts[(i + 1) * P + j + 1].normal;
+            if (sn.lengthSquared() < 1e-12) { decided = true; break; }  // no normal hint
+            flip = dot(gn, sn) < 0.0;
+            decided = true;
+        }
+        if (decided) break;
+    }
+
+    mesh.indices.reserve(mesh.indices.size() +
+                         static_cast<size_t>(R - 1) * (P - 1) * 6);
+    for (int i = 0; i + 1 < R; ++i) {
+        for (int j = 0; j + 1 < P; ++j) {
+            const uint32_t a = at(i, j), b = at(i, j + 1),
+                           c = at(i + 1, j), d = at(i + 1, j + 1);
+            if (!flip)
+                mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+            else
+                mesh.indices.insert(mesh.indices.end(), {a, d, b, a, c, d});
+        }
+    }
+}
+
 void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high) {
     if (mesh.vertices.empty()) return;
     double minY = 1e30, maxY = -1e30;

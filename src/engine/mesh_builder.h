@@ -94,6 +94,28 @@ struct MeshBuilder {
     static void gridIndices(RenderMesh& mesh, int cols, int rows,
                             uint32_t base = 0);
 
+    // --- Swept-lattice emission (road-mesher-research.md) -----------------
+    // The primitive the road mesher needs and the engine was missing: a
+    // (rings x profilePts) grid of SHARED vertices, connectivity by index
+    // arithmetic — vertex (i,j) at base + i*profilePts + j, quad (i,j) over
+    // {(i,j),(i,j+1),(i+1,j+1),(i+1,j)}. Row i is one station ring along a
+    // swept surface; column j is one profile point across it. Unlike emitTri,
+    // NOTHING is duplicated per face, so there is real topology to subdivide,
+    // decimate, and smooth along — V/T ~ 0.5, not 3. Split columns (list the
+    // same XZ twice with different normal/uv/color) to keep a crease flat-shaded
+    // or an attribute seam sharp; the lattice stays regular.
+    //
+    // Winding is fixed ONCE for the whole lattice, from the supplied vertex
+    // normals of the first non-degenerate cell (front = the caller's normals) —
+    // NOT per face. Shared vertices cannot carry a per-face winding, which is
+    // exactly the trap emitTri's per-face normal test would spring here.
+    struct LatticeSpec {
+        int rings = 0;         // number of station rings (rows of vertices)
+        int profilePts = 0;    // number of profile points (columns of vertices)
+        const Vertex* verts = nullptr;   // row-major, rings*profilePts, caller-filled
+    };
+    static void emitLattice(RenderMesh& mesh, const LatticeSpec& spec);
+
     // Planar UVs projected along an axis (0=x, 1=y, 2=z): the two perpendicular
     // position components, scaled, become (u, v). A cheap default mapping for
     // terrain (axis=1) and generated geometry that ships without UVs.
