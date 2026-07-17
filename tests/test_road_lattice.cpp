@@ -190,3 +190,48 @@ TEST_CASE(freeway_parapet_gaps_over_a_gore) {
     CHECK(wallVertsInWindow(gapped, 105, 135) == 0);     // parapet opened for the merge
     CHECK(wallVertsInWindow(gapped, 0, 40) > 0);         // still there elsewhere
 }
+
+// The junction patch (road-mesher-research.md §3). Four arms arrive at DIFFERENT
+// heights — the exact case where weldSolid's nearest-spine field STEPS across the
+// medial axis to a 164% grade. The Coons patch INTERPOLATES all four, so the pad
+// is a gentle ramp with no step, and it is a clean shared-vertex all-quad lattice.
+TEST_CASE(junction_coons_patch_is_smooth_and_all_quad) {
+    auto side = [](Vec3 a, Vec3 b, int n) {
+        std::vector<Vec3> s;
+        for (int i = 0; i <= n; ++i) s.push_back(a + (b - a) * (i / static_cast<double>(n)));
+        return s;
+    };
+    // A 20 m square pad, corners at 0 / 0.5 / 0.5 / 1.0 m — ~1 m of relief across
+    // 20 m, i.e. a ~5% surface. Anything steep in the pad is a mesher step.
+    const Vec3 SW(-10, 0.0, -10), SE(10, 0.5, -10), NW(-10, 0.5, 10), NE(10, 1.0, 10);
+    std::vector<Vec3> bottom = side(SW, SE, 8), top = side(NW, NE, 8);
+    std::vector<Vec3> left = side(SW, NW, 8), right = side(SE, NE, 8);
+    RenderMesh m = coonsPatch(bottom, right, top, left);
+
+    const std::size_t tris = m.indices.size() / 3;
+    CHECK(tris > 0);
+    CHECK(static_cast<double>(m.vertices.size()) / tris < 0.7);   // shared lattice
+
+    int steep = 0, degenerate = 0;
+    double worst = 0.0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        const Vec3 nrm = cross(b - a, c - a);
+        const double ny = std::fabs(nrm.y);
+        if (ny < 1e-9) { ++degenerate; continue; }
+        const double g = std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / ny;
+        worst = std::max(worst, g);
+        if (g > 0.25) ++steep;
+    }
+    CHECK(degenerate == 0);
+    CHECK(steep == 0);            // no medial-axis step — the 164% face is gone
+    CHECK(worst < 0.15);         // the whole pad is as gentle as the arms imply
+
+    // The pad interpolates: its centre sits at the mean of the corner heights.
+    double cy = 0;
+    for (const Vertex& v : m.vertices)
+        if (std::fabs(v.position.x) < 1e-6 && std::fabs(v.position.z) < 1e-6) cy = v.position.y;
+    CHECK(std::fabs(cy - 0.5) < 1e-6);
+}

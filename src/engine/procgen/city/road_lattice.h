@@ -105,6 +105,20 @@ RenderMesh sweepCorridor(const UnionSpine& deckSpine,
                          const std::vector<UnionSpine>& rampSpines,
                          const CorridorLatticeParams& params);
 
+// --- Junction patch (road-mesher-research.md §3) -----------------------------
+// A Coons (transfinite bilinear) patch over four boundary curves — the drivable
+// surface where roads meet. `bottom`/`top` share the u-direction (nu+1 points
+// each); `left`/`right` the v-direction (nv+1 each); corners must coincide
+// (bottom[0]=left[0], bottom.back()=right[0], top[0]=left.back(),
+// top.back()=right.back()). Every interior vertex INTERPOLATES all four
+// boundaries and the bilinear corner blend, so a junction between arms arriving
+// at different heights ramps smoothly instead of STEPPING across the medial axis
+// — the causal fix for weldSolid's 164%-grade pad faces. Emits one shared-vertex
+// lattice (nv+1 rings x nu+1 columns), mu/color flat across the pad.
+RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& right,
+                      const std::vector<Vec3>& top, const std::vector<Vec3>& left,
+                      float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
+
 }  // namespace engine
 
 #endif

@@ -263,4 +263,56 @@ RenderMesh sweepCorridor(const UnionSpine& deckSpine,
     return mesh;
 }
 
+RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& right,
+                      const std::vector<Vec3>& top, const std::vector<Vec3>& left,
+                      float mu, const Vec3& color) {
+    RenderMesh mesh;
+    const int nu = static_cast<int>(bottom.size()) - 1;   // u-direction spans
+    const int nv = static_cast<int>(left.size()) - 1;     // v-direction spans
+    if (nu < 1 || nv < 1 || static_cast<int>(top.size()) != nu + 1 ||
+        static_cast<int>(right.size()) != nv + 1)
+        return mesh;
+
+    const Vec3 P00 = bottom.front(), P10 = bottom.back();
+    const Vec3 P01 = top.front(),    P11 = top.back();
+
+    const int R = nv + 1, P = nu + 1;
+    std::vector<Vec3> pos(static_cast<std::size_t>(R) * P);
+    for (int j = 0; j <= nv; ++j) {
+        const double v = static_cast<double>(j) / nv;
+        for (int i = 0; i <= nu; ++i) {
+            const double u = static_cast<double>(i) / nu;
+            // Transfinite bilinear (Coons) interpolation: the two ruled surfaces
+            // between opposite sides, minus the bilinear surface of the corners.
+            const Vec3  ruledU = bottom[i] * (1 - v) + top[i] * v;
+            const Vec3 ruledV = left[j] * (1 - u) + right[j] * u;
+            const Vec3 bilin = P00 * ((1 - u) * (1 - v)) + P10 * (u * (1 - v)) +
+                               P01 * ((1 - u) * v) + P11 * (u * v);
+            pos[j * P + i] = ruledU + ruledV - bilin;
+        }
+    }
+
+    // Per-vertex normals from the grid tangents, so the pad reads as the (gently
+    // sloped) driving surface it is — the drive probe keeps up-facing faces.
+    std::vector<Vertex> verts(static_cast<std::size_t>(R) * P);
+    for (int j = 0; j <= nv; ++j) {
+        for (int i = 0; i <= nu; ++i) {
+            const Vec3& c = pos[j * P + i];
+            const Vec3 du = pos[j * P + std::min(i + 1, nu)] - pos[j * P + std::max(i - 1, 0)];
+            const Vec3 dv = pos[std::min(j + 1, nv) * P + i] - pos[std::max(j - 1, 0) * P + i];
+            Vec3 n = cross(dv, du);
+            if (n.y < 0) n = n * -1.0;                    // keep it up-facing
+            Vertex& vv = verts[j * P + i];
+            vv.position = c;
+            vv.normal = n.lengthSquared() > 1e-12 ? normalize(n) : Vec3(0, 1, 0);
+            vv.tangent = du.lengthSquared() > 1e-12 ? normalize(du) : Vec3(1, 0, 0);
+            vv.u = mu;
+            vv.v = 0.0f;
+            vv.color = color;
+        }
+    }
+    MeshBuilder::emitLattice(mesh, { R, P, verts.data() });
+    return mesh;
+}
+
 }  // namespace engine
