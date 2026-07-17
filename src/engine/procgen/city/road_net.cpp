@@ -1244,7 +1244,11 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         // shreds the irregular-face subdivision — the local streets meet arterials
         // at every angle by design. So only de-sliver lightly (drop sub-metre edges
         // planarize leaves at street/arterial tees) and keep the rest intact.
-        cg = mergeShortEdges(cg, g.value("min_road_len", 3.0), rules.maxDegree);
+        // Glenn (repeatedly): "some of the short roads shouldn't exist." The old
+        // 3.0 m floor kept sub-5 m stubs (the double-stoplight collinear stub was
+        // 4.94 m) that ride other edges' ribbons. 10 m is well under the ~70 m
+        // blocks (no subdivision shredding) and well over stub scale.
+        cg = mergeShortEdges(cg, g.value("min_road_len", 10.0), rules.maxDegree);
     } else {
         // Minimum road length (device: "really short roads ... should be merged"):
         // fold crossings that landed close together into one junction, or stretch a
