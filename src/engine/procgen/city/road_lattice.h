@@ -83,6 +83,28 @@ RoadProfile parapetProfile(double side, double height = 0.85, double thickness =
 // The solid median wall down the centreline, `halfWidth` each way, `height` tall.
 RoadProfile medianProfile(double halfWidth = 0.35, double height = 0.85);
 
+// A one-way RAMP deck: carriageway + underside + edge parapets, no median. The
+// ramp rides its spine's authored yAbs from the deck down to the street.
+RenderMesh sweepRampDeck(const UnionSpine& spine,
+                         const std::function<double(double, double)>& ground,
+                         double ringStep = 3.0, double deckThickness = 0.5);
+
+// The whole corridor as swept lattices: the divided mainline deck (parapets
+// gapped over `deckGaps` so ramps can merge), every ramp, and the support piers
+// under the elevated spans. `pierBasesOut`, if given, receives the pier
+// footprints (world XZ) so the lot/vegetation passes can treat them as used
+// ground. This is the one call the loader makes in place of weldSolid.
+struct CorridorLatticeParams {
+    double ringStep = 3.0;
+    double deckThickness = 0.5;
+    std::function<double(double, double)> ground;
+    std::vector<GapWindow> deckGaps;
+    std::vector<Vec2>* pierBasesOut = nullptr;
+};
+RenderMesh sweepCorridor(const UnionSpine& deckSpine,
+                         const std::vector<UnionSpine>& rampSpines,
+                         const CorridorLatticeParams& params);
+
 }  // namespace engine
 
 #endif

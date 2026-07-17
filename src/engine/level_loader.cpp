@@ -12,6 +12,7 @@
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
+#include "procgen/city/road_lattice.h"       // swept-lattice freeway mesher
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
@@ -3086,25 +3087,36 @@ bool LevelLoader::load(const std::string& path,
                 return lg ? lg(x, z) : 0.0;
             };
             {
+                // SWEPT-LATTICE freeway (road-mesher-research.md): the corridor
+                // AUTHORS (ramp centrelines + flatten windows) and the sweeper
+                // DRAWS each spine as a shared-vertex lattice — drivable deck with
+                // real carriageway UV, viaduct structure, parapets/median, ramps,
+                // and piers. Parapets GAP over each ramp gore so a car can merge.
                 engine::CorridorAuthoring au = engine::corridorAuthor(def, levelGround, 3.0);
                 pc.rampPaths = std::move(au.rampPaths);
                 pc.flatten = std::move(au.flatten);
-                std::vector<engine::UnionSpine> spines =
+                std::vector<engine::UnionSpine> deckSpines =
                     engine::corridorDeckSpines(def, groundFn, 3.0);
                 std::vector<engine::UnionSpine> ramps =
                     engine::corridorRampSpines(pc.rampPaths);
-                spines.insert(spines.end(), ramps.begin(), ramps.end());
-                engine::WeldSolidParams wp;
-                wp.barriers = true;
-                wp.thickness = 0.5;
-                wp.heightAt = groundFn;
-                wp.pierBasesOut = &pc.pierBases;
-                pc.deck = engine::weldSolid(spines, wp);
-                // The weld owns parapets/median/piers; the corridor still owns its
-                // overhead SIGNAGE, which is authored off the exit gores.
+                engine::CorridorLatticeParams clp;
+                clp.ground = groundFn;
+                clp.deckThickness = 0.5;
+                clp.pierBasesOut = &pc.pierBases;
+                const double Lc = def.horizontal.length();
+                for (const engine::ExitDef& e : def.exits) {
+                    if (e.station < 0) continue;
+                    const double sg = std::min(std::max<double>(e.station, 0.0), Lc);
+                    clp.deckGaps.push_back({ std::max(0.0, sg - e.decelLength - 20.0),
+                                             std::min(Lc, sg + 30.0) });
+                }
+                pc.deck = deckSpines.empty()
+                              ? RenderMesh{}
+                              : engine::sweepCorridor(deckSpines.front(), ramps, clp);
+                // The corridor still owns its overhead SIGNAGE (off the exit gores).
                 pc.barrier = engine::corridorFurniture(def);
-                LOG_INFO << "[corridor] " << spines.size() << " spines (deck + "
-                         << ramps.size() << " ramps) via weldSolid";
+                LOG_INFO << "[corridor] swept-lattice: deck + " << ramps.size()
+                         << " ramps + piers (" << pc.pierBases.size() << " bents)";
             }
             // The corridor JOINS the drivable network (P8.4): mainline chain
             // + one chain per ramp, nodes carrying deck height over ground so

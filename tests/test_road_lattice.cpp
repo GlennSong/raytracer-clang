@@ -162,6 +162,7 @@ TEST_CASE(freeway_full_section_has_structure_and_drives) {
     CHECK(rep.samples > 50);
     CHECK(rep.holes == 0);
     CHECK(rep.blocked == 0);      // no wall in the lane
+    CHECK(rep.steps == 0);        // the deck sweep itself is continuous
 }
 
 // The blocked-merge fix, as data: an edge parapet GAPS over a gore window, so a

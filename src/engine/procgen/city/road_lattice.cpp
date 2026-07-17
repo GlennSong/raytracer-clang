@@ -217,4 +217,50 @@ RenderMesh sweepFreewayDeck(const UnionSpine& spine,
     return mesh;
 }
 
+RenderMesh sweepRampDeck(const UnionSpine& spine,
+                         const std::function<double(double, double)>& ground,
+                         double ringStep, double deckThickness) {
+    RenderMesh mesh;
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, freewayDeckProfile(1), ground, ringStep));
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, freewayUndersideProfile(deckThickness),
+                                               ground, ringStep));
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, parapetProfile(+1), ground, ringStep));
+    MeshBuilder::append(mesh, sweepRoadLattice(spine, parapetProfile(-1), ground, ringStep));
+    return mesh;
+}
+
+RenderMesh sweepCorridor(const UnionSpine& deckSpine,
+                         const std::vector<UnionSpine>& rampSpines,
+                         const CorridorLatticeParams& p) {
+    RenderMesh mesh;
+    MeshBuilder::append(mesh, sweepFreewayDeck(deckSpine, p.ground, p.ringStep,
+                                               p.deckThickness, &p.deckGaps));
+    for (const UnionSpine& r : rampSpines)
+        MeshBuilder::append(mesh, sweepRampDeck(r, p.ground, p.ringStep, p.deckThickness));
+
+    // Piers under the ELEVATED spans of the mainline: a column every ~24 m of
+    // raised run, from the ground up to the deck soffit. deckY here is the
+    // authored spine height; the pier stops at deckY - thickness.
+    if (deckSpine.yAbs.size() == deckSpine.points.size()) {
+        std::vector<Vec2> cl = deckSpine.points;
+        std::vector<double> dy = deckSpine.yAbs;
+        std::vector<int> at;
+        double since = 1e9;
+        for (std::size_t i = 0; i < cl.size(); ++i) {
+            const double g = p.ground ? p.ground(cl[i].x, cl[i].y) : 0.0;
+            const double clr = dy[i] - g;
+            const double seg = i == 0 ? 0.0 : (cl[i] - cl[i - 1]).length();
+            since += seg;
+            if (clr > 2.0 && since >= 24.0) { at.push_back(static_cast<int>(i)); since = 0.0; }
+        }
+        if (!at.empty()) {
+            MeshBuilder::append(mesh, bridgePiers(cl, dy, at, 2.0, 1.4, p.deckThickness,
+                                                  Vec3(0.45, 0.46, 0.48), p.ground));
+            if (p.pierBasesOut)
+                for (int i : at) p.pierBasesOut->push_back(cl[i]);
+        }
+    }
+    return mesh;
+}
+
 }  // namespace engine

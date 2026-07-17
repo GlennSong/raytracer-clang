@@ -14,7 +14,9 @@
 
 #include "../src/engine/procgen/city/corridor_mesh.h"
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/city/road_lattice.h"
 #include "../src/engine/procgen/city/alignment.h"
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -49,42 +51,60 @@ CorridorDef labCorridor() {
     return c;
 }
 
-RenderMesh weldCorridor(const CorridorDef& c, std::vector<RampPath>& rampsOut) {
+// Build the corridor mesh the loader builds — the SWEPT-LATTICE freeway, deck
+// parapets gapped over each gore — and hand back the ramp centrelines so the
+// tests drive the exact polylines the nav chain is built from.
+RenderMesh sweptCorridor(const CorridorDef& c, std::vector<RampPath>& rampsOut) {
     auto ground = [](Real, Real) -> Real { return 0.0; };
     CorridorAuthoring au = corridorAuthor(c, ground, 3.0);
     rampsOut = au.rampPaths;
-    std::vector<UnionSpine> spines = corridorDeckSpines(c, ground, 3.0);
+    std::vector<UnionSpine> deckSpines = corridorDeckSpines(c, ground, 3.0);
     std::vector<UnionSpine> ramps = corridorRampSpines(au.rampPaths);
-    spines.insert(spines.end(), ramps.begin(), ramps.end());
-    WeldSolidParams wp;
-    wp.barriers = true;               // the parapets/median a real freeway has
-    wp.thickness = 0.5;
-    wp.heightAt = ground;
-    return weldSolid(spines, wp);
+    CorridorLatticeParams clp;
+    clp.ground = ground;
+    const Real Lc = c.horizontal.length();
+    for (const ExitDef& e : c.exits) {
+        if (e.station < 0) continue;
+        const double sg = std::min(std::max<double>(e.station, 0.0), (double)Lc);
+        clp.deckGaps.push_back({ std::max(0.0, sg - e.decelLength - 20.0),
+                                 std::min((double)Lc, sg + 30.0) });
+    }
+    return deckSpines.empty() ? RenderMesh{}
+                              : sweepCorridor(deckSpines.front(), ramps, clp);
 }
 
 }  // namespace
 
-// THE MAINLINE. Driving down the middle of the deck must be unobstructed: the
-// parapets belong at the verges, not across the carriageway.
+// THE MAINLINE. Driving a carriageway LANE must be unobstructed — parapets
+// belong at the verges and the median wall down the centre, neither across a
+// lane. (A divided road is driven in a lane, not down its median, which is where
+// the geometric centreline runs.)
 TEST_CASE(drive_freeway_mainline_is_clear) {
     CorridorDef c = labCorridor();
     std::vector<RampPath> ramps;
-    RenderMesh m = weldCorridor(c, ramps);
+    RenderMesh m = sweptCorridor(c, ramps);
 
-    // the deck's own centreline, at its authored height
-    std::vector<Vec3> path;
     const Real L = c.horizontal.length();
-    for (Real s = 4; s <= L - 4; s += 4.0) {
-        const Vec2 p = c.horizontal.pos(s);
-        path.push_back(Vec3(p.x, c.vertical.elevation(s), p.y));
+    for (const Real side : { Real(+1), Real(-1) }) {   // both carriageways
+        std::vector<Vec3> path;
+        for (Real s = 4; s <= L - 4; s += 4.0) {
+            const Vec2 p = c.horizontal.pos(s);
+            const Vec2 nrm = c.horizontal.normal(s);
+            const Real off = side * c.halfWidthAt(s, side) * 0.5;   // a lane centre
+            path.push_back(Vec3(p.x + nrm.x * off, c.vertical.elevation(s),
+                                p.y + nrm.y * off));
+        }
+        Report rep;
+        drivePath(m, path, rep);
+        rep.print(side > 0 ? "mainline+" : "mainline-");
+        CHECK(rep.samples > 50);
+        CHECK(rep.holes == 0);
+        CHECK(rep.blocked == 0);
+        // The deck sweep is step-free on its own (freeway_deck_is_drivable /
+        // freeway_full_section_has_structure_and_drives). Any residual step here
+        // is the RAMP's top seam where it overlaps the mainline deck — the
+        // ramp<->deck weld, the next task (#64), not the deck mesher.
     }
-    Report rep;
-    drivePath(m, path, rep);
-    rep.print("mainline");
-    CHECK(rep.samples > 50);
-    CHECK(rep.holes == 0);
-    CHECK(rep.blocked == 0);
 }
 
 // THE RAMPS — the user's report: "The freeway on ramps aren't driveable and
@@ -95,7 +115,7 @@ TEST_CASE(drive_freeway_mainline_is_clear) {
 TEST_CASE(drive_freeway_ramps_are_clear) {
     CorridorDef c = labCorridor();
     std::vector<RampPath> ramps;
-    RenderMesh m = weldCorridor(c, ramps);
+    RenderMesh m = sweptCorridor(c, ramps);
 
     int driven = 0;
     Report rep;
@@ -106,11 +126,10 @@ TEST_CASE(drive_freeway_ramps_are_clear) {
     }
     rep.print("ramps");
     CHECK(driven > 0);                        // the fixture really authors ramps
-    // BASELINE 2026-07-17: blocked=11 (a 0.85 m parapet stands across every gore),
-    // steps=86 (worst 3.20 m — the ramp foot never welds to the street). These
-    // bounds catch regression; the swept-lattice freeway (barrier as a per-station
-    // profile column, gapped at the gore) drives blocked to 0.
-    // STAGE-1 GATE: tighten to `blocked == 0` and `holes == 0`.
-    CHECK(rep.blocked <= 12);                 // TARGET 0: no parapet across the merge
-    CHECK(rep.holes <= 2);                    // TARGET 0: no gap in the ramp surface
+    // The weldSolid freeway shipped blocked=11 (a 0.85 m parapet across every
+    // gore) and steps=86 (the ramp foot never welded to grade). The swept-lattice
+    // freeway gaps the deck parapet over each gore, so nothing stands across the
+    // merge and the ramp surface is continuous down its own descent.
+    CHECK(rep.blocked == 0);                  // no wall across the merge
+    CHECK(rep.holes == 0);                    // no gap in the ramp surface
 }
