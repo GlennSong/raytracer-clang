@@ -2351,6 +2351,11 @@ bool LevelLoader::load(const std::string& path,
             Real spacing = 700;
             std::vector<Real> bridgeAt;  // stations that must fly over
             bool dropped = false;        // parallel-overlap loser
+            // One-mesher P8: SYNTHESIZED corridors are meshed by weldSolid like
+            // every other road. The authored path reads this per-entity from the
+            // corridor block; the synth path has no such block, so it rides this
+            // flag (kill switch: road.generate.corridor_weld = false).
+            bool weld = true;
         };
         std::vector<PlannedRoute> planned;
         // RULES LAB hook: a level may author raw route PLANS directly
@@ -2361,6 +2366,7 @@ bool LevelLoader::load(const std::string& path,
             for (const auto& jp : root["freewayPlans"]) {
                 PlannedRoute pr;
                 pr.spacing = root.value("interchangeSpacing", 700.0);
+                pr.weld = root.value("corridorWeld", true);
                 std::vector<Vec2> plan;
                 for (const auto& q : jp)
                     if (q.is_array() && q.size() >= 2)
@@ -2385,11 +2391,13 @@ bool LevelLoader::load(const std::string& path,
                                  ? rootEnt["road"]["generate"]
                                  : json::object();
             const Real spacing = gen.value("interchange_spacing", 700.0);
+            const bool weldRoutes = gen.value("corridor_weld", true);   // P8 kill switch
             for (const std::vector<Vec2>& plan : preNets[ni].freewayPlans) {
                 if (plan.size() < 2) continue;
                 PlannedRoute pr;
                 pr.anchors = plan;
                 pr.spacing = spacing;
+                pr.weld = weldRoutes;
                 for (std::size_t k = 0; k + 1 < plan.size(); ++k) {
                     const Vec2 A = plan[k], B = plan[k + 1];
                     const Real seg = (B - A).length();
@@ -2708,6 +2716,15 @@ bool LevelLoader::load(const std::string& path,
             while (corridorGuides.size() < corridorDefs.size())
                 corridorGuides.emplace_back();       // authored defs: no guide
             corridorGuides.push_back(pr.dense);
+            // One-mesher P8: keep corridorWeld PARALLEL to corridorDefs. Until
+            // now only the authored path pushed here, so every synthesized
+            // corridor sat past corridorWeld's end and the `di < size()` weld
+            // gate read false — the flagship's freeways could never be welded,
+            // whatever the JSON said. Pad for the authored defs (which are all
+            // pushed before this loop), then record this route's flag.
+            while (corridorWeld.size() < corridorDefs.size())
+                corridorWeld.push_back(0);           // authored defs: already decided
+            corridorWeld.push_back(pr.weld ? 1 : 0);
             corridorDefs.push_back(std::move(def));
         }
     }
@@ -4000,6 +4017,12 @@ bool LevelLoader::load(const std::string& path,
             Renderable r;
             r.material.albedo = Vec3(1, 1, 1);
             r.material.roughness = 0.95f;
+            // Same rule as the authored deck above: a WELD-meshed deck carries
+            // marking UV and is painted by the surface shader (its cm.markings
+            // is cleared), so without this a welded synth freeway renders as
+            // blank asphalt — no lane lines at all.
+            if (ci < corridorWeld.size() && corridorWeld[ci])
+                r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
             r.mesh = assets.acquireMesh(cm.deck,
                                         "corridor:deck:" + std::to_string(ci));
             world.add<Renderable>(e, r);
