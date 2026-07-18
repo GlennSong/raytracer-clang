@@ -696,3 +696,116 @@ TEST_CASE(lattice_streets_grow_owned_sidewalk_bands) {
     CHECK(rep.steps == 0);
     CHECK(rep.blocked == 0);          // the curb lip never juts into the lanes
 }
+
+// ---------------------------------------------------------------------------
+// Roads-v2 S6: ONE mesher. The lattice meshes every class — an authored
+// Freeway chain gets the full viaduct structure (deck, soffit, parapets,
+// median, piers), a Ramp chain gets its deck, and the curb/sidewalk band
+// GAPS across non-street mouths instead of curbing a ramp entrance shut.
+
+TEST_CASE(lattice_meshes_authored_freeway_with_structure) {
+    RoadGraph g;
+    auto node = [&](double x, double z, double elev, bool abs) {
+        RoadNode n; n.pos = Vec2(x, z); n.elev = elev; n.elevAbsolute = abs;
+        g.nodes.push_back(n);
+        return static_cast<int>(g.nodes.size() - 1);
+    };
+    // Elevated 3-lane freeway along +X at +9 m over a street crossing below.
+    const int f0 = node(-200, 0, 9, true), f1 = node(30, 0, 9, true),
+              f2 = node(200, 0, 9, true);
+    const int s0 = node(30, -80, 0, false), s1 = node(30, 80, 0, false);
+    auto edge = [&](int a, int b, double w, RoadClass k) {
+        RoadEdge e; e.a = a; e.b = b; e.width = w; e.klass = k;
+        g.edges.push_back(e);
+    };
+    edge(f0, f1, 22.0, RoadClass::Freeway);
+    edge(f1, f2, 22.0, RoadClass::Freeway);
+    edge(s0, s1, 8.0, RoadClass::Local);
+    RenderMesh m = buildRoadNetLattice(g, nullptr);
+    CHECK(!m.vertices.empty());
+
+    int up9 = 0, down = 0, lateral = 0, pierFaces = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        Vec3 gn = cross(c - a, b - a);
+        if (gn.length() < 1e-9) continue;
+        gn = normalize(gn);
+        const Vec3 ctr = (a + b + c) * (1.0 / 3.0);
+        if (gn.y > 0.5 && ctr.y > 8.0) ++up9;            // deck top
+        if (gn.y < -0.5 && ctr.y > 7.0) ++down;          // soffit underside
+        if (std::fabs(gn.y) <= 0.5 && ctr.y > 8.5) ++lateral;   // parapets/median
+        if (std::fabs(gn.y) <= 0.5 && ctr.y > 2.0 && ctr.y < 7.0 &&
+            std::fabs(ctr.z) < 3.0)
+            ++pierFaces;                                  // pier shafts
+    }
+    CHECK(up9 > 0);
+    CHECK(down > 0);
+    CHECK(lateral > 0);
+    CHECK(pierFaces > 0);
+
+    // A LANE on the deck drives clear (median at centre, parapets at verge).
+    std::vector<Vec3> lane;
+    for (double x = -180; x <= 180; x += 5) lane.push_back(Vec3(x, 9.0, 6.0));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, lane, rep);
+    CHECK(rep.samples > 40);
+    CHECK(rep.holes == 0);
+    CHECK(rep.blocked == 0);
+
+    // The street drives clean UNDER the viaduct.
+    std::vector<Vec3> under;
+    for (double z = -60; z <= 60; z += 3) under.push_back(Vec3(30, 0.5, z));
+    driveprobe::Report urep;
+    driveprobe::drivePath(m, under, urep);
+    CHECK(urep.samples > 20);
+    CHECK(urep.holes == 0);
+    CHECK(urep.blocked == 0);
+
+    // No sidewalk band beside the freeway (spec: no sidewalks on a freeway).
+    for (double x = -150; x <= 150; x += 60) {
+        for (double h : driveprobe::surfacesAt(m, x, 13.5))
+            CHECK(!(h > 0.05 && h < 0.5));   // no raised slab at ground level
+    }
+}
+
+TEST_CASE(band_gaps_across_a_ramp_mouth) {
+    RoadGraph g;
+    auto node = [&](double x, double z) {
+        RoadNode n; n.pos = Vec2(x, z);
+        g.nodes.push_back(n);
+        return static_cast<int>(g.nodes.size() - 1);
+    };
+    const int w = node(-80, 0), a = node(0, 0), e = node(80, 0);
+    const int r1 = node(0, -40), r2 = node(0, -90);
+    auto edge = [&](int p, int q, double wd, RoadClass k) {
+        RoadEdge ed; ed.a = p; ed.b = q; ed.width = wd; ed.klass = k;
+        g.edges.push_back(ed);
+    };
+    edge(w, a, 8.0, RoadClass::Local);
+    edge(a, e, 8.0, RoadClass::Local);
+    edge(a, r1, 7.2, RoadClass::Ramp);     // a ramp FOOT landing on the street
+    edge(r1, r2, 7.2, RoadClass::Ramp);
+    RenderMesh m = buildRoadNetLattice(g, nullptr);
+    CHECK(!m.vertices.empty());
+
+    // Drive from the ramp, through the junction pad, onto the street: without
+    // the band gap a 0.15 m curb + slab stood across the ramp mouth.
+    std::vector<Vec3> path;
+    for (double z = -70; z <= -8; z += 3) path.push_back(Vec3(0, 0.5, z));
+    path.push_back(Vec3(4, 0.5, -4));
+    path.push_back(Vec3(12, 0.5, 0));
+    path.push_back(Vec3(30, 0.5, 0));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, path, rep);
+    CHECK(rep.samples > 20);
+    CHECK(rep.holes == 0);
+    CHECK(rep.blocked == 0);
+
+    // The band still exists along the plain street away from the mouth.
+    std::vector<double> hits = driveprobe::surfacesAt(m, 40.0, 5.5);
+    bool raised = false;
+    for (double h : hits) raised |= (h > 0.10 && h < 0.4);
+    CHECK(raised);
+}

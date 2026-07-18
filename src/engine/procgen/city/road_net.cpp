@@ -499,7 +499,39 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     // this field — asphalt and band meet flush by construction.
     EdgeHeightField bandHeights;
     std::vector<Poly2> bandRibbons;
-    for (const UnionSpine& s : chains) {
+    std::vector<std::pair<Vec2, Vec2>> bandGaps;   // non-street mouths (S6)
+    std::vector<int> streetArms(N, 0);             // per cluster root
+    // Which chains are REALLY elevated (deck rides above the ground — a
+    // viaduct or layered bridge)? weldChainProfiles assigns yAbs to EVERY
+    // chain (the one-profile-source ride), so yAbs presence alone says
+    // nothing — compare against the ground. At-grade chains double as the
+    // pier KEEP-OUT: no column may stand in a road below (S6).
+    std::vector<char> chainElevated(chains.size(), 0);
+    struct KeepOutSeg { Vec2 a, b; double hw; };
+    std::vector<KeepOutSeg> pierKeepOut;
+    for (std::size_t ci = 0; ci < chains.size(); ++ci) {
+        const UnionSpine& cs = chains[ci];
+        bool up = false;
+        if (cs.yAbs.size() == cs.points.size())
+            for (std::size_t i = 0; i < cs.points.size() && !up; ++i)
+                if (cs.yAbs[i] - ground(cs.points[i].x, cs.points[i].y) > 1.5) up = true;
+        chainElevated[ci] = up;
+        if (!up)
+            for (std::size_t i = 0; i + 1 < cs.points.size(); ++i)
+                pierKeepOut.push_back({ cs.points[i], cs.points[i + 1], cs.halfWidth });
+    }
+    auto pierBlocked = [&](const Vec2& p) {
+        for (const KeepOutSeg& k : pierKeepOut) {
+            const Vec2 ab = k.b - k.a;
+            const double l2 = ab.lengthSquared();
+            double t2 = l2 > 1e-12 ? dot(p - k.a, ab) / l2 : 0.0;
+            t2 = t2 < 0 ? 0 : (t2 > 1 ? 1 : t2);
+            if ((k.a + ab * t2 - p).length() < k.hw + 2.5) return true;
+        }
+        return false;
+    };
+    for (std::size_t ci = 0; ci < chains.size(); ++ci) {
+        const UnionSpine& s = chains[ci];
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
         if (a >= 0 && b >= 0 && a != b && find(a) == find(b))
@@ -510,22 +542,57 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (t.points.size() < 2) continue;
 
         const int lanesPerSide = std::max(1, static_cast<int>(std::lround(s.halfWidth / 3.6)));
+        const bool elevated = chainElevated[ci] != 0;
+        const bool isFwy = s.klass == RoadClass::Freeway;
+        const bool isRamp = s.klass == RoadClass::Ramp;
         std::vector<Vec3> ring0, ringN;
-        // S5 OWNERSHIP: bodies sweep the CARRIAGEWAY only. The curb + sidewalk
-        // band below owns everything outside the asphalt — a body can no
-        // longer sweep a raised sidewalk into a pad or a neighbouring road.
-        MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
-                                                  ground, 2.0, nullptr, &ring0, &ringN));
-        {   // footprint + edge heights for the band union
-            std::vector<double> ys(t.points.size(), 0.0);
-            if (t.yAbs.size() == t.points.size()) ys = t.yAbs;
-            else for (std::size_t i = 0; i < t.points.size(); ++i)
-                ys[i] = ground(t.points[i].x, t.points[i].y);
-            bandHeights.addPolyline(t.points, ys);
-            Poly2 rib = ribbonOutline(t.points, t.halfWidth + 0.02, 2.0);
-            if (rib.size() >= 3) {
-                if (signedArea(rib) < 0) std::reverse(rib.begin(), rib.end());
-                bandRibbons.push_back(std::move(rib));
+        if (isFwy || isRamp) {
+            // S6 ONE MESHER: a Freeway/Ramp chain gets the full structure the
+            // corridor kit builds — deck, viaduct underside, edge parapets,
+            // (freeway) median, piers under elevated spans. Parapets stop at
+            // the junction trim, so a gore's merge stays open by construction.
+            const int lanes = isRamp ? 1
+                : std::max(1, static_cast<int>(std::lround((s.halfWidth - 1.0) / 3.6)));
+            MeshBuilder::append(out, sweepRoadLattice(t, freewayDeckProfile(lanes),
+                                                      ground, 2.0, nullptr, &ring0, &ringN));
+            MeshBuilder::append(out, sweepRoadLattice(t, freewayUndersideProfile(0.5), ground, 2.0));
+            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(+1), ground, 2.0));
+            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(-1), ground, 2.0));
+            if (isFwy)
+                MeshBuilder::append(out, sweepRoadLattice(t, medianProfile(), ground, 2.0));
+            MeshBuilder::append(out, latticeChainPiers(t, groundFn, 0.5, nullptr, pierBlocked));
+            // No sidewalk band along a freeway or ramp — and where this chain
+            // enters a STREET junction, the band must GAP across its mouth
+            // (else a curb + slab curbs the ramp entrance shut).
+            if (ring0.size() >= 2)
+                bandGaps.push_back({ Vec2(ring0.front().x, ring0.front().z),
+                                     Vec2(ring0.back().x, ring0.back().z) });
+            if (ringN.size() >= 2)
+                bandGaps.push_back({ Vec2(ringN.front().x, ringN.front().z),
+                                     Vec2(ringN.back().x, ringN.back().z) });
+        } else {
+            // S5 OWNERSHIP: street bodies sweep the CARRIAGEWAY only. The curb
+            // + sidewalk band owns everything outside the asphalt — a body can
+            // no longer sweep a raised sidewalk into a pad or a neighbour.
+            MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
+                                                      ground, 2.0, nullptr, &ring0, &ringN));
+            if (elevated) {
+                // A layered street bridge: give the deck an underside and legs.
+                // (Its sidewalk is omitted — bridge sides are barrier/grammar
+                // territory, not a kerbed slab hanging over the void.)
+                MeshBuilder::append(out, sweepRoadLattice(t, freewayUndersideProfile(0.4), ground, 2.0));
+                MeshBuilder::append(out, latticeChainPiers(t, groundFn, 0.4, nullptr, pierBlocked));
+            } else {   // footprint + edge heights for the band union
+                std::vector<double> ys(t.points.size(), 0.0);
+                if (t.yAbs.size() == t.points.size()) ys = t.yAbs;
+                else for (std::size_t i = 0; i < t.points.size(); ++i)
+                    ys[i] = ground(t.points[i].x, t.points[i].y);
+                bandHeights.addPolyline(t.points, ys);
+                Poly2 rib = ribbonOutline(t.points, t.halfWidth + 0.02, 2.0);
+                if (rib.size() >= 3) {
+                    if (signedArea(rib) < 0) std::reverse(rib.begin(), rib.end());
+                    bandRibbons.push_back(std::move(rib));
+                }
             }
         }
         // The mouth is the FULL profile ring (sidewalk|curb|lanes|curb|sidewalk),
@@ -549,10 +616,14 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         const std::size_t tn = t.points.size();
         // Arms gather on the cluster ROOT: a compound pad (merged too-close
         // junctions) collects the outer arms of ALL its member nodes.
-        if (a >= 0 && deg[a] >= 3 && ring0.size() >= 2)
+        if (a >= 0 && deg[a] >= 3 && ring0.size() >= 2) {
             arms[find(a)].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0, true) });
-        if (b >= 0 && deg[b] >= 3 && ringN.size() >= 2)
+            if (!isFwy && !isRamp && !elevated) ++streetArms[find(a)];
+        }
+        if (b >= 0 && deg[b] >= 3 && ringN.size() >= 2) {
             arms[find(b)].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN, false) });
+            if (!isFwy && !isRamp && !elevated) ++streetArms[find(b)];
+        }
     }
 
     int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0,
@@ -575,7 +646,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         std::vector<Vec3> padFootprint;
         MeshBuilder::append(out, junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
                                                &padFootprint));
-        if (padFootprint.size() >= 3) {
+        if (padFootprint.size() >= 3 && streetArms[v] > 0) {
             bandHeights.addLoop(padFootprint);
             Poly2 fp;
             for (const Vec3& p : padFootprint) fp.push_back(Vec2(p.x, p.z));
@@ -617,7 +688,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         }
         MeshBuilder::append(out, sweepCurbSidewalkBand(
             loops, [&](double x, double z) { return bandHeights.sample(x, z); },
-            3.0, 0.15));
+            3.0, 0.15, bandGaps.empty() ? nullptr : &bandGaps));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;

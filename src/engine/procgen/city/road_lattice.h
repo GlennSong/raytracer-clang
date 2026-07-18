@@ -170,9 +170,23 @@ RoadProfile carriagewayProfile(int lanesPerSide);
 // sidewalk gate), and an outer face dropping to the ground. `edgeHeight(x,z)`
 // samples the asphalt edge height at the loop (the bodies' own verge rails),
 // so band and asphalt meet flush by construction.
+// `mouthGaps` (optional): segments (a non-street arm's mouth — a ramp or
+// freeway entering a street junction) where the band must NOT emit — without
+// the gap a curb + slab would stand across the ramp entrance.
 RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                  const std::function<double(double, double)>& edgeHeight,
-                                 double sidewalkWidth, double curbHeight);
+                                 double sidewalkWidth, double curbHeight,
+                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps = nullptr);
+
+// Support piers under the ELEVATED spans of a chain (yAbs riding above the
+// ground): a column every ~24 m of raised run, ground to soffit. The same
+// placement the corridor mainline uses — hoisted so the street lattice gives
+// authored viaducts and layered bridges real legs (S6, one mesher).
+RenderMesh latticeChainPiers(const UnionSpine& spine,
+                             const std::function<double(double, double)>& ground,
+                             double deckThickness = 0.5,
+                             std::vector<Vec2>* pierBasesOut = nullptr,
+                             const std::function<bool(const Vec2&)>& keepOut = nullptr);
 
 }  // namespace engine
 

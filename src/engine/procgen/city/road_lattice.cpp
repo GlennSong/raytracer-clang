@@ -322,27 +322,39 @@ RenderMesh sweepCorridor(const UnionSpine& deckSpine,
     for (const UnionSpine& r : rampSpines)
         MeshBuilder::append(mesh, sweepRampDeck(r, p.ground, p.ringStep, p.deckThickness));
 
-    // Piers under the ELEVATED spans of the mainline: a column every ~24 m of
-    // raised run, from the ground up to the deck soffit. deckY here is the
-    // authored spine height; the pier stops at deckY - thickness.
-    if (deckSpine.yAbs.size() == deckSpine.points.size()) {
-        std::vector<Vec2> cl = deckSpine.points;
-        std::vector<double> dy = deckSpine.yAbs;
-        std::vector<int> at;
-        double since = 1e9;
-        for (std::size_t i = 0; i < cl.size(); ++i) {
-            const double g = p.ground ? p.ground(cl[i].x, cl[i].y) : 0.0;
-            const double clr = dy[i] - g;
-            const double seg = i == 0 ? 0.0 : (cl[i] - cl[i - 1]).length();
-            since += seg;
-            if (clr > 2.0 && since >= 24.0) { at.push_back(static_cast<int>(i)); since = 0.0; }
+    // Piers under the elevated spans (shared helper — the street lattice uses
+    // the same placement for authored viaducts and layered bridges).
+    MeshBuilder::append(mesh, latticeChainPiers(deckSpine, p.ground, p.deckThickness,
+                                                p.pierBasesOut));
+    return mesh;
+}
+
+RenderMesh latticeChainPiers(const UnionSpine& spine,
+                             const std::function<double(double, double)>& ground,
+                             double deckThickness, std::vector<Vec2>* pierBasesOut,
+                             const std::function<bool(const Vec2&)>& keepOut) {
+    RenderMesh mesh;
+    if (spine.yAbs.size() != spine.points.size()) return mesh;
+    const std::vector<Vec2>& cl = spine.points;
+    const std::vector<double>& dy = spine.yAbs;
+    std::vector<int> at;
+    double since = 1e9;
+    for (std::size_t i = 0; i < cl.size(); ++i) {
+        const double g = ground ? ground(cl[i].x, cl[i].y) : 0.0;
+        const double clr = dy[i] - g;
+        const double seg = i == 0 ? 0.0 : (cl[i] - cl[i - 1]).length();
+        since += seg;
+        if (clr > 2.0 && since >= 24.0) {
+            if (keepOut && keepOut(cl[i])) continue;   // no column in a road below
+            at.push_back(static_cast<int>(i));
+            since = 0.0;
         }
-        if (!at.empty()) {
-            MeshBuilder::append(mesh, bridgePiers(cl, dy, at, 2.0, 1.4, p.deckThickness,
-                                                  Vec3(0.45, 0.46, 0.48), p.ground));
-            if (p.pierBasesOut)
-                for (int i : at) p.pierBasesOut->push_back(cl[i]);
-        }
+    }
+    if (!at.empty()) {
+        MeshBuilder::append(mesh, bridgePiers(cl, dy, at, 2.0, 1.4, deckThickness,
+                                              Vec3(0.45, 0.46, 0.48), ground));
+        if (pierBasesOut)
+            for (int i : at) pierBasesOut->push_back(cl[i]);
     }
     return mesh;
 }
@@ -866,7 +878,8 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
 // corners bevel with a fan, PINCHING corners meet at the true intersection.
 RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                  const std::function<double(double, double)>& edgeHeight,
-                                 double sidewalkWidth, double curbHeight) {
+                                 double sidewalkWidth, double curbHeight,
+                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps) {
     RenderMesh mesh;
     if (sidewalkWidth <= 0.0) return mesh;
     const Vec3 walkColor(0.62, 0.62, 0.60);
@@ -913,11 +926,23 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
         std::vector<double> sArc(m + 1, 0.0);
         for (int i = 0; i < m; ++i)
             sArc[i + 1] = sArc[i] + (loop[(i + 1) % m] - loop[i]).length();
+        auto inMouthGap = [&](const Vec2& p) {
+            if (!mouthGaps) return false;
+            for (const auto& gseg : *mouthGaps) {
+                const Vec2 ab = gseg.second - gseg.first;
+                const double l2 = ab.lengthSquared();
+                double t = l2 > 1e-12 ? dot(p - gseg.first, ab) / l2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                if ((gseg.first + ab * t - p).length() < 0.8) return true;
+            }
+            return false;
+        };
         for (int i = 0; i < m; ++i) {
             const int j = (i + 1) % m;
             const Vec2& a = loop[i];
             const Vec2& b = loop[j];
             if ((b - a).length() < 1e-9) continue;
+            if (inMouthGap((a + b) * 0.5)) continue;   // never curb a ramp shut
             const Vec2 ao = oc[i].nextPt, bo = oc[j].prevPt;
             const Vec2 rn = rnorm(b - a);
             const Vec3 eo3(rn.x, 0, rn.y);   // outward, per edge
