@@ -737,8 +737,8 @@ TEST_CASE(lattice_meshes_authored_freeway_with_structure) {
         if (gn.y < -0.5 && ctr.y > 7.0) ++down;          // soffit underside
         if (std::fabs(gn.y) <= 0.5 && ctr.y > 8.5) ++lateral;   // parapets/median
         if (std::fabs(gn.y) <= 0.5 && ctr.y > 2.0 && ctr.y < 7.0 &&
-            std::fabs(ctr.z) < 3.0)
-            ++pierFaces;                                  // pier shafts
+            std::fabs(ctr.z) < 12.0)
+            ++pierFaces;   // pier shafts (portal legs stand at the deck edges)
     }
     CHECK(up9 > 0);
     CHECK(down > 0);

@@ -337,6 +337,20 @@ RenderMesh latticeChainPiers(const UnionSpine& spine,
     if (spine.yAbs.size() != spine.points.size()) return mesh;
     const std::vector<Vec2>& cl = spine.points;
     const std::vector<double>& dy = spine.yAbs;
+    // Column bases sit at the DECK EDGES (portal bent), so the keep-out must
+    // test the COLUMN positions, not the centreline — a bent whose centre is
+    // clear can still drop a leg in the street below.
+    const double colOff = std::max(1.2, spine.halfWidth - 1.2);
+    std::vector<Vec2> clL(cl.size()), clR(cl.size());
+    for (std::size_t i = 0; i < cl.size(); ++i) {
+        const std::size_t j = i + 1 < cl.size() ? i + 1 : i;
+        const std::size_t h = i > 0 ? i - 1 : i;
+        Vec2 d = cl[j] - cl[h];
+        const double dl = d.length();
+        const Vec2 n = dl > 1e-9 ? Vec2(-d.y / dl, d.x / dl) : Vec2(0, 1);
+        clL[i] = cl[i] + n * colOff;
+        clR[i] = cl[i] - n * colOff;
+    }
     std::vector<int> at;
     double since = 1e9;
     for (std::size_t i = 0; i < cl.size(); ++i) {
@@ -345,16 +359,67 @@ RenderMesh latticeChainPiers(const UnionSpine& spine,
         const double seg = i == 0 ? 0.0 : (cl[i] - cl[i - 1]).length();
         since += seg;
         if (clr > 2.0 && since >= 24.0) {
-            if (keepOut && keepOut(cl[i])) continue;   // no column in a road below
+            if (keepOut && (keepOut(clL[i]) || keepOut(clR[i])))
+                continue;   // a LEG would stand in a road below: slide on
             at.push_back(static_cast<int>(i));
             since = 0.0;
         }
     }
+    // Span audit (roads-v2.1 2d): a stretch that never found a legal pier
+    // is a validator warning, not a silently unsupported deck.
+    {
+        double run = 0;
+        std::size_t k = 0;
+        for (std::size_t i = 1; i < cl.size(); ++i) {
+            run += (cl[i] - cl[i - 1]).length();
+            const double g = ground ? ground(cl[i].x, cl[i].y) : 0.0;
+            if (k < at.size() && static_cast<int>(i) >= at[k]) { run = 0; ++k; }
+            if (run > 60.0 && dy[i] - g > 2.0) {
+                std::fprintf(stderr,
+                             "[piers] WARN: %0.0f m elevated span with no legal "
+                             "pier near (%.0f, %.0f)\n", run, cl[i].x, cl[i].y);
+                run = 0;
+            }
+        }
+    }
     if (!at.empty()) {
-        MeshBuilder::append(mesh, bridgePiers(cl, dy, at, 2.0, 1.4, deckThickness,
-                                              Vec3(0.45, 0.46, 0.48), ground));
+        // PORTAL BENTS (roads-v2.1 2d, drive feedback B3: "one pillar is
+        // probably not enough... it would need a u-bend or two pillars"):
+        // each bent is TWO columns at the deck edges joined by a cap beam
+        // under the deck — not a single box in the middle of the roadway
+        // width. Columns reuse bridgePiers on laterally-offset centrelines.
+        const Vec3 pc(0.45, 0.46, 0.48);
+        MeshBuilder::append(mesh, bridgePiers(clL, dy, at, 1.2, 1.2, deckThickness, pc, ground));
+        MeshBuilder::append(mesh, bridgePiers(clR, dy, at, 1.2, 1.2, deckThickness, pc, ground));
+        // Cap beam: a shallow box spanning the two columns under the deck.
+        for (int i : at) {
+            const double beamTop = dy[i] - deckThickness;
+            const double beamBot = beamTop - 0.9;
+            const Vec2 A = clL[i], B = clR[i];
+            Vec2 axis = B - A;
+            const double al = axis.length();
+            if (al < 1e-6) continue;
+            axis = axis * (1.0 / al);
+            const Vec2 n2(-axis.y, axis.x);
+            const double hw2 = 0.7;
+            auto V = [&](const Vec2& q, double y) { return Vec3(q.x, y, q.y); };
+            const Vec2 c0 = A - axis * 0.6 + n2 * hw2, c1 = B + axis * 0.6 + n2 * hw2;
+            const Vec2 c2 = B + axis * 0.6 - n2 * hw2, c3 = A - axis * 0.6 - n2 * hw2;
+            const Vec3 up(0, 1, 0);
+            MeshBuilder::emitQuad(mesh, V(c0, beamBot), V(c1, beamBot),
+                                  V(c2, beamBot), V(c3, beamBot), up * -1.0, pc);
+            MeshBuilder::emitQuad(mesh, V(c0, beamBot), V(c0, beamTop),
+                                  V(c1, beamTop), V(c1, beamBot),
+                                  Vec3(n2.x, 0, n2.y), pc);
+            MeshBuilder::emitQuad(mesh, V(c2, beamBot), V(c2, beamTop),
+                                  V(c3, beamTop), V(c3, beamBot),
+                                  Vec3(-n2.x, 0, -n2.y), pc);
+        }
         if (pierBasesOut)
-            for (int i : at) pierBasesOut->push_back(cl[i]);
+            for (int i : at) {
+                pierBasesOut->push_back(clL[i]);
+                pierBasesOut->push_back(clR[i]);
+            }
     }
     return mesh;
 }

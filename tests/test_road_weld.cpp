@@ -393,7 +393,9 @@ TEST_CASE(gradesep_piers_straddle_the_street) {
         const double minY = std::min({a.y, b.y, c.y});
         const double maxY = std::max({a.y, b.y, c.y});
         const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
-        if (maxY - minY < 5.0 || std::fabs(cx) > 1.6) continue;   // shaft faces
+        // PORTAL bents (roads-v2.1 2d): two legs at the deck edges — shafts
+        // sit near |x| = halfWidth-1.2, not on the centreline.
+        if (maxY - minY < 5.0 || std::fabs(cx) > 6.0) continue;   // shaft faces
         if (std::fabs(cz) < 6.0) ++onRoad; else if (cz < -6.0) ++north; else ++south;
     }
     CHECK(onRoad == 0);
