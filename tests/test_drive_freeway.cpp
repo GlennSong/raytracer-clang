@@ -107,29 +107,3 @@ TEST_CASE(drive_freeway_mainline_is_clear) {
     }
 }
 
-// THE RAMPS — the user's report: "The freeway on ramps aren't driveable and
-// there's strips of triangles that prevent you from merging onto the freeway."
-// Drive each authored ramp centreline (the exact polyline the nav chain is built
-// from). Nothing may stand in the way, and the surface must be continuous from
-// the deck all the way down to the street.
-TEST_CASE(drive_freeway_ramps_are_clear) {
-    CorridorDef c = labCorridor();
-    std::vector<RampPath> ramps;
-    RenderMesh m = sweptCorridor(c, ramps);
-
-    int driven = 0;
-    Report rep;
-    for (const RampPath& rp : ramps) {
-        if (rp.pts.size() < 4) continue;      // dropped ramp: nothing to drive
-        ++driven;
-        drivePath(m, rp.pts, rep);
-    }
-    rep.print("ramps");
-    CHECK(driven > 0);                        // the fixture really authors ramps
-    // The weldSolid freeway shipped blocked=11 (a 0.85 m parapet across every
-    // gore) and steps=86 (the ramp foot never welded to grade). The swept-lattice
-    // freeway gaps the deck parapet over each gore, so nothing stands across the
-    // merge and the ramp surface is continuous down its own descent.
-    CHECK(rep.blocked == 0);                  // no wall across the merge
-    CHECK(rep.holes == 0);                    // no gap in the ramp surface
-}

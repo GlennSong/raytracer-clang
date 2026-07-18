@@ -540,7 +540,11 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
             const Vec2 d = b2 - a2;
             const double t = (d.x * B.dir.y - d.y * B.dir.x) / denom;
             const Vec2 hit = a2 + A.dir * t;
-            if ((hit - (a2 + b2) * 0.5).length() < 2.0 * chord) { c2 = hit; arc = true; }
+            // A kerb-return control sits NEAR the corner. A far intersection
+            // (near-parallel arms on a generated graph) would sweep the arc
+            // across the pad and self-intersect the loop — earcut then spins
+            // its recovery passes (the 14-minute city hang). Straight chord.
+            if ((hit - (a2 + b2) * 0.5).length() < 0.75 * chord) { c2 = hit; arc = true; }
         }
         const int nArc = arc ? std::max(2, std::min(10, static_cast<int>(chord / 1.5))) : 1;
         for (int k = 1; k < nArc; ++k) {

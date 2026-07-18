@@ -13,6 +13,7 @@
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
+#include "../procgen/city/road_net.h"   // buildRoadNetLattice (city.solid, S6)
 #include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
@@ -1855,25 +1856,55 @@ int l_city_weld(lua_State* L) {
 int l_city_solid(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    WeldSolidParams p;
-    p.topY = optField(L, 1, "y", p.topY);
-    p.thickness = optField(L, 1, "thickness", p.thickness);
-    p.cornerRadius = optField(L, 1, "corner_radius", p.cornerRadius);
-    p.maxGrade = optField(L, 1, "max_grade", p.maxGrade);
-    p.topColor = optVec3Field(L, 1, "color", p.topColor);
-    p.sideColor = optVec3Field(L, 1, "side_color", p.sideColor);
-    p.bottomColor = optVec3Field(L, 1, "bottom_color", p.bottomColor);
-    p.sidewalkWidth = optField(L, 1, "sidewalk", p.sidewalkWidth);
-    p.curbHeight = optField(L, 1, "curb", p.curbHeight);
-    p.sidewalkColor = optVec3Field(L, 1, "sidewalk_color", p.sidewalkColor);
-    p.curbColor = optVec3Field(L, 1, "curb_color", p.curbColor);
+    // Roads-v2 S6: the weld is gone — city.solid now routes through the ONE
+    // road mesher. The spine polylines become a RoadGraph (nodes hash-deduped
+    // at shared positions, so touching spines weld into junctions) and
+    // buildRoadNetLattice builds carriageways, junction pads, curb/sidewalk
+    // band and per-class structure exactly like every level road.
+    const double sidewalkW = optField(L, 1, "sidewalk", 0.0);
+    const double curbH = optField(L, 1, "curb", 0.15);
+    const double topY = optField(L, 1, "y", 0.0);
+    RoadGraph g;
+    std::unordered_map<long long, int> nodeAt;
+    auto key = [](const Vec2& p) {
+        return (static_cast<long long>(std::llround(p.x * 8.0)) << 32) ^
+               (static_cast<long long>(std::llround(p.y * 8.0)) & 0xffffffffLL);
+    };
+    for (const UnionSpine& sp : spines) {
+        const bool hasY = sp.yAbs.size() == sp.points.size();
+        int prev = -1;
+        for (std::size_t i = 0; i < sp.points.size(); ++i) {
+            const long long k = key(sp.points[i]);
+            auto it = nodeAt.find(k);
+            int ni;
+            if (it != nodeAt.end()) ni = it->second;
+            else {
+                RoadNode n;
+                n.pos = sp.points[i];
+                if (hasY) { n.elev = sp.yAbs[i]; n.elevAbsolute = true; }
+                ni = static_cast<int>(g.nodes.size());
+                g.nodes.push_back(n);
+                nodeAt.emplace(k, ni);
+            }
+            if (prev >= 0 && prev != ni) {
+                RoadEdge e;
+                e.a = prev; e.b = ni;
+                e.width = sp.halfWidth * 2.0;
+                e.klass = sp.klass;
+                g.edges.push_back(e);
+            }
+            prev = ni;
+        }
+    }
+    std::function<Real(Real, Real)> ground = [topY](Real, Real) { return topY; };
     lua_getfield(L, 1, "height");
     if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
         HeightField h = *hf;
-        p.heightAt = [h](double x, double z) { return h(x, z); };
+        ground = [h, topY](Real x, Real z) { return h(x, z) + topY; };
     }
     lua_pop(L, 1);
-    pushMesh(L, std::make_shared<RenderMesh>(weldSolid(spines, p)));
+    pushMesh(L, std::make_shared<RenderMesh>(
+        buildRoadNetLattice(g, ground, nullptr, sidewalkW, curbH)));
     return 1;
 }
 

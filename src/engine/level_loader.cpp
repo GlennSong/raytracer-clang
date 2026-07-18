@@ -3193,7 +3193,7 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<UnionSpine> spines =
                     engine::roadNetWeldSpines(engine::roadNetConstrainedGraph(net));
                 std::vector<std::vector<double>> profs = engine::weldChainProfiles(
-                    spines, levelGround, 0.0, engine::WeldSolidParams{}.maxGrade,
+                    spines, levelGround, 0.0, /*maxGrade=*/0.08,
                     net.sidewalk + 4.0);
                 if (std::getenv("RT_POKE_SITE")) {
                     RoadGraph gFp = engine::roadNetConstrainedGraph(net);

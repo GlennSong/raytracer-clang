@@ -18,6 +18,12 @@ struct Node {
 };
 
 struct Earcut {
+    // HARD STEP BUDGET: mapbox's recovery passes (filter -> cure -> split) can
+    // ping-pong forever on a self-intersecting input polygon — measured as a
+    // 14-minute spin on one malformed junction loop from a generated city. No
+    // input may hang the clipper: when the budget runs out the fill returns
+    // partial (a visual defect at ONE junction beats a hung build).
+    long long steps = 0, maxSteps = 0;
     std::vector<Node> nodes;
     std::vector<std::array<int, 3>> tris;
 
@@ -90,6 +96,7 @@ struct Earcut {
         if (ear == -1) return;
         int stop = ear, prev, next;
         while (nodes[ear].prev != nodes[ear].next) {
+            if (maxSteps > 0 && ++steps > maxSteps) return;   // budget: bail, partial
             prev = nodes[ear].prev; next = nodes[ear].next;
             if (isEar(ear)) {
                 tris.push_back({nodes[prev].i, nodes[ear].i, nodes[next].i});
@@ -124,6 +131,7 @@ struct Earcut {
     int cureLocalIntersections(int start) {
         int p = start;
         do {
+            if (maxSteps > 0 && ++steps > maxSteps) return filterPoints(p);
             int a = nodes[p].prev, b = nodes[nodes[p].next].next;
             if (!equals(a, b) && intersects(a, p, nodes[p].next, b) &&
                 locallyInside(a, b) && locallyInside(b, a)) {
@@ -149,8 +157,10 @@ struct Earcut {
     void splitEarcut(int start) {
         int a = start;
         do {
+            if (maxSteps > 0 && steps > maxSteps) return;
             int b = nodes[nodes[a].next].next;
             while (b != nodes[a].prev) {
+                if (maxSteps > 0 && ++steps > maxSteps) return;
                 if (nodes[a].i != nodes[b].i && isValidDiagonal(a, b)) {
                     int c = splitPolygon(a, b);
                     a = filterPoints(a, nodes[a].next);
@@ -281,6 +291,10 @@ triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
         holeStarts.push_back(E.linkedList(ring, pts, /*clockwise=*/false));
     }
     if (!holeStarts.empty()) E.eliminateHoles(outerNode, holeStarts);
+    // A well-formed n-gon clips in ~n ears; give a generous multiple, but NOT
+    // quadratic — the recovery passes reset each other on malformed input and
+    // a quadratic budget let 700 city pads churn for minutes.
+    E.maxSteps = 200LL * static_cast<long long>(pts.size()) + 20000;
     E.earcutLinked(E.filterPoints(outerNode));
 
     out.reserve(E.tris.size());

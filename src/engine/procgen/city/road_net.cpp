@@ -201,6 +201,11 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
 // Also keeps the curvature cap honest: netMinTurnRadius scans edgeWidths, and
 // a 27 m freeway width would inflate every street's minimum turn radius.
 // Nodes are kept (indices stay stable); orphaned nodes emit no geometry.
+// Profile slope limit (rise/run) for chain-height smoothing — the value the
+// deleted weld used (WeldSolidParams::maxGrade); mesh and terrain carve both
+// grade to it, so they stay in agreement.
+static constexpr double kRoadMaxGrade = 0.08;
+
 RoadNet roadNetStreetsOnly(const RoadNet& net) {
     bool any = false;
     for (uint8_t b : net.edgeBaked)
@@ -412,14 +417,16 @@ struct EdgeHeightField {
 
 RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                const std::function<Real(Real, Real)>& heightAt,
-                               std::vector<std::size_t>* chainTriEndsOut) {
+                               std::vector<std::size_t>* chainTriEndsOut,
+                               double sidewalkWidth, double curbHeight,
+                               bool crosswalks) {
     const int N = static_cast<int>(g.nodes.size());
     // Stage 1 of the junction re-architecture (docs/junction-weld-decision.md):
     // the junction owns the FULL cross-section. Trim each body by its full
     // half-width (carriageway + sidewalk), so an arm's raised sidewalk pulls
     // back out of the junction disc instead of sweeping into the pad and
     // double-covering it — the measured 85% of the 16% overlap.
-    const double kSidewalkW = 3.0;   // matches the streetProfile(..) call below
+    const double kSidewalkW = sidewalkWidth;
     std::vector<int> deg(N, 0);
     std::vector<double> rad(N, 0.0);
     for (const RoadEdge& e : g.edges) {
@@ -467,7 +474,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     std::vector<UnionSpine> chains = weldChainSpines(g);
     {
         std::vector<std::vector<double>> profiles = weldChainProfiles(
-            chains, groundFn, 0.0, WeldSolidParams{}.maxGrade, 3.0 + 4.0);
+            chains, groundFn, 0.0, kRoadMaxGrade, 3.0 + 4.0);
         for (std::size_t si = 0; si < chains.size(); ++si)
             if (chains[si].yAbs.empty() &&
                 profiles[si].size() == chains[si].points.size())
@@ -574,8 +581,28 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
             // S5 OWNERSHIP: street bodies sweep the CARRIAGEWAY only. The curb
             // + sidewalk band owns everything outside the asphalt — a body can
             // no longer sweep a raised sidewalk into a pad or a neighbour.
+            const std::size_t v0 = out.vertices.size();
             MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
                                                       ground, 2.0, nullptr, &ring0, &ringN));
+            // Crosswalk band UV (ADR-0062, ported from the weld): the shader
+            // stripes a zebra where mv lands in the set-back window past a
+            // junction mouth. The sweep bakes v = chain arc length; remap it
+            // to metres-past-the-NEAREST-JUNCTION-mouth (dead ends and chain
+            // interiors stay out of the window), or shift everything clear of
+            // the window when crosswalks are off — the paint stays gated.
+            {
+                double Lc = 0;
+                for (std::size_t i = 1; i < t.points.size(); ++i)
+                    Lc += (t.points[i] - t.points[i - 1]).length();
+                const bool jA = rA > 0.0, jB = rB > 0.0;
+                for (std::size_t vi = v0; vi < out.vertices.size(); ++vi) {
+                    const double sAt = out.vertices[vi].v;
+                    double d = 1e4;
+                    if (jA) d = std::min(d, sAt);
+                    if (jB) d = std::min(d, Lc - sAt);
+                    out.vertices[vi].v = static_cast<float>(crosswalks ? d : d + 64.0);
+                }
+            }
             if (elevated) {
                 // A layered street bridge: give the deck an underside and legs.
                 // (Its sidewalk is omitted — bridge sides are barrier/grammar
@@ -688,7 +715,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         }
         MeshBuilder::append(out, sweepCurbSidewalkBand(
             loops, [&](double x, double z) { return bandHeights.sample(x, z); },
-            3.0, 0.15, bandGaps.empty() ? nullptr : &bandGaps));
+            sidewalkWidth, curbHeight, bandGaps.empty() ? nullptr : &bandGaps));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;
@@ -722,9 +749,6 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
     // (that re-promoted roundabouts the generator disabled).
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;
-    bool roundabout = false;
-    for (int v = 0; v < static_cast<int>(raw.nodes.size()); ++v)
-        if (nodeNeedsRoundabout(raw, v, rules)) { roundabout = true; break; }
     RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= constrainedNetGraph)
 
     // Grade separations (ADR-0051/0054): an edge on a higher layer is an overpass.
@@ -803,93 +827,13 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
         }
     }
 
-    // Swept-lattice streets (street-lattice-plan.md stage 3c): temporary env gate
-    // so the whole-city switch can be DRIVEN before it becomes the default. Not a
-    // standing flag — it comes out when the lattice reaches parity and weldSolid
-    // is deleted.
-    if (net.latticeStreets || std::getenv("RT_LATTICE_STREETS"))
-        return buildRoadNetLattice(g, net.heightAt);
-
-    // Three road meshers. The polygon-union WELD is the default — each road welded into ONE surface
-    // (no double-coverage, so sidewalks can't overlap at any junction angle), crisp, fast, UV-native.
-    // The SDF grid weld and the analytic per-junction pad are kept as opt-in alternatives (A/B +
-    // fallback). A roundabout ring welds fine too: weldChainSpines hands the loop to weldSolid, whose
-    // union opens the island as a hole.
-
-    // Opt-in SDF grid weld: RT_SDF_ROADS, or a roundabout under RT_ROUNDABOUT_SDF.
-    if (std::getenv("RT_SDF_ROADS") || (roundabout && std::getenv("RT_ROUNDABOUT_SDF"))) {
-        RoadbedParams rp;
-        rp.cell = 0.4;
-        rp.sidewalkWidth = net.sidewalk;
-        rp.curbHeight = net.curb;
-        rp.lift = net.lift;
-        rp.roadColor = net.color;
-        rp.heightAt = net.heightAt;
-        // Suppress lane markings inside each junction (degree >= 3): the crossing reads as plain
-        // asphalt and the road-local UV is ambiguous there. Radius ~ the widest incident road.
-        std::vector<int> deg(g.nodes.size(), 0);
-        std::vector<double> jw(g.nodes.size(), 0.0);
-        for (const RoadEdge& e : g.edges) {
-            ++deg[e.a]; ++deg[e.b];
-            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
-            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
-        }
-        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v)
-            if (deg[v] >= 3) { rp.noPaintCenters.push_back(g.nodes[v].pos); rp.noPaintRadii.push_back(jw[v] * 0.85); }
-        return unionRoadbed(g, rp);
-    }
-    // Opt-in analytic per-junction mesher (RT_ANALYTIC_ROADS) — the former default, kept as a fallback
-    // and for anything the weld doesn't yet cover.
-    if (std::getenv("RT_ANALYTIC_ROADS")) {
-        RoadMeshParams p;
-        p.lift = net.lift;
-        p.color = net.color;
-        p.sidewalkWidth = net.sidewalk;
-        p.curbHeight = net.curb;
-        p.cornerRadius = net.cornerRadius;
-        p.laneMarkings = net.markings;
-        p.shaderMarkings = net.markings;     // paint via the RoadMarkings surface, not geometry
-        p.crosswalks = net.crosswalks;
-        p.minSetback = net.width * 0.5 + 0.5;        // pad clears the curb corners
-        p.heightAt = net.heightAt;
-        return buildRoadMesh(g, p);
-    }
-
-    // DEFAULT: polygon-union weld. Smooth per-road ribbons (weldChainSpines) boolean-unioned into one
-    // surface with raised sidewalk bands, rounded curb returns, and UV-native lane markings — the
-    // welded boundary snap-rounded + de-spiked so sharp junctions stay clean.
-    WeldSolidParams wp;
-    wp.topY = net.lift;
-    wp.thickness = 0.5;
-    wp.cornerRadius = net.cornerRadius;
-    wp.sidewalkWidth = net.sidewalk;
-    wp.curbHeight = net.curb;
-    wp.topColor = net.color;
-    wp.heightAt = net.heightAt;
-    wp.crosswalks = net.crosswalks;   // paint set-back zebra bands into the road texture
-    wp.crosswalkMaxWidth = 18.0;      // ...but never across a freeway-width chain
-    wp.clearance = defaultDesign().clearance;   // grade-separation Δz threshold (P4)
-    wp.barriers = true;               // Freeway-class chains get parapets + median (one mesher)
-    // Junction pads (device: mesh holes at skewed T-junctions): chains end square
-    // to their own direction, so where a through-road BENDS at a junction the two
-    // arm caps disagree by the bend angle and a wedge of ground shows through. A
-    // disc per junction node, radius = the widest incident arm's half-width,
-    // fills every such wedge regardless of the arm angles.
-    {
-        std::vector<int> deg(g.nodes.size(), 0);
-        std::vector<double> jw(g.nodes.size(), 0.0);
-        for (const RoadEdge& e : g.edges) {
-            ++deg[e.a]; ++deg[e.b];
-            jw[e.a] = std::max(jw[e.a], static_cast<double>(e.width));
-            jw[e.b] = std::max(jw[e.b], static_cast<double>(e.width));
-        }
-        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v)
-            if (deg[v] >= 3) {
-                wp.padCenters.push_back(g.nodes[v].pos);
-                wp.padRadii.push_back(jw[v] * 0.5 * 1.02);
-            }
-    }
-    return weldSolid(weldChainSpines(g), wp);
+    // ONE MESHER (roads-v2 S6): every street net goes through the swept
+    // lattice — carriageway bodies, junction pads, curb/sidewalk band loops,
+    // and per-class structure (freeway kit, ramp decks, layered bridges).
+    // The union weld (weldSolid), the SDF grid and the analytic fallback are
+    // deleted from this path; the lattice IS the road mesher.
+    return buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk, net.curb,
+                               net.crosswalks);
 }
 
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder,
@@ -920,7 +864,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double sho
     // only minOverlapping left the higher deck floating up to 2.6 m above the
     // ground it never lowered (road_poke_probe metropolis, 8.4% verts >1 m).
     std::vector<std::vector<double>> profiles =
-        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade,
+        weldChainProfiles(spines, net.heightAt, 0.0, kRoadMaxGrade,
                           net.sidewalk + 4.0);
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
@@ -1032,7 +976,7 @@ StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p) {
     RoadGraph g = constrainedNetGraph(net);
     std::vector<UnionSpine> spines = weldChainSpines(g);
     std::vector<std::vector<double>> profiles =
-        weldChainProfiles(spines, net.heightAt, 0.0, WeldSolidParams{}.maxGrade,
+        weldChainProfiles(spines, net.heightAt, 0.0, kRoadMaxGrade,
                           net.sidewalk + 4.0);
 
     for (std::size_t si = 0; si < spines.size(); ++si) {
@@ -1284,7 +1228,6 @@ RoadNet roadNetFromJson(const json& j) {
     if (j.contains("edge_specs") && j["edge_specs"].is_array())
         for (const auto& je : j["edge_specs"])
             net.edgeSpecs.push_back(je.is_number_integer() ? je.get<int>() : -1);
-    net.latticeStreets = j.value("lattice", net.latticeStreets);
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
                          j["color"][2].get<double>());

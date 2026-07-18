@@ -29,8 +29,8 @@ using namespace mesh_invariants;
 
 namespace {
 
-// weldSolid flat-shades, so every triangle pushes its OWN vertices — a fan has no
-// shared index to count. Cluster by POSITION (1 cm) to find coincident apexes.
+// Flat-shaded meshes push per-face vertices — a fan has no shared index to
+// count. Cluster by POSITION (1 cm) to find coincident apexes.
 long long key1cm(const Vec3& p) {
     const long long x = std::llround(p.x * 100), y = std::llround(p.y * 100),
                     z = std::llround(p.z * 100);

@@ -264,85 +264,8 @@ RenderMesh unionRibbons(const std::vector<UnionSpine>& spines, double cell,
 RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Vec3& color,
                        double cornerRadius = 0.0);
 
-// EXTRUDE the welded outline into a closed SOLID with real thickness — top deck, vertical side
-// walls, and a bottom — instead of a one-sided floating ribbon (unified-road-plan task 3). The
-// road rides a smoothed, grade-limited vertical profile: terrain height is sampled along each
-// spine's centerline and ironed flat by roadProfile (follows hills, irons out bumps), then any
-// surface point takes the nearest spine's smoothed height. Block-interior holes get inner walls
-// too, so an open block is a real shaft. `cornerRadius` fillets junctions as in weldRibbons.
-struct WeldSolidParams {
-    double topY = 0.06;                         // flat fallback height when no terrain is given
-    double thickness = 0.5;                     // top-to-bottom extrude depth (m)
-    double cornerRadius = 0.0;                  // junction curb-return fillet
-    double maxGrade = 0.08;                     // profile slope limit (rise/run) for smoothing
-    // Grade-separation clearance (m): two carriageways overlapping in plan weld
-    // into one surface only where their decks are within this height of each
-    // other; beyond it they are separate surfaces (a deck flies over a road).
-    double clearance = 5.0;
-    Vec3   topColor{0.10, 0.10, 0.11};          // asphalt deck
-    Vec3   sideColor{0.18, 0.18, 0.19};         // curb / road edge
-    Vec3   bottomColor{0.05, 0.05, 0.05};       // underside
-    // VIADUCT STRUCTURE (one-mesher P8b). At grade, a road's edge is a curb and
-    // its underside is a slab bottom nobody ever sees — both stay near-black. But
-    // an AUTHORED elevated deck's edge and soffit ARE the structure: the fascia
-    // and box girder a viaduct is seen from below and beside. Painting those with
-    // the pavement colour turned every flown span into a black wedge; the corridor
-    // mesher this replaces drew them concrete, like the piers holding them up.
-    Vec3   viaductSideColor{0.56, 0.55, 0.53};    // fascia / slab edge (concrete)
-    Vec3   viaductBottomColor{0.44, 0.43, 0.42};  // soffit (concrete, self-shaded)
-    // Deck-surface CHORD SAG (m). The deck top is earcut over the union's 2D
-    // outline, then each vertex is lifted to heightOf(). Ear clipping guarantees a
-    // VALID triangulation but never a well-shaped one: on a long spine it emits
-    // slivers spanning hundreds of metres, and a triangle's interior is a flat
-    // plane through its corners — so such a sliver cuts THROUGH a climbing deck
-    // instead of following it (a 48% cliff in the driving surface; the "dark
-    // wedges" at freeway_lab's gores). Any edge whose midpoint the chord misses by
-    // more than this is bisected and its triangle re-split, so the sheet tracks the
-    // road however earcut happened to carve it. 0 disables (raw earcut).
-    double deckSag = 0.10;
-    int    deckSagMaxDepth = 8;                   // recursion cap (4^d worst case)
-    // PIER FOOTPRINTS (world XZ), reported out if non-null. The lot/vegetation
-    // passes treat a bent's ground as USED ("turn those pylons into a used lot so
-    // nothing else can be built there"): nothing may be planted or built inside a
-    // column. The weld is the only thing that knows where its piers actually land
-    // — it slides them clear of the streets below — so it is the only honest
-    // source for this.
-    std::vector<Vec2>* pierBasesOut = nullptr;
-    // Raised sidewalk: a curbed concrete band run along the welded boundary loops (the
-    // outer carriageway edge + every block-interior/island hole), offset outward by
-    // sidewalkWidth and standing curbHeight above the deck. 0 width = no sidewalks.
-    double sidewalkWidth = 0.0;                  // slab width beyond the carriageway (m)
-    double curbHeight = 0.15;                    // curb lip above the deck (m)
-    Vec3   sidewalkColor{0.55, 0.55, 0.52};      // concrete slab top
-    Vec3   curbColor{0.42, 0.42, 0.40};          // curb riser faces
-    std::function<double(double, double)> heightAt;  // terrain (world XZ -> height); null = flat
-    // Zebra crosswalks painted into the road TEXTURE (not overlaid geometry): when
-    // true, the carriageway UV `mv` is baked as metres PAST the junction mouth, so
-    // the RoadMarkings shader stripes a set-back crosswalk band on each approach.
-    // When false, mv is a large sentinel so no band is painted (ADR-0062).
-    bool   crosswalks = false;
-    // No zebra on FREEWAY-width chains (>= this full width): grade-separated
-    // roads have no street crossings. Mirrors RoadMeshParams::crosswalkMaxWidth.
-    double crosswalkMaxWidth = 18.0;
-    // Junction pads (device: mesh holes at skewed junctions): every chain ENDS
-    // square to its own direction at a junction node, so where the arms meet
-    // off-square (a bent through-road at a T, arms at 170°) the caps disagree and
-    // a knife-wedge of ground shows through between them. A disc of the widest
-    // incident arm's half-width per junction node — unioned into the outline and
-    // laid as a plain deck fan — covers every such wedge at any arm angle.
-    std::vector<Vec2>   padCenters;
-    std::vector<double> padRadii;
-    // FREEWAY BARRIERS (road-unification: one mesher): when true, every
-    // RoadClass::Freeway spine gets divided-highway furniture on its deck — edge
-    // parapets at the verge + a solid median box down the centre — trimmed to
-    // stop at junction mouths. Off by default so streets and existing fixtures
-    // are unaffected; the street mesher turns it on.
-    bool   barriers = false;
-    double barrierHeight = 0.85;                  // parapet / median wall height (m)
-    double medianHalfWidth = 0.7;                 // solid centre-divider half-width (m)
-    Vec3   barrierColor{0.60, 0.60, 0.58};        // concrete
-};
-RenderMesh weldSolid(const std::vector<UnionSpine>& spines, const WeldSolidParams& p);
+// (WeldSolidParams / weldSolid deleted — roads-v2 S6, one mesher.)
+
 
 // The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
 // an endpoint agree on its height) — weldSolid rides these, and the terrain

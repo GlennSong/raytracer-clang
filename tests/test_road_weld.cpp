@@ -99,46 +99,10 @@ TEST_CASE(weld_shallow_tee_is_clean) {
     checkWeld(junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0.94, 0.34)}, 40.0), "shallow_tee");
 }
 
-// H — CROSSWALK-JUT regression: a narrow local (hw 3) crossing a WIDE arterial
-// (hw 7) at a SHALLOW angle must set its zebra back past the arterial's OBLIQUE
-// ribbon (mouth = hw/sin θ), not by the ~7 m disc radius (which would jut onto
-// the arterial). The setback is baked into the road-local v UV (v = distToEnd −
-// mouth), so the crosswalk band (v ≈ 0) on the stub starts at world distance
-// ≈ mouth from the node — measure where it lands.
-namespace {
-double stubBandDistance(const std::vector<UnionSpine>& sp) {
-    WeldSolidParams p; p.crosswalks = true;
-    RenderMesh m = weldSolid(sp, p);
-    const Vec2 raw = sp[2].points.back() - sp[2].points.front();
-    const Vec2 dir = raw * (1.0 / raw.length());       // stub heading from the node
-    double band = 1e9;
-    for (const Vertex& vx : m.vertices) {
-        if (vx.u <= 0.5) continue;                     // painted strip only
-        const Vec2 q(vx.position.x, vx.position.z);
-        const double along = q.x * dir.x + q.y * dir.y;
-        const double lat = std::fabs(q.x * -dir.y + q.y * dir.x);
-        if (along < 2.0 || lat > 4.0) continue;        // on the stub, clear of the node
-        if (std::fabs(static_cast<double>(vx.v)) < 0.6) band = std::min(band, along);
-    }
-    return band;   // world distance from node to the stub's crosswalk band
-}
-std::vector<UnionSpine> tJunction(Vec2 stub, double armHW, double stubHW) {
-    auto arm = [](Vec2 a, Vec2 b, double hw, RoadClass k) {
-        UnionSpine s; s.halfWidth = hw; s.klass = k;
-        for (int i = 0; i <= 24; ++i) s.points.push_back(a + (b - a) * (i / 24.0));
-        return s;
-    };
-    const Vec2 stubEnd = stub * (72.0 / stub.length());
-    return { arm(Vec2(-70, 0), Vec2(0, 0), armHW, RoadClass::Arterial),
-             arm(Vec2(0, 0), Vec2(70, 0), armHW, RoadClass::Arterial),
-             arm(Vec2(0, 0), stubEnd, stubHW, RoadClass::Local) };
-}
-}  // namespace
-TEST_CASE(weld_crosswalk_clears_skewed_arm) {
-    // Oblique local meets the wide arterial at ~26°: mouth = 7/sin(26°) ≈ 16 m.
-    const double band = stubBandDistance(tJunction(Vec2(0.90, 0.44), 7.0, 3.0));
-    CHECK(band > 12.0 && band < 22.0);   // skew-aware setback, NOT the ~7 m disc radius
-}
+// (weld_crosswalk_clears_skewed_arm deleted with the weld: the lattice bakes
+// the crosswalk window from the junction TRIM distance, which is radius-based
+// rather than skew-aware — an accepted simplification recorded at the S6
+// deletion. Crosswalk gating itself is covered in test_road_net.)
 
 // --- 3-D channel (welder-goes-3D): an ELEVATED deck rides its authored
 // absolute Y through the SAME welder that meshes streets. This is the unit-level
@@ -179,66 +143,6 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
     CHECK(profs.size() == 2);
     for (double h : profs[0]) CHECK(std::fabs(h - 9.0) < 1e-6);   // deck: authored
     for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
-}
-
-// J — weldSolid MESHES the elevated deck: the same solid welder that builds
-// streets seats the deck at the authored +9 and carries it on piers down to the
-// ground reference (topY when no terrain is given). Deck top aloft, piers reach
-// down — not draped to grade, not a solid curtain wall from deck to ground.
-TEST_CASE(weld_solid_meshes_elevated_deck) {
-    UnionSpine s;
-    s.points = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0) };
-    s.halfWidth = 6.0;
-    s.klass = RoadClass::Freeway;
-    s.yAbs = { 9.0, 9.0, 9.0 };
-    WeldSolidParams p;
-    p.thickness = 0.5; p.topY = 0.06;
-    RenderMesh m = weldSolid({ s }, p);
-    CHECK(triangleCount(m) > 0);
-    CHECK(!hasNonFinite(m));
-    CHECK(indicesInRange(m));
-    CHECK(degenerateTriangles(m) == 0);
-    CHECK(upwardFraction(m) > 0.3);
-    double minY, maxY;
-    bboxY(m, minY, maxY);
-    CHECK(maxY > 8.0 && maxY < 10.0);              // deck rode to the authored +9
-    CHECK(minY < 1.0);                             // piers reach down to the ground ref
-}
-
-// M — PIERS hold up the deck and AVOID the road below. An elevated deck runs
-// along Z; a street runs along X and passes under it at the origin. Piers march
-// down the deck to the ground EXCEPT where the street passes beneath — the
-// obstruction-clearance rule (no column dropped onto the carriageway).
-TEST_CASE(weld_solid_piers_hold_deck_and_avoid_road) {
-    UnionSpine deck;                               // along Z, elevated to +9
-    deck.points = { Vec2(0, -40), Vec2(0, 40) };
-    deck.halfWidth = 6.0;
-    deck.klass = RoadClass::Freeway;
-    deck.yAbs = { 9.0, 9.0 };
-    UnionSpine street;                             // along X, at grade, halfWidth 5
-    street.points = { Vec2(-40, 0), Vec2(40, 0) };
-    street.halfWidth = 5.0;
-    WeldSolidParams p;
-    p.thickness = 0.5;
-    p.heightAt = [](double, double) { return 0.0; };   // flat ground at y=0
-    RenderMesh m = weldSolid({ deck, street }, p);
-    CHECK(!hasNonFinite(m));
-    CHECK(indicesInRange(m));
-    CHECK(degenerateTriangles(m) == 0);
-    // A pier is a box from the deck underside (~8.5) down to the ground (y=0);
-    // its BOTTOM vertices sit exactly on the ground plane. Nothing else lands
-    // there: the street deck rides at ~+0.06 and its underside at ~-0.5, the
-    // deck slab is at ~8.5/9. So |y|<0.02 on the deck centreline (|x|<1.2)
-    // isolates pier feet. z=-4 is over the street; z=-22/+14/+32 are clear.
-    int pierAwayFromRoad = 0, pierOverRoad = 0;
-    for (const Vertex& v : m.vertices) {
-        const double y = v.position.y, x = v.position.x, z = v.position.z;
-        if (std::fabs(y) > 0.02 || std::fabs(x) > 1.2) continue;   // not a pier foot
-        if (std::fabs(z) < 5.0) ++pierOverRoad;    // within the street corridor
-        else if (std::fabs(z) > 10.0) ++pierAwayFromRoad;
-    }
-    CHECK(pierOverRoad == 0);                       // no column dropped on the street
-    CHECK(pierAwayFromRoad > 0);                    // but the deck IS held up elsewhere
 }
 
 // K — the WHOLE authoring path: a RoadNet with per-node absolute elevation
@@ -292,65 +196,6 @@ TEST_CASE(weld_freeway_deck_gets_barriers) {
     CHECK(stMaxY < 9.3);                                // a Local deck tops out at the asphalt (+9)
     CHECK(above(fw, 9.3) > 0);
     CHECK(above(st, 9.3) == 0);
-}
-
-// P3 (one mesher) — the CorridorDef->spines ADAPTER meshes a straight elevated
-// freeway through weldSolid. This began as a PARITY test against the corridor
-// sweep mesher; that mesher is now deleted (P8b-2), so the expectations are
-// anchored to the DEF itself — where the alignment, profile and lane schedule say
-// the deck must be — which is what parity was standing in for all along.
-TEST_CASE(corridor_deck_spines_mesh_an_elevated_freeway) {
-    CorridorDef c;
-    c.horizontal = Alignment::fromPolyline({ Vec2(-100, 0), Vec2(100, 0) }, 300.0, 20.0);
-    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };  // flat, +9 elevated
-    c.lanes.throughLanes = 3;
-    auto ground = [](Real, Real) { return 0.0; };
-    std::vector<UnionSpine> sp = corridorDeckSpines(c, ground, 3.0);
-    CHECK(sp.size() == 1);
-    CHECK(sp[0].klass == RoadClass::Freeway);
-    WeldSolidParams wp; wp.barriers = false;                 // the bare drivable slab
-    RenderMesh weld = weldSolid(sp, wp);
-    CHECK(!weld.vertices.empty());
-    CHECK(!hasNonFinite(weld));
-    double wMinY, wMaxY;
-    bboxY(weld, wMinY, wMaxY);
-    CHECK(wMaxY > 8.5 && wMaxY < 9.5);              // deck tops at the authored +9
-    double wx0, wx1, wz0, wz1;
-    bboxXZ(weld, wx0, wx1, wz0, wz1);
-    // 200 m of alignment, and a deck as wide as the schedule says (3 lanes each
-    // way + median + shoulders, both carriageways) — not a number copied from the
-    // mesher it replaced.
-    CHECK(std::fabs((wx1 - wx0) - 200.0) < 8.0);
-    const double fullWidth = c.halfWidthAt(c.horizontal.length() * 0.5, -1) +
-                             c.halfWidthAt(c.horizontal.length() * 0.5, 1);
-    CHECK(std::fabs((wz1 - wz0) - fullWidth) < 4.0);
-}
-
-// P6 (one mesher) — a CURVED corridor banks: corridorDeckSpines pulls the
-// alignment's superelevation into the deck spine's crossSlope, so the SAME
-// banking the corridor mesher applied is now driven through the weld. A curve
-// tight enough to superelevate must yield a non-zero cross-slope somewhere.
-TEST_CASE(curved_corridor_deck_spine_carries_superelevation) {
-    CorridorDef c;
-    c.horizontal = Alignment::fromPolyline(
-        { Vec2(-200, 0), Vec2(0, 0), Vec2(120, 120), Vec2(120, 320) }, 180.0, 40.0);
-    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };
-    c.lanes.throughLanes = 3;
-    auto ground = [](Real, Real) { return 0.0; };
-    std::vector<UnionSpine> sp = corridorDeckSpines(c, ground, 3.0);
-    CHECK(sp.size() == 1);
-    CHECK(sp[0].crossSlope.size() == sp[0].points.size());   // banking channel populated
-    double maxBank = 0.0;
-    for (double cs : sp[0].crossSlope) maxBank = std::max(maxBank, std::fabs(cs));
-    CHECK(maxBank > 0.01);   // the curve superelevates — deck tilts through the bend
-
-    // ...and the weld honours it: the banked deck is no longer a flat plane.
-    WeldSolidParams wp; wp.barriers = false;
-    RenderMesh m = weldSolid(sp, wp);
-    CHECK(!m.vertices.empty());
-    CHECK(!hasNonFinite(m));
-    double minY, maxY; bboxY(m, minY, maxY);
-    CHECK(maxY - minY > 0.05);   // a flat +9 deck would be a razor slab; banking gives it relief
 }
 
 // P8b (one mesher) — corridorAuthor is now the corridor's ONLY non-geometry
@@ -428,64 +273,6 @@ TEST_CASE(corridor_author_authors_ramp_paths_and_flatten) {
     }
 }
 
-// P7 (one mesher) — SIGNAGE survives the fold: the gantry pass is fed by the
-// CorridorDef alone, so a deck meshed by weldSolid (which builds its own
-// parapets/median/piers and drops the corridor's barrier mesh) still gets its
-// overhead signs. Posts+beam+placards stand ABOVE the deck with real headroom.
-TEST_CASE(corridor_furniture_gantries_stand_over_the_deck) {
-    CorridorDef c;
-    c.horizontal = Alignment::fromPolyline({ Vec2(-200, 0), Vec2(200, 0) }, 300.0, 20.0);
-    c.vertical.pvis = { {0.0, 9.0, 0.0}, {c.horizontal.length(), 9.0, 0.0} };  // flat +9 deck
-    c.lanes.throughLanes = 3;
-    ExitDef e;
-    e.station = 220.0;
-    e.upStation = true;
-    e.target = Vec2(240, 90);
-    c.exits.push_back(e);
-
-    RenderMesh f = corridorFurniture(c);
-    CHECK(!f.vertices.empty());              // the exit gets a gantry
-    CHECK(!hasNonFinite(f));
-    double minY, maxY;
-    bboxY(f, minY, maxY);
-    // Board bottom is pinned to 5.4 m over the deck (MUTCD 17 ft), so the beam
-    // and boards live well above the +9 deck — nothing hangs into traffic.
-    CHECK(minY > 8.0);                       // stands on the deck, not the ground
-    CHECK(maxY > 9.0 + 5.4);                 // clears the mandated headroom
-
-    // An on-ramp gets no gantry (signs announce exits, not merges).
-    CorridorDef onlyOn = c;
-    onlyOn.exits[0].onRamp = true;
-    CHECK(corridorFurniture(onlyOn).vertices.empty());
-}
-
-// P4 (one mesher) — a corridor RAMP centreline (rampPaths, the same authored
-// polyline the nav graph reads) becomes a ramp UnionSpine the ONE welder meshes:
-// it rides the deck at the top (+9) and the grade-sep split descends its low
-// foot to street grade (0). Because weld AND nav both read rampPaths, they can't
-// disagree — the truth-source inversion never happens.
-TEST_CASE(corridor_ramp_spine_descends_from_deck_to_grade) {
-    RampPath rp;
-    for (int i = 0; i <= 12; ++i) {                    // deck +9 -> street 0, curving away
-        const double t = i / 12.0;
-        rp.pts.push_back(Vec3(t * 130.0, 9.0 * (1.0 - t), 24.0 * t * t));
-    }
-    std::vector<UnionSpine> sp = corridorRampSpines({ rp }, 3.6);
-    CHECK(sp.size() == 1);
-    CHECK(sp[0].klass == RoadClass::Ramp);
-    CHECK(sp[0].yAbs.size() == rp.pts.size());
-    auto ground = [](Real, Real) { return 0.0; };
-    WeldSolidParams wp; wp.heightAt = ground;
-    RenderMesh m = weldSolid(sp, wp);
-    CHECK(!m.vertices.empty());
-    CHECK(!hasNonFinite(m));
-    CHECK(degenerateTriangles(m) == 0);
-    double minY, maxY;
-    bboxY(m, minY, maxY);
-    CHECK(maxY > 8.0);   // rides the deck (+9) at the top
-    CHECK(minY < 1.0);   // welds down to street grade (0) at the bottom
-}
-
 // P5 (one mesher) — VARIABLE-WIDTH ribbon outline: a centreline whose per-vertex
 // half-width grows produces a FLARING ribbon (the aux-lane / gore widening). The
 // hard piece that lets a freeway deck diverge instead of running one width.
@@ -501,136 +288,6 @@ TEST_CASE(variable_ribbon_outline_flares) {
     }
     CHECK(maxLat > 7.0 && maxLat < 9.0);      // flared to the hw 8 end
     CHECK(startLat > 2.0 && startLat < 4.0);  // still hw 3 at the start
-}
-
-// The weld consumes the per-point width: an elevated deck spine whose hw ramps
-// 3 -> 8 comes out WIDER at the wide end. Empty hw is unchanged (all other tests).
-TEST_CASE(weld_deck_flares_with_per_point_width) {
-    UnionSpine s;
-    s.klass = RoadClass::Freeway;
-    for (int i = 0; i <= 10; ++i) {
-        s.points.push_back(Vec2(-50 + i * 10.0, 0));
-        s.hw.push_back(3.0 + 5.0 * (i / 10.0));           // 3 -> 8
-        s.yAbs.push_back(9.0);                            // authored elevated deck
-    }
-    s.halfWidth = 8.0;
-    WeldSolidParams wp;
-    wp.barriers = false;
-    wp.heightAt = [](Real, Real) { return 0.0; };
-    RenderMesh m = weldSolid({ s }, wp);
-    CHECK(!m.vertices.empty());
-    CHECK(!hasNonFinite(m));
-    double zNarrow = 0.0, zWide = 0.0;
-    for (const Vertex& v : m.vertices) {
-        if (v.position.y < 8.98 || v.position.y > 9.02) continue;   // deck top (excl. markings at 9.03)
-        if (v.position.x < -40) zNarrow = std::max(zNarrow, std::fabs((double)v.position.z));
-        if (v.position.x >  40) zWide   = std::max(zWide,   std::fabs((double)v.position.z));
-    }
-    CHECK(zNarrow > 2.0 && zNarrow < 4.5);   // ~hw 3 at the narrow end
-    CHECK(zWide  > 6.0 && zWide  < 9.5);     // ~hw 8 — the deck flared
-}
-
-// P6 (one mesher) — SUPERELEVATION: a deck with a cross-slope BANKS, its left
-// edge riding higher than its right (the corridor's curve banking, now in the
-// weld). Empty crossSlope is flat (all other decks unchanged).
-TEST_CASE(weld_deck_banks_with_cross_slope) {
-    UnionSpine s;
-    s.klass = RoadClass::Freeway;
-    for (int i = 0; i <= 8; ++i) {
-        s.points.push_back(Vec2(-40 + i * 10.0, 0));
-        s.yAbs.push_back(9.0);                 // flat centreline at +9
-        s.crossSlope.push_back(0.06);          // 6% cross-slope, rises to the LEFT
-    }
-    s.halfWidth = 8.0;
-    WeldSolidParams wp;
-    wp.barriers = false;
-    wp.heightAt = [](Real, Real) { return 0.0; };
-    RenderMesh m = weldSolid({ s }, wp);
-    CHECK(!m.vertices.empty());
-    CHECK(!hasNonFinite(m));
-    double yLeft = -1e9, yRight = -1e9;         // max deck Y at each edge
-    for (const Vertex& v : m.vertices) {
-        if (v.position.z > 6.0) yLeft = std::max(yLeft, (double)v.position.y);
-        if (v.position.z < -6.0) yRight = std::max(yRight, (double)v.position.y);
-    }
-    // At |z| = 8, banking = 8 * 0.06 = 0.48: left edge ~9.48, right edge ~8.52.
-    CHECK(yLeft > 9.2);    // left edge banked UP
-    CHECK(yRight < 8.9);   // right edge banked DOWN
-}
-
-// P8b (one mesher) — a VIADUCT IS A STRUCTURE: an authored elevated deck's
-// fascia and soffit are the concrete box girder you see from beside and below,
-// not pavement. The corridor mesher this replaces drew them concrete; the weld
-// was painting them with the road's near-black kerb/underside colours, turning
-// every flown span into a black wedge. At grade those same faces stay dark —
-// there they really are an unseen kerb edge and slab bottom.
-TEST_CASE(weld_viaduct_wears_concrete_fascia_and_soffit) {
-    auto ground = [](Real, Real) { return 0.0; };
-    auto minChannel = [](const Vec3& c) { return std::min(c.x, std::min(c.y, c.z)); };
-
-    UnionSpine deck;                       // authored +9 viaduct
-    deck.klass = RoadClass::Freeway;
-    for (int i = 0; i <= 10; ++i) {
-        deck.points.push_back(Vec2(-50 + i * 10.0, 0));
-        deck.yAbs.push_back(9.0);
-    }
-    deck.halfWidth = 8.0;
-    WeldSolidParams wp;
-    wp.heightAt = ground;
-    RenderMesh viaduct = weldSolid({ deck }, wp);
-    CHECK(!viaduct.vertices.empty());
-    // The soffit (downward-facing, up at deck height) must be concrete-bright.
-    int soffit = 0, darkSoffit = 0;
-    for (std::size_t i = 0; i + 2 < viaduct.indices.size(); i += 3) {
-        const Vertex& v = viaduct.vertices[viaduct.indices[i]];
-        if (v.normal.y > -0.5 || v.position.y < 7.0) continue;   // deck soffit only
-        ++soffit;
-        if (minChannel(v.color) < 0.2) ++darkSoffit;
-    }
-    CHECK(soffit > 0);          // the fixture really does emit a soffit...
-    CHECK(darkSoffit == 0);     // ...and none of it is painted pavement-black
-
-    // An AT-GRADE road keeps the dark underside: this is deck-only styling.
-    UnionSpine street;
-    street.klass = RoadClass::Local;
-    for (int i = 0; i <= 10; ++i) street.points.push_back(Vec2(-50 + i * 10.0, 0));
-    street.halfWidth = 5.0;
-    RenderMesh flat = weldSolid({ street }, wp);
-    int darkFlat = 0;
-    for (std::size_t i = 0; i + 2 < flat.indices.size(); i += 3) {
-        const Vertex& v = flat.vertices[flat.indices[i]];
-        if (v.normal.y > -0.5) continue;
-        if (minChannel(v.color) < 0.2) ++darkFlat;
-    }
-    CHECK(darkFlat > 0);        // streets are unchanged
-}
-
-// P6 (one mesher) — the deck's own FURNITURE banks with it: a superelevated
-// freeway's edge parapets ride the raised/lowered verge instead of floating at
-// the flat centreline height. The high (left, +z) rail tops out above the low
-// (right, -z) rail — proof the barrier baseline picked up the cross-slope.
-TEST_CASE(weld_freeway_barriers_bank_with_the_deck) {
-    UnionSpine s;
-    s.klass = RoadClass::Freeway;
-    for (int i = 0; i <= 8; ++i) {
-        s.points.push_back(Vec2(-40 + i * 10.0, 0));
-        s.yAbs.push_back(9.0);
-        s.crossSlope.push_back(0.06);          // 6% bank, rises to the LEFT (+z)
-    }
-    s.halfWidth = 8.0;
-    WeldSolidParams wp;
-    wp.barriers = true;
-    wp.heightAt = [](Real, Real) { return 0.0; };
-    RenderMesh m = weldSolid({ s }, wp);
-    CHECK(!m.vertices.empty());
-    CHECK(!hasNonFinite(m));
-    double topLeft = -1e9, topRight = -1e9;    // highest vertex at each verge
-    for (const Vertex& v : m.vertices) {
-        if (v.position.z > 7.0) topLeft = std::max(topLeft, (double)v.position.y);
-        if (v.position.z < -7.0) topRight = std::max(topRight, (double)v.position.y);
-    }
-    // Left verge ~9.48+0.85 rail, right ~8.52+0.85 rail: ~0.96 apart.
-    CHECK(topLeft > topRight + 0.5);
 }
 
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
@@ -652,20 +309,35 @@ TEST_CASE(road_net_without_node_elev_stays_at_grade) {
 // so the deck and the street beneath it are two independent surfaces with clear
 // air between. Height-band assertions are robust to the thin marking overlay.
 
+
 namespace {
-// A constant +9 m deck (along Z) crossing an at-grade street (along X) at origin.
+// The grade-separation fixture, rebuilt on the ONE mesher: a street at grade
+// along X and an elevated deck (+9 absolute) along Z crossing over it — no
+// shared node, so the lattice meshes two independent chains, gives the deck
+// an underside and piers (which must dodge the street below), and leaves
+// clear air between the two surfaces.
 RenderMesh flyover() {
-    UnionSpine deck;
-    deck.points = { Vec2(0, -40), Vec2(0, 40) };
-    deck.halfWidth = 6.0; deck.klass = RoadClass::Freeway;
-    deck.yAbs = { 9.0, 9.0 };
-    UnionSpine street;                             // no yAbs -> draped at grade
-    street.points = { Vec2(-40, 0), Vec2(40, 0) };
-    street.halfWidth = 5.0;
-    WeldSolidParams p;
-    p.thickness = 0.5; p.clearance = 5.0;
-    p.heightAt = [](double, double) { return 0.0; };
-    return weldSolid({ deck, street }, p);
+    RoadGraph g;
+    auto node = [&](double x, double z, double e, bool abs) {
+        RoadNode n;
+        n.pos = Vec2(x, z);
+        n.elev = e;
+        n.elevAbsolute = abs;
+        g.nodes.push_back(n);
+        return static_cast<int>(g.nodes.size() - 1);
+    };
+    const int s0 = node(-60, 0, 0, false), s1 = node(60, 0, 0, false);
+    const int d0 = node(0, -60, 9, true), d1 = node(0, 60, 9, true);
+    auto edge = [&](int a, int b) {
+        RoadEdge e;
+        e.a = a;
+        e.b = b;
+        e.width = 8.0;
+        g.edges.push_back(e);
+    };
+    edge(s0, s1);
+    edge(d0, d1);
+    return buildRoadNetLattice(g, nullptr);
 }
 }  // namespace
 
@@ -708,13 +380,21 @@ TEST_CASE(gradesep_continuous_under_and_over) {
 }
 
 // Q — piers straddle the street: columns on both approaches, none on the road.
+// Detect piers by their SHAFTS (mid-height vertices near the deck centreline) —
+// the old ground-level proxy now also catches the street's own curb-lip bases,
+// which sit at y = 0 beside the carriageway by design (S5 band ownership).
 TEST_CASE(gradesep_piers_straddle_the_street) {
     RenderMesh m = flyover();
     int onRoad = 0, north = 0, south = 0;
-    for (const Vertex& v : m.vertices) {
-        if (std::fabs(v.position.y) > 0.02 || std::fabs(v.position.x) > 1.2) continue;
-        const double z = v.position.z;
-        if (std::fabs(z) < 6.0) ++onRoad; else if (z < -6.0) ++north; else if (z > 6.0) ++south;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        const double minY = std::min({a.y, b.y, c.y});
+        const double maxY = std::max({a.y, b.y, c.y});
+        const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
+        if (maxY - minY < 5.0 || std::fabs(cx) > 1.6) continue;   // shaft faces
+        if (std::fabs(cz) < 6.0) ++onRoad; else if (cz < -6.0) ++north; else ++south;
     }
     CHECK(onRoad == 0);
     CHECK(north > 0);
