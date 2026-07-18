@@ -100,21 +100,6 @@ RenderMesh sweepRampDeck(const UnionSpine& spine,
                          const std::function<double(double, double)>& ground,
                          double ringStep = 3.0, double deckThickness = 0.5);
 
-// The whole corridor as swept lattices: the divided mainline deck (parapets
-// gapped over `deckGaps` so ramps can merge), every ramp, and the support piers
-// under the elevated spans. `pierBasesOut`, if given, receives the pier
-// footprints (world XZ) so the lot/vegetation passes can treat them as used
-// ground. This is the one call the loader makes in place of weldSolid.
-struct CorridorLatticeParams {
-    double ringStep = 3.0;
-    double deckThickness = 0.5;
-    std::function<double(double, double)> ground;
-    std::vector<GapWindow> deckGaps;
-    std::vector<Vec2>* pierBasesOut = nullptr;
-};
-RenderMesh sweepCorridor(const UnionSpine& deckSpine,
-                         const std::vector<UnionSpine>& rampSpines,
-                         const CorridorLatticeParams& params);
 
 // --- Junction patch (road-mesher-research.md §3) -----------------------------
 // A Coons (transfinite bilinear) patch over four boundary curves — the drivable

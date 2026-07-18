@@ -28,26 +28,6 @@ struct RampPath {
     int bandBack = 0;
 };
 
-// Fold the corridor into the ONE welder (road-unification, one-mesher P3): sample
-// the corridor's alignment + vertical profile into UnionSpine(s) that `weldSolid`
-// meshes — the deck's centreline with per-point absolute Y (`yAbs`), per-point
-// half-width (aux/gore flares, P5), cross-slope (superelevation, P6) and class
-// Freeway. This adapter is what lets the corridor's authoring core drive the
-// unified mesher; there is no second geometry pass any more.
-std::vector<UnionSpine> corridorDeckSpines(
-    const CorridorDef& corridor,
-    const std::function<Real(Real, Real)>& ground, Real step = 3.0);
-
-// Turn the corridor's authored ramp centrelines (rampPaths — the DRAWN gore-band
-// + free-run polyline with absolute heights that the nav graph is also built
-// from) into ramp UnionSpines the ONE welder meshes: class Ramp, per-point
-// absolute Y (`yAbs`), constant half-width. Because the weld and the nav chain
-// BOTH consume rampPaths, they can never disagree — no truth-source inversion.
-// The grade-sep split then descends each ramp from the deck and welds its low
-// foot into the street grid below. A dropped ramp (empty pts) yields no spine.
-std::vector<UnionSpine> corridorRampSpines(
-    const std::vector<RampPath>& rampPaths, Real halfWidth = 3.6);
-
 // Everything a corridor authors that ISN'T drawn geometry (one-mesher
 // P8b): the ramp centrelines and the terrain-flatten windows. These are the two
 // outputs the weld path still needs from the old mesher — the nav graph and the
@@ -73,14 +53,6 @@ struct CorridorAuthoring {
 CorridorAuthoring corridorAuthor(const CorridorDef& corridor,
                                  const std::function<Real(Real, Real)>& ground,
                                  Real step = 3.0);
-
-// Overhead SIGN GANTRIES for a corridor (one-mesher P7): at each exit gore, two
-// posts, a beam across the deck, a wide green placard over the through lanes and a
-// smaller drop-arrow placard over the peeling exit lane. Fed by the CorridorDef
-// alone (no ribs), so the ONE welder's deck — which builds its own parapets,
-// median, and piers — wears the signage the corridor still owns. Returns a single
-// furniture mesh (concrete + green + white).
-RenderMesh corridorFurniture(const CorridorDef& corridor);
 
 }  // namespace engine
 

@@ -313,22 +313,6 @@ RenderMesh sweepRampDeck(const UnionSpine& spine,
     return mesh;
 }
 
-RenderMesh sweepCorridor(const UnionSpine& deckSpine,
-                         const std::vector<UnionSpine>& rampSpines,
-                         const CorridorLatticeParams& p) {
-    RenderMesh mesh;
-    MeshBuilder::append(mesh, sweepFreewayDeck(deckSpine, p.ground, p.ringStep,
-                                               p.deckThickness, &p.deckGaps));
-    for (const UnionSpine& r : rampSpines)
-        MeshBuilder::append(mesh, sweepRampDeck(r, p.ground, p.ringStep, p.deckThickness));
-
-    // Piers under the elevated spans (shared helper — the street lattice uses
-    // the same placement for authored viaducts and layered bridges).
-    MeshBuilder::append(mesh, latticeChainPiers(deckSpine, p.ground, p.deckThickness,
-                                                p.pierBasesOut));
-    return mesh;
-}
-
 RenderMesh latticeChainPiers(const UnionSpine& spine,
                              const std::function<double(double, double)>& ground,
                              double deckThickness, std::vector<Vec2>* pierBasesOut,

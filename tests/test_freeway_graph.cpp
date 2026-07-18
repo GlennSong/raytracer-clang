@@ -185,10 +185,12 @@ TEST_CASE(baked_freeway_is_editable_like_a_street) {
     CHECK(g.net.edges.size() == f.net.edges.size());
 }
 
-TEST_CASE(baked_net_does_not_double_mesh_the_corridor) {
-    // S3b: the street mesher, terrain conform, and street nav must see ONLY the
-    // streets of a baked net — the corridor draws/carves/navigates itself. So a
-    // baked net produces byte-identical street outputs to its pre-bake self.
+TEST_CASE(baked_net_meshes_freeway_and_streets_once) {
+    // 2e (inverts the S3b contract): the ONE mesher now BUILDS the baked
+    // freeway — the mesh contains streets AND corridor, nav routes the
+    // freeway natively from the graph. Only the terrain conform still
+    // strips baked edges: corridorAuthor's engineered flatten owns that
+    // carve, so nothing double-grades the interchange ground.
     Fixture f = makeFixture();
     RoadNet streetsOnly;                       // rebuild the pre-bake net
     streetsOnly.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
@@ -198,16 +200,20 @@ TEST_CASE(baked_net_does_not_double_mesh_the_corridor) {
 
     const RenderMesh a = buildRoadNetMesh(f.net);
     const RenderMesh b = buildRoadNetMesh(streetsOnly);
-    CHECK(a.vertices.size() == b.vertices.size());
-    CHECK(a.indices.size() == b.indices.size());
+    CHECK(a.indices.size() > b.indices.size());   // the freeway IS in the mesh
 
     const RoadGraph na = navRoadGraph(f.net);
     const RoadGraph nb = navRoadGraph(streetsOnly);
-    CHECK(na.edges.size() == nb.edges.size());  // no double-counted nav edges
+    int fwyEdges = 0;
+    for (const RoadEdge& e : na.edges)
+        if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp)
+            ++fwyEdges;
+    CHECK(fwyEdges > 0);                          // nav routes it natively
+    CHECK(na.edges.size() > nb.edges.size());
 
     const std::size_t ca = roadNetConformRegions(f.net).size();
     const std::size_t cb = roadNetConformRegions(streetsOnly).size();
-    CHECK(ca == cb);                            // no double terrain carve
+    CHECK(ca == cb);                              // still exactly one carve
 }
 
 TEST_CASE(recipe_regenerate_rebakes_the_freeway) {
@@ -270,37 +276,6 @@ TEST_CASE(recipe_regenerate_rebakes_the_freeway) {
             (onStreet[net.edges[ei][0]] || onStreet[net.edges[ei][1]]))
             ++rampTouchesStreet;
     CHECK(rampTouchesStreet > 0);
-}
-
-TEST_CASE(baked_graph_agrees_with_the_corridor_mesh) {
-    Fixture f = makeFixture();
-    // Mesh the corridor the shipping way (swept lattices)...
-    auto ground = [](double, double) { return 0.0; };
-    std::vector<UnionSpine> deck = corridorDeckSpines(f.def, [](Real, Real) { return Real(0); });
-    CHECK(deck.size() == 1);
-    CorridorLatticeParams lp;
-    lp.ground = ground;
-    RenderMesh m = sweepCorridor(deck[0], corridorRampSpines(f.authored.rampPaths), lp);
-    CHECK(!m.vertices.empty());
-
-    // ...then drive the BAKED GRAPH's chains over that mesh. Graph and mesh
-    // come from the same solve, so the drive must be clean.
-    std::vector<Vec3> mainPath;
-    for (int ni : f.mainline)
-        mainPath.push_back(Vec3(f.net.nodes[ni].x, f.net.nodeElev[ni], f.net.nodes[ni].y));
-    driveprobe::Report rep;
-    driveprobe::drivePath(m, mainPath, rep);
-    CHECK(rep.samples > 40);
-    CHECK(rep.holes == 0);
-    CHECK(rep.steps == 0);
-
-    // The ramp chain too: gore -> landing, heights from the graph.
-    std::vector<Vec3> rampPath;
-    for (const Vec3& p : f.authored.rampPaths[0].pts) rampPath.push_back(p);
-    driveprobe::Report rrep;
-    driveprobe::drivePath(m, rampPath, rrep);
-    CHECK(rrep.samples > 10);
-    CHECK(rrep.holes == 0);
 }
 
 TEST_CASE(baked_ramps_are_sparse_editable_splines) {
@@ -482,4 +457,74 @@ TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
     CHECK(stations > 10);
     CHECK(gapsAwayFromGores == 0);
     CHECK(railed * 10 >= stations * 9);   // >= 90%% coverage
+}
+
+TEST_CASE(dragging_a_gore_node_moves_the_built_freeway) {
+    // THE B5 GATE, end to end (asked six times, then found broken on
+    // device: "moving them affects nothing"): drag a baked freeway node
+    // through the editor's entry point, rebuild through the ONE mesher's
+    // standard entry point, and the DECK VISIBLY MOVES — and still drives.
+    // No corridor renderer, no stale load-time mesh: the graph is the road.
+    Fixture f = makeFixture();
+    const RenderMesh before = buildRoadNetMesh(f.net);
+    CHECK(!before.vertices.empty());
+
+    const int ni = f.mainline[f.mainline.size() / 2];
+    const Vec2 from = f.net.nodes[ni];
+    const Vec2 to = from + Vec2(0, 20);
+    CHECK(roadNetMoveNode(f.net, ni, to));
+    const RenderMesh after = buildRoadNetMesh(f.net);
+
+    // The mesh CHANGED where the drag happened: deck-height vertices now sit
+    // near the moved node, and none did before.
+    auto deckVertsNear = [&](const RenderMesh& m, const Vec2& p) {
+        int n = 0;
+        for (const Vertex& v : m.vertices)
+            if (std::fabs(v.position.x - p.x) < 4.0 &&
+                std::fabs(v.position.z - p.y) < 4.0 && v.position.y > 8.0)
+                ++n;
+        return n;
+    };
+    CHECK(deckVertsNear(before, to) == 0);
+    CHECK(deckVertsNear(after, to) > 0);
+
+    // And the dragged mainline still drives clean over the rebuilt mesh.
+    // The path follows the SAMPLED graph curve (what the mesh sweeps), not
+    // straight node chords — after a 20 m jog the Hermite bows metres off
+    // the chord, and a chord-driving probe would clip the parapet of a deck
+    // that is in fact fine.
+    std::vector<Vec3> path;
+    {
+        RoadGraph g = roadNetFullGraph(f.net);
+        std::vector<std::vector<std::pair<int, int>>> adj(g.nodes.size());
+        for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei)
+            if (g.edges[ei].klass == RoadClass::Freeway) {
+                adj[g.edges[ei].a].push_back({ g.edges[ei].b, ei });
+                adj[g.edges[ei].b].push_back({ g.edges[ei].a, ei });
+            }
+        int start = -1;
+        for (std::size_t v = 0; v < adj.size(); ++v)
+            if (adj[v].size() == 1) { start = static_cast<int>(v); break; }
+        CHECK(start >= 0);
+        std::vector<char> used(g.edges.size(), 0);
+        int cur = start;
+        path.push_back(Vec3(g.nodes[cur].pos.x, g.nodes[cur].elev + 0.3,
+                            g.nodes[cur].pos.y));
+        for (;;) {
+            int nxt = -1;
+            for (const auto& [w, ei] : adj[cur])
+                if (!used[ei]) { used[ei] = 1; nxt = w; break; }
+            if (nxt < 0) break;
+            path.push_back(Vec3(g.nodes[nxt].pos.x, g.nodes[nxt].elev + 0.3,
+                                g.nodes[nxt].pos.y));
+            cur = nxt;
+        }
+        CHECK(path.size() > 40u);   // the sampled curve, not 20 chords
+    }
+    driveprobe::Report rep;
+    driveprobe::drivePath(after, path, rep);
+    CHECK(rep.samples > 40);
+    CHECK(rep.holes == 0);
+    CHECK(rep.steps == 0);
+    CHECK(rep.blocked == 0);
 }

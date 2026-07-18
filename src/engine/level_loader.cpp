@@ -2268,24 +2268,11 @@ bool LevelLoader::load(const std::string& path,
     // CORRIDORS (plan §8): freeway-grade alignments. The mesh is built here
     // against the BASE terrain so its at-grade flatten windows join the same
     // carve set the roads use; the entities spawn after the terrain does.
-    // One corridor, ready to spawn. The corridor AUTHORS its ramp centrelines and
-    // flatten windows (corridorAuthor); weldSolid draws the deck/ramps/piers and
-    // corridorFurniture the signage. There is no second mesher any more.
-    struct PendingCorridor {
-        RenderMesh deck;                       // welded deck + ramps + piers
-        RenderMesh barrier;                    // sign gantries (weld owns parapets/median)
-        std::vector<TerrainFlatten> flatten;   // at-grade windows carve to the deck
-        std::vector<Vec2> pierBases;           // where the weld's columns landed (USED ground)
-        std::vector<engine::RampPath> rampPaths;   // nav + ramp spines read these
-    };
-    std::vector<PendingCorridor> preCorridors;
-    // Corridor graph fragments (§10): collected here and welded into THE
-    // level's one road graph after the pre-pass — no consumer-side merging.
-    struct CorridorFrag {
-        engine::RoadGraph graph;
-        std::vector<int> snapNodes;   // street-end terminals to weld
-    };
-    std::vector<CorridorFrag> corridorFrags;
+    // Roads-v2.1 2e: there is no corridor renderer. corridorAuthor SOLVES
+    // (ramp centrelines + at-grade flatten windows) and bakeCorridorIntoNet
+    // turns the solve into ordinary graph edges; THE road mesher builds the
+    // freeway from the graph like any street. Flatten flows straight into
+    // roadFlatten; nav routes the baked edges natively via navRoadGraph.
     std::vector<CorridorDef> corridorDefs;
     // Roads-v2 S3b: which preNet each SYNTH corridor came from (-1 = authored /
     // rules-lab). The solved corridor BAKES into that net (bakeCorridorIntoNet)
@@ -2343,7 +2330,14 @@ bool LevelLoader::load(const std::string& path,
                 e.rampSpiral = ex.value("spiral", 30.0);
                 def.exits.push_back(e);
             }
-            corridorSrcNet.push_back(-1);        // authored: no source net (S3b)
+            // 2e: authored corridors bake too — into the level's first street
+            // net (creating an empty one when the level has none), so the one
+            // mesher builds them exactly like the metro-planned corridors.
+            if (preNets.empty()) {
+                preNets.emplace_back();
+                preNetEnts.push_back(&ent);
+            }
+            corridorSrcNet.push_back(0);
             corridorDefs.push_back(std::move(def));
             // One-mesher P8: still OPT-IN for authored corridors. Flipping this
             // to true is a prerequisite for deleting the corridor mesher, but
@@ -2434,19 +2428,6 @@ bool LevelLoader::load(const std::string& path,
     }
     if (levelGround && !corridorDefs.empty()) {
         for (CorridorDef& def : corridorDefs) {
-            // Bents must not stand in the streets below: hand the sweep the
-            // same sampled graph the road meshes are built from.
-            engine::RoadGraph streetsBelow;
-            for (const engine::RoadNet& net : preNets) {
-                engine::RoadGraph g = engine::navRoadGraph(net);
-                const int base = static_cast<int>(streetsBelow.nodes.size());
-                for (const engine::RoadNode& nd : g.nodes)
-                    streetsBelow.nodes.push_back(nd);
-                for (engine::RoadEdge e : g.edges) {
-                    e.a += base; e.b += base;
-                    streetsBelow.edges.push_back(e);
-                }
-            }
             // §10.3/§12 landing resolution (corridor_plan.cpp, shared with
             // the editor's recipe-Regenerate): each ramp claims a real street
             // JUNCTION node on its own side (or splits the nearest street
@@ -2457,473 +2438,37 @@ bool LevelLoader::load(const std::string& path,
             for (engine::RoadNet& n2 : preNets) landNets.push_back(&n2);
             std::vector<std::pair<int, int>> rampAnchors =
                 engine::resolveCorridorLandings(def, landNets, levelGround);
-            // §12: bents must dodge OTHER corridors too — append their
-            // centrelines as wide pseudo-edges so no column of a flyover
-            // lands on the deck below it.
+            // Roads-v2.1 2e: the corridor SOLVES and BAKES — nothing here
+            // draws. corridorAuthor engineers the ramp centrelines and the
+            // at-grade flatten windows; the bake turns the solved corridor
+            // into ordinary graph edges of its street net, and THE one road
+            // mesher (buildRoadNetMesh, via roadCache below) builds deck,
+            // ramps, parapets, undersides and portal bents from that graph.
+            // The corridor renderer (sweepCorridor + its entity) is deleted;
+            // signage returns with the R6 furniture pass.
+            engine::CorridorAuthoring au =
+                engine::corridorAuthor(def, levelGround, 3.0);
             {
                 const std::size_t di =
                     static_cast<std::size_t>(&def - corridorDefs.data());
-                for (std::size_t gi = 0; gi < corridorGuides.size(); ++gi) {
-                    if (gi == di || corridorGuides[gi].empty()) continue;
-                    const std::vector<Vec2>& g2 = corridorGuides[gi];
-                    int prev2 = -1;
-                    for (std::size_t k = 0; k < g2.size(); k += 2) {
-                        engine::RoadNode nd;
-                        nd.pos = g2[k];
-                        const int idx =
-                            static_cast<int>(streetsBelow.nodes.size());
-                        streetsBelow.nodes.push_back(nd);
-                        if (prev2 >= 0) {
-                            engine::RoadEdge e2;
-                            e2.a = prev2;
-                            e2.b = idx;
-                            e2.width = 34.0;
-                            streetsBelow.edges.push_back(e2);
-                        }
-                        prev2 = idx;
-                    }
+                if (di < corridorSrcNet.size() && corridorSrcNet[di] >= 0 &&
+                    corridorSrcNet[di] < static_cast<int>(preNets.size())) {
+                    engine::RoadNet& src = preNets[corridorSrcNet[di]];
+                    const std::size_t e0 = src.edges.size();
+                    engine::bakeCorridorIntoNet(src, def, au.rampPaths);
+                    LOG_INFO << "[bake] corridor -> net " << corridorSrcNet[di]
+                             << ": +" << (src.edges.size() - e0)
+                             << " edges (freeway+ramps in the editable graph)";
                 }
             }
-            // ONE MESHER: the corridor AUTHORS (ramp centrelines + flatten windows)
-            // and weldSolid DRAWS — deck spine + ramp spines (the same rampPaths the
-            // nav chain reads) give deck + parapets + median + descending ramps
-            // welded into the streets below, on piers that dodge them. The old
-            // corridor sweep is gone; `streetsBelow` steered its pier bents and the
-            // weld now does that itself from the spines it can already see.
-            PendingCorridor pc;
-            auto groundFn = [lg = levelGround](double x, double z) {
-                return lg ? lg(x, z) : 0.0;
-            };
-            {
-                // SWEPT-LATTICE freeway (road-mesher-research.md): the corridor
-                // AUTHORS (ramp centrelines + flatten windows) and the sweeper
-                // DRAWS each spine as a shared-vertex lattice — drivable deck with
-                // real carriageway UV, viaduct structure, parapets/median, ramps,
-                // and piers. Parapets GAP over each ramp gore so a car can merge.
-                engine::CorridorAuthoring au = engine::corridorAuthor(def, levelGround, 3.0);
-                pc.rampPaths = std::move(au.rampPaths);
-                pc.flatten = std::move(au.flatten);
-                // Roads-v2 S3b: BAKE the solved corridor into its source street
-                // net — freeways+ramps become ordinary editable graph edges (the
-                // road entity spawns from this net via roadCache below). Street
-                // meshing/conform/nav skip the baked edges (roadNetStreetsOnly);
-                // the corridor keeps drawing itself until S4-S6 unify.
-                {
-                    const std::size_t di =
-                        static_cast<std::size_t>(&def - corridorDefs.data());
-                    if (di < corridorSrcNet.size() && corridorSrcNet[di] >= 0 &&
-                        corridorSrcNet[di] < static_cast<int>(preNets.size())) {
-                        engine::RoadNet& src = preNets[corridorSrcNet[di]];
-                        const std::size_t e0 = src.edges.size();
-                        engine::bakeCorridorIntoNet(src, def, pc.rampPaths);
-                        LOG_INFO << "[bake] corridor -> net " << corridorSrcNet[di]
-                                 << ": +" << (src.edges.size() - e0)
-                                 << " edges (freeway+ramps in the editable graph)";
-                    }
-                }
-                std::vector<engine::UnionSpine> deckSpines =
-                    engine::corridorDeckSpines(def, groundFn, 3.0);
-                std::vector<engine::UnionSpine> ramps =
-                    engine::corridorRampSpines(pc.rampPaths);
-                engine::CorridorLatticeParams clp;
-                clp.ground = groundFn;
-                clp.deckThickness = 0.5;
-                clp.pierBasesOut = &pc.pierBases;
-                const double Lc = def.horizontal.length();
-                for (const engine::ExitDef& e : def.exits) {
-                    if (e.station < 0) continue;
-                    const double sg = std::min(std::max<double>(e.station, 0.0), Lc);
-                    clp.deckGaps.push_back({ std::max(0.0, sg - e.decelLength - 20.0),
-                                             std::min(Lc, sg + 30.0) });
-                }
-                pc.deck = deckSpines.empty()
-                              ? RenderMesh{}
-                              : engine::sweepCorridor(deckSpines.front(), ramps, clp);
-                // The corridor still owns its overhead SIGNAGE (off the exit gores).
-                pc.barrier = engine::corridorFurniture(def);
-                LOG_INFO << "[corridor] swept-lattice: deck + " << ramps.size()
-                         << " ramps + piers (" << pc.pierBases.size() << " bents)";
-            }
-            // The corridor JOINS the drivable network (P8.4): mainline chain
-            // + one chain per ramp, nodes carrying deck height over ground so
-            // traffic rides the structure. Ramp street-ends are snap
-            // terminals — the citysim bridge welds them onto the street graph.
-            {
-                CorridorFrag eg;
-                auto ground = [&](const Vec2& p) {
-                    return levelGround ? levelGround(p.x, p.y) : 0.0;
-                };
-                const Real Lc = def.horizontal.length();
-                // TWO one-way chains, one per CARRIAGEWAY, each at its own
-                // centreline offset (device: cars rode the median and cut
-                // through the gore wall — the single two-way centreline chain
-                // could never model a divided highway). Up-station drives the
-                // negative offsets; the down chain's edges run high->low
-                // station so one-way means the right way.
-                const Real cw = def.lanes.throughLanes * def.laneWidth;
-                const Real cOff = def.medianWidth * 0.5 + def.shoulderIn + cw * 0.5;
-                std::vector<int> upChain, downChain;
-                std::vector<Real> chainS;
-                for (Real sst = 0; ; sst += 30.0) {
-                    const bool last = sst >= Lc;
-                    const Real sv = last ? Lc : sst;
-                    chainS.push_back(sv);
-                    for (int sideSign : {-1, +1}) {
-                        engine::RoadNode nd;
-                        nd.pos = def.horizontal.offset(sv, sideSign * cOff);
-                        // BANKED deck: the surface at this carriageway's
-                        // centreline sits superelevation*offset above/below
-                        // the profile — without it cars sank into the deck
-                        // on every curve (device).
-                        nd.elev = def.vertical.elevation(sv) +
-                                  def.superelevationAt(sv) * sideSign * cOff;
-                        nd.elevAbsolute = true;
-                        const int idx = static_cast<int>(eg.graph.nodes.size());
-                        eg.graph.nodes.push_back(nd);
-                        (sideSign < 0 ? upChain : downChain).push_back(idx);
-                    }
-                    if (last) break;
-                }
-                auto freewayEdge = [&](int a2, int b2) {
-                    engine::RoadEdge e2;
-                    e2.a = a2; e2.b = b2;
-                    e2.width = cw;
-                    e2.klass = engine::RoadClass::Freeway;
-                    e2.oneWay = true;
-                    e2.provenance = engine::RoadProvenance::CorridorMain;
-                    eg.graph.edges.push_back(e2);
-                };
-                for (std::size_t k = 0; k + 1 < upChain.size(); ++k)
-                    freewayEdge(upChain[k], upChain[k + 1]);       // low -> high s
-                for (std::size_t k = downChain.size(); k-- > 1;)
-                    freewayEdge(downChain[k], downChain[k - 1]);   // high -> low s
-                for (std::size_t xi = 0; xi < def.exits.size(); ++xi) {
-                    const engine::ExitDef& e = def.exits[xi];
-                    // §11 ONE SOURCE OF TRUTH: the nav chain is built from
-                    // the MESH'S OWN drawn centreline (gore band riding the
-                    // deck + free run to the street) — the geometry the
-                    // wheels see is the geometry the router sees.
-                    if (xi >= pc.rampPaths.size() ||
-                        pc.rampPaths[xi].pts.size() < 4)
-                        continue;   // dropped ramp (mesh already warned)
-                    const std::vector<Vec3>& pts = pc.rampPaths[xi].pts;
-                    // chain a node every ~8th sample (~24 m) + both ends
-                    std::vector<int> chainR;
-                    for (std::size_t k = 0; k < pts.size();
-                         k = std::min(pts.size() - 1, k + 8)) {
-                        engine::RoadNode nd;
-                        nd.pos = Vec2(pts[k].x, pts[k].z);
-                        nd.elev = pts[k].y;
-                        nd.elevAbsolute = true;
-                        chainR.push_back(static_cast<int>(eg.graph.nodes.size()));
-                        eg.graph.nodes.push_back(nd);
-                        if (k == pts.size() - 1) break;
-                    }
-                    auto ramp = [&](int a2, int b2) {
-                        engine::RoadEdge e2;
-                        e2.a = a2; e2.b = b2;
-                        e2.width = 5.0;   // ONE clean nav lane, centred (a
-                                          // 6.5 width rounded to two lanes and
-                                          // rode cars onto the shoulder)
-                        e2.klass = engine::RoadClass::Ramp;
-                        e2.provenance = engine::RoadProvenance::CorridorRamp;
-                        eg.graph.edges.push_back(e2);
-                    };
-                    for (std::size_t k = 0; k + 1 < chainR.size(); ++k)
-                        ramp(chainR[k], chainR[k + 1]);   // FLOW order already
-                    // hand off to the carriageway just past the band, along
-                    // the flow (never backward)
-                    const Real ds = e.upStation ? 1.0 : -1.0;
-                    const Real sg = std::max(Real(1),
-                                             std::min(e.station, Lc - 1.0));
-                    const Real sJoin = std::max(Real(1), std::min(Lc - 1.0,
-                        e.onRamp ? sg + ds * 24.0 : sg - ds * 24.0));
-                    const std::vector<int>& chain =
-                        e.upStation ? upChain : downChain;
-                    // Never merge onto / diverge from a chain END: up edges run
-                    // low->high station, down high->low, so the terminal node in
-                    // the flow direction owns no through-edge and the merge would
-                    // dead-end (a car reaches the deck and has nowhere to go). A
-                    // merge (on-ramp) needs an OUTGOING deck edge at mainIdx; a
-                    // diverge (exit) needs an INCOMING one.
-                    const std::size_t nChain = chain.size();
-                    auto deadEnd = [&](std::size_t k) -> bool {
-                        if (nChain < 3) return false;   // too short to trim
-                        if (e.onRamp)
-                            return e.upStation ? (k + 1 == nChain) : (k == 0);
-                        return e.upStation ? (k == 0) : (k + 1 == nChain);
-                    };
-                    int mainIdx = chain.front();
-                    Real best = 1e30;
-                    for (std::size_t k = 0; k < chain.size(); ++k) {
-                        if (deadEnd(k)) continue;
-                        const Real d0 = (chainS[k] - sJoin) * ds;
-                        const Real dv = e.onRamp ? (d0 >= 0 ? d0 : 1e4 - d0)
-                                                 : (d0 <= 0 ? -d0 : 1e4 + d0);
-                        if (dv < best) { best = dv; mainIdx = chain[k]; }
-                    }
-                    // The mesh ribbon stops at the landing SETBACK (the street
-                    // mesher owns the junction mouth), but the NAV graph must
-                    // reach the actual street JUNCTION node or cars can't get
-                    // on/off — the setback point sits 20 m out, past the 16 m
-                    // weld radius, so a chain ending there never welds (device
-                    // audit: "0 street->ramp welds"). Add a nav node AT the
-                    // junction and make IT the weld terminal.
-                    int termIdx = -1;
-                    if (rampAnchors[xi].first >= 0) {
-                        const Vec2 jp = preNets[rampAnchors[xi].first]
-                                            .nodes[rampAnchors[xi].second];
-                        engine::RoadNode jn;
-                        jn.pos = jp;
-                        jn.elev = e.targetY;
-                        jn.elevAbsolute = true;
-                        termIdx = static_cast<int>(eg.graph.nodes.size());
-                        eg.graph.nodes.push_back(jn);
-                    }
-                    if (e.onRamp) {
-                        ramp(chainR.back(), mainIdx);   // merge, forward
-                        if (termIdx >= 0) {
-                            ramp(termIdx, chainR.front());   // junction -> ramp
-                            eg.snapNodes.push_back(termIdx);
-                        } else {
-                            eg.snapNodes.push_back(chainR.front());
-                        }
-                    } else {
-                        ramp(mainIdx, chainR.front());  // diverge onto the band
-                        if (termIdx >= 0) {
-                            ramp(chainR.back(), termIdx);    // ramp -> junction
-                            eg.snapNodes.push_back(termIdx);
-                        } else {
-                            eg.snapNodes.push_back(chainR.back());
-                        }
-                    }
-                    // §10.3 JUNCTION STUB: graft a street edge from the
-                    // landing node back to the ribbon's mouth so the street
-                    // mesher builds a REAL junction there.
-                    if (rampAnchors[xi].first >= 0) {
-                        engine::RoadNet& net = preNets[rampAnchors[xi].first];
-                        const Vec3& pe = e.onRamp ? pts.front() : pts.back();
-                        const Vec2 P(pe.x, pe.z);
-                        // The stub ALWAYS grafts now, so the ramp physically
-                        // reaches the street — a "weld-only" landing (the old
-                        // shallow-angle skip) left the ramp ending in the grass
-                        // with a gap to the street (device: "the ramps ... don't
-                        // look like they're a part of the street"). The old skip
-                        // guarded the ANALYTIC junction pad (a polygon that
-                        // self-inverts at a near-parallel arm); the shipping weld
-                        // uses a disc pad that does not invert, and the stub is
-                        // now a slim 6 m arm with a mouth-set-back crosswalk, so
-                        // the apron blob it once feared no longer forms.
-                        if (net.tangents.size() < net.nodes.size())
-                            net.tangents.resize(net.nodes.size(), Vec2(0, 0));
-                        if (net.edgeWidths.size() < net.edges.size())
-                            net.edgeWidths.resize(net.edges.size(), 0.0);
-                        if (net.edgeLayers.size() < net.edges.size())
-                            net.edgeLayers.resize(net.edges.size(), 0);
-                        if (!net.edgeClasses.empty() &&
-                            net.edgeClasses.size() < net.edges.size())
-                            net.edgeClasses.resize(net.edges.size(),
-                                                   engine::RoadClass::Local);
-                        const int pIdx = static_cast<int>(net.nodes.size());
-                        net.nodes.push_back(P);
-                        net.tangents.push_back(Vec2(0, 0));
-                        net.edges.push_back({rampAnchors[xi].second, pIdx});
-                        // A ramp merges into the street as ONE lane. The old
-                        // 9 m "opened mouth" inflated the junction disc
-                        // (radius = half the widest arm) and paved a wide arm,
-                        // which — summed with the fan + terrain carve — read as
-                        // the ~40 m apron blob. Match the widened ramp ribbon
-                        // (7.2 m, AASHTO 24-ft) so the at-grade connector is the
-                        // SAME width as the ramp feeding it — no thin-strip step.
-                        const double kStubWidth = 7.2;
-                        net.edgeWidths.push_back(kStubWidth);
-                        net.edgeLayers.push_back(0);
-                        // The landing arm IS a ramp — type it so it welds and
-                        // styles as one (class-aware markings, and P1's
-                        // crosswalk-by-class correctly skips a zebra on it).
-                        if (!net.edgeClasses.empty())
-                            net.edgeClasses.push_back(engine::RoadClass::Ramp);
-                        // the stub is grafted AFTER the road conform pass —
-                        // carve its ground here or it pokes through the seam
-                        // (device: "the ground pokes up ... at points where
-                        // the road and freeway are meant to connect")
-                        {
-                            const Vec2 A2 =
-                                net.nodes[rampAnchors[xi].second];
-                            Vec2 d2 = P - A2;
-                            const Real dl2 = d2.length();
-                            if (dl2 > 1e-3) {
-                                d2 = d2 * (1.0 / dl2);
-                                const Vec2 p2(-d2.y, d2.x);
-                                // Hug the stub road (half = kStubWidth/2 = 3 m)
-                                // plus a 2 m seam margin — not the old 9.5 m
-                                // that graded a 19 m flat halo per landing.
-                                const Real hw2 = kStubWidth * 0.5 + 2.0;
-                                const Vec2 A3 = A2 - d2 * 4.0, P3 = P + d2 * 4.0;
-                                std::vector<Vec3> poly{
-                                    Vec3(A3.x + p2.x * hw2, 0, A3.y + p2.y * hw2),
-                                    Vec3(P3.x + p2.x * hw2, 0, P3.y + p2.y * hw2),
-                                    Vec3(P3.x - p2.x * hw2, 0, P3.y - p2.y * hw2),
-                                    Vec3(A3.x - p2.x * hw2, 0, A3.y - p2.y * hw2)};
-                                roadFlatten.push_back(engine::makeFlattenPad(
-                                    std::move(poly),
-                                    levelGround((A2.x + P.x) * 0.5,
-                                                (A2.y + P.y) * 0.5) - 0.04,
-                                    5.0));
-                            }
-                        }
-                        LOG_INFO << "[corridor] stub grafted at ("
-                                 << e.target.x << ", " << e.target.y << ")";
-                    }
-                }
-                // §12 R1.3 TERMINUS: each tapered end grafts an ARTERIAL
-                // street edge into the nearest junction and joins the nav —
-                // a freeway that "just stops" is now impossible by
-                // construction (it either connects or warns).
-                if (def.taperEnds && !upChain.empty() && !downChain.empty()) {
-                    // Street junctions the terminus may graft to (the landing
-                    // resolution's own anchor list moved into corridor_plan).
-                    struct TermAnchor { int net; int node; Vec2 pos; int degree; };
-                    std::vector<TermAnchor> anchors;
-                    for (std::size_t ni2 = 0; ni2 < preNets.size(); ++ni2) {
-                        std::vector<int> deg(preNets[ni2].nodes.size(), 0);
-                        for (const auto& ed : preNets[ni2].edges) {
-                            if (ed[0] >= 0 && ed[0] < static_cast<int>(deg.size())) ++deg[ed[0]];
-                            if (ed[1] >= 0 && ed[1] < static_cast<int>(deg.size())) ++deg[ed[1]];
-                        }
-                        for (std::size_t k = 0; k < preNets[ni2].nodes.size(); ++k)
-                            anchors.push_back({static_cast<int>(ni2),
-                                               static_cast<int>(k),
-                                               preNets[ni2].nodes[k], deg[k]});
-                    }
-                    const Real Lc2 = def.horizontal.length();
-                    for (int endI = 0; endI < 2; ++endI) {
-                        const Real sE = endI ? Lc2 - 0.5 : 0.5;
-                        const Vec2 endPos = def.horizontal.pos(sE);
-                        int bestNet = -1, bestNode = -1;
-                        Real best = 350.0;
-                        for (const TermAnchor& an : anchors) {
-                            if (an.degree < 2) continue;
-                            const Real d = (an.pos - endPos).length();
-                            if (d < best) {
-                                best = d;
-                                bestNet = an.net;
-                                bestNode = an.node;
-                            }
-                        }
-                        if (bestNet < 0) {
-                            LOG_WARN << "[corridor] terminus at (" << endPos.x
-                                     << ", " << endPos.y
-                                     << ") finds no street junction within "
-                                        "350 m — dead end (R1.3)";
-                            continue;
-                        }
-                        engine::RoadNet& net2 = preNets[bestNet];
-                        if (net2.tangents.size() < net2.nodes.size())
-                            net2.tangents.resize(net2.nodes.size(), Vec2(0, 0));
-                        if (net2.edgeWidths.size() < net2.edges.size())
-                            net2.edgeWidths.resize(net2.edges.size(), 0.0);
-                        if (net2.edgeLayers.size() < net2.edges.size())
-                            net2.edgeLayers.resize(net2.edges.size(), 0);
-                        if (!net2.edgeClasses.empty() &&
-                            net2.edgeClasses.size() < net2.edges.size())
-                            net2.edgeClasses.resize(net2.edges.size(),
-                                                    engine::RoadClass::Local);
-                        const int pIdx = static_cast<int>(net2.nodes.size());
-                        net2.nodes.push_back(endPos);
-                        net2.tangents.push_back(Vec2(0, 0));
-                        net2.edges.push_back({bestNode, pIdx});
-                        net2.edgeWidths.push_back(13.0);   // arterial approach
-                        net2.edgeLayers.push_back(0);
-                        if (!net2.edgeClasses.empty())     // freeway end -> arterial approach
-                            net2.edgeClasses.push_back(engine::RoadClass::Arterial);
-                        {   // carve under the grafted approach (same as stubs)
-                            const Vec2 A2 = net2.nodes[bestNode];
-                            Vec2 d2 = endPos - A2;
-                            const Real dl2 = d2.length();
-                            if (dl2 > 1e-3) {
-                                d2 = d2 * (1.0 / dl2);
-                                const Vec2 p2(-d2.y, d2.x);
-                                const Real hw2 = 11.0;
-                                const Vec2 A3 = A2 - d2 * 4.0,
-                                           P3 = endPos + d2 * 4.0;
-                                std::vector<Vec3> poly{
-                                    Vec3(A3.x + p2.x * hw2, 0, A3.y + p2.y * hw2),
-                                    Vec3(P3.x + p2.x * hw2, 0, P3.y + p2.y * hw2),
-                                    Vec3(P3.x - p2.x * hw2, 0, P3.y - p2.y * hw2),
-                                    Vec3(A3.x - p2.x * hw2, 0, A3.y - p2.y * hw2)};
-                                roadFlatten.push_back(engine::makeFlattenPad(
-                                    std::move(poly),
-                                    levelGround((A2.x + endPos.x) * 0.5,
-                                                (A2.y + endPos.y) * 0.5) - 0.04,
-                                    5.0));
-                            }
-                        }
-                        engine::RoadNode nd;
-                        nd.pos = endPos;
-                        nd.elev = def.vertical.elevation(sE);
-                        nd.elevAbsolute = true;
-                        const int E = static_cast<int>(eg.graph.nodes.size());
-                        eg.graph.nodes.push_back(nd);
-                        auto tEdge = [&](int a3, int b3) {
-                            engine::RoadEdge e3;
-                            e3.a = a3;
-                            e3.b = b3;
-                            e3.width = 6.0;
-                            e3.klass = engine::RoadClass::Ramp;
-                            eg.graph.edges.push_back(e3);
-                        };
-                        if (endI) {   // s=L: up-chain arrives, down-chain departs
-                            tEdge(upChain.back(), E);
-                            tEdge(E, downChain.back());
-                        } else {      // s=0: down-chain arrives, up-chain departs
-                            tEdge(downChain.front(), E);
-                            tEdge(E, upChain.front());
-                        }
-                        eg.snapNodes.push_back(E);
-                    }
-                }
-                corridorFrags.push_back(std::move(eg));
-            }
-            roadFlatten.insert(roadFlatten.end(), pc.flatten.begin(),
-                               pc.flatten.end());
-            preCorridors.push_back(std::move(pc));
+            roadFlatten.insert(roadFlatten.end(), au.flatten.begin(),
+                               au.flatten.end());
         }
-    }
-    // Spawn the corridor geometry: deck (collidable — cars/player drive it,
-    // elevated spans included, same guarantee the road decks make), painted
-    // markings, and the concrete barrier + piers.
-    for (std::size_t ci = 0; ci < preCorridors.size(); ++ci) {
-        PendingCorridor& cm = preCorridors[ci];
-        const std::string tag = std::to_string(ci);
-        auto spawn = [&](const RenderMesh& mesh, const std::string& name,
-                         const Vec3& albedo, Real rough, bool collide) {
-            if (mesh.vertices.empty()) return;
-            Entity e = world.create();
-            Transform t;
-            world.add<Transform>(e, t);
-            world.add<PrevTransform>(e, PrevTransform{t});
-            Renderable r;
-            r.material.albedo = albedo;
-            r.material.roughness = static_cast<float>(rough);
-            r.mesh = assets.acquireMesh(mesh, "corridor:" + name + ":" + tag);
-            world.add<Renderable>(e, r);
-            if (collide) {
-                MeshCollider mc;
-                mc.vertices.reserve(mesh.vertices.size());
-                for (const Vertex& v : mesh.vertices)
-                    mc.vertices.push_back(v.position);
-                mc.indices = mesh.indices;
-                mc.friction = 0.85;
-                world.add<MeshCollider>(e, mc);
-            }
-        };
-        spawn(cm.barrier, "barrier", Vec3(1, 1, 1), 0.9, true);
     }
     // §10: ONE derived road graph. Streets and corridor chains weld HERE, at
     // build — the citysim nav, street furniture, and editor all read this
     // single component instead of merging graphs privately.
-    if (!preNets.empty() || !corridorFrags.empty()) {
+    if (!preNets.empty()) {
         engine::LevelRoadGraph lrg;
         for (const engine::RoadNet& net : preNets) {
             engine::RoadGraph g = engine::navRoadGraph(net);
@@ -2935,39 +2480,10 @@ bool LevelLoader::load(const std::string& path,
                 lrg.graph.edges.push_back(e);
             }
         }
-        const int streetNodeCount = static_cast<int>(lrg.graph.nodes.size());
-        for (const CorridorFrag& frag : corridorFrags) {
-            std::vector<int> map(frag.graph.nodes.size());
-            for (std::size_t i = 0; i < frag.graph.nodes.size(); ++i) {
-                const bool terminal =
-                    std::find(frag.snapNodes.begin(), frag.snapNodes.end(),
-                              static_cast<int>(i)) != frag.snapNodes.end();
-                int reuse = -1;
-                if (terminal) {   // weld street ends onto real street nodes
-                    Real best = 16.0;
-                    for (int j = 0; j < streetNodeCount; ++j) {
-                        const Real d = (lrg.graph.nodes[j].pos -
-                                        frag.graph.nodes[i].pos).length();
-                        if (d < best) { best = d; reuse = j; }
-                    }
-                }
-                if (reuse >= 0) {
-                    map[i] = reuse;
-                } else {
-                    map[i] = static_cast<int>(lrg.graph.nodes.size());
-                    lrg.graph.nodes.push_back(frag.graph.nodes[i]);
-                }
-            }
-            for (engine::RoadEdge e : frag.graph.edges) {
-                e.a = map[e.a];
-                e.b = map[e.b];
-                lrg.graph.edges.push_back(e);
-            }
-        }
         if (!lrg.graph.edges.empty()) {
             LOG_INFO << "[roadgraph] unified: " << lrg.graph.nodes.size()
-                     << " nodes, " << lrg.graph.edges.size() << " edges ("
-                     << corridorFrags.size() << " corridor fragments welded)";
+                     << " nodes, " << lrg.graph.edges.size()
+                     << " edges (freeway+ramps native from the baked graph)";
             // PROOF DUMP (RT_DUMP_ROADGRAPH=path): write the ONE unified graph —
             // every street, arterial, freeway carriageway and ramp — so its
             // connectivity and cross-class reachability can be checked and drawn.
@@ -2996,18 +2512,17 @@ bool LevelLoader::load(const std::string& path,
 
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
 
-    // The routed freeway RIGHT-OF-WAY for the lot pass to build (and re-zone)
-    // around: the corridor fragments' dual carriageways + ramps, in world XZ
-    // with real classes/widths — the SAME geometry welded into the level graph
-    // above. Gathered here (once) so blocks under a deck become open/utility
-    // space instead of clipped buildings, for ramps and gores too — not just
-    // the mainline proxy.
+    // The routed freeway RIGHT-OF-WAY for the lot pass to build (and
+    // re-zone) around — from the BAKED graph now (2e): navRoadGraph carries
+    // the corridor's freeway/ramp edges natively, so blocks under a deck
+    // become open/utility space instead of clipped buildings.
     engine::RoadGraph freewayROW;
-    for (const CorridorFrag& frag : corridorFrags) {
+    for (const engine::RoadNet& net2 : preNets) {
+        engine::RoadGraph g2 = engine::navRoadGraph(net2);
         const int base = static_cast<int>(freewayROW.nodes.size());
-        for (const engine::RoadNode& n : frag.graph.nodes)
+        for (const engine::RoadNode& n : g2.nodes)
             freewayROW.nodes.push_back(n);
-        for (engine::RoadEdge e : frag.graph.edges) {
+        for (engine::RoadEdge e : g2.edges) {
             if (e.klass != engine::RoadClass::Freeway &&
                 e.klass != engine::RoadClass::Ramp)
                 continue;
@@ -3411,66 +2926,8 @@ bool LevelLoader::load(const std::string& path,
                      editorMode, cityEnt, &cityModel, &scriptCache,
                      entityGround ? &entityGround : nullptr,
                      roadCache.empty() ? nullptr : &roadCache);
-    // §10.4: the corridor DOCUMENT entity carries the deck mesh (+ collider),
-    // so the editor's picker selects the corridor like it selects a road —
-    // the deck used to live on an untagged runtime companion, invisible to
-    // click-select. Markings/piers stay companions (never serialized).
-    {
-        std::size_t ci = 0;
-        world.each<SourceSpec>([&](Entity e, SourceSpec& spec) {
-            if (spec.shape != "corridor" || ci >= preCorridors.size()) return;
-            const PendingCorridor& cm = preCorridors[ci];
-            if (!cm.deck.vertices.empty()) {
-                Renderable r;
-                r.material.albedo = Vec3(1, 1, 1);
-                r.material.roughness = 0.95f;
-                // The welded deck carries road-local marking UV, so the SAME
-                // surface shader that paints street lane lines paints it.
-                r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
-                r.mesh = assets.acquireMesh(
-                    cm.deck, "corridor:deck:" + std::to_string(ci));
-                world.add<Renderable>(e, r);
-                if (!world.has<PrevTransform>(e))
-                    world.add<PrevTransform>(e, PrevTransform{});
-                MeshCollider mc;
-                mc.vertices.reserve(cm.deck.vertices.size());
-                for (const Vertex& v : cm.deck.vertices)
-                    mc.vertices.push_back(v.position);
-                mc.indices = cm.deck.indices;
-                mc.friction = 0.85;
-                world.add<MeshCollider>(e, mc);
-            }
-            ++ci;
-        });
-        // §10.6: SYNTHESIZED corridors (metro-planned) have no document
-        // entity — their decks spawn as plain runtime entities, colliders
-        // included, or the metro freeways would be ghost markings with no
-        // asphalt under them.
-        for (; ci < preCorridors.size(); ++ci) {
-            const PendingCorridor& cm = preCorridors[ci];
-            if (cm.deck.vertices.empty()) continue;
-            Entity e = world.create();
-            Transform t2;
-            world.add<Transform>(e, t2);
-            world.add<PrevTransform>(e, PrevTransform{t2});
-            Renderable r;
-            r.material.albedo = Vec3(1, 1, 1);
-            r.material.roughness = 0.95f;
-            // Same rule as the authored deck above: the welded deck's lane
-            // lines are painted by the surface shader off its baked UV.
-            r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
-            r.mesh = assets.acquireMesh(cm.deck,
-                                        "corridor:deck:" + std::to_string(ci));
-            world.add<Renderable>(e, r);
-            MeshCollider mc;
-            mc.vertices.reserve(cm.deck.vertices.size());
-            for (const Vertex& v : cm.deck.vertices)
-                mc.vertices.push_back(v.position);
-            mc.indices = cm.deck.indices;
-            mc.friction = 0.85;
-            world.add<MeshCollider>(e, mc);
-        }
-    }
+    // (2e: the corridor document entity carries no mesh — the freeway IS the
+    // road entity's mesh, built from the baked graph by the one mesher.)
 
     }
 

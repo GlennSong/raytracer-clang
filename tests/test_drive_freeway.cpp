@@ -12,7 +12,9 @@
 #include "test_framework.h"
 #include "drive_probe.h"
 
+#include "../src/engine/procgen/city/corridor_bake.h"
 #include "../src/engine/procgen/city/corridor_mesh.h"
+#include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_lattice.h"
 #include "../src/engine/procgen/city/alignment.h"
@@ -51,26 +53,26 @@ CorridorDef labCorridor() {
     return c;
 }
 
-// Build the corridor mesh the loader builds — the SWEPT-LATTICE freeway, deck
-// parapets gapped over each gore — and hand back the ramp centrelines so the
-// tests drive the exact polylines the nav chain is built from.
+// Build the freeway mesh the loader builds — through the ONE mesher (2e):
+// the corridor SOLVES (corridorAuthor), BAKES into a street net
+// (bakeCorridorIntoNet), and buildRoadNetMesh sweeps deck, ramps, parapets
+// (gapped at gores by the junction trim), undersides and portal bents from
+// the graph. The ramp centrelines come back so the tests drive the exact
+// authored polylines.
 RenderMesh sweptCorridor(const CorridorDef& c, std::vector<RampPath>& rampsOut) {
     auto ground = [](Real, Real) -> Real { return 0.0; };
     CorridorAuthoring au = corridorAuthor(c, ground, 3.0);
     rampsOut = au.rampPaths;
-    std::vector<UnionSpine> deckSpines = corridorDeckSpines(c, ground, 3.0);
-    std::vector<UnionSpine> ramps = corridorRampSpines(au.rampPaths);
-    CorridorLatticeParams clp;
-    clp.ground = ground;
-    const Real Lc = c.horizontal.length();
-    for (const ExitDef& e : c.exits) {
-        if (e.station < 0) continue;
-        const double sg = std::min(std::max<double>(e.station, 0.0), (double)Lc);
-        clp.deckGaps.push_back({ std::max(0.0, sg - e.decelLength - 20.0),
-                                 std::min((double)Lc, sg + 30.0) });
-    }
-    return deckSpines.empty() ? RenderMesh{}
-                              : sweepCorridor(deckSpines.front(), ramps, clp);
+    RoadNet net;
+    net.width = 8.0;
+    net.autoRoundabout = false;
+    // Streets through both ramp targets so the landings graft onto real
+    // street nodes, exactly like a loaded level.
+    net.nodes = { Vec2(-40, -150), Vec2(60, -150), Vec2(150, -150),
+                  Vec2(280, -150) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    bakeCorridorIntoNet(net, c, au.rampPaths);
+    return buildRoadNetMesh(net);
 }
 
 }  // namespace

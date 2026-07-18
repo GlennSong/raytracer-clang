@@ -245,8 +245,11 @@ namespace {
 // The graph the mesher AND the terrain-conform both build from: the sampled net graph put
 // through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
-RoadGraph constrainedNetGraph(const RoadNet& netIn) {
-    const RoadNet net = roadNetStreetsOnly(netIn);
+RoadGraph constrainedNetGraph(const RoadNet& net) {
+    // Roads-v2.1 2e: baked corridor edges stay IN — nav routes the freeway
+    // natively from the graph now that the corridor renderer is gone. Only
+    // the terrain conform still strips them (roadNetConformRegions):
+    // corridorAuthor's engineered flatten owns the corridor's carve.
     double minR = netMinTurnRadius(net);
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
@@ -893,7 +896,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
 }
 
 RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
-    const RoadNet net = roadNetStreetsOnly(netIn);   // corridor draws itself (S3b)
+    // Roads-v2.1 2e: the ONE mesher builds EVERYTHING, baked corridor edges
+    // included — the corridor renderer is gone. (Conform still strips baked
+    // edges: corridorAuthor's engineered flatten owns that carve.)
+    const RoadNet& net = netIn;
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
     double minR = netMinTurnRadius(net);
@@ -974,6 +980,12 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
                     }
                     std::vector<double> deckY = clearanceProfile(s, minH, rampGrade);
                     for (int i = 0; i < n; ++i) {
+                        // 2e: AUTHORED deck heights win. A baked corridor
+                        // node already carries its solved profile — the
+                        // clearance re-derivation must not clobber it (it
+                        // would flatten the engineered viaduct onto generic
+                        // layer heights).
+                        if (g.nodes[ns[i]].elevAbsolute) continue;
                         g.nodes[ns[i]].elev = static_cast<Real>(deckY[i]);
                         g.nodes[ns[i]].elevAbsolute = true;                     // ride it through the weld
                     }
@@ -991,8 +1003,13 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
                                net.crosswalks);
 }
 
-std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder,
+std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double shoulder,
                                                   double falloff, double maxGrade) {
+    // 2e: the conform is the ONE consumer that still strips baked corridor
+    // edges — corridorAuthor's engineered flatten (at-grade windows only,
+    // viaducts fly) owns that carve; carving the baked chains here too would
+    // double-grade the interchange ground.
+    const RoadNet net = roadNetStreetsOnly(netIn);
     std::vector<TerrainFlatten> out;
     if (!net.heightAt) return out;                       // flat road: nothing to carve
     // Mirror the DECK's own profile computation EXACTLY — the same constrained
