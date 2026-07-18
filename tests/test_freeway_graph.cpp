@@ -20,8 +20,10 @@
 
 #include "../src/engine/procgen/city/corridor_bake.h"
 #include "../src/engine/procgen/city/corridor_mesh.h"
+#include "../src/engine/procgen/city/corridor_plan.h"
 #include "../src/engine/procgen/city/road_lattice.h"
 #include "../src/engine/procgen/city/road_net.h"
+#include <nlohmann/json.hpp>
 #include <cmath>
 #include <vector>
 
@@ -187,6 +189,68 @@ TEST_CASE(baked_net_does_not_double_mesh_the_corridor) {
     const std::size_t ca = roadNetConformRegions(f.net).size();
     const std::size_t cb = roadNetConformRegions(streetsOnly).size();
     CHECK(ca == cb);                            // no double terrain carve
+}
+
+TEST_CASE(recipe_regenerate_rebakes_the_freeway) {
+    // The S3 known gap (commit aef8436): the editor's tuning-panel Regenerate
+    // re-runs applyGenerateRecipe, which rebuilds the streets WITHOUT the
+    // corridor solve — the freeway vanished from the graph. The contract now:
+    // applyGenerateRecipe leaves a CLEAN street net (no stale baked flags, no
+    // accumulated freeway plans), and rebakeNetCorridors re-runs the same
+    // plan -> land -> author -> bake pipeline the loader uses, so Regenerate
+    // keeps the freeway IN the editable graph. Deterministic: regenerating
+    // twice from the same recipe lands the same graph.
+    RoadNet net;
+    net.width = 8.0;
+    net.heightAt = [](double, double) { return 0.0; };
+    nlohmann::json gen = {{"kind", "metro"},          {"radius", 700},
+                          {"seed", 5},                {"freeways", true},
+                          {"corridor_freeways", true},   // plans, not fat streets
+                          {"interchange_spacing", 520}};
+    applyGenerateRecipe(net, gen);
+    CHECK(!net.freewayPlans.empty());
+    const std::size_t plans1 = net.freewayPlans.size();
+
+    const int baked1 = rebakeNetCorridors(net, 520.0);
+    CHECK(baked1 > 0);
+    auto countClass = [&](RoadClass k) {
+        int n = 0;
+        for (std::size_t ei = 0; ei < net.edges.size(); ++ei)
+            if (ei < net.edgeClasses.size() && net.edgeClasses[ei] == k) ++n;
+        return n;
+    };
+    CHECK(countClass(RoadClass::Freeway) > 0);
+    CHECK(countClass(RoadClass::Ramp) > 0);
+    const std::size_t nodes1 = net.nodes.size(), edges1 = net.edges.size();
+
+    // Regenerate AGAIN from the same recipe — the editor's actual flow.
+    applyGenerateRecipe(net, gen);
+    CHECK(net.freewayPlans.size() == plans1);     // plans don't ACCUMULATE
+    for (uint8_t b : net.edgeBaked) CHECK(b == 0);  // no stale baked flags
+    CHECK(countClass(RoadClass::Freeway) == 0);   // clean street-only net...
+    const int baked2 = rebakeNetCorridors(net, 520.0);
+    CHECK(baked2 == baked1);                      // ...until the re-bake
+    CHECK(net.nodes.size() == nodes1);            // same graph, bit for bit
+    CHECK(net.edges.size() == edges1);
+    CHECK(countClass(RoadClass::Freeway) > 0);
+    CHECK(countClass(RoadClass::Ramp) > 0);
+
+    // And the re-baked ramps still LAND: every Ramp chain touches a street.
+    std::vector<char> onStreet(net.nodes.size(), 0);
+    for (std::size_t ei = 0; ei < net.edges.size(); ++ei)
+        if (ei < net.edgeClasses.size() &&
+            (net.edgeClasses[ei] == RoadClass::Local ||
+             net.edgeClasses[ei] == RoadClass::Arterial ||
+             net.edgeClasses[ei] == RoadClass::Collector)) {
+            onStreet[net.edges[ei][0]] = 1;
+            onStreet[net.edges[ei][1]] = 1;
+        }
+    int rampTouchesStreet = 0;
+    for (std::size_t ei = 0; ei < net.edges.size(); ++ei)
+        if (ei < net.edgeClasses.size() && net.edgeClasses[ei] == RoadClass::Ramp &&
+            (onStreet[net.edges[ei][0]] || onStreet[net.edges[ei][1]]))
+            ++rampTouchesStreet;
+    CHECK(rampTouchesStreet > 0);
 }
 
 TEST_CASE(baked_graph_agrees_with_the_corridor_mesh) {

@@ -3,6 +3,7 @@
 
 #include "../components.h"
 #include "../procgen/city/road_net.h"   // editable road regen (ADR-0049)
+#include "../procgen/city/corridor_plan.h"   // Regenerate re-bakes freeways (roads-v2 S3)
 #include "../imgui_properties.h"
 #include "../mesh_builder.h"
 #include "../level_writer.h"
@@ -191,6 +192,16 @@ void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
     nlohmann::json recipe = nlohmann::json::parse(spec->recipe, nullptr, false);
     if (!recipe.is_object() || !recipe.contains("generate")) return;
     applyGenerateRecipe(*net, recipe["generate"]);
+    // Roads-v2 S3: a metro that grew freeway plans gets them RE-BAKED into the
+    // fresh graph (the same plan -> land -> author -> bake pipeline the loader
+    // runs) — without this, Regenerate on a baked level silently dropped the
+    // freeway and its ramps from the editable graph. The corridor's RENDERED
+    // deck entities are load-time and stay stale until reload (like terrain,
+    // lots and signals do on a regen); the GRAPH stays whole and editable.
+    if (const int baked = rebakeNetCorridors(
+            *net, recipe["generate"].value("interchange_spacing", 700.0)))
+        LOG_INFO << "[bake] regenerate: " << baked
+                 << " corridor(s) re-baked into the editable graph";
     if (Renderable* r = world.get<Renderable>(e)) {
         RenderMesh mesh = buildRoadNetMesh(*net);
         if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);

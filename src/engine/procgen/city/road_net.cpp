@@ -1239,6 +1239,18 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // grows organic arterials between hotspots and fills the blocks between them.
     // Both hand a raw RoadGraph to the SHARED junction-policy tail below.
     const std::string kind = g.value("kind", std::string("district"));
+    // A regenerate must leave a CLEAN net: buildMetro APPENDS freeway plans and
+    // hubs (they would accumulate across regenerates), and the S2/S3 parallel
+    // arrays (specs, baked flags, node elevations) describe the OLD graph — a
+    // stale edgeBaked entry would silently drop a fresh street edge from the
+    // mesh, a stale nodeElev would lift a street onto a phantom deck.
+    net.freewayPlans.clear();
+    net.cityHubs.clear();
+    net.specs.clear();
+    net.edgeSpecs.clear();
+    net.edgeBaked.clear();
+    net.nodeElev.clear();
+    net.tangents.clear();
     RoadGraph base;
     if (kind == "metro") {
         MetroParams mp;

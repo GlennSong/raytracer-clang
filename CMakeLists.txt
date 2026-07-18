@@ -91,6 +91,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/buildability.cpp
     src/engine/procgen/city/corridor_bake.cpp
+    src/engine/procgen/city/corridor_plan.cpp
     src/engine/procgen/city/road_spec.cpp
     src/engine/procgen/city/road_net.cpp
     src/engine/procgen/city/road_constraints.cpp
