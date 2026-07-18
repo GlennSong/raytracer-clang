@@ -369,9 +369,14 @@ private:
     void computeCarWedge();   // fills carAheadGap_/carAheadSpeed_ (S7 senses)
 
 public:
-    // Total car-contact events since build — the roads-v2 S7 soak gate reads
-    // this and ratchets it down slice by slice toward the plan's zero.
+    // Car-contact events since build — the roads-v2 S7 soak gate reads these
+    // and ratchets them down slice by slice. `fastCrashEvents` is the class
+    // the plan's "no pile-ups" gate is about: both bodies above walking pace
+    // at contact. The remainder are slow junction-mouth brushes — kinematic
+    // lane ribbons overlapping at low speed, arbitrated by the fender-bender
+    // freeze; their fix is junction path geometry, not more braking rules.
     int crashEvents() const { return crashEvents_; }
+    int fastCrashEvents() const { return fastCrashEvents_; }
 
 private:
     // Per-node junction box radius: the widest incident half-width. Nonzero at
@@ -401,6 +406,7 @@ private:
     std::vector<Real> carAheadGap_;
     std::vector<Real> carAheadSpeed_;
     int crashEvents_ = 0;              // total fender-bender contacts (soak gate)
+    int fastCrashEvents_ = 0;          // contacts with both bodies > 2 m/s
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)

@@ -1470,6 +1470,55 @@ void CitySim::computeCarWedge() {
                 carAheadSpeed_[i] = std::max(Real(0), b.speed * hdot);
             }
         }
+        // CROSSING sense (slice 4): a car on a predicted collision course —
+        // closest approach inside the combined body envelope within my
+        // stopping horizon. The conflicts the corridor can't see: two greens
+        // turning across each other, unsignalled crossings, merge angles.
+        // Anti-deadlock is ASYMMETRY: I yield only to a crosser approaching
+        // from my RIGHT (right-hand traffic); it sees me on ITS left and
+        // drives on — mutual yield cannot form. A crosser that a red signal
+        // will stop before the box is exempt (a green driver assumes signal-
+        // stopped traffic stays stopped); one already committed is not.
+        for (std::size_t j = 0; j < agents_.size(); ++j) {
+            if (j == i) continue;
+            const Agent& b = agents_[j];
+            if (b.mode != Agent::Mode::Driver || !b.moving || b.speed < 0.3)
+                continue;
+            if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
+            const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            if (dx * dx + dy * dy > kRange * kRange) continue;
+            const Real across = -fy * dx + fx * dy;
+            if (across > 0) continue;             // my LEFT: their yield, not mine
+            const Real hdot = b.heading.x * fx + b.heading.y * fy;
+            if (hdot < -0.6 || hdot > 0.85) continue;   // oncoming/parallel: not a crossing
+            if (nav_ && b.leg < static_cast<int>(b.route.links.size())) {
+                const int bLi = b.route.links[b.leg];
+                const bool redBound =
+                    signals_.hasSignal(bLi) &&
+                    signals_.stateForLink(bLi) != SignalState::Green &&
+                    b.distOnLeg < nav_->links[bLi].length - 3.0;
+                if (redBound) continue;           // the signal will stop them
+            }
+            const Real rvx = b.heading.x * b.speed - fx * a.speed;
+            const Real rvy = b.heading.y * b.speed - fy * a.speed;
+            const Real rv2 = rvx * rvx + rvy * rvy;
+            if (rv2 < 1e-6) continue;
+            const Real tStar = -(dx * rvx + dy * rvy) / rv2;
+            // Look ahead at least my own stopping time — a fast car needs the
+            // conflict called early enough to brake for it.
+            const Real myHorizon = std::max(Real(2.6), a.speed / kCarDecel + Real(1.0));
+            if (tStar <= 0 || tStar > myHorizon) continue;
+            const Real mx = dx + rvx * tStar, my = dy + rvy * tStar;
+            if (mx * mx + my * my > (2.0 * kLat) * (2.0 * kLat)) continue;
+            const Real bodies = 0.5 * (vehicleLength(static_cast<int>(i)) +
+                                       vehicleLength(static_cast<int>(j)));
+            // Brake as if a stopped body sat at my share of the closing run.
+            const Real gap = std::max(Real(0.05), a.speed * tStar - bodies);
+            if (gap < carAheadGap_[i]) {
+                carAheadGap_[i] = gap;
+                carAheadSpeed_[i] = 0.0;
+            }
+        }
     }
 }
 
@@ -1694,6 +1743,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                             lb, b.distOnLeg, lb >= 0 ? nav_->links[lb].length : 0.0,
                             a.crashCount, b.crashCount);
             }
+            if (a.speed > 2.0 && b.speed > 2.0) ++fastCrashEvents_;
             auto crash = [this](Agent& c) {
                 if (c.crashTimer <= 0) {
                     c.crashTimer = crashHoldSeconds(c.brain);
