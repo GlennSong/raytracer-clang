@@ -840,16 +840,31 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
     if (nav_->isJunction(toNode)) {
         Real distToEnd = nav_->links[li].length - a.distOnLeg;
         if (car && distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
-        // Obey the stoplight: ease to a stop at the LINE unless this approach is
-        // green. A pedestrian on a green approach crosses the PERPENDICULAR road
-        // (which is then red), so the same condition is safe for cars and peds.
+        // Obey the stoplight. Cars go on THEIR approach's green; pedestrians
+        // cross ONLY in the WALK window (roads-v2.1 R3) — the conflict-group
+        // phases mean a "green approach" no longer guarantees the crossing
+        // street is red, so the old ride-the-perpendicular-green rule would
+        // walk peds into moving turns. WALK is everything-red by construction.
         Real distToLine = stopLinePos - a.distOnLeg;
         // Only cars still BEFORE the line brake for the signal — a car already
         // past it is COMMITTED and must clear the box (the all-red clearance
         // exists for exactly that). Capping a committed car to zero pinned it
         // mid-intersection every time a green expired under it.
+        // Cars AND peds ride their own approach's green — for peds this is
+        // the PARALLEL-WALK rule, and under CONFLICT-GROUP phases it is
+        // correct BY CONSTRUCTION: every arm a parallel-walking ped crosses
+        // conflicts with their approach, so it is red during their green.
+        // (Under the old bearing-parity bins that guarantee did not hold —
+        // and fixed-time WALK gates could not cover variable crossing
+        // widths: a 9 s gate left peds mid-box on arterials. The WALK window
+        // remains as bonus all-red scramble time.) Turning cars crossing the
+        // walkway on green brake for peds via the vision wedge, as before.
+        bool signalHolds =
+            car ? signals_.stateForLink(li) != SignalState::Green
+                : !(signals_.stateForLink(li) == SignalState::Green ||
+                    signals_.walkRemainingAt(toNode) >= 6.5);
         if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) &&
-            signals_.stateForLink(li) != SignalState::Green) {
+            signalHolds) {
             target = std::min(target, approachStop(distToLine, car ? kCarDecel : kPedDecel,
                                                    target));
         }
@@ -1099,6 +1114,15 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             netGap = carAheadGap_[myIdx];
             dv = a.speed - carAheadSpeed_[myIdx];
         }
+        // Any wedge-IGNORING drive (gridlock creep past 6 s, tow-truck
+        // escape) happens at a CRAWL while bodies are near: a full-speed
+        // escape brushing a moving passerby registered as a fast
+        // (dangerous-class) contact; walking pace keeps any brush in the
+        // slow, arbitrated class.
+        if (myIdx < static_cast<int>(carAheadGap_.size()) &&
+            carAheadGap_[myIdx] < 8.0 &&
+            (a.holdTimer > 6.0 || a.crashCount > 5))
+            target = std::min(target, Real(1.8));
         a.speed = engine::idmStep(a.speed, std::max(Real(0.1), target), netGap,
                                   dv, dt, kCarDecel * 2.0, idm);
         // The capped target is still a hard ceiling (signals/junction rules
@@ -1125,7 +1149,17 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         const bool nearJunc =
             nav_->isJunction(toNode) &&
             nav_->links[li].length - a.distOnLeg < kSignalApproach + 12.0;
-        if (a.speed < 0.05 && nearJunc && !redAhead && a.crashTimer <= 0)
+        // The gridlock clock also runs for a WEDGE-PINNED car ANYWHERE on the
+        // road — a wreck pile at a link ENTRANCE (post-crash bodies
+        // overlapped, wedge gap ~0) held five cars at v=0 forever, because
+        // the clock only ran near junctions and the creep never fired.
+        const std::size_t selfIdx =
+            static_cast<std::size_t>(&a - agents_.data());
+        const bool wedgePinned =
+            a.speed < 0.05 && a.crashTimer <= 0 && a.crashCount > 0 &&
+            selfIdx < carAheadGap_.size() && carAheadGap_[selfIdx] < 0.4;
+        if ((a.speed < 0.05 && nearJunc && !redAhead && a.crashTimer <= 0) ||
+            wedgePinned)
             a.holdTimer += dt;
         else if (a.speed > 1.5)   // above creep: genuinely rolling again — a
             a.holdTimer = 0;      // reset at creep speed sawtoothed the escape
@@ -1142,7 +1176,9 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     {
         int toNode = nav_->links[li].to;
         bool redAhead = signals_.hasSignal(li) &&
-                        signals_.stateForLink(li) != SignalState::Green;
+                        (car ? signals_.stateForLink(li) != SignalState::Green
+                             : !(signals_.stateForLink(li) == SignalState::Green ||
+                                 signals_.walkRemainingAt(toNode) >= 6.5));
         if (nav_->isJunction(toNode) && (redAhead || gate.yieldAtLine)) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
@@ -1213,6 +1249,41 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 
     Real motion = a.speed * dt;
+
+    // A pedestrian never walks INTO a car body (roads-v2.1 R3): a car
+    // standing across the walkway — queue spillback over a crosswalk, a
+    // mid-box lingerer draining on the all-red — is a WALL to a walker.
+    // Hold a half-step short until it moves on. (Cars sense pedestrians via
+    // the vision wedge; walkers get the mirror-image body check here.)
+    if (!car && motion > 0) {
+        const Vec2 probe(a.pos.x + a.heading.x * 1.0,
+                         a.pos.y + a.heading.y * 1.0);
+        for (const SimVehicle& v : vehicles_) {
+            const Real dx = probe.x - v.pos.x, dy = probe.y - v.pos.y;
+            if (dx * dx + dy * dy > 36.0) continue;
+            const Real lx = std::fabs(dx * v.heading.x + dy * v.heading.y);
+            const Real ly = std::fabs(-v.heading.y * dx + v.heading.x * dy);
+            const Real vSpeed =
+                v.driver >= 0 && v.driver < static_cast<int>(agents_.size())
+                    ? agents_[v.driver].speed
+                    : 0.0;
+            if (lx < v.length * 0.5 + 0.35 && ly < v.width * 0.5 + 0.35 &&
+                vSpeed > 1.5) {
+                // Only a genuinely SWEEPING body holds the walker — below
+                // that the car's own ped-yield governs, and holding for
+                // creeping queues interleaved car-yields-ped / ped-waits-car
+                // into a 300 s junction crawl.
+                // Hold only for a MOVING body (it will clear; a mutual hold
+                // with the car's own ped-sense deadlocked whole junctions).
+                // STANDING cars across walkways are removed at the source by
+                // the don't-block-the-box rule below.
+                a.speed = 0;
+                motion = 0;
+                a.state = Agent::State::Waiting;
+                break;
+            }
+        }
+    }
 
     // Hard stop for a pedestrian/player ahead: the smooth approachStop above eases
     // the car down but never to exactly zero, so on its own the car would still

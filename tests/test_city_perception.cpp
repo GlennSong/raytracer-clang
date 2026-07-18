@@ -215,5 +215,6 @@ TEST_CASE(pedestrians_never_stand_inside_cars) {
             }
         }
     }
+    std::printf("[pen] worstPen=%.3f\n", worstPen);
     CHECK(worstPen < 0.10);   // never meaningfully inside a car body
 }
