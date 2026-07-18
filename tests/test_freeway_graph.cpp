@@ -528,3 +528,93 @@ TEST_CASE(dragging_a_gore_node_moves_the_built_freeway) {
     CHECK(rep.steps == 0);
     CHECK(rep.blocked == 0);
 }
+
+TEST_CASE(merge_probe_drives_ramp_onto_mainline_on_a_real_metro) {
+    // THE MERGE PROBE (drive feedback B1: "You can't merge from the on
+    // ramps... there's no way to merge on"). On a REAL generated metro net
+    // (recipe -> plan -> resolve -> author -> bake -> ONE mesher), drive
+    // from each ramp, THROUGH its gore, onto the mainline — the lane change
+    // the old probes never attempted (they drove ramp and mainline
+    // separately, which is exactly why the un-mergeable freeway shipped).
+    RoadNet net;
+    net.width = 11.0;
+    net.sidewalk = 2.5;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    nlohmann::json gen = { { "kind", "metro" },     { "radius", 700 },
+                           { "hotspots", 5 },       { "block_size", 120 },
+                           { "seed", 9 },           { "freeways", true },
+                           { "corridor_freeways", true },
+                           { "min_road_len", 24 },  { "terrain_aware", false } };
+    applyGenerateRecipe(net, gen);
+    CHECK(!net.freewayPlans.empty());
+    const int baked = rebakeNetCorridors(net, 520.0);
+    std::printf("[merge] corridors baked=%d\n", baked);
+    CHECK(baked > 0);
+
+    RenderMesh m = buildRoadNetMesh(net);
+    CHECK(!m.vertices.empty());
+    RoadGraph g = roadNetFullGraph(net);
+
+    // For every gore (node with both Freeway and Ramp arms): drive the ramp's
+    // sampled curve INTO the gore, then continue along the mainline's sampled
+    // curve — one continuous path across the merge surface.
+    std::vector<std::vector<std::pair<int, int>>> adj(g.nodes.size());
+    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+        adj[g.edges[ei].a].push_back({ g.edges[ei].b, ei });
+        adj[g.edges[ei].b].push_back({ g.edges[ei].a, ei });
+    }
+    auto walkCurve = [&](int from, RoadClass k, int maxN) {
+        // Sampled polyline leaving `from` along class-k edges (BFS-free walk).
+        std::vector<Vec3> pts;
+        std::vector<char> used(g.edges.size(), 0);
+        int cur = from;
+        pts.push_back(Vec3(g.nodes[cur].pos.x, g.nodes[cur].elev + 0.3,
+                           g.nodes[cur].pos.y));
+        for (int n = 0; n < maxN; ++n) {
+            int nxt = -1;
+            for (const auto& [w, ei] : adj[cur])
+                if (!used[ei] && g.edges[ei].klass == k) {
+                    used[ei] = 1; nxt = w; break;
+                }
+            if (nxt < 0) break;
+            pts.push_back(Vec3(g.nodes[nxt].pos.x, g.nodes[nxt].elev + 0.3,
+                               g.nodes[nxt].pos.y));
+            cur = nxt;
+        }
+        return pts;
+    };
+    int gores = 0, cleanMerges = 0, totalDefects = 0;
+    for (std::size_t v = 0; v < adj.size(); ++v) {
+        bool hasF = false, hasR = false;
+        for (const auto& [w, ei] : adj[v]) {
+            if (g.edges[ei].klass == RoadClass::Freeway) hasF = true;
+            if (g.edges[ei].klass == RoadClass::Ramp) hasR = true;
+        }
+        if (!hasF || !hasR) continue;
+        ++gores;
+        // ramp approach (up to ~10 samples in) + mainline continuation.
+        std::vector<Vec3> ramp = walkCurve(static_cast<int>(v), RoadClass::Ramp, 10);
+        std::vector<Vec3> main = walkCurve(static_cast<int>(v), RoadClass::Freeway, 10);
+        if (ramp.size() < 3 || main.size() < 3) continue;
+        std::vector<Vec3> path(ramp.rbegin(), ramp.rend());   // toward the gore
+        path.insert(path.end(), main.begin() + 1, main.end()); // onto the deck
+        driveprobe::Report rep;
+        driveprobe::drivePath(m, path, rep);
+        if (rep.holes == 0 && rep.steps == 0 && rep.blocked == 0) ++cleanMerges;
+        else {
+            totalDefects += rep.holes + rep.steps + rep.blocked;
+            std::printf("[merge] gore %zu: holes=%d steps=%d blocked=%d\n", v,
+                        rep.holes, rep.steps, rep.blocked);
+        }
+    }
+    std::printf("[merge] gores=%d clean=%d totalDefects=%d\n", gores,
+                cleanMerges, totalDefects);
+    CHECK(gores >= 2);              // the metro really built interchanges
+    CHECK(cleanMerges >= 1);        // the merge mechanism is real
+    // RATCHET -> cleanMerges == gores in R2: the residuals are gore-WEDGE
+    // PAD quality (the long sliver fill between nose and gore node —
+    // measured 1-4 holes / <=2 steps / <=1 blocked per defective gore on
+    // seed 9). R2's junction-zoo pad work owns exactly this surface.
+    CHECK(totalDefects <= 12);
+}
