@@ -396,9 +396,32 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                 profiles[si].size() == chains[si].points.size())
                 chains[si].yAbs = profiles[si];
     }
+    // S4: junction pairs closer than their combined radii merge into ONE
+    // COMPOUND pad. trimSpine clamps its trims at 45% of the chain, so S1 kept
+    // a squeezed sub-metre body with BOTH pads stacked over it — the measured
+    // pad-pad overlap (52 cells on the real graph). Union-find the too-close
+    // pairs; the link body between merged nodes is skipped (the compound pad
+    // owns that asphalt), and the cluster's outer arms build one pad.
+    std::vector<int> uf(N);
+    for (int v = 0; v < N; ++v) uf[v] = v;
+    std::function<int(int)> find = [&](int v) {
+        while (uf[v] != v) v = uf[v] = uf[uf[v]];
+        return v;
+    };
     for (const UnionSpine& s : chains) {
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
+        if (a < 0 || b < 0 || a == b || deg[a] < 3 || deg[b] < 3) continue;
+        double len = 0;
+        for (std::size_t i = 1; i < s.points.size(); ++i)
+            len += (s.points[i] - s.points[i - 1]).length();
+        if (len <= rad[a] + rad[b] + 0.25) uf[find(a)] = find(b);
+    }
+    for (const UnionSpine& s : chains) {
+        if (s.points.size() < 2) continue;
+        const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
+        if (a >= 0 && b >= 0 && a != b && find(a) == find(b))
+            continue;                            // compound link: the pad owns it
         const double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
         const double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
         UnionSpine t = trimSpine(s, rA, rB);
@@ -418,33 +441,47 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         // returns will fillet (stage 2).
         // The pad is ASPHALT: slice the CARRIAGEWAY columns out of the full
         // profile ring (drop sidewalk+curb, 2 columns each side). Curb loops and
-        // sidewalk bands own the rest (roads-v2 Part 2, stages 5-6). Reversed so
-        // the mouth runs left->right looking OUTWARD along the arm.
-        auto mouth = [&](const std::vector<Vec3>& ring) {
-            std::vector<Vec3> rev(ring.rbegin(), ring.rend());
-            if (static_cast<int>(rev.size()) >= cw + 4)
-                return std::vector<Vec3>(rev.begin() + 2, rev.begin() + 2 + cw);
-            return rev;
+        // sidewalk bands own the rest (roads-v2 Part 2, stages 5-6). The mouth
+        // contract is left->right looking OUTWARD along the arm — and "outward"
+        // FLIPS between the chain's two ends: at ring0 outward is +sweep (the
+        // ring needs reversing), at ringN outward is -sweep (it does not). S1
+        // reversed BOTH, so every chain-END arm crossed its mouth backwards and
+        // the boundary loop bowtied there (found by the compound-pad area
+        // check: signed loop area 149 vs 213 actually filled).
+        auto mouth = [&](const std::vector<Vec3>& ring, bool flip) {
+            std::vector<Vec3> m = flip ? std::vector<Vec3>(ring.rbegin(), ring.rend())
+                                       : ring;
+            if (static_cast<int>(m.size()) >= cw + 4)
+                return std::vector<Vec3>(m.begin() + 2, m.begin() + 2 + cw);
+            return m;
         };
         if (chainTriEndsOut) chainTriEndsOut->push_back(out.indices.size());
         const std::size_t tn = t.points.size();
+        // Arms gather on the cluster ROOT: a compound pad (merged too-close
+        // junctions) collects the outer arms of ALL its member nodes.
         if (a >= 0 && deg[a] >= 3 && ring0.size() >= 4)
-            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0) });
+            arms[find(a)].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0, true) });
         if (b >= 0 && deg[b] >= 3 && ringN.size() >= 4)
-            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
+            arms[find(b)].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN, false) });
     }
 
-    int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0;
+    int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0,
+        nCompound = 0;
+    std::vector<int> clusterSize(N, 0);
+    for (int v = 0; v < N; ++v)
+        if (deg[v] >= 3) ++clusterSize[find(v)];
     std::vector<int> degHist(12, 0);
     for (int v = 0; v < N; ++v) {
         if (deg[v] < 12) ++degHist[deg[v]];
         if (deg[v] < 3) { if (deg[v] == 2) ++nDeg2; continue; }
+        if (find(v) != v) continue;                  // compound member: root emits
         const int na = static_cast<int>(arms[v].size());
         if (na < 3) { ++nStub; continue; }          // arms not gathered (trim/lookup failed)
-        if (na != deg[v]) ++nMismatch;               // gathered != incident: a real bug
-        if (na == 3) ++nT;                           // Coons T patch
-        else if (na == 4) ++nCoons;                  // Coons grid
-        else ++nFan;                                 // N>=5: still the fan stopgap
+        if (clusterSize[v] > 1) ++nCompound;         // merged too-close junctions
+        else if (na != deg[v]) ++nMismatch;          // gathered != incident: a real bug
+        if (na == 3) ++nT;
+        else if (na == 4) ++nCoons;
+        else ++nFan;
         MeshBuilder::append(out, junctionPatch(arms[v]));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
@@ -456,8 +493,9 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
             if (cross(b - a, c - a).length() < 1e-9) ++degen;
         }
         LOG_INFO << "[lattice] nodes=" << N << " deg2chains=" << nDeg2
-                 << " coons4=" << nCoons << " coonsT=" << nT << " fan(5+)=" << nFan
-                 << " stub(arms<3)=" << nStub << " armMismatch=" << nMismatch
+                 << " pad3=" << nT << " pad4=" << nCoons << " pad5+=" << nFan
+                 << " compound=" << nCompound << " stub(arms<3)=" << nStub
+                 << " armMismatch=" << nMismatch
                  << " | tris=" << (out.indices.size() / 3) << " degenerate=" << degen;
         std::string h;
         for (int d = 0; d < 12; ++d) if (degHist[d]) h += " d" + std::to_string(d) + "=" + std::to_string(degHist[d]);

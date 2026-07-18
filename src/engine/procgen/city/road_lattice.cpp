@@ -5,6 +5,9 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <cstdio>
+#include <cstdlib>
 
 namespace engine {
 
@@ -383,53 +386,22 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
 
 // ---------------------------------------------------------------------------
 // Junction fill (roads-v2 Part 2, step 4) — ONE path for every degree.
-// Interim slice of the full pipeline: boundary loop -> ear-clip -> lift by the
-// boundary heights. Corner ARCS and quad PAIRING are the next slices; the
-// per-degree templates (T/Coons dispatch/fan) and side strips are DELETED.
-RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
+// S4: kerb-return FILLET ARCS between adjacent arms, a GRID interior with
+// Laplace-smoothed heights, and an annulus stitch that touches EVERY boundary
+// vertex (exact K — the pad can never T-joint against a body's end ring).
+// Fallback for pads too small (or too odd) to grid: plain boundary ear-clip.
+
+namespace {
+
+// The S1 fill, kept as the small-pad fallback: ear-clip the boundary loop and
+// lift by the boundary heights (earcut may prune collinear midpoints — that is
+// exactly why it is only the fallback for pads with no room for a grid).
+RenderMesh junctionPadEarcut(const std::vector<Vec3>& loop, float mu, const Vec3& color) {
     RenderMesh mesh;
-    const int N = static_cast<int>(arms.size());
-    if (N <= 2) return mesh;                          // body runs straight through
-    for (const JunctionArm& arm : arms)
-        if (arm.mouth.size() < 2) return mesh;
-
-    // Order arms CCW by bearing so adjacent arms share a kerb corner.
-    std::sort(arms.begin(), arms.end(), [](const JunctionArm& a, const JunctionArm& b) {
-        return std::atan2(a.dir.y, a.dir.x) < std::atan2(b.dir.y, b.dir.x);
-    });
-    // Corner between arm i and its CCW neighbour: arm i's LEFT verge (front)
-    // meets arm i+1's RIGHT verge (back). Snap both to the shared midpoint so
-    // the loop closes exactly. (Stage 4 replaces the point with a fillet arc.)
-    for (int i = 0; i < N; ++i) {
-        JunctionArm& A = arms[i];
-        JunctionArm& B = arms[(i + 1) % N];
-        const Vec3 c = (A.mouth.front() + B.mouth.back()) * 0.5;
-        A.mouth.front() = c;
-        B.mouth.back() = c;
-    }
-    // Closed boundary loop, walking CCW around the pad (interior on the left):
-    // at each arm the boundary runs across its mouth right->left (back->front);
-    // the snapped endpoints stitch consecutive arms, so skip each duplicate.
-    std::vector<Vec3> loop;
-    for (int i = 0; i < N; ++i) {
-        const std::vector<Vec3>& m = arms[i].mouth;
-        for (std::size_t j = m.size(); j-- > 0;) {
-            if (!loop.empty() && (loop.back() - m[j]).lengthSquared() < 1e-10) continue;
-            loop.push_back(m[j]);
-        }
-    }
-    if (loop.size() >= 2 && (loop.front() - loop.back()).lengthSquared() < 1e-10)
-        loop.pop_back();
-    if (loop.size() < 3) return mesh;
-
-    // Ear-clip the plan-view loop. earcut connects only EXISTING boundary
-    // vertices (no interior points), so every arm's division count is honored
-    // and each output vertex has a known height from the loop.
     Poly2 outer;
     outer.reserve(loop.size());
     for (const Vec3& p : loop) outer.push_back(Vec2(p.x, p.z));
     const std::vector<std::array<Vec2, 3>> tris = triangulateWithHoles(outer, {});
-
     auto qkey = [](const Vec2& q) {
         return (static_cast<long long>(std::llround(q.x * 1024.0)) << 32) ^
                (static_cast<long long>(std::llround(q.y * 1024.0)) & 0xffffffffLL);
@@ -449,6 +421,402 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
         MeshBuilder::emitTriUV(mesh, a, b, c, normalize(n), color,
                                mu, 0.0f, mu, 0.0f, mu, 0.0f);
     }
+    if (std::getenv("RT_PAD_DEBUG")) {
+        double polyA = 0, triA = 0;
+        for (std::size_t i = 0; i < loop.size(); ++i) {
+            const Vec3& p = loop[i];
+            const Vec3& q = loop[(i + 1) % loop.size()];
+            polyA += p.x * q.z - q.x * p.z;
+        }
+        for (const std::array<Vec2, 3>& t : tris)
+            triA += std::fabs((t[1].x - t[0].x) * (t[2].y - t[0].y) -
+                              (t[2].x - t[0].x) * (t[1].y - t[0].y));
+        std::fprintf(stderr, "[pad] earcut: loop=%zu tris=%zu polyArea=%.1f triArea=%.1f\n",
+                     loop.size(), tris.size(), std::fabs(polyA) * 0.5, triA * 0.5);
+    }
+    return mesh;
+}
+
+}  // namespace
+
+RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
+    RenderMesh mesh;
+    const int N = static_cast<int>(arms.size());
+    if (N <= 2) return mesh;                          // body runs straight through
+    for (const JunctionArm& arm : arms)
+        if (arm.mouth.size() < 2) return mesh;
+
+    // Order arms CCW around the centroid of their mouth CENTRES — not by the
+    // outward dir bearing: a compound pad (two merged junctions) holds arms
+    // from different member nodes, and two parallel outer arms would tie on
+    // bearing while their positions order them unambiguously.
+    Vec2 ctr(0, 0);
+    auto mouthCentre = [](const JunctionArm& a) {
+        Vec3 s(0, 0, 0);
+        for (const Vec3& p : a.mouth) s = s + p;
+        s = s * (1.0 / static_cast<double>(a.mouth.size()));
+        return Vec2(s.x, s.z);
+    };
+    for (const JunctionArm& a : arms) ctr = ctr + mouthCentre(a);
+    ctr = ctr * (1.0 / N);
+    if (std::getenv("RT_PAD_DEBUG"))
+        for (const JunctionArm& a : arms)
+            std::fprintf(stderr,
+                         "[pad] arm dir=(%.2f,%.2f) mouth (%.1f,%.1f)->(%.1f,%.1f) K=%zu\n",
+                         a.dir.x, a.dir.y, a.mouth.front().x, a.mouth.front().z,
+                         a.mouth.back().x, a.mouth.back().z, a.mouth.size());
+    std::sort(arms.begin(), arms.end(), [&](const JunctionArm& a, const JunctionArm& b) {
+        const Vec2 ca = mouthCentre(a) - ctr, cb = mouthCentre(b) - ctr;
+        return std::atan2(ca.y, ca.x) < std::atan2(cb.y, cb.x);
+    });
+
+    // Closed boundary loop, CCW: each arm's mouth right->left (back->front),
+    // then the KERB-RETURN FILLET to the next arm — a quadratic arc from arm
+    // i's left verge to arm i+1's right verge, bulging toward the verge-line
+    // intersection (the rounded concave corner a real kerb return cuts),
+    // instead of S1's snapped midpoint. Mouth vertices are tagged: they are
+    // the bodies' own end-ring points and every one must survive to the fill.
+    std::vector<Vec3> loop;
+    std::vector<char> isMouth;
+    auto push = [&](const Vec3& p, bool m) {
+        const Vec2 p2(p.x, p.z);
+        if (!loop.empty() &&
+            (Vec2(loop.back().x, loop.back().z) - p2).lengthSquared() < 1e-10) {
+            isMouth.back() |= m;              // coincident corner: keep the tag
+            // Two arms sharing a corner point at DIFFERENT heights is a
+            // contradictory input (real chain profiles reconcile at nodes);
+            // the pad owns the seam and splits the difference.
+            loop.back().y = (loop.back().y + p.y) * 0.5;
+            return;
+        }
+        loop.push_back(p);
+        isMouth.push_back(m);
+    };
+    for (int i = 0; i < N; ++i) {
+        const JunctionArm& A = arms[i];
+        const JunctionArm& B = arms[(i + 1) % N];
+        for (std::size_t j = A.mouth.size(); j-- > 0;) push(A.mouth[j], true);
+        const Vec3 a3 = A.mouth.front(), b3 = B.mouth.back();
+        const Vec2 a2(a3.x, a3.z), b2(b3.x, b3.z);
+        const double chord = (b2 - a2).length();
+        if (chord < 0.6) continue;            // touching mouths: shared corner
+        // Control point: where the two verge lines (running along each arm's
+        // direction) meet. Near-parallel arms have no stable intersection —
+        // fall back to the straight chord.
+        Vec2 c2 = (a2 + b2) * 0.5;
+        bool arc = false;
+        const double denom = A.dir.x * B.dir.y - A.dir.y * B.dir.x;
+        if (std::fabs(denom) > 0.15) {
+            const Vec2 d = b2 - a2;
+            const double t = (d.x * B.dir.y - d.y * B.dir.x) / denom;
+            const Vec2 hit = a2 + A.dir * t;
+            if ((hit - (a2 + b2) * 0.5).length() < 2.0 * chord) { c2 = hit; arc = true; }
+        }
+        const int nArc = arc ? std::max(2, std::min(10, static_cast<int>(chord / 1.5))) : 1;
+        for (int k = 1; k < nArc; ++k) {
+            const double t = k / static_cast<double>(nArc);
+            const double w0 = (1 - t) * (1 - t), w1 = 2 * t * (1 - t), w2 = t * t;
+            const Vec2 p = a2 * w0 + c2 * w1 + b2 * w2;
+            push(Vec3(p.x, a3.y + (b3.y - a3.y) * t, p.y), false);
+        }
+    }
+    if (loop.size() >= 2 && (loop.front() - loop.back()).lengthSquared() < 1e-10) {
+        loop.pop_back();
+        isMouth.pop_back();
+    }
+    const int n = static_cast<int>(loop.size());
+    if (n < 3) return mesh;
+
+    // Normalize to CCW in plan view (positive signed area) so the inside
+    // tests, the stitch orientation, and earcut all agree.
+    {
+        double area2 = 0;
+        for (int i = 0; i < n; ++i) {
+            const Vec3& p = loop[i];
+            const Vec3& q = loop[(i + 1) % n];
+            area2 += p.x * q.z - q.x * p.z;
+        }
+        if (area2 < 0) {
+            std::reverse(loop.begin(), loop.end());
+            std::reverse(isMouth.begin(), isMouth.end());
+        }
+    }
+
+    // --- Interior grid, oriented to the widest arm ------------------------
+    const double h = 3.0;                      // cell size (~lane scale)
+    int widest = 0;
+    double widestW = 0;
+    for (int i = 0; i < N; ++i) {
+        const double w = (arms[i].mouth.front() - arms[i].mouth.back()).length();
+        if (w > widestW) { widestW = w; widest = i; }
+    }
+    const Vec2 ex = normalize(arms[widest].dir);
+    const Vec2 ez(-ex.y, ex.x);
+    auto toGrid = [&](const Vec2& p) {
+        const Vec2 d = p - ctr;
+        return Vec2(dot(d, ex), dot(d, ez));
+    };
+    auto toWorld = [&](double gx, double gz) { return ctr + ex * gx + ez * gz; };
+
+    auto insideLoop = [&](const Vec2& p) {
+        bool in = false;
+        for (int i = 0, j = n - 1; i < n; j = i++) {
+            const Vec2 a(loop[i].x, loop[i].z), b(loop[j].x, loop[j].z);
+            if ((a.y > p.y) != (b.y > p.y) &&
+                p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)
+                in = !in;
+        }
+        return in;
+    };
+    // Distance to the boundary (the keep margin) — and, separately, a SMOOTH
+    // height sample: inverse-distance weighting over the loop vertices, so a
+    // grid corner equidistant from two arms BLENDS their heights instead of
+    // snapping to whichever is nearest. Nearest-height init put a height CLIFF
+    // along the frontier wherever "nearest" switched arms — a steep stitch
+    // face on every hilly junction.
+    auto boundaryDistance = [&](const Vec2& p) {
+        double best = 1e30;
+        for (int i = 0; i < n; ++i) {
+            const Vec3& A3 = loop[i];
+            const Vec3& B3 = loop[(i + 1) % n];
+            const Vec2 a(A3.x, A3.z), b(B3.x, B3.z);
+            const Vec2 ab = b - a;
+            const double l2 = ab.lengthSquared();
+            double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            best = std::min(best, (a + ab * t - p).length());
+        }
+        return best;
+    };
+    auto boundaryHeight = [&](const Vec2& p) {
+        double wsum = 0, hsum = 0;
+        for (int i = 0; i < n; ++i) {
+            const double d2 = (Vec2(loop[i].x, loop[i].z) - p).lengthSquared();
+            const double w = 1.0 / (d2 + 0.25);
+            wsum += w;
+            hsum += w * loop[i].y;
+        }
+        return wsum > 0 ? hsum / wsum : 0.0;
+    };
+
+    double gxMin = 1e30, gxMax = -1e30, gzMin = 1e30, gzMax = -1e30;
+    for (const Vec3& p : loop) {
+        const Vec2 gq = toGrid(Vec2(p.x, p.z));
+        gxMin = std::min(gxMin, gq.x); gxMax = std::max(gxMax, gq.x);
+        gzMin = std::min(gzMin, gq.y); gzMax = std::max(gzMax, gq.y);
+    }
+    const int gi0 = static_cast<int>(std::floor(gxMin / h)) - 1;
+    const int gi1 = static_cast<int>(std::ceil(gxMax / h)) + 1;
+    const int gj0 = static_cast<int>(std::floor(gzMin / h)) - 1;
+    const int gj1 = static_cast<int>(std::ceil(gzMax / h)) + 1;
+    const int gw = gi1 - gi0 + 1, gh2 = gj1 - gj0 + 1;
+
+    struct Corner { double y = 0; bool kept = false; bool interior = false; };
+    std::vector<Corner> corner(static_cast<std::size_t>(gw) * gh2);
+    auto cornerAt = [&](int gi, int gj) -> Corner& {
+        return corner[static_cast<std::size_t>(gj - gj0) * gw + (gi - gi0)];
+    };
+    int keptCorners = 0;
+    for (int gj = gj0; gj <= gj1; ++gj)
+        for (int gi = gi0; gi <= gi1; ++gi) {
+            const Vec2 p = toWorld(gi * h, gj * h);
+            if (insideLoop(p) && boundaryDistance(p) >= 0.45 * h) {
+                Corner& c = cornerAt(gi, gj);
+                c.kept = true;
+                c.y = boundaryHeight(p);       // smooth blend of arm heights
+                ++keptCorners;
+            }
+        }
+
+    // Kept CELLS (all four corners kept) and the frontier of their union.
+    auto cellKept = [&](int gi, int gj) {
+        return gi >= gi0 && gi + 1 <= gi1 && gj >= gj0 && gj + 1 <= gj1 &&
+               cornerAt(gi, gj).kept && cornerAt(gi + 1, gj).kept &&
+               cornerAt(gi + 1, gj + 1).kept && cornerAt(gi, gj + 1).kept;
+    };
+    int keptCells = 0;
+    for (int gj = gj0; gj < gj1; ++gj)
+        for (int gi = gi0; gi < gi1; ++gi)
+            if (cellKept(gi, gj)) ++keptCells;
+
+    if (keptCells == 0) {                      // pad too small for a grid
+        if (std::getenv("RT_PAD_DEBUG")) std::fprintf(stderr, "[pad] fallback: keptCells=0 (corners=%d)\n", keptCorners);
+        return junctionPadEarcut(loop, mu, color);
+    }
+
+    // Frontier: the union outline of kept cells, walked with the region on the
+    // left (CCW). Directed edges between grid corners; shared edges cancel.
+    std::map<std::pair<int, int>, std::pair<int, int>> nextOf;
+    int frontierEdges = 0;
+    for (int gj = gj0; gj < gj1; ++gj)
+        for (int gi = gi0; gi < gi1; ++gi) {
+            if (!cellKept(gi, gj)) continue;
+            auto add = [&](int ax, int az, int bx, int bz) {
+                nextOf[{ax, az}] = {bx, bz};
+                ++frontierEdges;
+            };
+            if (!cellKept(gi, gj - 1)) add(gi, gj, gi + 1, gj);          // bottom
+            if (!cellKept(gi + 1, gj)) add(gi + 1, gj, gi + 1, gj + 1);  // right
+            if (!cellKept(gi, gj + 1)) add(gi + 1, gj + 1, gi, gj + 1);  // top
+            if (!cellKept(gi - 1, gj)) add(gi, gj + 1, gi, gj);          // left
+        }
+    // A corner can carry TWO outgoing frontier edges (diagonal cell contact) —
+    // the map keeps one and the stitch below detects the broken cycle and
+    // falls back. Same for multiple loops (holes / split regions).
+    std::vector<std::pair<int, int>> frontier;
+    {
+        auto start = nextOf.begin()->first;
+        auto cur = start;
+        for (std::size_t guard = 0; guard <= nextOf.size(); ++guard) {
+            frontier.push_back(cur);
+            auto it = nextOf.find(cur);
+            if (it == nextOf.end()) break;
+            cur = it->second;
+            if (cur == start) break;
+        }
+        if (frontier.size() != nextOf.size() ||
+            static_cast<int>(nextOf.size()) != frontierEdges || frontier.size() < 3) {
+            if (std::getenv("RT_PAD_DEBUG"))
+                std::fprintf(stderr, "[pad] fallback: frontier=%zu nextOf=%zu edges=%d cells=%d\n",
+                             frontier.size(), nextOf.size(), frontierEdges, keptCells);
+            return junctionPadEarcut(loop, mu, color);
+        }
+    }
+
+    // Laplace-relax the interior corner heights (frontier corners hold the
+    // nearest-boundary values): the pad's surface bends smoothly between the
+    // arms instead of creasing — the plan's "interior heights by smooth
+    // interpolation from the fixed boundary".
+    for (int gj = gj0; gj <= gj1; ++gj)
+        for (int gi = gi0; gi <= gi1; ++gi) {
+            Corner& c = cornerAt(gi, gj);
+            c.interior = c.kept && gi > gi0 && gi < gi1 && gj > gj0 && gj < gj1 &&
+                         cornerAt(gi - 1, gj).kept && cornerAt(gi + 1, gj).kept &&
+                         cornerAt(gi, gj - 1).kept && cornerAt(gi, gj + 1).kept;
+        }
+    for (int it2 = 0; it2 < 32; ++it2) {
+        for (int gj = gj0 + 1; gj < gj1; ++gj)
+            for (int gi = gi0 + 1; gi < gi1; ++gi) {
+                Corner& c = cornerAt(gi, gj);
+                if (!c.interior) continue;
+                c.y = (cornerAt(gi - 1, gj).y + cornerAt(gi + 1, gj).y +
+                       cornerAt(gi, gj - 1).y + cornerAt(gi, gj + 1).y) * 0.25;
+            }
+    }
+
+    // --- Emit: ONE shared-vertex mesh (loop verts + grid corners) ---------
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> idx;
+    auto addVert = [&](const Vec3& p) {
+        Vertex v;
+        v.position = p;
+        v.normal = Vec3(0, 0, 0);              // accumulated from faces below
+        v.tangent = Vec3(ex.x, 0, ex.y);
+        v.u = mu;
+        v.v = 0.0f;
+        v.color = color;
+        verts.push_back(v);
+        return static_cast<uint32_t>(verts.size() - 1);
+    };
+    std::vector<uint32_t> loopIdx(n);
+    for (int i = 0; i < n; ++i) loopIdx[i] = addVert(loop[i]);
+    std::map<std::pair<int, int>, uint32_t> gridIdx;
+    auto gridVert = [&](int gi, int gj) {
+        const auto k = std::make_pair(gi, gj);
+        auto it = gridIdx.find(k);
+        if (it != gridIdx.end()) return it->second;
+        const Vec2 p = toWorld(gi * h, gj * h);
+        const uint32_t vi = addVert(Vec3(p.x, cornerAt(gi, gj).y, p.y));
+        gridIdx.emplace(k, vi);
+        return vi;
+    };
+    // 2D CCW check in plan view (up-facing triangle before winding fix).
+    auto ccw2 = [&](uint32_t a, uint32_t b, uint32_t c) {
+        const Vec3& A = verts[a].position;
+        const Vec3& B = verts[b].position;
+        const Vec3& C = verts[c].position;
+        return (B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z);
+    };
+    bool stitchOk = true;
+    auto tri = [&](uint32_t a, uint32_t b, uint32_t c, bool guard) {
+        const double a2 = ccw2(a, b, c);
+        if (std::fabs(a2) < 1e-9) return;      // zero-area: skip, never emit
+        if (guard && a2 < -1e-6) stitchOk = false;   // stitch folded over
+        // Engine winding: outward normal = cross(c - a, b - a), so a plan-CCW
+        // triple emitted IN ORDER faces up; a CW triple emits swapped.
+        idx.push_back(a);
+        idx.push_back(a2 > 0 ? b : c);
+        idx.push_back(a2 > 0 ? c : b);
+    };
+    // Interior quads, split along the shorter 3D diagonal.
+    for (int gj = gj0; gj < gj1; ++gj)
+        for (int gi = gi0; gi < gi1; ++gi) {
+            if (!cellKept(gi, gj)) continue;
+            const uint32_t v00 = gridVert(gi, gj), v10 = gridVert(gi + 1, gj);
+            const uint32_t v11 = gridVert(gi + 1, gj + 1), v01 = gridVert(gi, gj + 1);
+            const double d0 = (verts[v00].position - verts[v11].position).lengthSquared();
+            const double d1 = (verts[v10].position - verts[v01].position).lengthSquared();
+            if (d0 <= d1) { tri(v00, v10, v11, false); tri(v00, v11, v01, false); }
+            else          { tri(v00, v10, v01, false); tri(v10, v11, v01, false); }
+        }
+    // Annulus stitch: outer loop (CCW) to frontier (CCW), advancing whichever
+    // cursor makes the shorter diagonal. Every loop vertex is consumed by
+    // construction — the EXACT-K guarantee (no pruned mouth points, ever).
+    {
+        const int m = static_cast<int>(frontier.size());
+        std::vector<uint32_t> inIdx(m);
+        for (int j = 0; j < m; ++j) inIdx[j] = gridVert(frontier[j].first, frontier[j].second);
+        int i0 = 0, j0 = 0;
+        double best = 1e30;
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < m; ++j) {
+                const double d = (verts[loopIdx[i]].position - verts[inIdx[j]].position).lengthSquared();
+                if (d < best) { best = d; i0 = i; j0 = j; }
+            }
+        int i = 0, j = 0;
+        auto O = [&](int k) { return loopIdx[(i0 + k) % n]; };
+        auto F = [&](int k) { return inIdx[(j0 + k) % m]; };
+        // Advance by NORMALIZED ARC LENGTH, not nearest diagonal: on an
+        // elongated pad (a compound junction pair) greedy-nearest lets one
+        // cursor lag, then its catch-up triangles sweep ACROSS the interior —
+        // positive-area overlap the fold guard cannot see (measured: the whole
+        // link double-covered). Arc-synchronized cursors walk the two loops in
+        // lockstep around the ring, so the stitch stays inside the annulus.
+        std::vector<double> arcO(n + 1, 0.0), arcF(m + 1, 0.0);
+        for (int k = 0; k < n; ++k)
+            arcO[k + 1] = arcO[k] + (verts[O(k + 1)].position - verts[O(k)].position).length();
+        for (int k = 0; k < m; ++k)
+            arcF[k + 1] = arcF[k] + (verts[F(k + 1)].position - verts[F(k)].position).length();
+        const double totO = std::max(1e-9, arcO[n]), totF = std::max(1e-9, arcF[m]);
+        while (i < n || j < m) {
+            const bool canO = i < n, canF = j < m;
+            const double pO = canO ? arcO[i + 1] / totO : 2.0;
+            const double pF = canF ? arcF[j + 1] / totF : 2.0;
+            if (canO && (!canF || pO <= pF)) { tri(O(i), O(i + 1), F(j), true); ++i; }
+            else                             { tri(O(i), F(j + 1), F(j), true); ++j; }
+        }
+    }
+    if (!stitchOk) {                           // stitch folded: odd geometry
+        if (std::getenv("RT_PAD_DEBUG")) std::fprintf(stderr, "[pad] fallback: stitch folded\n");
+        return junctionPadEarcut(loop, mu, color);
+    }
+
+    // Per-vertex normals accumulated from faces; drivable pad faces up.
+    for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+        const Vec3& A = verts[idx[t]].position;
+        const Vec3& B = verts[idx[t + 1]].position;
+        const Vec3& C = verts[idx[t + 2]].position;
+        Vec3 fn = cross(C - A, B - A);
+        if (fn.y < 0) fn = fn * -1.0;
+        verts[idx[t]].normal = verts[idx[t]].normal + fn;
+        verts[idx[t + 1]].normal = verts[idx[t + 1]].normal + fn;
+        verts[idx[t + 2]].normal = verts[idx[t + 2]].normal + fn;
+    }
+    for (Vertex& v : verts)
+        v.normal = v.normal.lengthSquared() > 1e-12 ? normalize(v.normal) : Vec3(0, 1, 0);
+
+    mesh.vertices = std::move(verts);
+    mesh.indices = std::move(idx);
     return mesh;
 }
 

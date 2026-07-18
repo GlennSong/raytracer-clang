@@ -8,6 +8,8 @@
 
 #include "../src/engine/procgen/city/road_lattice.h"
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/city/road_net.h"
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <vector>
@@ -386,7 +388,11 @@ TEST_CASE(junction_patch_4way_is_smooth_all_quad) {
         const Vec3 nrm = cross(b - a, c - a);
         const double ny = std::fabs(nrm.y);
         if (ny < 1e-9) { ++degenerate; continue; }
-        if (std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / ny > 0.25) ++steep;
+        if (std::sqrt(nrm.x * nrm.x + nrm.z * nrm.z) / ny > 0.25) {
+            ++steep;
+            std::printf("  [steep] (%.2f,%.2f,%.2f)(%.2f,%.2f,%.2f)(%.2f,%.2f,%.2f)\n",
+                        a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        }
     }
     CHECK(degenerate == 0);
     CHECK(steep == 0);            // matches the arms' gentle slope, no medial-axis step
@@ -454,4 +460,170 @@ TEST_CASE(junction_patch_T_is_smooth_all_quad) {
     CHECK(rep.samples > 5);
     CHECK(rep.holes == 0);      // the patch covers the through road with no gap
     CHECK(rep.blocked == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Roads-v2 S4: the pad grows corner FILLET ARCS (kerb returns), a GRID interior
+// with Laplace-smoothed heights, and EXACT boundary K — every mouth vertex the
+// bodies delivered appears in the fill (the S1 earcut collinear-prune caveat is
+// closed, so pad and body can never T-joint).
+
+namespace {
+JunctionArm s4arm(Vec2 d, double R, double hw, double h, int K) {
+    JunctionArm a;
+    a.dir = normalize(d);
+    const Vec2 c = a.dir * R;
+    const Vec2 pp(-a.dir.y, a.dir.x);       // +perp = left verge
+    for (int i = 0; i <= K; ++i) {
+        const double t = i / static_cast<double>(K);
+        const Vec2 p = c + pp * (hw * (1 - 2 * t));
+        a.mouth.push_back(Vec3(p.x, h, p.y));
+    }
+    return a;
+}
+int s4degenerate(const RenderMesh& m) {
+    int n = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3& a = m.vertices[m.indices[t]].position;
+        const Vec3& b = m.vertices[m.indices[t + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t + 2]].position;
+        if (cross(b - a, c - a).length() < 1e-9) ++n;
+    }
+    return n;
+}
+}  // namespace
+
+TEST_CASE(junction_pad_corner_fillets_round_the_kerb) {
+    // Right-angle 4-way: the corner between the E arm's left verge (12, 7.2)
+    // and the N arm's right verge (7.2, 12). A kerb-return fillet curves the
+    // boundary INSIDE the straight chord (x+z = 19.2), toward the verge-line
+    // intersection (7.2, 7.2) — a rounded concave corner, not a snapped point.
+    const double R = 12.0, hw = 7.2;
+    std::vector<JunctionArm> arms = {
+        s4arm(Vec2(0, 1), R, hw, 0.3, 4), s4arm(Vec2(1, 0), R, hw, 0.3, 4),
+        s4arm(Vec2(0, -1), R, hw, 0.3, 4), s4arm(Vec2(-1, 0), R, hw, 0.3, 4),
+    };
+    RenderMesh m = junctionPatch(arms);
+    CHECK(!m.vertices.empty());
+    CHECK(s4degenerate(m) == 0);
+    bool sawArc = false;
+    for (const Vertex& v : m.vertices) {
+        const double x = v.position.x, z = v.position.z;
+        if (x > 7.5 && z > 7.5 && x + z > 15.0 && x + z < 18.6) sawArc = true;
+    }
+    CHECK(sawArc);                          // a real arc point off the chord
+    // The fillet never pokes OUTSIDE the union of the two road rectangles.
+    for (const Vertex& v : m.vertices) {
+        const double x = v.position.x, z = v.position.z;
+        CHECK(!(x > hw + 0.05 && z > hw + 0.05 && x + z > 19.2 + 0.05));
+    }
+}
+
+TEST_CASE(junction_pad_grid_interior_exact_mouths_smooth_heights) {
+    // Hilly 4-way (the 164%-step case): N high, S low. S4 contract:
+    //  - EXACT K: every mouth vertex appears in the pad and carries triangles
+    //  - a grid interior exists (vertices well away from the boundary)
+    //  - heights stay inside the boundary range and change gently everywhere
+    //  - a car drives straight through N -> S
+    const double R = 12.0, hw = 7.2;
+    std::vector<JunctionArm> arms = {
+        s4arm(Vec2(0, 1), R, hw, 1.0, 4), s4arm(Vec2(1, 0), R, hw, 0.5, 4),
+        s4arm(Vec2(0, -1), R, hw, 0.0, 4), s4arm(Vec2(-1, 0), R, hw, 0.5, 4),
+    };
+    RenderMesh m = junctionPatch(arms);
+    CHECK(s4degenerate(m) == 0);
+
+    auto q = [](const Vec3& p) {
+        return std::make_pair(std::llround(p.x * 512.0), std::llround(p.z * 512.0));
+    };
+    std::map<std::pair<long long, long long>, int> refs;
+    for (const unsigned idx : m.indices) ++refs[q(m.vertices[idx].position)];
+    for (const JunctionArm& a : arms)
+        for (const Vec3& mp : a.mouth) {
+            auto it = refs.find(q(mp));
+            CHECK(it != refs.end());        // the mouth vertex EXISTS in the pad
+            if (it != refs.end()) CHECK(it->second >= 1);   // and has triangles
+        }
+
+    int interior = 0;
+    for (const Vertex& v : m.vertices)
+        if (std::fabs(v.position.x) < 4.0 && std::fabs(v.position.z) < 4.0)
+            ++interior;
+    CHECK(interior >= 1);                   // a real grid interior, not ear-clip
+
+    double lo = 1e9, hi = -1e9;
+    for (const JunctionArm& a : arms)
+        for (const Vec3& mp : a.mouth) { lo = std::min(lo, (double)mp.y); hi = std::max(hi, (double)mp.y); }
+    for (const Vertex& v : m.vertices) {
+        CHECK(v.position.y > lo - 0.05);
+        CHECK(v.position.y < hi + 0.05);
+    }
+    int steepEdges = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3)
+        for (int e = 0; e < 3; ++e) {
+            const Vec3& a = m.vertices[m.indices[t + e]].position;
+            const Vec3& b = m.vertices[m.indices[t + (e + 1) % 3]].position;
+            const double run = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
+            if (run > 0.1 && std::fabs(a.y - b.y) / run > 0.25) ++steepEdges;
+        }
+    CHECK(steepEdges == 0);                 // smooth Laplace interior, no step
+
+    std::vector<Vec3> path;
+    for (double z = 11; z >= -11; z -= 1.5) path.push_back(Vec3(0, 1.2, z));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, path, rep);
+    CHECK(rep.samples > 8);
+    CHECK(rep.holes == 0);
+    CHECK(rep.steps == 0);
+}
+
+TEST_CASE(compound_pad_covers_junction_pair_too_close) {
+    // Two T-junctions 9 m apart, joined by a link SHORTER than the two
+    // junction radii combined (rad = hw + sidewalk = 7 each). trimSpine CLAMPS
+    // its trims at 45% of the chain, so S1 kept a squeezed 0.9 m body with
+    // BOTH pads stacked over it — the measured pad-pad overlap (52 cells on
+    // the real graph). S4 merges the pair into ONE compound pad: the link's
+    // asphalt has exactly one owner, and a car still drives through clean.
+    RoadGraph g;
+    auto node = [&](double x, double z) {
+        RoadNode n; n.pos = Vec2(x, z);
+        g.nodes.push_back(n);
+        return static_cast<int>(g.nodes.size() - 1);
+    };
+    const int w = node(-60, 0), a = node(0, 0), b = node(9, 0), e = node(69, 0);
+    const int an = node(0, 60), bn = node(9, -60);
+    auto edge = [&](int p, int qn) {
+        RoadEdge ed; ed.a = p; ed.b = qn; ed.width = 8.0;
+        g.edges.push_back(ed);
+    };
+    edge(w, a); edge(a, b); edge(b, e); edge(a, an); edge(b, bn);
+    RenderMesh m = buildRoadNetLattice(g, nullptr);
+    CHECK(!m.vertices.empty());
+    CHECK(s4degenerate(m) == 0);
+
+    // ONE surface between the junctions: no body squeezed under stacked pads.
+    // Sample OFF the z=0 gridline (shared triangle edges there report both
+    // neighbours at the same height) and count DISTINCT heights only.
+    int stacked = 0;
+    for (double x = -2.0; x <= 11.0; x += 0.5) {
+        std::vector<double> hits = driveprobe::surfacesAt(m, x, 0.3);
+        std::vector<double> near;
+        for (double h : hits) if (h > -1.0 && h < 2.0) near.push_back(h);
+        std::sort(near.begin(), near.end());
+        int layers = 0;
+        for (std::size_t k = 0; k < near.size(); ++k)
+            if (k == 0 || near[k] - near[k - 1] > 0.02) ++layers;
+        if (layers > 1) ++stacked;
+    }
+    CHECK(stacked == 0);
+
+    std::vector<Vec3> path;
+    for (double x = -20; x <= 29; x += 1.5) path.push_back(Vec3(x, 1.0, 0));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, path, rep);
+    for (const auto& d : rep.defects)
+        std::printf("  [defect] %s at (%.2f, %.2f, %.2f)\n", d.kind.c_str(), d.where.x, d.where.y, d.where.z);
+    CHECK(rep.samples > 20);
+    CHECK(rep.holes == 0);                  // the compound pad closes the gap
+    CHECK(rep.steps == 0);
 }
