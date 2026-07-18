@@ -46,6 +46,11 @@ struct RoadNet {
     // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).
     std::vector<RoadSpec> specs;
     std::vector<int> edgeSpecs;
+    // Roads-v2 S3: 1 = this edge was BAKED from a corridor solve (the corridor
+    // still draws/carves/navigates itself, so street passes skip these). An
+    // AUTHORED freeway-class edge (edge_classes in JSON — weld_freeway_lab)
+    // keeps 0 and is meshed by the street path as before.
+    std::vector<uint8_t> edgeBaked;
     // Optional per-edge grade-separation layer (parallel to `edges`; 0 or missing = ground,
     // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
     // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
@@ -143,6 +148,10 @@ void roadNetSetWidth(RoadNet& net, double width);
 // legacy synthesis from width/sidewalk/curb — so every edge answers the band
 // model even before its level is migrated (roads-v2 compat shim).
 RoadSpec roadNetEdgeSpec(const RoadNet& net, int ei);
+// Roads-v2 S3b: the net with baked corridor edges (Freeway/Ramp) removed —
+// what the street mesher/conform/nav consume while the corridor still draws
+// itself. Nodes are preserved so indices stay stable.
+RoadNet roadNetStreetsOnly(const RoadNet& net);
 // Width of edge `ei` (its per-edge override if set, else the default `width`).
 double roadNetEdgeWidth(const RoadNet& net, int ei);
 // Override edge `ei`'s width (the viewport per-edge widen). w <= 0 reverts to default.

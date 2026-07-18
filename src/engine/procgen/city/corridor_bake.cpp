@@ -26,11 +26,13 @@ void pushEdge(RoadNet& net, int a, int b, double width, RoadClass klass,
     net.edgeLayers.resize(n, 0);
     net.edgeClasses.resize(n, RoadClass::Local);
     net.edgeSpecs.resize(n, -1);
+    net.edgeBaked.resize(n, 0);
     net.edges.push_back({ a, b });
     net.edgeWidths.push_back(width);
     net.edgeLayers.push_back(layer);
     net.edgeClasses.push_back(klass);
     net.edgeSpecs.push_back(spec);
+    net.edgeBaked.push_back(1);        // street passes skip; corridor draws itself
 }
 
 // Add a node with an (optionally absolute) deck height. nodeElev is parallel

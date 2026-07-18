@@ -190,10 +190,46 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     return g;
 }
 
+}  // namespace
+
+// Roads-v2 S3b: strip the BAKED corridor edges (klass Freeway/Ramp) so the
+// street mesher, terrain conform, and street nav see only streets — the
+// corridor still draws/carves/navigates itself until S4-S6 unify. Without this
+// a baked net double-meshes, double-carves, and double-counts nav edges (the
+// corridor's carriageway chains are merged into LevelRoadGraph separately).
+// Also keeps the curvature cap honest: netMinTurnRadius scans edgeWidths, and
+// a 27 m freeway width would inflate every street's minimum turn radius.
+// Nodes are kept (indices stay stable); orphaned nodes emit no geometry.
+RoadNet roadNetStreetsOnly(const RoadNet& net) {
+    bool any = false;
+    for (uint8_t b : net.edgeBaked)
+        if (b) { any = true; break; }
+    if (!any) return net;
+    RoadNet out = net;
+    out.edges.clear(); out.edgeWidths.clear(); out.edgeLayers.clear();
+    out.edgeClasses.clear(); out.edgeSpecs.clear(); out.edgeBaked.clear();
+    auto at = [](const auto& v, std::size_t i, auto dflt) {
+        return i < v.size() ? v[i] : dflt;
+    };
+    for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+        if (at(net.edgeBaked, ei, uint8_t(0))) continue;   // baked: corridor's own
+        out.edges.push_back(net.edges[ei]);
+        out.edgeWidths.push_back(at(net.edgeWidths, ei, 0.0));
+        out.edgeLayers.push_back(at(net.edgeLayers, ei, 0));
+        out.edgeClasses.push_back(at(net.edgeClasses, ei, RoadClass::Local));
+        out.edgeSpecs.push_back(at(net.edgeSpecs, ei, -1));
+        out.edgeBaked.push_back(0);
+    }
+    return out;
+}
+
+namespace {
+
 // The graph the mesher AND the terrain-conform both build from: the sampled net graph put
 // through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
-RoadGraph constrainedNetGraph(const RoadNet& net) {
+RoadGraph constrainedNetGraph(const RoadNet& netIn) {
+    const RoadNet net = roadNetStreetsOnly(netIn);
     double minR = netMinTurnRadius(net);
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
@@ -430,7 +466,8 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     return out;
 }
 
-RenderMesh buildRoadNetMesh(const RoadNet& net) {
+RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
+    const RoadNet net = roadNetStreetsOnly(netIn);   // corridor draws itself (S3b)
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
     double minR = netMinTurnRadius(net);

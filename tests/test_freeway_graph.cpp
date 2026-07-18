@@ -165,6 +165,30 @@ TEST_CASE(baked_freeway_is_editable_like_a_street) {
     CHECK(g.net.edges.size() == f.net.edges.size());
 }
 
+TEST_CASE(baked_net_does_not_double_mesh_the_corridor) {
+    // S3b: the street mesher, terrain conform, and street nav must see ONLY the
+    // streets of a baked net — the corridor draws/carves/navigates itself. So a
+    // baked net produces byte-identical street outputs to its pre-bake self.
+    Fixture f = makeFixture();
+    RoadNet streetsOnly;                       // rebuild the pre-bake net
+    streetsOnly.nodes = { Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
+    streetsOnly.edges = { { 0, 1 }, { 1, 2 } };
+    streetsOnly.width = 8.0;
+
+    const RenderMesh a = buildRoadNetMesh(f.net);
+    const RenderMesh b = buildRoadNetMesh(streetsOnly);
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(a.indices.size() == b.indices.size());
+
+    const RoadGraph na = navRoadGraph(f.net);
+    const RoadGraph nb = navRoadGraph(streetsOnly);
+    CHECK(na.edges.size() == nb.edges.size());  // no double-counted nav edges
+
+    const std::size_t ca = roadNetConformRegions(f.net).size();
+    const std::size_t cb = roadNetConformRegions(streetsOnly).size();
+    CHECK(ca == cb);                            // no double terrain carve
+}
+
 TEST_CASE(baked_graph_agrees_with_the_corridor_mesh) {
     Fixture f = makeFixture();
     // Mesh the corridor the shipping way (swept lattices)...
