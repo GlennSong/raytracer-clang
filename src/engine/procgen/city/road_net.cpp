@@ -603,51 +603,84 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         }
         return false;
     };
-    // 2c NOSE TRIM: a Ramp chain that meets a Freeway at a gore departs FROM
-    // the deck's centreline node, so its swept ribbon (rails included) rides
-    // ON the deck until the centreline laterally clears it — the measured
-    // parapet-in-the-lanes blockers. The ramp's trim at a gore end therefore
-    // extends to the NOSE: the arc where the ramp centreline exits the deck
-    // ribbon (deck half + ramp half + margin). The junction pad then fills
-    // the wedge from the deck edge to the ramp's mouth — the gore surface.
-    std::vector<std::vector<std::pair<Vec2, Vec2>>> fwySegsAt(N);
-    for (const UnionSpine& fs : chains) {
-        if (fs.klass != RoadClass::Freeway || fs.points.size() < 2) continue;
-        const int fa = nodeAt(fs.points.front()), fb = nodeAt(fs.points.back());
-        for (int v : { fa, fb }) {
-            if (v < 0) continue;
-            double acc = 0;
-            for (std::size_t i = 1; i < fs.points.size() && acc < 160.0; ++i) {
-                const bool fromA = (v == fa);
-                const std::size_t k = fromA ? i : fs.points.size() - 1 - i;
-                const std::size_t kp = fromA ? k - 1 : k + 1;
-                fwySegsAt[v].push_back({ fs.points[kp], fs.points[k] });
-                acc += (fs.points[k] - fs.points[kp]).length();
-            }
+    // ACUTE-PAIR TRIM (2c nose trim, generalized in R2): two arms leaving a
+    // junction NEARLY PARALLEL — a ramp along its freeway at a gore, or two
+    // streets forking at a sharp angle (drive feedback A1: "one of the roads
+    // remains a flat ribbon... It floats above it") — overlap ribbons far
+    // beyond the standard junction radius. Each such chain end extends its
+    // trim to where its centreline actually CLEARS the sibling's ribbon
+    // (half + half + margin); the junction pad then fills the wedge between
+    // the real mouths. Perpendicular and opposite arms are untouched (their
+    // ribbons separate within the standard radius already).
+    struct ArmRef { std::size_t chain; Vec2 dir; };
+    std::vector<std::vector<ArmRef>> armsAt(N);
+    for (std::size_t ci2 = 0; ci2 < chains.size(); ++ci2) {
+        const UnionSpine& cs2 = chains[ci2];
+        if (cs2.points.size() < 2) continue;
+        const int fa = nodeAt(cs2.points.front()), fb = nodeAt(cs2.points.back());
+        if (fa >= 0) {
+            Vec2 d = cs2.points[1] - cs2.points[0];
+            const double l = d.length();
+            if (l > 1e-9) armsAt[fa].push_back({ ci2, d * (1.0 / l) });
+        }
+        if (fb >= 0) {
+            Vec2 d = cs2.points[cs2.points.size() - 2] - cs2.points.back();
+            const double l = d.length();
+            if (l > 1e-9) armsAt[fb].push_back({ ci2, d * (1.0 / l) });
         }
     }
-    auto noseTrim = [&](const UnionSpine& rampS, int node, bool fromFront,
-                        double deckHalf) {
-        const double clearL = deckHalf + rampS.halfWidth + 0.5;
-        double acc = 0, trim = 0;
-        const std::size_t n2 = rampS.points.size();
-        for (std::size_t i = 0; i < n2; ++i) {
-            const std::size_t k = fromFront ? i : n2 - 1 - i;
-            if (i > 0) {
-                const std::size_t kp = fromFront ? k - 1 : k + 1;
-                acc += (rampS.points[k] - rampS.points[kp]).length();
+    // Near-node segments per chain (for the clearance walk).
+    auto chainSegsNear = [&](std::size_t ci2, int node, double reach) {
+        std::vector<std::pair<Vec2, Vec2>> segs;
+        const UnionSpine& cs2 = chains[ci2];
+        const bool fromA = nodeAt(cs2.points.front()) == node;
+        double acc = 0;
+        for (std::size_t i = 1; i < cs2.points.size() && acc < reach; ++i) {
+            const std::size_t k = fromA ? i : cs2.points.size() - 1 - i;
+            const std::size_t kp = fromA ? k - 1 : k + 1;
+            segs.push_back({ cs2.points[kp], cs2.points[k] });
+            acc += (cs2.points[k] - cs2.points[kp]).length();
+        }
+        return segs;
+    };
+    auto pairTrim = [&](const UnionSpine& mine, std::size_t myCi, int node,
+                        bool fromFront) {
+        double trim = 0;
+        Vec2 myDir(0, 0);
+        for (const ArmRef& ar : armsAt[node])
+            if (ar.chain == myCi) { myDir = ar.dir; break; }
+        if (myDir.x == 0 && myDir.y == 0) return trim;
+        for (const ArmRef& other : armsAt[node]) {
+            if (other.chain == myCi) continue;
+            if (dot(myDir, other.dir) < 0.82) continue;   // ~35 deg: not acute
+            // DOMINANCE: only the narrower-or-equal arm gives way — a ramp
+            // trims to clear its freeway, never the freeway to clear the
+            // ramp (the symmetric rule cut the mainline's body and parapets
+            // ~60 m back from every gore). Equal street forks both extend.
+            if (mine.halfWidth > chains[other.chain].halfWidth + 0.1) continue;
+            const double clearL = mine.halfWidth +
+                                  chains[other.chain].halfWidth + 0.4;
+            const auto segs = chainSegsNear(other.chain, node, 220.0);
+            double acc = 0;
+            const std::size_t n2 = mine.points.size();
+            for (std::size_t i = 0; i < n2; ++i) {
+                const std::size_t k = fromFront ? i : n2 - 1 - i;
+                if (i > 0) {
+                    const std::size_t kp = fromFront ? k - 1 : k + 1;
+                    acc += (mine.points[k] - mine.points[kp]).length();
+                }
+                double dmin = 1e30;
+                for (const auto& seg : segs) {
+                    const Vec2 ab = seg.second - seg.first;
+                    const double l2 = ab.lengthSquared();
+                    double t2 = l2 > 1e-12
+                        ? dot(mine.points[k] - seg.first, ab) / l2 : 0.0;
+                    t2 = t2 < 0 ? 0 : (t2 > 1 ? 1 : t2);
+                    dmin = std::min(dmin,
+                                    (seg.first + ab * t2 - mine.points[k]).length());
+                }
+                if (dmin > clearL) { trim = std::max(trim, acc); break; }
             }
-            double dmin = 1e30;
-            for (const auto& seg : fwySegsAt[node]) {
-                const Vec2 ab = seg.second - seg.first;
-                const double l2 = ab.lengthSquared();
-                double t2 = l2 > 1e-12
-                    ? dot(rampS.points[k] - seg.first, ab) / l2 : 0.0;
-                t2 = t2 < 0 ? 0 : (t2 > 1 ? 1 : t2);
-                dmin = std::min(dmin,
-                                (seg.first + ab * t2 - rampS.points[k]).length());
-            }
-            if (dmin > clearL) { trim = acc; break; }
         }
         return trim;
     };
@@ -659,12 +692,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
             continue;                            // compound link: the pad owns it
         double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
         double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
-        if (s.klass == RoadClass::Ramp) {
-            if (a >= 0 && !fwySegsAt[a].empty())
-                rA = std::max(rA, noseTrim(s, a, true, rad[a]));
-            if (b >= 0 && !fwySegsAt[b].empty())
-                rB = std::max(rB, noseTrim(s, b, false, rad[b]));
-        }
+        if (a >= 0 && deg[a] >= 3)
+            rA = std::max(rA, pairTrim(s, ci, a, true));
+        if (b >= 0 && deg[b] >= 3)
+            rB = std::max(rB, pairTrim(s, ci, b, false));
         UnionSpine t = trimSpine(s, rA, rB);
         if (t.points.size() < 2) continue;
 

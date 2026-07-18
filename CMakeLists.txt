@@ -440,6 +440,7 @@ add_executable(run_tests
     tests/test_freeway_graph.cpp
     tests/test_idm.cpp
     tests/test_street_furniture.cpp
+    tests/test_junction_zoo.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp
