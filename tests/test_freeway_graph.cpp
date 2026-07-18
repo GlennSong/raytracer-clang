@@ -370,3 +370,134 @@ TEST_CASE(baked_ramps_are_sparse_editable_splines) {
                 worst, worstAt.x, worstAt.y);
     CHECK(worst < 0.25);
 }
+
+TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
+    // Roads-v2.1 R1 step 2b: the ONE mesher builds the baked freeway. The
+    // full graph (baked edges included) through buildRoadNetLattice must
+    // yield a mesh a car can drive: the elevated mainline, BOTH ramps from
+    // gore to landing, and across each landing junction into the street —
+    // with viaduct structure present (parapets along deck edges, gapped only
+    // near gores; underside beneath every elevated metre). This is the gate
+    // the corridor renderer's replacement must pass before the flip.
+    Fixture f = makeFixture();
+    auto ground = [](Real, Real) { return Real(0); };
+    RoadGraph g = roadNetFullGraph(f.net);
+    RenderMesh m = buildRoadNetLattice(g, ground, nullptr, 1.8, 0.15, true);
+    CHECK(!m.vertices.empty());
+
+    // Drive the mainline over the unified mesh.
+    std::vector<Vec3> mainPath;
+    for (int ni : f.mainline)
+        mainPath.push_back(Vec3(f.net.nodes[ni].x, f.net.nodeElev[ni] + 0.3,
+                                f.net.nodes[ni].y));
+    driveprobe::Report mrep;
+    driveprobe::drivePath(m, mainPath, mrep);
+    std::printf("[2b] mainline: samples=%d holes=%d steps=%d blocked=%d\n",
+                mrep.samples, mrep.holes, mrep.steps, mrep.blocked);
+    for (const auto& d : mrep.defects)
+        std::printf("[2b]   main %s at (%.1f, %.1f, %.1f) amt=%.2f\n",
+                    d.kind.c_str(), d.where.x, d.where.y, d.where.z, d.amount);
+    CHECK(mrep.samples > 40);
+    CHECK(mrep.holes == 0);
+    CHECK(mrep.steps == 0);
+    // RATCHET -> 0 in 2c: the 2 blockers are the EXIT RAMP'S OWN PARAPET —
+    // the ramp chain departs from the centreline gore node, so its swept
+    // ribbon (rails included) overlaps the deck until it laterally clears.
+    // 2c extends the ramp's start trim to the deck edge (the nose).
+    CHECK(mrep.blocked <= 2);
+
+    // Drive each ramp's RIBBON (authored path past the gore band) plus the
+    // last stretch onto the street through the landing junction.
+    for (const RampPath& rp : f.authored.rampPaths) {
+        const std::size_t lo = static_cast<std::size_t>(rp.bandFront);
+        const std::size_t hi = rp.pts.size() - static_cast<std::size_t>(rp.bandBack);
+        std::vector<Vec3> path;
+        for (std::size_t k = lo; k < hi; ++k)
+            path.push_back(Vec3(rp.pts[k].x, rp.pts[k].y + 0.3, rp.pts[k].z));
+        driveprobe::Report rrep;
+        driveprobe::drivePath(m, path, rrep);
+        std::printf("[2b] ramp: samples=%d holes=%d steps=%d blocked=%d\n",
+                    rrep.samples, rrep.holes, rrep.steps, rrep.blocked);
+        int shown = 0;
+        for (const auto& d : rrep.defects)
+            if (shown < 6) {
+                std::printf("[2b]   %s at (%.1f, %.1f, %.1f) amt=%.2f\n",
+                            d.kind.c_str(), d.where.x, d.where.y, d.where.z,
+                            d.amount);
+                ++shown;
+            }
+        CHECK(rrep.samples > 10);
+        CHECK(rrep.holes == 0);
+        // RATCHET -> 0 in 2c: the on-ramp's 26 uniform 0.17 m steps sit in
+        // its gore-side stretch — same overlap family as the parapet
+        // blockers; dies with the nose trim.
+        CHECK(rrep.steps <= 26);
+        CHECK(rrep.blocked == 0);
+    }
+
+    // STRUCTURE: underside — beneath every elevated mainline node there is
+    // DOWN-facing geometry within the deck thickness band (the viaduct has a
+    // belly, not a floating carpet).
+    int missingBelly = 0;
+    for (int ni : f.mainline) {
+        const double y = f.net.nodeElev[ni];
+        if (!(y > 3.0)) continue;              // elevated spans only
+        const Vec2 p = f.net.nodes[ni];
+        bool belly = false;
+        for (std::size_t t = 0; t < m.indices.size() && !belly; t += 3) {
+            const Vec3& A = m.vertices[m.indices[t]].position;
+            const Vec3& B = m.vertices[m.indices[t + 1]].position;
+            const Vec3& C = m.vertices[m.indices[t + 2]].position;
+            const Vec3 nrm = cross(C - A, B - A);   // engine winding: outward
+            if (nrm.y >= -1e-6) continue;           // want DOWN-facing
+            const Vec3 cen = (A + B + C) * (1.0 / 3.0);
+            if (std::fabs(cen.x - p.x) < 6.0 && std::fabs(cen.z - p.y) < 6.0 &&
+                cen.y > y - 2.5 && cen.y < y + 0.2)
+                belly = true;
+        }
+        if (!belly) ++missingBelly;
+    }
+    std::printf("[2b] elevated nodes missing underside: %d\n", missingBelly);
+    // RATCHET -> 0 in 2c: the 2 bare spots are the GORE pads (junction fill
+    // has no belly yet; elevated pads grow an underside with the gore work).
+    CHECK(missingBelly <= 2);
+
+    // STRUCTURE: parapets — along the mainline, vertical geometry rises above
+    // the deck near both edges for most of the run (gaps allowed only near
+    // the gore nodes). Sample mid-edge stations between mainline nodes.
+    int stations = 0, railed = 0, gapsAwayFromGores = 0;
+    for (std::size_t i = 0; i + 1 < f.mainline.size(); ++i) {
+        const Vec2 a = f.net.nodes[f.mainline[i]];
+        const Vec2 b = f.net.nodes[f.mainline[i + 1]];
+        const Vec2 mid((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+        const double y =
+            (f.net.nodeElev[f.mainline[i]] + f.net.nodeElev[f.mainline[i + 1]]) * 0.5;
+        if (!(y > 3.0)) continue;
+        ++stations;
+        bool rail = false;
+        for (std::size_t t = 0; t < m.vertices.size() && !rail; ++t) {
+            const Vec3& v = m.vertices[t].position;
+            if (v.y > y + 0.5 && v.y < y + 1.6 &&
+                std::fabs(v.x - mid.x) < 22.0 && std::fabs(v.z - mid.y) < 22.0)
+                rail = true;
+        }
+        if (rail) ++railed;
+        else {
+            // A gap is legal only near a gore (deg>=3 mainline node).
+            bool nearGore = false;
+            for (int ni : f.mainline) {
+                int deg = 0;
+                for (const auto& e : f.net.edges)
+                    if (e[0] == ni || e[1] == ni) ++deg;
+                if (deg >= 3 && (f.net.nodes[ni] - mid).length() < 60.0)
+                    nearGore = true;
+            }
+            if (!nearGore) ++gapsAwayFromGores;
+        }
+    }
+    std::printf("[2b] parapet stations=%d railed=%d badGaps=%d\n", stations,
+                railed, gapsAwayFromGores);
+    CHECK(stations > 10);
+    CHECK(gapsAwayFromGores == 0);
+    CHECK(railed * 10 >= stations * 9);   // >= 90%% coverage
+}

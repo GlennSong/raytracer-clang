@@ -288,29 +288,38 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         s.klass = g.edges[e0].klass;             // carry class into the weld (P1)
         s.closed = closed;
         s.points.push_back(g.nodes[v].pos);
-        // 3-D channel (welder-goes-3D): a chain whose nodes ALL carry an
-        // ABSOLUTE deck Y (corridor decks / ramps, elevAbsolute) rides those
-        // heights through weldChainProfiles instead of draping. Streets keep
-        // elevAbsolute=false, so ys stays discarded and the drape path is
-        // unchanged. Chains are homogeneous by construction: a ramp-to-street
-        // transition is a degree change, which breaks the chain here.
-        std::vector<double> ys{ g.nodes[v].elev };
-        bool allAbs = g.nodes[v].elevAbsolute;
+        // 3-D channel (welder-goes-3D): a chain with ANY absolute deck Y
+        // (corridor decks / ramps, elevAbsolute) rides authored heights where
+        // they exist; non-absolute nodes get NaN here and are FILLED from the
+        // drape profile below — so a baked ramp chain that TERMINATES at an
+        // at-grade street junction keeps its authored descent instead of
+        // draping the whole elevated span onto the ground (the old all-or-
+        // nothing rule did exactly that: every landing node is at-grade, so
+        // every baked ramp meshed at ground level and the drive probe fell
+        // through the sky where the deck should be). Pure streets have no
+        // absolute nodes and keep the unchanged drape path.
+        auto yOf = [&](int ni) {
+            return g.nodes[ni].elevAbsolute
+                       ? static_cast<double>(g.nodes[ni].elev)
+                       : std::numeric_limits<double>::quiet_NaN();
+        };
+        std::vector<double> ys{ yOf(v) };
+        bool anyAbs = g.nodes[v].elevAbsolute;
         int prev = v, e = e0, startNode = v;
         while (!used[e]) {
             used[e] = 1;
             int nx = (g.edges[e].a == prev) ? g.edges[e].b : g.edges[e].a;
             if (closed && nx == startNode) break;
             s.points.push_back(g.nodes[nx].pos);
-            ys.push_back(g.nodes[nx].elev);
-            allAbs = allAbs && g.nodes[nx].elevAbsolute;
+            ys.push_back(yOf(nx));
+            anyAbs = anyAbs || g.nodes[nx].elevAbsolute;
             if (!closed && breaksChain(nx)) break;
             int ne = -1;
             for (int ee : inc[nx]) if (ee != e && !used[ee]) { ne = ee; break; }
             if (ne < 0) break;
             prev = nx; e = ne;
         }
-        if (allAbs && ys.size() == s.points.size()) s.yAbs = std::move(ys);
+        if (anyAbs && ys.size() == s.points.size()) s.yAbs = std::move(ys);
         return s;
     };
     for (int v = 0; v < n; ++v) {                  // open chains: start at every junction/dead-end
@@ -493,13 +502,46 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     // terrain. Ride the SAME profiles the carve uses: mesh and terrain now agree
     // by construction, exactly like the weld path (plan P3.2).
     std::vector<UnionSpine> chains = weldChainSpines(g);
+    // Mixed chains carry NaN at their at-grade nodes (a baked ramp's street
+    // landing). weldChainProfiles READS yAbs as its authored input, so the
+    // NaNs must die HERE, before any consumer: fill them with the draped
+    // street surface at that point. NaN must never reach a profile or a mesh.
+    for (UnionSpine& c : chains)
+        for (std::size_t i = 0; i < c.yAbs.size(); ++i)
+            if (std::isnan(c.yAbs[i]))
+                c.yAbs[i] = groundFn(c.points[i].x, c.points[i].y) + 0.15;
     {
         std::vector<std::vector<double>> profiles = weldChainProfiles(
             chains, groundFn, 0.0, kRoadMaxGrade, 3.0 + 4.0);
-        for (std::size_t si = 0; si < chains.size(); ++si)
-            if (chains[si].yAbs.empty() &&
-                profiles[si].size() == chains[si].points.size())
-                chains[si].yAbs = profiles[si];
+        for (std::size_t si = 0; si < chains.size(); ++si) {
+            const bool sized = profiles[si].size() == chains[si].points.size();
+            if (chains[si].yAbs.empty()) {
+                if (sized) chains[si].yAbs = profiles[si];
+                continue;
+            }
+            // Mixed chain: authored deck heights win; the at-grade holes
+            // (NaN — e.g. a ramp's street landing node) ride the same drape
+            // profile a street would, so the descent meets the street exactly
+            // where the street's own surface sits. If the profile pass
+            // resampled (size mismatch), bridge NaN runs from the finite
+            // neighbours instead — NaN must NEVER reach the mesh.
+            std::vector<double>& ys = chains[si].yAbs;
+            for (std::size_t i = 0; i < ys.size(); ++i) {
+                if (!std::isnan(ys[i])) continue;
+                if (sized) { ys[i] = profiles[si][i]; continue; }
+                std::size_t lo = i; while (lo > 0 && std::isnan(ys[lo - 1])) --lo;
+                std::size_t hi = i; while (hi + 1 < ys.size() && std::isnan(ys[hi + 1])) ++hi;
+                const double before = lo > 0 ? ys[lo - 1]
+                                             : (hi + 1 < ys.size() ? ys[hi + 1] : 0.0);
+                const double after = hi + 1 < ys.size() ? ys[hi + 1] : before;
+                for (std::size_t k = lo; k <= hi; ++k) {
+                    const double t = (hi >= lo)
+                        ? (double(k - lo) + 1.0) / (double(hi - lo) + 2.0) : 0.5;
+                    ys[k] = before + (after - before) * t;
+                }
+                i = hi;
+            }
+        }
     }
     // S4: junction pairs closer than their combined radii merge into ONE
     // COMPOUND pad. trimSpine clamps its trims at 45% of the chain, so S1 kept
