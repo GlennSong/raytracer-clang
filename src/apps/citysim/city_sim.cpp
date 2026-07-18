@@ -1136,6 +1136,46 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         }
     }
 
+    // S8 KERB DISCIPLINE (roads-v2 plan §3.3): at an UNSIGNALLED junction a
+    // walker GAP-ACCEPTS — it waits at the kerb while cars are inbound on the
+    // crossing and steps off into a gap, instead of walking out and relying
+    // on every driver's brakes (the signalled case is already the stop-line
+    // hold above). Assertiveness cap: after ~12 s of no gap the walker
+    // crosses anyway — traffic never fully starves a pedestrian, and the
+    // cars' person-sense stays the safety net, exactly like a real kerb.
+    if (!car) {
+        const int toNode = nav_->links[li].to;
+        const Real toEnd = nav_->links[li].length - a.distOnLeg;
+        // The kerb line sits BEFORE the corner-cut blend window (half the
+        // road width + margin): the sidewalk path cuts through the junction
+        // interior around the node, so a hold any later parks the walker IN
+        // the carriageway. Past the wait band the walker is committed —
+        // stopping mid-box would be strictly worse than walking on.
+        const Real kerb = nav_->links[li].width * 0.5 + 3.0;
+        if (nav_->isJunction(toNode) && !signals_.hasSignal(li) &&
+            toEnd < kerb && toEnd > kerb - 1.8 && a.holdTimer < 12.0) {
+            const Vec2 nodeP = nav_->nodes[toNode];
+            bool carInbound = false;
+            for (const Agent& c : agents_) {
+                if (c.mode != Agent::Mode::Driver || !c.moving || c.speed < 0.5)
+                    continue;
+                if (std::fabs(c.elevation - a.elevation) > 2.5) continue;
+                const Real cd = (c.pos - nodeP).length();
+                // Inside the box, or reaching it within ~2.5 s at its speed.
+                if (cd < 7.0 || cd < c.speed * 2.5 + 4.0) { carInbound = true; break; }
+            }
+            if (carInbound) {
+                a.holdTimer += dt;
+                a.speed = 0;
+                a.state = Agent::State::Waiting;
+                refreshPose(a);
+                steer(a, dt);
+                return;
+            }
+        }
+        if (toEnd >= kerb + 2.0) a.holdTimer = 0;   // clear of the kerb: reset patience
+    }
+
     Real motion = a.speed * dt;
 
     // Hard stop for a pedestrian/player ahead: the smooth approachStop above eases

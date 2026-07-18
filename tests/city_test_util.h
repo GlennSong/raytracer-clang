@@ -30,6 +30,21 @@ inline engine::NavGraph cross4(engine::Real arm) {
     return engine::buildNavGraph(g);
 }
 
+// A T-junction: centre node 0 (degree 3 — below the 4-approach signal
+// threshold, so it is UNCONTROLLED), arm tips 1..3. The kerb-discipline tests
+// use it: gap acceptance is exactly the unsignalled-crossing rule.
+inline engine::NavGraph tee(engine::Real arm) {
+    engine::RoadGraph g;
+    g.nodes = { {engine::Vec2(0, 0)}, {engine::Vec2(0, arm)},
+                {engine::Vec2(arm, 0)}, {engine::Vec2(-arm, 0)} };
+    g.edges = {
+        engine::RoadEdge{0, 1, 8, engine::RoadClass::Local, 0},
+        engine::RoadEdge{0, 2, 8, engine::RoadClass::Local, 0},
+        engine::RoadEdge{0, 3, 8, engine::RoadClass::Local, 0},
+    };
+    return engine::buildNavGraph(g);
+}
+
 // A single straight two-node road: one leg, no junction, no signal — a clear
 // open stretch where car-following (or free cruising) is the only rule in play.
 // `width` sets the carriageway: 8 m carries two lanes, 5 m forces a single lane
