@@ -259,6 +259,16 @@ RoadGraph constrainedNetGraph(const RoadNet& netIn) {
 // graph the mesher uses, without exposing the file-local builder above.
 RoadGraph navRoadGraph(const RoadNet& net) { return constrainedNetGraph(net); }
 
+// The FULL sampled+constrained graph, baked corridor edges INCLUDED — the
+// graph the unified mesher builds from (roads-v2.1 R1) and the surface the
+// bake-fidelity gates measure against. constrainedNetGraph strips baked
+// edges for the street-only passes; this is the whole road system.
+RoadGraph roadNetFullGraph(const RoadNet& net) {
+    RoadRules rules;
+    rules.autoRoundabout = net.autoRoundabout;
+    return applyConstraints(netGraph(net, netMinTurnRadius(net)), rules);
+}
+
 // One UnionSpine per CHAIN (a maximal degree-2 run between junctions/dead-ends), carrying that
 // road's WIDTH — so the weld gets smooth per-road ribbons (no per-edge spikes) AND the right width
 // (arterials stay wider than streets, which a width-less chain trace loses). A pure cycle with no

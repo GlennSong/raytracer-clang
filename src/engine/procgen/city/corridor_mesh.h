@@ -16,7 +16,17 @@ namespace engine {
 // chain from THESE points AND the weld builds the ramp's geometry from them, so
 // the mesh and the graph can never disagree. Points run in FLOW order (an exit:
 // deck -> street; an on-ramp: street -> deck).
-struct RampPath { std::vector<Vec3> pts; };
+struct RampPath {
+    std::vector<Vec3> pts;
+    // The GORE-BAND portion of pts — the piece that rides the flared deck
+    // edge. It is JUNCTION surface (deck flare + gore wedge), not ramp
+    // ribbon: exits carry it as the first `bandFront` points, on-ramps as
+    // the last `bandBack` (flow order street -> merge). The graph bake
+    // starts the editable ramp chain PAST the band (roads-v2.1 2a); the
+    // band's surface belongs to the gore junction (2c).
+    int bandFront = 0;
+    int bandBack = 0;
+};
 
 // Fold the corridor into the ONE welder (road-unification, one-mesher P3): sample
 // the corridor's alignment + vertical profile into UnionSpine(s) that `weldSolid`

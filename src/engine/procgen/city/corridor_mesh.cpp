@@ -178,13 +178,19 @@ CorridorAuthoring corridorAuthor(const CorridorDef& cIn,
         }
     }
 
-    // Mainline samples for the never-under-the-deck check (§11).
-    std::vector<Vec2> corrPts;
-    for (Real s2 = 0; s2 <= L; s2 += 25.0) corrPts.push_back(c.horizontal.pos(s2));
-    Real corrGuard = 0;
-    for (int i = 0; i <= n; ++i)
-        corrGuard = std::max(corrGuard, std::max(halfN[i], halfP[i]));
-    corrGuard += 1.5;
+    // Mainline samples for the never-under-the-deck check (§11), each with
+    // its LOCAL side-aware deck reach. The old guard took the GLOBAL max
+    // half-width — one exit's accel/decel flare anywhere on the corridor
+    // inflated the guard everywhere, and a second ramp's legitimately
+    // parallel descent then read as "crossing the mainline" and was DROPPED
+    // (an exit + on-ramp pair could never coexist).
+    struct CorrPt { Vec2 p; Real guardN, guardP; };
+    std::vector<CorrPt> corrPts;
+    for (Real s2 = 0; s2 <= L; s2 += 25.0) {
+        const int i = std::min(n, static_cast<int>(s2 / L * n));
+        corrPts.push_back({ c.horizontal.pos(s2),
+                            halfN[i] + Real(1.5), halfP[i] + Real(1.5) });
+    }
     for (const ExitDef& e : c.exits) {
         out.rampPaths.emplace_back();                    // parallel to exits
         std::vector<Vec3>& path = out.rampPaths.back().pts;
@@ -268,13 +274,16 @@ CorridorAuthoring corridorAuthor(const CorridorDef& cIn,
             rr[i].slope = 0;
             rUp[i] = rr[i].z - gy(rr[i].c) > 0.35;   // structure from 35 cm up
         }
-        {   // §11 guard: the free run must stay OUT of the mainline footprint.
+        {   // §11 guard: the free run must stay OUT of the mainline footprint
+            // — measured against the LOCAL reach on the ramp's own side.
             bool crosses = false;
             for (int i = 0; i <= rn && !crosses; ++i) {
                 const Real rs2 = RL * i / rn;
                 if (rs2 < 35.0) continue;        // the legit peel-off hugs the deck
-                for (const Vec2& q : corrPts)
-                    if ((q - rr[i].c).length() < corrGuard) { crosses = true; break; }
+                for (const CorrPt& q : corrPts) {
+                    const Real g = dirSign < 0 ? q.guardN : q.guardP;
+                    if ((q.p - rr[i].c).length() < g) { crosses = true; break; }
+                }
             }
             if (crosses) {
                 out.rampPaths.back().pts.clear();
@@ -287,9 +296,11 @@ CorridorAuthoring corridorAuthor(const CorridorDef& cIn,
         if (e.onRamp) {   // flow order: street -> arrival -> merge
             path.assign(freePath.rbegin(), freePath.rend());
             path.insert(path.end(), bandPath.begin() + 1, bandPath.end());
+            out.rampPaths.back().bandBack = static_cast<int>(bandPath.size()) - 1;
         } else {          // flow order: gore -> band end -> street
             path = bandPath;
             path.insert(path.end(), freePath.begin() + 1, freePath.end());
+            out.rampPaths.back().bandFront = static_cast<int>(bandPath.size());
         }
         // LANDING conform: flatten only the last stretch meeting street grade.
         for (Real s0 = 0; s0 < RL; s0 += 10.0) {

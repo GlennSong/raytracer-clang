@@ -115,6 +115,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
 // the asphalt is drawn on. (Wraps the file-local builder; defined in road_net.cpp.)
 RoadGraph navRoadGraph(const RoadNet& net);
 
+// The full sampled graph INCLUDING baked corridor edges — what the unified
+// mesher (roads-v2.1 R1) and the bake-fidelity tests build from.
+RoadGraph roadNetFullGraph(const RoadNet& net);
+
 // Diagnostic accessors: the mesher's exact constrained graph + weld-chain
 // decomposition, so instruments (RT_POKE_REPORT) measure the deck the mesh
 // actually rides — not a near-miss reconstruction.

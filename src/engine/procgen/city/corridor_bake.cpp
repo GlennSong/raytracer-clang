@@ -45,6 +45,16 @@ int pushNode(RoadNet& net, const Vec2& p, double elev) {
     return static_cast<int>(net.nodes.size()) - 1;
 }
 
+// Store an authored tangent for a baked node (parallel array padded). The
+// magnitude follows the Catmull-Rom convention netGraph's Hermite uses
+// (~half the span between neighbouring nodes), so sparse nodes reproduce
+// the solved curve instead of chording it.
+void setTangent(RoadNet& net, int ni, const Vec2& t) {
+    if (net.tangents.size() < net.nodes.size())
+        net.tangents.resize(net.nodes.size(), Vec2(0, 0));
+    net.tangents[ni] = t;
+}
+
 }  // namespace
 
 std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
@@ -87,11 +97,20 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
     }
     filled.push_back(stations.back());
 
-    // --- Bake the mainline chain.
-    for (double s : filled) {
+    // --- Bake the mainline chain, tangents from the solved alignment (2a).
+    for (std::size_t fi = 0; fi < filled.size(); ++fi) {
+        const double s = filled[fi];
         const Vec2 p = def.horizontal.pos(static_cast<Real>(s));
         const double y = def.vertical.elevation(static_cast<Real>(s));
         const int ni = pushNode(net, p, y);
+        Vec2 tan = def.horizontal.tangent(static_cast<Real>(s));
+        const double tl = tan.length();
+        if (tl > 1e-9) {
+            const double prevS = fi > 0 ? filled[fi - 1] : s;
+            const double nextS = fi + 1 < filled.size() ? filled[fi + 1] : s;
+            const double span = std::max(1.0, (nextS - prevS) * 0.5);
+            setTangent(net, ni, tan * (span / tl));
+        }
         if (!mainline.empty())
             pushEdge(net, mainline.back(), ni, fwyWidth, RoadClass::Freeway,
                      /*layer=*/1, fwySpec);
@@ -111,32 +130,112 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         }
         if (gore < 0 || best > 1.0) continue;      // must be exact, not near
 
-        const std::vector<Vec3>& pts = rampPaths[xi].pts;
-        int prev = gore;
-        for (std::size_t k = 0; k < pts.size(); ++k) {
-            const Vec2 q(pts[k].x, pts[k].z);
-            const bool last = (k + 1 == pts.size());
-            int ni;
-            if (last) {
-                // Landing: REUSE the street's own node when one is close — the
-                // graft that makes "the ramp ends on a street node" literal.
-                int snap = -1;
-                double sd = params.landingSnap * params.landingSnap;
-                for (int v = 0; v < streetNodes; ++v) {
-                    const double d = (net.nodes[v] - q).lengthSquared();
-                    if (d < sd) { sd = d; snap = v; }
+        // 2a RIBBON EXTRACTION: drop the gore band (junction surface, owned
+        // by the 2c gore treatment) and orient the walk GORE -> LANDING. An
+        // on-ramp's authored points run street -> merge with the band at the
+        // BACK, so its ribbon is walked in reverse — the old bake walked
+        // every ramp forward and snap-searched the DECK end for a street
+        // landing: every on-ramp baked backwards with a floating landing.
+        const RampPath& rp0 = rampPaths[xi];
+        const bool onRamp = def.exits[xi].onRamp;
+        std::vector<Vec3> rp;
+        if (onRamp) {
+            const int hi = static_cast<int>(rp0.pts.size()) - rp0.bandBack;
+            for (int k = hi - 1; k >= 0; --k) rp.push_back(rp0.pts[k]);
+        } else {
+            for (std::size_t k = rp0.bandFront; k < rp0.pts.size(); ++k)
+                rp.push_back(rp0.pts[k]);
+        }
+        if (rp.size() < 2) continue;
+
+        std::vector<double> arc(rp.size(), 0.0);
+        for (std::size_t k = 1; k < rp.size(); ++k)
+            arc[k] = arc[k - 1] + (Vec2(rp[k].x, rp[k].z) -
+                                   Vec2(rp[k - 1].x, rp[k - 1].z)).length();
+        // SHAPE-DRIVEN node selection (Douglas-Peucker): keep nodes where the
+        // ribbon actually bends (clothoid onsets need a handle; straights
+        // don't), bounded by rampStep*1.8 so no span outruns local
+        // editability. Even arc spacing put curvature onsets BETWEEN nodes
+        // and the Hermite smoothed them ~0.65 m wide; DP puts a node ON them.
+        std::vector<std::size_t> keep{ 0, rp.size() - 1 };
+        {
+            const double tol = 0.18;
+            std::vector<std::pair<std::size_t, std::size_t>> stack{
+                { 0, rp.size() - 1 } };
+            while (!stack.empty()) {
+                const auto seg = stack.back();
+                stack.pop_back();
+                if (seg.second <= seg.first + 1) continue;
+                const Vec2 A(rp[seg.first].x, rp[seg.first].z);
+                const Vec2 B(rp[seg.second].x, rp[seg.second].z);
+                const Vec2 AB = B - A;
+                const double l2 = AB.lengthSquared();
+                double worst = -1.0;
+                std::size_t at = seg.first;
+                for (std::size_t k = seg.first + 1; k < seg.second; ++k) {
+                    const Vec2 P2(rp[k].x, rp[k].z);
+                    double t = l2 > 1e-12 ? dot(P2 - A, AB) / l2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const double d = (A + AB * t - P2).length();
+                    if (d > worst) { worst = d; at = k; }
                 }
-                ni = (snap >= 0)
-                         ? snap
-                         : pushNode(net, q, std::numeric_limits<double>::quiet_NaN());
-            } else {
-                ni = pushNode(net, q, pts[k].y);   // descent rides authored heights
+                const bool tooLong =
+                    arc[seg.second] - arc[seg.first] > params.rampStep * 1.8;
+                if (worst > tol || tooLong) {
+                    const std::size_t mid =
+                        worst > tol ? at : (seg.first + seg.second) / 2;
+                    keep.push_back(mid);
+                    stack.push_back({ seg.first, mid });
+                    stack.push_back({ mid, seg.second });
+                }
             }
+            std::sort(keep.begin(), keep.end());
+            keep.erase(std::unique(keep.begin(), keep.end()), keep.end());
+        }
+        auto authoredDir = [&](std::size_t k) {
+            const std::size_t k0 = k > 0 ? k - 1 : k;
+            const std::size_t k1 = k + 1 < rp.size() ? k + 1 : k;
+            Vec2 d(rp[k1].x - rp[k0].x, rp[k1].z - rp[k0].z);
+            const double l = d.length();
+            return l > 1e-9 ? d * (1.0 / l) : Vec2(0, 0);
+        };
+        int prev = gore;
+        for (std::size_t ki = 0; ki < keep.size(); ++ki) {
+            const std::size_t k = keep[ki];
+            const Vec2 q(rp[k].x, rp[k].z);
+            const int ni = pushNode(net, q, rp[k].y);   // rides authored heights
+            // Tangent: authored direction, Catmull-Rom magnitude (half the
+            // arc span between the neighbouring KEPT nodes).
+            const double prevA = ki > 0 ? arc[keep[ki - 1]] : arc[k];
+            const double nextA = ki + 1 < keep.size() ? arc[keep[ki + 1]] : arc[k];
+            const Vec2 dir = authoredDir(k);
+            if (!(dir.x == 0.0 && dir.y == 0.0))
+                setTangent(net, ni, dir * std::max(1.0, (nextA - prevA) * 0.5));
             if (ni != prev)
                 pushEdge(net, prev, ni, rampWidth, RoadClass::Ramp, /*layer=*/0, rampSpec);
             prev = ni;
         }
+        // LANDING GRAFT: the ribbon's authored end stays a real node (the
+        // chain is faithful to the solved curve to its last metre); the final
+        // edge grafts it onto the street's own node — "the ramp ends on a
+        // street node", as an EDGE, not by substituting the ribbon end (the
+        // substitution cut the last ~20 m corner 3.7 m wide).
+        {
+            const Vec2 end(rp.back().x, rp.back().z);
+            int snap = -1;
+            double sd = params.landingSnap * params.landingSnap;
+            for (int v = 0; v < streetNodes; ++v) {
+                const double d = (net.nodes[v] - end).lengthSquared();
+                if (d < sd) { sd = d; snap = v; }
+            }
+            if (snap >= 0 && snap != prev)
+                pushEdge(net, prev, snap, rampWidth, RoadClass::Ramp, /*layer=*/0,
+                         rampSpec);
+        }
     }
+    // Tangent array stays parallel even if the last pushes were snaps.
+    if (net.tangents.size() < net.nodes.size())
+        net.tangents.resize(net.nodes.size(), Vec2(0, 0));
     return mainline;
 }
 

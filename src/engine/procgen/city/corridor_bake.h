@@ -30,6 +30,11 @@ struct CorridorBakeParams {
     // that last stretch — so the snap must cover setback + margin: the ramp's
     // final graph edge IS the graft the loader used to build as a stub.
     double landingSnap = 26.0;
+    // Ramp node spacing (m). The bake RESAMPLES the authored 3 m polyline to
+    // sparse spline nodes and stores TANGENTS from the authored curve, so the
+    // net's Hermite sampling reproduces the clothoid between editable handles
+    // (roads-v2.1 2a — "a few spline points with tangents", not hundreds).
+    double rampStep = 25.0;
 };
 
 // Appends the corridor to `net` (nodes, nodeElev, edges + parallel arrays,

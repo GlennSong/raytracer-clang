@@ -25,6 +25,7 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 using namespace engine;
@@ -43,13 +44,18 @@ struct Fixture {
 
 Fixture makeFixture() {
     Fixture f;
-    // Streets: a straight Local road through the ramp's landing area.
-    f.net.nodes = { Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
-    f.net.edges = { { 0, 1 }, { 1, 2 } };
+    // Streets: a straight Local road under the corridor's south side — long
+    // enough to catch BOTH the exit's landing and the on-ramp's origin.
+    f.net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
+                    Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
+    f.net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
     f.net.width = 8.0;
+    f.net.autoRoundabout = false;   // full-graph pass must not promote the gore
     f.streetNodeCount = static_cast<int>(f.net.nodes.size());
 
-    // The corridor: straight, elevated, one exit at station 400 to the street.
+    // The corridor: straight, elevated; one EXIT at station 400 to the street
+    // and one ON-RAMP at station 300 fed from the street behind it — the
+    // configuration whose bake orientation was never covered (and was wrong).
     f.def.horizontal = Alignment::fromPolyline({ Vec2(-100, 0), Vec2(800, 0) }, 300.0, 20.0);
     const Real L = f.def.horizontal.length();
     f.def.vertical.pvis = { { 0.0, 9.0, 0.0 }, { L, 9.0, 0.0 } };
@@ -57,9 +63,16 @@ Fixture makeFixture() {
     ExitDef e;
     e.station = 400.0;
     e.upStation = true;
-    e.target = Vec2(600, -120);     // the street's middle node
+    e.target = Vec2(600, -120);     // a street node
     e.targetY = 0.0;
     f.def.exits.push_back(e);
+    ExitDef on;
+    on.station = 300.0;
+    on.upStation = true;
+    on.onRamp = true;
+    on.target = Vec2(60, -120);     // approaches the merge from behind
+    on.targetY = 0.0;
+    f.def.exits.push_back(on);
 
     f.authored = corridorAuthor(f.def, [](Real, Real) { return 0.0; });
     f.mainline = bakeCorridorIntoNet(f.net, f.def, f.authored.rampPaths);
@@ -75,8 +88,9 @@ RoadClass edgeClass(const RoadNet& net, int ei) {
 
 TEST_CASE(freeway_and_ramps_are_in_the_one_net) {
     Fixture f = makeFixture();
-    CHECK(!f.authored.rampPaths.empty());
+    CHECK(f.authored.rampPaths.size() == 2u);
     CHECK(!f.authored.rampPaths[0].pts.empty());   // the exit was NOT dropped
+    CHECK(!f.authored.rampPaths[1].pts.empty());   // nor the on-ramp
 
     int nFreeway = 0, nRamp = 0, nLocal = 0;
     for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei) {
@@ -87,7 +101,7 @@ TEST_CASE(freeway_and_ramps_are_in_the_one_net) {
     }
     CHECK(nFreeway > 0);            // the mainline is graph edges now
     CHECK(nRamp > 0);               // so is the ramp
-    CHECK(nLocal == 2);             // the streets are untouched
+    CHECK(nLocal == 5);             // the streets are untouched
 
     // Specs ride the edges: freeway edges answer the freeway3 band model.
     bool sawFreewaySpec = false;
@@ -129,21 +143,25 @@ TEST_CASE(ramp_starts_at_a_gore_node_that_is_a_mainline_node) {
 
 TEST_CASE(ramp_lands_on_a_street_node) {
     Fixture f = makeFixture();
-    // The ramp's far end must REUSE a pre-existing street node (index < the
-    // street node count), and that node must carry Local edges.
-    int landing = -1;
+    // EVERY ramp chain's far end must REUSE a pre-existing street node (index
+    // < the street node count) carrying Local edges — the on-ramp too (its
+    // authored points run street->merge; the old bake walked it backwards
+    // and left its landing floating at the deck).
+    std::vector<int> landings;
     for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei)
         if (edgeClass(f.net, ei) == RoadClass::Ramp)
             for (int side = 0; side < 2; ++side)
                 if (f.net.edges[ei][side] < f.streetNodeCount)
-                    landing = f.net.edges[ei][side];
-    CHECK(landing >= 0);            // grafted, not floating nearby
-    bool touchesLocal = false;
-    for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei)
-        if (edgeClass(f.net, ei) == RoadClass::Local &&
-            (f.net.edges[ei][0] == landing || f.net.edges[ei][1] == landing))
-            touchesLocal = true;
-    CHECK(touchesLocal);
+                    landings.push_back(f.net.edges[ei][side]);
+    CHECK(landings.size() == 2u);   // one street landing per ramp, both grafted
+    for (int landing : landings) {
+        bool touchesLocal = false;
+        for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei)
+            if (edgeClass(f.net, ei) == RoadClass::Local &&
+                (f.net.edges[ei][0] == landing || f.net.edges[ei][1] == landing))
+                touchesLocal = true;
+        CHECK(touchesLocal);
+    }
 }
 
 TEST_CASE(baked_freeway_is_editable_like_a_street) {
@@ -173,8 +191,9 @@ TEST_CASE(baked_net_does_not_double_mesh_the_corridor) {
     // baked net produces byte-identical street outputs to its pre-bake self.
     Fixture f = makeFixture();
     RoadNet streetsOnly;                       // rebuild the pre-bake net
-    streetsOnly.nodes = { Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
-    streetsOnly.edges = { { 0, 1 }, { 1, 2 } };
+    streetsOnly.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
+                          Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
+    streetsOnly.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
     streetsOnly.width = 8.0;
 
     const RenderMesh a = buildRoadNetMesh(f.net);
@@ -282,4 +301,72 @@ TEST_CASE(baked_graph_agrees_with_the_corridor_mesh) {
     driveprobe::drivePath(m, rampPath, rrep);
     CHECK(rrep.samples > 10);
     CHECK(rrep.holes == 0);
+}
+
+TEST_CASE(baked_ramps_are_sparse_editable_splines) {
+    // Roads-v2.1 R1 step 2a (drive feedback B5: "Ramps have hundreds of
+    // points which is uneditable. Ideally it should be a few spline points
+    // with tangents."): the bake keeps ~one node per 25 m of ramp plus the
+    // pinned gore and landing, stores TANGENTS from the authored curve, and
+    // the net's own Hermite sampling reproduces the authored clothoid
+    // between the sparse nodes — editable handles, faithful shape.
+    Fixture f = makeFixture();
+
+    // Sparse: TWO ramp chains (exit + on-ramp), each a handful of nodes,
+    // not one per 3 m.
+    int rampEdges = 0;
+    for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei)
+        if (edgeClass(f.net, ei) == RoadClass::Ramp) ++rampEdges;
+    CHECK(rampEdges >= 8);              // two real chains...
+    CHECK(rampEdges <= 26);             // ...both editable (<= 14 handles each)
+
+    // Tangents are stored for the baked nodes (parallel array padded).
+    CHECK(f.net.tangents.size() == f.net.nodes.size());
+    int tangentless = 0, rampNodes = 0;
+    std::vector<char> onRamp(f.net.nodes.size(), 0);
+    for (int ei = 0; ei < static_cast<int>(f.net.edges.size()); ++ei)
+        if (edgeClass(f.net, ei) == RoadClass::Ramp) {
+            onRamp[f.net.edges[ei][0]] = 1;
+            onRamp[f.net.edges[ei][1]] = 1;
+        }
+    for (std::size_t ni = f.streetNodeCount; ni < f.net.nodes.size(); ++ni)
+        if (onRamp[ni]) {
+            ++rampNodes;
+            const Vec2 t = f.net.tangents[ni];
+            if (t.x == 0.0 && t.y == 0.0) ++tangentless;
+        }
+    CHECK(rampNodes > 0);
+    CHECK(tangentless == 0);            // every baked ramp node carries one
+
+    // Fidelity: sample the FULL graph (baked edges included) and check every
+    // authored ramp point sits within 0.25 m of the sampled ramp polyline —
+    // the Hermite through sparse nodes+tangents IS the clothoid, near enough.
+    RoadGraph g = roadNetFullGraph(f.net);
+    auto segD = [](const Vec2& p, const Vec2& a, const Vec2& b) {
+        const Vec2 ab = b - a;
+        const Real l2 = ab.lengthSquared();
+        Real t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        return (a + ab * t - p).length();
+    };
+    // Fidelity is measured on the RIBBON — the authored points past the
+    // gore band (bandFront/bandBack mark the deck-edge band, which is
+    // junction surface owned by 2c, not ramp ribbon) — for BOTH ramps.
+    Real worst = 0; Vec2 worstAt;
+    for (const RampPath& rp : f.authored.rampPaths) {
+        const std::size_t lo = static_cast<std::size_t>(rp.bandFront);
+        const std::size_t hi = rp.pts.size() - static_cast<std::size_t>(rp.bandBack);
+        for (std::size_t k = lo; k < hi; ++k) {
+            const Vec2 p(rp.pts[k].x, rp.pts[k].z);
+            Real best = 1e30;
+            for (const RoadEdge& e : g.edges) {
+                if (e.klass != RoadClass::Ramp) continue;
+                best = std::min(best, segD(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
+            }
+            if (best > worst) { worst = best; worstAt = p; }
+        }
+    }
+    std::printf("[2a] ribbon fidelity worst=%.3f at (%.1f, %.1f)\n",
+                worst, worstAt.x, worstAt.y);
+    CHECK(worst < 0.25);
 }
