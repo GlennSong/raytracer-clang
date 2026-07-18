@@ -730,6 +730,25 @@ void CitySim::refreshPose(Agent& a) {
         Real La = nav_->links[la].length, Lb = nav_->links[lb].length;
         engine::Vec2 p0 = sample(la, La > 1e-9 ? (La - B) / La : 0.0);
         engine::Vec2 c = (sample(la, 1.0) + sample(lb, 0.0)) * 0.5;
+        if (a.mode == Agent::Mode::Pedestrian) {
+            // MITER the walker's corner (roads-v2 S8): averaging the two
+            // guide endpoints CHORDS the offset envelope's arc, so on the
+            // inside of a bend the blended path dipped ~1.5 m into the
+            // carriageway — measured by the road-walk gate as 738 asphalt
+            // ticks, all at degree-2 bends. Push the control point out to
+            // the miter (offset / cos(halfAngle), clamped 2x — the same rule
+            // the mesher's rings use). A car keeps the cut: arcing INTO the
+            // junction on the carriageway is what driving through it is.
+            const engine::Vec2 nodeP = nav_->nodes[nav_->links[la].to];
+            const engine::Vec2 m = c - nodeP;
+            const Real m2 = m.lengthSquared();
+            const Real off = std::max((sample(la, 1.0) - nodeP).length(),
+                                      (sample(lb, 0.0) - nodeP).length());
+            if (m2 > 1e-9) {
+                Real f = std::min((off * off) / m2, Real(4.0));
+                c = nodeP + m * f;
+            }
+        }
         engine::Vec2 p2 = sample(lb, Lb > 1e-9 ? B / Lb : 1.0);
         Real v = 1.0 - u;
         return p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
