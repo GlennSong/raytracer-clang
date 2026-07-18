@@ -373,16 +373,22 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         // double-covered at every corner. The pad now spans verge to verge and
         // its corner points sit at the sidewalk outer edge, where the kerb
         // returns will fillet (stage 2).
+        // The pad is ASPHALT: slice the CARRIAGEWAY columns out of the full
+        // profile ring (drop sidewalk+curb, 2 columns each side). Curb loops and
+        // sidewalk bands own the rest (roads-v2 Part 2, stages 5-6). Reversed so
+        // the mouth runs left->right looking OUTWARD along the arm.
         auto mouth = [&](const std::vector<Vec3>& ring) {
-            return std::vector<Vec3>(ring.rbegin(), ring.rend());
+            std::vector<Vec3> rev(ring.rbegin(), ring.rend());
+            if (static_cast<int>(rev.size()) >= cw + 4)
+                return std::vector<Vec3>(rev.begin() + 2, rev.begin() + 2 + cw);
+            return rev;
         };
-        (void)cw;
         if (chainTriEndsOut) chainTriEndsOut->push_back(out.indices.size());
         const std::size_t tn = t.points.size();
         if (a >= 0 && deg[a] >= 3 && ring0.size() >= 4)
-            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0), true });
+            arms[a].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0) });
         if (b >= 0 && deg[b] >= 3 && ringN.size() >= 4)
-            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN), true });
+            arms[b].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN) });
     }
 
     int nCoons = 0, nT = 0, nFan = 0, nStub = 0, nDeg2 = 0, nMismatch = 0;
@@ -396,7 +402,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (na == 3) ++nT;                           // Coons T patch
         else if (na == 4) ++nCoons;                  // Coons grid
         else ++nFan;                                 // N>=5: still the fan stopgap
-        MeshBuilder::append(out, junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11), &groundFn));
+        MeshBuilder::append(out, junctionPatch(arms[v]));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;

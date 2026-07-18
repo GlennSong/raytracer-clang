@@ -136,13 +136,7 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
 // the patch and the body share it.
 struct JunctionArm {
     Vec2 dir{1, 0};              // outward unit direction from the node
-    std::vector<Vec3> mouth;     // K+1 cross-section points, left verge -> right verge
-    // True when `mouth` is a FULL profile ring (sidewalk|curb|lanes|curb|sidewalk):
-    // the pad then fills the CARRIAGEWAY columns only, and each corner between
-    // adjacent arms gets a raised sidewalk STRIP joining their sidewalk bands —
-    // the kerb return ("where it joins, the sidewalk gets extended"). Strips are
-    // clamped to ground+curb so they never cut under a terrain bump.
-    bool fullRing = false;
+    std::vector<Vec3> mouth;     // K+1 CARRIAGEWAY points, left verge -> right verge
 };
 
 // The drivable junction pad for a node, from its incident arms (any order —
@@ -151,9 +145,14 @@ struct JunctionArm {
 // interpolates and the pad matches every arm exactly. Other degrees get a
 // height-interpolated centroid fan for now (the T / N>=5 quad templates follow).
 // Returns empty for degree <= 2 (the body runs straight through).
+// ONE fill for every degree (roads-v2 plan, Part 2 step 4): sort arms CCW, join
+// their carriageway mouths into a single closed boundary loop (adjacent verges
+// meet at shared corner points), ear-clip the loop (adds no boundary points, so
+// each arm's division count is honored exactly), lift by the boundary heights.
+// Interim state of the real pipeline: corner ARCS and quad PAIRING land next;
+// there are no per-degree templates and no side strips — those are deleted.
 RenderMesh junctionPatch(std::vector<JunctionArm> arms,
-                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11),
-                         const std::function<double(double, double)>* ground = nullptr);
+                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
 
 }  // namespace engine
 

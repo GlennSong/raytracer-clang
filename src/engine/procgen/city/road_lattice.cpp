@@ -1,6 +1,8 @@
 #include "road_lattice.h"
 
 #include "../../mesh_builder.h"      // MeshBuilder::emitLattice
+#include "triangulate.h"           // junction pad ear-clip (roads-v2)
+#include <unordered_map>
 #include <algorithm>
 #include <cmath>
 
@@ -379,166 +381,73 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
     return mesh;
 }
 
-namespace {
-Vec3 ringCentre(const std::vector<Vec3>& r) {
-    Vec3 c(0, 0, 0);
-    for (const Vec3& p : r) c = c + p;
-    return r.empty() ? c : c * (1.0 / r.size());
-}
-std::vector<Vec3> resampleLine(const Vec3& a, const Vec3& b, int n) {
-    std::vector<Vec3> out;
-    for (int i = 0; i < n; ++i) {
-        const double t = n > 1 ? i / static_cast<double>(n - 1) : 0.0;
-        out.push_back(a + (b - a) * t);
-    }
-    return out;
-}
-
-// A T (or Y): 3 arms sorted CCW. The two most-opposite arms are the through
-// road, the third tees into one side. Mesh it as a Coons grid whose opposite
-// sides are the two through mouths, one side is the continuous FAR kerb edge,
-// and the fourth side carries the BRANCH mouth embedded between two kerb corners.
-// All-quad, interior vertices, NO hub — unlike the centroid fan.
-RenderMesh junctionPatchT(const std::vector<JunctionArm>& a, float mu, const Vec3& color) {
-    int bi = 0; double best = 1e9;                       // branch = excluded from the opposite pair
-    for (int k = 0; k < 3; ++k) {
-        const double d = dot(a[(k + 1) % 3].dir, a[(k + 2) % 3].dir);
-        if (d < best) { best = d; bi = k; }
-    }
-    const JunctionArm& B = a[bi];
-    const JunctionArm& T0 = a[(bi + 1) % 3];
-    const JunctionArm& T1 = a[(bi + 2) % 3];
-    if (T0.mouth.size() < 2 || T1.mouth.size() < 2 || B.mouth.size() < 2) return {};
-    if (T0.mouth.size() != T1.mouth.size()) return {};   // through arms share K
-    // Orient each through mouth FAR->NEAR, where NEAR is the verge toward the
-    // branch (larger projection on the branch direction) — the branch tees into
-    // the through road on the NEAR side; the FAR side is the continuous kerb.
-    auto towardB = [&](const Vec3& p) { return p.x * B.dir.x + p.z * B.dir.y; };
-    auto orient = [&](std::vector<Vec3> mouth) {
-        if (towardB(mouth.front()) > towardB(mouth.back()))
-            std::reverse(mouth.begin(), mouth.end());     // front := far (smaller projection)
-        return mouth;
-    };
-    const std::vector<Vec3> m0 = orient(T0.mouth);        // far -> near
-    const std::vector<Vec3> m1 = orient(T1.mouth);        // far -> near
-    // Branch mouth ordered from the T0 side to the T1 side.
-    std::vector<Vec3> bm = B.mouth;
-    if ((bm.front() - m0.back()).lengthSquared() > (bm.back() - m0.back()).lengthSquared())
-        std::reverse(bm.begin(), bm.end());
-    const Vec3 cTB = (m0.back() + bm.front()) * 0.5;      // T0.near ~ branch start
-    const Vec3 cBT = (bm.back() + m1.back()) * 0.5;       // branch end ~ T1.near
-    std::vector<Vec3> bottom = m0;                        // SW(far) -> SE(near)
-    std::vector<Vec3> top = m1;                           // NW(far) -> NE(near)
-    std::vector<Vec3> right;                              // SE -> NE, branch embedded
-    right.push_back(m0.back());
-    right.push_back(cTB);
-    for (const Vec3& p : bm) right.push_back(p);
-    right.push_back(cBT);
-    right.push_back(m1.back());
-    // The continuous FAR kerb: a straight edge SW -> NW, resampled to match.
-    std::vector<Vec3> left = resampleLine(m0.front(), m1.front(),
-                                          static_cast<int>(right.size()));
-    return coonsPatch(bottom, right, top, left, mu, color);
-}
-}  // namespace
-
-RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color,
-                         const std::function<double(double, double)>* ground) {
+// ---------------------------------------------------------------------------
+// Junction fill (roads-v2 Part 2, step 4) — ONE path for every degree.
+// Interim slice of the full pipeline: boundary loop -> ear-clip -> lift by the
+// boundary heights. Corner ARCS and quad PAIRING are the next slices; the
+// per-degree templates (T/Coons dispatch/fan) and side strips are DELETED.
+RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
     RenderMesh mesh;
     const int N = static_cast<int>(arms.size());
     if (N <= 2) return mesh;                          // body runs straight through
+    for (const JunctionArm& arm : arms)
+        if (arm.mouth.size() < 2) return mesh;
 
     // Order arms CCW by bearing so adjacent arms share a kerb corner.
     std::sort(arms.begin(), arms.end(), [](const JunctionArm& a, const JunctionArm& b) {
         return std::atan2(a.dir.y, a.dir.x) < std::atan2(b.dir.y, b.dir.x);
     });
-
-    // FULL rings: kerb-return sidewalk strips around each corner, then the pad
-    // fills the CARRIAGEWAY columns only (the configuration that drives clean —
-    // curb tops in the pad boundary injected 0.17 m mouth bumps last attempt).
-    if (arms[0].fullRing) {
-        const Vec3 walk(0.62, 0.62, 0.60);
-        for (int i = 0; i < N; ++i) {
-            const JunctionArm& A = arms[i];
-            const JunctionArm& B = arms[(i + 1) % N];
-            if (A.mouth.size() < 6 || B.mouth.size() < 6) continue;
-            const Vec3 aOut = A.mouth.front(), aCurb = A.mouth[1];
-            const Vec3 bOut = B.mouth.back(),  bCurb = B.mouth[B.mouth.size() - 2];
-            const int S = 4;
-            std::vector<Vertex> verts((S + 1) * 2);
-            for (int k = 0; k <= S; ++k) {
-                const double t = static_cast<double>(k) / S;
-                Vertex& vo = verts[k * 2];
-                Vertex& vi = verts[k * 2 + 1];
-                vo.position = aOut + (bOut - aOut) * t;
-                vi.position = aCurb + (bCurb - aCurb) * t;
-                if (ground) {   // never cut under a terrain bump between corners
-                    const double go = (*ground)(vo.position.x, vo.position.z) + 0.13;
-                    const double gi = (*ground)(vi.position.x, vi.position.z) + 0.13;
-                    if (vo.position.y < go) vo.position.y = static_cast<Real>(go);
-                    if (vi.position.y < gi) vi.position.y = static_cast<Real>(gi);
-                }
-                vo.normal = vi.normal = Vec3(0, 1, 0);
-                vo.tangent = vi.tangent = Vec3(1, 0, 0);
-                vo.u = -0.6f; vi.u = -0.05f;
-                vo.v = vi.v = 0.0f;
-                vo.color = vi.color = walk;
-            }
-            MeshBuilder::emitLattice(mesh, { S + 1, 2, verts.data() });
-        }
-        for (JunctionArm& a : arms) {                 // pad = carriageway columns
-            if (a.mouth.size() >= 6)
-                a.mouth = std::vector<Vec3>(a.mouth.begin() + 2, a.mouth.end() - 2);
-            a.fullRing = false;
-        }
-    }
-    for (const JunctionArm& arm : arms) if (arm.mouth.size() < 2) return mesh;
-
-    // A T / Y (3 arms): a Coons grid with the branch embedded in one side — the
-    // dominant junction in a generated city, and the case the centroid fan turns
-    // to spoke soup.
-    if (N == 3) return junctionPatchT(arms, mu, color);
-
-    // Kerb corner between arm i and its CCW neighbour i+1: arm i's LEFT verge
-    // (mouth.front()) meets arm i+1's RIGHT verge (mouth.back()).
-    std::vector<Vec3> corner(N);
+    // Corner between arm i and its CCW neighbour: arm i's LEFT verge (front)
+    // meets arm i+1's RIGHT verge (back). Snap both to the shared midpoint so
+    // the loop closes exactly. (Stage 4 replaces the point with a fillet arc.)
     for (int i = 0; i < N; ++i) {
-        const Vec3& a = arms[i].mouth.front();
-        const Vec3& b = arms[(i + 1) % N].mouth.back();
-        corner[i] = (a + b) * 0.5;
+        JunctionArm& A = arms[i];
+        JunctionArm& B = arms[(i + 1) % N];
+        const Vec3 c = (A.mouth.front() + B.mouth.back()) * 0.5;
+        A.mouth.front() = c;
+        B.mouth.back() = c;
     }
-    // Snap each arm's verge endpoints to the shared kerb corners (arm i's left ->
-    // corner[i], right -> corner[i-1]) so adjacent sides meet exactly.
-    for (int i = 0; i < N; ++i) {
-        arms[i].mouth.front() = corner[i];
-        arms[i].mouth.back() = corner[(i - 1 + N) % N];
-    }
-
-    // N == 4, opposite arms equal length: a Coons grid, no extraordinary vertex.
-    if (N == 4 && arms[0].mouth.size() == arms[2].mouth.size() &&
-        arms[1].mouth.size() == arms[3].mouth.size()) {
-        auto rev = [](std::vector<Vec3> v) { std::reverse(v.begin(), v.end()); return v; };
-        // Corners c0=a0/a1, c1=a1/a2, c2=a2/a3, c3=a3/a0 -> NE,NW,SW,SE.
-        // bottom=SW->SE=rev(a3), right=SE->NE=rev(a0), top=NW->NE=a1, left=SW->NW=a2.
-        return coonsPatch(rev(arms[3].mouth), rev(arms[0].mouth), arms[1].mouth,
-                          arms[2].mouth, mu, color);
-    }
-
-    // Stopgap for T (N=3) and N>=5: a centroid fan with INTERPOLATED height, so
-    // the pad still doesn't step even though it isn't all-quad yet (the mapped
-    // templates are the follow-up). Boundary = arm mouths + kerb corners, CCW.
+    // Closed boundary loop, walking CCW around the pad (interior on the left):
+    // at each arm the boundary runs across its mouth right->left (back->front);
+    // the snapped endpoints stitch consecutive arms, so skip each duplicate.
     std::vector<Vec3> loop;
     for (int i = 0; i < N; ++i) {
-        for (const Vec3& p : arms[i].mouth) loop.push_back(p);
-        loop.push_back(corner[i]);
+        const std::vector<Vec3>& m = arms[i].mouth;
+        for (std::size_t j = m.size(); j-- > 0;) {
+            if (!loop.empty() && (loop.back() - m[j]).lengthSquared() < 1e-10) continue;
+            loop.push_back(m[j]);
+        }
     }
-    Vec3 c(0, 0, 0);
-    for (int i = 0; i < N; ++i) c = c + ringCentre(arms[i].mouth);
-    c = c * (1.0 / N);                                // centre at the mean arm centre
-    for (std::size_t i = 0; i < loop.size(); ++i) {
-        const Vec3& p0 = loop[i];
-        const Vec3& p1 = loop[(i + 1) % loop.size()];
-        MeshBuilder::emitTri(mesh, c, p0, p1, Vec3(0, 1, 0), color);
+    if (loop.size() >= 2 && (loop.front() - loop.back()).lengthSquared() < 1e-10)
+        loop.pop_back();
+    if (loop.size() < 3) return mesh;
+
+    // Ear-clip the plan-view loop. earcut connects only EXISTING boundary
+    // vertices (no interior points), so every arm's division count is honored
+    // and each output vertex has a known height from the loop.
+    Poly2 outer;
+    outer.reserve(loop.size());
+    for (const Vec3& p : loop) outer.push_back(Vec2(p.x, p.z));
+    const std::vector<std::array<Vec2, 3>> tris = triangulateWithHoles(outer, {});
+
+    auto qkey = [](const Vec2& q) {
+        return (static_cast<long long>(std::llround(q.x * 1024.0)) << 32) ^
+               (static_cast<long long>(std::llround(q.y * 1024.0)) & 0xffffffffLL);
+    };
+    std::unordered_map<long long, double> heightOf;
+    heightOf.reserve(loop.size() * 2);
+    for (const Vec3& p : loop) heightOf[qkey(Vec2(p.x, p.z))] = p.y;
+    auto lift = [&](const Vec2& q) {
+        auto it = heightOf.find(qkey(q));
+        return Vec3(q.x, it != heightOf.end() ? it->second : 0.0, q.y);
+    };
+    for (const std::array<Vec2, 3>& t : tris) {
+        const Vec3 a = lift(t[0]), b = lift(t[1]), c = lift(t[2]);
+        Vec3 n = cross(c - a, b - a);
+        if (n.lengthSquared() < 1e-12) continue;
+        if (n.y < 0) n = n * -1.0;                    // drivable pad faces up
+        MeshBuilder::emitTriUV(mesh, a, b, c, normalize(n), color,
+                               mu, 0.0f, mu, 0.0f, mu, 0.0f);
     }
     return mesh;
 }
