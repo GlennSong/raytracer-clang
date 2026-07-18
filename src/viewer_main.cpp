@@ -3,6 +3,7 @@
 #include "game/arena_state.h"
 #include "log.h"
 #include <cstring>
+#include <fstream>
 
 using namespace engine;
 
@@ -24,6 +25,28 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--edit") == 0) startInPlay = false;
         else if (std::strcmp(argv[i], "--play") == 0) startInPlay = true;
         else levelPath = argv[i];
+    }
+
+    // Resolve the level the way the docs write it: a BARE NAME ("metropolis")
+    // means assets/levels/<name>.json; an existing path is taken as-is. A
+    // level that resolves to nothing is a HARD ERROR — booting the empty
+    // editor on a bad path used to SAVE an empty level to that literal path
+    // on the play-toggle, silently creating a junk file that made every later
+    // run "successfully" load an empty world ("there's nothing in that
+    // scene"). Fail loud, up front, before any state exists to save.
+    {
+        auto exists = [](const std::string& p) { return std::ifstream(p).good(); };
+        if (!exists(levelPath)) {
+            const std::string byName = "assets/levels/" + levelPath;
+            const std::string byJson = byName + ".json";
+            if (exists(byJson))      levelPath = byJson;
+            else if (exists(byName)) levelPath = byName;
+            else {
+                LOG_ERROR << "Level not found: '" << levelPath << "' (also tried "
+                          << byJson << " and " << byName << ")";
+                return 1;
+            }
+        }
     }
 
     // The two modes construct each other through factories, so neither layer
