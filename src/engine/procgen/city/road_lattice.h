@@ -122,6 +122,19 @@ RenderMesh coonsPatch(const std::vector<Vec3>& bottom, const std::vector<Vec3>& 
 struct JunctionArm {
     Vec2 dir{1, 0};              // outward unit direction from the node
     std::vector<Vec3> mouth;     // K+1 CARRIAGEWAY points, left verge -> right verge
+    int id = -1;                 // caller's chain id (rails match corners by it)
+};
+
+// A sampled boundary polyline for the corner between two SPECIFIC arms —
+// the wedge between an acute pair (a ramp along its freeway, a sharp street
+// fork) follows the DOMINANT arm's edge curve, which a straight chord (the
+// near-parallel fallback) cuts across: the subordinate's curved centreline
+// then bows OFF the pad (the merge probe's holes). pts are INTERIOR points
+// only (the mouth corners bound the corner already), ordered fromDir->toDir.
+struct JunctionRail {
+    int fromId = -1;             // JunctionArm.id of the corner's two arms —
+    int toId = -1;               // exact match (curved arms make dirs fragile)
+    std::vector<Vec3> pts;
 };
 
 // The drivable junction pad for a node, from its incident arms (any order —
@@ -140,7 +153,8 @@ struct JunctionArm {
 // documented weak case).
 RenderMesh junctionPatch(std::vector<JunctionArm> arms,
                          float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11),
-                         std::vector<Vec3>* footprintOut = nullptr);
+                         std::vector<Vec3>* footprintOut = nullptr,
+                         const std::vector<JunctionRail>* rails = nullptr);
 
 // Carriageway-only street cross-section (roads-v2 S5 OWNERSHIP: asphalt =
 // bodies + pads; curb + sidewalk belong to the closed band below). Columns are

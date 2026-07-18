@@ -516,7 +516,8 @@ RenderMesh junctionPadEarcut(const std::vector<Vec3>& loop, float mu, const Vec3
 }  // namespace
 
 RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color,
-                         std::vector<Vec3>* footprintOut) {
+                         std::vector<Vec3>* footprintOut,
+                         const std::vector<JunctionRail>* rails) {
     RenderMesh mesh;
     const int N = static_cast<int>(arms.size());
     if (N <= 2) return mesh;                          // body runs straight through
@@ -579,6 +580,26 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
         const Vec2 a2(a3.x, a3.z), b2(b3.x, b3.z);
         const double chord = (b2 - a2).length();
         if (chord < 0.6) continue;            // touching mouths: shared corner
+        // WEDGE RAIL (R2): if the caller supplied the dominant arm's edge
+        // curve for this specific corner, ride it instead of any chord/arc —
+        // matched by the arm pair's directions, either orientation.
+        if (rails) {
+            const JunctionRail* hit = nullptr;
+            bool fwd = true;
+            for (const JunctionRail& r : rails[0]) {
+                if (r.pts.empty() || A.id < 0 || B.id < 0) continue;
+                if (r.fromId == A.id && r.toId == B.id) { hit = &r; fwd = true; break; }
+                if (r.fromId == B.id && r.toId == A.id) { hit = &r; fwd = false; break; }
+            }
+            if (hit) {
+                if (fwd)
+                    for (const Vec3& p : hit->pts) push(p, -1);
+                else
+                    for (std::size_t k = hit->pts.size(); k-- > 0;)
+                        push(hit->pts[k], -1);
+                continue;
+            }
+        }
         // Control point: where the two verge lines (running along each arm's
         // direction) meet. Near-parallel arms have no stable intersection —
         // fall back to the straight chord.

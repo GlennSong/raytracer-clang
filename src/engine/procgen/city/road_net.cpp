@@ -643,9 +643,12 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         }
         return segs;
     };
+    struct Wedge { int node; std::size_t subCi, domCi; double subTrim; double side = 0; };
+    std::vector<Wedge> wedges;
     auto pairTrim = [&](const UnionSpine& mine, std::size_t myCi, int node,
                         bool fromFront) {
         double trim = 0;
+        std::size_t domBest = SIZE_MAX;
         Vec2 myDir(0, 0);
         for (const ArmRef& ar : armsAt[node])
             if (ar.chain == myCi) { myDir = ar.dir; break; }
@@ -679,23 +682,96 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                     dmin = std::min(dmin,
                                     (seg.first + ab * t2 - mine.points[k]).length());
                 }
-                if (dmin > clearL) { trim = std::max(trim, acc); break; }
+                if (dmin > clearL) {
+                    if (acc > trim) { trim = acc; domBest = other.chain; }
+                    break;
+                }
             }
         }
+        if (domBest != SIZE_MAX && trim > 0)
+            wedges.push_back({ node, myCi, domBest, trim });
         return trim;
     };
+    // TRIM PRE-PASS (R2): all trims — and therefore ALL wedge records — are
+    // computed before any chain sweeps, because a DOMINANT chain's parapet
+    // needs gap windows from wedges its SUBORDINATE (which may come later in
+    // the loop) records.
+    std::vector<double> trimA(chains.size(), 0.0), trimB(chains.size(), 0.0);
+    for (std::size_t ci = 0; ci < chains.size(); ++ci) {
+        const UnionSpine& s = chains[ci];
+        if (s.points.size() < 2) continue;
+        const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
+        trimA[ci] = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
+        trimB[ci] = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
+        if (a >= 0 && deg[a] >= 3)
+            trimA[ci] = std::max(trimA[ci], pairTrim(s, ci, a, true));
+        if (b >= 0 && deg[b] >= 3)
+            trimB[ci] = std::max(trimB[ci], pairTrim(s, ci, b, false));
+    }
+    // WEDGE RAILS (R2): for each acute pair, the pad's corner between the
+    // dominant and subordinate arms follows the DOMINANT chain's edge curve
+    // (sampled from its mouth out to the subordinate's mouth arc, offset by
+    // its half-width on the subordinate's side) instead of a straight chord
+    // the curved arm bows off of. Keyed to the pad root; matched by arm ids.
+    std::map<int, std::vector<JunctionRail>> nodeRails;
+    for (Wedge& w : wedges) {
+        const UnionSpine& dom = chains[w.domCi];
+        const UnionSpine& sub = chains[w.subCi];
+        if (dom.points.size() < 2 || sub.points.size() < 2) continue;
+        if (dom.yAbs.size() != dom.points.size()) continue;
+        const bool domFromA = nodeAt(dom.points.front()) == w.node;
+        if (!domFromA && nodeAt(dom.points.back()) != w.node) continue;
+        auto dirAt = [&](const UnionSpine& c, bool fromA) {
+            const Vec2 d = fromA ? c.points[1] - c.points[0]
+                                 : c.points[c.points.size() - 2] - c.points.back();
+            const double l = d.length();
+            return l > 1e-9 ? d * (1.0 / l) : Vec2(1, 0);
+        };
+        const bool subFromA = nodeAt(sub.points.front()) == w.node;
+        const Vec2 dDir = dirAt(dom, domFromA);
+        const Vec2 sDir = dirAt(sub, subFromA);
+        const double side =
+            (dDir.x * sDir.y - dDir.y * sDir.x) >= 0 ? 1.0 : -1.0;
+        w.side = side;
+        JunctionRail rail;
+        rail.fromId = static_cast<int>(w.domCi);
+        rail.toId = static_cast<int>(w.subCi);
+        const double s0 = (w.node < N ? rad[w.node] : 8.0) + 1.5;
+        const double s1 = w.subTrim - 1.5;
+        double acc = 0;
+        for (std::size_t i = 1; i < dom.points.size() && acc < s1; ++i) {
+            const std::size_t k = domFromA ? i : dom.points.size() - 1 - i;
+            const std::size_t kp = domFromA ? k - 1 : k + 1;
+            const Vec2 seg = dom.points[k] - dom.points[kp];
+            const double segL = seg.length();
+            if (segL < 1e-9) continue;
+            const double a0 = acc;
+            acc += segL;
+            for (double st = std::max(s0, std::ceil(a0 / 4.0) * 4.0); st < acc && st < s1;
+                 st += 4.0) {
+                const double t = (st - a0) / segL;
+                const Vec2 c2 = dom.points[kp] + seg * t;
+                const Vec2 dirN = seg * (1.0 / segL);
+                const Vec2 leftN(-dirN.y, dirN.x);
+                const double y =
+                    dom.yAbs[kp] + (dom.yAbs[k] - dom.yAbs[kp]) * t;
+                // seg is oriented AWAY from the node in BOTH walk
+                // orientations, so leftN is already node-relative — the side
+                // sign (from the away-from-node dir cross) applies directly.
+                const Vec2 p = c2 + leftN * (side * dom.halfWidth);
+                rail.pts.push_back(Vec3(p.x, y, p.y));
+            }
+        }
+        if (rail.pts.size() >= 2)
+            nodeRails[find(w.node)].push_back(std::move(rail));
+    }
     for (std::size_t ci = 0; ci < chains.size(); ++ci) {
         const UnionSpine& s = chains[ci];
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
         if (a >= 0 && b >= 0 && a != b && find(a) == find(b))
             continue;                            // compound link: the pad owns it
-        double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
-        double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
-        if (a >= 0 && deg[a] >= 3)
-            rA = std::max(rA, pairTrim(s, ci, a, true));
-        if (b >= 0 && deg[b] >= 3)
-            rB = std::max(rB, pairTrim(s, ci, b, false));
+        const double rA = trimA[ci], rB = trimB[ci];
         UnionSpine t = trimSpine(s, rA, rB);
         if (t.points.size() < 2) continue;
 
@@ -714,8 +790,33 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
             MeshBuilder::append(out, sweepRoadLattice(t, freewayDeckProfile(lanes),
                                                       ground, 2.0, nullptr, &ring0, &ringN));
             MeshBuilder::append(out, sweepRoadLattice(t, freewayUndersideProfile(0.5), ground, 2.0));
-            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(+1), ground, 2.0));
-            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(-1), ground, 2.0));
+            // Parapet WEDGE GAPS (R2): where this chain is the DOMINANT of
+            // an acute pair, its wedge-side parapet opens over the whole
+            // merge window (gore trim -> subordinate mouth), not just the
+            // junction trim — or the wall stands across the merge (the
+            // probe's blocked=1 at three gores).
+            double Lt = 0;
+            for (std::size_t i = 1; i < t.points.size(); ++i)
+                Lt += (t.points[i] - t.points[i - 1]).length();
+            std::vector<GapWindow> gapsL, gapsR;
+            for (const Wedge& w : wedges) {
+                if (w.domCi != ci || w.side == 0) continue;
+                const bool atA = a >= 0 && nodeAt(s.points.front()) == w.node;
+                const bool atB = b >= 0 && nodeAt(s.points.back()) == w.node;
+                if (!atA && !atB) continue;
+                const double span = w.subTrim - (atA ? rA : rB);
+                if (span <= 1.0) continue;
+                const GapWindow g = atA ? GapWindow{ 0.0, span }
+                                        : GapWindow{ Lt - span, Lt };
+                // side is in away-from-node coords; sweep runs a->b, so the
+                // b-end flips.
+                const double sweepSide = atA ? w.side : -w.side;
+                (sweepSide > 0 ? gapsL : gapsR).push_back(g);
+            }
+            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(+1), ground, 2.0,
+                                                      gapsL.empty() ? nullptr : &gapsL));
+            MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(-1), ground, 2.0,
+                                                      gapsR.empty() ? nullptr : &gapsR));
             if (isFwy)
                 MeshBuilder::append(out, sweepRoadLattice(t, medianProfile(), ground, 2.0));
             MeshBuilder::append(out, latticeChainPiers(t, groundFn, 0.5, nullptr, pierBlocked));
@@ -795,11 +896,11 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         // Arms gather on the cluster ROOT: a compound pad (merged too-close
         // junctions) collects the outer arms of ALL its member nodes.
         if (a >= 0 && deg[a] >= 3 && ring0.size() >= 2) {
-            arms[find(a)].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0, true) });
+            arms[find(a)].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0, true), static_cast<int>(ci) });
             if (!isFwy && !isRamp && !elevated) ++streetArms[find(a)];
         }
         if (b >= 0 && deg[b] >= 3 && ringN.size() >= 2) {
-            arms[find(b)].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN, false) });
+            arms[find(b)].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN, false), static_cast<int>(ci) });
             if (!isFwy && !isRamp && !elevated) ++streetArms[find(b)];
         }
     }
@@ -823,7 +924,9 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         else ++nFan;
         std::vector<Vec3> padFootprint;
         RenderMesh pad = junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
-                                       &padFootprint);
+                                       &padFootprint,
+                                       nodeRails.count(v) ? &nodeRails[v]
+                                                          : nullptr);
         // 2c: an ELEVATED pad (a gore on the deck) closes its bottom — a
         // mirrored down-facing belly at deck thickness plus a rim skirt, so
         // the viaduct has structure under the junction fill too, not a

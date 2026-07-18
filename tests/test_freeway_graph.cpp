@@ -611,10 +611,6 @@ TEST_CASE(merge_probe_drives_ramp_onto_mainline_on_a_real_metro) {
     std::printf("[merge] gores=%d clean=%d totalDefects=%d\n", gores,
                 cleanMerges, totalDefects);
     CHECK(gores >= 2);              // the metro really built interchanges
-    CHECK(cleanMerges >= 1);        // the merge mechanism is real
-    // RATCHET -> cleanMerges == gores in R2: the residuals are gore-WEDGE
-    // PAD quality (the long sliver fill between nose and gore node —
-    // measured 1-4 holes / <=2 steps / <=1 blocked per defective gore on
-    // seed 9). R2's junction-zoo pad work owns exactly this surface.
-    CHECK(totalDefects <= 12);
+    CHECK(cleanMerges == gores);    // EVERY merge drives clean
+    CHECK(totalDefects == 0);
 }
