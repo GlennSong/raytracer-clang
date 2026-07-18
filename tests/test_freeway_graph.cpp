@@ -394,17 +394,11 @@ TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
     driveprobe::drivePath(m, mainPath, mrep);
     std::printf("[2b] mainline: samples=%d holes=%d steps=%d blocked=%d\n",
                 mrep.samples, mrep.holes, mrep.steps, mrep.blocked);
-    for (const auto& d : mrep.defects)
-        std::printf("[2b]   main %s at (%.1f, %.1f, %.1f) amt=%.2f\n",
-                    d.kind.c_str(), d.where.x, d.where.y, d.where.z, d.amount);
+
     CHECK(mrep.samples > 40);
     CHECK(mrep.holes == 0);
     CHECK(mrep.steps == 0);
-    // RATCHET -> 0 in 2c: the 2 blockers are the EXIT RAMP'S OWN PARAPET —
-    // the ramp chain departs from the centreline gore node, so its swept
-    // ribbon (rails included) overlaps the deck until it laterally clears.
-    // 2c extends the ramp's start trim to the deck edge (the nose).
-    CHECK(mrep.blocked <= 2);
+    CHECK(mrep.blocked == 0);
 
     // Drive each ramp's RIBBON (authored path past the gore band) plus the
     // last stretch onto the street through the landing junction.
@@ -418,20 +412,10 @@ TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
         driveprobe::drivePath(m, path, rrep);
         std::printf("[2b] ramp: samples=%d holes=%d steps=%d blocked=%d\n",
                     rrep.samples, rrep.holes, rrep.steps, rrep.blocked);
-        int shown = 0;
-        for (const auto& d : rrep.defects)
-            if (shown < 6) {
-                std::printf("[2b]   %s at (%.1f, %.1f, %.1f) amt=%.2f\n",
-                            d.kind.c_str(), d.where.x, d.where.y, d.where.z,
-                            d.amount);
-                ++shown;
-            }
+
         CHECK(rrep.samples > 10);
         CHECK(rrep.holes == 0);
-        // RATCHET -> 0 in 2c: the on-ramp's 26 uniform 0.17 m steps sit in
-        // its gore-side stretch — same overlap family as the parapet
-        // blockers; dies with the nose trim.
-        CHECK(rrep.steps <= 26);
+        CHECK(rrep.steps == 0);
         CHECK(rrep.blocked == 0);
     }
 
@@ -458,9 +442,7 @@ TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
         if (!belly) ++missingBelly;
     }
     std::printf("[2b] elevated nodes missing underside: %d\n", missingBelly);
-    // RATCHET -> 0 in 2c: the 2 bare spots are the GORE pads (junction fill
-    // has no belly yet; elevated pads grow an underside with the gore work).
-    CHECK(missingBelly <= 2);
+    CHECK(missingBelly == 0);
 
     // STRUCTURE: parapets — along the mainline, vertical geometry rises above
     // the deck near both edges for most of the run (gaps allowed only near

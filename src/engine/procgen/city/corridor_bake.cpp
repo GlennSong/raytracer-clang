@@ -152,11 +152,12 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         for (std::size_t k = 1; k < rp.size(); ++k)
             arc[k] = arc[k - 1] + (Vec2(rp[k].x, rp[k].z) -
                                    Vec2(rp[k - 1].x, rp[k - 1].z)).length();
-        // SHAPE-DRIVEN node selection (Douglas-Peucker): keep nodes where the
-        // ribbon actually bends (clothoid onsets need a handle; straights
-        // don't), bounded by rampStep*1.8 so no span outruns local
-        // editability. Even arc spacing put curvature onsets BETWEEN nodes
-        // and the Hermite smoothed them ~0.65 m wide; DP puts a node ON them.
+        // SHAPE-DRIVEN node selection (Douglas-Peucker, in 3D): keep nodes
+        // where the ribbon bends in PLAN (clothoid onsets) or in PROFILE
+        // (the descent's vertical knees) — a 2D DP left plan-straight steep
+        // sections chorded 0.45 m proud, which the drive probe read as a
+        // 0.17 m washboard. Bounded by rampStep*1.8 so no span outruns
+        // local editability.
         std::vector<std::size_t> keep{ 0, rp.size() - 1 };
         {
             const double tol = 0.18;
@@ -166,17 +167,18 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
                 const auto seg = stack.back();
                 stack.pop_back();
                 if (seg.second <= seg.first + 1) continue;
-                const Vec2 A(rp[seg.first].x, rp[seg.first].z);
-                const Vec2 B(rp[seg.second].x, rp[seg.second].z);
-                const Vec2 AB = B - A;
-                const double l2 = AB.lengthSquared();
+                const Vec3& A = rp[seg.first];
+                const Vec3& B = rp[seg.second];
+                const Vec3 AB = B - A;
+                const double l2 = dot(AB, AB);
                 double worst = -1.0;
                 std::size_t at = seg.first;
                 for (std::size_t k = seg.first + 1; k < seg.second; ++k) {
-                    const Vec2 P2(rp[k].x, rp[k].z);
-                    double t = l2 > 1e-12 ? dot(P2 - A, AB) / l2 : 0.0;
+                    const Vec3& P3 = rp[k];
+                    double t = l2 > 1e-12 ? dot(P3 - A, AB) / l2 : 0.0;
                     t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                    const double d = (A + AB * t - P2).length();
+                    const Vec3 cp = A + AB * t - P3;
+                    const double d = std::sqrt(dot(cp, cp));
                     if (d > worst) { worst = d; at = k; }
                 }
                 const bool tooLong =

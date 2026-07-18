@@ -600,14 +600,68 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         }
         return false;
     };
+    // 2c NOSE TRIM: a Ramp chain that meets a Freeway at a gore departs FROM
+    // the deck's centreline node, so its swept ribbon (rails included) rides
+    // ON the deck until the centreline laterally clears it — the measured
+    // parapet-in-the-lanes blockers. The ramp's trim at a gore end therefore
+    // extends to the NOSE: the arc where the ramp centreline exits the deck
+    // ribbon (deck half + ramp half + margin). The junction pad then fills
+    // the wedge from the deck edge to the ramp's mouth — the gore surface.
+    std::vector<std::vector<std::pair<Vec2, Vec2>>> fwySegsAt(N);
+    for (const UnionSpine& fs : chains) {
+        if (fs.klass != RoadClass::Freeway || fs.points.size() < 2) continue;
+        const int fa = nodeAt(fs.points.front()), fb = nodeAt(fs.points.back());
+        for (int v : { fa, fb }) {
+            if (v < 0) continue;
+            double acc = 0;
+            for (std::size_t i = 1; i < fs.points.size() && acc < 160.0; ++i) {
+                const bool fromA = (v == fa);
+                const std::size_t k = fromA ? i : fs.points.size() - 1 - i;
+                const std::size_t kp = fromA ? k - 1 : k + 1;
+                fwySegsAt[v].push_back({ fs.points[kp], fs.points[k] });
+                acc += (fs.points[k] - fs.points[kp]).length();
+            }
+        }
+    }
+    auto noseTrim = [&](const UnionSpine& rampS, int node, bool fromFront,
+                        double deckHalf) {
+        const double clearL = deckHalf + rampS.halfWidth + 0.5;
+        double acc = 0, trim = 0;
+        const std::size_t n2 = rampS.points.size();
+        for (std::size_t i = 0; i < n2; ++i) {
+            const std::size_t k = fromFront ? i : n2 - 1 - i;
+            if (i > 0) {
+                const std::size_t kp = fromFront ? k - 1 : k + 1;
+                acc += (rampS.points[k] - rampS.points[kp]).length();
+            }
+            double dmin = 1e30;
+            for (const auto& seg : fwySegsAt[node]) {
+                const Vec2 ab = seg.second - seg.first;
+                const double l2 = ab.lengthSquared();
+                double t2 = l2 > 1e-12
+                    ? dot(rampS.points[k] - seg.first, ab) / l2 : 0.0;
+                t2 = t2 < 0 ? 0 : (t2 > 1 ? 1 : t2);
+                dmin = std::min(dmin,
+                                (seg.first + ab * t2 - rampS.points[k]).length());
+            }
+            if (dmin > clearL) { trim = acc; break; }
+        }
+        return trim;
+    };
     for (std::size_t ci = 0; ci < chains.size(); ++ci) {
         const UnionSpine& s = chains[ci];
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
         if (a >= 0 && b >= 0 && a != b && find(a) == find(b))
             continue;                            // compound link: the pad owns it
-        const double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
-        const double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
+        double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;
+        double rB = (b >= 0 && deg[b] >= 3) ? rad[b] : 0.0;
+        if (s.klass == RoadClass::Ramp) {
+            if (a >= 0 && !fwySegsAt[a].empty())
+                rA = std::max(rA, noseTrim(s, a, true, rad[a]));
+            if (b >= 0 && !fwySegsAt[b].empty())
+                rB = std::max(rB, noseTrim(s, b, false, rad[b]));
+        }
         UnionSpine t = trimSpine(s, rA, rB);
         if (t.points.size() < 2) continue;
 
@@ -734,8 +788,46 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         else if (na == 4) ++nCoons;
         else ++nFan;
         std::vector<Vec3> padFootprint;
-        MeshBuilder::append(out, junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
-                                               &padFootprint));
+        RenderMesh pad = junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
+                                       &padFootprint);
+        // 2c: an ELEVATED pad (a gore on the deck) closes its bottom — a
+        // mirrored down-facing belly at deck thickness plus a rim skirt, so
+        // the viaduct has structure under the junction fill too, not a
+        // floating carpet between the chains' undersides.
+        if (padFootprint.size() >= 3) {
+            double avgY = 0, gnd = 0;
+            for (const Vec3& p : padFootprint) {
+                avgY += p.y;
+                gnd += ground(p.x, p.z);
+            }
+            avgY /= padFootprint.size();
+            gnd /= padFootprint.size();
+            if (avgY - gnd > 2.5) {
+                const double thk = 0.5;
+                RenderMesh belly = pad;
+                for (auto& vtx : belly.vertices) vtx.position.y -= thk;
+                // Flip winding so the belly faces DOWN.
+                for (std::size_t t = 0; t + 2 < belly.indices.size(); t += 3)
+                    std::swap(belly.indices[t + 1], belly.indices[t + 2]);
+                MeshBuilder::append(out, belly);
+                // Rim skirt: quads around the footprint loop.
+                RenderMesh skirt;
+                const std::size_t nfp = padFootprint.size();
+                for (std::size_t i = 0; i < nfp; ++i) {
+                    const Vec3& A = padFootprint[i];
+                    const Vec3& B = padFootprint[(i + 1) % nfp];
+                    Vec3 d = B - A;
+                    const double dl = std::sqrt(d.x * d.x + d.z * d.z);
+                    if (dl < 1e-6) continue;
+                    const Vec3 nrm(d.z / dl, 0.0, -d.x / dl);   // outward (CCW loop)
+                    MeshBuilder::emitQuad(
+                        skirt, A, B, Vec3(B.x, B.y - thk, B.z),
+                        Vec3(A.x, A.y - thk, A.z), nrm, Vec3(0.32, 0.32, 0.34));
+                }
+                MeshBuilder::append(out, skirt);
+            }
+        }
+        MeshBuilder::append(out, pad);
         if (padFootprint.size() >= 3 && streetArms[v] > 0) {
             bandHeights.addLoop(padFootprint);
             Poly2 fp;

@@ -120,12 +120,17 @@ inline void drivePath(const RenderMesh& m, const std::vector<Vec3>& path,
                       Report& rep, const DriveParams& p = {}) {
     if (path.size() < 2) return;
     double prevY = 0; bool havePrev = false;
+    double prevDelta = 0; bool haveDelta = false;
     for (std::size_t i = 0; i + 1 < path.size(); ++i) {
         const Vec3 a = path[i], b = path[i + 1];
         const double segLen = (Vec2(b.x, b.z) - Vec2(a.x, a.z)).length();
         if (segLen < 1e-6) continue;
         const int n = std::max(1, (int)std::ceil(segLen / p.step));
-        for (int k = 0; k <= n; ++k) {
+        // Consecutive path segments share an endpoint: sampling k=0 again
+        // would DOUBLE-SAMPLE it — a ghost delta of zero that alternates
+        // with the real per-sample delta and reads as a kink/staircase on
+        // any grade (and double-counts samples and defects at seams).
+        for (int k = havePrev ? 1 : 0; k <= n; ++k) {
             const double t = (double)k / n;
             const Vec3 q = a + (b - a) * t;
             ++rep.samples;
@@ -140,13 +145,31 @@ inline void drivePath(const RenderMesh& m, const std::vector<Vec3>& path,
                 ++rep.holes; havePrev = false; continue;
             }
             if (havePrev) {
-                const double jump = std::fabs(best - prevY);
+                const double delta = best - prevY;
+                const double jump = std::fabs(delta);
                 const double run = segLen / n;
-                rep.worstStep = std::max(rep.worstStep, jump);
                 const double g = run > 1e-6 ? jump / run : 0.0;
                 rep.worstGrade = std::max(rep.worstGrade, g);
-                if (jump > p.maxStep) { rep.defects.push_back({"step", q, jump}); ++rep.steps; }
-                else if (g > p.maxGrade) { rep.defects.push_back({"grade", q, g}); ++rep.grades; }
+                // A STEP is a surface DISCONTINUITY, not a steep-but-smooth
+                // grade: fire on the KINK (second difference — the change in
+                // per-sample delta) or on an outright cliff. Raw |delta| >
+                // 0.15 also fired on a smooth 11% ramp knee sampled every
+                // ~1.4 m (0.15/sample) — a drivable grade, which the grade
+                // check below owns. On flat/gentle fixtures deltas are ~0,
+                // so the kink rule matches the old rule there exactly.
+                const double kink = haveDelta ? std::fabs(delta - prevDelta)
+                                              : jump;
+                rep.worstStep = std::max(rep.worstStep, kink);
+                if (kink > p.maxStep || jump > 0.6) {
+                    rep.defects.push_back({"step", q, std::max(kink, jump)});
+                    ++rep.steps;
+                } else if (g > p.maxGrade) {
+                    rep.defects.push_back({"grade", q, g});
+                    ++rep.grades;
+                }
+                prevDelta = delta; haveDelta = true;
+            } else {
+                haveDelta = false;
             }
             prevY = best; havePrev = true;
 
