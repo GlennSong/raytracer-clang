@@ -63,6 +63,11 @@ TEST_CASE(car_heading_yaw_rate_is_bounded_by_turn_radius) {
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const Agent& a = ag[k];
             if (a.mode != Agent::Mode::Driver) continue;
+            // A car that CRASHED this tick is not steering: the contact rule
+            // zeroed its speed after the yaw was already applied, so the
+            // speed-proportional bound doesn't describe it. The turn-radius
+            // contract under test is for cars that are driving.
+            if (a.crashTimer > 0) { prev[k] = a.heading; have[k] = a.moving; continue; }
             if (a.moving && have[k]) {
                 sawMotion = true;
                 Real ang = headingAngle(prev[k], a.heading);

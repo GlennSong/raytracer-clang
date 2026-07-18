@@ -366,6 +366,7 @@ private:
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
+    void computeCarWedge();   // fills carAheadGap_/carAheadSpeed_ (S7 senses)
 
 public:
     // Total car-contact events since build — the roads-v2 S7 soak gate reads
@@ -392,6 +393,13 @@ private:
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)
+    // Car-vs-car vision wedge (roads-v2 S7 slice 3): per car, the nearest CAR
+    // body in its forward corridor — the sense the lane-keyed gap logic
+    // structurally lacks (merge convergence, wrecks on another link, bodies
+    // inside the junction box). Net bumper gap + that body's along-my-heading
+    // speed; INF/0 when clear.
+    std::vector<Real> carAheadGap_;
+    std::vector<Real> carAheadSpeed_;
     int crashEvents_ = 0;              // total fender-bender contacts (soak gate)
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)

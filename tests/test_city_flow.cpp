@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include <cstdio>
 
 #include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"

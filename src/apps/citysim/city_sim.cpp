@@ -1056,10 +1056,20 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         idm.accelMax = accel;
         idm.decelComf = kCarDecel;
         idm.minGap = kCarBumperGap;
-        const Real netGap = gap < 1e8
+        Real netGap = gap < 1e8
             ? std::max(Real(0.05), gap - (minGap - kCarBumperGap))
             : std::numeric_limits<Real>::infinity();
-        const Real dv = gap < 1e8 ? a.speed - leaderSpeeds_[myIdx] : 0.0;
+        Real dv = gap < 1e8 ? a.speed - leaderSpeeds_[myIdx] : 0.0;
+        // The vision wedge may know a NEARER body than the lane chain does
+        // (a merger's nose, a wreck on another link). Whoever is closest is
+        // the leader IDM brakes for. A gridlock-creeping car ignores the
+        // wedge: the creep exists to unpick stalemates, and the fender-bender
+        // rule arbitrates any resulting brush.
+        if (myIdx < static_cast<int>(carAheadGap_.size()) &&
+            carAheadGap_[myIdx] < netGap && a.holdTimer <= 6.0) {
+            netGap = carAheadGap_[myIdx];
+            dv = a.speed - carAheadSpeed_[myIdx];
+        }
         a.speed = engine::idmStep(a.speed, std::max(Real(0.1), target), netGap,
                                   dv, dt, kCarDecel * 2.0, idm);
         // The capped target is still a hard ceiling (signals/junction rules
@@ -1399,6 +1409,70 @@ void CitySim::computeGaps() {
     }
 }
 
+// The car-vs-car VISION WEDGE (roads-v2 plan Â§3.1, sense 2 of the driver
+// agent) â slice 3: the CORRIDOR sense. The lane-keyed gap logic only sees
+// leaders on MY route's lane chain; a merging car's nose, a wreck on another
+// link, or a body stalled inside the junction box is invisible to it â and
+// the soak telemetry traced real contacts to exactly those. Each car senses
+// bodies in its forward swept corridor and hands the nearest to IDM as a
+// leader. Guard rails that keep the historic deadlock out (cars were
+// deliberately blind to cars before this â braking for everything on the
+// heading ray froze junctions):
+//   - ROUTE-AWARE horizon: my corridor ends at my link's end node (+ a box
+//     allowance) â past it my path turns; bodies there (cross-street
+//     queues!) are not ahead of me whatever the ray says.
+//   - ONCOMING cars in their own lane pass; only a truly head-on body binds.
+//   - a STOPPED cross-oriented car beyond close range is a cross-street
+//     queue â the signal owns that conflict, not mutual corridor braking.
+void CitySim::computeCarWedge() {
+    const Real INF = std::numeric_limits<Real>::infinity();
+    carAheadGap_.assign(agents_.size(), INF);
+    carAheadSpeed_.assign(agents_.size(), 0.0);
+    constexpr Real kRange = 38.0;   // sense horizon (m)
+    constexpr Real kLat = 2.15;     // corridor half-width: two bodies abreast
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        Agent& a = agents_[i];
+        if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+        const Real fx = a.heading.x, fy = a.heading.y;
+        Real linkLeft = kRange;
+        if (nav_ && a.leg < static_cast<int>(a.route.links.size())) {
+            const int li = a.route.links[a.leg];
+            linkLeft = nav_->links[li].length - a.distOnLeg + 10.0;
+        }
+        const Real horizon = std::min(kRange, linkLeft);
+        for (std::size_t j = 0; j < agents_.size(); ++j) {
+            if (j == i) continue;
+            const Agent& b = agents_[j];
+            if (b.mode != Agent::Mode::Driver) continue;
+            // Different decks never conflict (viaduct vs the street below).
+            if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
+            const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            if (dx * dx + dy * dy > kRange * kRange) continue;
+            const Real along = fx * dx + fy * dy;
+            const Real across = -fy * dx + fx * dy;   // + = b on my left
+            if (along <= 0 || along >= horizon || std::fabs(across) >= kLat)
+                continue;
+            const Real hdot = b.heading.x * fx + b.heading.y * fy;
+            // ONCOMING bodies are not the corridor's problem, in-lane or not:
+            // a lane-bound car cannot dodge sideways, so braking converts a
+            // (rare, U-turn-made) head-on into a nose-to-nose STANDOFF that
+            // the creep/contact/escape machinery then has to grind through --
+            // measured as escape time trebling on the dead-end wander map.
+            // The contact rule arbitrates real head-on touches, as before.
+            if (hdot < -0.6) continue;
+            if (b.speed < 0.5 && std::fabs(hdot) < 0.5 && along > 9.0)
+                continue;                                           // cross queue: signal's job
+            const Real bodies = 0.5 * (vehicleLength(static_cast<int>(i)) +
+                                       vehicleLength(static_cast<int>(j)));
+            const Real gap = std::max(Real(0.05), along - bodies);
+            if (gap < carAheadGap_[i]) {
+                carAheadGap_[i] = gap;
+                carAheadSpeed_[i] = std::max(Real(0), b.speed * hdot);
+            }
+        }
+    }
+}
+
 void CitySim::step(Real dt, Real hoursPerSecond) {
     if (!nav_ || agents_.empty()) return;
 
@@ -1455,6 +1529,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // the reactive lean below is only valid on a re-anchored pose.
     std::vector<uint8_t> advanced(agents_.size(), 0);
     computeGaps();
+    computeCarWedge();   // S7 senses: bodies in the forward corridor
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (a.playerControlled || a.released) continue;
@@ -1567,7 +1642,13 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             }
             Real rvx = b.heading.x * b.speed - a.heading.x * a.speed;
             Real rvy = b.heading.y * b.speed - a.heading.y * a.speed;
-            if (rvx * dx + rvy * dy >= 0) continue;   // separating: let them part
+            // Separating bodies part without a crash — EXCEPT when both are
+            // still driving fast through each other: crossing/passing
+            // geometry flips to "separating" the instant the centres pass,
+            // while the bodies are still interpenetrating. That IS a crash
+            // (it read as ghosting, observably), not a near miss.
+            if (rvx * dx + rvy * dy >= 0 && !(a.speed > 2.0 && b.speed > 2.0))
+                continue;
             // Undo the overshoot: whoever MOVED into the contact backs its path
             // progress out again, split by speed, so the pair rests touching —
             // without this a resumed car RATCHETED deeper each freeze cycle.
@@ -1598,8 +1679,6 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                 if (leftA > 0) rollBack(b, a, leftA);
                 if (leftB > 0) rollBack(a, b, leftB);
             }
-            // NOTE: do not zero speed here — this tick's motion (and steering)
-            // already used it honestly; the hold branch freezes them next tick.
             if (std::getenv("RT_CRASH_DEBUG")) {
                 const Real hdot = a.heading.x * b.heading.x + a.heading.y * b.heading.y;
                 const Real along = a.heading.x * dx + a.heading.y * dy;
@@ -1622,6 +1701,12 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                     ++c.crashCount;
                     ++crashEvents_;   // soak gate: total contacts over a run
                 }
+                // Contact means BODIES TOUCHING now (capsule), so the impact
+                // kills the velocity WITH the event — without this, a pair
+                // that cannot be rolled apart (both freshly chained at a
+                // dead-end tip, distOnLeg ~0) spends the pre-freeze tick
+                // interpenetrating at full speed: ghosting, observably.
+                c.speed = 0;
                 c.state = Agent::State::Waiting;
             };
             crash(a);

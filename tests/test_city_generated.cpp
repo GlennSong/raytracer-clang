@@ -182,9 +182,9 @@ TEST_CASE(traffic_soak_no_collisions_idm) {
     std::printf("[soak] warmup crashes=%d run crashes=%d\n", afterWarmup,
                 sim.crashEvents() - afterWarmup);
     // RATCHET (deterministic sim, exact count). Pre-S7 baseline: 115/10 min
-    // under the proximity-disc rule. Slice 2 (oriented capsule contact): 95 —
-    // the phantom side-swipes are gone, what remains is real crossing/merge
-    // conflict. Each remaining S7 slice (corridor wedge, crossing wedge) must
-    // lower it; the plan's end gate is 0.
-    CHECK(sim.crashEvents() - afterWarmup <= 95);
+    // under the proximity-disc rule. Slice 2 (oriented capsule contact): 95.
+    // Slice 3 (corridor vision wedge -> IDM leader): 52. The remainder is
+    // dominated by junction crossing conflict — the crossing-course slice's
+    // target. The plan's end gate is 0.
+    CHECK(sim.crashEvents() - afterWarmup <= 52);
 }
