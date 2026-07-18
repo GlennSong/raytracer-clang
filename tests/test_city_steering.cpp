@@ -125,3 +125,52 @@ TEST_CASE(steering_preserves_determinism) {
             same = false;
     CHECK(same);
 }
+
+TEST_CASE(cars_hold_a_steady_line_at_city_speed) {
+    // Device: "weaving from side to side when a car is going slow shouldn't
+    // be... Only on the freeway going at a high speed does it make sense."
+    // The waver's old gate saturated at 4 m/s — below every cruise speed —
+    // so city traffic wove at full amplitude. Now the amplitude fades in
+    // above ~14 m/s: a car cruising a Local street (8 m/s) must hold its
+    // lane line exactly. Sample the lateral position mid-block (clear of
+    // corner blends and U-turn chains) over a long run.
+    NavGraph nav = citytest::straightRoad(400.0, 8.0);
+    CitySim sim;
+    sim.build(nav, 1, 0, 3);
+    sim.setWander(true);
+
+    Real lo = 1e30, hi = -1e30;
+    long sampled = 0;
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            if (a.speed < 6.0) continue;                  // cruising only
+            if (a.distOnLeg < 60.0 || a.distOnLeg > 340.0) continue;   // mid-block
+            lo = std::min(lo, a.pos.y);
+            hi = std::max(hi, a.pos.y);
+            ++sampled;
+        }
+    }
+    CHECK(sampled > 500);          // the car really cruised mid-block
+    // One lane, one direction per pass: the y offset flips sign with travel
+    // direction, so compare within... no — wander alternates direction, and
+    // y is symmetric (+/- lane offset). Bound the WOBBLE per side instead:
+    // all samples sit within a hair of one of the two lane lines.
+    CHECK(hi - lo < 2.0 * 3.1);    // sanity: within the two lane lines
+    // The real assertion: no sample deviates from ITS side's lane line.
+    // Re-run cheaply: bucket by sign.
+    Real loP = 1e30, hiP = -1e30, loN = 1e30, hiN = -1e30;
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving) continue;
+            if (a.speed < 6.0) continue;
+            if (a.distOnLeg < 60.0 || a.distOnLeg > 340.0) continue;
+            if (a.pos.y >= 0) { loP = std::min(loP, a.pos.y); hiP = std::max(hiP, a.pos.y); }
+            else              { loN = std::min(loN, a.pos.y); hiN = std::max(hiN, a.pos.y); }
+        }
+    }
+    if (hiP >= loP) CHECK(hiP - loP < 0.02);   // steady on the +y lane line
+    if (hiN >= loN) CHECK(hiN - loN < 0.02);   // steady on the -y lane line
+}

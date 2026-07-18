@@ -686,11 +686,20 @@ void CitySim::refreshPose(Agent& a) {
         const Real spacing = laneSpacing(LL);
         Real off = (0.5 + fl) * spacing;
         if (LL.oneWay) off -= lanes * 0.5 * spacing;
-        // WAVER (device): a human hand is never perfectly still — a slow,
-        // speed-scaled weave inside the lane. Deterministic per agent.
+        // WAVER (device): a human hand is never perfectly still — but only at
+        // SPEED (device: "weaving from side to side when a car is going slow
+        // shouldn't be... Only on the freeway going at a high speed does it
+        // make sense"). The old gate min(1, speed/4) saturated at 14 km/h —
+        // below EVERY cruise speed in the sim — so it was a no-op and the
+        // weave ran full amplitude at all speeds. Amplitude now fades in
+        // above city pace (~14 m/s; arterials barely, freeways fully). The
+        // phase runs on a CONSTANT clock: the old speed-scaled frequency
+        // teleported the phase whenever speed changed, reading as a buzz
+        // exactly where speed changes most (accelerating up an on-ramp).
         const Real phase = (a.home * 2.399 + a.work * 1.117);
-        off += 0.12 * std::sin(simSeconds_ * (0.5 + a.speed * 0.05) + phase) *
-               std::min(Real(1), a.speed / 4.0);
+        const Real waverGain =
+            std::min(Real(1), std::max(Real(0), (a.speed - 14.0) / 12.0));
+        off += 0.12 * std::sin(simSeconds_ * 0.55 + phase) * waverGain;
         Vec2 cpt = nav_->pointOnLink(link, t);
         const Vec2 d = nav_->direction(link);
         return cpt + Vec2(d.y, -d.x) * off;
@@ -1172,16 +1181,24 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // stopping mid-box would be strictly worse than walking on.
         const Real kerb = nav_->links[li].width * 0.5 + 3.0;
         if (nav_->isJunction(toNode) && !signals_.hasSignal(li) &&
-            toEnd < kerb && toEnd > kerb - 1.8 && a.holdTimer < 12.0) {
+            toEnd < kerb && toEnd > kerb - 1.8) {
             const Vec2 nodeP = nav_->nodes[toNode];
+            // Patience relaxes the ACCEPTED GAP, it never removes the check:
+            // fresh at the kerb, a walker wants ~2.5 s of clear approach;
+            // past ~12 s of waiting it asserts into traffic — but stepping
+            // out UNDER a car arriving within ~a second is not assertive,
+            // it is a contact (measured: the unconditional override walked a
+            // ped 1.3 m in front of a braking car's bumper).
+            const bool patient = a.holdTimer < 12.0;
             bool carInbound = false;
             for (const Agent& c : agents_) {
                 if (c.mode != Agent::Mode::Driver || !c.moving || c.speed < 0.5)
                     continue;
                 if (std::fabs(c.elevation - a.elevation) > 2.5) continue;
                 const Real cd = (c.pos - nodeP).length();
-                // Inside the box, or reaching it within ~2.5 s at its speed.
-                if (cd < 7.0 || cd < c.speed * 2.5 + 4.0) { carInbound = true; break; }
+                const bool near = patient ? (cd < 7.0 || cd < c.speed * 2.5 + 4.0)
+                                          : (cd < 7.0 || cd < c.speed * 1.2);
+                if (near) { carInbound = true; break; }
             }
             if (carInbound) {
                 a.holdTimer += dt;

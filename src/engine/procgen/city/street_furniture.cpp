@@ -1,6 +1,8 @@
 #include "street_furniture.h"
 
 #include <algorithm>
+#include <cmath>
+#include <map>
 
 namespace engine {
 
@@ -13,11 +15,24 @@ StreetFurniturePlan planStreetFurniture(
     // constant CityRenderSystem uses, so poles on a bridge stand on its deck.
     const Real kLayerLift = 5.8;
 
-    // SIGNALS: one per junction-entering link — the exact criterion the sim's
-    // SignalController uses, so placed poles and simulated phases agree
-    // one-to-one by link index. The pole stands on the near-right curb corner,
-    // backed off by the widest crossing road (and a knot-merged junction's
-    // spread) so it never lands in a carriageway.
+    // SIGNALS: one per (junction, approach BEARING) — matching the sim's
+    // SignalController for real this time. Two mismatches used to break the
+    // "poles and phases agree" claim:
+    //   - the controller only signalises 4+-approach junctions (T-junctions
+    //     stay uncontrolled, by device feedback), but poles were planted at
+    //     EVERY junction — a dark, dead head on every T;
+    //   - the unified graph can hold OVERLAPPING COLLINEAR edges (a long
+    //     edge plus a stub riding it), and per-LINK placement stood two heads
+    //     on one arm (device: "double stoplights which is bizarre").
+    // So: skip junctions the controller leaves uncontrolled, quantise each
+    // approach bearing to a 15-degree bin per node, and keep ONE pole per
+    // bin — the widest approach, then the longest, then the lowest link
+    // index (deterministic). Phases stay per-LINK in the sim (stateForLink),
+    // so a deduped twin still resolves its phase; only its redundant pole is
+    // gone. The pole stands on the near-right curb corner, backed off by the
+    // widest crossing road (and a knot-merged junction's spread) so it never
+    // lands in a carriageway.
+    std::map<std::pair<int, int>, int> armBest;   // (node, bearing bin) -> link
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
         // §10: the unified graph includes the corridor — merges/gores are
@@ -25,6 +40,29 @@ StreetFurniturePlan planStreetFurniture(
         if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
             continue;
         if (!nav.isJunction(L.to)) continue;
+        if (nav.outLinks[L.to].size() < 4) continue;   // uncontrolled (T/merge)
+        Vec2 d = nav.direction(li);
+        int bin = static_cast<int>(std::lround(std::atan2(d.y, d.x) /
+                                               (PI / 12.0)));
+        bin = ((bin % 24) + 24) % 24;
+        const auto key = std::make_pair(L.to, bin);
+        auto it = armBest.find(key);
+        if (it != armBest.end()) {
+            const NavLink& W = nav.links[it->second];
+            const bool better =
+                L.width > W.width ||
+                (L.width == W.width &&
+                 (L.length > W.length ||
+                  (L.length == W.length && li < it->second)));
+            if (!better) continue;
+            it->second = li;
+        } else {
+            armBest.emplace(key, li);
+        }
+    }
+    for (const auto& kv : armBest) {
+        const int li = kv.second;
+        const NavLink& L = nav.links[li];
         Vec2 d = nav.direction(li);
         Vec2 node = nav.nodes[L.to];
         Vec2 right(d.y, -d.x);
