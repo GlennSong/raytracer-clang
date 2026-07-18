@@ -6,6 +6,7 @@
 #include "procgen/city/city.h"
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
+#include "procgen/city/corridor_bake.h"   // S3b: bake solved corridors into the net
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
@@ -2285,6 +2286,11 @@ bool LevelLoader::load(const std::string& path,
     };
     std::vector<CorridorFrag> corridorFrags;
     std::vector<CorridorDef> corridorDefs;
+    // Roads-v2 S3b: which preNet each SYNTH corridor came from (-1 = authored /
+    // rules-lab). The solved corridor BAKES into that net (bakeCorridorIntoNet)
+    // so freeways+ramps land in the editable street graph before the road
+    // entities spawn from roadCache.
+    std::vector<int> corridorSrcNet;
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "corridor") continue;
@@ -2336,6 +2342,7 @@ bool LevelLoader::load(const std::string& path,
                 e.rampSpiral = ex.value("spiral", 30.0);
                 def.exits.push_back(e);
             }
+            corridorSrcNet.push_back(-1);        // authored: no source net (S3b)
             corridorDefs.push_back(std::move(def));
             // One-mesher P8: still OPT-IN for authored corridors. Flipping this
             // to true is a prerequisite for deleting the corridor mesher, but
@@ -2364,6 +2371,7 @@ bool LevelLoader::load(const std::string& path,
             Real spacing = 700;
             std::vector<Real> bridgeAt;  // stations that must fly over
             bool dropped = false;        // parallel-overlap loser
+            int srcNet = -1;             // which preNet grew this route (S3b bake)
         };
         std::vector<PlannedRoute> planned;
         // RULES LAB hook: a level may author raw route PLANS directly
@@ -2403,6 +2411,7 @@ bool LevelLoader::load(const std::string& path,
                 PlannedRoute pr;
                 pr.anchors = plan;
                 pr.spacing = spacing;
+                pr.srcNet = static_cast<int>(ni);   // S3b: bake target
                 for (std::size_t k = 0; k + 1 < plan.size(); ++k) {
                     const Vec2 A = plan[k], B = plan[k + 1];
                     const Real seg = (B - A).length();
@@ -2721,6 +2730,9 @@ bool LevelLoader::load(const std::string& path,
             while (corridorGuides.size() < corridorDefs.size())
                 corridorGuides.emplace_back();       // authored defs: no guide
             corridorGuides.push_back(pr.dense);
+            while (corridorSrcNet.size() < corridorDefs.size())
+                corridorSrcNet.push_back(-1);
+            corridorSrcNet.push_back(pr.srcNet);
             corridorDefs.push_back(std::move(def));
         }
     }
@@ -3095,6 +3107,24 @@ bool LevelLoader::load(const std::string& path,
                 engine::CorridorAuthoring au = engine::corridorAuthor(def, levelGround, 3.0);
                 pc.rampPaths = std::move(au.rampPaths);
                 pc.flatten = std::move(au.flatten);
+                // Roads-v2 S3b: BAKE the solved corridor into its source street
+                // net — freeways+ramps become ordinary editable graph edges (the
+                // road entity spawns from this net via roadCache below). Street
+                // meshing/conform/nav skip the baked edges (roadNetStreetsOnly);
+                // the corridor keeps drawing itself until S4-S6 unify.
+                {
+                    const std::size_t di =
+                        static_cast<std::size_t>(&def - corridorDefs.data());
+                    if (di < corridorSrcNet.size() && corridorSrcNet[di] >= 0 &&
+                        corridorSrcNet[di] < static_cast<int>(preNets.size())) {
+                        engine::RoadNet& src = preNets[corridorSrcNet[di]];
+                        const std::size_t e0 = src.edges.size();
+                        engine::bakeCorridorIntoNet(src, def, pc.rampPaths);
+                        LOG_INFO << "[bake] corridor -> net " << corridorSrcNet[di]
+                                 << ": +" << (src.edges.size() - e0)
+                                 << " edges (freeway+ramps in the editable graph)";
+                    }
+                }
                 std::vector<engine::UnionSpine> deckSpines =
                     engine::corridorDeckSpines(def, groundFn, 3.0);
                 std::vector<engine::UnionSpine> ramps =
