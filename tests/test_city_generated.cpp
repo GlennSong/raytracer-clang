@@ -181,10 +181,10 @@ TEST_CASE(traffic_soak_no_collisions_idm) {
     for (int i = 0; i < 6000; ++i) sim.step(0.1, 0.02);   // 10 sim-minutes
     std::printf("[soak] warmup crashes=%d run crashes=%d\n", afterWarmup,
                 sim.crashEvents() - afterWarmup);
-    // RATCHET (deterministic sim, exact count). Measured baseline before S7:
-    // 115 contacts/10 min under the proximity-disc contact rule — previously
-    // uncounted, so this is documentation, not regression. Each S7 slice
-    // (oriented contact, corridor wedge, crossing wedge) must lower it; the
-    // plan's end gate is 0. Tighten this bound with every slice that lands.
-    CHECK(sim.crashEvents() - afterWarmup <= 115);
+    // RATCHET (deterministic sim, exact count). Pre-S7 baseline: 115/10 min
+    // under the proximity-disc rule. Slice 2 (oriented capsule contact): 95 —
+    // the phantom side-swipes are gone, what remains is real crossing/merge
+    // conflict. Each remaining S7 slice (corridor wedge, crossing wedge) must
+    // lower it; the plan's end gate is 0.
+    CHECK(sim.crashEvents() - afterWarmup <= 95);
 }

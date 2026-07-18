@@ -1511,7 +1511,60 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
                               vehicleLength(static_cast<int>(j)));
             Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
             Real d2 = dx * dx + dy * dy;
-            if (d2 >= rs * rs) continue;
+            if (d2 >= rs * rs) continue;              // broad phase (cheap reject)
+            // ORIENTED narrow phase (roads-v2 S7 slice 2): a car is ~4.5 m
+            // long but only ~2 m wide — the isotropic disc called every
+            // adjacent-lane pass and turn-arc convergence a "crash" (measured
+            // 115 phantom-heavy contacts in the 10-minute soak). Each body is
+            // a CAPSULE (axis segment along the heading, half-width radius);
+            // contact = exact segment-segment distance under the summed radii:
+            // fires exactly at bumper touch nose-to-tail, at body overlap in a
+            // side-swipe, and never for a lane-apart pass (>= 3 m centrelines).
+            {
+                const Real kHalfW = 0.92;   // body half-width + a small skin
+                auto axis = [&](const Agent& c, int idx, Real& ex, Real& ey) {
+                    const Real half =
+                        std::max(Real(0), 0.5 * vehicleLength(idx) - kHalfW);
+                    ex = c.heading.x * half;
+                    ey = c.heading.y * half;
+                };
+                Real ax, ay, bx2, by2;
+                axis(a, static_cast<int>(i), ax, ay);
+                axis(b, static_cast<int>(j), bx2, by2);
+                const Real A0x = -ax, A0y = -ay, A1x = ax, A1y = ay;
+                const Real B0x = dx - bx2, B0y = dy - by2;
+                const Real B1x = dx + bx2, B1y = dy + by2;
+                auto ori = [](Real ox, Real oy, Real px, Real py,
+                              Real qx, Real qy) {
+                    const Real v = (px - ox) * (qy - oy) - (py - oy) * (qx - ox);
+                    return v > 1e-9 ? 1 : (v < -1e-9 ? -1 : 0);
+                };
+                Real best2 = 1e30;
+                if (ori(A0x, A0y, A1x, A1y, B0x, B0y) !=
+                        ori(A0x, A0y, A1x, A1y, B1x, B1y) &&
+                    ori(B0x, B0y, B1x, B1y, A0x, A0y) !=
+                        ori(B0x, B0y, B1x, B1y, A1x, A1y)) {
+                    best2 = 0;   // axes cross: bodies interpenetrate
+                } else {
+                    auto p2s2 = [](Real px, Real py, Real sx, Real sy,
+                                   Real tx, Real ty) {
+                        const Real ux = tx - sx, uy = ty - sy;
+                        const Real l2 = ux * ux + uy * uy;
+                        Real t = l2 > 1e-12
+                                     ? ((px - sx) * ux + (py - sy) * uy) / l2
+                                     : 0.0;
+                        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                        const Real cx = sx + ux * t - px, cy = sy + uy * t - py;
+                        return cx * cx + cy * cy;
+                    };
+                    best2 = std::min(
+                        std::min(p2s2(B0x, B0y, A0x, A0y, A1x, A1y),
+                                 p2s2(B1x, B1y, A0x, A0y, A1x, A1y)),
+                        std::min(p2s2(A0x, A0y, B0x, B0y, B1x, B1y),
+                                 p2s2(A1x, A1y, B0x, B0y, B1x, B1y)));
+                }
+                if (best2 >= (2.0 * kHalfW) * (2.0 * kHalfW)) continue;
+            }
             Real rvx = b.heading.x * b.speed - a.heading.x * a.speed;
             Real rvy = b.heading.y * b.speed - a.heading.y * a.speed;
             if (rvx * dx + rvy * dy >= 0) continue;   // separating: let them part
