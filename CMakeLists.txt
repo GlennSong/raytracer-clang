@@ -90,6 +90,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/buildability.cpp
+    src/engine/procgen/city/corridor_bake.cpp
     src/engine/procgen/city/road_spec.cpp
     src/engine/procgen/city/road_net.cpp
     src/engine/procgen/city/road_constraints.cpp
@@ -436,6 +437,7 @@ add_executable(run_tests
     tests/test_road_lattice.cpp
     tests/test_road_join.cpp
     tests/test_road_spec.cpp
+    tests/test_freeway_graph.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp

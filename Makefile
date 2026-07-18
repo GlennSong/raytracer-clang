@@ -72,6 +72,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/corridor_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/triangulate.cpp \
+	$(SRC_DIR)/engine/procgen/city/corridor_bake.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
@@ -251,6 +252,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/corridor_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/triangulate.cpp \
+	$(SRC_DIR)/engine/procgen/city/corridor_bake.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
