@@ -342,7 +342,14 @@ RenderMesh latticeChainPiers(const UnionSpine& spine,
         const double clr = dy[i] - g;
         const double seg = i == 0 ? 0.0 : (cl[i] - cl[i - 1]).length();
         since += seg;
-        if (clr > 2.0 && since >= 24.0) {
+        // A bent under a sub-3.2 m deck is wrong twice: visually (that low,
+        // real ramps ride an earth embankment — R6 side-grammar work, not
+        // struts) and practically (its beam lands in the junction area's
+        // clutter — the zoo's landing rims). Structure starts with headroom.
+        if (clr > 3.2 && since >= 24.0) {
+            if (std::getenv("RT_BAND_DEBUG"))
+                std::fprintf(stderr, "[bent] at (%.1f, %.1f) dy=%.2f clr=%.2f\n",
+                             cl[i].x, cl[i].y, dy[i], clr);
             if (keepOut && (keepOut(clL[i]) || keepOut(clR[i])))
                 continue;   // a LEG would stand in a road below: slide on
             at.push_back(static_cast<int>(i));
@@ -392,12 +399,22 @@ RenderMesh latticeChainPiers(const UnionSpine& spine,
             const Vec3 up(0, 1, 0);
             MeshBuilder::emitQuad(mesh, V(c0, beamBot), V(c1, beamBot),
                                   V(c2, beamBot), V(c3, beamBot), up * -1.0, pc);
+            MeshBuilder::emitQuad(mesh, V(c0, beamTop), V(c1, beamTop),
+                                  V(c2, beamTop), V(c3, beamTop), up, pc);
             MeshBuilder::emitQuad(mesh, V(c0, beamBot), V(c0, beamTop),
                                   V(c1, beamTop), V(c1, beamBot),
                                   Vec3(n2.x, 0, n2.y), pc);
             MeshBuilder::emitQuad(mesh, V(c2, beamBot), V(c2, beamTop),
                                   V(c3, beamTop), V(c3, beamBot),
                                   Vec3(-n2.x, 0, -n2.y), pc);
+            // END faces: the beam is a CLOSED box — open ends leaked
+            // full-height rims at every bent (the zoo's landing census).
+            MeshBuilder::emitQuad(mesh, V(c3, beamBot), V(c3, beamTop),
+                                  V(c0, beamTop), V(c0, beamBot),
+                                  Vec3(-axis.x, 0, -axis.y), pc);
+            MeshBuilder::emitQuad(mesh, V(c1, beamBot), V(c1, beamTop),
+                                  V(c2, beamTop), V(c2, beamBot),
+                                  Vec3(axis.x, 0, axis.y), pc);
         }
         if (pierBasesOut)
             for (int i : at) {
@@ -1011,12 +1028,57 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             }
             return false;
         };
+        // Which segments emit: needed ahead of time so a gap's CUT ENDS can
+        // be CAPPED — an uncapped cut leaves the band's hollow cross-section
+        // open at every ramp mouth (drive feedback A2: "the ribbon sometimes
+        // doesn't have a side to give it an enclosed shape appearance").
+        std::vector<char> emitSeg(m, 0);
+        for (int i = 0; i < m; ++i) {
+            const int j = (i + 1) % m;
+            emitSeg[i] = (loop[j] - loop[i]).length() >= 1e-9 &&
+                         !inMouthGap((loop[i] + loop[j]) * 0.5);
+        }
+        auto capAt = [&](int v, const Vec2& outerPt, const Vec2& along) {
+            const Vec3 iB = P3(loop[v], 0), iT = P3(loop[v], curbHeight);
+            const Vec3 oT = P3(outerPt, curbHeight), oB = P3(outerPt, -drop);
+            MeshBuilder::emitQuad(mesh, iB, iT, oT, oB,
+                                  Vec3(along.x, 0, along.y), curbColor);
+            // A beveled corner has TWO outer points; the neighbour's face may
+            // end at the other one — wall the bevel span too or its rim stays
+            // open (the last landing census hit).
+            if (oc[v].bevel &&
+                (oc[v].prevPt - oc[v].nextPt).lengthSquared() > 1e-12) {
+                const Vec3 pT = P3(oc[v].prevPt, curbHeight);
+                const Vec3 pB = P3(oc[v].prevPt, -drop);
+                const Vec3 nT = P3(oc[v].nextPt, curbHeight);
+                const Vec3 nB = P3(oc[v].nextPt, -drop);
+                MeshBuilder::emitQuad(mesh, pT, nT, nB, pB,
+                                      Vec3(along.x, 0, along.y), curbColor);
+            }
+        };
         for (int i = 0; i < m; ++i) {
             const int j = (i + 1) % m;
             const Vec2& a = loop[i];
             const Vec2& b = loop[j];
-            if ((b - a).length() < 1e-9) continue;
-            if (inMouthGap((a + b) * 0.5)) continue;   // never curb a ramp shut
+            if (!emitSeg[i]) {
+                // Gap segment: cap the neighbours' cut faces once per edge.
+                const int prev = (i + m - 1) % m;
+                // Cap tangents come from the EMITTED neighbour, never the
+                // gap segment itself — a DEGENERATE (sub-mm) gap segment has
+                // no direction, and deriving from it silently skipped the cap
+                // (the last open rim at the landing).
+                if (emitSeg[prev]) {   // band ends here: cap faces the gap
+                    Vec2 t = loop[i] - loop[prev];
+                    const double tl = t.length();
+                    if (tl > 1e-9) capAt(i, oc[i].prevPt, t * (1.0 / tl));
+                }
+                if (emitSeg[j]) {      // band resumes at j: cap faces back
+                    Vec2 t = loop[j] - loop[(j + 1) % m];
+                    const double tl = t.length();
+                    if (tl > 1e-9) capAt(j, oc[j].nextPt, t * (1.0 / tl));
+                }
+                continue;
+            }
             const Vec2 ao = oc[i].nextPt, bo = oc[j].prevPt;
             const Vec2 rn = rnorm(b - a);
             const Vec3 eo3(rn.x, 0, rn.y);   // outward, per edge

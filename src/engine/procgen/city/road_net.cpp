@@ -789,7 +789,33 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                 : std::max(1, static_cast<int>(std::lround((s.halfWidth - 1.0) / 3.6)));
             MeshBuilder::append(out, sweepRoadLattice(t, freewayDeckProfile(lanes),
                                                       ground, 2.0, nullptr, &ring0, &ringN));
-            MeshBuilder::append(out, sweepRoadLattice(t, freewayUndersideProfile(0.5), ground, 2.0));
+            // STRUCTURE exists only where the deck FLIES (the old corridor's
+            // 35 cm rule, as gap data): at-grade stretches get no underside
+            // (buried soffit + an open fascia ring at the street were the
+            // zoo's landing rims) and no PARAPET either — an at-grade ramp
+            // edge wants a guardrail (R6 side grammar), not 0.85 m of
+            // concrete running into the junction.
+            std::vector<GapWindow> ground0;
+            {
+                double acc2 = 0, runStart = -1;
+                const bool hasY2 = t.yAbs.size() == t.points.size();
+                for (std::size_t i = 0; i < t.points.size(); ++i) {
+                    if (i > 0) acc2 += (t.points[i] - t.points[i - 1]).length();
+                    const double clr2 = hasY2
+                        ? t.yAbs[i] - ground(t.points[i].x, t.points[i].y)
+                        : 0.0;
+                    if (clr2 < 0.35) {
+                        if (runStart < 0) runStart = std::max(0.0, acc2 - 1.0);
+                    } else if (runStart >= 0) {
+                        ground0.push_back({ runStart, acc2 });
+                        runStart = -1;
+                    }
+                }
+                if (runStart >= 0) ground0.push_back({ runStart, acc2 + 1.0 });
+                MeshBuilder::append(out, sweepRoadLattice(
+                    t, freewayUndersideProfile(0.5), ground, 2.0,
+                    ground0.empty() ? nullptr : &ground0));
+            }
             // Parapet WEDGE GAPS (R2): where this chain is the DOMINANT of
             // an acute pair, its wedge-side parapet opens over the whole
             // merge window (gore trim -> subordinate mouth), not just the
@@ -812,6 +838,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                 // b-end flips.
                 const double sweepSide = atA ? w.side : -w.side;
                 (sweepSide > 0 ? gapsL : gapsR).push_back(g);
+            }
+            for (const GapWindow& g : ground0) {   // no parapets at grade
+                gapsL.push_back(g);
+                gapsR.push_back(g);
             }
             MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(+1), ground, 2.0,
                                                       gapsL.empty() ? nullptr : &gapsL));
