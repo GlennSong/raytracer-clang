@@ -338,7 +338,22 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
     RenderMesh out;
     const std::function<double(double, double)> groundFn = ground;   // for strips
     std::vector<std::vector<JunctionArm>> arms(N);
-    for (const UnionSpine& s : weldChainSpines(g)) {
+    // ONE profile source (Glenn: "roads under the terrain... floating ribbons").
+    // The terrain carve grades to weldChainProfiles' reconciled, grade-limited
+    // heights — but the lattice was draping each ring on RAW ground, so wherever
+    // smoothing changed the height the road sat under (or above) the carved
+    // terrain. Ride the SAME profiles the carve uses: mesh and terrain now agree
+    // by construction, exactly like the weld path (plan P3.2).
+    std::vector<UnionSpine> chains = weldChainSpines(g);
+    {
+        std::vector<std::vector<double>> profiles = weldChainProfiles(
+            chains, groundFn, 0.0, WeldSolidParams{}.maxGrade, 3.0 + 4.0);
+        for (std::size_t si = 0; si < chains.size(); ++si)
+            if (chains[si].yAbs.empty() &&
+                profiles[si].size() == chains[si].points.size())
+                chains[si].yAbs = profiles[si];
+    }
+    for (const UnionSpine& s : chains) {
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
         const double rA = (a >= 0 && deg[a] >= 3) ? rad[a] : 0.0;

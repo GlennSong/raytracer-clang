@@ -11,6 +11,7 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/terrain.h"   // applyFlatten (the CARVED ground)
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -177,6 +178,16 @@ TEST_CASE(real_generated_graph_surface_is_clean) {
     RenderMesh m = buildRoadNetLattice(g, net.heightAt, &chainEnds);
     CHECK(!m.vertices.empty());
 
+    // Scan against the CARVED ground — the terrain the viewer actually renders.
+    // The mesh rides weldChainProfiles (smoothed, grade-limited) and the loader
+    // carves terrain to the same profiles via roadNetConformRegions; comparing
+    // against RAW ground scored that agreement as "under terrain" (and, before
+    // the profile ride, scored real burial as clean — blind both ways).
+    const std::vector<TerrainFlatten> carve = roadNetConformRegions(net);
+    const Ground kCarved = [&, carve](Real x, Real z) {
+        return (Real)applyFlatten(carve, x, z, kHills(x, z));
+    };
+
     std::vector<int> deg(g.nodes.size(), 0);
     for (const RoadEdge& e : g.edges) { ++deg[e.a]; ++deg[e.b]; }
     std::vector<Vec2> junctions;
@@ -184,7 +195,7 @@ TEST_CASE(real_generated_graph_surface_is_clean) {
         if (deg[v] >= 3) junctions.push_back(g.nodes[v].pos);
 
     const int degen = degenerateFaces(m);
-    const SurfaceScan s = scanSurface(m, net.heightAt, junctions);
+    const SurfaceScan s = scanSurface(m, kCarved, junctions);
     std::printf("[real-graph] nodes=%zu edges=%zu tris=%zu | degenerate=%d "
                 "sampled=%d overlap=%d (%d near junctions, %d mid-chain) under=%d (worst %.2fm)\n",
                 g.nodes.size(), g.edges.size(), m.indices.size() / 3, degen,
