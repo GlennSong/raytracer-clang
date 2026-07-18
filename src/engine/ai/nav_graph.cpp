@@ -212,6 +212,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         // dividers and junction dashes. Every link is one carriageway-direction,
         // so the per-direction count is what a car follows.
         l.lanes = std::max(1, lanesForClass(e.klass, /*perDirection=*/true));
+        l.walkable = e.walkable;
         l.layer = e.layer;
         l.elevA = elev[a];
         l.elevB = elev[b];

@@ -462,7 +462,8 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
     for (int k = 0; k < n; ++k) {
         int goal = (start + k) % n;
         if (goal == from) continue;
-        engine::Route r = engine::findRoute(*nav_, from, goal);
+        engine::Route r = engine::findRoute(*nav_, from, goal,
+                                            a.mode == Agent::Mode::Pedestrian);
         if (!r.valid()) continue;
         if (reversesArrival(r)) { if (fallback < 0) fallback = goal; continue; }
         startTrip(a, from, goal, fromRest);
@@ -1173,7 +1174,8 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                         const int goal = a.route.links.back();
                         engine::Route r2 = engine::findRoute(
                             *nav_, nav_->links[cont].to,
-                            nav_->links[goal].to);
+                            nav_->links[goal].to,
+                            a.mode == Agent::Mode::Pedestrian);
                         if (r2.valid()) {
                             r2.links.insert(r2.links.begin(), cont);
                             a.route = r2;

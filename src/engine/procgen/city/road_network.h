@@ -50,6 +50,11 @@ struct RoadEdge {
     // from width/oneWay). Carried through netGraph so the mesher/bake read the
     // band model off the graph edge directly.
     int spec = -1;
+    // Roads-v2 S8: may pedestrians travel along this edge? Baked from the
+    // edge's RoadSpec band list (any Sidewalk band => true) where a spec is
+    // known; edges without specs keep the permissive default and rely on the
+    // class rule (pathfind's onFoot skip of Freeway/Ramp) as the backstop.
+    bool walkable = true;
 };
 
 struct RoadGraph {

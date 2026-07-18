@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/ai/pathfind.h"
+#include "../src/engine/procgen/city/road_net.h"   // S8: band-model walk tests
 
 using namespace engine;
 
@@ -73,4 +74,73 @@ TEST_CASE(pathfind_class_speed_ordering) {
     // Faster classes must report higher free-speeds (the routing cost basis).
     CHECK(classSpeed(RoadClass::Freeway) > classSpeed(RoadClass::Arterial));
     CHECK(classSpeed(RoadClass::Arterial) > classSpeed(RoadClass::Local));
+}
+
+TEST_CASE(pathfind_walkers_need_sidewalk_bands) {
+    // Roads-v2 S8: walk permission comes from the BAND MODEL, not just class.
+    // Two routes from node 0 to node 1: a direct street whose spec has NO
+    // sidewalk bands (a country road through the block), and a longer L-shaped
+    // pair of ordinary streets with sidewalks. Cars take the short cut; a
+    // pedestrian must go around.
+    engine::RoadNet net;
+    net.nodes = { engine::Vec2(0, 0), engine::Vec2(100, 0), engine::Vec2(0, 90),
+                  engine::Vec2(100, 90) };
+    net.edges = { { 0, 1 },            // direct: dirt (no sidewalk band)
+                  { 0, 2 }, { 2, 3 }, { 3, 1 } };   // around: local streets
+    net.width = 7.0;
+    net.specs = { engine::roadSpecPreset("dirt"),
+                  engine::roadSpecPreset("local") };
+    net.edgeSpecs = { 0, 1, 1, 1 };
+    NavGraph nav = buildNavGraph(engine::navRoadGraph(net));
+
+    const int s = nav.nearestNode(engine::Vec2(0, 0));
+    const int g = nav.nearestNode(engine::Vec2(100, 0));
+    Route car = findRoute(nav, s, g, /*onFoot=*/false);
+    Route ped = findRoute(nav, s, g, /*onFoot=*/true);
+    CHECK(car.valid());
+    CHECK(ped.valid());
+    CHECK(car.length(nav) < 120.0);        // driver takes the direct road
+    CHECK(ped.length(nav) > 200.0);        // walker goes around the block
+    for (int li : ped.links) CHECK(nav.links[li].walkable);
+}
+
+TEST_CASE(pathfind_walkers_never_route_the_authored_freeway) {
+    // An AUTHORED freeway-class net (weld_freeway_lab-style: edge_classes +
+    // freeway3 spec, NOT baked) reaches navRoadGraph directly — a BAKED
+    // corridor never does (roadNetStreetsOnly strips it; its nav comes from
+    // the corridor fragments, where pathfind's class backstop rules). Assert
+    // the DATA level here: the freeway3 spec has no Sidewalk band, so the
+    // edge is unwalkable BEFORE the class rule even looks, and an on-foot
+    // route between its endpoints goes around on the streets.
+    engine::RoadNet net;
+    net.nodes = { engine::Vec2(0, 0), engine::Vec2(200, 0), engine::Vec2(0, 80),
+                  engine::Vec2(200, 80) };
+    net.edges = { { 0, 1 },            // direct: freeway carriageway
+                  { 0, 2 }, { 2, 3 }, { 3, 1 } };   // around: local streets
+    net.width = 8.0;
+    net.edgeClasses = { engine::RoadClass::Freeway, engine::RoadClass::Local,
+                        engine::RoadClass::Local, engine::RoadClass::Local };
+    net.specs = { engine::roadSpecPreset("freeway3"),
+                  engine::roadSpecPreset("local") };
+    net.edgeSpecs = { 0, 1, 1, 1 };
+
+    engine::RoadGraph rg = engine::navRoadGraph(net);
+    bool sawFreewayUnwalkable = false;
+    for (const engine::RoadEdge& re : rg.edges)
+        if (re.klass == engine::RoadClass::Freeway) {
+            CHECK(!re.walkable);       // the band model shut it, not the class
+            sawFreewayUnwalkable = true;
+        }
+    CHECK(sawFreewayUnwalkable);
+
+    NavGraph nav = buildNavGraph(rg);
+    const int s = nav.nearestNode(engine::Vec2(0, 0));
+    const int g = nav.nearestNode(engine::Vec2(200, 0));
+    Route ped = findRoute(nav, s, g, /*onFoot=*/true);
+    CHECK(ped.valid());
+    for (int li : ped.links) {
+        CHECK(nav.links[li].walkable);
+        CHECK(nav.links[li].klass != engine::RoadClass::Freeway);
+    }
+    CHECK(ped.length(nav) > 350.0);    // around the block, not down the deck
 }

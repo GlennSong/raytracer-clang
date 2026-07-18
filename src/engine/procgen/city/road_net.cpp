@@ -70,6 +70,15 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     auto espec = [&](int ei) {
         return (ei < static_cast<int>(net.edgeSpecs.size())) ? net.edgeSpecs[ei] : -1;
     };
+    // S8 walk permission from the BAND MODEL: an edge is walkable iff its
+    // resolved spec carries a Sidewalk band on either side. The legacy shim
+    // synthesizes sidewalks from net.sidewalk for ordinary streets, so nets
+    // without specs keep pedestrians; freeway3/ramp1/dirt presets have no
+    // Sidewalk band and correctly shut walkers out at the DATA level.
+    auto ewalk = [&](int ei) {
+        const RoadSpec sp = roadNetEdgeSpec(net, ei);
+        return sp.hasSidewalk(-1) || sp.hasSidewalk(1);
+    };
     auto eclass = [&](int ei) {
         return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
                                                                : RoadClass::Local;
@@ -181,11 +190,13 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             g.nodes.push_back(nd);
             RoadEdge ge{prev, idx, w, kls, lay};
             ge.spec = espec(ei);                 // roads-v2: band model rides the graph
+            ge.walkable = ewalk(ei);
             g.edges.push_back(ge);
             prev = idx;
         }
         RoadEdge geLast{prev, b, w, kls, lay};
         geLast.spec = espec(ei);
+        geLast.walkable = ewalk(ei);
         g.edges.push_back(geLast);               // last -> shared node b
     }
     return g;

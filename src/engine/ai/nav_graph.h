@@ -34,6 +34,10 @@ struct NavLink {
     // One-way link (freeway carriageway / ramp): its LANES span the full
     // link width centred on the chain, not the right half of a two-way road.
     bool oneWay = false;
+    // S8: pedestrians may travel this link (baked from the road spec's
+    // Sidewalk bands; see RoadEdge.walkable). Routing (onFoot) and the sim's
+    // walkers both honour it.
+    bool walkable = true;
 };
 
 struct NavGraph {

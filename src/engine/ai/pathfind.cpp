@@ -71,7 +71,8 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
         for (int li : graph.outLinks[u]) {
             const NavLink& link = graph.links[li];
             if (onFoot && (link.klass == RoadClass::Freeway ||
-                       link.klass == RoadClass::Ramp)) continue;
+                       link.klass == RoadClass::Ramp || !link.walkable))
+                continue;
             Real step = link.length / classSpeed(link.klass);
             Real tentative = g[u] + step;
             if (tentative + 1e-12 < g[link.to]) {
