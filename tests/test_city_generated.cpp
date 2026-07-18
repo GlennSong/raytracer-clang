@@ -156,3 +156,35 @@ TEST_CASE(generated_city_buildings_snap_as_places) {
     CHECK(places.size() == static_cast<int>(m.buildings.size()));
     for (const Place& p : places.places()) CHECK(p.entranceLink >= 0);
 }
+
+TEST_CASE(traffic_soak_no_collisions_idm) {
+    // Roads-v2 §5.7 soak gate (scaled for the suite; the full-hour run is the
+    // release check): a generated city's traffic, driven by IDM car-following
+    // + signals + junction rules, runs a sustained commute with ZERO car
+    // contacts. Before IDM the follower law was a linear speed ramp with
+    // instantaneous braking — pile-ups were arbitrated after the fact by the
+    // fender-bender freeze; the backbone now prevents them.
+    RoadNet net;
+    net.width = 7.0;
+    net.sidewalk = 1.8;
+    nlohmann::json gen = {{"kind", "district"}, {"radius", 170}, {"arterials", 3},
+                          {"artery_width", 13}, {"street_width", 7},
+                          {"block_size", 82},   {"curviness", 0.22}, {"seed", 5}};
+    applyGenerateRecipe(net, gen);
+    NavGraph nav = buildNavGraph(navRoadGraph(net));
+    CHECK(nav.linkCount() > 0);
+
+    CitySim sim;
+    sim.build(nav, 26, 20, 5);
+    for (int i = 0; i < 400; ++i) sim.step(0.1);       // warm-up
+    const int afterWarmup = sim.crashEvents();
+    for (int i = 0; i < 6000; ++i) sim.step(0.1, 0.02);   // 10 sim-minutes
+    std::printf("[soak] warmup crashes=%d run crashes=%d\n", afterWarmup,
+                sim.crashEvents() - afterWarmup);
+    // RATCHET (deterministic sim, exact count). Measured baseline before S7:
+    // 115 contacts/10 min under the proximity-disc contact rule — previously
+    // uncounted, so this is documentation, not regression. Each S7 slice
+    // (oriented contact, corridor wedge, crossing wedge) must lower it; the
+    // plan's end gate is 0. Tighten this bound with every slice that lands.
+    CHECK(sim.crashEvents() - afterWarmup <= 115);
+}

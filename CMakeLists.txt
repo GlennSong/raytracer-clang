@@ -438,6 +438,7 @@ add_executable(run_tests
     tests/test_road_join.cpp
     tests/test_road_spec.cpp
     tests/test_freeway_graph.cpp
+    tests/test_idm.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp

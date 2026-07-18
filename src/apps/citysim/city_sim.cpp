@@ -1,9 +1,12 @@
 #include "city_sim.h"
 
 #include "traffic_rules.h"   // approachStop
+#include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>    // RT_CRASH_DEBUG contact telemetry
+#include <cstdlib>
 #include <limits>
 #include <unordered_map>
 
@@ -1041,9 +1044,32 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // minGap is length-aware (computeGaps → pairMinGap): sedan traffic reproduces
     // the old 5.0 m, and a longer body keeps a bigger bumper gap so nothing packs
     // tighter than before. Peds fall back to the fixed footprint gap.
-    Real slowZone = car ? kCarSlowZone : kPedSlowZone;
-    target = followCap(target, gap, minGap, slowZone);
-    a.speed = std::min(target, a.speed + accel * dt);
+    if (car) {
+        // IDM car-following (roads-v2 plan Â§3.1): one smooth law for free
+        // acceleration toward the (signal/junction/perception-capped) target
+        // and braking for the leader â the anti-pile-up backbone, replacing
+        // the linear followCap ramp + instantaneous down-jump. The net gap is
+        // bumper-to-bumper: centre gap minus the bodies (minGap carries them
+        // plus kCarBumperGap, which doubles as IDM's jam gap s0).
+        const int myIdx = static_cast<int>(&a - agents_.data());
+        engine::IdmParams idm;
+        idm.accelMax = accel;
+        idm.decelComf = kCarDecel;
+        idm.minGap = kCarBumperGap;
+        const Real netGap = gap < 1e8
+            ? std::max(Real(0.05), gap - (minGap - kCarBumperGap))
+            : std::numeric_limits<Real>::infinity();
+        const Real dv = gap < 1e8 ? a.speed - leaderSpeeds_[myIdx] : 0.0;
+        a.speed = engine::idmStep(a.speed, std::max(Real(0.1), target), netGap,
+                                  dv, dt, kCarDecel * 2.0, idm);
+        // The capped target is still a hard ceiling (signals/junction rules
+        // must bind immediately, not on the IDM relaxation curve).
+        a.speed = std::min(a.speed, std::max(Real(0), target));
+    } else {
+        Real slowZone = kPedSlowZone;
+        target = followCap(target, gap, minGap, slowZone);
+        a.speed = std::min(target, a.speed + accel * dt);
+    }
 
     // Gridlock clock + escape. A jam's terminal form is a RING: cars pinned
     // nose-to-nose across adjacent junctions by the follow gap (each behind the
@@ -1315,6 +1341,7 @@ void CitySim::computeGaps() {
     const Real INF = std::numeric_limits<Real>::infinity();
     gaps_.assign(agents_.size(), INF);
     minGaps_.assign(agents_.size(), kCarMinGap);   // overwritten where a leader exists
+    leaderSpeeds_.assign(agents_.size(), 0.0);     // valid only where gaps_ < INF
     auto laneKeyOf = [this](const Agent& a, int li) {
         // Clamp per link so a car keyed onto a narrower continuation matches the
         // followers/leaders actually driving that link's lanes.
@@ -1343,6 +1370,7 @@ void CitySim::computeGaps() {
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
             gaps_[v[k].second] = v[k + 1].first - v[k].first;
             minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
+            leaderSpeeds_[v[k].second] = agents_[v[k + 1].second].speed;
         }
     }
     // Car-following ACROSS a node: the front car on a link (no leader ahead on its
@@ -1363,6 +1391,7 @@ void CitySim::computeGaps() {
             if (it != minEntry.end()) {
                 gaps_[i] = ahead + it->second.first;
                 minGaps_[i] = pairMinGap(i, it->second.second);
+                leaderSpeeds_[i] = agents_[it->second.second].speed;
                 break;
             }
             ahead += nav_->links[nextLi].length;       // no car on this link; look one further
@@ -1518,11 +1547,27 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             }
             // NOTE: do not zero speed here — this tick's motion (and steering)
             // already used it honestly; the hold branch freezes them next tick.
-            auto crash = [](Agent& c) {
+            if (std::getenv("RT_CRASH_DEBUG")) {
+                const Real hdot = a.heading.x * b.heading.x + a.heading.y * b.heading.y;
+                const Real along = a.heading.x * dx + a.heading.y * dy;
+                const Real across = -a.heading.y * dx + a.heading.x * dy;
+                const int la = a.leg < (int)a.route.links.size() ? a.route.links[a.leg] : -1;
+                const int lb = b.leg < (int)b.route.links.size() ? b.route.links[b.leg] : -1;
+                std::printf("[crash] t=%.1f pos(%.1f,%.1f) va=%.1f vb=%.1f hdot=%+.2f "
+                            "along=%+.1f across=%+.1f la=%d(%.0f/%.0f) lb=%d(%.0f/%.0f) "
+                            "cca=%d ccb=%d\n",
+                            simSeconds_, a.pos.x, a.pos.y, a.speed, b.speed, hdot,
+                            along, across,
+                            la, a.distOnLeg, la >= 0 ? nav_->links[la].length : 0.0,
+                            lb, b.distOnLeg, lb >= 0 ? nav_->links[lb].length : 0.0,
+                            a.crashCount, b.crashCount);
+            }
+            auto crash = [this](Agent& c) {
                 if (c.crashTimer <= 0) {
                     c.crashTimer = crashHoldSeconds(c.brain);
                     if (c.crashCount == 0) c.crashAnchor = c.pos;
                     ++c.crashCount;
+                    ++crashEvents_;   // soak gate: total contacts over a run
                 }
                 c.state = Agent::State::Waiting;
             };

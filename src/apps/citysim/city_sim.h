@@ -366,6 +366,13 @@ private:
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
+
+public:
+    // Total car-contact events since build — the roads-v2 S7 soak gate reads
+    // this and ratchets it down slice by slice toward the plan's zero.
+    int crashEvents() const { return crashEvents_; }
+
+private:
     // Per-node junction box radius: the widest incident half-width. Nonzero at
     // PLAIN nodes too (their road's half-width) — launchClear reads it at
     // arbitrary departure nodes; 0 only where a node has no out-links.
@@ -384,6 +391,8 @@ private:
     std::vector<SimVehicle> vehicles_;
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
+    std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)
+    int crashEvents_ = 0;              // total fender-bender contacts (soak gate)
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
