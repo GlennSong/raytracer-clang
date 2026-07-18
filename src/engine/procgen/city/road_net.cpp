@@ -1,6 +1,7 @@
 #include "road_net.h"
 #include "../../../log.h"
-#include "road_lattice.h"        // swept-lattice street mesher (stage 3)
+#include "road_lattice.h"
+#include "road_offset.h"   // ribbonOutline + polygonUnion (S5 curb/sidewalk band)        // swept-lattice street mesher (stage 3)
 #include "../../mesh_builder.h"  // MeshBuilder::append
 
 #include "road_network.h"       // RoadGraph, RoadEdge
@@ -333,6 +334,82 @@ UnionSpine trimSpine(const UnionSpine& s, double rA, double rB) {
 }
 }  // namespace
 
+namespace {
+// Nearest-asphalt-edge height sampler for the S5 curb/sidewalk band: segments
+// (chain centrelines with their reconciled profile heights + pad boundary
+// loops) in a coarse grid hash; sample = height at the nearest point on the
+// nearest segment. The band hugs the asphalt within ~7 m, so a small search
+// window finds its segment; brute force is the (rare) fallback.
+struct EdgeHeightField {
+    struct Seg { Vec2 a, b; double ya, yb; };
+    std::vector<Seg> segs;
+    std::unordered_map<long long, std::vector<int>> cells;
+    static constexpr double kCell = 12.0;
+    static long long key(int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^
+               (static_cast<long long>(cz) & 0xffffffffLL);
+    }
+    void addPolyline(const std::vector<Vec2>& pts, const std::vector<double>& ys) {
+        for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+            const int si = static_cast<int>(segs.size());
+            segs.push_back({ pts[i], pts[i + 1], ys[i], ys[i + 1] });
+            const double x0 = std::min(pts[i].x, pts[i + 1].x) - 1.0;
+            const double x1 = std::max(pts[i].x, pts[i + 1].x) + 1.0;
+            const double z0 = std::min(pts[i].y, pts[i + 1].y) - 1.0;
+            const double z1 = std::max(pts[i].y, pts[i + 1].y) + 1.0;
+            for (int cx = (int)std::floor(x0 / kCell); cx <= (int)std::floor(x1 / kCell); ++cx)
+                for (int cz = (int)std::floor(z0 / kCell); cz <= (int)std::floor(z1 / kCell); ++cz)
+                    cells[key(cx, cz)].push_back(si);
+        }
+    }
+    void addLoop(const std::vector<Vec3>& loop) {
+        if (loop.size() < 2) return;
+        std::vector<Vec2> pts;
+        std::vector<double> ys;
+        for (const Vec3& p : loop) { pts.push_back(Vec2(p.x, p.z)); ys.push_back(p.y); }
+        pts.push_back(Vec2(loop.front().x, loop.front().z));
+        ys.push_back(loop.front().y);
+        addPolyline(pts, ys);
+    }
+    double sample(double x, double z) const {
+        // Inverse-distance BLEND over the nearby segments, not nearest-only:
+        // at a junction corner the nearest chain flips between arms meeting at
+        // different heights, and a nearest-snap put that height CLIFF straight
+        // into the band (steep slab quads on hills). Blending keeps the band
+        // flush where it hugs one edge (that weight dominates) and smooth
+        // where two arms compete.
+        const int cx = (int)std::floor(x / kCell), cz = (int)std::floor(z / kCell);
+        std::vector<int> cand;                   // small: the 3x3 window's lists
+        for (int r = 1; r <= 3 && cand.empty(); ++r)
+            for (int dx = -r; dx <= r; ++dx)
+                for (int dz = -r; dz <= r; ++dz) {
+                    auto it = cells.find(key(cx + dx, cz + dz));
+                    if (it != cells.end())
+                        cand.insert(cand.end(), it->second.begin(), it->second.end());
+                }
+        if (cand.empty()) {                      // fallback: brute force
+            cand.resize(segs.size());
+            for (std::size_t i = 0; i < segs.size(); ++i) cand[i] = (int)i;
+        }
+        std::sort(cand.begin(), cand.end());
+        cand.erase(std::unique(cand.begin(), cand.end()), cand.end());
+        double wsum = 0.0, hsum = 0.0;
+        for (int si : cand) {
+            const Seg& sg = segs[si];
+            const Vec2 ab = sg.b - sg.a;
+            const double l2 = ab.lengthSquared();
+            double t = l2 > 1e-12 ? dot(Vec2(x, z) - sg.a, ab) / l2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const double d = (sg.a + ab * t - Vec2(x, z)).length();
+            const double w = 1.0 / (d * d + 0.5);
+            wsum += w;
+            hsum += w * (sg.ya + (sg.yb - sg.ya) * t);
+        }
+        return wsum > 0 ? hsum / wsum : 0.0;
+    }
+};
+}  // namespace
+
 RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                const std::function<Real(Real, Real)>& heightAt,
                                std::vector<std::size_t>* chainTriEndsOut) {
@@ -417,6 +494,11 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
             len += (s.points[i] - s.points[i - 1]).length();
         if (len <= rad[a] + rad[b] + 0.25) uf[find(a)] = find(b);
     }
+    // S5: the curb/sidewalk band is swept along the union outline of these
+    // footprints (body ribbons + pad boundaries), with heights sampled from
+    // this field — asphalt and band meet flush by construction.
+    EdgeHeightField bandHeights;
+    std::vector<Poly2> bandRibbons;
     for (const UnionSpine& s : chains) {
         if (s.points.size() < 2) continue;
         const int a = nodeAt(s.points.front()), b = nodeAt(s.points.back());
@@ -428,10 +510,24 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (t.points.size() < 2) continue;
 
         const int lanesPerSide = std::max(1, static_cast<int>(std::lround(s.halfWidth / 3.6)));
-        const int cw = 2 * lanesPerSide + 1;
         std::vector<Vec3> ring0, ringN;
-        MeshBuilder::append(out, sweepRoadLattice(t, streetProfile(lanesPerSide, 3.0, 0.15),
+        // S5 OWNERSHIP: bodies sweep the CARRIAGEWAY only. The curb + sidewalk
+        // band below owns everything outside the asphalt — a body can no
+        // longer sweep a raised sidewalk into a pad or a neighbouring road.
+        MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
                                                   ground, 2.0, nullptr, &ring0, &ringN));
+        {   // footprint + edge heights for the band union
+            std::vector<double> ys(t.points.size(), 0.0);
+            if (t.yAbs.size() == t.points.size()) ys = t.yAbs;
+            else for (std::size_t i = 0; i < t.points.size(); ++i)
+                ys[i] = ground(t.points[i].x, t.points[i].y);
+            bandHeights.addPolyline(t.points, ys);
+            Poly2 rib = ribbonOutline(t.points, t.halfWidth + 0.02, 2.0);
+            if (rib.size() >= 3) {
+                if (signedArea(rib) < 0) std::reverse(rib.begin(), rib.end());
+                bandRibbons.push_back(std::move(rib));
+            }
+        }
         // The mouth is the FULL profile ring (sidewalk|curb|lanes|curb|sidewalk),
         // reversed to run left -> right looking OUTWARD. Slicing only the
         // carriageway here was the boundary bug: each arm swept its raised
@@ -439,29 +535,23 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         // double-covered at every corner. The pad now spans verge to verge and
         // its corner points sit at the sidewalk outer edge, where the kerb
         // returns will fillet (stage 2).
-        // The pad is ASPHALT: slice the CARRIAGEWAY columns out of the full
-        // profile ring (drop sidewalk+curb, 2 columns each side). Curb loops and
-        // sidewalk bands own the rest (roads-v2 Part 2, stages 5-6). The mouth
-        // contract is left->right looking OUTWARD along the arm — and "outward"
-        // FLIPS between the chain's two ends: at ring0 outward is +sweep (the
-        // ring needs reversing), at ringN outward is -sweep (it does not). S1
-        // reversed BOTH, so every chain-END arm crossed its mouth backwards and
-        // the boundary loop bowtied there (found by the compound-pad area
-        // check: signed loop area 149 vs 213 actually filled).
+        // The body ring IS the carriageway (S5 ownership), so the mouth is the
+        // whole ring. The contract is left->right looking OUTWARD along the
+        // arm — and "outward" FLIPS between the chain's two ends: at ring0
+        // outward is +sweep (the ring needs reversing), at ringN outward is
+        // -sweep (it does not). S1 reversed BOTH, so every chain-END arm
+        // crossed its mouth backwards and the boundary loop bowtied there
+        // (found by the compound-pad area check: 149 vs 213 filled).
         auto mouth = [&](const std::vector<Vec3>& ring, bool flip) {
-            std::vector<Vec3> m = flip ? std::vector<Vec3>(ring.rbegin(), ring.rend())
-                                       : ring;
-            if (static_cast<int>(m.size()) >= cw + 4)
-                return std::vector<Vec3>(m.begin() + 2, m.begin() + 2 + cw);
-            return m;
+            return flip ? std::vector<Vec3>(ring.rbegin(), ring.rend()) : ring;
         };
         if (chainTriEndsOut) chainTriEndsOut->push_back(out.indices.size());
         const std::size_t tn = t.points.size();
         // Arms gather on the cluster ROOT: a compound pad (merged too-close
         // junctions) collects the outer arms of ALL its member nodes.
-        if (a >= 0 && deg[a] >= 3 && ring0.size() >= 4)
+        if (a >= 0 && deg[a] >= 3 && ring0.size() >= 2)
             arms[find(a)].push_back({ normalize(t.points[1] - t.points[0]), mouth(ring0, true) });
-        if (b >= 0 && deg[b] >= 3 && ringN.size() >= 4)
+        if (b >= 0 && deg[b] >= 3 && ringN.size() >= 2)
             arms[find(b)].push_back({ normalize(t.points[tn - 2] - t.points[tn - 1]), mouth(ringN, false) });
     }
 
@@ -482,7 +572,52 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
         if (na == 3) ++nT;
         else if (na == 4) ++nCoons;
         else ++nFan;
-        MeshBuilder::append(out, junctionPatch(arms[v]));
+        std::vector<Vec3> padFootprint;
+        MeshBuilder::append(out, junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
+                                               &padFootprint));
+        if (padFootprint.size() >= 3) {
+            bandHeights.addLoop(padFootprint);
+            Poly2 fp;
+            for (const Vec3& p : padFootprint) fp.push_back(Vec2(p.x, p.z));
+            if (signedArea(fp) < 0) std::reverse(fp.begin(), fp.end());
+            bandRibbons.push_back(std::move(fp));
+        }
+    }
+    // S5: sweep the curb + sidewalk band along every union boundary loop
+    // (exterior outlines AND block-interior holes — the band rides each
+    // loop's right normal, outward from the asphalt in both cases).
+    if (!bandRibbons.empty()) {
+        std::vector<Poly2> loops;
+        for (Poly2& L : polygonUnion(bandRibbons)) {
+            // snap-round + de-spike (1 cm) so band quads never fold on a
+            // hairline vertex the union left behind
+            Poly2 c;
+            for (const Vec2& p : L) {
+                const Vec2 q(std::round(p.x * 100.0) / 100.0,
+                             std::round(p.y * 100.0) / 100.0);
+                if (c.empty() || (q - c.back()).length() > 0.005) c.push_back(q);
+            }
+            if (c.size() >= 2 && (c.front() - c.back()).length() <= 0.005) c.pop_back();
+            bool changed = true;
+            while (changed && c.size() > 3) {
+                changed = false;
+                const int nn2 = static_cast<int>(c.size());
+                for (int i = 0; i < nn2; ++i) {
+                    const Vec2 e0 = c[i] - c[(i + nn2 - 1) % nn2];
+                    const Vec2 e1 = c[(i + 1) % nn2] - c[i];
+                    const double l0 = e0.length(), l1 = e1.length();
+                    if (l0 < 1e-9 || l1 < 1e-9 || dot(e0, e1) / (l0 * l1) < -0.985) {
+                        c.erase(c.begin() + i);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (c.size() >= 3) loops.push_back(std::move(c));
+        }
+        MeshBuilder::append(out, sweepCurbSidewalkBand(
+            loops, [&](double x, double z) { return bandHeights.sample(x, z); },
+            3.0, 0.15));
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;

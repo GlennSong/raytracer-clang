@@ -140,19 +140,39 @@ struct JunctionArm {
 };
 
 // The drivable junction pad for a node, from its incident arms (any order —
-// sorted by bearing internally). A 4-arm node gets a Coons grid whose four sides
-// are the arm mouths (corners snapped to the shared kerb points), so the height
-// interpolates and the pad matches every arm exactly. Other degrees get a
-// height-interpolated centroid fan for now (the T / N>=5 quad templates follow).
-// Returns empty for degree <= 2 (the body runs straight through).
-// ONE fill for every degree (roads-v2 plan, Part 2 step 4): sort arms CCW, join
-// their carriageway mouths into a single closed boundary loop (adjacent verges
-// meet at shared corner points), ear-clip the loop (adds no boundary points, so
-// each arm's division count is honored exactly), lift by the boundary heights.
-// Interim state of the real pipeline: corner ARCS and quad PAIRING land next;
-// there are no per-degree templates and no side strips — those are deleted.
+// sorted CCW around the mouth-centre centroid internally, which also covers
+// COMPOUND pads whose arms come from different merged nodes).
+// ONE fill for every degree (roads-v2 plan, Part 2 step 4, S4 complete):
+// kerb-return FILLET arcs between adjacent arms, a ~3 m GRID interior with
+// Laplace-smoothed heights seeded by smooth IDW over the boundary, and an
+// arc-length-synchronized annulus stitch that consumes EVERY boundary vertex
+// (exact K — no T-joints against the bodies' end rings). Tiny or odd pads
+// fall back to a plain boundary ear-clip. Returns empty for degree <= 2.
+// `footprintOut` (optional): the pad's closed boundary loop WITH heights,
+// mouth vertices nudged ~5 cm outward along their arm — the 2D footprint the
+// curb/sidewalk union consumes (the nudge makes pad and body ribbons OVERLAP
+// slightly instead of sharing exactly-collinear edges, polygonUnion's one
+// documented weak case).
 RenderMesh junctionPatch(std::vector<JunctionArm> arms,
-                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11));
+                         float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11),
+                         std::vector<Vec3>* footprintOut = nullptr);
+
+// Carriageway-only street cross-section (roads-v2 S5 OWNERSHIP: asphalt =
+// bodies + pads; curb + sidewalk belong to the closed band below). Columns are
+// the streetProfile asphalt columns (crease normals at the verges), nothing
+// else — a body can no longer sweep a sidewalk into a pad or a neighbour.
+RoadProfile carriagewayProfile(int lanesPerSide);
+
+// The raised curb + sidewalk BAND, swept along each closed boundary loop of
+// the asphalt union (per block, wrapping kerb-return corners and dead-end
+// caps as one piece): road-facing curb lip, concrete slab top stepping out by
+// `sidewalkWidth` (arc-length scored via negative-u UV, the shader's existing
+// sidewalk gate), and an outer face dropping to the ground. `edgeHeight(x,z)`
+// samples the asphalt edge height at the loop (the bodies' own verge rails),
+// so band and asphalt meet flush by construction.
+RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
+                                 const std::function<double(double, double)>& edgeHeight,
+                                 double sidewalkWidth, double curbHeight);
 
 }  // namespace engine
 

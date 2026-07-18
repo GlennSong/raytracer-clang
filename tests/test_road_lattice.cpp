@@ -627,3 +627,72 @@ TEST_CASE(compound_pad_covers_junction_pair_too_close) {
     CHECK(rep.holes == 0);                  // the compound pad closes the gap
     CHECK(rep.steps == 0);
 }
+
+// ---------------------------------------------------------------------------
+// Roads-v2 S5: OWNERSHIP. Asphalt = bodies + pads (carriageway only); curb +
+// sidewalk = a raised band swept along the CLOSED union outline of the whole
+// network (per block). No two components cover the same ground.
+
+TEST_CASE(lattice_streets_grow_owned_sidewalk_bands) {
+    RoadGraph g;
+    auto node = [&](double x, double z) {
+        RoadNode n; n.pos = Vec2(x, z);
+        g.nodes.push_back(n);
+        return static_cast<int>(g.nodes.size() - 1);
+    };
+    const int c = node(0, 0), nn = node(0, 80), ss = node(0, -80),
+              ee = node(80, 0), ww = node(-80, 0);
+    auto edge = [&](int p, int q) {
+        RoadEdge ed; ed.a = p; ed.b = q; ed.width = 8.0;
+        g.edges.push_back(ed);
+    };
+    edge(ww, c); edge(c, ee); edge(ss, c); edge(c, nn);
+    RenderMesh m = buildRoadNetLattice(g, nullptr);
+    CHECK(!m.vertices.empty());
+    CHECK(s4degenerate(m) == 0);
+
+    // The band exists BESIDE the carriageway: over the verge strip (asphalt
+    // edge at |z| = 4, band to |z| ~ 7) the top surface is the raised slab.
+    {
+        std::vector<double> hits = driveprobe::surfacesAt(m, 30.0, 5.5);
+        CHECK(!hits.empty());
+        double top = -1e9;
+        for (double h : hits) top = std::max(top, h);
+        CHECK(top > 0.10);            // raised (curb height), not bare asphalt
+        CHECK(top < 0.40);
+    }
+    // And it WRAPS the junction corner: outside the kerb-return arc.
+    {
+        std::vector<double> hits = driveprobe::surfacesAt(m, 5.8, 5.8);
+        CHECK(!hits.empty());
+        double top = -1e9;
+        for (double h : hits) top = std::max(top, h);
+        CHECK(top > 0.10);
+        CHECK(top < 0.40);
+    }
+    // Ownership: nowhere do two up-facing surfaces stack (sampled off grid
+    // lines; distinct heights only — shared edges are not overlap).
+    int stacked = 0;
+    for (double x = -60; x <= 60; x += 3.1)
+        for (double z = -60; z <= 60; z += 3.1) {
+            std::vector<double> hits = driveprobe::surfacesAt(m, x, z);
+            std::vector<double> near;
+            for (double h : hits) if (h > -2 && h < 3) near.push_back(h);
+            std::sort(near.begin(), near.end());
+            int layers = 0;
+            for (std::size_t k = 0; k < near.size(); ++k)
+                if (k == 0 || near[k] - near[k - 1] > 0.02) ++layers;
+            if (layers > 1) ++stacked;
+        }
+    CHECK(stacked == 0);
+
+    // The carriageway still drives clean through the junction.
+    std::vector<Vec3> path;
+    for (double x = -60; x <= 60; x += 2.0) path.push_back(Vec3(x, 0.5, 0));
+    driveprobe::Report rep;
+    driveprobe::drivePath(m, path, rep);
+    CHECK(rep.samples > 40);
+    CHECK(rep.holes == 0);
+    CHECK(rep.steps == 0);
+    CHECK(rep.blocked == 0);          // the curb lip never juts into the lanes
+}

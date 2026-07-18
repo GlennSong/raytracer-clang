@@ -269,6 +269,21 @@ RoadProfile streetProfile(int lanesPerSide, double sidewalkWidth, double curbHei
     return p;
 }
 
+RoadProfile carriagewayProfile(int lanesPerSide) {
+    RoadProfile p;
+    const Vec3 asphalt(0.10, 0.10, 0.11);
+    const int cw = std::max(3, 2 * std::max(1, lanesPerSide) + 1);
+    for (int j = 0; j < cw; ++j) {
+        const double f = -1.0 + 2.0 * j / (cw - 1);
+        // curb-face crease at the verges: tilt the edge column's normal a little
+        // so the curb band beside it reads as a step rather than flat asphalt.
+        const double nl = (j == 0) ? 0.4 : (j == cw - 1 ? -0.4 : 0.0);
+        p.cols.push_back(pc(f, 0, 0, nl, j == 0 || j == cw - 1 ? 0.9 : 1.0,
+                            static_cast<float>(2.0 + f), asphalt));
+    }
+    return p;
+}
+
 RenderMesh sweepFreewayDeck(const UnionSpine& spine,
                             const std::function<double(double, double)>& ground,
                             double ringStep, double deckThickness,
@@ -439,7 +454,8 @@ RenderMesh junctionPadEarcut(const std::vector<Vec3>& loop, float mu, const Vec3
 
 }  // namespace
 
-RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color) {
+RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color,
+                         std::vector<Vec3>* footprintOut) {
     RenderMesh mesh;
     const int N = static_cast<int>(arms.size());
     if (N <= 2) return mesh;                          // body runs straight through
@@ -478,11 +494,12 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
     // the bodies' own end-ring points and every one must survive to the fill.
     std::vector<Vec3> loop;
     std::vector<char> isMouth;
-    auto push = [&](const Vec3& p, bool m) {
+    std::vector<int> armOf;               // sorted-arm index per vertex (-1 = arc)
+    auto push = [&](const Vec3& p, int arm) {
         const Vec2 p2(p.x, p.z);
         if (!loop.empty() &&
             (Vec2(loop.back().x, loop.back().z) - p2).lengthSquared() < 1e-10) {
-            isMouth.back() |= m;              // coincident corner: keep the tag
+            if (arm >= 0) { isMouth.back() = 1; armOf.back() = arm; }
             // Two arms sharing a corner point at DIFFERENT heights is a
             // contradictory input (real chain profiles reconcile at nodes);
             // the pad owns the seam and splits the difference.
@@ -490,12 +507,13 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
             return;
         }
         loop.push_back(p);
-        isMouth.push_back(m);
+        isMouth.push_back(arm >= 0);
+        armOf.push_back(arm);
     };
     for (int i = 0; i < N; ++i) {
         const JunctionArm& A = arms[i];
         const JunctionArm& B = arms[(i + 1) % N];
-        for (std::size_t j = A.mouth.size(); j-- > 0;) push(A.mouth[j], true);
+        for (std::size_t j = A.mouth.size(); j-- > 0;) push(A.mouth[j], i);
         const Vec3 a3 = A.mouth.front(), b3 = B.mouth.back();
         const Vec2 a2(a3.x, a3.z), b2(b3.x, b3.z);
         const double chord = (b2 - a2).length();
@@ -517,12 +535,13 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
             const double t = k / static_cast<double>(nArc);
             const double w0 = (1 - t) * (1 - t), w1 = 2 * t * (1 - t), w2 = t * t;
             const Vec2 p = a2 * w0 + c2 * w1 + b2 * w2;
-            push(Vec3(p.x, a3.y + (b3.y - a3.y) * t, p.y), false);
+            push(Vec3(p.x, a3.y + (b3.y - a3.y) * t, p.y), -1);
         }
     }
     if (loop.size() >= 2 && (loop.front() - loop.back()).lengthSquared() < 1e-10) {
         loop.pop_back();
         isMouth.pop_back();
+        armOf.pop_back();
     }
     const int n = static_cast<int>(loop.size());
     if (n < 3) return mesh;
@@ -539,6 +558,24 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
         if (area2 < 0) {
             std::reverse(loop.begin(), loop.end());
             std::reverse(isMouth.begin(), isMouth.end());
+            std::reverse(armOf.begin(), armOf.end());
+        }
+    }
+    // Footprint for the curb/sidewalk union: the boundary loop with each mouth
+    // vertex nudged ~5 cm OUT along its arm, so the pad footprint OVERLAPS the
+    // body ribbon instead of sharing an exactly-collinear edge (polygonUnion's
+    // documented weak case).
+    if (footprintOut) {
+        footprintOut->clear();
+        footprintOut->reserve(loop.size());
+        for (int i = 0; i < n; ++i) {
+            Vec3 p = loop[i];
+            if (armOf[i] >= 0) {
+                const Vec2& d = arms[armOf[i]].dir;
+                p.x += d.x * 0.05;
+                p.z += d.y * 0.05;
+            }
+            footprintOut->push_back(p);
         }
     }
 
@@ -817,6 +854,103 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
 
     mesh.vertices = std::move(verts);
     mesh.indices = std::move(idx);
+    return mesh;
+}
+
+// ---------------------------------------------------------------------------
+// Roads-v2 S5: the raised curb + sidewalk BAND (ownership: asphalt = bodies +
+// pads; this band owns everything from the asphalt edge to the sidewalk's
+// outer face). Swept along each closed union-outline loop, riding the loop's
+// RIGHT normal (outward from the asphalt for CCW outers AND CW holes), with
+// the corner logic proven in the old weld: gentle corners miter, sharp OPENING
+// corners bevel with a fan, PINCHING corners meet at the true intersection.
+RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
+                                 const std::function<double(double, double)>& edgeHeight,
+                                 double sidewalkWidth, double curbHeight) {
+    RenderMesh mesh;
+    if (sidewalkWidth <= 0.0) return mesh;
+    const Vec3 walkColor(0.62, 0.62, 0.60);
+    const Vec3 curbColor(0.48, 0.48, 0.47);
+    const double drop = 0.35;             // outer face tucks under the ground
+    auto rnorm = [](const Vec2& e) {
+        Vec2 n(e.y, -e.x);
+        const double l = n.length();
+        return l < 1e-9 ? Vec2(0, 0) : n * (1.0 / l);
+    };
+    auto P3 = [&](const Vec2& v, double dh) {
+        return Vec3(v.x, edgeHeight(v.x, v.y) + dh, v.y);
+    };
+    for (const Poly2& loop : loops) {
+        const int m = static_cast<int>(loop.size());
+        if (m < 3) continue;
+        struct Corner { Vec2 prevPt, nextPt; bool bevel; };
+        std::vector<Corner> oc(m);
+        for (int i = 0; i < m; ++i) {
+            const Vec2 e0 = loop[i] - loop[(i + m - 1) % m];
+            const Vec2 e1 = loop[(i + 1) % m] - loop[i];
+            const Vec2 n0 = rnorm(e0), n1 = rnorm(e1);
+            const Vec2 bis = n0 + n1;
+            const double bl = bis.length();
+            const Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
+            const double cosH = dot(mm, n1);
+            // A LEFT turn OPENS the band (fan/bevel closes the gap); a RIGHT
+            // turn PINCHES it (edges meet at the offset lines' intersection).
+            const bool opens = (e0.x * e1.y - e0.y * e1.x) > 0.0;
+            if (!opens) {
+                const Vec2 q = loop[i] + mm * (sidewalkWidth / std::max(0.2, cosH));
+                oc[i] = { q, q, false };
+            } else if (cosH >= 0.5) {
+                const Vec2 q = loop[i] + mm * (sidewalkWidth / cosH);
+                oc[i] = { q, q, false };
+            } else {
+                oc[i] = { loop[i] + n0 * sidewalkWidth,
+                          loop[i] + n1 * sidewalkWidth, true };
+            }
+        }
+        // Arc length -> negative-u slab UV: the shader scores sidewalk joints
+        // PERPENDICULAR to the curb, following its curvature, and negative u
+        // keeps the band inside the existing "mu < 0.98 = sidewalk" gate.
+        std::vector<double> sArc(m + 1, 0.0);
+        for (int i = 0; i < m; ++i)
+            sArc[i + 1] = sArc[i] + (loop[(i + 1) % m] - loop[i]).length();
+        for (int i = 0; i < m; ++i) {
+            const int j = (i + 1) % m;
+            const Vec2& a = loop[i];
+            const Vec2& b = loop[j];
+            if ((b - a).length() < 1e-9) continue;
+            const Vec2 ao = oc[i].nextPt, bo = oc[j].prevPt;
+            const Vec2 rn = rnorm(b - a);
+            const Vec3 eo3(rn.x, 0, rn.y);   // outward, per edge
+            const Vec3 aT = P3(a, curbHeight), bT = P3(b, curbHeight);
+            const Vec3 aR = P3(a, 0), bR = P3(b, 0);
+            const Vec3 aoT = P3(ao, curbHeight), boT = P3(bo, curbHeight);
+            const Vec3 aoB = P3(ao, -drop), boB = P3(bo, -drop);
+            MeshBuilder::emitQuad(mesh, aR, bR, bT, aT, eo3 * -1.0, curbColor);  // curb lip
+            const float ua = static_cast<float>(-sArc[i]);
+            const float ub = static_cast<float>(-sArc[i + 1]);
+            MeshBuilder::emitTriUV(mesh, aT, bT, boT, Vec3(0, 1, 0), walkColor,
+                                   ua, 0.0f, ub, 0.0f, ub, 1.0f);                // slab top
+            MeshBuilder::emitTriUV(mesh, aT, boT, aoT, Vec3(0, 1, 0), walkColor,
+                                   ua, 0.0f, ub, 1.0f, ua, 1.0f);
+            MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, curbColor);     // outer face
+            if (oc[j].bevel) {
+                // Fan closing the band around an opening corner + its outer face.
+                const Vec3 jT = P3(b, curbHeight);
+                const Vec3 p0T = P3(oc[j].prevPt, curbHeight);
+                const Vec3 p1T = P3(oc[j].nextPt, curbHeight);
+                MeshBuilder::emitTriUV(mesh, jT, p0T, p1T, Vec3(0, 1, 0), walkColor,
+                                       ub, 0.0f, ub, 1.0f, ub, 1.0f);
+                const Vec2 bev = oc[j].nextPt - oc[j].prevPt;
+                if (bev.length() > 1e-9) {
+                    const Vec2 bn = rnorm(bev);
+                    const Vec3 p0B = P3(oc[j].prevPt, -drop);
+                    const Vec3 p1B = P3(oc[j].nextPt, -drop);
+                    MeshBuilder::emitQuad(mesh, p0T, p1T, p1B, p0B,
+                                          Vec3(bn.x, 0, bn.y), curbColor);
+                }
+            }
+        }
+    }
     return mesh;
 }
 
