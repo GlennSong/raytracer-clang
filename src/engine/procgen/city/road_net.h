@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 
 #include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
+#include "road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
 #include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
 #include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
 #include "metro.h"              // CityHub (polycentric zoning handoff)
@@ -38,7 +39,13 @@ struct RoadNet {
     double width = 10.0;                        // default carriageway width (m) — widen control
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.
+    // DEPRECATED by specs/edgeSpecs (roads-v2): kept during the transition; removed
+    // with the old mesher at the cleanup stage.
     std::vector<double> edgeWidths;
+    // Roads-v2 band model: the net's spec table + a per-edge index into it
+    // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).
+    std::vector<RoadSpec> specs;
+    std::vector<int> edgeSpecs;
     // Optional per-edge grade-separation layer (parallel to `edges`; 0 or missing = ground,
     // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
     // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
@@ -132,6 +139,10 @@ StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p = {});
 // --- editor edit ops (each leaves the net ready for buildRoadNetMesh) ----------
 // Set the default carriageway width (the inspector "Width" control — "widen a road").
 void roadNetSetWidth(RoadNet& net, double width);
+// The SPEC of edge `ei`: its entry in the net's spec table when assigned, else a
+// legacy synthesis from width/sidewalk/curb — so every edge answers the band
+// model even before its level is migrated (roads-v2 compat shim).
+RoadSpec roadNetEdgeSpec(const RoadNet& net, int ei);
 // Width of edge `ei` (its per-edge override if set, else the default `width`).
 double roadNetEdgeWidth(const RoadNet& net, int ei);
 // Override edge `ei`'s width (the viewport per-edge widen). w <= 0 reverts to default.

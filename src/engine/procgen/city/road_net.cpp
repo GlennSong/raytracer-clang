@@ -66,6 +66,9 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     auto elayer = [&](int ei) {
         return (ei < static_cast<int>(net.edgeLayers.size())) ? net.edgeLayers[ei] : 0;
     };
+    auto espec = [&](int ei) {
+        return (ei < static_cast<int>(net.edgeSpecs.size())) ? net.edgeSpecs[ei] : -1;
+    };
     auto eclass = [&](int ei) {
         return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
                                                                : RoadClass::Local;
@@ -175,10 +178,14 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
                 nd.elevAbsolute = true;
             }
             g.nodes.push_back(nd);
-            g.edges.push_back(RoadEdge{prev, idx, w, kls, lay});
+            RoadEdge ge{prev, idx, w, kls, lay};
+            ge.spec = espec(ei);                 // roads-v2: band model rides the graph
+            g.edges.push_back(ge);
             prev = idx;
         }
-        g.edges.push_back(RoadEdge{prev, b, w, kls, lay});   // last -> shared node b
+        RoadEdge geLast{prev, b, w, kls, lay};
+        geLast.spec = espec(ei);
+        g.edges.push_back(geLast);               // last -> shared node b
     }
     return g;
 }
@@ -790,6 +797,15 @@ void roadNetSetWidth(RoadNet& net, double width) {
     net.width = std::max(0.5, width);
 }
 
+RoadSpec roadNetEdgeSpec(const RoadNet& net, int ei) {
+    if (ei >= 0 && ei < static_cast<int>(net.edgeSpecs.size())) {
+        const int si = net.edgeSpecs[ei];
+        if (si >= 0 && si < static_cast<int>(net.specs.size())) return net.specs[si];
+    }
+    return roadSpecFromLegacy(roadNetEdgeWidth(net, ei), /*oneWay=*/false,
+                              net.sidewalk, net.curb);
+}
+
 double roadNetEdgeWidth(const RoadNet& net, int ei) {
     if (ei >= 0 && ei < static_cast<int>(net.edgeWidths.size()) && net.edgeWidths[ei] > 0.0)
         return net.edgeWidths[ei];
@@ -980,6 +996,13 @@ RoadNet roadNetFromJson(const json& j) {
     net.markings = j.value("markings", net.markings);
     net.crosswalks = j.value("crosswalks", net.crosswalks);
     net.autoRoundabout = j.value("auto_roundabout", net.autoRoundabout);
+    // Roads-v2 band model: a spec table + per-edge indices. Either a preset
+    // name ("freeway3") or an object with a "bands" array per entry.
+    if (j.contains("specs") && j["specs"].is_array())
+        for (const auto& js : j["specs"]) net.specs.push_back(roadSpecFromJson(js));
+    if (j.contains("edge_specs") && j["edge_specs"].is_array())
+        for (const auto& je : j["edge_specs"])
+            net.edgeSpecs.push_back(je.is_number_integer() ? je.get<int>() : -1);
     net.latticeStreets = j.value("lattice", net.latticeStreets);
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),

@@ -46,6 +46,10 @@ struct RoadEdge {
     // by construction (plan §8/§9): the corridor publishes two of these, one
     // per direction, so traffic can never take a link against the flow.
     bool oneWay = false;
+    // Roads-v2: index into the owning net's spec table (-1 = legacy, synthesize
+    // from width/oneWay). Carried through netGraph so the mesher/bake read the
+    // band model off the graph edge directly.
+    int spec = -1;
 };
 
 struct RoadGraph {
