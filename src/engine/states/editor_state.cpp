@@ -18,8 +18,7 @@ namespace engine {
 EditorState::EditorState(Window& window, Renderer& renderer,
                          std::string levelFile,
                          EditorSystem::PlayFactory makePlayState,
-                         EditorBridge* bridge,
-                         EditorSystem::OpenLevelFactory openLevel)
+                         EditorBridge* bridge)
     : PlayingState(window), editorRenderer(renderer),
       levelFile(std::move(levelFile)) {
     addSystem<DevControlSystem>();   // Esc quits the app from the editor
@@ -34,7 +33,7 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
     addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),
-                            bridge, std::move(openLevel));
+                            bridge);
 }
 
 void EditorState::onEnter(FrameContext& ctx) {
@@ -49,7 +48,6 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setString("cameraMode", "fly");
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", false);   // F = frame selected
-    ctx.settings.setString("levelPath", levelFile);
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
 
     if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view,

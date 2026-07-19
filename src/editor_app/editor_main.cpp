@@ -13,6 +13,7 @@
 #include "../engine/components.h"
 #include "../engine/editor_bridge.h"
 #include "../engine/model_importer.h"
+#include "../engine/recent_scenes.h"
 #include "../engine/states/editor_state.h"
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
@@ -593,7 +594,9 @@ int main(int argc, char** argv) {
                    : QString("Import failed: cannot copy to %1").arg(dest),
             6000);
     });
-    fileMenu->addSeparator();
+    // "Recently Opened" is inserted here (before this separator) once the
+    // state factories exist — it needs to open a level, which requestState does.
+    auto* fileTailSeparator = fileMenu->addSeparator();
     fileMenu->addAction("&Quit", &qtApp, &QApplication::quit);
 
     // Edit menu: the engine-side command log, reachable with the native
@@ -697,6 +700,56 @@ int main(int argc, char** argv) {
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
                                             levelPath, makeEditor, &bridge);
     };
+
+    // Normalize a level path to one relative to the working directory, so the
+    // same scene opened from the asset browser (which yields an absolute path)
+    // and from the command line (relative) dedupe to ONE recent entry.
+    auto relativeScenePath = [](const std::string& raw) {
+        const QString abs = QFileInfo(QString::fromStdString(raw)).absoluteFilePath();
+        return QDir::current().relativeFilePath(abs).toStdString();
+    };
+
+    // Open a level by path: the one place a scene becomes the loaded scene.
+    // Records it in the recent list, updates the title, and swaps the editor
+    // state. Used by the asset-browser double-click and File > Recently Opened.
+    auto openScene = [&](const std::string& rawPath) {
+        const std::string path = relativeScenePath(rawPath);
+        levelPath = path;
+        engine::recordRecentScene(app.settings(), path);
+        baseTitle = "Raytracer Editor — " + QString::fromStdString(path);
+        mainWindow.setWindowTitle(baseTitle);
+        app.requestState(makeEditor());
+        viewport->setFocus();
+    };
+
+    // File > Recently Opened: the last few scenes you've opened, newest first,
+    // persisted in settings.json. Rebuilt each time the menu opens so it always
+    // reflects the current list. Inserted into the File menu above Quit.
+    auto* recentMenu = new QMenu("&Recently Opened", &mainWindow);
+    QObject::connect(recentMenu, &QMenu::aboutToShow, [&, recentMenu]() {
+        recentMenu->clear();
+        const std::vector<std::string> recent =
+            engine::loadRecentScenes(app.settings());
+        if (recent.empty()) {
+            recentMenu->addAction("(none yet)")->setEnabled(false);
+            return;
+        }
+        for (const std::string& path : recent) {
+            // Show the bare scene name (no directory, no ".json"); open the
+            // full path. Skip any file that has since been deleted.
+            const QString qpath = QString::fromStdString(path);
+            const QString name = QFileInfo(qpath).completeBaseName();
+            QAction* act = recentMenu->addAction(name, [&, path]() {
+                openScene(path);
+            });
+            act->setEnabled(QFileInfo::exists(qpath));
+        }
+        recentMenu->addSeparator();
+        recentMenu->addAction("Clear List", [&]() {
+            app.settings().setString("recentScenes", "");
+        });
+    });
+    fileMenu->insertMenu(fileTailSeparator, recentMenu);
 
     // Level menu: document-level properties (they belong to the level, not
     // to any entity in the hierarchy). The environment HDR is the first.
@@ -884,14 +937,12 @@ int main(int argc, char** argv) {
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
         QString path = assetsModel->filePath(idx);
         if (!path.endsWith(".json")) return;
-        levelPath = path.toStdString();
-        baseTitle = QString("Raytracer Editor — %1").arg(path);
-        mainWindow.setWindowTitle(baseTitle);
-        app.requestState(makeEditor());
-        viewport->setFocus();
+        openScene(path.toStdString());
     });
 
     app.settings().setString("cameraMode", "fly");
+    // The scene we boot with counts as recently opened (normalized like the rest).
+    engine::recordRecentScene(app.settings(), relativeScenePath(levelPath));
     app.pushState(makeEditor());
     app.begin();
 

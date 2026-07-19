@@ -16,8 +16,7 @@ class EditorState : public PlayingState {
 public:
     EditorState(Window& window, Renderer& renderer, std::string levelFile,
                 EditorSystem::PlayFactory makePlayState,
-                EditorBridge* bridge = nullptr,
-                EditorSystem::OpenLevelFactory openLevel = nullptr);
+                EditorBridge* bridge = nullptr);
 
     void onEnter(FrameContext& ctx) override;
     void onResume(FrameContext& ctx) override;

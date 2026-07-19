@@ -14,7 +14,7 @@ class Settings;
 // one key ("recentScenes"), newest first, de-duplicated, and capped — Settings
 // only stores flat strings, so the paths are joined with '\n' into that one
 // value (a path never contains a newline).
-constexpr int kMaxRecentScenes = 12;
+constexpr int kMaxRecentScenes = 10;
 
 // The recent scenes, newest first. Empty if none have been recorded.
 std::vector<std::string> loadRecentScenes(const Settings& settings);

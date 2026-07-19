@@ -1,11 +1,9 @@
 #include "engine/application.h"
 #include "engine/states/editor_state.h"
-#include "engine/recent_scenes.h"
 #include "game/arena_state.h"
 #include "log.h"
 #include <cstring>
 #include <fstream>
-#include <memory>
 
 using namespace engine;
 
@@ -51,34 +49,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Remember the launched scene so the editor's "Recent Scenes" list can
-    // offer it back, and keep the current path in one shared spot so switching
-    // scenes from that list also changes what Play loads.
-    recordRecentScene(app.settings(), levelPath);
-    auto currentLevel = std::make_shared<std::string>(levelPath);
-
     // The two modes construct each other through factories, so neither layer
     // hard-codes the other (the engine's editor never names game states).
-    // makeEditorFor(path) additionally lets the editor swap to a different
-    // scene at runtime — the hook behind the recents list.
     std::function<std::unique_ptr<AppState>()> makePlay;
     std::function<std::unique_ptr<AppState>()> makeEditor;
-    EditorSystem::OpenLevelFactory makeEditorFor;
-    makeEditor = [&app, currentLevel, &makePlay,
-                  &makeEditorFor]() -> std::unique_ptr<AppState> {
+    makeEditor = [&app, levelPath, &makePlay]() -> std::unique_ptr<AppState> {
         return std::make_unique<EditorState>(app.windowRef(), app.renderer(),
-                                             *currentLevel, makePlay, nullptr,
-                                             makeEditorFor);
+                                             levelPath, makePlay);
     };
-    makePlay = [&app, currentLevel, &makeEditor]() -> std::unique_ptr<AppState> {
+    makePlay = [&app, levelPath, &makeEditor]() -> std::unique_ptr<AppState> {
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
-                                            *currentLevel, makeEditor);
-    };
-    makeEditorFor = [&app, currentLevel, &makeEditor](
-                        const std::string& path) -> std::unique_ptr<AppState> {
-        *currentLevel = path;                      // Play now loads this scene too
-        recordRecentScene(app.settings(), path);   // float it to the top
-        return makeEditor();
+                                            levelPath, makeEditor);
     };
 
     app.settings().setString("cameraMode", "fly");
