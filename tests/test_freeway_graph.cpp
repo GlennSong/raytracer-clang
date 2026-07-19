@@ -714,44 +714,57 @@ TEST_CASE(no_crosswalks_anywhere_on_the_freeway) {
             }
         }
     };
-    int zebraTotal = 0, onCorridorAsphalt = 0, atGoreLandingDisc = 0;
+    int zebraTotal = 0;
+    std::vector<Vec2> nearCorridor;   // stripe-points at grade beside the corridor
     for (const Vertex& v : m.vertices) {
         if (!(v.u > 1.05 && v.u < 3.0 && v.v > 0.5 && v.v < 3.6)) continue;
         ++zebraTotal;
         const Vec2 p(v.position.x, v.position.z);
         double d, deckY;
         nearestCorridor(p, d, deckY);
-        // ON the corridor = close in plan AND at the SAME height (the deck is
-        // not flying overhead). A ramp/deck > 2 m above the street zebra is a
-        // legitimate crossing UNDER an overpass, not a crosswalk on the freeway.
+        // "Beside the corridor at grade" = close in plan AND at the same
+        // height (the deck is not flying overhead). A ramp/deck > 2 m above a
+        // street stripe is a crossing UNDER an overpass, not on the freeway.
         if (d < 6.0 && std::fabs(deckY - v.position.y) < 2.0)
-            ++onCorridorAsphalt;
-        double dGL = 1e30;
-        for (const RoadNode& n : g.nodes)
-            if (isGore(n.kind) || n.kind == JunctionKind::Landing)
-                dGL = std::min(dGL, (p - n.pos).length());
-        if (dGL < 8.0) ++atGoreLandingDisc;   // within a gore/landing junction disc
+            nearCorridor.push_back(p);
     }
-    // The DEFINITIVE question: does any gore/landing carry a real zebra
-    // BAND (dozens of verts) at its mouth, or just stray corner verts of a
-    // nearby legitimate street crossing clipping into the disc? Count zebra
-    // verts per gore/landing node.
-    int worstAtNode = 0;
-    for (const RoadNode& n : g.nodes) {
-        if (!isGore(n.kind) && n.kind != JunctionKind::Landing) continue;
+
+    // The real test: is there a CROSSWALK BAND (dozens of stripe-points close
+    // together) sitting beside the corridor? Find the densest cluster of the
+    // near-corridor points, and report what junction node it sits at and how
+    // that node is classified. A stray corner of a distant street crossing is
+    // a few points; a real crosswalk painted at a ramp is a whole band.
+    int worstCluster = 0;
+    Vec2 worstAt(0, 0);
+    for (const Vec2& c : nearCorridor) {
         int here = 0;
-        for (const Vertex& v : m.vertices) {
-            if (!(v.u > 1.05 && v.u < 3.0 && v.v > 0.5 && v.v < 3.6)) continue;
-            const Vec2 p(v.position.x, v.position.z);
-            if ((p - n.pos).lengthSquared() < 10.0 * 10.0) ++here;
-        }
-        worstAtNode = std::max(worstAtNode, here);
+        for (const Vec2& q : nearCorridor)
+            if ((c - q).lengthSquared() < 6.0 * 6.0) ++here;
+        if (here > worstCluster) { worstCluster = here; worstAt = c; }
     }
-    std::printf("[xwalk] city zebra verts=%d | at-grade near corridor=%d | "
-                "worst single gore/landing=%d verts\n", zebraTotal,
-                onCorridorAsphalt, worstAtNode);
+    // What junction is the worst cluster sitting on, and what kind is it?
+    int nearNode = -1;
+    double nd = 1e30;
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+        const double dd = (g.nodes[i].pos - worstAt).length();
+        if (dd < nd) { nd = dd; nearNode = static_cast<int>(i); }
+    }
+    const char* kindName = "?";
+    if (nearNode >= 0) switch (g.nodes[nearNode].kind) {
+        case JunctionKind::Intersection: kindName = "Intersection"; break;
+        case JunctionKind::Landing: kindName = "Landing"; break;
+        case JunctionKind::Merge: kindName = "Merge"; break;
+        case JunctionKind::Diverge: kindName = "Diverge"; break;
+        case JunctionKind::DeadEnd: kindName = "DeadEnd"; break;
+        case JunctionKind::None: kindName = "None(through)"; break;
+        default: kindName = "Auto"; break;
+    }
+    std::printf("[xwalk] city stripe-points=%d | beside corridor at grade=%zu | "
+                "densest cluster=%d at (%.0f,%.0f) node %d kind=%s (%.1f m away)\n",
+                zebraTotal, nearCorridor.size(), worstCluster, worstAt.x,
+                worstAt.y, nearNode, kindName, nd);
     CHECK(zebraTotal > 0);          // streets DO have crosswalks (sanity)
-    // No gore/landing carries a crosswalk BAND (a band is dozens of verts;
-    // a handful is a neighbouring street crossing's corner clipping in).
-    CHECK(worstAtNode < 12);
+    // No crosswalk BAND sits beside the freeway/ramp at grade. A band is
+    // dozens of points; a handful is a nearby street crossing's edge.
+    CHECK(worstCluster < 16);
 }
