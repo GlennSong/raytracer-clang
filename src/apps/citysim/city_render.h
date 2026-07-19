@@ -9,6 +9,7 @@
 #include "places.h"        // PlaceMap (ADR-0066)
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace citysim {
@@ -147,6 +148,24 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
+    // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
+    // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
+    // plan and writes each pose here; syncGroups bakes it instead of the
+    // kinematic agentPose, and flags the instance so its kinematic proxy
+    // box parks instead of tracking (a box inside the dynamic chassis would
+    // fight it).
+    void setAgentPhysPose(int agent, const engine::Mat4& pose) {
+        physPose_[agent] = pose;
+    }
+    void clearAgentPhysPose(int agent) { physPose_.erase(agent); }
+    // Bake-order agent id per car instance (parallel to each carGroup's
+    // transforms), so the physics bridge can park the kinematic proxy of a
+    // possessed agent THE SAME TICK it acquires the body (a bake-time flag
+    // would lag one tick and the box would kick the fresh chassis).
+    const std::vector<std::vector<int>>& carAgentIds() const {
+        return carAgentIds_;
+    }
+    Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
     const engine::NavGraph& nav() const { return nav_; }
     // Cars are split across several instance groups, one per body/colour variant
@@ -228,6 +247,8 @@ private:
     engine::NavGraph nav_;
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
+    std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
+    std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies

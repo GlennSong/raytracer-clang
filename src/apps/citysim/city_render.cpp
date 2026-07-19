@@ -922,14 +922,24 @@ void CityRenderSystem::syncGroups(World& world) {
     if (ped) ped->transforms.clear();
     for (int s = 0; s < 3; ++s) if (sig[s]) sig[s]->transforms.clear();
 
-    for (const Agent& a : sim_.agents()) {
+    carAgentIds_.assign(cars.size(), {});
+    const auto& agents = sim_.agents();
+    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+        const Agent& a = agents[ai];
         if (a.mode == Agent::Mode::Driver) {
             if (cars.empty()) continue;   // cars owned externally (ADR-0062 bridge)
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
             int v = (a.vehicle >= 0 ? a.vehicle : 0) % carVariantCount();
-            if (cars[v]) cars[v]->transforms.push_back(agentPose(a));
+            if (!cars[v]) continue;
+            // R5: a physically-possessed agent renders its Jolt body's pose —
+            // real suspension, pitch and roll — while the sim's kinematic
+            // plan stays the brains' truth.
+            const auto po = physPose_.find(static_cast<int>(ai));
+            cars[v]->transforms.push_back(po != physPose_.end() ? po->second
+                                                                : agentPose(a));
+            carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             ped->transforms.push_back(agentPose(a));
         }

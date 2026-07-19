@@ -599,23 +599,23 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
     )
 
+    # Links citysim + engine_core (which provide world/components/event_bus/
+    # motion_system) so the R5 physical-tier soak can run the real city brains
+    # against real Jolt vehicles headlessly.
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
         tests/test_driving_lab.cpp
         tests/test_physics_system.cpp
+        tests/test_city_phys_tier.cpp
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
-        src/engine/systems/motion_system.cpp
-        src/engine/event_bus.cpp
-        src/engine/world.cpp
-        src/engine/components.cpp
-        src/job_system.cpp
+        src/apps/citysim/city_physics.cpp
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
-    target_link_libraries(physics_tests PRIVATE Jolt Threads::Threads)
+    target_link_libraries(physics_tests PRIVATE citysim engine_core Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
 
     # The audible physics demo (see the demos block above for the rationale).

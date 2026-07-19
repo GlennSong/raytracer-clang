@@ -21,6 +21,7 @@ PhysicsWorld::VehicleConfig sedan() {
     c.chassisHalfExtent = Vec3(0.92, 0.45, 2.15);
     c.mass = 1400.0;
     c.comOffsetY = -0.42;
+    c.engineTorque = 900.0;   // brisk sedan: ~3.5 m/s^2 launch (envelope probe)
     auto wheel = [&](Real x, Real z, bool steered, bool driven) {
         PhysicsWorld::VehicleWheel w;
         w.position = Vec3(x, -0.35, z);
@@ -30,7 +31,11 @@ PhysicsWorld::VehicleConfig sedan() {
         w.driven = driven;
         return w;
     };
-    c.wheels = { wheel(-0.82, 1.45, true, false), wheel(0.82, 1.45, true, false),
+    // ALL wheels driven: the launch is TRACTION-limited (measured — rear
+    // drive capped every config at ~2.1 m/s^2 regardless of torque; AWD
+    // doubled it). ~4 m/s^2 matches the brains' kCarAccel, which is the
+    // tier-invariance contract.
+    c.wheels = { wheel(-0.82, 1.45, true, true), wheel(0.82, 1.45, true, true),
                  wheel(-0.82, -1.42, false, true), wheel(0.82, -1.42, false, true) };
     return c;
 }
@@ -46,6 +51,32 @@ Vec2 forward2(const Quat& q) {
 Real upDot(const Quat& q) { return q.rotate(Vec3(0, 1, 0)).y; }
 
 }  // namespace
+
+// Powertrain envelope: full throttle from rest on the flat. Pins what the
+// sedan can actually DO — the possession tier's catch-up authority budget
+// (a ghost cruises at 8.5; the body must hold a real speed margin over it).
+TEST_CASE(driving_lab_full_throttle_envelope) {
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(500, 1, 500), Vec3(0, -1, 0), Quat::identity(),
+                 BodyMotion::Static);
+    world.optimizeBroadPhase();
+    PhysicsWorld::VehicleId car =
+        world.addVehicle(sedan(), Vec3(0, 1.0, 0), Quat::identity());
+    Real v3 = 0, v8 = 0;
+    for (int i = 0; i < 60 * 8; ++i) {
+        world.setVehicleInput(car, 1.0, 0.0, 0.0, 0.0);
+        world.update(1.0 / 60.0);
+        const Vec3 v = world.vehicleVelocity(car);
+        const Real s = std::sqrt(v.x * v.x + v.z * v.z);
+        if (i == 60 * 3 - 1) v3 = s;
+        if (i == 60 * 8 - 1) v8 = s;
+        if (i % 60 == 59)
+            std::printf("    [envelope] t=%ds v=%.2f m/s\n", (i + 1) / 60, s);
+    }
+    CHECK(v3 > 10.0);   // the catch-up margin the tier plans with exists
+    CHECK(v8 > 20.0);
+}
 
 TEST_CASE(driving_lab_straight_stop_at_the_bar) {
     PhysicsWorld world;

@@ -89,6 +89,12 @@ public:
     // (e.g. agent-driven cars) whose pose is decided outside the physics step.
     void moveKinematic(PhysicsBodyId id, const Vec3& position,
                        const Quat& orientation, Real dt);
+    // TELEPORT a body: set the pose directly and zero its velocities — no
+    // sweep, so nothing on the straight line to the target gets hit. For
+    // discontinuous moves (parking a possessed car's proxy far away, respawn):
+    // MoveKinematic across such a jump is a one-frame hypersonic sweep that
+    // batters everything it passes through.
+    void teleport(PhysicsBodyId id, const Vec3& position, const Quat& orientation);
     Vec3 bodyPosition(PhysicsBodyId id) const;
     Quat bodyOrientation(PhysicsBodyId id) const;
 

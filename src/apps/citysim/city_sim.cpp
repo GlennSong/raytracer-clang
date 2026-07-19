@@ -17,7 +17,11 @@ using engine::NavGraph;
 
 namespace {
 constexpr Real kWalkSpeed = 1.4;
-constexpr Real kCarAccel = 6.0;
+// 4.0, not the old 6.0: the physical tier measured the real sedan's launch
+// (driving-lab envelope probe) — the brains must not plan accelerations the
+// body cannot follow, or every possessed car falls behind its ghost out of
+// every light and corner (roads-v2.1 R5).
+constexpr Real kCarAccel = 4.0;
 constexpr Real kPedAccel = 1.0;
 constexpr Real kCarMinGap = 5.0, kCarSlowZone = 14.0;
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
@@ -731,6 +735,20 @@ void CitySim::refreshPose(Agent& a) {
     // the arc the rate-limited heading was already pretending to drive.
     auto blendSpan = [&](int la, int lb) {
         Real B = std::max(nav_->links[la].width, nav_->links[lb].width) * 0.5 + 1.0;
+        // A DRIVER's corner must be traceable by a real car: the quadratic's
+        // apex radius is ~B/2, so B ~= 10 gives ~5 m — the physical sedan's
+        // actual lock radius. The old width-derived span produced ~2.5 m
+        // apexes — the position curve was tighter than the sim's OWN heading
+        // model (kCarMinTurnRadius) could steer. NEAR-REVERSALS keep the
+        // tight span: a 180-degree "arc" with a 10 m control span sweeps a
+        // 20 m loop across the whole carriageway (dead-end U-turn tips
+        // ploughed the oncoming queue).
+        if (a.mode == Agent::Mode::Driver) {
+            const engine::Vec2 da = nav_->direction(la);
+            const engine::Vec2 db = nav_->direction(lb);
+            if (da.x * db.x + da.y * db.y > -0.5)
+                B = std::max(B, Real(10.0));
+        }
         B = std::min(B, nav_->links[la].length * 0.45);
         B = std::min(B, nav_->links[lb].length * 0.45);
         return B;
@@ -1075,6 +1093,33 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // the target; the gate carries the line the hard clamp below holds at.
     JunctionGate gate = junctionSpeedCap(a, li, target);
     target = gate.cap;
+    // CORNER FEASIBILITY (roads-v2.1 R5): a real car cannot hold a junction
+    // arc at cruise (90 degrees at 8 m/s on a ~7 m arc is ~1 g lateral) — and
+    // the physical tier drives THIS plan, so an infeasible corner meant the
+    // body understeered past the mouth and lost its ghost. Cap the approach
+    // by the bend into the NEXT leg, easing down at comfortable decel, and
+    // hold the corner pace while the nose is still rotating onto the leg.
+    if (car) {
+        const engine::Vec2 dl = nav_->direction(li);
+        auto bendCap = [](Real cosB) {
+            // Floor 2.8: a corner-apex car sits in the city's SLOW contact
+            // class (< 3 m/s) — the ped kerb rule's "fast car" boundary.
+            return std::max(Real(2.8), Real(8.5) * std::max(Real(0), cosB));
+        };
+        if (a.leg + 1 < static_cast<int>(a.route.links.size())) {
+            const engine::Vec2 dn = nav_->direction(a.route.links[a.leg + 1]);
+            const Real cosB = dl.x * dn.x + dl.y * dn.y;
+            if (cosB < 0.94) {   // > ~20 degrees: a real bend
+                const Real rem =
+                    std::max(Real(0), nav_->links[li].length - a.distOnLeg);
+                const Real vC = bendCap(cosB);
+                target = std::min(
+                    target, std::sqrt(vC * vC + 2 * kCarDecel * 0.6 * rem));
+            }
+        }
+        const Real cosH = a.heading.x * dl.x + a.heading.y * dl.y;
+        if (cosH < 0.94) target = std::min(target, bendCap(cosH));
+    }
     // Perception: how far ahead the nearest person (or predicted collision) is;
     // ease to a stop kPedClearance short of it.
     Real seenAhead = std::numeric_limits<Real>::infinity();

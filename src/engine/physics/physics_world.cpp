@@ -391,6 +391,17 @@ void PhysicsWorld::moveKinematic(PhysicsBodyId id, const Vec3& position,
                                  toJolt(orientation), static_cast<float>(dt));
 }
 
+void PhysicsWorld::teleport(PhysicsBodyId id, const Vec3& position,
+                            const Quat& orientation) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    impl->bodies().SetPositionAndRotation(JPH::BodyID(id), toJoltR(position),
+                                          toJolt(orientation),
+                                          JPH::EActivation::Activate);
+    impl->bodies().SetLinearAndAngularVelocity(JPH::BodyID(id),
+                                               JPH::Vec3::sZero(),
+                                               JPH::Vec3::sZero());
+}
+
 Vec3 PhysicsWorld::bodyPosition(PhysicsBodyId id) const {
     if (!impl || id == INVALID_PHYSICS_BODY) return Vec3();
     return fromJolt(impl->bodies().GetPosition(JPH::BodyID(id)));
