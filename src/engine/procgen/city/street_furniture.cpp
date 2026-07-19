@@ -35,12 +35,10 @@ StreetFurniturePlan planStreetFurniture(
     std::map<std::pair<int, int>, int> armBest;   // (node, bearing bin) -> link
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
-        // §10: the unified graph includes the corridor — merges/gores are
-        // junctions in the graph but NEVER signalised street corners.
-        if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
-            continue;
-        if (!nav.isJunction(L.to)) continue;
-        if (nav.outLinks[L.to].size() < 4) continue;   // uncontrolled (T/merge)
+        // Semantic signal predicate (#17/S5), shared with the controller and
+        // the render markings so all three agree exactly.
+        if (!(L.access & road_access::kSignalable)) continue;
+        if (!nav.signalControlled(L.to)) continue;
         Vec2 d = nav.direction(li);
         int bin = static_cast<int>(std::lround(std::atan2(d.y, d.x) /
                                                (PI / 12.0)));

@@ -44,6 +44,12 @@ struct NavLink {
     uint8_t access = road_access::kAllStreet;
 };
 
+// Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED
+// iff it is a street INTERSECTION with at least 4 SIGNALABLE approaches. This
+// replaces three duplicated filters (skip Freeway/Ramp + isJunction +
+// outLinks>=4) that all counted RAMP links toward the >=4 threshold — so a
+// 3-street + 1-ramp landing wrongly got signal heads. A Landing is not an
+// Intersection, so it now correctly gets none. Declared after NavGraph.
 struct NavGraph {
     std::vector<Vec2> nodes;                // node positions (world XZ; Vec2.x=x, .y=z)
     std::vector<NavLink> links;             // directed links
@@ -72,6 +78,20 @@ struct NavGraph {
     // place agents slow for / will yield at (ADR-0059).
     bool isJunction(int node) const {
         return node >= 0 && node < static_cast<int>(junction.size()) && junction[node];
+    }
+
+    // The number of signalable (street-class) approaches departing `node`.
+    int signalableApproaches(int node) const {
+        if (node < 0 || node >= static_cast<int>(outLinks.size())) return 0;
+        int k = 0;
+        for (int ol : outLinks[node])
+            if (links[ol].access & road_access::kSignalable) ++k;
+        return k;
+    }
+    // See the comment above the struct.
+    bool signalControlled(int node) const {
+        return kindOf(node) == JunctionKind::Intersection &&
+               signalableApproaches(node) >= 4;
     }
 
     // Unit travel direction of a link (zero-length links report {1,0}).

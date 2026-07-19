@@ -20,18 +20,17 @@ void SignalController::build(const engine::NavGraph& graph, double greenTime,
     // Inbound street approaches per junction node.
     std::unordered_map<int, std::vector<int>> inbound;
     for (int li = 0; li < graph.linkCount(); ++li) {
-        const int to = graph.links[li].to;
-        // A freeway merge/gore is a junction in the unified graph (§10) but
-        // never a stoplight: mainline and ramp approaches stay uncontrolled.
-        if (graph.links[li].klass == engine::RoadClass::Freeway ||
-            graph.links[li].klass == engine::RoadClass::Ramp)
-            continue;
-        if (!graph.isJunction(to)) continue;            // open road: no signal
-        // Only signalise real crossings — 4+ approaches. T-junctions and minor
-        // merges go uncontrolled, so a dense district isn't a forest of
-        // stoplights (user feedback).
-        if (graph.outLinks[to].size() < 4) continue;
-        inbound[to].push_back(li);
+        const engine::NavLink& L = graph.links[li];
+        // Semantic signal predicate (#17/S5): signalise a node ONLY if it is
+        // a street INTERSECTION with >= 4 signalable approaches. This is the
+        // ONE source of truth street_furniture + city_render also read, so
+        // the heads, the phases, and the stop-bar markings can never
+        // disagree. A gore/landing (Freeway/Ramp arms) is not an
+        // Intersection, so it is never controlled — and a 3-street + 1-ramp
+        // landing no longer sneaks past a raw outLinks >= 4 count.
+        if (!(L.access & engine::road_access::kSignalable)) continue;   // ramp arm
+        if (!graph.signalControlled(L.to)) continue;
+        inbound[L.to].push_back(li);
     }
 
     // CONFLICT-BASED grouping (roads-v2.1 R3): two approaches conflict unless

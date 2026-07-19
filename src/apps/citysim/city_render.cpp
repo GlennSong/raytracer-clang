@@ -821,9 +821,7 @@ engine::RenderMesh CityRenderSystem::buildRoadMarkings() const {
             for (int ol : nav_.outLinks[to]) {
                 const engine::NavLink& O = nav_.links[ol];
                 if (O.to == L.from) continue;   // the U-turn back
-                if (O.klass == engine::RoadClass::Freeway ||
-                    O.klass == engine::RoadClass::Ramp)
-                    continue;
+                if (!(O.access & engine::road_access::kSignalable)) continue;   // #17/S5
                 const engine::Vec2 od = nav_.direction(ol);
                 const Real cross = dir.x * od.y - dir.y * od.x;
                 const Real dot2 = dir.x * od.x + dir.y * od.y;

@@ -2,6 +2,7 @@
 
 #include "../src/apps/citysim/traffic_signal.h"
 #include "../src/engine/ai/nav_graph.h"
+#include "../src/engine/procgen/city/road_semantics.h"
 #include "../src/engine/procgen/city/road_network.h"
 
 using namespace engine;
@@ -203,4 +204,41 @@ TEST_CASE(signals_walk_window_stops_everything) {
                 CHECK(sc.stateForLink(i) == SignalState::Red);
     }
     CHECK(sawWalk);
+}
+
+// Semantic layer S5 (#17): the signal predicate is now "street Intersection
+// with >= 4 SIGNALABLE approaches", not a raw outLinks >= 4 count. A landing
+// where 3 streets meet a ramp used to pass the >= 4 count via the ramp arm
+// and get signal heads; it must not any more (the ramp arm is not a
+// signalable approach, and a Landing is not an Intersection).
+TEST_CASE(signal_landing_with_a_ramp_arm_is_not_controlled) {
+    RoadGraph g;
+    g.nodes = { { Vec2(0, 0) },  { Vec2(0, 70) }, { Vec2(0, -70) },
+                { Vec2(-70, 0) }, { Vec2(70, 40) } };
+    // Three STREET arms + one RAMP arm at node 0 -> raw degree 4, but only 3
+    // signalable approaches, and node 0 classifies as a Landing.
+    g.edges = {
+        RoadEdge{ 1, 0, 8, RoadClass::Local, 0 },
+        RoadEdge{ 2, 0, 8, RoadClass::Local, 0 },
+        RoadEdge{ 3, 0, 8, RoadClass::Local, 0 },
+        RoadEdge{ 4, 0, 6, RoadClass::Ramp, 0 },
+    };
+    NavGraph nav = buildNavGraph(g);
+    CHECK(nav.kindOf(0) == JunctionKind::Landing);
+    CHECK(!nav.signalControlled(0));
+    SignalController sig;
+    sig.build(nav);
+    for (int i = 0; i < nav.linkCount(); ++i) CHECK(!sig.hasSignal(i));
+
+    // Control: swap the ramp for a fourth STREET -> a real 4-way, signalled.
+    g.edges.back() = RoadEdge{ 4, 0, 8, RoadClass::Local, 0 };
+    NavGraph nav2 = buildNavGraph(g);
+    CHECK(nav2.kindOf(0) == JunctionKind::Intersection);
+    CHECK(nav2.signalControlled(0));
+    SignalController sig2;
+    sig2.build(nav2);
+    int signalled = 0;
+    for (int i = 0; i < nav2.linkCount(); ++i)
+        if (sig2.hasSignal(i)) ++signalled;
+    CHECK(signalled >= 4);
 }
