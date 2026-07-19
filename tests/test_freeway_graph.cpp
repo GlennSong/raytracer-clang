@@ -457,6 +457,23 @@ TEST_CASE(unified_mesh_drives_freeway_ramps_and_landings) {
     CHECK(stations > 10);
     CHECK(gapsAwayFromGores == 0);
     CHECK(railed * 10 >= stations * 9);   // >= 90%% coverage
+
+    // R6d SIDE GRAMMAR presence: box girders hang under the elevated deck
+    // (steel-coloured verts BELOW deck level) and railing posts top the
+    // parapets (post-coloured verts ABOVE the wall crown). Colour is the
+    // cheap fingerprint — each element owns a distinct one.
+    int girderVerts = 0, postVerts = 0;
+    for (const Vertex& v : m.vertices) {
+        if (std::fabs(v.color.x - 0.30f) < 0.02f &&
+            std::fabs(v.color.z - 0.34f) < 0.02f)
+            ++girderVerts;
+        if (std::fabs(v.color.x - 0.55f) < 0.02f &&
+            std::fabs(v.color.z - 0.58f) < 0.02f)
+            ++postVerts;
+    }
+    std::printf("[2b] girderVerts=%d postVerts=%d\n", girderVerts, postVerts);
+    CHECK(girderVerts > 100);
+    CHECK(postVerts > 100);
 }
 
 TEST_CASE(dragging_a_gore_node_moves_the_built_freeway) {

@@ -238,6 +238,20 @@ RoadProfile parapetProfile(double side, double height, double thickness) {
     return p;
 }
 
+RoadProfile girderProfile(double side, double depth, double width, double inset) {
+    RoadProfile p;
+    const Vec3 steel(0.30, 0.31, 0.34);
+    const double o = -side * inset;             // outer web, inboard of the verge
+    const double i = -side * (inset + width);   // inner web
+    p.cols = {
+        pc(side, o, -0.25, side, 0.0, 0.5f, steel),                    // outer top
+        pc(side, o, -0.25 - depth, side * 0.5, -0.8, 0.5f, steel),     // outer foot
+        pc(side, i, -0.25 - depth, -side * 0.5, -0.8, 0.5f, steel),    // inner foot
+        pc(side, i, -0.25, -side, 0.0, 0.5f, steel),                   // inner top
+    };
+    return p;
+}
+
 RoadProfile medianProfile(double halfWidth, double height) {
     RoadProfile p;
     p.cols = {

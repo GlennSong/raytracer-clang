@@ -82,6 +82,12 @@ RoadProfile freewayUndersideProfile(double thickness = 0.5);
 // An edge parapet standing `height` above the deck at the `+1` (left) or `-1`
 // (right) verge, `thickness` inboard of it.
 RoadProfile parapetProfile(double side, double height = 0.85, double thickness = 0.28);
+// R6d side grammar: a box-girder beam hanging under the deck edge on `side`
+// (+1 left / -1 right) — outer web, soffit, inner web, an open U whose mouth
+// hides against the deck underside. Gives every elevated span the steel
+// undercarriage the flat soffit alone never read as.
+RoadProfile girderProfile(double side, double depth = 0.85, double width = 0.55,
+                          double inset = 0.9);
 // The solid median wall down the centreline, `halfWidth` each way, `height` tall.
 RoadProfile medianProfile(double halfWidth = 0.35, double height = 0.85);
 

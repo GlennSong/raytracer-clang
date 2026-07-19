@@ -847,6 +847,69 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                                       gapsL.empty() ? nullptr : &gapsL));
             MeshBuilder::append(out, sweepRoadLattice(t, parapetProfile(-1), ground, 2.0,
                                                       gapsR.empty() ? nullptr : &gapsR));
+            // R6d side grammar: box girders hang under both deck edges (the
+            // flat soffit alone read as paper), gapped where the deck sits
+            // at grade; and a railing POST tops each parapet run every
+            // ~3.2 m — skipping exactly the windows the walls skip.
+            MeshBuilder::append(out, sweepRoadLattice(t, girderProfile(+1), ground, 2.0,
+                                                      ground0.empty() ? nullptr : &ground0));
+            MeshBuilder::append(out, sweepRoadLattice(t, girderProfile(-1), ground, 2.0,
+                                                      ground0.empty() ? nullptr : &ground0));
+            {
+                const Vec3 postCol(0.55, 0.56, 0.58);
+                auto inGaps = [](const std::vector<GapWindow>& gs, double sArc) {
+                    for (const GapWindow& g : gs)
+                        if (sArc >= g.s0 - 0.4 && sArc <= g.s1 + 0.4) return true;
+                    return false;
+                };
+                auto post = [&](const Vec3& base, const Vec2& d) {
+                    const Vec2 l(-d.y, d.x);
+                    const double hx = 0.06, hz = 0.06, h = 0.5;
+                    const Vec3 dx(l.x * hx, 0, l.y * hx);
+                    const Vec3 dz(d.x * hz, 0, d.y * hz);
+                    const Vec3 top = base + Vec3(0, h, 0);
+                    auto face = [&](const Vec3& A, const Vec3& B, const Vec3& C,
+                                    const Vec3& D, const Vec3& n) {
+                        MeshBuilder::emitQuad(out, A, B, C, D, n, postCol);
+                    };
+                    face(base - dx - dz, base + dx - dz, top + dx - dz,
+                         top - dx - dz, Vec3(-d.x, 0, -d.y));
+                    face(base + dx + dz, base - dx + dz, top - dx + dz,
+                         top + dx + dz, Vec3(d.x, 0, d.y));
+                    face(base - dx + dz, base - dx - dz, top - dx - dz,
+                         top - dx + dz, Vec3(-l.x, 0, -l.y));
+                    face(base + dx - dz, base + dx + dz, top + dx + dz,
+                         top + dx - dz, Vec3(l.x, 0, l.y));
+                    face(top - dx - dz, top + dx - dz, top + dx + dz,
+                         top - dx + dz, Vec3(0, 1, 0));
+                };
+                const bool hasY = t.yAbs.size() == t.points.size();
+                const bool hasW = t.hw.size() == t.points.size();
+                double acc = 0, nextPost = 1.6;
+                for (std::size_t i = 1; i < t.points.size() && hasY; ++i) {
+                    const Vec2 A = t.points[i - 1], B = t.points[i];
+                    const double seg = (B - A).length();
+                    while (seg > 1e-6 && nextPost <= acc + seg) {
+                        const double f = (nextPost - acc) / seg;
+                        const Vec2 P = A + (B - A) * f;
+                        const Vec2 d = normalize(B - A);
+                        const Vec2 l(-d.y, d.x);
+                        const double y =
+                            t.yAbs[i - 1] + (t.yAbs[i] - t.yAbs[i - 1]) * f;
+                        const double hwHere =
+                            hasW ? t.hw[i - 1] + (t.hw[i] - t.hw[i - 1]) * f
+                                 : t.halfWidth;
+                        for (int side = -1; side <= 1; side += 2) {
+                            if (inGaps(side > 0 ? gapsL : gapsR, nextPost))
+                                continue;
+                            const Vec2 c2 = P + l * (side * (hwHere - 0.14));
+                            post(Vec3(c2.x, y + 0.85, c2.y), d);
+                        }
+                        nextPost += 3.2;
+                    }
+                    acc += seg;
+                }
+            }
             if (isFwy)
                 MeshBuilder::append(out, sweepRoadLattice(t, medianProfile(), ground, 2.0));
             MeshBuilder::append(out, latticeChainPiers(t, groundFn, 0.5, nullptr, pierBlocked));
