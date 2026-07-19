@@ -1,94 +1,104 @@
-# Metropolis drive checklist — Roads v2 acceptance (S1–S8)
+# Drive checklist — Roads v2.1 acceptance (R1–R6)
 
-Launch: `./build/viewer metropolis --play` (bare names resolve now).
-`Esc` → edit mode, backtick → debug overlay.
+Launch: `./build/viewer metropolis --play`, then repeat the hill items on
+`./build/viewer hillcity --play` (the standing hills testbed).
+`Esc` → edit mode, backtick → debug overlay, `K` → spectate/follow cars.
 
 Each item names the feature it validates. Items marked **KNOWN EDGE** are
-documented open edges — noting *how bad* they look is the useful data there.
+documented open edges — noting *how bad* they look is the useful data.
 Report by item number ("B3 fails at the second on-ramp").
 
-## A. Streets, up close (the one mesher: S4 pads, S5 curbs/sidewalks, S6 switch)
+Everything below was rebuilt or added since your last drive: the corridor
+renderer is DELETED (the baked graph is the freeway, meshed by the one
+street mesher), signals run conflict phases, blocks are graded and
+NYC-scaled, and the nearest cars to you are now real physics vehicles.
 
-- [ ] **A1 — Junction surfaces.** Drive through a dozen intersections of mixed
-  size (4-way, T, the odd 5-arm). The pad should be a flat, continuous
-  surface — no bumps or steps crossing it, no fan of slivers from a centre
-  point, no criss-crossed polygons. This is the S4 quad-pad rebuild.
-- [ ] **A2 — Curbs and corners.** Every junction corner should carry a rounded
-  curb return; sidewalks should read as closed bands around each block, with
-  the curb between them and the asphalt. No floating ribbons, no sidewalk
-  strips detached from their road. (S5 ownership: asphalt, curb, sidewalk
-  never overlap.)
-- [ ] **A3 — Terrain conform on hills.** Find sloped streets: the road must
-  sit ON the carved ground — no asphalt submerged under terrain, no ground
-  poking through the surface, no vertical walls of road edge. (The
-  one-profile ride: mesh and carve share heights.)
-- [ ] **A4 — Materials.** Asphalt on carriageways, concrete only on
-  sidewalks; centrelines run mid-road; crosswalk zebras only at junctions.
-- [ ] **A5 — KNOWN EDGE.** Crosswalk windows are junction-trim based, not
-  skew-aware: at very acute forks the zebra/pad can look rough (bounded
-  partial fill by design). Note the worst one you find.
+## A. Streets, up close (one mesher; R2 junction zoo quality)
 
-## B. The freeway (S3 bake, S6a viaduct kit)
+- [ ] **A1 — Junction surfaces.** A dozen mixed intersections (4-way, T,
+  acute forks, the odd 5-arm): flat continuous pads, no bumps/steps, no
+  sliver fans, no stacked surfaces. Acute forks now carry wedge trims and
+  rails instead of floating ribbons (your A1 finding — the zoo gates it).
+- [ ] **A2 — Curbs and corners.** Rounded curb returns at corners, closed
+  sidewalk bands, curb ends CAPPED (no open square tube mouths — your A2).
+- [ ] **A3 — Hills: conform + walls.** On hillcity especially: roads sit ON
+  carved ground; deep hill cuts now carry concrete RETAINING WALLS with a
+  bench crown instead of raw near-vertical dirt (new, R6). Shallow cuts
+  stay grassy on purpose. Note any raw steep face without a wall, or a
+  wall standing somewhere silly.
+- [ ] **A4 — Markings.** Centrelines mid-road, zebras only at junctions —
+  and NEW: a white STOP BAR plus a per-lane TURN ARROW on every signalled
+  approach, none of it outside the asphalt.
+- [ ] **A5 — Parking (NEW, R6).** Local streets carry marked parallel bays
+  mid-block, roughly half filled with parked cars. Driving past them must
+  not clip them; arriving drivers pull into free bays to rest and pull
+  out again later. Bays never crowd a junction mouth.
 
-- [ ] **B1 — Mainline end to end.** Drive the full elevated spine both
-  directions: no holes, no steps, nothing blocking the lanes. Parapets run
-  the edges but must be OPEN across every gore — you can physically merge.
-- [ ] **B2 — Every ramp.** Take each on/off ramp: continuous surface street →
-  landing → climb → deck and the reverse. The landing must meet the street
-  at a real junction — no wedge gaps, no dropped ground at the ramp foot.
-- [ ] **B3 — Under the deck.** Drive the streets below: piers never stand in
-  a carriageway, real headroom under the deck, ground continuous beneath.
-- [ ] **B4 — Vegetation vs the corridor.** Look for trees through the deck or
-  through ramps. Under the viaduct is fine (intended); THROUGH structure is
-  a defect. (Unverified from headless runs — this one needs your eyes.)
-- [ ] **B5 — THE PROMISE: freeway is editable like a road.** `Esc` to edit,
-  click the freeway mainline: nodes should show handles AT DECK HEIGHT.
-  Click a ramp: same. Drag a node — it moves like any street node. Then
-  Regenerate the road entity: the freeway must survive (the regen re-bakes).
-  This is the thing asked for six times; it is only done when you see it.
+## B. The freeway (R1 unification + R6 structure)
 
-## C. Traffic (S7: IDM + senses)
+- [ ] **B1 — Mainline end to end.** Both directions: no holes, steps, or
+  blockers; parapets run the edges, OPEN across every gore (merges work —
+  the merge probe drives every gore in CI now).
+- [ ] **B2 — Every ramp.** Street → landing → climb → deck and reverse.
+  Landings are real junctions (the 3-mesher seam is gone — one mesher).
+- [ ] **B3 — Under the deck.** Piers are now PORTAL BENTS (two columns + a
+  cap beam) that dodge carriageways; real headroom; and NEW: box GIRDERS
+  hang under the deck edges, railing POSTS top the parapets every ~3 m.
+- [ ] **B4 — Vegetation vs the corridor.** Trees under the viaduct fine;
+  through structure is a defect.
+- [ ] **B5 — Editable like a road.** `Esc`, click the mainline: sparse
+  handles AT DECK HEIGHT (~a dozen per ramp, not hundreds — your B5).
+  Drag a gore node, Regenerate: the freeway rebuilds around your edit and
+  stays drivable (this is gated headlessly now, but see it once yourself).
 
-- [ ] **C1 — No weave in town.** Watch/follow cars at street speed: they hold
-  their lane line steadily. On the freeway at speed, a slight human drift is
-  intended. (Fixed this session — the old gate was a no-op.)
-- [ ] **C2 — Following.** Queues form smoothly behind slow cars and at reds —
-  no accordion slamming, no rear-end pile-ups. (IDM.)
-- [ ] **C3 — Junction conflict.** Park at a busy 4-way for a few minutes:
-  crossing and turning cars brake for each other and nobody drives through
-  another car at speed. **KNOWN EDGE:** occasional low-speed nose-to-nose
-  shuffling at junction mouths is the documented kinematic-lane limitation
-  (fix = the physical steering tier). Contact at real speed is a defect;
-  creep-speed awkwardness is the known edge — note how often you see it.
-- [ ] **C4 — Signals.** Exactly ONE signal head per approach at 4-way
-  junctions; NO signal poles at T-junctions at all (they're uncontrolled by
-  design); heads face their approaching traffic. (Fixed this session.)
-- [ ] **C5 — Freeway flow.** Cars use the ramps, merge at gores without
-  stopping dead on the mainline, and freeway traffic moves at freeway speed.
-- [ ] **C6 — One car, one day.** Tail a single car: it pulls out, drives its
-  route, waits at reds, turns, and arrives without teleporting.
+## C. Traffic (R3 signals + R5 physical cars)
 
-## D. Pedestrians (S8: band-model walking + kerb discipline)
+- [ ] **C1 — Physical cars (NEW, R5).** The ~12 cars nearest you are REAL
+  physics vehicles — suspension, braking dive, corner roll. Watch close
+  cars: no vibration (the old tilt jitter is filtered), no flips, no
+  visible teleports. **KNOWN EDGE:** a car wedged by traffic may snap
+  back to its lane after ~1.5 s — count how often you actually see it.
+- [ ] **C2 — Corner behaviour.** Cars now BRAKE INTO corners (~10 km/h for
+  a 90° turn) and take wide feasible arcs — no more whipping around
+  junctions at cruise. Following queues stay smooth (IDM).
+- [ ] **C3 — Signals: conflict phases.** Park at a busy 4-way: crossing
+  streams NEVER share green (the all-four-green you found is structurally
+  dead); each junction runs its own offset clock; a WALK window closes
+  each cycle.
+- [ ] **C4 — Signal furniture.** One head per approach, none at
+  T-junctions, heads face their traffic.
+- [ ] **C5 — Freeway flow.** Ramps used, gore merges without dead stops,
+  freeway speed on the mainline.
+- [ ] **C6 — Population (NEW, R6).** Density-based now: metropolis runs
+  ~360 cars + ~200 walkers (was 80/30). Streets should read alive; note
+  if any district still feels empty — the knob is per lane-km.
 
-- [ ] **D1 — Sidewalks only.** Mid-block, walkers stay on sidewalks — never
-  down the middle of a road, never on the freeway, ramps, or any road
-  without sidewalks.
-- [ ] **D2 — Crossings.** At unsignalled junctions walkers WAIT at the kerb
-  while cars are coming and cross in gaps (after a long wait they assert,
-  but never step under a car). At signalled junctions they hold on red.
-- [ ] **D3 — Corners.** Walkers round bends and corners staying on the
-  walkway — no dipping into the carriageway on curves.
+## D. Pedestrians (S8 kerb discipline + R3 WALK)
 
-## E. The whole city (the road graph as foundation)
+- [ ] **D1 — Sidewalks only;** never mid-carriageway, never on freeway.
+- [ ] **D2 — Crossings.** Kerb-wait and gap-accept at unsignalled
+  junctions; at signalled ones they go with their parallel green/WALK and
+  never walk under a moving car.
+- [ ] **D3 — Corners.** Walkers round corners on the walkway.
 
-- [ ] **E1 — Blocks and lots.** Buildings sit on lots, lots respect roads (no
-  building in a carriageway); under-freeway blocks are parking/utility/open
-  space, not towers through the deck.
-- [ ] **E2 — No regressions.** Terrain shaping, ocean, fog, building look —
-  everything not road-related should look as it did before Roads v2.
+## E. The whole city (R4 ground truth)
+
+- [ ] **E1 — Blocks: NYC bones.** Long rectangular blocks (~70×250 m) in
+  the gridded districts, not squares. Buildings on lots, lots off roads.
+- [ ] **E2 — No pits, walkable ground.** Walk off any road into a block:
+  interiors are graded to their road ring — no inescapable bowls, no
+  sidewalk cliff faces; you can step up onto every sidewalk.
+- [ ] **E3 — Parks contained + solid.** Parks/greens stop at the road (no
+  grass exploding into carriageways); fences and tree trunks are SOLID —
+  you collide, you don't ghost through.
+- [ ] **E4 — No regressions.** Terrain, ocean, fog, buildings — everything
+  non-road as before.
 
 ## Scoring
 
 A/B items are the mesher and graph — defects there are top priority.
-C3/C5 calibrate the S7 gate. B5 is the acceptance for the whole S3 arc.
-B4 and A5 decide two open tasks (#65, crosswalk geometry).
+C1/C2 accept the R5 physical tier (its wedge/snap rate is the number to
+calibrate). A3 walls, A5 parking, A4 arrows, B3 girders/posts, and C6
+density are the new R6 layer — for each, "looks right / looks wrong
+where" is enough. E-items accept R4. Your findings remain the final gate
+for the whole v2.1 round.
