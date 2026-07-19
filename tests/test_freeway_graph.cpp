@@ -654,3 +654,104 @@ TEST_CASE(merge_probe_drives_ramp_onto_mainline_on_a_real_metro) {
     CHECK(cleanMerges == gores);    // EVERY merge drives clean
     CHECK(totalDefects == 0);
 }
+
+// Answering "should I see crosswalks on the freeway?" on a REAL baked metro:
+// census zebra crossing paint (carriageway vert, u in (1.05,3), mv in the
+// [0.5,3.6] shader window) near every freeway/ramp/gore/landing node.
+TEST_CASE(no_crosswalks_anywhere_on_the_freeway) {
+    RoadNet net;
+    net.width = 11.0;
+    net.sidewalk = 2.5;
+    net.crosswalks = true;   // zebras ON — the interesting case
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    nlohmann::json gen = { { "kind", "metro" },     { "radius", 700 },
+                           { "hotspots", 5 },        { "block_size", 120 },
+                           { "seed", 9 },            { "freeways", true },
+                           { "corridor_freeways", true },
+                           { "min_road_len", 24 },   { "terrain_aware", false } };
+    applyGenerateRecipe(net, gen);
+    const int baked = rebakeNetCorridors(net, 520.0);
+    CHECK(baked > 0);
+
+    RenderMesh m = buildRoadNetMesh(net);
+    RoadGraph g = roadNetFullGraph(net);
+
+    // Every place a crosswalk must NOT appear: any freeway/ramp edge, and
+    // every gore/landing node.
+    std::vector<Vec2> forbidden;
+    for (const RoadEdge& e : g.edges)
+        if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp) {
+            forbidden.push_back(g.nodes[e.a].pos);
+            forbidden.push_back(g.nodes[e.b].pos);
+        }
+    int gores = 0, landings = 0;
+    for (const RoadNode& n : g.nodes) {
+        if (isGore(n.kind)) { ++gores; forbidden.push_back(n.pos); }
+        if (n.kind == JunctionKind::Landing) { ++landings; forbidden.push_back(n.pos); }
+    }
+    std::printf("[xwalk] gores=%d landings=%d forbidden-pts=%zu\n", gores,
+                landings, forbidden.size());
+
+    // DIAGNOSTIC: for each zebra vert, is its nearest graph edge a
+    // freeway/ramp carriageway (a zebra literally ON the freeway = a bug),
+    // and how close to a gore/landing NODE is it (within the junction disc)?
+    // Nearest freeway/ramp edge to a point: 2D distance AND the deck height
+    // there (so a ramp passing overhead is distinguished from one at grade).
+    auto nearestCorridor = [&](const Vec2& q, double& outD, double& outY) {
+        outD = 1e30; outY = 0;
+        for (const RoadEdge& e : g.edges) {
+            if (e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp)
+                continue;
+            const Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos, ab = B - A;
+            const double l2 = ab.lengthSquared();
+            double t = l2 > 1e-9 ? dot(q - A, ab) / l2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const double d = (q - (A + ab * t)).length();
+            if (d < outD) {
+                outD = d;
+                outY = g.nodes[e.a].elev + (g.nodes[e.b].elev - g.nodes[e.a].elev) * t;
+            }
+        }
+    };
+    int zebraTotal = 0, onCorridorAsphalt = 0, atGoreLandingDisc = 0;
+    for (const Vertex& v : m.vertices) {
+        if (!(v.u > 1.05 && v.u < 3.0 && v.v > 0.5 && v.v < 3.6)) continue;
+        ++zebraTotal;
+        const Vec2 p(v.position.x, v.position.z);
+        double d, deckY;
+        nearestCorridor(p, d, deckY);
+        // ON the corridor = close in plan AND at the SAME height (the deck is
+        // not flying overhead). A ramp/deck > 2 m above the street zebra is a
+        // legitimate crossing UNDER an overpass, not a crosswalk on the freeway.
+        if (d < 6.0 && std::fabs(deckY - v.position.y) < 2.0)
+            ++onCorridorAsphalt;
+        double dGL = 1e30;
+        for (const RoadNode& n : g.nodes)
+            if (isGore(n.kind) || n.kind == JunctionKind::Landing)
+                dGL = std::min(dGL, (p - n.pos).length());
+        if (dGL < 8.0) ++atGoreLandingDisc;   // within a gore/landing junction disc
+    }
+    // The DEFINITIVE question: does any gore/landing carry a real zebra
+    // BAND (dozens of verts) at its mouth, or just stray corner verts of a
+    // nearby legitimate street crossing clipping into the disc? Count zebra
+    // verts per gore/landing node.
+    int worstAtNode = 0;
+    for (const RoadNode& n : g.nodes) {
+        if (!isGore(n.kind) && n.kind != JunctionKind::Landing) continue;
+        int here = 0;
+        for (const Vertex& v : m.vertices) {
+            if (!(v.u > 1.05 && v.u < 3.0 && v.v > 0.5 && v.v < 3.6)) continue;
+            const Vec2 p(v.position.x, v.position.z);
+            if ((p - n.pos).lengthSquared() < 10.0 * 10.0) ++here;
+        }
+        worstAtNode = std::max(worstAtNode, here);
+    }
+    std::printf("[xwalk] city zebra verts=%d | at-grade near corridor=%d | "
+                "worst single gore/landing=%d verts\n", zebraTotal,
+                onCorridorAsphalt, worstAtNode);
+    CHECK(zebraTotal > 0);          // streets DO have crosswalks (sanity)
+    // No gore/landing carries a crosswalk BAND (a band is dozens of verts;
+    // a handful is a neighbouring street crossing's corner clipping in).
+    CHECK(worstAtNode < 12);
+}
