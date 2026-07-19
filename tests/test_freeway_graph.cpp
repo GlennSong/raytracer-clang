@@ -23,6 +23,7 @@
 #include "../src/engine/procgen/city/corridor_plan.h"
 #include "../src/engine/procgen/city/road_lattice.h"
 #include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/road_semantics.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <cstdio>
@@ -572,6 +573,28 @@ TEST_CASE(merge_probe_drives_ramp_onto_mainline_on_a_real_metro) {
     RenderMesh m = buildRoadNetMesh(net);
     CHECK(!m.vertices.empty());
     RoadGraph g = roadNetFullGraph(net);
+
+    // PLANARITY (#18): the bake now REJECTS any ramp chain that would cross
+    // the net — so no CORRIDOR edge on the fully baked metro may cross
+    // anything. Street-vs-street curve crossings the METRO GENERATOR itself
+    // produces are a separate pre-existing finding (surfaced by this audit,
+    // logged, tracked outside #18) — reported but not gated here.
+    {
+        const auto viols = auditRoadGraph(g, net.heightAt);
+        int corridorViols = 0;
+        for (const auto& v : viols) {
+            const bool corr =
+                g.edges[v.edgeA].klass == RoadClass::Freeway ||
+                g.edges[v.edgeA].klass == RoadClass::Ramp ||
+                g.edges[v.edgeB].klass == RoadClass::Freeway ||
+                g.edges[v.edgeB].klass == RoadClass::Ramp;
+            std::printf("[audit] %s edges %d x %d at (%.1f, %.1f) dY=%.2f\n",
+                        corr ? "CORRIDOR" : "street", v.edgeA, v.edgeB, v.at.x,
+                        v.at.y, v.dY);
+            if (corr) ++corridorViols;
+        }
+        CHECK(corridorViols == 0);
+    }
 
     // For every gore (node with both Freeway and Ramp arms): drive the ramp's
     // sampled curve INTO the gore, then continue along the mainline's sampled

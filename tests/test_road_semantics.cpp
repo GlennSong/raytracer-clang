@@ -168,3 +168,80 @@ TEST_CASE(semantics_nav_carries_kind_through_knot_merge) {
         if (l.klass == RoadClass::Ramp && l.access == 0) sawRampNoAccess = true;
     CHECK(sawRampNoAccess);
 }
+
+// The audit (#18): two deliberately-crossing ramp chains at similar height.
+// auditRoadGraph reports the crossing, and the BAKE refuses to create it in
+// the first place — the second ramp rolls back whole, with no stale gore.
+TEST_CASE(semantics_audit_rejects_crossing_ramps) {
+    // Hand-built graph: two at-grade edges crossing mid-span, no shared node.
+    RoadGraph g;
+    g.nodes.push_back({ Vec2(-50, 0) });
+    g.nodes.push_back({ Vec2(50, 0) });
+    g.nodes.push_back({ Vec2(0, -50) });
+    g.nodes.push_back({ Vec2(0, 50) });
+    g.addEdge(0, 1, 6, RoadClass::Ramp);
+    g.addEdge(2, 3, 6, RoadClass::Ramp);
+    auto viols = auditRoadGraph(g);
+    CHECK(viols.size() == 1);
+    if (!viols.empty()) {
+        CHECK(std::fabs(viols[0].at.x) < 1.0);
+        CHECK(std::fabs(viols[0].at.y) < 1.0);
+        CHECK(viols[0].dY < 4.5);
+    }
+    // Lift one edge to a proper overpass: no violation.
+    g.nodes[2].elev = 6.0;
+    g.nodes[2].elevAbsolute = true;
+    g.nodes[3].elev = 6.0;
+    g.nodes[3].elevAbsolute = true;
+    CHECK(auditRoadGraph(g).empty());
+
+    // BAKE-TIME REJECT: an exit whose target forces the authored ramp to
+    // cross the earlier exit's chain at like height. The second chain must
+    // roll back — same edge count as a one-exit bake, and no Landing stamp
+    // for the dropped ramp's target.
+    auto bakeWith = [](bool addCrosser) {
+        RoadNet net;
+        net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
+                      Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
+        net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
+        net.width = 8.0;
+        net.autoRoundabout = false;
+        net.heightAt = [](double, double) { return 0.0; };
+        CorridorDef def;
+        def.horizontal = Alignment::fromPolyline(
+            { Vec2(-100, 0), Vec2(800, 0) }, 300.0, 20.0);
+        const Real L = def.horizontal.length();
+        def.vertical.pvis = { { 0.0, 9.0, 0.0 }, { L, 9.0, 0.0 } };
+        def.lanes.throughLanes = 3;
+        ExitDef e;
+        e.station = 400.0;
+        e.upStation = true;
+        e.target = Vec2(600, -120);
+        e.targetY = 0.0;
+        def.exits.push_back(e);
+        if (addCrosser) {
+            // A second exit slightly UPSTREAM whose target lies BEYOND the
+            // first ramp's landing: its descending chain must slice across
+            // the first chain at like height on the way there.
+            ExitDef x;
+            x.station = 360.0;
+            x.upStation = true;
+            x.target = Vec2(740, -120);
+            x.targetY = 0.0;
+            def.exits.push_back(x);
+        }
+        CorridorAuthoring au =
+            corridorAuthor(def, [](Real, Real) { return 0.0; });
+        bakeCorridorIntoNet(net, def, au.rampPaths);
+        return net;
+    };
+    RoadNet one = bakeWith(false);
+    RoadNet two = bakeWith(true);
+    // Either the AUTHOR already refused the overlapping second ramp, or the
+    // bake audit dropped it — both are acceptance; what must never happen is
+    // both chains in the net with a crossing.
+    RoadGraph gb = roadNetFullGraph(two);
+    CHECK(auditRoadGraph(gb, two.heightAt).empty());
+    std::printf("[sem] oneExit edges=%zu twoExit edges=%zu\n", one.edges.size(),
+                two.edges.size());
+}

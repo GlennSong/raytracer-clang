@@ -5,7 +5,8 @@
 #include "procgen/terrain.h"
 #include "procgen/city/city.h"
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
-#include "procgen/city/road_net.h"   // editor-authored roads (shape:"road")
+#include "procgen/city/road_net.h"
+#include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
 #include "procgen/city/corridor_bake.h"
 #include "procgen/city/corridor_plan.h"   // S3b: bake solved corridors into the net
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
@@ -2502,6 +2503,36 @@ bool LevelLoader::load(const std::string& path,
                 f << "]}";
                 LOG_INFO << "[roadgraph] dumped " << lrg.graph.nodes.size()
                          << " nodes to " << dp;
+            }
+            // Load-time PLANARITY REPORT (#18): the bake already REJECTS
+            // crossing ramp chains; this catches anything else (authored
+            // nets, multi-net overlaps) loudly instead of silently meshing
+            // roads through each other.
+            {
+                const auto viols =
+                    engine::auditRoadGraph(lrg.graph, levelGround);
+                int corridorViols = 0, street = 0;
+                for (const auto& v : viols) {
+                    const bool corr =
+                        lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Freeway ||
+                        lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Ramp ||
+                        lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Freeway ||
+                        lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Ramp;
+                    if (corr) {
+                        ++corridorViols;
+                        LOG_ERROR << "[roadgraph] corridor edges " << v.edgeA
+                                  << " and " << v.edgeB << " cross at ("
+                                  << v.at.x << ", " << v.at.y << ") with only "
+                                  << v.dY << " m clearance";
+                    } else {
+                        ++street;
+                    }
+                }
+                if (street)
+                    LOG_WARN << "[roadgraph] " << street
+                             << " street-street curve crossing(s) — the metro "
+                                "generator's own planarity debt (tracked "
+                                "separately from #18)";
             }
             world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
         }

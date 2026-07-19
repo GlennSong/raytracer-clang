@@ -1,5 +1,7 @@
 #include "corridor_bake.h"
 
+#include "../../../log.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -69,6 +71,53 @@ void setTangent(RoadNet& net, int ni, const Vec2& t) {
 
 }  // namespace
 
+// The bake-time PLANARITY audit (#18): does any edge in [e0, end) cross an
+// EARLIER edge in XZ — sharing no endpoint position — with less than
+// `clearance` metres of vertical gap at the crossing? Node Y = authored
+// nodeElev where finite, else terrain (net.heightAt). This is the check the
+// planner's §12 guard never did: it tested the straight gore->target CHORD,
+// never the authored clothoid the ramp actually drives.
+bool chainCrossesNet(const RoadNet& net, std::size_t e0, double clearance) {
+    auto nodeY = [&](int v) {
+        if (v < static_cast<int>(net.nodeElev.size()) &&
+            std::isfinite(net.nodeElev[v]))
+            return net.nodeElev[v];
+        return net.heightAt ? net.heightAt(net.nodes[v].x, net.nodes[v].y) : 0.0;
+    };
+    for (std::size_t i = e0; i < net.edges.size(); ++i) {
+        const Vec2 p = net.nodes[net.edges[i][0]];
+        const Vec2 q = net.nodes[net.edges[i][1]];
+        for (std::size_t j = 0; j < e0; ++j) {
+            const Vec2 r = net.nodes[net.edges[j][0]];
+            const Vec2 s2 = net.nodes[net.edges[j][1]];
+            // Shared endpoint (by position): adjacency, not a crossing.
+            const double tol2 = 1.0;
+            if ((p - r).lengthSquared() < tol2 || (p - s2).lengthSquared() < tol2 ||
+                (q - r).lengthSquared() < tol2 || (q - s2).lengthSquared() < tol2)
+                continue;
+            const Vec2 d1 = q - p, d2 = s2 - r;
+            const double den = d1.x * d2.y - d1.y * d2.x;
+            if (std::fabs(den) < 1e-9) continue;
+            const Vec2 pr = r - p;
+            const double t = (pr.x * d2.y - pr.y * d2.x) / den;
+            const double u = (pr.x * d1.y - pr.y * d1.x) / den;
+            if (t <= 0.02 || t >= 0.98 || u <= 0.02 || u >= 0.98) continue;
+            const double ya = nodeY(net.edges[i][0]) +
+                              (nodeY(net.edges[i][1]) - nodeY(net.edges[i][0])) * t;
+            const double yb = nodeY(net.edges[j][0]) +
+                              (nodeY(net.edges[j][1]) - nodeY(net.edges[j][0])) * u;
+            if (std::fabs(ya - yb) < clearance) {
+                LOG_ERROR << "[bake] ramp chain crosses an existing road at ("
+                          << (p + d1 * t).x << ", " << (p + d1 * t).y
+                          << ") with only " << std::fabs(ya - yb)
+                          << " m clearance — ramp dropped";
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
                                      const std::vector<RampPath>& rampPaths,
                                      const CorridorBakeParams& params) {
@@ -76,6 +125,53 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
     const Real L = def.horizontal.length();
     if (L < 1.0) return mainline;
     const int streetNodes = static_cast<int>(net.nodes.size());
+
+    // The SAMPLED existing net (#18): streets are Catmull-Rom curves in the
+    // derived graph — a chord-level test misses a ramp slicing through a
+    // street's BOW (the metro audit caught exactly that at dY = 0). The
+    // authored ramp polylines are tested against these curve segments; the
+    // net grows corridor-by-corridor, so earlier corridors are included.
+    const RoadGraph sampled = navRoadGraph(net);
+    auto sampledY = [&](int v) {
+        const RoadNode& nd = sampled.nodes[v];
+        if (nd.elevAbsolute) return static_cast<double>(nd.elev);
+        return (net.heightAt ? net.heightAt(nd.pos.x, nd.pos.y) : 0.0) +
+               static_cast<double>(nd.elev);
+    };
+    // Does the authored polyline cross a sampled segment at like height,
+    // away from its own two ends (gore + landing adjacency)?
+    auto rampPathCrosses = [&](const std::vector<Vec3>& path) {
+        if (path.size() < 2) return false;
+        const Vec2 endA(path.front().x, path.front().z);
+        const Vec2 endB(path.back().x, path.back().z);
+        for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+            const Vec2 p(path[i].x, path[i].z), q(path[i + 1].x, path[i + 1].z);
+            for (const RoadEdge& e : sampled.edges) {
+                const Vec2 r = sampled.nodes[e.a].pos;
+                const Vec2 s2 = sampled.nodes[e.b].pos;
+                const Vec2 d1 = q - p, d2 = s2 - r;
+                const double den = d1.x * d2.y - d1.y * d2.x;
+                if (std::fabs(den) < 1e-9) continue;
+                const Vec2 pr = r - p;
+                const double t = (pr.x * d2.y - pr.y * d2.x) / den;
+                const double u = (pr.x * d1.y - pr.y * d1.x) / den;
+                if (t <= 0.0 || t >= 1.0 || u <= 0.02 || u >= 0.98) continue;
+                const Vec2 at = p + d1 * t;
+                if ((at - endA).length() < 6.0 || (at - endB).length() < 6.0)
+                    continue;   // its own gore / landing node adjacency
+                const double yr = path[i].y + (path[i + 1].y - path[i].y) * t;
+                const double ys = sampledY(e.a) + (sampledY(e.b) - sampledY(e.a)) * u;
+                if (std::fabs(yr - ys) < 4.5) {
+                    LOG_ERROR << "[bake] authored ramp crosses a road curve at ("
+                              << at.x << ", " << at.y << ") with only "
+                              << std::fabs(yr - ys)
+                              << " m clearance — ramp dropped";
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
 
     const int fwySpec = ensureSpec(net, "freeway3");
     const int rampSpec = ensureSpec(net, "ramp1");
@@ -141,9 +237,14 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
             if (d < best) { best = d; gore = ni; }
         }
         if (gore < 0 || best > 1.0) continue;      // must be exact, not near
-        stampKind(net, gore,
-                  def.exits[xi].onRamp ? JunctionKind::Merge
-                                       : JunctionKind::Diverge);
+        if (rampPathCrosses(rampPaths[xi].pts)) continue;   // #18: author-curve audit
+        // Snapshot every parallel array: if this ramp's authored chain turns
+        // out to CROSS the net (#18), the whole chain rolls back and the
+        // gore/landing kinds are never stamped.
+        const std::size_t snapNodes = net.nodes.size();
+        const std::size_t snapEdges = net.edges.size();
+        const std::size_t snapTang = net.tangents.size();
+        const std::size_t snapKinds = net.nodeKinds.size();
 
         // 2a RIBBON EXTRACTION: drop the gore band (junction surface, owned
         // by the 2c gore treatment) and orient the walk GORE -> LANDING. An
@@ -217,6 +318,7 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
             return l > 1e-9 ? d * (1.0 / l) : Vec2(0, 0);
         };
         int prev = gore;
+        int landing = -1;
         for (std::size_t ki = 0; ki < keep.size(); ++ki) {
             const std::size_t k = keep[ki];
             const Vec2 q(rp[k].x, rp[k].z);
@@ -245,12 +347,33 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
                 const double d = (net.nodes[v] - end).lengthSquared();
                 if (d < sd) { sd = d; snap = v; }
             }
-            if (snap >= 0 && snap != prev) {
+            if (snap >= 0 && snap != prev)
                 pushEdge(net, prev, snap, rampWidth, RoadClass::Ramp, /*layer=*/0,
                          rampSpec);
-                stampKind(net, snap, JunctionKind::Landing);
-            }
+            landing = snap;
         }
+
+        // PLANARITY AUDIT (#18): the authored chain against everything
+        // already in the net (streets + mainline + earlier ramps). On a
+        // violation the chain rolls back whole — a criss-crossed ramp never
+        // enters the graph.
+        if (chainCrossesNet(net, snapEdges, 4.5)) {
+            net.nodes.resize(snapNodes);
+            net.nodeElev.resize(std::min(net.nodeElev.size(), snapNodes));
+            net.edges.resize(snapEdges);
+            net.edgeWidths.resize(std::min(net.edgeWidths.size(), snapEdges));
+            net.edgeLayers.resize(std::min(net.edgeLayers.size(), snapEdges));
+            net.edgeClasses.resize(std::min(net.edgeClasses.size(), snapEdges));
+            net.edgeSpecs.resize(std::min(net.edgeSpecs.size(), snapEdges));
+            net.edgeBaked.resize(std::min(net.edgeBaked.size(), snapEdges));
+            net.tangents.resize(snapTang);
+            net.nodeKinds.resize(std::min(net.nodeKinds.size(), snapKinds));
+            continue;
+        }
+        stampKind(net, gore,
+                  def.exits[xi].onRamp ? JunctionKind::Merge
+                                       : JunctionKind::Diverge);
+        if (landing >= 0) stampKind(net, landing, JunctionKind::Landing);
     }
     // Tangent array stays parallel even if the last pushes were snaps.
     if (net.tangents.size() < net.nodes.size())
