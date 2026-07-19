@@ -1304,49 +1304,76 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
     return out;
 }
 
-StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p) {
+StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
     StructureSet set;
-    if (!net.heightAt) return set;                      // flat road: no walls
-    // SAME decomposition as roadNetConformRegions, so a wall lands exactly where
-    // that pass's batter clamps at reach — the two read the identical deck profile.
+    // CO-DESIGNED with the SMOOTHSTEP conform (roads-v2.1 R6a; the old
+    // version priced walls off the DaylightBatter reach the conform no
+    // longer uses). roadNetConformRegions feathers deck -> natural over
+    // `falloff` metres past the graded corridor; a DEEP CUT leaves that
+    // feather face near-vertical and raw (hillcity's first frame). The wall
+    // stands just OUTSIDE the graded corridor and rises to the natural
+    // ground at the feather's END, fronting the steep face — the terrain
+    // still smoothsteps behind it, hidden. Shallow cuts (drop <= minWall)
+    // keep their grass; fills stay open embankments (they read as slopes).
+    const RoadNet net = roadNetStreetsOnly(netIn);   // corridor flies; no walls
+    if (!net.heightAt) return set;                   // flat road: no walls
     RoadGraph g = constrainedNetGraph(net);
     std::vector<UnionSpine> spines = weldChainSpines(g);
     std::vector<std::vector<double>> profiles =
         weldChainProfiles(spines, net.heightAt, 0.0, kRoadMaxGrade,
                           net.sidewalk + 4.0);
+    const double falloff = 8.0;   // roadNetConformRegions' feather span
 
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         const int n = static_cast<int>(sp.points.size());
         if (static_cast<int>(profiles[si].size()) != n || n < 2) continue;
-        const double flatHalf = sp.halfWidth + net.sidewalk + 2.0;   // graded-corridor half-width
-        const double wallLat = flatHalf + p.reach;                    // where the batter clamps
-        // The wall top sits at the batter-end height at lateral offset wallLat; its
-        // drop is the residual to natural ground there. One short quad per station
-        // pair, so the wall follows the road's undulation.
-        auto stationWall = [&](int side, int k, Vec3& topOut, double& dropOut, bool& retainOut) {
-            int seg = std::min(k, n - 2);
-            Vec2 dir = normalize(sp.points[seg + 1] - sp.points[seg]);
+        if (!sp.yAbs.empty()) continue;   // authored elevated: piers, not walls
+        const double flatHalf = sp.halfWidth + net.sidewalk + 2.0;   // graded corridor
+        const double wallLat = flatHalf + 0.6;    // just outside the graded ground
+        // DENSIFIED stations (~6 m): the spine's own points can span a whole
+        // straight edge, and a single wall quad would chord an undulating
+        // hill line instead of following it.
+        std::vector<Vec2> pts;
+        std::vector<double> deck;
+        for (int k = 0; k + 1 < n; ++k) {
+            const Vec2 A = sp.points[k], B = sp.points[k + 1];
+            const double len = (B - A).length();
+            const int div = std::max(1, static_cast<int>(std::ceil(len / 6.0)));
+            for (int t = 0; t < div; ++t) {
+                const double f = static_cast<double>(t) / div;
+                pts.push_back(A + (B - A) * f);
+                deck.push_back(profiles[si][k] +
+                               (profiles[si][k + 1] - profiles[si][k]) * f);
+            }
+        }
+        pts.push_back(sp.points[n - 1]);
+        deck.push_back(profiles[si][n - 1]);
+        const int m = static_cast<int>(pts.size());
+        auto stationWall = [&](int side, int k, Vec3& topOut, double& dropOut) {
+            int seg = std::min(k, m - 2);
+            Vec2 dir = normalize(pts[seg + 1] - pts[seg]);
             Vec2 nrm = perp(dir);
-            Vec2 lat = sp.points[k] + nrm * (static_cast<double>(side) * wallLat);
-            double deckY = profiles[si][k];
-            double naturalEnd = net.heightAt(lat.x, lat.y);
-            bool cut = naturalEnd > deckY;
-            double batterEndY = cut ? deckY + p.reach * p.cutBatter
-                                    : deckY - p.reach * p.fillBatter;
-            double drop = cut ? (naturalEnd - batterEndY)   // hill still above the cut batter
-                              : (batterEndY - naturalEnd);  // fill batter still above ground
-            topOut = Vec3(lat.x, batterEndY, lat.y);
+            Vec2 at = pts[k] + nrm * (static_cast<double>(side) * wallLat);
+            Vec2 end =
+                pts[k] + nrm * (static_cast<double>(side) * (flatHalf + falloff));
+            const double naturalEnd = net.heightAt(end.x, end.y);
+            const double drop = naturalEnd - deck[k];   // cut face height
+            topOut = Vec3(at.x, deck[k] + std::max(0.0, drop), at.y);
             dropOut = std::max(0.0, drop);
-            retainOut = cut;
         };
         for (int side = -1; side <= 1; side += 2)
-            for (int k = 0; k + 1 < n; ++k) {
-                Vec3 topA, topB; double dropA, dropB; bool retainA, retainB;
-                stationWall(side, k, topA, dropA, retainA);
-                stationWall(side, k + 1, topB, dropB, retainB);
+            for (int k = 0; k + 1 < m; ++k) {
+                Vec3 topA, topB; double dropA, dropB;
+                stationWall(side, k, topA, dropA);
+                stationWall(side, k + 1, topB, dropB);
                 if (dropA <= p.minWall && dropB <= p.minWall) continue;
-                set.walls.push_back(WallSegment{topA, topB, dropA, dropB, retainA || retainB});
+                WallSegment w{topA, topB, dropA, dropB, true};
+                const int seg = std::min(k, m - 2);
+                const Vec2 nrm = perp(normalize(pts[seg + 1] - pts[seg]));
+                w.out = Vec3(nrm.x * side, 0, nrm.y * side);
+                w.bench = falloff - 0.6 + 0.4;   // cover the feather to natural
+                set.walls.push_back(w);
                 set.colliderEdges.push_back({topA, topB});
             }
     }

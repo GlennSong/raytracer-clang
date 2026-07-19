@@ -12,6 +12,7 @@
 
 #include "../src/engine/procgen/city/block_grade.h"
 #include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/structure_set.h"
 #include "../src/engine/procgen/terrain.h"
 #include <cmath>
 #include <cstdio>
@@ -227,4 +228,50 @@ TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
     std::printf("[park] parks=%d violations=%d\n", parks, violations);
     CHECK(parks > 0);
     CHECK(violations == 0);
+}
+
+TEST_CASE(retaining_walls_front_deep_cut_faces) {
+    // R6a (hillcity finding): the smoothstep conform leaves a near-vertical
+    // face where a road cuts DEEP into a hill. buildRoadWalls (co-designed
+    // with that feather) fronts each deep face with a retaining wall just
+    // outside the graded corridor; shallow cuts and flats stay open ground.
+    auto ridge = [](double x, double z) {
+        (void)x;   // a steep ridge north of the road line
+        return z > 0 ? std::min(24.0, z * 0.8) : 0.0;
+    };
+    RoadNet net;
+    net.width = 8.0;
+    net.sidewalk = 2.0;
+    net.autoRoundabout = false;
+    net.heightAt = ridge;
+    net.nodes = { Vec2(-120, 6), Vec2(120, 6) };   // hugs the ridge foot
+    net.edges = { { 0, 1 } };
+
+    StructureParams p;
+    p.minWall = 3.5;
+    StructureSet ws = buildRoadWalls(net, p);
+    std::printf("[walls] segments=%zu\n", ws.walls.size());
+    CHECK(!ws.walls.empty());          // the deep cut face gets its wall
+    CHECK(!ws.mesh.vertices.empty());
+
+    const double flatHalf = 4.0 + 2.0 + 2.0;   // halfWidth + sidewalk + 2
+    double worstTopGap = 0;
+    for (const WallSegment& w : ws.walls) {
+        // Walls only on the CUT (ridge) side, outside the graded corridor,
+        // never in the walkway.
+        CHECK(w.topA.z > 6.0 + flatHalf - 0.5);
+        CHECK(w.retaining);
+        // The top edge meets the hill line at the feather's end (the wall
+        // FRONTS the steep feather face; terrain behind it climbs on).
+        const double natural = ridge(w.topA.x, 6.0 + flatHalf + 8.0);
+        worstTopGap = std::max(worstTopGap, std::fabs(w.topA.y - natural));
+        CHECK(w.dropA > 0 || w.dropB > 0);
+    }
+    std::printf("[walls] worstTopGap=%.2f\n", worstTopGap);
+    CHECK(worstTopGap < 1.5);   // top tracks the hill line (grade-limited deck)
+
+    // Control: a flat site grows no walls at all.
+    RoadNet flat = net;
+    flat.heightAt = [](double, double) { return 2.0; };
+    CHECK(buildRoadWalls(flat, p).walls.empty());
 }

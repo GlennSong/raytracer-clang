@@ -20,8 +20,15 @@ RenderMesh bakeWallMesh(const std::vector<WallSegment>& walls, const Vec3& color
         // Front + back quads (topA, topB, botB, botA), both windings.
         MeshBuilder::emitQuad(mesh, w.topA, w.topB, botB, botA, n, color);
         MeshBuilder::emitQuad(mesh, w.topB, w.topA, botA, botB, Vec3(-n.x, 0, -n.z), color);
-        // Thin top cap so the crown doesn't read as a paper edge (0 width is fine
-        // visually; a small inset would need a thickness param — deferred).
+        // Backfill bench: horizontal cap from the top edge back over the
+        // conform's feather, meeting natural ground at its far edge (the
+        // wall top IS the natural height at the feather's end).
+        if (w.bench > 0 && (w.out.x != 0 || w.out.z != 0)) {
+            const Vec3 backA = w.topA + w.out * static_cast<Real>(w.bench);
+            const Vec3 backB = w.topB + w.out * static_cast<Real>(w.bench);
+            MeshBuilder::emitQuad(mesh, w.topA, backA, backB, w.topB,
+                                  Vec3(0, 1, 0), color);
+        }
     }
     return mesh;
 }

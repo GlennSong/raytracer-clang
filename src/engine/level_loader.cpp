@@ -2257,12 +2257,6 @@ bool LevelLoader::load(const std::string& path,
                     applyGenerateRecipe(net, roadBlock["generate"]);
                 std::vector<TerrainFlatten> r = roadNetConformRegions(net);
                 roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
-                // Retaining/fill walls (ADR-0075 P1b) are DISABLED: they were sized
-                // to the DaylightBatter reach, which regressed the conform and was
-                // reverted to the smoothstep feather — so a wall at the old batter
-                // step no longer matches the ground. buildRoadWalls stays in-tree
-                // for a future attempt that co-designs the walls with the carve.
-                (void)roadWallMesh;
                 preNets.push_back(std::move(net));
                 preNetEnts.push_back(&ent);
             }
@@ -2667,6 +2661,32 @@ bool LevelLoader::load(const std::string& path,
         // road's grade-break structures — concrete-grey, with a static MeshCollider
         // so cars and pedestrians can't walk through a cut face. The terrain batter
         // grades down to each wall's top; the wall caps the residual step to natural.
+        // Retaining walls (roads-v2.1 R6a): built against the FULLY CARVED
+        // ground — base terrain + road conform + block grading — never the
+        // raw hill. Sampling the base terrain stood walls against blocks the
+        // city had already graded level (hillcity smoke: a wall fencing a
+        // flat lawn). Co-designed with the smoothstep conform: a wall fronts
+        // each DEEP cut face the feather leaves near-vertical, with a
+        // backfill bench capping the feather dip behind it; minWall 3.5
+        // keeps shallow grassy cuts open.
+        {
+            auto wallTp = std::make_shared<TerrainParams>(terrainParams);
+            auto wallNoise = std::make_shared<Noise>(terrainSeed);
+            StructureParams wp;
+            wp.minWall = 3.5;
+            for (const engine::RoadNet& pn : preNets) {
+                engine::RoadNet wn = pn;
+                wn.heightAt = [wallTp, wallNoise](double x, double z) {
+                    return terrainHeight(*wallTp, *wallNoise, x, z);
+                };
+                StructureSet ws = buildRoadWalls(wn, wp);
+                if (!ws.empty()) {
+                    LOG_INFO << "[walls] " << ws.walls.size()
+                             << " retaining segments";
+                    MeshBuilder::append(roadWallMesh, ws.mesh);
+                }
+            }
+        }
         if (!roadWallMesh.vertices.empty()) {
             Entity we = world.create();
             world.add<Transform>(we, Transform{});             // mesh is world-space

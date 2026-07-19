@@ -18,6 +18,13 @@ struct WallSegment {
     Vec3   topA, topB;             // top edge along the shoulder (at the batter-end height)
     double dropA = 0, dropB = 0;   // height down to natural ground at each end (> 0)
     bool   retaining = true;       // true = cut wall (holds the hill), false = fill wall
+    // Outward unit (XZ, away from the road). When set on a retaining wall,
+    // the bake adds a BACKFILL BENCH: a horizontal cap from the top edge
+    // back over the conform's feather to where it meets natural ground —
+    // without it the feathered dip behind the wall reads as an open trench
+    // between wall and hill (hillcity smoke).
+    Vec3   out{0, 0, 0};
+    double bench = 0;              // cap depth (m); 0 = no cap
 };
 
 struct StructureSet {
