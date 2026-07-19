@@ -254,6 +254,19 @@ follow along and review.
   (it has caused real bugs here: a literal `\n` written into code, edits that
   no-op on an anchor that changed). Shell is for building, running, grepping,
   and git — not for mutating tracked source.
+- **Hand over a viewable example and say exactly what to look at.** A test-pass
+  count and a paragraph of measurements are NOT a demonstration — the person
+  cannot see a number go from 18 to 0. When a fix or feature is done, produce a
+  concrete thing they can open and point them straight at it: the exact command
+  to run (`./build/viewer assets/levels/<scene>.json --edit`), *where* to go
+  once it loads (which junction / ramp / building — give a landmark or a
+  spawn/camera that frames it), and *what they should see* now versus what was
+  wrong before. If the change is visual, build or reuse a scene that isolates it
+  (a small focused lab level beats "go find it in metropolis"), and when useful
+  dump a frame with `RT_FRAME_DUMP` so there's an image in the report. The test
+  proves it *stays* fixed; the example is how the human confirms it *is* fixed.
+  Never end a visual change with only "verified, suite green" — end it with
+  "open X, look at Y, you'll see Z."
 
 ## Coding Standards
 
