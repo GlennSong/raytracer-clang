@@ -83,9 +83,10 @@ constexpr Real kPedAnticipation = 0.4;  // walkers dodge where a neighbour WILL 
 // clearly on its (right-hand) side. A fixed lane width instead leaves a car
 // hugging the centreline on a wide road, which reads as driving on the wrong
 // side. laneCenter places lane i at (0.5 + i) * spacing off the centreline.
-Real laneSpacing(const engine::NavLink& l) {
+Real laneSpacing(const engine::NavLink& l, Real drivableWidth) {
     int lanes = l.lanes < 1 ? 1 : l.lanes;
-    return (l.oneWay ? l.width : l.width * 0.5) / static_cast<Real>(lanes);
+    return (l.oneWay ? drivableWidth : drivableWidth * 0.5) /
+           static_cast<Real>(lanes);
 }
 
 // Speed a follower may travel given the centre-to-centre gap to its leader.
@@ -175,6 +176,14 @@ bool CitySim::nearJunction(Vec2 pos, Real margin) const {
     return false;
 }
 
+Real CitySim::laneSpacingFor(int li) const {
+    const engine::NavLink& l = nav_->links[li];
+    Real w = l.width;
+    if (li < static_cast<int>(bayNarrowed_.size()) && bayNarrowed_[li])
+        w = std::max(Real(4.8), w - 2.0 * 2.6);   // both curb strips parked
+    return laneSpacing(l, w);
+}
+
 std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     std::vector<Vec2> out;
     if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
@@ -183,7 +192,7 @@ std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     if (step < 0.5) step = 0.5;
     for (int li : a.route.links) {
         const engine::NavLink& L = nav_->links[li];
-        Real spacing = laneSpacing(L);
+        Real spacing = laneSpacingFor(li);
         int n = std::max(1, static_cast<int>(std::ceil(L.length / step)));
         int lane = std::min(a.lane, std::max(1, L.lanes) - 1);
         for (int k = 0; k <= n; ++k) {
@@ -225,6 +234,50 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     rng_ = seed ? seed : 0x6c078965u;
     ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
     signals_.build(graph);
+    // Curbside bays (R6b): mid-link on at-grade Local streets, right curb of
+    // each directed link, well clear of junction mouths; ~55% seeded with
+    // scenery cars so streets read parked-along from the first frame.
+    bays_.clear();
+    baysOnLink_.assign(graph.linkCount(), {});
+    for (int li = 0; li < graph.linkCount(); ++li) {
+        const engine::NavLink& L = graph.links[li];
+        if (L.klass != engine::RoadClass::Local) continue;
+        if (L.layer != 0 || L.elevAbsolute) continue;
+        if (L.length < 40.0 || L.width < 9.5) continue;
+        const engine::Vec2 dir = graph.direction(li);
+        const engine::Vec2 right(dir.y, -dir.x);
+        const Real off = L.width * 0.5 - 1.05;   // hugging the curb line
+        // 22 m junction setback: a physical car exits a corner with ~1 m of
+        // lateral error that decays over the first ~15 m — bays any closer
+        // took sideswipes from the possession tier's real bodies.
+        for (Real st = 22.0; st + 22.0 < L.length; st += 7.0) {
+            ParkingBay b;
+            b.link = li;
+            b.station = st;
+            b.pos = graph.pointOnLink(li, st / L.length) + right * off;
+            b.heading = dir;
+            // Deterministic scenery fill (~55%), stable per (link, slot).
+            const uint32_t h = (static_cast<uint32_t>(li) * 2654435761u) ^
+                               (static_cast<uint32_t>(st * 8.0) * 40503u) ^ rng_;
+            b.occupant = (h % 100u) < 55u ? kBayScenery : -1;
+            baysOnLink_[li].push_back(static_cast<int>(bays_.size()));
+            bays_.push_back(b);
+        }
+    }
+    bayNarrowed_.assign(graph.linkCount(), 0);
+    for (int li = 0; li < graph.linkCount(); ++li)
+        if (!baysOnLink_[li].empty()) bayNarrowed_[li] = 1;
+    // The reverse twin of a parked-up roadway narrows too (each direction
+    // parks its own right curb; the carriageway loses both strips).
+    for (int li = 0; li < graph.linkCount(); ++li) {
+        if (bayNarrowed_[li]) continue;
+        const engine::NavLink& L = graph.links[li];
+        for (int ol : graph.outLinks[L.to])
+            if (graph.links[ol].to == L.from && bayNarrowed_[ol]) {
+                bayNarrowed_[li] = 1;
+                break;
+            }
+    }
     // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
     // (persistent) wander flag; a host with custom tables re-installs after.
     goalPed_ = wander_ ? wanderGoals(false) : defaultScheduleGoals();
@@ -655,6 +708,10 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.laneTimer = 4.0 + (a.home % 11);
     ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
+    if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {
+        bays_[a.parkedBay].occupant = -1;   // pulling out frees the bay
+        a.parkedBay = -1;
+    }
     a.crashTimer = 0;    // a fresh trip carries no wreck state: without this an
     a.crashCount = 0;    // escapee that PARKED near its wreck departed hours
                          // later still contact-immune and ghosted through traffic
@@ -687,7 +744,7 @@ void CitySim::refreshPose(Agent& a) {
         const Real flMax = Real(lanes - 1) +
             (LL.klass == engine::RoadClass::Freeway ? Real(1) : Real(0));
         const Real fl = std::min(std::max(a.laneF, Real(0)), flMax);
-        const Real spacing = laneSpacing(LL);
+        const Real spacing = laneSpacingFor(link);
         Real off = (0.5 + fl) * spacing;
         if (LL.oneWay) off -= lanes * 0.5 * spacing;
         // WAVER (device): a human hand is never perfectly still — but only at
@@ -1473,20 +1530,37 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         return;
     }
     if (a.mode == Agent::Mode::Driver) {
-        // Park OFF the carriageway (ADR-0062). Resting at the lane's very end
-        // was harmless for a kinematic ghost, but the PHYSICAL car that now
-        // follows this pose became a roadblock parked at the junction mouth —
-        // everyone behind piled up until the next trip, hours later. Pull to
-        // the verge beside the link, a few metres short of the node, with a
-        // per-agent setback so arrivals at one destination don't stack.
-        Vec2 dir = nav_->direction(lastLink);
-        Vec2 right(dir.y, -dir.x);
-        Real hw = nav_->links[lastLink].width * 0.5;
-        Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;   // 4..13 m
-        back = std::min(back, nav_->links[lastLink].length * 0.5);
-        a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                right * (hw + 2.8);
-        a.heading = dir;
+        // Park OFF the travel lanes (ADR-0062). Preferred: a marked curbside
+        // BAY on the arrival link (R6b) — the stretch just behind the node,
+        // the same range the old verge snap used. Fallback: the grass verge.
+        const int myIdx = static_cast<int>(&a - agents_.data());
+        int bay = -1;
+        if (lastLink < static_cast<int>(baysOnLink_.size())) {
+            const Real L = nav_->links[lastLink].length;
+            for (int bi : baysOnLink_[lastLink]) {
+                if (bays_[bi].occupant != -1) continue;
+                if (L - bays_[bi].station > 30.0) continue;   // near the node
+                bay = bi;
+                break;
+            }
+        }
+        if (bay >= 0) {
+            bays_[bay].occupant = myIdx;
+            a.parkedBay = bay;
+            a.pos = bays_[bay].pos;
+            a.heading = bays_[bay].heading;
+        } else {
+            // Verge fallback: a few metres short of the node, per-agent
+            // setback so arrivals at one destination don't stack.
+            Vec2 dir = nav_->direction(lastLink);
+            Vec2 right(dir.y, -dir.x);
+            Real hw = nav_->links[lastLink].width * 0.5;
+            Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;   // 4..13 m
+            back = std::min(back, nav_->links[lastLink].length * 0.5);
+            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8);
+            a.heading = dir;
+        }
     } else {
         // A walker rests at the end of its sidewalk (continuous with the final
         // motion — not snapped across the node, which was the old visible jump).

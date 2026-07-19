@@ -116,6 +116,7 @@ struct Agent {
     // Current trip along the lane graph.
     engine::Route route;
     int leg = 0;
+    int parkedBay = -1;   // curbside bay held while resting (roads-v2.1 R6b)
     int trips = 0;   // trips started so far — the ADR-0062 bridge rebuilds its
                      // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
@@ -225,6 +226,20 @@ public:
     Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
     const std::vector<Agent>& agents() const { return agents_; }
     const std::vector<SimVehicle>& vehicles() const { return vehicles_; }
+
+    // Curbside parallel-parking bays (roads-v2.1 R6b, plan 4d phase 1):
+    // marked bays mid-link on at-grade Local streets, seeded ~half full with
+    // scenery cars at build; an arriving driver claims a free bay on its
+    // arrival link instead of the old grass verge, and departure frees it.
+    // occupant: -1 free, kBayScenery build-time filler, else the agent id.
+    static constexpr int kBayScenery = -2;
+    struct ParkingBay {
+        engine::Vec2 pos, heading;   // bay centre + facing (along the link)
+        int link = -1;               // directed link whose right curb it hugs
+        engine::Real station = 0;    // metres from the link's `from` node
+        int occupant = -1;
+    };
+    const std::vector<ParkingBay>& parkingBays() const { return bays_; }
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
 
@@ -395,6 +410,13 @@ private:
     const engine::NavGraph* nav_ = nullptr;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
+    std::vector<ParkingBay> bays_;
+    std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
+    std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
+    // Effective lane spacing for a link: a parked-up street loses its curb
+    // strips from the DRIVABLE width (band-model semantics, sim-side) — the
+    // raw geometric spacing centred cars overlapping the parked row.
+    engine::Real laneSpacingFor(int li) const;
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)

@@ -466,6 +466,40 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.add<InstanceGroup>(signalPostGroup_, g);
     }
 
+    // Curbside bay markings (R6b): one white outline instanced per bay —
+    // two end ticks + the outer edge line of a 6.2 x 2.2 parallel bay,
+    // riding just above the asphalt. Local +Z = along the bay (like cars).
+    {
+        engine::RenderMesh bay;
+        const Vec3 white(0.85, 0.85, 0.85);
+        auto stripe = [&](Real x0, Real z0, Real x1, Real z1) {
+            MeshBuilder::emitQuad(bay, Vec3(x0, 0, z0), Vec3(x1, 0, z0),
+                                  Vec3(x1, 0, z1), Vec3(x0, 0, z1),
+                                  Vec3(0, 1, 0), white);
+        };
+        stripe(-1.1, 3.0, 1.1, 3.12);     // front tick
+        stripe(-1.1, -3.12, 1.1, -3.0);   // back tick
+        stripe(1.0, -3.12, 1.12, 3.12);   // outer (curb-side) edge line
+        MeshHandle bayMesh{};
+        if (assets) bayMesh = assets->acquireMesh(bay, "city:parkbay");
+        parkBayGroup_ = world.create();
+        InstanceGroup g;
+        g.mesh = bayMesh;
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.92f;
+        g.renderLayer = 0;
+        for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+            const Real y = groundAt(b.pos.x, b.pos.y) + 0.05;
+            const Real yaw = std::atan2(b.heading.x, b.heading.y);
+            g.transforms.push_back(
+                Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
+                          Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                          Vec3(1, 1, 1)));
+        }
+        refreshBounds(&g);
+        world.add<InstanceGroup>(parkBayGroup_, g);
+    }
+
     // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
     // on the sidewalk steer around the signal poles and never stand inside one.
     {
@@ -1012,6 +1046,27 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             ped->transforms.push_back(agentPose(a));
+        }
+    }
+    // Scenery parked cars (R6b): bays seeded full at build render a real car
+    // (variant by bay index) — and, riding the car groups, they get the same
+    // kinematic collision boxes as ambient traffic for free.
+    if (!cars.empty()) {
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        const auto& bays = sim_.parkingBays();
+        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
+            const CitySim::ParkingBay& b = bays[bi];
+            if (b.occupant != CitySim::kBayScenery) continue;
+            const int v = static_cast<int>(bi) % carVariantCount();
+            if (!cars[v]) continue;
+            const Real y = groundAt(b.pos.x, b.pos.y) +
+                           (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
+            const Real yaw = std::atan2(b.heading.x, b.heading.y);
+            cars[v]->transforms.push_back(
+                Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
+                          Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                          Vec3(1, 1, 1)));
+            carAgentIds_[v].push_back(-1);
         }
     }
 
