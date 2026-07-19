@@ -8,10 +8,12 @@
 #include "../mesh_builder.h"
 #include "../level_writer.h"
 #include "../model_importer.h"
+#include "../recent_scenes.h"
 #include "../../log.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -212,9 +214,11 @@ void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
 }  // namespace
 
 EditorSystem::EditorSystem(CameraSystem& cameras, std::string levelFile,
-                           PlayFactory makePlayState, EditorBridge* bridge)
+                           PlayFactory makePlayState, EditorBridge* bridge,
+                           OpenLevelFactory openLevel)
     : cameras(cameras), levelFile(std::move(levelFile)),
-      makePlayState(std::move(makePlayState)), bridge(bridge) {}
+      makePlayState(std::move(makePlayState)), bridge(bridge),
+      openLevel(std::move(openLevel)) {}
 
 // "Conform terrain to roads" (G): re-grade the CDLOD terrain so the ground meets every
 // road, then re-drape the roads on the carved result (ADR-0044 corridor conforming).
@@ -774,6 +778,70 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
         conformTerrainToRoads(ctx);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", levelFile.c_str());
+
+    // Scene picker: "Recent Scenes" (levels you've opened, newest first) plus
+    // an "All Scenes" browse of the levels folder, so you don't have to hunt
+    // for a file path. Only shown where the host gave us a way to swap the
+    // whole editor to a new level (the viewer); the Qt shell and web gallery
+    // pick scenes their own way.
+    if (openLevel) {
+        // Turn "assets/levels/metropolis.json" into "metropolis" for display.
+        auto sceneName = [](const std::string& path) {
+            std::string name = path;
+            std::size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            std::size_t dot = name.rfind(".json");
+            if (dot != std::string::npos) name.resize(dot);
+            return name;
+        };
+        // One clickable scene row: flags the current scene, and on click saves
+        // the current edits (Play does the same) before swapping the whole
+        // editor state to the chosen scene.
+        auto sceneRow = [&](const std::string& path) {
+            const bool isCurrent = (path == levelFile);
+            ImGui::PushID(path.c_str());
+            char label[160];
+            std::snprintf(label, sizeof(label), "%s%s", sceneName(path).c_str(),
+                          isCurrent ? "  (open)" : "");
+            if (ImGui::Selectable(label, isCurrent) && !isCurrent) {
+                LevelWriter::save(levelFile, ctx.world);
+                ctx.transition.replaceWith(openLevel(path));
+            }
+            ImGui::PopID();
+        };
+
+        ImGui::SeparatorText("Recent Scenes");
+        std::vector<std::string> recent = loadRecentScenes(ctx.settings);
+        if (recent.empty())
+            ImGui::TextDisabled("(none yet — scenes you open show up here)");
+        for (const std::string& path : recent) sceneRow(path);
+
+        // Scan the levels folder once per edit session (the directory of the
+        // scene we're editing), sorted, sidecars excluded. New files created
+        // mid-session are picked up on the next relaunch/scene-switch.
+        if (!browseScanned) {
+            browseScanned = true;
+            browseScenes.clear();
+            namespace fs = std::filesystem;
+            fs::path dir = fs::path(levelFile).parent_path();
+            std::error_code ec;
+            if (fs::is_directory(dir, ec)) {
+                for (const auto& entry : fs::directory_iterator(dir, ec)) {
+                    const fs::path& p = entry.path();
+                    // Levels are "*.json" but not the "*.cameras.json" sidecars.
+                    if (p.extension() != ".json") continue;
+                    if (p.string().find(".cameras.json") != std::string::npos)
+                        continue;
+                    browseScenes.push_back(p.generic_string());
+                }
+                std::sort(browseScenes.begin(), browseScenes.end());
+            }
+        }
+        if (!browseScenes.empty() &&
+            ImGui::CollapsingHeader("All Scenes")) {
+            for (const std::string& path : browseScenes) sceneRow(path);
+        }
+    }
 
     // Undo/redo: buttons plus the universal chords (Ctrl+Z / Ctrl+Shift+Z).
     const ImGuiIO& io = ImGui::GetIO();

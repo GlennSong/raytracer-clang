@@ -50,12 +50,19 @@ bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
 class EditorSystem : public System {
 public:
     using PlayFactory = std::function<std::unique_ptr<AppState>()>;
+    // Builds a fresh editor state for a DIFFERENT level path — the hook the
+    // "Recent scenes" list uses to reopen a scene without a relaunch. Null in
+    // hosts that switch scenes their own way (the Qt shell, the web gallery);
+    // the recents list simply hides itself there.
+    using OpenLevelFactory =
+        std::function<std::unique_ptr<AppState>(const std::string&)>;
 
     // `bridge`, when given, connects this system to a native shell (the Qt
     // editor): selection is shared and the shell's panels read the world
     // through it while the editor state is active.
     EditorSystem(CameraSystem& cameras, std::string levelFile,
-                 PlayFactory makePlayState, EditorBridge* bridge = nullptr);
+                 PlayFactory makePlayState, EditorBridge* bridge = nullptr,
+                 OpenLevelFactory openLevel = nullptr);
 
     void onStart(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
@@ -146,6 +153,7 @@ private:
     std::string levelFile;
     PlayFactory makePlayState;
     EditorBridge* bridge = nullptr;
+    OpenLevelFactory openLevel;   // null => the recents list is hidden
 
     // Declared before `undo`, which holds a reference into whichever
     // registry componentRegistry() picked.
@@ -182,6 +190,11 @@ private:
         nlohmann::json before;
     } pendingEdit;
     int gizmoOp = 0;            // 0 translate, 1 rotate, 2 scale
+    // Every .json level found next to the current one, scanned once per edit
+    // session (filled lazily on first toolbar draw) so the "All Scenes" picker
+    // doesn't hit the filesystem every frame.
+    std::vector<std::string> browseScenes;
+    bool browseScanned = false;
     char modelPath[256] = "assets/models/";
     std::vector<std::string> pendingAdds;   // shape names; "camera" places one
     bool pendingDuplicate = false;

@@ -45,6 +45,7 @@ add_library(engine_core STATIC
     src/job_system.cpp
     src/renderer/settings.cpp
     src/renderer/hosted_window.cpp
+    src/engine/recent_scenes.cpp
     src/engine/clock.cpp
     src/engine/event_bus.cpp
     src/engine/debug_draw.cpp
@@ -393,6 +394,7 @@ add_executable(run_tests
     tests/test_follow_camera.cpp
     tests/test_scene_camera.cpp
     tests/test_camera_store.cpp
+    tests/test_recent_scenes.cpp
     tests/test_lens.cpp
     tests/test_level_scene.cpp
     tests/test_pbr_lighting.cpp
