@@ -145,3 +145,43 @@ TEST_CASE(block_grading_leaves_no_pits_between_roads) {
     std::printf("[pit] worstRiser=%.2f\n", worstRiser);
     CHECK(worstRiser < 0.35 + 0.20);   // curb + small tolerance
 }
+
+#include "../src/engine/procgen/city/city_lots.h"
+
+TEST_CASE(metro_blocks_reach_city_scale_and_aspect) {
+    // Drive feedback: "streets need more space between them and need to be
+    // longer... Those blocks don't even feel like NYC blocks." NYC blocks
+    // run ~80 x 274 m — LONG: square-celled subdivision structurally cannot
+    // produce that. The generator now cuts each district face with an
+    // ANISOTROPIC cell (short axis ~lot depth, long axis city-scale), so
+    // long blocks exist at all.
+    RoadNet net;
+    net.width = 11.0;
+    net.autoRoundabout = false;
+    nlohmann::json gen = { { "kind", "metro" },    { "radius", 700 },
+                           { "hotspots", 5 },      { "block_size", 150 },
+                           { "seed", 11 },         { "freeways", false },
+                           { "min_road_len", 24 }, { "terrain_aware", false } };
+    applyGenerateRecipe(net, gen);
+    RoadGraph g = navRoadGraph(net);
+    std::vector<Poly2> blocks = extractBlocks(g, 400.0);
+    CHECK(blocks.size() > 30u);
+
+    int longBlocks = 0;
+    std::vector<double> areas;
+    for (const Poly2& b : blocks) {
+        OBB2 o = orientedBoundingBox(b);
+        const double longSide = 2.0 * std::max(o.half[0], o.half[1]);
+        const double shortSide = 2.0 * std::min(o.half[0], o.half[1]);
+        if (shortSide < 20.0) continue;              // slivers aren't blocks
+        areas.push_back(longSide * shortSide);
+        if (longSide / std::max(1.0, shortSide) >= 2.0 && longSide >= 150.0)
+            ++longBlocks;
+    }
+    std::sort(areas.begin(), areas.end());
+    const double median = areas.empty() ? 0 : areas[areas.size() / 2];
+    std::printf("[scale] blocks=%zu median=%.0f m2 long=%d\n", blocks.size(),
+                median, longBlocks);
+    CHECK(median >= 7000.0);        // city-scale, not courtyard-scale
+    CHECK(longBlocks >= 8);         // real long blocks exist
+}

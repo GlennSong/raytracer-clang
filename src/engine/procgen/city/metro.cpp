@@ -233,15 +233,23 @@ void subdivide(const Poly2& poly, double mn, double mx, double jitter,
 // `crook` (0 = perfectly regular) jitters each grid line's position, so OLD
 // TOWN reads as irregular streets while downtown stays crisp — robust on ANY
 // block shape (chords via cutSpan, no fragile inset).
-void gridFill(const Poly2& poly, double cell, double collectorSpan,
-              double crook, Lcg& rng, std::vector<Cut>& streets) {
+// `cellLong` (roads-v2.1 R4, drive feedback: "those blocks don't even feel
+// like NYC blocks"): the OBB's LONG axis is cut at city scale while the
+// short axis stays at lot-depth scale — long blocks (NYC ~80 x 274) are
+// structurally impossible with one square cell.
+void gridFill(const Poly2& poly, double cell, double cellLong,
+              double collectorSpan, double crook, Lcg& rng,
+              std::vector<Cut>& streets) {
     if (poly.size() < 3 || cell < 8.0) return;
     OBB2 o = orientedBoundingBox(poly);
     for (int axis = 0; axis < 2; ++axis) {
         const Vec2 along = o.axis[axis];         // spacing runs along this axis
         const Vec2 cutDir = o.axis[1 - axis];    // streets run along this one
         const double half = o.half[axis];
-        const int lines = static_cast<int>(std::floor(2.0 * half / cell));
+        // Lines spaced along the LONG axis produce the blocks' LONG side.
+        const double spacing =
+            o.half[axis] >= o.half[1 - axis] ? std::max(cellLong, cell) : cell;
+        const int lines = static_cast<int>(std::floor(2.0 * half / spacing));
         if (lines < 1) continue;
         const double step = 2.0 * half / (lines + 1);
         const bool collectorAxis =
@@ -834,10 +842,17 @@ RoadGraph buildMetro(const MetroParams& p,
             // expands"). The wider cross-section is paid for by a bigger cell,
             // and the level scales radius/terrain to match.
             const double kindCellCap[5] = {84.0, 88.0, 98.0, 70.0, 156.0};
+            // LONG-axis cell caps (R4): the city-scale block length per
+            // district — residential runs longest (the NYC feel), old town
+            // stays small and crooked, industrial takes the biggest plates.
+            const double kindCellLong[5] = {170.0, 210.0, 260.0, 110.0, 320.0};
             const double cell =
                 std::min(p.blockSize * kindBlockMul[kind], kindCellCap[kind]);
+            const double cellLong =
+                std::min(p.blockSize * kindBlockMul[kind] * 2.8,
+                         kindCellLong[kind]);
             const double crook = kindCrook[kind];
-            gridFill(f, cell, collectorSpan, crook, rng, streets);
+            gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)
