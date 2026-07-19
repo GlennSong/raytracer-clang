@@ -125,6 +125,7 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
     const Real L = def.horizontal.length();
     if (L < 1.0) return mainline;
     const int streetNodes = static_cast<int>(net.nodes.size());
+    const std::size_t firstMainlineEdge = net.edges.size();
 
     // The SAMPLED existing net (#18): streets are Catmull-Rom curves in the
     // derived graph — a chord-level test misses a ramp slicing through a
@@ -223,6 +224,21 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
             pushEdge(net, mainline.back(), ni, fwyWidth, RoadClass::Freeway,
                      /*layer=*/1, fwySpec);
         mainline.push_back(ni);
+    }
+
+    // MAINLINE PLANARITY (#18, review S4b): the ramp loop audits each ramp
+    // against everything already baked, but nothing audited the MAINLINE
+    // itself against the pre-existing streets. An authored freeway that dips
+    // toward the surface (a sag in def.vertical) could slice a street at
+    // like height. The mainline is the backbone — rolling it back would
+    // orphan the whole interchange — so this WARNS loudly instead of
+    // dropping: an authoring error the level must fix.
+    if (chainCrossesNet(net, static_cast<std::size_t>(streetNodes) == 0
+                                 ? 0
+                                 : firstMainlineEdge,
+                        4.5)) {
+        LOG_ERROR << "[bake] freeway MAINLINE crosses a surface road at like "
+                     "height — check the corridor's vertical profile";
     }
 
     // --- Bake each surviving ramp: gore node -> authored descent -> landing.

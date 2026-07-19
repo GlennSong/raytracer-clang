@@ -485,3 +485,33 @@ TEST_CASE(semantics_delete_node_keeps_edge_arrays_parallel) {
     CHECK(net.edgeBaked[0] == 1);
     CHECK(net.edgeLayers[0] == 2);
 }
+
+// [1] Review S4b: the audit's spatial hash must register every cell a
+// segment passes through (DDA supercover), not point-sample at cell width.
+// Two SHORT edges crossing at their midpoints on a cell corner used to
+// bucket into disjoint cells and be silently missed.
+TEST_CASE(semantics_audit_catches_short_edge_crossing) {
+    // 15 m edges (< the 16 m cell), an X centred on the grid corner (0,0) at
+    // 45 degrees — the exact disjoint-bucket case the review constructed.
+    RoadGraph g;
+    g.nodes.push_back({ Vec2(-5.3, -5.3) });
+    g.nodes.push_back({ Vec2(5.3, 5.3) });
+    g.nodes.push_back({ Vec2(5.3, -5.3) });
+    g.nodes.push_back({ Vec2(-5.3, 5.3) });
+    g.addEdge(0, 1, 6, RoadClass::Ramp);
+    g.addEdge(2, 3, 6, RoadClass::Ramp);
+    auto viols = auditRoadGraph(g);
+    std::printf("[sem] short-edge X violations = %zu\n", viols.size());
+    CHECK(viols.size() == 1);   // the crossing is found
+
+    // And a long edge crossing a short one (mixed lengths, arbitrary offset)
+    // is also caught — the DDA walk covers the whole span.
+    RoadGraph g2;
+    g2.nodes.push_back({ Vec2(-200, 3) });
+    g2.nodes.push_back({ Vec2(200, 3) });
+    g2.nodes.push_back({ Vec2(37, -6) });
+    g2.nodes.push_back({ Vec2(37, 12) });
+    g2.addEdge(0, 1, 8, RoadClass::Ramp);
+    g2.addEdge(2, 3, 6, RoadClass::Ramp);
+    CHECK(auditRoadGraph(g2).size() == 1);
+}

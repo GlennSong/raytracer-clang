@@ -149,16 +149,43 @@ std::vector<CrossingViolation> auditRoadGraph(const RoadGraph& g,
     auto edgeOk = [&](const RoadEdge& e) {
         return e.a >= 0 && e.a < n && e.b >= 0 && e.b < n && e.a != e.b;
     };
+    // Register each edge in EVERY cell its segment passes through — an
+    // Amanatides-Woo supercover walk, not point-sampling (review S4b: point
+    // samples at up-to-cell spacing skipped the interior cell of a short
+    // edge, so two crossing edges could bucket into disjoint cells and never
+    // be compared — a silent missed crossing). The walk visits only the
+    // traversed cells, so two crossing segments always share the crossing's
+    // cell without bounding-box over-insertion.
+    auto insertCell = [&](long long cx, long long cy, int ei) {
+        grid[cx * 73856093LL ^ cy * 19349663LL].push_back(ei);
+    };
     for (int ei = 0; ei < m; ++ei) {
         const RoadEdge& e = g.edges[ei];
         if (!edgeOk(e)) continue;
         const Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos;
-        const double len = (B - A).length();
-        const int steps = std::max(1, static_cast<int>(std::ceil(len / cell)));
-        for (int s = 0; s <= steps; ++s) {
-            const double t = static_cast<double>(s) / steps;
-            const Vec2 p = A + (B - A) * t;
-            grid[key(p.x, p.y)].push_back(ei);
+        long long cx = static_cast<long long>(std::floor(A.x / cell));
+        long long cy = static_cast<long long>(std::floor(A.y / cell));
+        const long long ex = static_cast<long long>(std::floor(B.x / cell));
+        const long long ey = static_cast<long long>(std::floor(B.y / cell));
+        const double dx = B.x - A.x, dy = B.y - A.y;
+        const int sx = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        const int sy = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
+        // Parametric distance to the next cell boundary in each axis.
+        auto tNext = [&](double a0, double d, long long c, int step) {
+            if (step == 0) return 1e30;
+            const double boundary = (step > 0 ? (c + 1) : c) * cell;
+            return (boundary - a0) / d;
+        };
+        double tMaxX = tNext(A.x, dx, cx, sx);
+        double tMaxY = tNext(A.y, dy, cy, sy);
+        const double tDeltaX = sx != 0 ? std::fabs(cell / dx) : 1e30;
+        const double tDeltaY = sy != 0 ? std::fabs(cell / dy) : 1e30;
+        insertCell(cx, cy, ei);
+        int guard = 0;
+        while ((cx != ex || cy != ey) && guard++ < 100000) {
+            if (tMaxX < tMaxY) { cx += sx; tMaxX += tDeltaX; }
+            else { cy += sy; tMaxY += tDeltaY; }
+            insertCell(cx, cy, ei);
         }
     }
     for (auto& [k, v] : grid) {
