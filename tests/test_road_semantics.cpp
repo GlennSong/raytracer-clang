@@ -245,3 +245,89 @@ TEST_CASE(semantics_audit_rejects_crossing_ramps) {
     std::printf("[sem] oneExit edges=%zu twoExit edges=%zu\n", one.edges.size(),
                 two.edges.size());
 }
+
+// S3 STYLING GATE (#21): the road MESH must carry no zebra crossing paint at
+// a gore or a ramp landing — that's exactly the "the freeways have
+// crosswalks?" / "it thinks an on-ramp merge is an intersection" report. The
+// zebra is painted by the shader where a CARRIAGEWAY vertex (u = mu > 1.05)
+// has v = mv in the crosswalk window [0.5, 3.6] (mesh.wgsl:400). A plain
+// street intersection is the positive control: it MUST still paint one.
+namespace {
+int zebraVertsNear(const engine::RenderMesh& m, const Vec2& c, double radius) {
+    int n = 0;
+    for (const Vertex& v : m.vertices) {
+        const double dx = v.position.x - c.x, dz = v.position.z - c.y;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        if (v.u > 1.05 && v.u < 3.0 && v.v > 0.4 && v.v < 3.7) ++n;
+    }
+    return n;
+}
+}  // namespace
+
+TEST_CASE(semantics_no_zebra_at_gores_or_landings) {
+    // Positive control: a plain street 4-way paints a zebra on each approach.
+    {
+        RoadNet cross;
+        cross.width = 10.0;
+        cross.sidewalk = 2.5;
+        cross.crosswalks = true;
+        cross.autoRoundabout = false;
+        cross.nodes = { Vec2(0, 0), Vec2(70, 0), Vec2(-70, 0), Vec2(0, 70),
+                        Vec2(0, -70) };
+        cross.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 } };
+        RenderMesh m = buildRoadNetMesh(cross);
+        std::printf("[sem] plain 4-way zebra verts = %d\n",
+                    zebraVertsNear(m, Vec2(0, 0), 24.0));
+        CHECK(zebraVertsNear(m, Vec2(0, 0), 24.0) > 0);
+    }
+
+    // The corridor fixture: streets under an elevated freeway with an exit
+    // (Diverge) at s=400 and an on-ramp (Merge) at s=300, landing on the
+    // street. NO zebra anywhere near a gore or a landing node.
+    RoadNet net;
+    net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
+                  Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
+    net.width = 8.0;
+    net.sidewalk = 2.5;
+    net.crosswalks = true;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    CorridorDef def;
+    def.horizontal =
+        Alignment::fromPolyline({ Vec2(-100, 0), Vec2(800, 0) }, 300.0, 20.0);
+    const Real L = def.horizontal.length();
+    def.vertical.pvis = { { 0.0, 9.0, 0.0 }, { L, 9.0, 0.0 } };
+    def.lanes.throughLanes = 3;
+    ExitDef e;
+    e.station = 400.0;
+    e.upStation = true;
+    e.target = Vec2(600, -120);
+    e.targetY = 0.0;
+    def.exits.push_back(e);
+    ExitDef on;
+    on.station = 300.0;
+    on.upStation = true;
+    on.onRamp = true;
+    on.target = Vec2(60, -120);
+    on.targetY = 0.0;
+    def.exits.push_back(on);
+    CorridorAuthoring au = corridorAuthor(def, [](Real, Real) { return 0.0; });
+    bakeCorridorIntoNet(net, def, au.rampPaths);
+
+    RenderMesh m = buildRoadNetMesh(net);
+    RoadGraph g = roadNetFullGraph(net);
+    int checked = 0;
+    for (const RoadNode& nd : g.nodes) {
+        if (nd.kind != JunctionKind::Landing && !isGore(nd.kind)) continue;
+        ++checked;
+        const int z = zebraVertsNear(m, nd.pos, 16.0);
+        if (z > 0)
+            std::printf("[sem] ZEBRA at %s (%.0f, %.0f): %d verts\n",
+                        nd.kind == JunctionKind::Landing ? "landing" : "gore",
+                        nd.pos.x, nd.pos.y, z);
+        CHECK(z == 0);
+    }
+    std::printf("[sem] gore/landing nodes checked = %d\n", checked);
+    CHECK(checked >= 2);
+}

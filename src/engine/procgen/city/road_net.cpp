@@ -299,6 +299,7 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         UnionSpine s;
         s.halfWidth = g.edges[e0].width * 0.5;
         s.klass = g.edges[e0].klass;             // carry class into the weld (P1)
+        s.access = g.edges[e0].access;           // semantic access bits (#17/#21)
         s.closed = closed;
         s.points.push_back(g.nodes[v].pos);
         // 3-D channel (welder-goes-3D): a chain with ANY absolute deck Y
@@ -370,7 +371,7 @@ UnionSpine trimSpine(const UnionSpine& s, double rA, double rB) {
         p = s.points[i] + (s.points[i + 1] - s.points[i]) * t;
         if (hasY) y = s.yAbs[i] + (s.yAbs[i + 1] - s.yAbs[i]) * t;
     };
-    UnionSpine o; o.halfWidth = s.halfWidth; o.klass = s.klass;
+    UnionSpine o; o.halfWidth = s.halfWidth; o.klass = s.klass; o.access = s.access;
     Vec2 p; double y = 0;
     at(a, p, y); o.points.push_back(p); if (hasY) o.yAbs.push_back(y);
     for (int i = 0; i < n; ++i)
@@ -964,7 +965,18 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 double Lc = 0;
                 for (std::size_t i = 1; i < t.points.size(); ++i)
                     Lc += (t.points[i] - t.points[i - 1]).length();
-                const bool jA = rA > 0.0, jB = rB > 0.0;
+                // Semantic zebra gate (#21): a crossing window opens at a
+                // chain end ONLY where that end is a street INTERSECTION and
+                // the edge is crossable — never at a ramp landing or a gore
+                // (both are deg >= 3, so the old trim-radius test lit a zebra
+                // there: "the freeways have crosswalks?"). Per-end, so a
+                // street that is an Intersection at A and a Landing at B gets
+                // its zebra only at A.
+                const bool cross = (s.access & road_access::kCrossable) != 0;
+                const bool jA = rA > 0.0 && cross && a >= 0 &&
+                                g.nodes[a].kind == JunctionKind::Intersection;
+                const bool jB = rB > 0.0 && cross && b >= 0 &&
+                                g.nodes[b].kind == JunctionKind::Intersection;
                 for (std::size_t vi = v0; vi < out.vertices.size(); ++vi) {
                     const double sAt = out.vertices[vi].v;
                     double d = 1e4;
@@ -1028,6 +1040,28 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     std::vector<int> clusterSize(N, 0);
     for (int v = 0; v < N; ++v)
         if (deg[v] >= 3) ++clusterSize[find(v)];
+    // Cluster KIND (#21): the most-specific member kind over each union-find
+    // cluster of too-close junctions. Landings/gores styling-differ from
+    // street Intersections — the pad still fills the disc, but only an
+    // Intersection cluster joins the sidewalk band and hosts zebras.
+    auto kindPrio = [](JunctionKind k) {
+        switch (k) {
+            case JunctionKind::Landing: return 6;
+            case JunctionKind::Diverge: return 5;
+            case JunctionKind::Merge: return 4;
+            case JunctionKind::Intersection: return 3;
+            case JunctionKind::DeadEnd: return 2;
+            case JunctionKind::None: return 1;
+            default: return 0;
+        }
+    };
+    std::vector<JunctionKind> clusterKind(N, JunctionKind::None);
+    for (int v = 0; v < N; ++v) {
+        if (deg[v] < 3) continue;
+        const int r = find(v);
+        if (kindPrio(g.nodes[v].kind) > kindPrio(clusterKind[r]))
+            clusterKind[r] = g.nodes[v].kind;
+    }
     std::vector<int> degHist(12, 0);
     for (int v = 0; v < N; ++v) {
         if (deg[v] < 12) ++degHist[deg[v]];
@@ -1083,7 +1117,13 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             }
         }
         MeshBuilder::append(out, pad);
-        if (padFootprint.size() >= 3 && streetArms[v] > 0) {
+        // Only a street INTERSECTION's pad joins the sidewalk band union
+        // (#21). A Landing/gore pad has a ramp arm; joining it wrapped the
+        // sidewalk band around and ONTO the ramp mouth (the curb "sealed the
+        // ramp entrance shut", and a zebra painted across it). The pad still
+        // meshes as the drivable disc — it just stops recruiting sidewalk.
+        if (padFootprint.size() >= 3 && streetArms[v] > 0 &&
+            clusterKind[v] == JunctionKind::Intersection) {
             bandHeights.addLoop(padFootprint);
             Poly2 fp;
             for (const Vec3& p : padFootprint) fp.push_back(Vec2(p.x, p.z));
