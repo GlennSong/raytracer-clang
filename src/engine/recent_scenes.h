@@ -25,6 +25,10 @@ std::vector<std::string> loadRecentScenes(const Settings& settings);
 // writes settings.json to disk on exit (and some panels save mid-run).
 void recordRecentScene(Settings& settings, const std::string& path);
 
+// Forget every recent scene (the editor's "Clear List"). Lives here so callers
+// never have to know which Settings key backs the list.
+void clearRecentScenes(Settings& settings);
+
 }  // namespace engine
 
 #endif

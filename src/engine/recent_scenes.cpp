@@ -52,4 +52,8 @@ void recordRecentScene(Settings& settings, const std::string& path) {
     settings.setString(kRecentKey, join(list));
 }
 
+void clearRecentScenes(Settings& settings) {
+    settings.setString(kRecentKey, "");
+}
+
 }  // namespace engine

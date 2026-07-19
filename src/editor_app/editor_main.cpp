@@ -746,7 +746,7 @@ int main(int argc, char** argv) {
         }
         recentMenu->addSeparator();
         recentMenu->addAction("Clear List", [&]() {
-            app.settings().setString("recentScenes", "");
+            engine::clearRecentScenes(app.settings());
         });
     });
     fileMenu->insertMenu(fileTailSeparator, recentMenu);

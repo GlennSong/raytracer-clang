@@ -63,6 +63,21 @@ TEST_CASE(recent_scenes_ignores_blank) {
     CHECK(loadRecentScenes(s).empty());
 }
 
+TEST_CASE(recent_scenes_clear_empties_the_list) {
+    Settings s;
+    recordRecentScene(s, "assets/levels/a.json");
+    recordRecentScene(s, "assets/levels/b.json");
+    CHECK(loadRecentScenes(s).size() == 2);
+
+    clearRecentScenes(s);
+    CHECK(loadRecentScenes(s).empty());
+    // Clearing must not wedge the list — recording still works afterwards.
+    recordRecentScene(s, "assets/levels/c.json");
+    auto list = loadRecentScenes(s);
+    CHECK(list.size() == 1);
+    CHECK(list[0] == "assets/levels/c.json");
+}
+
 TEST_CASE(recent_scenes_survive_settings_round_trip) {
     TmpFile cleanup;
     {
