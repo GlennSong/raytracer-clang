@@ -40,13 +40,32 @@ void classifyRoadGraph(RoadGraph& g, const GroundFn& groundAt) {
     // ---- pass 1: node kinds -------------------------------------------
     for (int v = 0; v < n; ++v) {
         const int d = static_cast<int>(inc[v].size());
-        // A HINT (baked gore/landing) wins — but only while the degree
-        // still supports it: roadNetStreetsOnly strips the ramp edges off a
-        // hinted landing, and the leftover street run must degrade to what
-        // its remaining arms actually are. Degree 2 KEEPS a hint: a ramp
-        // grafted onto a street's very tip is still a Landing (street +
-        // ramp, one of each) even though no third arm exists.
-        if (d >= 2 && g.nodes[v].kind != JunctionKind::Auto) continue;
+        // A HINT (baked gore/landing) wins — but only while the degree AND
+        // the incident classes still support it. roadNetStreetsOnly strips
+        // the ramp edges off a hinted landing, so the leftover run must
+        // degrade to what its remaining arms actually are. Critical case
+        // (review S4b): a ramp grafted onto a MID-street node makes it
+        // degree 3 (2 collinear street edges + 1 ramp); streets-only drops
+        // the ramp, leaving a degree-2 THROUGH node still carrying a stale
+        // Landing hint. Keep a hint only when its defining edge class is
+        // still present: a gore needs a Freeway/Ramp arm, a Landing needs a
+        // Ramp arm. Otherwise fall through and re-derive.
+        if (g.nodes[v].kind != JunctionKind::Auto) {
+            bool hasRamp = false, hasCorridor = false;
+            for (int ei : inc[v]) {
+                if (g.edges[ei].klass == RoadClass::Ramp) hasRamp = true;
+                if (g.edges[ei].klass == RoadClass::Ramp ||
+                    g.edges[ei].klass == RoadClass::Freeway)
+                    hasCorridor = true;
+            }
+            const JunctionKind hint = g.nodes[v].kind;
+            const bool hintStands =
+                (hint == JunctionKind::Landing && hasRamp && d >= 2) ||
+                (isGore(hint) && hasCorridor && d >= 2) ||
+                (hint != JunctionKind::Landing && !isGore(hint) && d >= 3);
+            if (hintStands) continue;
+            g.nodes[v].kind = JunctionKind::Auto;   // stale: re-derive below
+        }
         JunctionKind kind;
         if (d == 0) {
             kind = JunctionKind::None;

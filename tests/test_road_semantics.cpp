@@ -402,3 +402,86 @@ TEST_CASE(semantics_approach_sheds_its_sidewalk_on_the_climb) {
     std::printf("[sem] no-ramp control sidewalk maxY = %.2f\n", flatMaxY);
     CHECK(flatMaxY > 1.0);   // a plain climbing street keeps its full sidewalk
 }
+
+// Review S4b regressions (adversarial review of S0-S4).
+
+// [0]: a ramp landing on a MID-street node (degree 3: two collinear street
+// edges + the ramp) must DEGRADE to a through node once roadNetStreetsOnly
+// strips the ramp — a stale Landing hint on a plain street point would drive
+// phantom sidewalk trimming and cluster mis-promotion.
+TEST_CASE(semantics_mid_street_landing_degrades_without_its_ramp) {
+    RoadNet net;
+    net.width = 8.0;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    // A straight street; node 2 is interior (collinear neighbours).
+    net.nodes = { Vec2(0, 0), Vec2(60, 0), Vec2(120, 0), Vec2(180, 0) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    net.nodes.push_back(Vec2(140, 60));   // a BAKED ramp leaves node 2
+    net.edges.push_back({ 2, 4 });
+    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
+    net.edgeClasses.back() = RoadClass::Ramp;
+    net.edgeBaked.resize(net.edges.size(), 0);
+    net.edgeBaked.back() = 1;   // baked -> roadNetStreetsOnly strips it
+    net.nodeKinds.resize(net.nodes.size(), (uint8_t)JunctionKind::Auto);
+    net.nodeKinds[2] = (uint8_t)JunctionKind::Landing;   // the bake's hint
+
+    // Full graph: node 2 is a real Landing (ramp present).
+    RoadGraph full = navRoadGraph(net);
+    int fullLandings = 0;
+    for (const RoadNode& n : full.nodes)
+        if (n.kind == JunctionKind::Landing) ++fullLandings;
+    CHECK(fullLandings >= 1);
+
+    // Streets-only: the ramp is gone, so node 2 is a plain through node — NOT
+    // a Landing (the stale hint must not survive).
+    RoadGraph so = navRoadGraph(roadNetStreetsOnly(net));
+    for (const RoadNode& n : so.nodes)
+        CHECK(n.kind != JunctionKind::Landing);
+}
+
+// [2]: applyGenerateRecipe must clear nodeKinds — a stale baked hint would
+// otherwise land on an arbitrary node of the freshly generated grid.
+TEST_CASE(semantics_regenerate_clears_stale_node_hints) {
+    RoadNet net;
+    // Simulate a net that carried a baked corridor: leftover hints.
+    net.nodeKinds = { (uint8_t)JunctionKind::Merge, (uint8_t)JunctionKind::Landing,
+                      (uint8_t)JunctionKind::Diverge };
+    nlohmann::json gen = { { "kind", "metro" }, { "radius", 300 },
+                           { "hotspots", 3 },   { "block_size", 120 },
+                           { "seed", 4 },       { "freeways", false } };
+    applyGenerateRecipe(net, gen);
+    CHECK(net.nodeKinds.empty());   // wiped before the fresh grid is built
+
+    // And the derived graph carries no phantom gores/landings.
+    RoadGraph g = navRoadGraph(net);
+    for (const RoadNode& n : g.nodes) {
+        CHECK(!isGore(n.kind));
+        CHECK(n.kind != JunctionKind::Landing);
+    }
+}
+
+// [4]: roadNetDeleteNode must keep edgeSpecs/edgeBaked/edgeLayers parallel to
+// edges — a delete shifts edge indices, and a desynced per-edge array bakes
+// the wrong cross-section onto surviving edges.
+TEST_CASE(semantics_delete_node_keeps_edge_arrays_parallel) {
+    RoadNet net;
+    net.nodes = { Vec2(0, 0), Vec2(50, 0), Vec2(100, 0), Vec2(150, 0) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    net.edgeClasses = { RoadClass::Local, RoadClass::Arterial, RoadClass::Local };
+    net.edgeSpecs = { 10, 20, 30 };
+    net.edgeBaked = { 0, 1, 0 };
+    net.edgeLayers = { 0, 2, 0 };
+    // Delete node 0 -> drops edge {0,1}; edges {1,2},{2,3} survive and shift.
+    CHECK(roadNetDeleteNode(net, 0));
+    CHECK(net.edges.size() == 2);
+    CHECK(net.edgeSpecs.size() == 2);
+    CHECK(net.edgeBaked.size() == 2);
+    CHECK(net.edgeLayers.size() == 2);
+    // The surviving arterial edge (was index 1) kept its spec 20 / baked 1 /
+    // layer 2 — not a shifted-in neighbour's value.
+    CHECK(net.edgeClasses[0] == RoadClass::Arterial);
+    CHECK(net.edgeSpecs[0] == 20);
+    CHECK(net.edgeBaked[0] == 1);
+    CHECK(net.edgeLayers[0] == 2);
+}

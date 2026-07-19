@@ -1647,20 +1647,32 @@ bool roadNetDeleteNode(RoadNet& net, int i) {
     std::vector<std::array<int, 2>> kept;
     std::vector<double> keptW;
     std::vector<RoadClass> keptC;
+    std::vector<int> keptS, keptL;
+    std::vector<uint8_t> keptB;
     const bool hasW = !net.edgeWidths.empty();
     const bool hasC = !net.edgeClasses.empty();
+    const bool hasS = !net.edgeSpecs.empty();
+    const bool hasB = !net.edgeBaked.empty();
+    const bool hasL = !net.edgeLayers.empty();
+    auto pick = [&](const auto& v, int ei, auto def) {
+        return ei < static_cast<int>(v.size()) ? v[ei] : def;
+    };
     for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
         const std::array<int, 2>& e = net.edges[ei];
         if (e[0] == i || e[1] == i) continue;                 // drop incident edges
         kept.push_back({ e[0] > i ? e[0] - 1 : e[0], e[1] > i ? e[1] - 1 : e[1] });
-        if (hasW) keptW.push_back(ei < static_cast<int>(net.edgeWidths.size())
-                                      ? net.edgeWidths[ei] : 0.0);
-        if (hasC) keptC.push_back(ei < static_cast<int>(net.edgeClasses.size())
-                                      ? net.edgeClasses[ei] : RoadClass::Local);
+        if (hasW) keptW.push_back(pick(net.edgeWidths, ei, 0.0));
+        if (hasC) keptC.push_back(pick(net.edgeClasses, ei, RoadClass::Local));
+        if (hasS) keptS.push_back(pick(net.edgeSpecs, ei, -1));
+        if (hasB) keptB.push_back(pick(net.edgeBaked, ei, uint8_t(0)));
+        if (hasL) keptL.push_back(pick(net.edgeLayers, ei, 0));
     }
     net.edges = std::move(kept);
     if (hasW) net.edgeWidths = std::move(keptW);              // stay parallel to edges
     if (hasC) net.edgeClasses = std::move(keptC);
+    if (hasS) net.edgeSpecs = std::move(keptS);   // review S4b: were desynced —
+    if (hasB) net.edgeBaked = std::move(keptB);   // a delete shifted indices but
+    if (hasL) net.edgeLayers = std::move(keptL);  // these stayed at old order
     net.nodes.erase(net.nodes.begin() + i);
     if (i < static_cast<int>(net.tangents.size()))
         net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
@@ -1977,6 +1989,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     net.edgeSpecs.clear();
     net.edgeBaked.clear();
     net.nodeElev.clear();
+    net.nodeKinds.clear();   // stale baked hints would land on fresh grid nodes
     net.tangents.clear();
     RoadGraph base;
     if (kind == "metro") {
