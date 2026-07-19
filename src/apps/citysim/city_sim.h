@@ -240,6 +240,10 @@ public:
         int occupant = -1;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
+    // Effective lane spacing for a link: a parked-up street loses its curb
+    // strips from the DRIVABLE width (band-model semantics, sim-side). The
+    // render bridge lines its lane arrows up with the same spacing.
+    engine::Real laneSpacingFor(int li) const;
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
 
@@ -413,10 +417,6 @@ private:
     std::vector<ParkingBay> bays_;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
-    // Effective lane spacing for a link: a parked-up street loses its curb
-    // strips from the DRIVABLE width (band-model semantics, sim-side) — the
-    // raw geometric spacing centred cars overlapping the parked row.
-    engine::Real laneSpacingFor(int li) const;
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)

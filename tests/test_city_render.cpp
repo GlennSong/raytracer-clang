@@ -834,3 +834,46 @@ TEST_CASE(density_population_scales_with_the_graph) {
     CHECK(fixed_.first == 9);                // explicit count is an override
     CHECK(big.second > 6);                   // walkers scale too
 }
+
+TEST_CASE(road_markings_stay_inside_the_carriageway) {
+    // R6c (plan 4e): every SIGNALLED approach carries a stop bar and one
+    // arrow per lane, and no paint vertex ever leaves the carriageway.
+    World world;
+    world.add<RoadNet>(world.create(), crossRoads());   // signalled 4-way
+    CityRenderParams params;
+    params.cars = 0;
+    params.pedestrians = 0;
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+
+    engine::RenderMesh paint = city.buildRoadMarkings();
+    CHECK(!paint.vertices.empty());
+
+    // Containment: every vertex within some link's carriageway half-width
+    // of its centreline (segment distance), and near the ground.
+    const NavGraph& nav = city.nav();
+    int outside = 0;
+    for (const Vertex& v : paint.vertices) {
+        const Vec2 p(v.position.x, v.position.z);
+        bool inside = false;
+        for (int li = 0; li < nav.linkCount() && !inside; ++li) {
+            const Vec2 A = nav.nodes[nav.links[li].from];
+            const Vec2 B = nav.nodes[nav.links[li].to];
+            const Vec2 AB = B - A;
+            const Real l2 = AB.lengthSquared();
+            Real t = l2 > 1e-9 ? ((p - A).x * AB.x + (p - A).y * AB.y) / l2 : 0;
+            t = std::clamp(t, Real(0), Real(1));
+            const Vec2 cp = A + AB * t;
+            if ((p - cp).length() <= nav.links[li].width * 0.5 + 0.05)
+                inside = true;
+        }
+        if (!inside) ++outside;
+    }
+    std::printf("    [marks] verts=%zu outside=%d\n", paint.vertices.size(),
+                outside);
+    CHECK(outside == 0);
+
+    // Coverage: 4 signalled approaches -> at least a bar + one arrow each
+    // (a bar is 1 quad = 4 verts; an arrow is >= 3 quads).
+    CHECK(paint.vertices.size() >= 4 * 4 * 4);
+}

@@ -168,6 +168,9 @@ public:
         return carAgentIds_;
     }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
+    // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
+    // public so the gate can assert paint never leaves the carriageway.
+    engine::RenderMesh buildRoadMarkings() const;
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
     const engine::NavGraph& nav() const { return nav_; }
     // Cars are split across several instance groups, one per body/colour variant
@@ -259,6 +262,7 @@ private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
+    engine::Entity roadMarkGroup_;     // stop bars + lane-turn arrows (R6c)
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
     // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
     engine::Entity headlightGroup_{};  // white, forward

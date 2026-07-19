@@ -500,6 +500,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         world.add<InstanceGroup>(parkBayGroup_, g);
     }
 
+    // Stop bars + lane-turn arrows (R6c, plan 4e): one white PAINT mesh for
+    // every signalled approach (buildRoadMarkings), one identity instance.
+    {
+        engine::RenderMesh paint = buildRoadMarkings();
+        MeshHandle mh{};
+        if (assets) mh = assets->acquireMesh(paint, "city:roadmarks");
+        roadMarkGroup_ = world.create();
+        InstanceGroup g;
+        g.mesh = mh;
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.92f;
+        g.transforms.push_back(Mat4());   // world-space mesh, identity instance
+        refreshBounds(&g);
+        world.add<InstanceGroup>(roadMarkGroup_, g);
+    }
+
     // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
     // on the sidewalk steer around the signal poles and never stand inside one.
     {
@@ -744,6 +760,94 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     built_ = true;
     syncGroups(world);
     return true;
+}
+
+engine::RenderMesh CityRenderSystem::buildRoadMarkings() const {
+    // Stop bars + lane-turn arrows (R6c, plan 4e): derived entirely from
+    // the graph (turn options = the node's outgoing street links), thin
+    // raised quads just above the asphalt — the shader's mu/mv paint has
+    // no per-lane identity to hang arrows on.
+    engine::RenderMesh paint;
+        const Vec3 white(0.88, 0.88, 0.88);
+        const Vec3 up(0, 1, 0);
+        auto quad = [&](const engine::Vec2& c, const engine::Vec2& f,
+                        Real halfW, Real halfL, Real y) {
+            const engine::Vec2 r(f.y, -f.x);
+            const engine::Vec2 a2 = c - r * halfW - f * halfL;
+            const engine::Vec2 b2 = c + r * halfW - f * halfL;
+            const engine::Vec2 c2 = c + r * halfW + f * halfL;
+            const engine::Vec2 d2 = c - r * halfW + f * halfL;
+            MeshBuilder::emitQuad(paint, Vec3(a2.x, y, a2.y), Vec3(b2.x, y, b2.y),
+                                  Vec3(c2.x, y, c2.y), Vec3(d2.x, y, d2.y), up,
+                                  white);
+        };
+        // A turn arrow: shaft along the lane + head bent toward the turn
+        // (-1 left, 0 straight, +1 right).
+        auto arrow = [&](const engine::Vec2& c, const engine::Vec2& f, int turn,
+                         Real y) {
+            quad(c, f, 0.12, 0.85, y);   // shaft
+            engine::Vec2 hd = f;
+            if (turn != 0) {
+                const engine::Vec2 r(f.y, -f.x);
+                hd = normalize(f * 0.2 + r * (Real(turn) * 0.98));
+                quad(c + f * 0.75 + hd * 0.35, hd, 0.12, 0.45, y);   // bent head
+            }
+            // Head ticks (a simple V), pointing along hd.
+            const engine::Vec2 tip =
+                c + f * (turn == 0 ? Real(0.95) : Real(0.75)) +
+                (turn == 0 ? engine::Vec2(0, 0) : hd * Real(0.8));
+            const engine::Vec2 hr(hd.y, -hd.x);
+            quad(tip + hd * 0.12 - hr * 0.22, normalize(hd - hr), 0.10, 0.32, y);
+            quad(tip + hd * 0.12 + hr * 0.22, normalize(hd + hr), 0.10, 0.32, y);
+        };
+        for (int li : signalLinks_) {
+            const engine::NavLink& L = nav_.links[li];
+            const int to = L.to;
+            const engine::Vec2 dir = nav_.direction(li);
+            const engine::Vec2 right(dir.y, -dir.x);
+            // Stop line: clear of the crossing road's mouth + the shader's
+            // zebra band (~4.4 m of crosswalk paint past the mouth).
+            Real mouth = 0;
+            for (int ol : nav_.outLinks[to])
+                mouth = std::max(mouth, nav_.links[ol].width * 0.5);
+            Real back = std::min(L.length * 0.4, mouth + 6.2);
+            const engine::Vec2 node = nav_.nodes[to];
+            const engine::Vec2 barC =
+                node - dir * back + right * (L.width * 0.25);
+            const Real y = groundAt(barC.x, barC.y) + 0.06;
+            quad(barC, dir, L.width * 0.24, 0.3, y);   // the bar (approach half)
+            // Turn options from the node's outgoing street links.
+            bool hasL = false, hasS = false, hasR = false;
+            for (int ol : nav_.outLinks[to]) {
+                const engine::NavLink& O = nav_.links[ol];
+                if (O.to == L.from) continue;   // the U-turn back
+                if (O.klass == engine::RoadClass::Freeway ||
+                    O.klass == engine::RoadClass::Ramp)
+                    continue;
+                const engine::Vec2 od = nav_.direction(ol);
+                const Real cross = dir.x * od.y - dir.y * od.x;
+                const Real dot2 = dir.x * od.x + dir.y * od.y;
+                if (dot2 > 0.7) hasS = true;
+                else if (cross < -0.5) hasL = true;
+                else if (cross > 0.5) hasR = true;
+            }
+            const int lanes = std::max(1, L.lanes);
+            const Real spacing = sim_.laneSpacingFor(li);
+            for (int ln = 0; ln < lanes; ++ln) {
+                const engine::Vec2 laneC =
+                    node - dir * (back + 2.6) +
+                    right * ((0.5 + ln) * spacing);
+                // One arrow per lane: leftmost leans left, rightmost right,
+                // middle (or absent turns) go straight.
+                int turn = 0;
+                if (lanes == 1) turn = hasS ? 0 : (hasL ? -1 : (hasR ? 1 : 0));
+                else if (ln == 0 && hasL) turn = -1;
+                else if (ln == lanes - 1 && hasR) turn = 1;
+                arrow(laneC, dir, turn,
+                      groundAt(laneC.x, laneC.y) + 0.06);
+            }
+        }
+    return paint;
 }
 
 Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
