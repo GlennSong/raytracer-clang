@@ -313,6 +313,13 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                                        {t3, up, n3}, Vec3(0.12, 0.95, 0.12)},
                             PartId::Wood, rail * 0.9);
                     if (pi2 == posts) continue;
+                    {   // this post->next span is fenced: record for colliders
+                        Vec2 np2 = a + dir * (step * (pi2 + 1));
+                        bool ngap = false;
+                        for (const Vec2& mo : mouths)
+                            if ((mo - np2).length() < 2.6) { ngap = true; break; }
+                        if (!ngap) g.fenceSegs.push_back({ pp, np2 });
+                    }
                     // rails to the next post, skipped when it sits in a gap
                     Vec2 np = a + dir * (step * (pi2 + 1));
                     bool ngap = false;
@@ -919,6 +926,93 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         return true;
     };
+    // PUSH a polygon clear of the sampled road ribbons (roads-v2.1 R4-6c,
+    // drive feedback: "parks don't sit on their lots and explode into the
+    // street including fences"). Buildings shrink-to-fit via clearOfRoads;
+    // parks/greens used their raw footprint and a uniform inset that assumed
+    // 4 m half-width roads — arterials and curved streets overran them, so
+    // fences and trees stood in the carriageway. Edges are subdivided first
+    // so a road bowing into a LONG park edge still gets pushed.
+    auto pushPolyClearOfRoads = [&](Poly2 poly) {
+        if (!roads || poly.size() < 3) return poly;
+        Poly2 dense;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const Vec2& a2 = poly[i];
+            const Vec2& b2 = poly[(i + 1) % poly.size()];
+            dense.push_back(a2);
+            const Real len = (b2 - a2).length();
+            const int div = static_cast<int>(len / 8.0);
+            for (int k = 1; k <= div; ++k)
+                dense.push_back(a2 + (b2 - a2) * (static_cast<Real>(k) / (div + 1)));
+        }
+        for (Vec2& v : dense) {
+            for (int guard = 0; guard < 4; ++guard) {
+                Real worst = 0;
+                Vec2 away(0, 0);
+                for (const RoadEdge& e : roads->edges) {
+                    if (e.a < 0 || e.b < 0 ||
+                        e.a >= static_cast<int>(roads->nodes.size()) ||
+                        e.b >= static_cast<int>(roads->nodes.size()))
+                        continue;
+                    const Vec2& a2 = roads->nodes[e.a].pos;
+                    const Vec2& b2 = roads->nodes[e.b].pos;
+                    Vec2 ab = b2 - a2;
+                    Real len2 = ab.lengthSquared();
+                    Real t = len2 > 1e-12 ? dot(v - a2, ab) / len2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const Vec2 q(a2.x + ab.x * t, a2.y + ab.y * t);
+                    const Real need = e.width * 0.5 + roadClearance;
+                    const Real d = (v - q).length();
+                    if (need - d > worst) {
+                        worst = need - d;
+                        away = d > 1e-6 ? (v - q) * (1.0 / d) : Vec2(1, 0);
+                    }
+                }
+                if (worst <= 0) break;
+                v = v + away * (worst + 0.2);
+            }
+        }
+        // INFEASIBLE lot: vertices that still violate after the pushes sit in
+        // a sliver no park can occupy (a leftover strip between two
+        // carriageways). Such ground is street verge, not a lot — return
+        // EMPTY so the caller skips the park/green entirely rather than
+        // furnishing the roadway.
+        int bad = 0;
+        std::vector<char> badAt(dense.size(), 0);
+        for (std::size_t vi = 0; vi < dense.size(); ++vi) {
+            const Vec2& v = dense[vi];
+            for (const RoadEdge& e : roads->edges) {
+                if (e.a < 0 || e.b < 0 ||
+                    e.a >= static_cast<int>(roads->nodes.size()) ||
+                    e.b >= static_cast<int>(roads->nodes.size()))
+                    continue;
+                const Vec2& a2 = roads->nodes[e.a].pos;
+                const Vec2& b2 = roads->nodes[e.b].pos;
+                Vec2 ab = b2 - a2;
+                Real len2 = ab.lengthSquared();
+                Real t = len2 > 1e-12 ? dot(v - a2, ab) / len2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                if ((v - (a2 + ab * t)).length() < e.width * 0.5 + 0.3) {
+                    ++bad;
+                    badAt[vi] = 1;
+                    break;
+                }
+            }
+        }
+        if (bad * 5 > static_cast<int>(dense.size()))   // > 20% hopeless
+            return Poly2{};
+        if (bad > 0) {
+            // A few stragglers (opposing pushes couldn't settle them): the
+            // polygon simply loses those corners — a slightly smaller park
+            // beats a fence post in the carriageway.
+            Poly2 kept;
+            for (std::size_t vi = 0; vi < dense.size(); ++vi)
+                if (!badAt[vi]) kept.push_back(dense[vi]);
+            if (kept.size() < 3) return Poly2{};
+            return kept;
+        }
+        return dense;
+    };
     // Under a FREEWAY/RAMP deck? The clearance graph carries the freeway
     // right-of-way as RoadClass::Freeway / ::Ramp edges whose width is the deck
     // SHADOW (set by the loader). A point within that shadow can't host a normal
@@ -1131,10 +1225,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.type = "park";
                 g.recipe = "park_block";
                 g.color = colorFor("park");
-                g.pad = foot;
+                g.pad = pushPolyClearOfRoads(foot);
+                if (g.pad.empty()) continue;   // road-locked block: no square
                 // The city square is DESIGNED: plaza, paths, fountain,
                 // benches, hedges, tree spots (not a bare green pad).
-                sculptPark(g, foot, g.height, p.ground,
+                sculptPark(g, g.pad, g.height, p.ground,
                            mix(bf.pp.seed, 0xB10C2u), outParts);
                 out.push_back(std::move(g));
                 continue;
@@ -1269,7 +1364,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.type = "green";
                 g.recipe = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
-                g.pad = lot.footprint;
+                g.pad = pushPolyClearOfRoads(lot.footprint);
+                if (g.pad.empty()) return;     // road-locked sliver: no green
                 // NO pad mesh (device: "I still get the green pads here and
                 // there. We should remove them"): the terrain is the green's
                 // ground; the lot polygon still marks it for planting.
@@ -1307,7 +1403,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         u.recipe = kind == 0 ? "underfreeway_open"
                                  : kind == 1 ? "underfreeway_parking"
                                              : "underfreeway_utility";
-                        u.pad = lot.footprint;
+                        u.pad = lot.footprint;   // deliberately IN the ROW
                         u.color = Vec3(0.30, 0.50, 0.26);
                         if (kind == 0) {         // landscaped open space, no canopy
                             sculptPark(u, u.pad, u.height, p.ground, s, outParts);
@@ -1386,7 +1482,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
                                   // lift so park edges tuck below the asphalt
-                b.pad = lot.footprint;
+                b.pad = pushPolyClearOfRoads(lot.footprint);
+                if (b.pad.empty()) continue;   // road-locked sliver: no park
                 sculptPark(b, b.pad, b.height, p.ground,
                            mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
                            outParts);

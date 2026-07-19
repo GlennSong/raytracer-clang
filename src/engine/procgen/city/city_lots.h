@@ -59,6 +59,10 @@ struct LotBuilding {
     // real trees at (parks: around the paths; yards: behind the house). Each
     // entry is (world x, trunk scale, world z). Empty = host's own scatter.
     std::vector<Vec3> treeSpots;
+    // Fenced ring spans (world XZ pairs) sculptPark actually built — the
+    // loader turns them into thin wall colliders (drive feedback: "Parks
+    // also have no collision detection").
+    std::vector<std::pair<Vec2, Vec2>> fenceSegs;
 };
 
 struct LotParams {

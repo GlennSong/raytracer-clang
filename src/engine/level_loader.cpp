@@ -3153,6 +3153,43 @@ bool LevelLoader::load(const std::string& path,
             std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
+                // Park FENCES + TREE TRUNKS are solid (drive feedback: "Parks
+                // also have no collision detection") — thin walls / posts in
+                // the same static collider mesh the buildings use.
+                auto wall = [&](const Vec2& a2, const Vec2& b2, double h2,
+                                double thick) {
+                    engine::Vec2 d2 = b2 - a2;
+                    const double l2 = d2.length();
+                    if (l2 < 1e-3) return;
+                    d2 = d2 * (1.0 / l2);
+                    const engine::Vec2 n2(-d2.y, d2.x);
+                    const double y0 =
+                        (entityGround ? entityGround(a2.x, a2.y) : 0.0) - 0.3;
+                    const uint32_t s0 =
+                        static_cast<uint32_t>(buildingsMc.vertices.size());
+                    for (int c4 = 0; c4 < 4; ++c4) {
+                        const engine::Vec2 p2 =
+                            (c4 < 2 ? a2 : b2) +
+                            n2 * ((c4 % 2 == 0 ? 1.0 : -1.0) * thick * 0.5);
+                        buildingsMc.vertices.push_back(Vec3(p2.x, y0, p2.y));
+                        buildingsMc.vertices.push_back(
+                            Vec3(p2.x, y0 + 0.3 + h2, p2.y));
+                    }
+                    const uint32_t q[4] = { s0, s0 + 2, s0 + 6, s0 + 4 };
+                    for (int f2 = 0; f2 < 4; ++f2) {
+                        const uint32_t A2 = q[f2], B2 = q[(f2 + 1) % 4];
+                        buildingsMc.indices.insert(buildingsMc.indices.end(),
+                                                   { A2, B2, B2 + 1, A2, B2 + 1,
+                                                     A2 + 1 });
+                    }
+                };
+                for (const auto& fs : lb.fenceSegs)
+                    wall(fs.first, fs.second, 0.95, 0.14);
+                for (const Vec3& ts : lb.treeSpots) {
+                    const engine::Vec2 t2(ts.x, ts.z);
+                    wall(t2 + engine::Vec2(-0.16, 0), t2 + engine::Vec2(0.16, 0),
+                         2.2, 0.32);
+                }
                 if (lb.type != "park" && lb.type != "green" &&
                     lb.plan.size() >= 3) {
                     const double base = lb.baseY - 0.5, top = lb.baseY + lb.height;

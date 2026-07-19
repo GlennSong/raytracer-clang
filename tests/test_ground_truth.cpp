@@ -185,3 +185,46 @@ TEST_CASE(metro_blocks_reach_city_scale_and_aspect) {
     CHECK(median >= 7000.0);        // city-scale, not courtyard-scale
     CHECK(longBlocks >= 8);         // real long blocks exist
 }
+
+TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
+    // Drive feedback E1/B4: "parks don't sit on their lots and explode into
+    // the street including fences... park fences sunk into the road." Every
+    // park/green pad vertex must clear every sampled road ribbon — the same
+    // protection buildings always had.
+    RoadNet net;
+    net.width = 13.0;   // arterial width: the case the old 4 m assumption broke
+    net.autoRoundabout = false;
+    nlohmann::json gen = { { "kind", "metro" },    { "radius", 600 },
+                           { "hotspots", 4 },      { "block_size", 130 },
+                           { "seed", 21 },         { "freeways", false },
+                           { "min_road_len", 24 }, { "terrain_aware", false } };
+    applyGenerateRecipe(net, gen);
+    RoadGraph rg = navRoadGraph(net);
+
+    LotParams lp;
+    lp.seed = 7;
+    lp.roadMargin = 8.0;
+    NetLotResult grown =
+        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, &rg);
+    int parks = 0, violations = 0;
+    for (const LotBuilding& lb : grown.lots) {
+        if (lb.type != "park" && lb.type != "green") continue;
+        if (lb.recipe.rfind("underfreeway", 0) == 0) continue;   // in the ROW by design
+        ++parks;
+        for (const Vec2& v : lb.pad) {
+            for (const RoadEdge& e : rg.edges) {
+                if (e.a < 0 || e.b < 0) continue;
+                const Vec2& a = rg.nodes[e.a].pos;
+                const Vec2& b = rg.nodes[e.b].pos;
+                Vec2 ab = b - a;
+                const Real l2 = ab.lengthSquared();
+                Real t = l2 > 1e-12 ? dot(v - a, ab) / l2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                if ((a + ab * t - v).length() < e.width * 0.5) ++violations;
+            }
+        }
+    }
+    std::printf("[park] parks=%d violations=%d\n", parks, violations);
+    CHECK(parks > 0);
+    CHECK(violations == 0);
+}
