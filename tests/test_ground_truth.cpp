@@ -1,0 +1,147 @@
+// Roads-v2.1 R4 ground-truth gates (drive feedback): the terrain the city
+// stands on must be WALKABLE truth —
+//   PIT PROBE: roads on hills used to corral terrain into bowls a player
+//     falls into and cannot leave ("the road makes it into a hole"). With
+//     block grading, every block interior blends to the plane of its road
+//     boundary: no enclosed basin deeper than a curb-step remains.
+//   RISER PROBE: the sidewalk's OUTER face used to stand as a wall where
+//     the ungraded interior fell away ("player can't walk up onto a
+//     sidewalk") — the same grading pins the interior to the street, so the
+//     outer riser stays a step, not a wall.
+#include "test_framework.h"
+
+#include "../src/engine/procgen/city/block_grade.h"
+#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/terrain.h"
+#include <cmath>
+#include <cstdio>
+#include <nlohmann/json.hpp>
+
+using namespace engine;
+
+namespace {
+
+// Rolling hills: enough relief that an ungraded block interior forms a
+// real bowl between filled road edges.
+double hills(double x, double z) {
+    return 7.0 * std::sin(x * 0.045) + 5.5 * std::cos(z * 0.06) +
+           2.5 * std::sin((x + z) * 0.03);
+}
+
+// TRAPPED, honestly: a grid cell the player cannot REACH from any road by
+// walking (each 2 m step limited to a comfortable climb). A pit is exactly
+// the set of low cells no walkable path serves — local ray tests miss
+// block-sized bowls whose walls are far from the bottom.
+template <typename F>
+int trappedCells(F&& ground, double lo, double hi) {
+    const double cell = 2.0;
+    const int N = static_cast<int>((hi - lo) / cell) + 1;
+    std::vector<double> h(N * N);
+    for (int iz = 0; iz < N; ++iz)
+        for (int ix = 0; ix < N; ++ix)
+            h[iz * N + ix] = ground(lo + ix * cell, lo + iz * cell);
+    std::vector<char> reach(N * N, 0);
+    std::vector<int> stack;
+    for (int i = 0; i < N; ++i) {   // the boundary ring rides the roads
+        for (int j : { i, (N - 1) * N + i, i * N, i * N + (N - 1) })
+            if (!reach[j]) { reach[j] = 1; stack.push_back(j); }
+    }
+    const double kStep = 1.0;   // per-2 m climb a player comfortably walks
+    while (!stack.empty()) {
+        const int c = stack.back();
+        stack.pop_back();
+        const int ix = c % N, iz = c / N;
+        const int nb[4] = { c - 1, c + 1, c - N, c + N };
+        const bool ok[4] = { ix > 0, ix < N - 1, iz > 0, iz < N - 1 };
+        for (int k = 0; k < 4; ++k) {
+            if (!ok[k] || reach[nb[k]]) continue;
+            // SAFE means the road is reachable CLIMBING OUT: expand cell c
+            // to neighbour nb only if nb could step UP into c — descending
+            // into a bowl is always possible and proves nothing.
+            if (h[c] - h[nb[k]] > kStep) continue;
+            reach[nb[k]] = 1;
+            stack.push_back(nb[k]);
+        }
+    }
+    int trapped = 0;
+    for (int i = 0; i < N * N; ++i)
+        if (!reach[i]) {
+            ++trapped;
+            if (std::getenv("RT_PIT_DEBUG"))
+                std::printf("[pit]   trapped cell (%.0f, %.0f) h=%.2f\n",
+                            lo + (i % N) * cell, lo + (i / N) * cell, h[i]);
+        }
+    return trapped;
+}
+
+}  // namespace
+
+TEST_CASE(block_grading_leaves_no_pits_between_roads) {
+    // A closed ring of streets around a naturally-low interior — the exact
+    // corral geometry from the drive. Conform carves the roads; the block
+    // grade must lift/blend the interior to the boundary plane.
+    RoadNet net;
+    net.width = 8.0;
+    net.sidewalk = 2.0;
+    net.autoRoundabout = false;
+    net.heightAt = hills;
+    net.nodes = { Vec2(-60, -60), Vec2(60, -60), Vec2(60, 60), Vec2(-60, 60) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 } };
+
+    std::vector<TerrainFlatten> flatten = roadNetConformRegions(net);
+    // The block: the ring interior, inset off the road (as the lot plan's
+    // blocks are).
+    // The grade polygon OVERLAPS the road conform band on purpose: the
+    // road's higher priority wins inside its own footprint, and everywhere
+    // else the block plane owns the ground — no raw-terrain notch can
+    // survive between the two systems (the seam gap was the pit).
+    Poly2 block{ Vec2(-58, -58), Vec2(58, -58), Vec2(58, 58), Vec2(-58, 58) };
+    auto roadCarved = [&](double x, double z) {
+        return applyFlatten(flatten, x, z, hills(x, z));
+    };
+    // CONTROL: without grading, the road ring stands over an interior that
+    // falls metres away — the sidewalk-edge WALL (and the raw notch between
+    // road band and interior) is exactly the 'can't get back up' pit
+    // mechanism from the drive. If this stops failing, the fixture lost
+    // its teeth.
+    {
+        double wallUngraded = 0;
+        for (double t = -50; t <= 50; t += 5.0) {
+            const double deckY = roadCarved(t, -60.0);
+            const double insideY = roadCarved(t, -60.0 + 7.0);
+            wallUngraded = std::max(wallUngraded, deckY + 0.15 - insideY);
+        }
+        std::printf("[pit] control wallUngraded=%.2f\n", wallUngraded);
+        CHECK(wallUngraded > 0.55);
+    }
+    std::vector<TerrainFlatten> graded = gradeBlocks({ block }, roadCarved);
+    CHECK(!graded.empty());
+    std::vector<TerrainFlatten> all = flatten;
+    all.insert(all.end(), graded.begin(), graded.end());
+    auto finalGround = [&](double x, double z) {
+        return applyFlatten(all, x, z, hills(x, z));
+    };
+
+    if (std::getenv("RT_PIT_DEBUG"))
+        for (double z = 50; z <= 60; z += 2)
+            std::printf("[pit]   col x=-38 z=%.0f h=%.2f\n", z,
+                        finalGround(-38, z));
+    // PIT PROBE: with grading, every cell is reachable on foot from a road.
+    const int basins = trappedCells(finalGround, -58.0, 58.0);
+    std::printf("[pit] trapped=%d\n", basins);
+    CHECK(basins == 0);
+
+    // RISER PROBE:    // RISER PROBE: just outside each road's sidewalk line, the ground sits
+    // within a stepable 0.35 m of the road deck (the sidewalk outer face is
+    // a curb-step, not a wall).
+    double worstRiser = 0;
+    for (double t = -50; t <= 50; t += 5.0) {
+        // north edge road runs z=-60; sample the block-side sidewalk outer line
+        const double deckY = finalGround(t, -60.0);
+        const double insideY = finalGround(t, -60.0 + net.width * 0.5 +
+                                                  net.sidewalk + 1.0);
+        worstRiser = std::max(worstRiser, deckY + 0.15 - insideY);
+    }
+    std::printf("[pit] worstRiser=%.2f\n", worstRiser);
+    CHECK(worstRiser < 0.35 + 0.20);   // curb + small tolerance
+}

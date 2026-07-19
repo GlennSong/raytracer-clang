@@ -1192,7 +1192,10 @@ static void loadPlayer(const json& player, World& world) {
         cc.radius = col.value("radius", 0.3);
         cc.halfHeight = col.value("halfHeight", 0.4);
     }
-    cc.stepHeight = player.value("stepHeight", 0.45);
+    // 0.55 default (roads-v2.1 R4): belt-and-braces with block grading — a
+    // curb+lift step tops ~0.5 on slopes; the player must always mount a
+    // sidewalk (drive feedback: "player can't walk up onto a sidewalk").
+    cc.stepHeight = player.value("stepHeight", 0.55);
 
     // CDLOD terrain: snap the spawn to just above the surface at its XZ so the
     // character settles onto the ground rather than spawning embedded (below the
@@ -2561,13 +2564,45 @@ bool LevelLoader::load(const std::string& path,
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
                 return terrainHeight(*lotTp, *lotNoise, x, z);
             };
-            // BLOCK GRADING CASCADE (ADR-0075 P2) is DISABLED pending a device-
-            // verified rework: on the real city the block grader either extracted
-            // no faces (a terrain-gated metro is tree-like) or the graded ground
-            // interacted badly with lot/pad placement. gradeBlocks + the priority
-            // mechanism stay in-tree; re-enable behind a measured device pass.
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
                                    freewayROWp);
+            // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
+            // the old attempt extracted faces from the GRAPH (none on a
+            // tree-like terrain-gated metro); the LOT PLAN's own block
+            // polygons are the real thing. Each block, DILATED to overlap
+            // the road conform band (the road's higher priority wins inside
+            // its own footprint; everywhere else the block plane owns the
+            // ground, so no raw-terrain notch survives between the two — the
+            // notch was the 'fell in the hole, can't get out' pit), blends
+            // to the plane of its road-carved boundary. Kills three drive
+            // findings at once: corralled pits, the sidewalk-outer-face
+            // wall, and buildings floating off sloped interiors.
+            if (!preLots.plan.blocks.empty()) {
+                std::vector<engine::Poly2> gradePolys;
+                gradePolys.reserve(preLots.plan.blocks.size());
+                for (const engine::Poly2& b2 : preLots.plan.blocks) {
+                    if (b2.size() < 3) continue;
+                    engine::Vec2 c(0, 0);
+                    for (const engine::Vec2& v : b2) c = c + v;
+                    c = c * (1.0 / b2.size());
+                    engine::Poly2 grown;
+                    grown.reserve(b2.size());
+                    for (const engine::Vec2& v : b2) {
+                        engine::Vec2 d = v - c;
+                        const double l = d.length();
+                        grown.push_back(l > 1e-6 ? c + d * ((l + 4.5) / l) : v);
+                    }
+                    gradePolys.push_back(std::move(grown));
+                }
+                std::vector<TerrainFlatten> blockGrades = engine::gradeBlocks(
+                    gradePolys, lotGround);
+                LOG_INFO << "[grade] " << blockGrades.size()
+                         << " block planes/terraces from "
+                         << gradePolys.size() << " blocks";
+                terrainParams.flatten.insert(terrainParams.flatten.end(),
+                                             blockGrades.begin(),
+                                             blockGrades.end());
+            }
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||
                     lb.plan.size() < 3) continue;
