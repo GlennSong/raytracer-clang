@@ -45,6 +45,18 @@ int pushNode(RoadNet& net, const Vec2& p, double elev) {
     return static_cast<int>(net.nodes.size()) - 1;
 }
 
+// Stamp a semantic-layer hint (#17) on a net node: the bake KNOWS which
+// node is a gore (and whether the ramp joins or leaves) and which street
+// node is a landing — geometry alone cannot tell a Merge from a mirrored
+// Diverge. classifyRoadGraph honours these at degree >= 3.
+void stampKind(RoadNet& net, int ni, JunctionKind k) {
+    if (ni < 0) return;
+    if (net.nodeKinds.size() < net.nodes.size())
+        net.nodeKinds.resize(net.nodes.size(),
+                             static_cast<uint8_t>(JunctionKind::Auto));
+    net.nodeKinds[ni] = static_cast<uint8_t>(k);
+}
+
 // Store an authored tangent for a baked node (parallel array padded). The
 // magnitude follows the Catmull-Rom convention netGraph's Hermite uses
 // (~half the span between neighbouring nodes), so sparse nodes reproduce
@@ -129,6 +141,9 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
             if (d < best) { best = d; gore = ni; }
         }
         if (gore < 0 || best > 1.0) continue;      // must be exact, not near
+        stampKind(net, gore,
+                  def.exits[xi].onRamp ? JunctionKind::Merge
+                                       : JunctionKind::Diverge);
 
         // 2a RIBBON EXTRACTION: drop the gore band (junction surface, owned
         // by the 2c gore treatment) and orient the walk GORE -> LANDING. An
@@ -230,9 +245,11 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
                 const double d = (net.nodes[v] - end).lengthSquared();
                 if (d < sd) { sd = d; snap = v; }
             }
-            if (snap >= 0 && snap != prev)
+            if (snap >= 0 && snap != prev) {
                 pushEdge(net, prev, snap, rampWidth, RoadClass::Ramp, /*layer=*/0,
                          rampSpec);
+                stampKind(net, snap, JunctionKind::Landing);
+            }
         }
     }
     // Tangent array stays parallel even if the last pushes were snaps.

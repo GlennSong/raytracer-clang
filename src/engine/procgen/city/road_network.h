@@ -19,6 +19,40 @@ namespace engine {
 // parameters — ADR-0052.)
 enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp };
 
+// What MEETS at a node — not how many edges (roads-v2.2 semantic layer,
+// issue #17). Auto = unclassified; classifyRoadGraph (road_semantics.h)
+// fills it, and a non-Auto value on input is an authored/baked HINT that
+// wins at degree >= 3 (bakeCorridorIntoNet stamps its gores and landings —
+// the bake KNOWS which side of the interchange it built; geometry alone
+// cannot tell a Merge from a mirror-image Diverge).
+enum class JunctionKind : uint8_t {
+    Auto = 0,       // not yet classified
+    None,           // open road: degree 2 (through / curve sample) or isolated
+    DeadEnd,        // degree 1
+    Intersection,   // streets crossing streets — pads, zebras, signals live here
+    Merge,          // gore: an on-ramp joins a freeway mainline
+    Diverge,        // gore: an exit ramp leaves a freeway mainline
+    Landing,        // a ramp foot meets street(s)
+};
+// Consumers that only care "is this a gore?" go through this — Merge vs
+// Diverge is bake-only truth and no current consumer needs the difference.
+inline bool isGore(JunctionKind k) {
+    return k == JunctionKind::Merge || k == JunctionKind::Diverge;
+}
+
+// Per-edge ACCESS bits (semantic layer): derived once by classifyRoadGraph
+// and STORED, so consumers stop re-deriving "freeway-ness" with their own
+// class checks. kWalkable mirrors RoadEdge::walkable this round (the bool
+// stays for nav/pathfind compat until a later cleanup).
+namespace road_access {
+constexpr uint8_t kWalkable   = 1;   // pedestrians travel along it
+constexpr uint8_t kFrontage   = 2;   // lots/parking/sidewalk band may front it
+constexpr uint8_t kCrossable  = 4;   // may host a zebra crossing
+constexpr uint8_t kSignalable = 8;   // counts as a signal approach
+constexpr uint8_t kAllStreet =
+    kWalkable | kFrontage | kCrossable | kSignalable;
+}  // namespace road_access
+
 struct RoadNode {
     Vec2 pos;
     // Carriageway height here. elevAbsolute=false (default): height ABOVE
@@ -27,6 +61,10 @@ struct RoadNode {
     // ground-relative value made deck traffic hover/sink between nodes.
     Real elev = 0;
     bool elevAbsolute = false;
+    // Semantic layer: what meets here (see JunctionKind above). Auto until
+    // classifyRoadGraph runs; appended defaulted member — every existing
+    // brace-init keeps working.
+    JunctionKind kind = JunctionKind::Auto;
 };
 // `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY
 // are the same intersection only when they share a layer; different layers pass over/under
@@ -55,6 +93,9 @@ struct RoadEdge {
     // known; edges without specs keep the permissive default and rely on the
     // class rule (pathfind's onFoot skip of Freeway/Ramp) as the backstop.
     bool walkable = true;
+    // Semantic layer: access bits (road_access::k*), derived by
+    // classifyRoadGraph from class/spec/elevation/neighbours and stored.
+    uint8_t access = road_access::kAllStreet;
 };
 
 struct RoadGraph {

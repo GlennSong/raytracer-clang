@@ -95,6 +95,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_spec.cpp
     src/engine/procgen/city/road_net.cpp
     src/engine/procgen/city/road_constraints.cpp
+    src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
     src/engine/procgen/city/district.cpp
@@ -424,6 +425,7 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
+    tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
     tests/test_road_crossings.cpp

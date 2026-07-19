@@ -36,6 +36,12 @@ struct RoadNet {
     // mesher. Interior spline samples interpolate between two authored endpoints;
     // a chain with any at-grade node drapes (welder needs a homogeneous chain).
     std::vector<double> nodeElev;
+    // Semantic-layer HINTS (roads-v2.2 #17): JunctionKind per node (parallel
+    // to `nodes`; short/missing = Auto). bakeCorridorIntoNet stamps its gores
+    // and landings here — the bake KNOWS which side of the interchange it
+    // built; classifyRoadGraph honours a hint at degree >= 3 and derives the
+    // rest. Not serialized: the bake re-stamps on every load/regen.
+    std::vector<uint8_t> nodeKinds;
     double width = 10.0;                        // default carriageway width (m) — widen control
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.

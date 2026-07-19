@@ -1,4 +1,6 @@
 #include "nav_graph.h"
+
+#include "../procgen/city/road_semantics.h"
 #include "../procgen/city/road_rules.h"
 
 #include <algorithm>
@@ -73,7 +75,31 @@ int NavGraph::nearestLink(const Vec2& p) const {
     return best;
 }
 
-NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
+namespace {
+// Knot-merge cluster kind: the most specific member wins — a Landing glued
+// to an Intersection keeps its landing truth (the fixture decides if this
+// ever needs to be per-consumer instead).
+int kindPriority(JunctionKind k) {
+    switch (k) {
+        case JunctionKind::Landing: return 6;
+        case JunctionKind::Diverge: return 5;
+        case JunctionKind::Merge: return 4;
+        case JunctionKind::Intersection: return 3;
+        case JunctionKind::DeadEnd: return 2;
+        case JunctionKind::None: return 1;
+        default: return 0;
+    }
+}
+}  // namespace
+
+NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
+    // Semantic self-heal (#17): hand-built graphs (tests, tools) classify on
+    // entry so kind-gated consumers behave identically for them.
+    RoadGraph healed;
+    const RoadGraph& roads = roadGraphUnclassified(roadsIn)
+                                 ? (healed = roadsIn,
+                                    classifyRoadGraph(healed), healed)
+                                 : roadsIn;
     // Knot merge (see NavBuildParams::junctionMergeRadius): collapse clusters of
     // nearby JUNCTION nodes into one intersection before building links, so a
     // generated crossing is one junction with real approach lengths instead of a
@@ -82,13 +108,16 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
     std::vector<Vec2> pos;
     std::vector<Real> elev;
     std::vector<uint8_t> elevAbs;
+    std::vector<uint8_t> kind;
     pos.reserve(roads.nodes.size());
     elev.reserve(roads.nodes.size());
     elevAbs.reserve(roads.nodes.size());
+    kind.reserve(roads.nodes.size());
     for (const RoadNode& rn : roads.nodes) {
         pos.push_back(rn.pos);
         elev.push_back(rn.elev);
         elevAbs.push_back(rn.elevAbsolute ? 1 : 0);
+        kind.push_back(static_cast<uint8_t>(rn.kind));
     }
     std::vector<int> remap(pos.size());
     for (std::size_t i = 0; i < remap.size(); ++i) remap[i] = static_cast<int>(i);
@@ -144,6 +173,14 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
             if (cnt[remap[i]] > 1)
                 pos[remap[i]] = sum[remap[i]] / static_cast<Real>(cnt[remap[i]]);
         }
+        // Cluster KIND: the most specific member's kind survives the merge.
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            const int r = find(static_cast<int>(i));
+            if (r == static_cast<int>(i)) continue;
+            if (kindPriority(static_cast<JunctionKind>(kind[i])) >
+                kindPriority(static_cast<JunctionKind>(kind[r])))
+                kind[r] = kind[i];
+        }
         // The knot's SPREAD: how far members sat from their cluster centroid.
         // Recorded per surviving node so placement (signal poles) can clear the
         // whole drawn crossing, which spans the knot around the merged node.
@@ -162,6 +199,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         std::vector<Real> packedElev;
         std::vector<uint8_t> packedElevAbs;
         std::vector<Real> packedSpread;
+        std::vector<uint8_t> packedKind;
         packed.reserve(pos.size());
         for (std::size_t i = 0; i < pos.size(); ++i) {
             if (remap[i] != static_cast<int>(i)) continue;   // merged away
@@ -170,6 +208,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
             packedElev.push_back(elev[i]);
             packedElevAbs.push_back(elevAbs[i]);
             packedSpread.push_back(spreadOf[i]);
+            packedKind.push_back(kind[i]);
         }
         std::vector<Edge> kept;
         kept.reserve(edges.size());
@@ -188,11 +227,13 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         elev.swap(packedElev);
         elevAbs.swap(packedElevAbs);
         spread.swap(packedSpread);
+        kind.swap(packedKind);
     }
 
     NavGraph g;
     g.nodes = pos;
     g.nodeSpread = spread;
+    g.nodeKind = kind;
     g.outLinks.resize(g.nodes.size());
 
     const int n = static_cast<int>(g.nodes.size());
@@ -213,6 +254,7 @@ NavGraph buildNavGraph(const RoadGraph& roads, const NavBuildParams& params) {
         // so the per-direction count is what a car follows.
         l.lanes = std::max(1, lanesForClass(e.klass, /*perDirection=*/true));
         l.walkable = e.walkable;
+        l.access = e.access;   // semantic layer (#17)
         l.layer = e.layer;
         l.elevA = elev[a];
         l.elevB = elev[b];

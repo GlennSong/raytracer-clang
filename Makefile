@@ -77,6 +77,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \
@@ -148,6 +149,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_road_weld.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \
 	$(TEST_DIR)/test_road_constraints.cpp \
+	$(TEST_DIR)/test_road_semantics.cpp \
 	$(TEST_DIR)/test_road_layers.cpp \
 	$(TEST_DIR)/test_road_offset.cpp \
 	$(TEST_DIR)/test_road_crossings.cpp \
@@ -258,6 +260,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
 	$(SRC_DIR)/engine/procgen/city/district.cpp \

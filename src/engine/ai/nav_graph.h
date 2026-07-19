@@ -38,6 +38,10 @@ struct NavLink {
     // Sidewalk bands; see RoadEdge.walkable). Routing (onFoot) and the sim's
     // walkers both honour it.
     bool walkable = true;
+    // Semantic layer (#17): access bits (road_access::k*) copied from the
+    // source RoadEdge. kWalkable mirrors `walkable`; the new consumers key
+    // on kFrontage/kCrossable/kSignalable.
+    uint8_t access = road_access::kAllStreet;
 };
 
 struct NavGraph {
@@ -49,6 +53,17 @@ struct NavGraph {
     // ordinary nodes. The drawn crossing spans this far around the merged node,
     // so anything PLACED relative to the node (signal poles) backs off by it.
     std::vector<Real> nodeSpread;
+    // Semantic layer (#17): JunctionKind per node (values of the road
+    // graph's JunctionKind enum). junction[] keeps its degree-based meaning
+    // this round — every box/gridlock ratchet reads it unchanged; nodeKind
+    // carries the NEW distinctions (Intersection vs gore vs landing).
+    std::vector<uint8_t> nodeKind;
+
+    JunctionKind kindOf(int node) const {
+        return node >= 0 && node < static_cast<int>(nodeKind.size())
+                   ? static_cast<JunctionKind>(nodeKind[node])
+                   : JunctionKind::Auto;
+    }
 
     int nodeCount() const { return static_cast<int>(nodes.size()); }
     int linkCount() const { return static_cast<int>(links.size()); }

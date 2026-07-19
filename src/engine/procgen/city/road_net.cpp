@@ -1,4 +1,6 @@
 #include "road_net.h"
+
+#include "road_semantics.h"
 #include "../../../log.h"
 #include "road_lattice.h"
 #include "road_offset.h"   // ribbonOutline + polygonUnion (S5 curb/sidewalk band)        // swept-lattice street mesher (stage 3)
@@ -95,6 +97,10 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         g.nodes[i].pos = net.nodes[i];
         if (nhasElev(i)) { g.nodes[i].elev = static_cast<Real>(net.nodeElev[i]);
                            g.nodes[i].elevAbsolute = true; }
+        // Semantic hints ride onto the ORIGINAL control nodes (0..n-1);
+        // appended curve samples stay Auto for classifyRoadGraph.
+        if (i < static_cast<int>(net.nodeKinds.size()))
+            g.nodes[i].kind = static_cast<JunctionKind>(net.nodeKinds[i]);
     }
 
     // Per-node neighbours (for degree + the Catmull-Rom "other" neighbour).
@@ -253,7 +259,9 @@ RoadGraph constrainedNetGraph(const RoadNet& net) {
     double minR = netMinTurnRadius(net);
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
-    return applyConstraints(netGraph(net, minR), rules);
+    RoadGraph g = applyConstraints(netGraph(net, minR), rules);
+    classifyRoadGraph(g, net.heightAt);   // semantic layer (#17): kinds + access
+    return g;
 }
 
 }  // namespace
@@ -269,7 +277,9 @@ RoadGraph navRoadGraph(const RoadNet& net) { return constrainedNetGraph(net); }
 RoadGraph roadNetFullGraph(const RoadNet& net) {
     RoadRules rules;
     rules.autoRoundabout = net.autoRoundabout;
-    return applyConstraints(netGraph(net, netMinTurnRadius(net)), rules);
+    RoadGraph g = applyConstraints(netGraph(net, netMinTurnRadius(net)), rules);
+    classifyRoadGraph(g, net.heightAt);   // semantic layer (#17)
+    return g;
 }
 
 // One UnionSpine per CHAIN (a maximal degree-2 run between junctions/dead-ends), carrying that
@@ -448,11 +458,26 @@ struct EdgeHeightField {
 };
 }  // namespace
 
-RenderMesh buildRoadNetLattice(const RoadGraph& g,
+RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                                const std::function<Real(Real, Real)>& heightAt,
                                std::vector<std::size_t>* chainTriEndsOut,
                                double sidewalkWidth, double curbHeight,
                                bool crosswalks) {
+    // Semantic self-heal (#17): tests and tools hand this hand-built graphs
+    // that never went through a producer — classify so kind-gated styling
+    // behaves identically for them. Classified inputs pass through untouched
+    // (classifyRoadGraph is idempotent; hints are preserved).
+    RoadGraph healed;
+    const RoadGraph& g = roadGraphUnclassified(gIn)
+                             ? (healed = gIn,
+                                classifyRoadGraph(
+                                    healed,
+                                    heightAt ? GroundFn([&heightAt](double x, double y) {
+                                        return static_cast<double>(heightAt(x, y));
+                                    })
+                                             : GroundFn()),
+                                healed)
+                             : gIn;
     const int N = static_cast<int>(g.nodes.size());
     // Stage 1 of the junction re-architecture (docs/junction-weld-decision.md):
     // the junction owns the FULL cross-section. Trim each body by its full
@@ -1221,6 +1246,10 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
         }
     }
 
+    // Semantic layer (#17): classify AFTER the layer-elevation stamping so
+    // access bits see the final elevAbsolute truth.
+    classifyRoadGraph(g, net.heightAt);
+
     // ONE MESHER (roads-v2 S6): every street net goes through the swept
     // lattice — carriageway bodies, junction pads, curb/sidewalk band loops,
     // and per-class structure (freeway kit, ramp decks, layered bridges).
@@ -1562,6 +1591,10 @@ bool roadNetDeleteNode(RoadNet& net, int i) {
     net.nodes.erase(net.nodes.begin() + i);
     if (i < static_cast<int>(net.tangents.size()))
         net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
+    if (i < static_cast<int>(net.nodeElev.size()))
+        net.nodeElev.erase(net.nodeElev.begin() + i);          // and elevations
+    if (i < static_cast<int>(net.nodeKinds.size()))
+        net.nodeKinds.erase(net.nodeKinds.begin() + i);        // and semantic hints
     return true;
 }
 
