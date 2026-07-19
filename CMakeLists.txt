@@ -602,6 +602,7 @@ if(RT_ENABLE_PHYSICS)
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
+        tests/test_driving_lab.cpp
         tests/test_physics_system.cpp
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
