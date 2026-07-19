@@ -133,6 +133,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     world.each<engine::CitySimConfig>([&](Entity, engine::CitySimConfig& c) {
         params_.cars = c.cars;
         params_.pedestrians = c.pedestrians;
+        params_.carsPerLaneKm = c.carsPerLaneKm;
+        params_.pedsPerKm = c.pedsPerKm;
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
@@ -222,7 +224,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                     ap.name);
     }
 
-    sim_.build(nav_, params_.cars, params_.pedestrians, params_.seed);
+    // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
+    // graph itself — cars per LANE-km of carriageway, walkers per km of
+    // sidewalk (both sides of every street) — so population scales with the
+    // city instead of a flat number tuned for one level.
+    int carCount = params_.cars, pedCount = params_.pedestrians;
+    if (carCount < 0 || pedCount < 0) {
+        Real laneKm = 0, walkKm = 0;
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            const engine::NavLink& L = nav_.links[li];
+            laneKm += L.length * std::max(1, L.lanes) * 1e-3;
+            if (L.klass != engine::RoadClass::Freeway &&
+                L.klass != engine::RoadClass::Ramp)
+                walkKm += L.length * 2.0 * 1e-3;
+        }
+        // Directed links double-count each roadway: halve to physical km.
+        laneKm *= 0.5;
+        walkKm *= 0.5;
+        if (carCount < 0)
+            carCount = std::clamp(
+                static_cast<int>(laneKm * params_.carsPerLaneKm), 6, 400);
+        if (pedCount < 0)
+            pedCount = std::clamp(
+                static_cast<int>(walkKm * params_.pedsPerKm), 6, 400);
+        LOG_INFO << "[citysim] density population: " << carCount << " cars ("
+                 << laneKm << " lane-km), " << pedCount << " walkers ("
+                 << walkKm << " sidewalk-km)";
+    }
+    sim_.build(nav_, carCount, pedCount, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
 #ifdef RT_ENABLE_SCRIPTING
@@ -683,8 +712,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     return true;
 }
 
-Mat4 CityRenderSystem::agentPose(const Agent& a) const {
+Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     bool car = a.mode == Agent::Mode::Driver;
+    // Tilt low-pass (4b): blend this tick's fitted up-vector toward the last
+    // one before building the basis. Raw per-tick refits on noisy ground
+    // vibrated the body; the ~0.5 s constant also eases the pitch snap at
+    // link-grade boundaries. Returns the smoothed up (identity for peds or
+    // unindexed callers).
+    auto smoothedUp = [&](Vec3 up) {
+        if (agentIdx < 0 || !car) return up;
+        if (smoothUp_.size() <= static_cast<std::size_t>(agentIdx))
+            smoothUp_.resize(sim_.agents().size(), Vec3(0, 0, 0));
+        Vec3& su = smoothUp_[agentIdx];
+        // Gain from the bake interval (tau ~0.7 s), so the filter behaves the
+        // same at the viewer's 60 Hz and the tests' 10 Hz.
+        const Real k = 1.0 - std::exp(-bakeDt_ / 0.7);
+        if (su.lengthSquared() < 1e-6)
+            su = up;
+        else
+            su = normalize(su + (up - su) * k);
+        return su;
+    };
     Real x = a.pos.x, z = a.pos.y;          // Vec2 maps to world XZ (.y = world z)
     // Lift the box so it rests on the ground: half its OWN body height (a tall van
     // or box truck sits higher than a sedan). Read the height from the possessed
@@ -715,6 +763,8 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
             Vec3 rt(f.y, 0, -f.x);
             Vec3 up = normalize(cross(fw, rt));
             if (up.y < 0) up = up * -1;
+            up = smoothedUp(up);
+            fw = normalize(fw - up * dot(fw, up));
             rt = normalize(cross(up, fw));
             Mat4 m;
             m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
@@ -741,6 +791,8 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
             if (up.lengthSquared() > 1e-9) {
                 up = normalize(up);
                 if (up.y < 0) up = up * -1;
+                up = smoothedUp(up);
+                fw = normalize(fw - up * dot(fw, up));
                 rt = normalize(cross(up, fw));
                 Mat4 m;   // columns: X = right, Y = up, Z = forward (yaw basis)
                 m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
@@ -749,6 +801,23 @@ Mat4 CityRenderSystem::agentPose(const Agent& a) const {
                 m.m[0][3] = x; m.m[1][3] = y; m.m[2][3] = z;
                 return m;
             }
+        }
+    }
+    if (car && agentIdx >= 0) {
+        const Vec3 up = smoothedUp(Vec3(0, 1, 0));
+        Vec2 f = a.heading;
+        const Real fl = f.length();
+        if (fl > 1e-6 && up.y < 0.99999) {
+            f = f * (1.0 / fl);
+            Vec3 fw(f.x, 0, f.y);
+            fw = normalize(fw - up * dot(fw, up));
+            const Vec3 rt = normalize(cross(up, fw));
+            Mat4 m;
+            m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+            m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+            m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+            m.m[0][3] = x; m.m[1][3] = y; m.m[2][3] = z;
+            return m;
         }
     }
     Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
@@ -937,8 +1006,9 @@ void CityRenderSystem::syncGroups(World& world) {
             // real suspension, pitch and roll — while the sim's kinematic
             // plan stays the brains' truth.
             const auto po = physPose_.find(static_cast<int>(ai));
-            cars[v]->transforms.push_back(po != physPose_.end() ? po->second
-                                                                : agentPose(a));
+            cars[v]->transforms.push_back(
+                po != physPose_.end() ? po->second
+                                      : agentPose(a, static_cast<int>(ai)));
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             ped->transforms.push_back(agentPose(a));
@@ -1099,6 +1169,7 @@ void CityRenderSystem::syncGroups(World& world) {
 
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
+    bakeDt_ = dt;   // the tilt low-pass keys its gain to the bake interval
     sim_.step(dt, params_.hoursPerSecond);
     syncGroups(world);
 }

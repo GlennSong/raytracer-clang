@@ -733,3 +733,104 @@ TEST_CASE(walk_pose_index_tracks_real_speed) {
     CHECK_APPROX(walkPoseSwing(0), 0.0, 1e-12);
     CHECK(std::fabs(walkPoseSwing(1)) > 0.1);
 }
+
+TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
+    // Roads-v2.1 4b (drive feedback C1: "cars vibrate"): the car's road-plane
+    // basis is re-fit from ground samples every tick; on QUANTISED ground
+    // (CDLOD mesh steps) the raw fit snaps the up-vector tick to tick. The
+    // tilt low-pass must bound the per-tick swing while still letting the
+    // body take real slopes.
+    World world;
+    RoadNet net = squareLoop();
+    // Jagged drape: coarse steps (quantised terrain) over a gentle slope.
+    net.heightAt = [](double x, double z) {
+        const double slope = 0.03 * x + 0.02 * z;
+        const double steps = 0.22 * (std::floor(x / 2.0) + std::floor(z / 2.0));
+        return slope + std::fmod(std::fabs(steps), 0.44);
+    };
+    world.add<RoadNet>(world.create(), net);
+
+    CityRenderParams params;
+    params.cars = 4;
+    params.pedestrians = 0;
+    params.seed = 3;
+    params.wander = true;
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+    for (int i = 0; i < 80; ++i) city.step(world, 0.1);   // warm up: cars rolling
+
+    // Track every car instance's up-vector across steps (instances keep bake
+    // order while the same agents stay moving).
+    std::vector<Vec3> prevUp;
+    Real maxSwing = 0;   // degrees per 0.1 s tick
+    for (int i = 0; i < 150; ++i) {
+        city.step(world, 0.1);
+        std::vector<Vec3> ups;
+        for (Entity e : city.carGroups()) {
+            InstanceGroup* g = world.get<InstanceGroup>(e);
+            if (!g) continue;
+            for (const Mat4& m : g->transforms)
+                ups.push_back(Vec3(m.m[0][1], m.m[1][1], m.m[2][1]));
+        }
+        if (prevUp.size() == ups.size()) {
+            for (std::size_t k = 0; k < ups.size(); ++k) {
+                const Real c = std::clamp(dot(prevUp[k], ups[k]), Real(-1), Real(1));
+                maxSwing = std::max(maxSwing, std::acos(c) * 180.0 / 3.14159265358979);
+            }
+        }
+        prevUp = std::move(ups);
+    }
+    std::printf("    [pose] maxSwing=%.2f deg/tick\n", maxSwing);
+    // Unsmoothed, a 0.22 m step under one axle flips the fit several degrees
+    // in ONE tick; the low-pass spreads it. Bound the per-tick swing.
+    CHECK(maxSwing < 2.5);
+    CHECK(maxSwing > 0.0);   // the probe really saw tilting cars
+}
+
+TEST_CASE(density_population_scales_with_the_graph) {
+    // Roads-v2.1 4c: cars = -1 / pedestrians = -1 ask for DENSITY population —
+    // counts derived from lane-km / sidewalk-km, so a bigger city gets more
+    // traffic from the same recipe, and explicit counts stay overrides.
+    auto build = [](RoadNet net, int cars, Real perLaneKm, World& world) {
+        world.add<RoadNet>(world.create(), std::move(net));
+        CityRenderParams p;
+        p.cars = cars;
+        p.pedestrians = -1;
+        p.carsPerLaneKm = perLaneKm;
+        p.seed = 5;
+        CityRenderSystem city(p);
+        CHECK(city.build(world, nullptr));
+        int drivers = 0, peds = 0;
+        for (const Agent& a : city.sim().agents())
+            (a.mode == Agent::Mode::Driver ? drivers : peds)++;
+        return std::make_pair(drivers, peds);
+    };
+    auto grid = []() {
+        RoadNet net;
+        const int N = 4;
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i)
+                net.nodes.push_back(Vec2(i * 80.0, j * 80.0));
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                if (i + 1 < N) net.edges.push_back({ j * N + i, j * N + i + 1 });
+                if (j + 1 < N) net.edges.push_back({ j * N + i, (j + 1) * N + i });
+            }
+        net.width = 10.0;
+        net.sidewalk = 2.5;
+        return net;
+    };
+
+    World w1, w2, w3, w4;
+    auto tiny = build(squareLoop(), -1, 30.0, w1);   // 0.16 km loop
+    auto big = build(grid(), -1, 30.0, w2);          // ~1.9 km grid
+    auto denser = build(grid(), -1, 60.0, w3);       // same city, 2x density
+    auto fixed_ = build(grid(), 9, 30.0, w4);        // explicit count wins
+    std::printf("    [density] tiny=%d big=%d denser=%d fixed=%d peds=%d\n",
+                tiny.first, big.first, denser.first, fixed_.first, big.second);
+    CHECK(tiny.first >= 6);                  // floor keeps a hamlet alive
+    CHECK(big.first > tiny.first);           // more city -> more cars
+    CHECK(denser.first > big.first);         // knob scales it
+    CHECK(fixed_.first == 9);                // explicit count is an override
+    CHECK(big.second > 6);                   // walkers scale too
+}

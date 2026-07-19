@@ -29,8 +29,10 @@ namespace citysim {
 // pose-bake logic is unit-tested headless; mesh upload is the only part that
 // needs the AssetManager (skipped, with null mesh handles, when absent).
 struct CityRenderParams {
-    int cars = 40;
-    int pedestrians = 40;
+    int cars = 40;          // -1 = by density (carsPerLaneKm over the nav)
+    int pedestrians = 40;   // -1 = by density (pedsPerKm over the sidewalks)
+    Real carsPerLaneKm = 10.0;
+    Real pedsPerKm = 6.0;
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
@@ -229,7 +231,11 @@ private:
     void syncGroups(engine::World& world);
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
     int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
-    engine::Mat4 agentPose(const Agent& a) const;   // box sized by a.mode (car/ped)
+    // Box sized by a.mode (car/ped). `agentIdx` >= 0 enables the per-agent
+    // TILT LOW-PASS for cars (roads-v2.1 4b): the road-plane basis is re-fit
+    // from terrain samples every tick, and raw refits vibrate the body on
+    // noisy/quantised ground (drive feedback C1: "cars vibrate").
+    engine::Mat4 agentPose(const Agent& a, int agentIdx = -1) const;
     // Where a signalled approach's pole stands and which way its head/arm point
     // (matches the city's street_kit placement, scaled to road width).
     struct SignalSite {
@@ -262,7 +268,9 @@ private:
     // or a synthesized default set for C++ fallback cars. An empty entry => that
     // variant draws no lamps.
     std::vector<std::vector<LampMarker>> carLights_;
-    std::vector<Real> prevCarSpeed_;   // last step's per-agent speed (brake decel)
+    std::vector<Real> prevCarSpeed_;
+    mutable std::vector<engine::Vec3> smoothUp_;   // per-agent tilt low-pass
+    Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows

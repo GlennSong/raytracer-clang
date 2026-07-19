@@ -334,8 +334,14 @@ struct AuthoredPlace {
 };
 
 struct CitySimConfig {
+    // Population: explicit counts, or -1 = BY DENSITY (roads-v2.1 4c) — the
+    // citysim bridge computes counts from the built nav graph's lane-km /
+    // sidewalk-km, so a metropolis is busy and a hamlet is quiet from the
+    // same recipe. Flat counts remain as overrides.
     int cars = 40;
     int pedestrians = 40;
+    float carsPerLaneKm = 10.0f;   // density mode: ambient cars per lane-km
+    float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err

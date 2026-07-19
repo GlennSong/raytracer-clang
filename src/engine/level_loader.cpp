@@ -2982,6 +2982,8 @@ bool LevelLoader::load(const std::string& path,
         CitySimConfig cfg;
         cfg.cars = cs.value("cars", cfg.cars);
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
+        cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
         cfg.perceptionReliability =
