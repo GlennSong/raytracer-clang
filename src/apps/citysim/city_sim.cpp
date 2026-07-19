@@ -243,6 +243,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         const engine::NavLink& L = graph.links[li];
         if (L.klass != engine::RoadClass::Local) continue;
         if (L.layer != 0 || L.elevAbsolute) continue;
+        // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
+        // ramp APPROACH (a street climbing to a landing has no frontage, so
+        // no curbside parking on the on-ramp feeder).
+        if (!(L.access & engine::road_access::kFrontage)) continue;
         if (L.length < 40.0 || L.width < 9.5) continue;
         const engine::Vec2 dir = graph.direction(li);
         const engine::Vec2 right(dir.y, -dir.x);
