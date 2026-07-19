@@ -319,9 +319,10 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         };
         std::vector<double> ys{ yOf(v) };
         bool anyAbs = g.nodes[v].elevAbsolute;
-        int prev = v, e = e0, startNode = v;
+        int prev = v, e = e0, startNode = v, lastE = e0;
         while (!used[e]) {
             used[e] = 1;
+            lastE = e;
             int nx = (g.edges[e].a == prev) ? g.edges[e].b : g.edges[e].a;
             if (closed && nx == startNode) break;
             s.points.push_back(g.nodes[nx].pos);
@@ -333,6 +334,7 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
             if (ne < 0) break;
             prev = nx; e = ne;
         }
+        s.accessBack = g.edges[lastE].access;   // the back end's edge (#21)
         if (anyAbs && ys.size() == s.points.size()) s.yAbs = std::move(ys);
         return s;
     };
@@ -371,7 +373,8 @@ UnionSpine trimSpine(const UnionSpine& s, double rA, double rB) {
         p = s.points[i] + (s.points[i + 1] - s.points[i]) * t;
         if (hasY) y = s.yAbs[i] + (s.yAbs[i + 1] - s.yAbs[i]) * t;
     };
-    UnionSpine o; o.halfWidth = s.halfWidth; o.klass = s.klass; o.access = s.access;
+    UnionSpine o; o.halfWidth = s.halfWidth; o.klass = s.klass;
+    o.access = s.access; o.accessBack = s.accessBack;
     Vec2 p; double y = 0;
     at(a, p, y); o.points.push_back(p); if (hasY) o.yAbs.push_back(y);
     for (int i = 0; i < n; ++i)
@@ -955,6 +958,24 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             const std::size_t v0 = out.vertices.size();
             MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
                                                       ground, 2.0, nullptr, &ring0, &ringN));
+            // LANDING/gore MOUTH GAP (#20, review S4b): where a STREET body
+            // meets a ramp landing, gap the sidewalk band across its mouth —
+            // exactly as the freeway/ramp branch does. Otherwise the street's
+            // closed-capsule ribbon caps with a CURB WALL straight across the
+            // carriageway at the landing, sealing the ramp entrance ("holes
+            // where it thinks it's an intersection"). The zebra is already
+            // suppressed there (S3); this opens the curb too.
+            auto landingEnd = [&](int nd) {
+                return nd >= 0 &&
+                       (g.nodes[nd].kind == JunctionKind::Landing ||
+                        isGore(g.nodes[nd].kind));
+            };
+            if (landingEnd(a) && ring0.size() >= 2)
+                bandGaps.push_back({ Vec2(ring0.front().x, ring0.front().z),
+                                     Vec2(ring0.back().x, ring0.back().z) });
+            if (landingEnd(b) && ringN.size() >= 2)
+                bandGaps.push_back({ Vec2(ringN.front().x, ringN.front().z),
+                                     Vec2(ringN.back().x, ringN.back().z) });
             // Crosswalk band UV (ADR-0062, ported from the weld): the shader
             // stripes a zebra where mv lands in the set-back window past a
             // junction mouth. The sweep bakes v = chain arc length; remap it
@@ -972,10 +993,11 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 // there: "the freeways have crosswalks?"). Per-end, so a
                 // street that is an Intersection at A and a Landing at B gets
                 // its zebra only at A.
-                const bool cross = (s.access & road_access::kCrossable) != 0;
-                const bool jA = rA > 0.0 && cross && a >= 0 &&
+                const bool jA = rA > 0.0 &&
+                                (s.access & road_access::kCrossable) && a >= 0 &&
                                 g.nodes[a].kind == JunctionKind::Intersection;
-                const bool jB = rB > 0.0 && cross && b >= 0 &&
+                const bool jB = rB > 0.0 &&
+                                (s.accessBack & road_access::kCrossable) && b >= 0 &&
                                 g.nodes[b].kind == JunctionKind::Intersection;
                 for (std::size_t vi = v0; vi < out.vertices.size(); ++vi) {
                     const double sAt = out.vertices[vi].v;

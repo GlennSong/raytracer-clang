@@ -234,10 +234,13 @@ struct UnionSpine {
     // markings, crosswalk gate, and lane dashes vary by CLASS instead of guessing
     // from width — the single lanesForClass() source (road-unification-plan P1).
     RoadClass klass = RoadClass::Local;
-    // Semantic access bits (road_access::k*), from the chain's first edge —
-    // so the mesher's zebra/band styling reads the classified truth instead
-    // of re-deriving "freeway-ness" (roads-v2.2 #17/#21).
-    uint8_t access = road_access::kAllStreet;
+    // Semantic access bits (road_access::k*): PER-END, from the chain's
+    // first and last edges (a chain's two ends can differ — an Intersection
+    // at one, a ramp-approach Landing at the other). The mesher's zebra
+    // reads the end-adjacent bits so it doesn't drop a crossable end just
+    // because the chain was welded from the other end (roads-v2.2 #17/#21).
+    uint8_t access = road_access::kAllStreet;      // first edge (front end)
+    uint8_t accessBack = road_access::kAllStreet;  // last edge (back end)
     // ABSOLUTE per-point deck Y (parallel to `points`; EMPTY = drape on terrain
     // as before). This is the 3-D channel that lets ONE welder carry a ramp or an
     // elevated deck through the same flat-street pipeline: a chain with authored

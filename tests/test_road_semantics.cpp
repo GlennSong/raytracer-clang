@@ -515,3 +515,60 @@ TEST_CASE(semantics_audit_catches_short_edge_crossing) {
     g2.addEdge(2, 3, 6, RoadClass::Ramp);
     CHECK(auditRoadGraph(g2).size() == 1);
 }
+
+// [6] Review S4b: the sidewalk band must GAP across a street's mouth at a
+// ramp landing — otherwise the street's closed-capsule ribbon caps with a
+// curb wall straight across the carriageway, sealing the ramp entrance. A
+// curb cap is a sidewalk-band vertex (negative-u) sitting INSIDE the
+// carriageway; near a landing there must be none.
+// [5] Review S4b: the zebra gate reads PER-END access. A street running
+// Intersection A <-> Landing B, welded from the LANDING end (B has the lower
+// node index), must still paint its crosswalk at A — the old code used the
+// chain's first-edge access (the approach edge, no kCrossable) for BOTH ends
+// and dropped the Intersection-end zebra.
+TEST_CASE(semantics_zebra_survives_at_the_intersection_end_of_an_approach) {
+    // Node 0 = a 4-way street Intersection (lowest index, so weldChainSpines
+    // starts the chain here — but we also need the LANDING to have a low
+    // index to exercise the back-end path). Build so the chain 5<->0 welds
+    // from node 0's side and the far end is the intersection... simplest:
+    // one street chain from a Landing (node 1) to an Intersection (node 0),
+    // climbing toward the landing.
+    RoadNet net;
+    net.width = 10.0;
+    net.sidewalk = 2.5;
+    net.crosswalks = true;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    // Node 0: 4-way intersection. Node 4: ramp landing reached by a climbing
+    // street from node 0's east arm.
+    net.nodes = { Vec2(0, 0),    Vec2(0, 70),  Vec2(0, -70), Vec2(-70, 0),
+                  Vec2(60, 0),   Vec2(120, 0) };
+    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 }, { 4, 5 } };
+    net.nodeElev = { std::nan(""), std::nan(""), std::nan(""), std::nan(""),
+                     0.6, 1.4 };   // climb east to the landing at node 4
+    net.nodes.push_back(Vec2(150, 45));   // ramp leaves node 4
+    net.nodeElev.push_back(6.0);
+    net.edges.push_back({ 4, 6 });
+    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
+    net.edgeClasses.back() = RoadClass::Ramp;
+
+    RoadGraph g = roadNetFullGraph(net);
+    CHECK(g.nodes[0].kind == JunctionKind::Intersection);
+    bool landing = false;
+    for (const RoadNode& n : g.nodes)
+        if (n.kind == JunctionKind::Landing) landing = true;
+    CHECK(landing);
+
+    RenderMesh m = buildRoadNetMesh(net);
+    // Zebra verts on each of node 0's four approaches — the intersection must
+    // still paint them despite one arm being an approach to a landing.
+    int zebra = 0;
+    for (const Vertex& v : m.vertices) {
+        const double dx = v.position.x, dz = v.position.z;
+        if (dx * dx + dz * dz > 24.0 * 24.0) continue;
+        if (v.u > 1.05 && v.u < 3.0 && v.v > 0.4 && v.v < 3.7) ++zebra;
+    }
+    std::printf("[sem] intersection zebra verts (with an approach arm) = %d\n",
+                zebra);
+    CHECK(zebra > 0);   // per-end gate keeps the intersection's crosswalks
+}
