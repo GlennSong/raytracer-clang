@@ -200,8 +200,15 @@ RoadGraph applyConstraints(const RoadGraph& in, const RoadRules& rules) {
     for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i)
         if (remap[i] == 0) { remap[i] = static_cast<int>(out.nodes.size()); out.nodes.push_back(g.nodes[i]); }
     out.edges.reserve(g.edges.size());
-    for (const RoadEdge& e : g.edges)
-        out.edges.push_back(RoadEdge{remap[e.a], remap[e.b], e.width, e.klass, e.layer});
+    for (const RoadEdge& e : g.edges) {
+        // Copy-then-remap: a positional re-init here silently dropped every
+        // field after `layer` (walkable/spec/oneWay/provenance — and the
+        // semantic access bits) whenever a node promoted.
+        RoadEdge o = e;
+        o.a = remap[e.a];
+        o.b = remap[e.b];
+        out.edges.push_back(o);
+    }
     return out;
 }
 
@@ -336,8 +343,15 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
     for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i)
         if (remap[i] == 0) { remap[i] = static_cast<int>(out.nodes.size()); out.nodes.push_back(g.nodes[i]); }
     out.edges.reserve(g.edges.size());
-    for (const RoadEdge& e : g.edges)
-        out.edges.push_back(RoadEdge{remap[e.a], remap[e.b], e.width, e.klass, e.layer});
+    for (const RoadEdge& e : g.edges) {
+        // Copy-then-remap: a positional re-init here silently dropped every
+        // field after `layer` (walkable/spec/oneWay/provenance — and the
+        // semantic access bits) whenever a node promoted.
+        RoadEdge o = e;
+        o.a = remap[e.a];
+        o.b = remap[e.b];
+        out.edges.push_back(o);
+    }
     return out;
 }
 

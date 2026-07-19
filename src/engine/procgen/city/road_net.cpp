@@ -1736,15 +1736,23 @@ static RoadGraph warpGraph(const RoadGraph& in, double curviness) {
         double len = (b - a).length();
         int segs = std::max(1, static_cast<int>(std::lround(len / spacing)));
         int prev = e.a;
+        // Copy-then-remap (field-carry): the positional re-init dropped every
+        // field after `layer` on warped edges.
+        auto segEdge = [&](int va, int vb) {
+            RoadEdge o = e;
+            o.a = va;
+            o.b = vb;
+            out.edges.push_back(o);
+        };
         for (int i = 1; i < segs; ++i) {
             double t = static_cast<double>(i) / segs;
             Vec2 p = a + (b - a) * t;
             int mi = static_cast<int>(out.nodes.size());
             out.nodes.push_back(RoadNode{p + warp(p)});
-            out.edges.push_back(RoadEdge{prev, mi, e.width, e.klass, e.layer});
+            segEdge(prev, mi);
             prev = mi;
         }
-        out.edges.push_back(RoadEdge{prev, e.b, e.width, e.klass, e.layer});
+        segEdge(prev, e.b);
     }
     return out;
 }

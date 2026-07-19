@@ -361,3 +361,32 @@ TEST_CASE(generate_recipe_has_no_hairpin_bends) {
         CHECK(dot(d0, d1) >= std::cos(0.95));   // limit + slack
     }
 }
+
+// Field-carry (semantic-layer S0): the promotion rebuild used to re-init
+// edges positionally, silently resetting every field after `layer`
+// (walkable, spec, oneWay, provenance — and the access bits the semantic
+// layer adds). A promoted hub must keep its surviving spokes' payload.
+TEST_CASE(constraints_promotion_preserves_edge_payload) {
+    RoadGraph g = radialHub(7);   // over maxDegree: promotes to a roundabout
+    for (RoadEdge& e : g.edges) {
+        e.walkable = false;       // non-default on every spoke
+        e.spec = 3;
+        e.oneWay = true;
+        e.provenance = RoadProvenance::CorridorRamp;
+    }
+    RoadGraph out = applyConstraints(g);
+    CHECK(out.nodes.size() > g.nodes.size());   // it really promoted
+    // Ring arcs are synthesized (default payload, and they inherit the
+    // spokes' width — width cannot tell them apart). The payload itself
+    // identifies the surviving spokes: exactly the original 7 edges carry
+    // it, and each carries ALL of it.
+    int spokes = 0;
+    for (const RoadEdge& e : out.edges) {
+        if (e.spec != 3) continue;      // a synthesized ring arc
+        ++spokes;
+        CHECK(!e.walkable);
+        CHECK(e.oneWay);
+        CHECK(e.provenance == RoadProvenance::CorridorRamp);
+    }
+    CHECK(spokes == 7);   // every spoke survived with its payload
+}

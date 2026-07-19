@@ -1,0 +1,30 @@
+{
+  "cameras": [
+    {
+      "forward": [
+        0.2912372237746623,
+        -0.05902178309266951,
+        0.9548284184127478
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 8.0,
+        "far": 8000.0,
+        "focalLength": 50.0,
+        "focusDistance": 10.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Camera 1",
+      "position": [
+        -11.21244755404476,
+        10.946273087103313,
+        -75.79368422487983
+      ]
+    }
+  ],
+  "version": 1
+}
