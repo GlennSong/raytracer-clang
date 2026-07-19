@@ -275,3 +275,81 @@ TEST_CASE(retaining_walls_front_deep_cut_faces) {
     flat.heightAt = [](double, double) { return 2.0; };
     CHECK(buildRoadWalls(flat, p).walls.empty());
 }
+
+#include "../src/engine/procgen/city/corridor_plan.h"
+#include "../src/engine/procgen/city/road_semantics.h"
+
+// #19 (semantic layer S6): city blocks and lots derive from the WALKABLE
+// STREET subgraph only. A baked freeway corridor must NEVER be a block face
+// or a lot frontage — else houses grow along the elevated freeway with no
+// street to reach them ("orphaned houses along the freeway"). The freeway
+// ROW stays a keep-out band, not frontage.
+TEST_CASE(no_lots_front_the_freeway_only) {
+    RoadNet net;
+    net.width = 12.0;
+    net.sidewalk = 2.5;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    nlohmann::json gen = { { "kind", "metro" },     { "radius", 650 },
+                           { "hotspots", 4 },        { "block_size", 120 },
+                           { "seed", 12 },           { "freeways", true },
+                           { "corridor_freeways", true },
+                           { "min_road_len", 24 },   { "terrain_aware", false } };
+    applyGenerateRecipe(net, gen);
+    CHECK(!net.freewayPlans.empty());
+    const int baked = rebakeNetCorridors(net, 520.0);
+    CHECK(baked > 0);
+
+    // The STREET subgraph (what a walker/car can actually reach) and the
+    // freeway ROW (the corridor's own edges), split by class off the net.
+    RoadGraph streets, freeway;
+    for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+        const auto& e = net.edges[ei];
+        const bool bakedE = ei < net.edgeBaked.size() && net.edgeBaked[ei];
+        const RoadClass k = ei < net.edgeClasses.size() ? net.edgeClasses[ei]
+                                                        : RoadClass::Local;
+        RoadGraph& dst =
+            (bakedE || k == RoadClass::Freeway || k == RoadClass::Ramp) ? freeway
+                                                                        : streets;
+        const int b = static_cast<int>(dst.nodes.size());
+        dst.nodes.push_back({ net.nodes[e[0]] });
+        dst.nodes.push_back({ net.nodes[e[1]] });
+        dst.edges.push_back(RoadEdge{ b, b + 1, 8, k, 0 });
+    }
+    CHECK(!freeway.edges.empty());
+
+    auto nearestEdgeDist = [](const RoadGraph& g, const Vec2& p) {
+        double best = 1e30;
+        for (const RoadEdge& e : g.edges) {
+            const Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos, ab = B - A;
+            const double l2 = ab.lengthSquared();
+            double t = l2 > 1e-9 ? dot(p - A, ab) / l2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            best = std::min(best, (p - (A + ab * t)).length());
+        }
+        return best;
+    };
+
+    RoadGraph rowGraph = engine::navRoadGraph(net);
+    LotParams lp;
+    lp.seed = 5;
+    lp.roadMargin = 8.0;
+    NetLotResult grown =
+        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, &rowGraph);
+
+    int lots = 0, orphans = 0;
+    for (const LotBuilding& lb : grown.lots) {
+        // Under-freeway lots are IN the ROW by design (parking/utility/open).
+        if (lb.recipe.rfind("underfreeway", 0) == 0) continue;
+        ++lots;
+        const double toStreet = nearestEdgeDist(streets, lb.site);
+        const double toFreeway = nearestEdgeDist(freeway, lb.site);
+        // An orphan: closer to the freeway than any street, and beyond the
+        // reach a street lot could plausibly front (margin + a generous lot
+        // depth).
+        if (toStreet > 60.0 && toFreeway < toStreet) ++orphans;
+    }
+    std::printf("[lots] non-underfreeway lots=%d orphans=%d\n", lots, orphans);
+    CHECK(lots > 0);
+    CHECK(orphans == 0);
+}

@@ -2056,6 +2056,20 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         const int base = static_cast<int>(rg.nodes.size());
         for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
         for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+            // #19 (semantic layer S6): block faces and rim-rectangle lots
+            // derive from the WALKABLE STREET subgraph only. A baked corridor
+            // edge (freeway/ramp) must never be a block boundary or a lot
+            // frontage — else houses grow fronting the freeway with no street
+            // to reach them (Glenn's "orphaned houses along the elevated
+            // freeway"). The freeway ROW stays a keep-out band via rgSampled/
+            // freewayROW below; it is simply not FRONTAGE.
+            const bool baked =
+                ei < net.edgeBaked.size() && net.edgeBaked[ei] != 0;
+            const RoadClass ek = ei < net.edgeClasses.size()
+                                     ? net.edgeClasses[ei]
+                                     : RoadClass::Local;
+            if (baked || ek == RoadClass::Freeway || ek == RoadClass::Ramp)
+                continue;   // corridor edge: not a block/lot source
             const auto& e = net.edges[ei];
             const float w = static_cast<float>(
                 roadNetEdgeWidth(net, static_cast<int>(ei)));
