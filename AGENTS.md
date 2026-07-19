@@ -216,6 +216,45 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
   other parts of the engine (and future procgen projects) can build on, over a
   one-off that solves only today's case.
 
+## Working & Communicating (Agent Rule)
+
+How to report progress and make changes so a human who was NOT watching can
+follow along and review.
+
+- **Write in plain language. Explain, don't gesture.** The person reading did
+  not see your reasoning or your tool output. Do not use shorthand you invented
+  mid-task ("the disc", "the gate", "clipping in") as if it were shared
+  vocabulary. Spell terms out the first time. Lead with what a result *means*,
+  then the detail. Bad: "the worst gore has 4 zebra verts, a corner clipping
+  into the disc, not a band." Good: "no crosswalk stripes end up on the freeway
+  — at the busiest ramp merge only 4 stray stripe-points fall near it, which is
+  a nearby street crosswalk's corner, not a real crosswalk (a real one is
+  dozens of points)."
+- **Define domain jargon on first use.** This project has a lot of it. A short
+  glossary of terms that keep showing up — say what each means the first time
+  per conversation, don't assume it's obvious:
+  - **gore** — the paved wedge where an on-ramp splits from / merges into the
+    freeway (the "V" between ramp and mainline).
+  - **zebra** — the striped pedestrian crosswalk marking.
+  - **vert / verts** — vertices; the corner points of a 3D mesh.
+  - **gate / test gate** — an automated test that must pass; "adding a gate"
+    means adding a test so a bug can't silently come back.
+  - **weld / spine / ribbon** — the road mesher's terms: a *spine* is a road
+    centreline, a *ribbon* is the flat road surface swept along it, *welding*
+    is joining road pieces into one continuous mesh.
+  - **conform / flatten** — reshaping the terrain to sit flat under a road.
+  - **soak** — running the simulation for a long time to catch rare bugs.
+  - When a new term like these is load-bearing in an explanation, gloss it in a
+    few words rather than assuming the reader knows it.
+- **Edit source files with the Edit / Write tools, never with shell or Python
+  string-replacement.** The editor tools show a reviewable diff, fail safely
+  when the target text is missing or ambiguous, and let the harness track file
+  state. A `python3 -c "open(f).read().replace(...)"` or `sed -i` edit does none
+  of that — it is invisible in review and silently corrupts on a bad match
+  (it has caused real bugs here: a literal `\n` written into code, edits that
+  no-op on an anchor that changed). Shell is for building, running, grepping,
+  and git — not for mutating tracked source.
+
 ## Coding Standards
 
 ### Naming Conventions
