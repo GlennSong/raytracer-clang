@@ -221,6 +221,17 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
 How to report progress and make changes so a human who was NOT watching can
 follow along and review.
 
+- **Confirm the ask before you build it — don't inflate scope.** When a request
+  could be read more than one way, or you're about to build MORE than its
+  literal words (extra machinery, persistence, options, a whole system where a
+  small thing was asked for), stop and check first: restate in plain terms what
+  you think Glenn wants and ask, rather than running off and building your
+  interpretation. The failure this exists to prevent: asked for "a way to open
+  scenes from the editor", the agent built a most-recently-used list that saves
+  to disk on top — Glenn only wanted to open scenes. A one-line question up
+  front is far cheaper than building the wrong thing and unwinding it. (Small,
+  unambiguous, easily-reversible edits don't need a check; new features, new
+  files, or any behavior Glenn didn't name do.)
 - **Write in plain language. Explain, don't gesture.** The person reading did
   not see your reasoning or your tool output. Do not use shorthand you invented
   mid-task ("the disc", "the gate", "clipping in") as if it were shared
