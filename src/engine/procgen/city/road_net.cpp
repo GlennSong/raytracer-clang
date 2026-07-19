@@ -996,11 +996,44 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 if (t.yAbs.size() == t.points.size()) ys = t.yAbs;
                 else for (std::size_t i = 0; i < t.points.size(); ++i)
                     ys[i] = ground(t.points[i].x, t.points[i].y);
-                bandHeights.addPolyline(t.points, ys);
-                Poly2 rib = ribbonOutline(t.points, t.halfWidth + 0.02, 2.0);
-                if (rib.size() >= 3) {
-                    if (signedArea(rib) < 0) std::reverse(rib.begin(), rib.end());
-                    bandRibbons.push_back(std::move(rib));
+                // APPROACH BAND CUT (#20): a street that climbs to a ramp
+                // LANDING or gore must not carry its sidewalk up the grade
+                // ("the sidewalk floats as it elevates, not attached to the
+                // road"). Trim the RISING portion off each Landing/gore end,
+                // keeping only the flat interior (within 0.5 m of the chain's
+                // low point). A plain flat street trims nothing.
+                std::vector<Vec2> bpts = t.points;
+                std::vector<double> bys = ys;
+                {
+                    int lo = 0, hi = static_cast<int>(bpts.size()) - 1;
+                    const double base =
+                        *std::min_element(bys.begin(), bys.end());
+                    auto isLand = [&](int nd) {
+                        return nd >= 0 &&
+                               (g.nodes[nd].kind == JunctionKind::Landing ||
+                                isGore(g.nodes[nd].kind));
+                    };
+                    if (isLand(a))
+                        while (lo < hi && bys[lo] > base + 0.5) ++lo;
+                    if (isLand(b))
+                        while (hi > lo && bys[hi] > base + 0.5) --hi;
+                    if (lo > 0 || hi < static_cast<int>(bpts.size()) - 1) {
+                        std::vector<Vec2> kp(bpts.begin() + lo,
+                                             bpts.begin() + hi + 1);
+                        std::vector<double> ky(bys.begin() + lo,
+                                               bys.begin() + hi + 1);
+                        bpts.swap(kp);
+                        bys.swap(ky);
+                    }
+                }
+                if (bpts.size() >= 2) {
+                    bandHeights.addPolyline(bpts, bys);
+                    Poly2 rib = ribbonOutline(bpts, t.halfWidth + 0.02, 2.0);
+                    if (rib.size() >= 3) {
+                        if (signedArea(rib) < 0)
+                            std::reverse(rib.begin(), rib.end());
+                        bandRibbons.push_back(std::move(rib));
+                    }
                 }
             }
         }

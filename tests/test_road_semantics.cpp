@@ -331,3 +331,74 @@ TEST_CASE(semantics_no_zebra_at_gores_or_landings) {
     std::printf("[sem] gore/landing nodes checked = %d\n", checked);
     CHECK(checked >= 2);
 }
+
+// S4 APPROACH BAND CUT (#20): a street that climbs to a ramp landing must
+// NOT carry its sidewalk band up the grade ("the sidewalk floats as it
+// elevates, not attached to the road's side"). The band cuts before the
+// climb; a plain flat street keeps its full band.
+TEST_CASE(semantics_approach_sheds_its_sidewalk_on_the_climb) {
+    // A street that climbs GENTLY (under 1.5 m, so it meshes as a draped
+    // street with a sidewalk band, not an elevated bridge) toward a ramp
+    // LANDING must shed that band on the grade — "the sidewalk floats as it
+    // elevates, not attached to the road's side." Node 4 is degree 3 (two
+    // streets + a ramp) so it classifies as a Landing.
+    RoadNet net;
+    net.width = 9.0;
+    net.sidewalk = 2.5;
+    net.autoRoundabout = false;
+    net.heightAt = [](double, double) { return 0.0; };
+    net.nodes = { Vec2(0, 0),   Vec2(40, 0),  Vec2(80, 0),
+                  Vec2(110, 0), Vec2(125, 0), Vec2(165, 0) };
+    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
+    // Climb to 1.3 m at the landing over the last flat run (grade ~9%).
+    net.nodeElev = { std::nan(""), std::nan(""), std::nan(""),
+                     0.4, 1.3, std::nan("") };
+    net.nodes.push_back(Vec2(190, 45));   // ramp leaves the landing
+    net.nodeElev.push_back(6.0);
+    net.edges.push_back({ 4, 6 });
+    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
+    net.edgeClasses[5] = RoadClass::Ramp;   // edge {4,6}
+
+    RoadGraph g = roadNetFullGraph(net);
+    Vec2 landingPos;
+    bool sawLanding = false;
+    for (const RoadNode& n : g.nodes)
+        if (n.kind == JunctionKind::Landing) { sawLanding = true; landingPos = n.pos; }
+    CHECK(sawLanding);   // node 4: street + street + ramp
+
+    RenderMesh m = buildRoadNetMesh(net);
+    // Sidewalk band verts (negative-u) within 40 m of the landing that have
+    // climbed above 0.5 m: the floating approach sidewalk.
+    int bandHigh = 0;
+    double maxBandY = 0;
+    for (const Vertex& v : m.vertices) {
+        if (v.u > -0.01) continue;   // sidewalk band only (negative mu)
+        const double dx = v.position.x - landingPos.x;
+        const double dz = v.position.z - landingPos.y;
+        if (dx * dx + dz * dz > 40.0 * 40.0) continue;
+        if (v.position.y > 0.5) {
+            ++bandHigh;
+            maxBandY = std::max(maxBandY, static_cast<double>(v.position.y));
+        }
+    }
+    (void)bandHigh;
+    std::printf("[sem] approach sidewalk maxY near landing = %.2f\n", maxBandY);
+    // The approach sidewalk stays at street level (the flat-end curb, ~0.55 m)
+    // — it does NOT climb the ramp grade.
+    CHECK(maxBandY < 0.9);
+
+    // Control: the SAME street with the ramp removed (node 4 an ordinary
+    // through point, not a Landing) keeps its climbing sidewalk — we only
+    // shed the band at approaches, never on a plain street that rises.
+    RoadNet flat = net;
+    flat.edges.pop_back();   // drop the ramp
+    flat.edgeClasses.pop_back();
+    flat.nodes.pop_back();
+    flat.nodeElev.pop_back();
+    RenderMesh mf = buildRoadNetMesh(flat);
+    double flatMaxY = 0;
+    for (const Vertex& v : mf.vertices)
+        if (v.u < -0.01) flatMaxY = std::max(flatMaxY, (double)v.position.y);
+    std::printf("[sem] no-ramp control sidewalk maxY = %.2f\n", flatMaxY);
+    CHECK(flatMaxY > 1.0);   // a plain climbing street keeps its full sidewalk
+}
