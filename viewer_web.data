@@ -339,137 +339,13 @@
         0.0,
         3.1,
         3.0
-      ]
+      ],
+      "show_gizmo": true
     }
   ],
   "version": 1
 }
 {
-  "version": 1,
-  "watch_scripts": true,
-  "entities": [
-    {
-      "id": 1,
-      "name": "ground",
-      "shape": "box",
-      "position": [0.0, -0.55, 0.0],
-      "size": [240.0, 0.4, 190.0],
-      "material": {
-        "albedo": [0.38, 0.43, 0.34],
-        "metallic": 0.0,
-        "roughness": 1.0,
-        "opacity": 1.0,
-        "emission": [0.0, 0.0, 0.0],
-        "checkerboard": false
-      },
-      "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 }
-    },
-    {
-      "id": 2,
-      "name": "gallery",
-      "shape": "script",
-      "file": "building_gallery.lua",
-      "seed": 5,
-      "opts": { "seed": 5 }
-    }
-  ],
-  "player": {
-    "position": [0, 1.2, 70],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
-    "friction": 0.5
-  },
-  "environment": { "skyColor": [0.55, 0.68, 0.86] },
-  "lighting": {
-    "ambientMultiplier": 0.7,
-    "exposure": 0.7,
-    "sun": {
-      "castsShadow": true,
-      "color": [1, 0.98, 0.94],
-      "direction": [0.4, 0.72, -0.32],
-      "intensity": 6.0
-    }
-  }
-}
-{
-  "cameras": [
-    {
-      "name": "Overview",
-      "position": [
-        80,
-        95,
-        150
-      ],
-      "forward": [
-        -0.42,
-        -0.52,
-        -0.74
-      ],
-      "lens": {
-        "focalLength": 28,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 170.0
-      }
-    },
-    {
-      "name": "Front",
-      "position": [
-        0,
-        10,
-        90
-      ],
-      "forward": [
-        0,
-        -0.1,
-        -1.0
-      ],
-      "lens": {
-        "focalLength": 35,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 90.0
-      }
-    },
-    {
-      "name": "NewRecipes",
-      "position": [
-        72,
-        52,
-        248
-      ],
-      "forward": [
-        -0.51,
-        -0.34,
-        -0.79
-      ],
-      "lens": {
-        "focalLength": 28,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 125.0
-      }
-    },
-    {
-      "name": "Eaves",
-      "position": [
-        -46,
-        14,
-        138
-      ],
-      "forward": [
-        -0.18,
-        -0.16,
-        -0.97
-      ],
-      "lens": {
-        "focalLength": 30,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 14.0
-      }
-    }
-  ]
-}{
   "version": 1,
   "watch_scripts": true,
   "entities": [
@@ -519,6 +395,335 @@
   { "name": "Lab", "position": [36, 26, 44], "forward": [-0.58, -0.38, -0.72],
     "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 60.0 } }
 ] }
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0,
+        -0.55,
+        0
+      ],
+      "size": [
+        200,
+        0.4,
+        120
+      ],
+      "material": {
+        "albedo": [
+          0.34,
+          0.36,
+          0.33
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    }
+  ],
+  "vehicles": [
+    {
+      "recipe": "hatchback",
+      "position": [
+        -13,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 1
+    },
+    {
+      "recipe": "sedan",
+      "position": [
+        -6.5,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 2
+    },
+    {
+      "recipe": "jeep",
+      "position": [
+        0,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 3
+    },
+    {
+      "recipe": "pickup",
+      "position": [
+        6.5,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 4
+    },
+    {
+      "recipe": "van",
+      "position": [
+        13,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 5
+    }
+  ],
+  "player": {
+    "position": [
+      0,
+      1.6,
+      14
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.4
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  }
+}{
+  "cameras": [],
+  "version": 1
+}
+{
+  "entities": [
+    {
+      "id": 1,
+      "material": {
+        "albedo": [
+          0.34,
+          0.36,
+          0.33
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 1.0
+      },
+      "name": "ground",
+      "physics": {
+        "friction": 0.9,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        -0.55,
+        0.0
+      ],
+      "shape": "box",
+      "size": [
+        200.0,
+        0.4,
+        120.0
+      ]
+    },
+    {
+      "file": "car_gallery.lua",
+      "id": 2,
+      "name": "car",
+      "opts": {
+        "lod": "high"
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 7,
+      "shape": "script"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.2,
+      16.0
+    ]
+  },
+  "version": 1,
+  "watch_scripts": true
+}
+{
+  "cameras": [],
+  "version": 1
+}
+{
+  "entities": [
+    {
+      "id": 1,
+      "material": {
+        "albedo": [
+          0.34,
+          0.36,
+          0.33
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 1.0
+      },
+      "name": "ground",
+      "physics": {
+        "friction": 0.9,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        -0.55,
+        0.0
+      ],
+      "shape": "box",
+      "size": [
+        120.0,
+        0.4,
+        100.0
+      ]
+    },
+    {
+      "file": "car_lab.lua",
+      "id": 2,
+      "name": "car",
+      "opts": {
+        "lod": "high",
+        "paint": [
+          0.72,
+          0.1,
+          0.1
+        ],
+        "seed": 7
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 7,
+      "shape": "script"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.2,
+      9.0
+    ]
+  },
+  "version": 1,
+  "watch_scripts": true
+}
+{"cameras":[],"version":1}
 {
   "version": 1,
   "environment": {
@@ -3766,170 +3971,33 @@
     "seaLevel": -5.0
   }
 }{
-  "citysim": {
-    "buildChance": 0.9,
-    "buildLots": true,
-    "cars": 20,
-    "debugWidgets": false,
-    "downtownRadius": 70,
-    "hoursPerSecond": 0.05,
-    "midtownRadius": 150,
-    "pedestrians": 24,
-    "perceptionReliability": 1.0,
-    "seed": 5,
-    "sidewalk": 4.0,
-    "vehicles": "vehicles.lua",
-    "wander": false
-  },
-  "entities": [
+  "cameras": [
     {
-      "id": 2,
-      "name": "streets",
-      "position": [
-        0.0,
-        0.0,
-        0.0
+      "forward": [
+        0.2912372237746623,
+        -0.05902178309266951,
+        0.9548284184127478
       ],
-      "road": {
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ],
-        "corner_radius": 3.0,
-        "crosswalks": true,
-        "curb": 0.16,
-        "generate": {
-          "artery_width": 13,
-          "beach_rise": 2.5,
-          "block_size": 72,
-          "hotspots": 5,
-          "kind": "metro",
-          "radius": 240,
-          "sea_level": -5.0,
-          "seed": 5,
-          "street_width": 7
-        },
-        "lift": 0.08,
-        "markings": true,
-        "sidewalk": 3.5,
-        "width": 7.0,
-        "lattice": true
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 8.0,
+        "far": 8000.0,
+        "focalLength": 50.0,
+        "focusDistance": 10.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
       },
-      "shape": "road"
+      "name": "Camera 1",
+      "position": [
+        -11.21244755404476,
+        10.946273087103313,
+        -75.79368422487983
+      ]
     }
   ],
-  "environment": {
-    "skyColor": [
-      0.55,
-      0.68,
-      0.86
-    ]
-  },
-  "lighting": {
-    "ambientMultiplier": 0.6,
-    "exposure": 0.5,
-    "sun": {
-      "castsShadow": true,
-      "color": [
-        1.0,
-        0.96,
-        0.86
-      ],
-      "direction": [
-        0.42,
-        0.52,
-        -0.5
-      ],
-      "intensity": 8.0
-    }
-  },
-  "name": "Lattice Streets Lab",
-  "player": {
-    "collider": {
-      "halfHeight": 0.8,
-      "radius": 0.3,
-      "shape": "capsule"
-    },
-    "friction": 0.5,
-    "position": [
-      0.0,
-      1.9995751012343201,
-      150.0
-    ]
-  },
-  "terrain": {
-    "_comment": "Full-toolset COASTAL terrain (ADR-0043): domain-warped fbm base + a spine-driven ridged range to the WEST, ERODED, tiltX -0.06 ramps the ground DOWN to the east into a SEA (water block below) \u2014 snow peaks west, city on the coastal shelf, harbour to the east. The VARIED peaks come from the ridged-multifractal mountain layer confined to the range corridor by mountainAlongRange. The metro at the origin gates on water.seaLevel (single source of truth), so it fills the buildable shelf and stops at the shoreline.",
-    "cdlod": {
-      "worldHalf": 600
-    },
-    "erode": true,
-    "erodeDroplets": 300000,
-    "erodeRadius": 4,
-    "erodeRes": 600,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
-    "heightScale": 22,
-    "material": {
-      "albedo": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "roughness": 1.0
-    },
-    "mountainAlongRange": true,
-    "mountainHeight": 150,
-    "mountainMaskHi": 0.4,
-    "mountainMaskLo": -0.1,
-    "mountainMaskScale": 0.0012,
-    "mountainScale": 0.0022,
-    "noiseScale": 0.004,
-    "octaves": 6,
-    "rangeHeight": 240,
-    "rangeSpine": [
-      [
-        -575,
-        -380
-      ],
-      [
-        -545,
-        -120
-      ],
-      [
-        -575,
-        120
-      ],
-      [
-        -545,
-        380
-      ]
-    ],
-    "rangeVariation": 0.6,
-    "rangeWidth": 240,
-    "resolution": 500,
-    "seed": 7,
-    "size": 1200,
-    "tiltX": -0.06,
-    "warp": 0.35
-  },
-  "version": 1,
-  "water": {
-    "cell": 8,
-    "color": [
-      0.012,
-      0.05,
-      0.08
-    ],
-    "foamBand": 40,
-    "opacity": 0.82,
-    "region": 600,
-    "roughness": 0.04,
-    "seaLevel": -5.0
-  },
-  "_comment": "Swept-lattice street mesher (street-lattice-plan.md stage 3): the SAME hilly metro grid as metro_hills, but road.lattice=true so streets mesh as quad-strip bodies + Coons junction patches instead of the earcut union weld. Open metro_hills.json for the weldSolid A/B."
-}{
-  "cameras": [],
   "version": 1
 }
 {
@@ -4217,141 +4285,6 @@
   ]
 }
 {
-  "version": 1,
-  "environment": {
-    "skyColor": [
-      0.55,
-      0.68,
-      0.86
-    ]
-  },
-  "terrain": {
-    "seed": 7,
-    "size": 620,
-    "resolution": 380,
-    "heightScale": 13,
-    "noiseScale": 0.008,
-    "octaves": 4,
-    "warp": 0.3,
-    "material": {
-      "albedo": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "roughness": 1.0
-    },
-    "cdlod": true,
-    "rangeSpine": [
-      [
-        -300,
-        -255
-      ],
-      [
-        -150,
-        -288
-      ],
-      [
-        20,
-        -284
-      ],
-      [
-        190,
-        -268
-      ],
-      [
-        310,
-        -244
-      ]
-    ],
-    "rangeWidth": 135,
-    "rangeHeight": 76,
-    "rangeVariation": 0.6,
-    "mountainScale": 0.01
-  },
-  "entities": [
-    {
-      "id": 2,
-      "name": "streets",
-      "shape": "road",
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "road": {
-        "generate": {
-          "kind": "metro",
-          "radius": 300,
-          "hotspots": 5,
-          "block_size": 70,
-          "artery_width": 13,
-          "street_width": 7,
-          "seed": 5
-        },
-        "width": 7.0,
-        "sidewalk": 3.5,
-        "curb": 0.16,
-        "corner_radius": 3.0,
-        "lift": 0.08,
-        "markings": true,
-        "crosswalks": true,
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ]
-      }
-    }
-  ],
-  "citysim": {
-    "cars": 22,
-    "pedestrians": 26,
-    "seed": 5,
-    "hoursPerSecond": 0.05,
-    "perceptionReliability": 1.0,
-    "debugWidgets": true,
-    "wander": false,
-    "vehicles": "vehicles.lua",
-    "buildLots": true,
-    "sidewalk": 4.0,
-    "downtownRadius": 60,
-    "midtownRadius": 140,
-    "buildChance": 0.9
-  },
-  "player": {
-    "position": [
-      0,
-      1.2,
-      150
-    ],
-    "collider": {
-      "shape": "capsule",
-      "radius": 0.3,
-      "halfHeight": 0.8
-    },
-    "friction": 0.5
-  },
-  "lighting": {
-    "sun": {
-      "direction": [
-        0.42,
-        0.52,
-        -0.5
-      ],
-      "color": [
-        1.0,
-        0.96,
-        0.86
-      ],
-      "intensity": 8.0,
-      "castsShadow": true
-    },
-    "exposure": 0.5,
-    "ambientMultiplier": 0.6
-  },
-  "name": "metro"
-}{
   "citysim": {
     "buildChance": 0.9,
     "buildLots": true,
@@ -5693,10 +5626,6 @@
   "version": 1
 }
 {
-  "cameras": [],
-  "version": 1
-}
-{
   "_comment": "ROADS-ONLY metropolis sandbox (device: \"dupe the road network of metropolis and add these freeways ... no buildings, just the roads and freeways\"): corridor generation OPT-IN here so the chained routes + stamped diamonds can be judged on the real network before the real level re-earns them.",
   "citysim": {
     "buildChance": 0.9,
@@ -6893,49 +6822,6 @@
 }
 {
   "version": 1,
-  "_comment": "Minimal lighting baseline: ONE directional sun, no point/spot lights, no HDR/IBL, low ambient. Use this to confirm sun shadows work in isolation, then add layers back one at a time.",
-  "environment": {
-    "skyColor": [0.05, 0.05, 0.08]
-  },
-  "entities": [
-    {
-      "shape": "box",
-      "size": [40, 1, 40],
-      "position": [0, -0.5, 0],
-      "material": { "albedo": [0.7, 0.7, 0.7], "roughness": 0.9 },
-      "physics": { "motion": "static", "friction": 0.5 }
-    },
-    {
-      "shape": "box",
-      "size": [2, 4, 2],
-      "position": [-3, 2, 0],
-      "material": { "albedo": [0.8, 0.3, 0.3], "roughness": 0.8 },
-      "physics": { "motion": "static", "friction": 0.5 }
-    },
-    {
-      "shape": "sphere",
-      "size": [1.5, 1.5, 1.5],
-      "position": [3, 1.5, 0],
-      "material": { "albedo": [0.3, 0.5, 0.8], "roughness": 0.5 },
-      "physics": { "motion": "static", "friction": 0.5 }
-    }
-  ],
-  "player": {
-    "position": [0, 2, 10]
-  },
-  "lighting": {
-    "sun": {
-      "direction": [0.5, 0.5, -0.4],
-      "color": [1.0, 0.98, 0.92],
-      "intensity": 3.0,
-      "castsShadow": true
-    },
-    "exposure": 1.0,
-    "ambientMultiplier": 0.15
-  }
-}
-{
-  "version": 1,
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "entities": [
     { "name": "roads", "shape": "script", "file": "showcase.lua" }
@@ -7235,319 +7121,6 @@
   { "name": "Tensor", "position": [185, 120, 270], "forward": [0.0, -0.52, -0.85],
     "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 } }
 ] }
-{
-  "_comment": "freeway_lab with buildLots enabled: the corridor crosses the generated street grid, so blocks under the deck re-zone to open space / parking / utility / short buildings (under_freeway_lots).",
-  "citysim": {
-    "buildLots": true,
-    "cars": 64,
-    "debugWidgets": false,
-    "pedestrians": 0,
-    "seed": 4,
-    "wander": true
-  },
-  "entities": [
-    {
-      "id": 2,
-      "name": "streets",
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "road": {
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ],
-        "corner_radius": 3.0,
-        "crosswalks": true,
-        "curb": 0.16,
-        "generate": {
-          "ambient_per_500": 85,
-          "artery_width": 12,
-          "block_size": 110,
-          "collector_width": 9,
-          "corridor_spacing": 80,
-          "freeway_width": 12,
-          "hotspots": 2,
-          "influence": 300,
-          "interchange_spacing": 4000,
-          "kill_radius": 60,
-          "kind": "metro",
-          "loop_max": 260,
-          "loop_min": 120,
-          "merge_radius": 44,
-          "min_road_len": 22,
-          "radius": 400,
-          "sea_level": -100.0,
-          "seed": 4,
-          "seg_length": 30,
-          "street_width": 7
-        },
-        "lift": 0.08,
-        "markings": true,
-        "sidewalk": 3.0,
-        "width": 7.0
-      },
-      "shape": "road"
-    },
-    {
-      "corridor": {
-        "designSpeed": 30.0,
-        "exits": [
-          {
-            "decel": 190,
-            "radius": 60,
-            "spiral": 26,
-            "station": 640,
-            "target": [
-              250,
-              260
-            ],
-            "upStation": true
-          },
-          {
-            "decel": 200,
-            "onRamp": true,
-            "radius": 60,
-            "spiral": 26,
-            "station": 850,
-            "target": [
-              290,
-              400
-            ],
-            "upStation": true
-          },
-          {
-            "decel": 190,
-            "radius": 60,
-            "spiral": 26,
-            "station": 870,
-            "target": [
-              120,
-              430
-            ],
-            "upStation": false
-          },
-          {
-            "decel": 200,
-            "onRamp": true,
-            "radius": 60,
-            "spiral": 26,
-            "station": 650,
-            "target": [
-              40,
-              250
-            ],
-            "upStation": false
-          },
-          {
-            "decel": 180,
-            "radius": 60,
-            "spiral": 26,
-            "station": 380,
-            "target": [
-              0,
-              0
-            ],
-            "upStation": true
-          },
-          {
-            "decel": 190,
-            "onRamp": true,
-            "radius": 60,
-            "spiral": 26,
-            "station": 545,
-            "target": [
-              0,
-              0
-            ],
-            "upStation": true
-          },
-          {
-            "decel": 180,
-            "radius": 60,
-            "spiral": 26,
-            "station": 560,
-            "target": [
-              0,
-              0
-            ],
-            "upStation": false
-          },
-          {
-            "decel": 190,
-            "onRamp": true,
-            "radius": 60,
-            "spiral": 26,
-            "station": 395,
-            "target": [
-              0,
-              0
-            ],
-            "upStation": false
-          }
-        ],
-        "laneWidth": 3.6,
-        "lanes": 4,
-        "median": 1.4,
-        "points": [
-          [
-            -560,
-            -420
-          ],
-          [
-            -180,
-            -240
-          ],
-          [
-            120,
-            40
-          ],
-          [
-            180,
-            420
-          ],
-          [
-            520,
-            560
-          ],
-          [
-            820,
-            700
-          ]
-        ],
-        "profile": [
-          [
-            0,
-            13,
-            0
-          ],
-          [
-            140,
-            14,
-            100
-          ],
-          [
-            260,
-            14,
-            140
-          ],
-          [
-            560,
-            26,
-            160
-          ],
-          [
-            860,
-            26,
-            160
-          ],
-          [
-            1120,
-            12,
-            140
-          ],
-          [
-            1500,
-            10,
-            0
-          ],
-          [
-            1900,
-            10,
-            0
-          ]
-        ],
-        "radius": 240,
-        "spiral": 70
-      },
-      "id": 3,
-      "name": "mainline",
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "shape": "corridor"
-    }
-  ],
-  "environment": {
-    "fog": {
-      "color": [
-        0.72,
-        0.78,
-        0.88
-      ],
-      "density": 0.0008,
-      "heightFalloff": 0.012
-    },
-    "skyColor": [
-      0.55,
-      0.68,
-      0.86
-    ]
-  },
-  "lighting": {
-    "ambientMultiplier": 0.6,
-    "exposure": 0.5,
-    "sun": {
-      "castsShadow": true,
-      "color": [
-        1.0,
-        0.96,
-        0.86
-      ],
-      "direction": [
-        0.42,
-        0.52,
-        -0.5
-      ],
-      "intensity": 8.0
-    }
-  },
-  "name": "Under-Freeway Lab",
-  "player": {
-    "_comment": "spawns ON the freeway deck just before the exit gore (station ~950): walk south along the right edge to take the ramp down",
-    "collider": {
-      "halfHeight": 0.8,
-      "radius": 0.3,
-      "shape": "capsule"
-    },
-    "friction": 0.5,
-    "position": [
-      175.0,
-      22.0,
-      330.0
-    ]
-  },
-  "terrain": {
-    "cdlod": {
-      "worldHalf": 700
-    },
-    "erode": false,
-    "heightScale": 11,
-    "material": {
-      "albedo": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "roughness": 1.0
-    },
-    "noiseScale": 0.004,
-    "octaves": 5,
-    "resolution": 700,
-    "seed": 7,
-    "size": 1400,
-    "warp": 0.3
-  },
-  "version": 1
-}{
-  "cameras": [],
-  "version": 1
-}
 {
   "version": 1,
   "name": "Weld Freeway Lab",
@@ -8036,6 +7609,216 @@ else
   for _, entry in ipairs(grown) do
     m:add(mesh.translate(entry.mesh, cxz), MATS[entry.part])
   end
+end
+
+return m
+-- car_gallery.lua — every vehicle class in a row, for judging them against each
+-- other rather than one at a time. A class that looks fine alone can still be
+-- indistinguishable from its neighbour, and that only shows up side by side.
+--
+--   opts.classes  list of class names (default: all five wheeled car classes)
+--   opts.spacing  metres between centres (default 6.5)
+--   opts.lod      "high" | "mid" | "low" | "proxy"
+--   opts.no_glass drop the glass so interiors read
+--   opts.driver   false to hide occupants
+
+local classes = require "vehicle_classes"
+local forms   = require "vehicle_forms"
+
+local opts = args or {}
+local names = opts.classes or { "hatchback", "sedan", "jeep", "pickup", "van" }
+local spacing = opts.spacing or 6.5
+local lod = opts.lod or "high"
+
+local m = model.new()
+
+local MATS = {
+  body     = material.new{ roughness = 0.40, metallic = 0.50 },
+  glass    = material.new{ roughness = 0.06, metallic = 0.0, opacity = 0.30,
+                           two_sided = true },
+  interior = material.new{ roughness = 0.90, metallic = 0.0 },
+  lamp     = material.new{ roughness = 0.25, metallic = 0.0,
+                           emission = { 1.1, 1.0, 0.85 } },
+  rubber   = material.new{ roughness = 0.85, metallic = 0.0 },
+  pad      = material.new{ roughness = 0.95, metallic = 0.0 },
+}
+
+-- Per-class paint, so neighbours are separable at a glance.
+local PAINT = {
+  hatchback = { 0.15, 0.45, 0.75 },
+  sedan     = { 0.72, 0.10, 0.10 },
+  jeep      = { 0.22, 0.34, 0.24 },
+  pickup    = { 0.20, 0.28, 0.42 },
+  van       = { 0.86, 0.86, 0.88 },
+  box_truck = { 0.90, 0.72, 0.20 },
+  bus       = { 0.85, 0.45, 0.10 },
+}
+
+local n = #names
+local total = (n - 1) * spacing
+m:add(scope{ origin = { -total * 0.5 - 4, -0.3, -4 },
+             size = { total + 8, 0.3, 8 } }:box{ 0.30, 0.32, 0.34 })
+
+for i, name in ipairs(names) do
+  local ox = (i - 1) * spacing - total * 0.5
+  local c = classes.classes[name]
+  if c then
+    local d = classes.dims(c)
+    local car = mesh.car(forms.car_params(c, d,
+                          { color = PAINT[name] or { 0.6, 0.6, 0.6 }, lod = lod }))
+    -- Origin is the body centre, so lift by half the height to stand it on the pad.
+    local lift = car.half_extent[2]
+    local function place(part, mat)
+      if part then m:add(mesh.translate(part, { ox, lift, 0 }), mat) end
+    end
+    place(car.body, MATS.body)
+    if opts.no_glass ~= true then place(car.glass, MATS.glass) end
+    place(car.interior, MATS.interior)
+    place(car.lamp, MATS.lamp)
+    place(car.wheel, MATS.rubber)
+
+    -- Wheels from the SAME package numbers the arches were cut from, so a
+    -- mismatch between tyre and arch is visible rather than inferred.
+    if car.wheel == nil then
+      local r = c.wheel_diameter * 0.5
+      local wheel = mesh.rotate_z(mesh.cylinder(r, math.max(0.18, c.track * 0.13), 14),
+                                  math.pi * 0.5)
+      local frontZ = d.length * 0.5 - d.front_overhang
+      local rearZ = -(d.length * 0.5 - d.rear_overhang)
+      for _, sx in ipairs({ 1, -1 }) do
+        for _, wz in ipairs({ frontZ, rearZ }) do
+          m:add(mesh.bake_height_color(
+                  mesh.translate(wheel, { ox + sx * c.track * 0.5, r, wz }),
+                  { 0.05, 0.05, 0.06 }, { 0.05, 0.05, 0.06 }), MATS.rubber)
+        end
+      end
+    end
+
+    if opts.driver ~= false then
+      for _, l in ipairs(car.lights or {}) do
+        if l.name == "driver_seat" then
+          m:add(mesh.translate(mesh.occupant{ back_angle = c.a40 or 25 },
+                               { ox + l.pos[1], l.pos[2] + lift, l.pos[3] }),
+                MATS.interior)
+        end
+      end
+    end
+  end
+end
+
+-- One 1.75 m reference at the end of the row: relative size between two cars is
+-- easy to see, absolute size is not.
+m:add(scope{ origin = { total * 0.5 + 2.0, 0.0, -0.15 },
+             size = { 0.42, 1.75, 0.28 } }:box{ 0.20, 0.42, 0.30 })
+
+return m
+-- car_lab.lua — the CAR LAB recipe.
+--
+-- One vehicle on a pedestal, regenerated live: the level watches this file
+-- ("watch_scripts": true) and rebuilds the scene whenever it changes, so a
+-- geometry edit and an on-screen look iterate in seconds. Mirrors
+-- building_lab.lua exactly, including the U/O keys the watcher binds.
+--
+-- Knobs ride the level entity's `opts` (read here via the `args` global):
+--   paint      = {r, g, b}
+--   lod        = "high" | "mid" | "low" | "proxy"
+--   tumblehome = degrees the sides lean in above the belt
+--   chamfer    = corner chamfer, fraction of half-extent
+--   scale_ref  = false to hide the human-height reference block
+--
+-- The body comes from mesh.car with the C++ class defaults (a sedan). Per-class
+-- RECIPES over vehicle_classes.lua land with the other chassis families; until
+-- then this lab varies the sedan.
+--
+-- LAB DRESSING vs GENERATOR OUTPUT — worth keeping straight while reviewing:
+-- the wheels and the scale block below are drawn by THIS FILE, not by the
+-- generator. Real wheels are a separate CarPart the caller places (that is what
+-- stops them being baked twice); the placeholders here exist so the car's
+-- stance is judgeable instead of floating.
+
+local opts  = args or {}
+local paint = opts.paint or { 0.72, 0.10, 0.10 }
+local lod   = opts.lod or "high"
+
+local m = model.new()
+
+-- Pedestal: a pad to sit on and read shadows against.
+m:add(scope{ origin = {-7, -0.3, -5}, size = {14, 0.3, 10} }:box{0.30, 0.32, 0.34})
+m:add(scope{ origin = {-4, 0.0, -2.4}, size = {8, 0.02, 4.8} }:box{0.38, 0.39, 0.40})
+
+local MATS = {
+  body   = material.new{ roughness = 0.40, metallic = 0.50 },
+  -- two_sided: ONE pane drawn from both faces. Without it the pane would have
+  -- to be emitted twice at the same coordinates, and since the transparent pass
+  -- does not write depth both copies blend — which is what made the glass read
+  -- as a solid panel instead of a window.
+  glass  = material.new{ roughness = 0.06, metallic = 0.00, opacity = 0.30,
+                         two_sided = true },
+  interior = material.new{ roughness = 0.90, metallic = 0.00 },
+  -- Lamps are drawn EMISSIVE here so headlights and tail lights read in the
+  -- lab. In the city the same lens part is bound unlit and citysim overlays lit
+  -- instances at the markers per state (clock for headlights, deceleration for
+  -- brakes, blink for indicators) — see car_lamps.h.
+  lamp   = material.new{ roughness = 0.25, metallic = 0.0,
+                         emission = opts.lamp_emission or { 1.1, 1.0, 0.85 } },
+  rubber = material.new{ roughness = 0.85, metallic = 0.00 },
+}
+
+local car = mesh.car{
+  paint      = paint,
+  lod        = lod,
+  tumblehome = opts.tumblehome,
+  chamfer    = opts.chamfer,
+}
+
+-- The car's origin is its BODY CENTRE, so lift it by half its height to stand
+-- the wheels on the pad rather than burying them in it.
+local half = car.half_extent
+local liftY = half[2]
+
+local function place(mesh_, mat)
+  if mesh_ then m:add(mesh.translate(mesh_, {0, liftY, 0}), mat) end
+end
+place(car.body, MATS.body)
+if opts.no_glass ~= true then place(car.glass, MATS.glass) end
+place(car.interior, MATS.interior)
+place(car.lamp, MATS.lamp)
+place(car.wheel, MATS.rubber)
+
+-- Placeholder wheels (LAB DRESSING — see the header note). Sized and placed
+-- from the same package numbers the generator uses for its arch openings, so if
+-- these do not sit inside the arches, the arches are wrong.
+if car.wheel == nil then
+  local WD, FO, RO = 0.62, 0.90, 1.00     -- wheel diameter, front/rear overhang
+  local L, W = half[3] * 2, half[1] * 2
+  local frontZ, rearZ = L * 0.5 - FO, -(L * 0.5 - RO)
+  local wheel = mesh.rotate_z(mesh.cylinder(WD * 0.5, 0.20, 14), math.pi * 0.5)
+  for _, sx in ipairs({ 1, -1 }) do
+    for _, wz in ipairs({ frontZ, rearZ }) do
+      m:add(mesh.bake_height_color(
+              mesh.translate(wheel, { sx * (W * 0.5 - 0.06), WD * 0.5, wz }),
+              {0.05, 0.05, 0.06}, {0.05, 0.05, 0.06}), MATS.rubber)
+    end
+  end
+end
+
+-- The DRIVER, placed at the car's own "driver_seat" marker rather than at a
+-- guessed offset — the same contract VehicleSystem uses for the player's car, so
+-- if the marker is wrong the lab shows it.
+if opts.driver ~= false then
+  for _, l in ipairs(car.lights or {}) do
+    if l.name == "driver_seat" then
+      m:add(mesh.translate(mesh.occupant{ back_angle = opts.back_angle or 25 },
+                           { l.pos[1], l.pos[2] + liftY, l.pos[3] }), MATS.interior)
+    end
+  end
+end
+
+-- A human-height reference. Proportion errors are invisible against an empty
+-- pad and obvious against something 1.75 m tall standing next to the car.
+if opts.scale_ref ~= false then
+  m:add(scope{ origin = {-3.2, 0.0, -1.9}, size = {0.42, 1.75, 0.28} }
+          :box{0.20, 0.42, 0.30})
 end
 
 return m
@@ -9586,11 +9369,487 @@ end
 m:add_instances(tree_proto, trees, { collide = { shape = "capsule", radius = 0.5, height = 4 } })
 
 return m
+-- Vehicle CLASS BEHAVIOUR as data — the reference layer the car generator's
+-- recipes are built on. Defines a global `vehicle_classes` table.
+--
+-- This file holds the two things that make a generated vehicle read as a real
+-- one, kept separate from the recipes themselves so the sourcing stays legible:
+--
+--   1. FEATURE GATES — which features a class has AT ALL. Features switch on and
+--      off by class; they are not scaled to zero. A pickup has a bed rule, a
+--      coupe does not, and no amount of parameter tweaking turns one into the
+--      other. Transcribed from Orsborn, Cagan, Pawlicki & Smith (2006),
+--      "Creating cross-over vehicles", AIEDAM 20(3) 217-246, Table 2 (p. 237).
+--
+--   2. PACKAGE RANGES — the proportions. Car designers work from a package (the
+--      occupant and wheel layout) and let form follow, which is why deriving
+--      proportions here makes a vehicle plausible by construction rather than by
+--      tuning. Codes are SAE J1100 "Motor Vehicle Dimensions" so a generated
+--      vehicle is cross-checkable against any real spec sheet.
+--
+-- SOURCING. Numbers marked [J] are verified from a primary standard text; those
+-- marked [~] are plausible defaults from secondary sources — good enough to
+-- generate from, not good enough to cite. J1100 and J826 are readable because US
+-- federal regulation incorporates them by reference:
+--   J1100: https://law.resource.org/pub/us/cfr/ibr/005/sae.j1100.2001.html
+--   J826:  https://archive.org/download/gov.law.sae.j826.1995/sae.j826.1995.html
+--
+-- NOT transcribed: Orsborn's numeric parameter envelopes (Figs. 29-38). They
+-- bound Bezier control points of five named 2D curves in a coordinate frame the
+-- paper never pins down (Fig. 30's "global" axis runs Y 20-70 in, which cannot be
+-- lateral distance from the stated origin), and our generator sweeps 3D station
+-- rings rather than fitting 2D curves. Converting would validate an
+-- interpretation, not the paper. The class RELATIONS below are taken instead —
+-- those are robust to the datum question.
+--
+-- Units are METRES and DEGREES (engine convention). SAE publishes mm; converted.
+
+local vehicle_classes = {}
+
+
+-- ---------------------------------------------------------------------------
+-- SAE J1100 / J1516 / J826 constants shared by every class.
+
+vehicle_classes.sae = {
+    -- Chair height H30 (SgRP to accelerator heel point) is THE class axis: one
+    -- continuous number spanning sports car to bus. The A/B split is a real
+    -- standardised boundary, not a stylistic one. [J] J1516/J1517.
+    h30_class_a = { 0.127, 0.405 },   -- cars, vans, light trucks
+    h30_class_b = { 0.405, 0.530 },   -- heavy trucks, buses
+
+    -- Back angle A40 correlates with H30 and is why truck drivers visibly sit
+    -- upright while sports-car drivers recline. [J]
+    a40_class_a = { 5, 40 },
+    a40_class_b = { 11, 18 },
+    a40_default = 25,                 -- [J] J826 default when unspecified
+
+    -- Steering wheel diameter W9. [J] Class A/B bounds; [~] the car figure.
+    w9_class_a_max = 0.450,
+    w9_class_b     = { 0.450, 0.560 },
+    w9_car_typical = 0.370,
+
+    -- J826 H-point manikin leg segments, 50th percentile. [J] These are the
+    -- numbers every car interior in the world is packaged around, so a seated
+    -- driver built from them lands knees/hands/head where a real one's are.
+    thigh_50    = 0.4315,
+    lower_leg_50 = 0.4175,
+    foot_angle_min = 87,              -- [J] degrees
+    sgrp_outboard  = 0.381,           -- [J] driver SgRP from centreline
+
+    -- US regulatory hardpoints. Every real vehicle obeys these, which is why a
+    -- generated one that doesn't looks subtly wrong. [J]
+    bumper_zone   = { 0.406, 0.508 }, -- 49 CFR 581 impact zone above ground
+    headlamp_h125 = { 0.559, 1.372 }, -- FMVSS 108 lamp centre above ground
+    plate_us      = { 0.305, 0.152 }, -- 6 x 12 in
+    plate_eu      = { 0.520, 0.110 },
+}
+
+
+-- ---------------------------------------------------------------------------
+-- FEATURE GATES — Orsborn et al. Table 2, mapped onto our feature names.
+--
+-- The paper's three classes are coupe / SUV / pickup. Our sedan and hatchback
+-- both inherit the coupe gates (it is a front/side/rear-view grammar, and a
+-- sedan differs from a coupe in door count, which the grammar handles by rule 41
+-- rather than by class). Van, box truck and bus are ours, not the paper's —
+-- their gates are marked [ours] and follow the same on/off discipline.
+--
+-- Each flag names a FEATURE, not a rule number, so the table stays readable; the
+-- originating Table 2 rule is in the trailing comment.
+
+local COUPE_GATES = {
+    rear_fender_coupe   = true,   -- rule 18
+    grill_own_rules     = true,   -- rules 23, 24 (grill rules only used on coupes)
+    grill_in_bumper     = true,   -- rule 30 (grill inserted into the front bumper)
+    trunk               = true,   -- rules 36, 37
+    rear_side_window    = true,   -- rule 43 (coupes only)
+    headlight_coupe     = true,   -- rule 59
+    taillight_coupe     = true,   -- rule 60
+    rear_door           = true,   -- rule 41 (sedans; a true coupe omits it)
+}
+
+local SUV_GATES = {
+    rear_fender_utility = true,   -- rule 50 (SUVs and pickups)
+    front_bumper_tall   = true,   -- rule 52 (pickups and SUVs only)
+    rear_windshield_alt = true,   -- rule 48 (pickups and some SUVs)
+    trunk               = true,   -- rule 37 (coupes and SUVs)
+    hatch               = true,   -- rule 56 (trunk/hatch rule for SUVs)
+    rear_bumper_step    = true,   -- rule 54 (step on SUV rear bumper)
+    rear_bumper_utility = true,   -- rules 51, 57
+    beltline_door_curve = true,   -- rule 55 (curve in beltline in front door, SUVs only)
+    rear_door           = true,   -- rule 41
+    rear_side_window    = true,   -- rule 44 (pickups and SUVs)
+    rear_window_suv     = true,   -- rule 45 (SUVs only)
+    taillight_utility   = true,   -- rule 53 (SUVs and pickups)
+}
+
+local PICKUP_GATES = {
+    rear_fender_utility = true,   -- rule 50
+    front_bumper_tall   = true,   -- rule 52
+    rear_windshield_alt = true,   -- rule 48
+    bed                 = true,   -- rule 49 (bed rule for pickups only)
+    rear_bumper_utility = true,   -- rules 51, 57
+    rear_side_window    = true,   -- rule 44
+    taillight_utility   = true,   -- rule 53
+    -- rule 40 "does not work with pickups": no wrap-around door glass.
+    door_wrap_glass     = false,
+}
+
+
+-- ---------------------------------------------------------------------------
+-- QUALITATIVE CLASS RELATIONS — Orsborn et al. pp. 237-240, prose + figures.
+--
+-- These survive the datum ambiguity that made the numeric envelopes unusable,
+-- and they are what actually separates the classes at a glance:
+--
+--   * Coupe grills sit LOWER and come FARTHER FORWARD than SUV/pickup grills,
+--     because of nose length and the grill's placement within the bumper.
+--   * SUV and pickup grills are similar in height range and horizontal average;
+--     SUV grills have the broader horizontal range. Both sit farther BACK than a
+--     coupe's, because of shorter noses.
+--   * SUV/pickup grills curve CONSISTENTLY along their length; coupe grills
+--     curve SHARPLY at one end or the other. The hood does the inverse. So the
+--     vertical-to-horizontal transition in the front end happens in the GRILL on
+--     a coupe and in the HOOD on an SUV/pickup — one line, and it is most of
+--     what makes a front end read as one class or the other.
+--   * Coupe and SUV side curves do NOT overlap at all — the single cleanest
+--     class separator in the paper.
+--   * SUV hoods fall almost entirely INSIDE the coupe hood range; pickup fenders
+--     nearly contain the SUV range. Classes are nested, not disjoint, except at
+--     the side curve.
+
+vehicle_classes.relations = {
+    grill_drop     = { coupe = 0.00, suv = 0.34, pickup = 0.34 },  -- up from lowest
+    grill_setback  = { coupe = 0.00, suv = 0.30, pickup = 0.26 },  -- back from nose
+    grill_curve    = { coupe = "sharp_end", suv = "even", pickup = "even" },
+    hood_curve     = { coupe = "even", suv = "sharp_end", pickup = "sharp_end" },
+}
+
+
+-- ---------------------------------------------------------------------------
+-- THE CLASSES.
+--
+-- `wheelbase_wd` is in WHEEL DIAMETERS, the proportion designers actually reason
+-- in: Peter Stevens (McLaren F1) gives ~4.5 as his rule of thumb, the Wikipedia
+-- glossary says ~4; 4.0-4.7 is the honest band for a normal car. [~]
+--
+-- `height_wd` is authored per class rather than derived. The widely repeated
+-- "height ~= 3x wheel diameter" rule does NOT reproduce real cars: 3 x 0.62 m
+-- gives a 1.86 m sedan, and a real one is ~1.45 m. Measured off actual class
+-- dimensions the ratio runs ~2.3 (sedan, SUV) to ~3.0 (bus). Stevens is likely
+-- measuring something other than overall height; we don't guess at what.
+--
+-- Overhangs are likewise real: a sedan carries ~0.9 m front and ~1.0 m rear on a
+-- 2.7 m wheelbase for a 4.6 m car. Deriving them from too-small multiples was
+-- caught immediately by the wb/length bound below, which is the point of having
+-- it.
+--
+-- `drivetrain` drives dash-to-axle, which is the single strongest cue for what a
+-- car COSTS: FWD puts the engine over the front axle (long front overhang, short
+-- dash-to-axle, front wheel close to the A-pillar), RWD sets it behind (short
+-- overhang, long dash-to-axle — the BMW/Jaguar look). One enum, no other change.
+--
+-- `greenhouse_frac` defaults to 1/3 of total height, body 2/3 — a widely repeated
+-- and reliable starting proportion. The belt line is NOT authored: per Orsborn it
+-- has no rules of its own and EMERGES from hood + side windows + trunk.
+
+vehicle_classes.classes = {
+    sedan = {                                  -- ~4.60 x 1.82 x 1.45 m
+        gates = COUPE_GATES, form = "coupe",
+        box_count = 3, drivetrain = "fwd", sae_class = "a",
+        wheel_diameter = 0.62, wheelbase_wd = 4.35, height_wd = 2.34,
+        front_overhang_wd = 1.45, rear_overhang_wd = 1.61,
+        track = 1.56, h156 = 0.14, h30 = 0.28, a40 = 25, w9 = 0.370,
+        greenhouse_frac = 0.33, tumblehome = 7,
+        rows = 2, l50 = 0.87,
+    },
+    hatchback = {                              -- ~3.95 x 1.75 x 1.48 m
+        gates = COUPE_GATES, form = "coupe",
+        box_count = 2, drivetrain = "fwd", sae_class = "a",
+        wheel_diameter = 0.60, wheelbase_wd = 4.17, height_wd = 2.47,
+        front_overhang_wd = 1.33, rear_overhang_wd = 1.08,
+        track = 1.52, h156 = 0.15, h30 = 0.30, a40 = 25, w9 = 0.370,
+        greenhouse_frac = 0.35, tumblehome = 8,
+        rows = 2, l50 = 0.83,
+    },
+    jeep = {                                   -- ~4.40 x 1.88 x 1.75 m
+        gates = SUV_GATES, form = "suv",
+        box_count = 2, drivetrain = "rwd", sae_class = "a",
+        wheel_diameter = 0.74, wheelbase_wd = 3.65, height_wd = 2.36,
+        front_overhang_wd = 1.15, rear_overhang_wd = 1.15,
+        track = 1.60, h156 = 0.22, h30 = 0.36, a40 = 22, w9 = 0.390,
+        greenhouse_frac = 0.38, tumblehome = 3,
+        rows = 2, l50 = 0.88,
+    },
+    pickup = {                                 -- ~5.70 x 2.00 x 1.95 m
+        gates = PICKUP_GATES, form = "pickup",
+        box_count = 2, modules = { "bed", "frame" },
+        drivetrain = "rwd", sae_class = "a",
+        wheel_diameter = 0.78, wheelbase_wd = 4.62, height_wd = 2.50,
+        front_overhang_wd = 1.15, rear_overhang_wd = 1.54,
+        track = 1.70, h156 = 0.22, h30 = 0.38, a40 = 20, w9 = 0.400,
+        greenhouse_frac = 0.34, tumblehome = 2,
+        rows = 2, l50 = 0.90,
+    },
+    van = {                                    -- ~5.20 x 1.98 x 1.90 m  [ours]
+        gates = SUV_GATES, form = "suv",
+        box_count = 1, drivetrain = "fwd", sae_class = "a",
+        wheel_diameter = 0.68, wheelbase_wd = 4.41, height_wd = 2.79,
+        front_overhang_wd = 1.32, rear_overhang_wd = 1.91,
+        track = 1.68, h156 = 0.18, h30 = 0.38, a40 = 20, w9 = 0.420,
+        greenhouse_frac = 0.30, tumblehome = 2,
+        rows = 2, l50 = 0.90,
+    },
+    box_truck = {                              -- ~6.60 x 2.35 x 2.90 m  [ours]
+        gates = PICKUP_GATES, form = "pickup",
+        box_count = 1, modules = { "cargo_box" },
+        drivetrain = "rwd", sae_class = "b",
+        wheel_diameter = 0.90, wheelbase_wd = 4.22, height_wd = 3.22,
+        front_overhang_wd = 1.22, rear_overhang_wd = 1.89,
+        track = 1.90, h156 = 0.24, h30 = 0.45, a40 = 15, w9 = 0.500,
+        greenhouse_frac = 0.22, tumblehome = 0,
+        rows = 1, l50 = 0.90,
+    },
+    bus = {                                    -- ~11.4 x 2.55 x 3.20 m  [ours]
+        gates = SUV_GATES, form = "suv",
+        box_count = 1, modules = { "cargo_box", "seat_rows" },
+        drivetrain = "rwd", sae_class = "b",
+        wheel_diameter = 1.05, wheelbase_wd = 5.62, height_wd = 3.05,
+        front_overhang_wd = 2.19, rear_overhang_wd = 2.95,
+        track = 2.10, h156 = 0.28, h30 = 0.48, a40 = 15, w9 = 0.520,
+        greenhouse_frac = 0.30, tumblehome = 0,
+        -- Bus seating is a repeat, not a layout: city 0.61-0.71 m pitch, school
+        -- 0.71-0.76, coach 0.86-1.02. [~] One repeat op fills the whole cabin.
+        rows = 0, seat_pitch = 0.66, seat_width = 0.46,
+    },
+}
+
+
+-- ---------------------------------------------------------------------------
+-- Plausibility bounds. A recipe edit that leaves these has produced a cartoon —
+-- this is what the generator's tests assert against, and it is why the numbers
+-- above are sourced rather than invented.
+
+vehicle_classes.bounds = {
+    wheelbase_wd    = { 2.0, 6.0 },
+    wb_over_length  = { 0.50, 0.70 },
+    height_wd       = { 2.2, 3.3 },
+    greenhouse_frac = { 0.20, 0.45 },
+}
+
+
+-- Derive the overall dimensions a class implies. Length is the sum of the
+-- package, not an independent knob — which is the whole point of packaging
+-- first: you cannot author a car whose parts don't add up.
+function vehicle_classes.dims(c)
+    local wd = c.wheel_diameter
+    local wb = c.wheelbase_wd * wd
+    return {
+        wheelbase = wb,
+        length = wb + (c.front_overhang_wd + c.rear_overhang_wd) * wd,
+        height = c.height_wd * wd,
+        -- Body sits ~13 cm proud of each tyre. [~] Right for cars; it undershoots
+        -- the box truck and bus by ~8%, because on those the body width is set by
+        -- the CARGO MODULE (which is wider than the cab), not by the track. The
+        -- module overrides this when it lands.
+        width  = c.track + 0.26,
+        front_overhang = c.front_overhang_wd * wd,
+        rear_overhang  = c.rear_overhang_wd * wd,
+    }
+end
+
+
+-- Check a class (or a recipe merged onto one) against `bounds` and its SAE
+-- class. Returns nil when clean, else a list of human-readable failures. The
+-- generator's tests call this; it also caught four bad overhang values the first
+-- time this file was written, which is why it exists.
+function vehicle_classes.validate(name, c)
+    local b, s, d = vehicle_classes.bounds, vehicle_classes.sae, vehicle_classes.dims(c)
+    local bad = {}
+    local function chk(label, v, r)
+        if v < r[1] or v > r[2] then
+            bad[#bad + 1] = string.format("%s: %s %.3f not in [%.2f, %.2f]",
+                                          name, label, v, r[1], r[2])
+        end
+    end
+    chk("wheelbase_wd", c.wheelbase_wd, b.wheelbase_wd)
+    chk("wb/length", d.wheelbase / d.length, b.wb_over_length)
+    chk("height_wd", c.height_wd, b.height_wd)
+    chk("greenhouse_frac", c.greenhouse_frac, b.greenhouse_frac)
+    chk("h30", c.h30, (c.sae_class == "b") and s.h30_class_b or s.h30_class_a)
+    chk("a40", c.a40, (c.sae_class == "b") and s.a40_class_b or s.a40_class_a)
+    if c.sae_class == "a" and c.w9 > s.w9_class_a_max then
+        bad[#bad + 1] = name .. ": w9 exceeds Class A maximum"
+    end
+    return (#bad > 0) and bad or nil
+end
+
+
+-- Merge a class's defaults under a recipe's overrides. Recipes stay short: they
+-- say what makes THEM different, and inherit the rest of the class.
+function vehicle_classes.apply(class_name, opts)
+    local c = vehicle_classes.classes[class_name]
+    if not c then error("unknown vehicle class: " .. tostring(class_name)) end
+    local p = {}
+    for k, v in pairs(c) do p[k] = v end
+    for k, v in pairs(opts or {}) do p[k] = v end
+    return p
+end
+
+return vehicle_classes
+-- vehicle_forms.lua — the FORM layer: class package data -> mesh.car parameters.
+--
+-- vehicle_classes.lua answers "how big is a jeep, and what features does it
+-- have"; car_mesh.cpp answers "given curves and window bands, build a shell".
+-- Neither answers "what curves does a jeep have", and that is this file.
+--
+-- Everything here keys off `c.form` (coupe | suv | pickup) and `c.box_count`,
+-- the two things Orsborn et al. found actually distinguish vehicle classes —
+-- rather than off the class NAME, so a new class picks up a sensible shape by
+-- declaring its form instead of needing a new branch.
+--
+-- The curves are fractions: `roof`/`sill` are fractions of overall height,
+-- `plan` is a fraction of half-width, and z runs +0.5 at the nose to -0.5 at the
+-- tail. All three are lists of {z, value} keys, smoothstepped between.
+
+local forms = {}
+
+-- The cabin roof plateau, as a fraction of height. Not a free knob: a taller
+-- greenhouse has to start lower on the body, so it comes off the class's own
+-- `greenhouse_frac` (1/3 of height is the textbook car; vans run higher).
+local function plateau_of(c)
+  local g = c.greenhouse_frac or 0.33
+  -- 0.33 -> 0.94, rising slowly. Clamped so a wild override cannot invert the
+  -- roof through the belt line.
+  return math.max(0.80, math.min(0.99, 0.94 + (g - 0.33) * 0.45))
+end
+
+-- ROOFLINE. The single most recognisable curve on the car: where the bonnet
+-- ends, how raked the screen is, whether the roof falls to a separate boot
+-- (three-box) or runs back to a tailgate (two-box) or never falls at all (van).
+function forms.roof(c)
+  local top = plateau_of(c)
+  local boxes = c.box_count or 3
+  if c.form == "suv" then
+    -- Taller and flatter, with an upright screen and a squared-off tail. The
+    -- roof barely falls at the back — that is what reads as "utility".
+    return { {0.50, 0.50}, {0.44, 0.56}, {0.32, 0.64}, {0.26, 0.69},
+             {0.15, top},  {-0.30, top}, {-0.44, top - 0.03}, {-0.50, 0.74} }
+  elseif c.form == "pickup" then
+    -- Cab roof plateau ends early; behind it the bed sides are far lower, which
+    -- is the silhouette. (The bed is still a hole in one volume, not a separate
+    -- module — see the note in vehicles.lua.)
+    return { {0.50, 0.52}, {0.44, 0.58}, {0.34, 0.66}, {0.28, 0.70},
+             {0.18, top},  {-0.06, top}, {-0.14, 0.60}, {-0.46, 0.58},
+             {-0.50, 0.54} }
+  elseif boxes == 1 then
+    -- One box: the screen starts almost at the bumper and the roof runs flat
+    -- all the way to the tail. Short nose is the whole read.
+    return { {0.50, 0.56}, {0.46, 0.72}, {0.38, 0.90}, {0.30, top},
+             {-0.40, top}, {-0.47, top - 0.04}, {-0.50, 0.76} }
+  elseif boxes == 2 then
+    -- Two box: sedan's nose, but the roof carries back to a steep tailgate
+    -- instead of dropping to a boot lid.
+    return { {0.50, 0.44}, {0.44, 0.48}, {0.30, 0.55}, {0.24, 0.59},
+             {0.13, top},  {-0.26, top}, {-0.40, top - 0.05}, {-0.47, 0.80},
+             {-0.50, 0.64} }
+  end
+  -- Three box: bonnet, raked screen, cabin, then a distinct boot deck.
+  return { {0.50, 0.42}, {0.44, 0.46}, {0.30, 0.52}, {0.25, 0.55},
+           {0.125, top}, {-0.24, top + 0.01}, {-0.40, 0.62}, {-0.46, 0.58},
+           {-0.50, 0.54} }
+end
+
+-- SILL — the underside. Higher and flatter on anything with ground clearance,
+-- because a tall body with a car's low rocker reads as a lifted car, not a truck.
+function forms.sill(c)
+  if c.form == "suv" or c.form == "pickup" then
+    return { {0.50, 0.26}, {0.44, 0.20}, {0.30, 0.17}, {-0.40, 0.17},
+             {-0.46, 0.20}, {-0.50, 0.26} }
+  elseif (c.box_count or 3) == 1 then
+    return { {0.50, 0.24}, {0.44, 0.16}, {0.30, 0.13}, {-0.40, 0.13},
+             {-0.46, 0.16}, {-0.50, 0.24} }
+  end
+  return { {0.50, 0.22}, {0.44, 0.14}, {0.30, 0.10}, {-0.40, 0.10},
+           {-0.46, 0.14}, {-0.50, 0.22} }
+end
+
+-- PLAN — half-width along the car. Boxier classes hold full width closer to
+-- both ends; a coupe pinches in hard at the nose and tail.
+function forms.plan(c)
+  if c.form == "suv" or c.form == "pickup" or (c.box_count or 3) == 1 then
+    return { {0.50, 0.74}, {0.44, 0.90}, {0.32, 0.99}, {0.02, 1.00},
+             {-0.30, 1.00}, {-0.42, 0.98}, {-0.47, 0.92}, {-0.50, 0.80} }
+  end
+  return { {0.50, 0.62}, {0.44, 0.82}, {0.30, 0.97}, {0.02, 1.00},
+           {-0.22, 1.00}, {-0.40, 0.97}, {-0.46, 0.88}, {-0.50, 0.70} }
+end
+
+-- GLASS BANDS. The windscreen sits between the cowl and the roof plateau, so it
+-- moves with the roofline rather than being authored twice; the backlight is
+-- placed off the tail treatment.
+function forms.windshield(c)
+  if c.form == "suv" then return { 0.15, 0.27 } end
+  if c.form == "pickup" then return { 0.18, 0.29 } end
+  if (c.box_count or 3) == 1 then return { 0.30, 0.44 } end
+  return { 0.125, 0.25 }
+end
+
+function forms.backlight(c)
+  local boxes = c.box_count or 3
+  if c.form == "pickup" then return { -0.14, -0.07 } end     -- small cab rear window
+  if c.form == "suv" then return { -0.44, -0.31 } end
+  if boxes == 1 then return { -0.47, -0.40 } end
+  if boxes == 2 then return { -0.47, -0.33 } end
+  return { -0.40, -0.24 }
+end
+
+-- SIDE GLASS. Row count drives pane count: two rows of seats means two doors of
+-- glass per side, one row means a single cab pane. Quarter lights are kept for
+-- the car forms (see the DLO note in car_mesh.cpp) and dropped on the utility
+-- forms, whose real counterparts largely do without them.
+function forms.side_windows(c)
+  local rows = c.rows or 2
+  if c.form == "pickup" or rows < 2 then
+    return { { 0.02, 0.16 } }                       -- single cab pane
+  end
+  if c.form == "suv" then
+    return { { -0.08, 0.13 }, { -0.30, -0.12 } }    -- two big upright panes
+  end
+  if (c.box_count or 3) == 1 then
+    return { { 0.10, 0.26 }, { -0.34, 0.06 } }      -- cab pane + long cargo window
+  end
+  -- Car: four panes, each door's main glass plus its quarter light.
+  return { { 0.082, 0.110 }, { -0.086, 0.072 },
+           { -0.235, -0.121 }, { -0.273, -0.245 } }
+end
+
+-- Assemble the full mesh.car parameter table for a class.
+function forms.car_params(c, d, opts)
+  opts = opts or {}
+  return {
+    width = d.width, height = d.height, length = d.length,
+    wheel_diameter = c.wheel_diameter,
+    front_overhang = d.front_overhang, rear_overhang = d.rear_overhang,
+    ground_clearance = c.h156,
+    tumblehome = c.tumblehome,
+    roof = forms.roof(c), sill = forms.sill(c), plan = forms.plan(c),
+    windshield = forms.windshield(c), backlight = forms.backlight(c),
+    side_windows = forms.side_windows(c),
+    paint = opts.color, lod = opts.lod or "high",
+  }
+end
+
+return forms
 -- Procedural vehicle bodies (ADR-0059) — authored in Lua over the procgen
 -- builders, exactly like flora.lua and the gun. Defines a global `vehicle` table:
 --
---   vehicle.sedan(seed, opts)      -> spec   four-door car
---   vehicle.hatchback(seed, opts)  -> spec   smaller, peppier variant
+--   vehicle.sedan / hatchback / jeep / van / pickup (seed, opts) -> spec
+--
+-- All five are one builder, from_class, over the SAE package data in
+-- vehicle_classes.lua and the curve layer in vehicle_forms.lua (both reached by
+-- `require`). Proportions and handling derive from the class; opts override any
+-- field. `opts.class_overrides` tweaks the package before it is validated.
 --
 -- A "spec" is a plain table the C++ VehicleSpec reader (vehicle_spec.cpp)
 -- consumes: a `body` Mesh built with mesh.* plus handling/physics parameters and
@@ -9603,83 +9862,127 @@ return m
 
 vehicle = {}
 
+-- The package data (SAE J1100/J826) and the form layer that turns it into
+-- mesh.car curves. Both are shared modules — see script_modules.h for why
+-- `require` exists in a sandbox that deliberately has no `package`.
+local classes = require "vehicle_classes"
+local forms   = require "vehicle_forms"
 
--- Solid-colour a part: bake_height_color with low==high paints it flat.
-local function paint(m, c) return mesh.bake_height_color(m, c, c) end
 
--- A low car body that sits around the wheels, with a set-back cabin, dark glass,
--- and front/rear lights. `color` is the paint; faces +Z.
-local function car_body(L, W, H, color)
-    local hw, hl = W * 0.5, L * 0.5
-    local glass = { 0.05, 0.06, 0.09 }
-    local parts = {}
-    -- Low main hull (its sides come down around the wheels).
-    parts[#parts + 1] = paint(mesh.box({ W, H * 0.46, L }), color)
-    -- Greenhouse / cabin: narrower, set back a touch, sitting on the hull.
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.84, H * 0.42, L * 0.46 }), { 0, H * 0.40, -L * 0.04 }), color)
-    -- Windshield + rear window (dark glass bands).
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.80, H * 0.30, L * 0.05 }), { 0, H * 0.42, L * 0.15 }), glass)
-    parts[#parts + 1] = paint(mesh.translate(
-        mesh.box({ W * 0.80, H * 0.26, L * 0.05 }), { 0, H * 0.42, -L * 0.23 }), glass)
-    -- Head/taillights at the front (+Z) and rear (-Z) corners.
-    local ly = -H * 0.08
-    local lx = hw - 0.30
-    for _, sx in ipairs({ 1, -1 }) do
-        parts[#parts + 1] = paint(mesh.translate(
-            mesh.box({ 0.34, 0.18, 0.10 }), { sx * lx, ly, hl - 0.02 }), { 1.0, 0.97, 0.82 })
-        parts[#parts + 1] = paint(mesh.translate(
-            mesh.box({ 0.34, 0.18, 0.10 }), { sx * lx, ly, -hl + 0.02 }), { 0.85, 0.06, 0.05 })
-    end
-    return mesh.recompute_normals(mesh.merge(parts))
+-- Build a drivable spec from a CLASS. One builder for every wheeled vehicle:
+-- proportions come from vehicle_classes.lua, curves from vehicle_forms.lua, and
+-- the shell from mesh.car. It replaces the old box-stack body that gave every
+-- class the same silhouette.
+--
+-- The spec is MULTI-PART. mesh.car returns body / glass / interior / lamp
+-- separately because each wants its own material, and a Renderable holds only
+-- one. The opaque bits (painted body + dark lamp housings) merge into `body`;
+-- the transparent glass and the matte interior ride in `parts`, which
+-- spawnVehicle turns into child Renderables pinned to the chassis. That is what
+-- lets the player's car show see-through glass and a cabin, matching the lab —
+-- earlier this merged everything and the windows read as solid panels.
+local function from_class(class_name, seed, opts)
+  opts = opts or {}
+  local c = classes.apply(class_name, opts.class_overrides)
+  local d = classes.dims(c)
+
+  -- Fail loudly on a cartoon. This is the check that caught four bad overhang
+  -- values when the class file was written; a recipe override deserves it too.
+  local bad = classes.validate(class_name, c)
+  if bad then
+    error(class_name .. ": " .. table.concat(bad, "; "))
+  end
+
+  local color = opts.color or c.color or { 0.70, 0.12, 0.12 }
+  local car = mesh.car(forms.car_params(c, d, { color = color, lod = opts.lod }))
+
+  -- Opaque shell: painted body + dark lamp housings, both white-albedo with the
+  -- hue in vertex colours (the shader does albedo * vertexColour, so the body
+  -- material must stay white or the paint squares and darkens).
+  local shell = { car.body }
+  if car.lamp then shell[#shell + 1] = car.lamp end
+  local body = mesh.recompute_normals(mesh.merge(shell))
+
+  -- Transparent glass + matte interior as their own materials.
+  local parts = {}
+  if car.glass then
+    parts[#parts + 1] = { mesh = car.glass, albedo = { 1, 1, 1 },
+                          metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+  end
+  if car.interior then
+    parts[#parts + 1] = { mesh = car.interior, albedo = { 1, 1, 1 },
+                          metallic = 0.0, roughness = 0.90 }
+  end
+
+  -- Wheels DERIVED, not hardcoded. vehicle.sedan used to declare radius 0.34
+  -- against a 0.62 m wheel diameter (r = 0.31), so the simulated wheels were
+  -- 3 cm larger than the arches drawn for them.
+  local r = c.wheel_diameter * 0.5
+  local halfTrack = c.track * 0.5
+  local axleY = -d.height * 0.5 + r + c.h156
+  local frontZ = d.length * 0.5 - d.front_overhang
+  local rearZ = -(d.length * 0.5 - d.rear_overhang)
+
+  -- Mass scales with the box the vehicle occupies; a van is not a heavy sedan.
+  local volume = d.length * d.width * d.height
+  local mass = opts.mass or math.floor(volume * 120)
+
+  return {
+    body = body,
+    -- WHITE: the shell mesh already carries the paint in its vertex colours and
+    -- the shader multiplies albedo by them. A coloured albedo here squares the
+    -- paint (the old box body did exactly that and drove darker than authored).
+    albedo = { 1, 1, 1 },
+    metallic = 0.6,
+    roughness = 0.35,
+    parts = parts,           -- transparent glass + matte interior
+    lights = car.lights,     -- headlight_l/r, taillight_l/r, driver_seat markers
+    chassis = { half = { d.width * 0.5, d.height * 0.5, d.length * 0.5 } },
+    mass = mass,
+    -- Centre of gravity below the body centre. Anchored so a sedan-height body
+    -- (1.45 m) gets exactly -0.45 — the value the sedan was hand-tuned to before
+    -- the class recipes ("low CoG so it doesn't tip in turns") — while TALLER
+    -- bodies drop further, or a van/jeep rolls over under any real steering. So
+    -- the sedan drives exactly as tuned and the height term only ever helps the
+    -- new tall classes.
+    com_offset = opts.com_offset or -(0.23 + 0.22 * (d.height / 1.45)),
+    engine_torque = opts.engine_torque or math.floor(mass * 0.46),
+    max_rpm = opts.max_rpm or 6000,
+    max_steer_deg = opts.max_steer_deg or (c.form == "coupe" and 32 or 28),
+    brake_torque = opts.brake_torque or math.floor(mass * 1.15),
+    hand_brake_torque = opts.hand_brake_torque or math.floor(mass * 2.9),
+    wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
+    wheels = {
+      { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
+      { x = -halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
+      { x =  halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
+      { x = -halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
+    },
+  }
 end
 
-function vehicle.sedan(seed, opts)
-    opts = opts or {}
-    local L = opts.length or 4.2
-    local W = opts.width or 1.8
-    local H = opts.height or 1.3          -- lower, planted stance
-    local color = opts.color or { 0.70, 0.12, 0.12 }
-    local hw = W * 0.5
-    local inset = 0.10
-    local axleY = -H * 0.5 + 0.34         -- wheel centres near the body's lower edge
-    local frontZ = L * 0.34
-    local rearZ = -L * 0.34
-    return {
-        body = car_body(L, W, H, color),
-        albedo = color,
-        metallic = 0.6,
-        roughness = 0.35,
-        chassis = { half = { hw, H * 0.5, L * 0.5 } },
-        mass = opts.mass or 1400,
-        com_offset = opts.com_offset or -0.45,   -- low CoG so it doesn't tip in turns
-        engine_torque = opts.engine_torque or 650,   -- enough grunt to climb a curb back onto the road
-        max_rpm = opts.max_rpm or 6000,
-        max_steer_deg = opts.max_steer_deg or 32,
-        brake_torque = opts.brake_torque or 1600,
-        hand_brake_torque = opts.hand_brake_torque or 4000,
-        wheel = { radius = 0.34, width = 0.32 },  -- chunkier tyres
-        -- All four wheels DRIVEN (4WD) so the car can crawl back up off-road and
-        -- over kerbs; the front pair steers, the rear pair also takes the
-        -- handbrake. x>0 is the car's right, z>0 its front, y the axle height.
-        wheels = {
-            { x =  hw - inset, y = axleY, z = frontZ, steered = true,  driven = true },
-            { x = -hw + inset, y = axleY, z = frontZ, steered = true,  driven = true },
-            { x =  hw - inset, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
-            { x = -hw + inset, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
-        },
-    }
-end
-
+function vehicle.sedan(seed, opts)    return from_class("sedan", seed, opts) end
 function vehicle.hatchback(seed, opts)
-    opts = opts or {}
-    opts.length = opts.length or 3.6
-    opts.mass = opts.mass or 1100
-    opts.engine_torque = opts.engine_torque or 430
-    opts.color = opts.color or { 0.15, 0.45, 0.75 }
-    return vehicle.sedan(seed, opts)
+  opts = opts or {}
+  opts.color = opts.color or { 0.15, 0.45, 0.75 }
+  return from_class("hatchback", seed, opts)
 end
+function vehicle.jeep(seed, opts)
+  opts = opts or {}
+  opts.color = opts.color or { 0.22, 0.34, 0.24 }
+  return from_class("jeep", seed, opts)
+end
+function vehicle.van(seed, opts)
+  opts = opts or {}
+  opts.color = opts.color or { 0.86, 0.86, 0.88 }
+  return from_class("van", seed, opts)
+end
+function vehicle.pickup(seed, opts)
+  opts = opts or {}
+  opts.color = opts.color or { 0.20, 0.28, 0.42 }
+  return from_class("pickup", seed, opts)
+end
+vehicle.from_class = from_class
 
 
 -- ---------------------------------------------------------------------------
@@ -9696,7 +9999,7 @@ end
 --   parts  = { { pos={x,y,z}, size={w,h,l}, color={r,g,b} }, ... }   -- boxes
 --   lights = { { name=, pos={x,y,z} }, ... }   -- named lamp ATTACHMENT markers
 -- `parts` is the boxy body (hull + cabin + dark glass + corner lamps + wheels —
--- the same primitive shapes as the player's car_body above, but as flat data).
+-- the same box primitives, but as flat data).
 -- `lights` mark the front/rear lamp positions: the SEAM where future emissive
 -- lens entities / light actuators will attach (parsed today, rendered later —
 -- see the ADR-0065 register row in docs/decisions.md). Car faces +Z; x>0 = right.
@@ -9744,7 +10047,7 @@ local function fleet_car(style, W, H, L, color)
         box({ W * 0.94, H * 0.40, L * 0.24 }, { 0, H * 0.30, L * 0.35 }, color)   -- cab roof
         box({ W * 0.84, H * 0.30, L * 0.05 }, { 0, H * 0.30, L * 0.47 }, glass)   -- windshield
         box({ W, H * 0.86, L * 0.62 }, { 0, H * 0.12, -L * 0.17 }, color)         -- cargo box
-    else                        -- sedan: the player's car_body proportions
+    else                        -- sedan: baseline proportions
         box({ W, H * 0.46, L }, { 0, 0, 0 }, color)
         box({ W * 0.84, H * 0.42, L * 0.46 }, { 0, H * 0.40, -L * 0.04 }, color)
         box({ W * 0.80, H * 0.30, L * 0.05 }, { 0, H * 0.42, L * 0.15 }, glass)
