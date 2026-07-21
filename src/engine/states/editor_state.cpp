@@ -50,16 +50,35 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setBool("cameraDetachEnabled", false);   // F = frame selected
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
 
-    if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view,
-                           ctx.assets, /*editorMode=*/true)) {
-        LOG_ERROR << "Failed to load level: " << levelFile;
-    }
+    reloadDocument(ctx);
     PlayingState::onEnter(ctx);
     // PlayingState captures the pointer for first-person play; the editor is
     // a pointing UI — picking, gizmos, panels — so the cursor stays visible.
     window.setCursorMode(CursorMode::Normal);
     LOG_INFO << "Edit mode: click selects, 1/2/3 move/rotate/scale, "
                 "Play runs the level";
+}
+
+void EditorState::reloadDocument(FrameContext& ctx) {
+    if (!LevelLoader::load(levelFile, ctx.world, editorRenderer, ctx.view,
+                           ctx.assets, /*editorMode=*/true)) {
+        LOG_ERROR << "Failed to load level: " << levelFile;
+    }
+    // Seeded AFTER the load, from the files the load actually opened, so a
+    // module reached through `require` is watched even though the level JSON
+    // never names it.
+    watch.collect(levelFile);
+}
+
+void EditorState::update(FrameContext& ctx) {
+    PlayingState::update(ctx);
+    if (!watch.tick()) return;
+    // Rebuild in place rather than swapping states: the editor owns camera,
+    // selection and panel state that a state swap would discard.
+    LOG_INFO << "watch_scripts: change detected, rebuilding scene";
+    ctx.world.destroyAll();
+    ctx.assets.clear();
+    reloadDocument(ctx);
 }
 
 void EditorState::onResume(FrameContext& ctx) {

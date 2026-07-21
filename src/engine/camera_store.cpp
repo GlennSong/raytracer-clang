@@ -38,6 +38,12 @@ bool CameraStore::load(const std::string& path, World& world) {
 
         SceneCamera cam;
         cam.name = c.value("name", std::string("Camera"));
+        // Round-trips so a scene can author cameras that DON'T draw a body.
+        // Without it every saved camera is a solid box in the world, and a
+        // handful of close-in views around one prop bury the prop itself —
+        // which is exactly what happened to the car lab. Defaults true, so
+        // existing sidecars are unaffected.
+        cam.showGizmo = c.value("show_gizmo", true);
         // The lens block is the property layer's JSON form (FieldMeta ids
         // match this file's historical keys); missing keys keep defaults.
         if (c.contains("lens")) {
@@ -62,6 +68,7 @@ bool CameraStore::save(const std::string& path, World& world) {
         [&](Entity, Transform& t, SceneCamera& cam) {
             json c;
             c["name"] = cam.name;
+            c["show_gizmo"] = cam.showGizmo;
             c["position"] = vec3ToJson(t.position);
             c["forward"] = vec3ToJson(t.orientation.rotate(Vec3(0, 0, -1)));
             json lens;

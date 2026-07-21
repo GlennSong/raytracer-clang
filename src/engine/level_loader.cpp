@@ -1,4 +1,9 @@
 #include "level_loader.h"
+
+#include "script_assets.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "scripting/script_modules.h"
+#endif
 #include <cstdlib>
 #include "mesh_builder.h"
 #include "asset_manager.h"
@@ -53,6 +58,12 @@
 using json = nlohmann::json;
 
 namespace engine {
+
+// Files the current load has read. File-static rather than threaded through
+// every helper: loading is single-threaded and the alternative is an extra
+// out-param on a dozen call sites.
+static std::vector<std::string> g_loadedScriptFiles;
+
 
 static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
     if (!j.is_array() || j.size() < 3) return fallback;
@@ -766,20 +777,6 @@ static void loadCityEntity(const json& ent, const json& root, World& world,
              << m.parts.size() << " draw parts, + colliders";
 }
 
-// Read a script entity's `file`: as given, else under assets/scripts/, else
-// level-relative. Empty if none found.
-static std::string loadScriptCode(const std::string& file, const std::string& levelDir) {
-    for (const std::string& path : {file, std::string("assets/scripts/") + file,
-                                    levelDir + "/" + file}) {
-        std::ifstream f(path);
-        if (f) {
-            std::stringstream ss;
-            ss << f.rdbuf();
-            return ss.str();
-        }
-    }
-    return {};
-}
 
 #ifdef RT_ENABLE_SCRIPTING
 // Run a script entity's recipe into `out`. An on-terrain recipe gets the level's
@@ -794,8 +791,15 @@ static bool runScriptModel(const json& ent, const std::string& levelDir,
         LOG_WARN << "script entity: cannot read '" << file << "'";
         return false;
     }
+    if (const std::string path = resolveScriptPath(file, levelDir); !path.empty())
+        g_loadedScriptFiles.push_back(path);
+    // A FRESH VM per script entity, deliberately. Every shipped level has one
+    // such entity, so the module re-parse is once per load; and the shared-VM
+    // alternative leaks `args`/`ground` from one entity into the next (see
+    // level_scene.cpp's ensureVm, which sets them only when present).
     ScriptVM vm;
     openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(levelDir, &g_loadedScriptFiles));
     vm.setGlobalNumber("seed", ent.value("seed", 0.0));
     if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
     if (ground != nullptr) setGlobalHeightField(vm, "ground", *ground);
@@ -862,6 +866,10 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         r.material.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
         r.material.metallic = part.material.metallic;
         r.material.roughness = part.material.roughness;
+        r.material.opacity = part.material.opacity;
+        r.material.emission = part.material.emission;
+        if (part.material.twoSided)
+            r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
         // Analytic surface library (renderer.h Surface): an id evaluated in-shader
         // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
         // road-local u/v baked onto the carriageway. Independent of texture maps,
@@ -1540,15 +1548,20 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         if (!scriptVm) {
             scriptVm = std::make_unique<ScriptVM>();
             openProcgenLibrary(*scriptVm);
-            std::ifstream ff("assets/scripts/flora.lua");
-            if (ff) {
-                std::string src((std::istreambuf_iterator<char>(ff)),
-                                std::istreambuf_iterator<char>());
+            openModuleLoader(*scriptVm, makeModuleSource(levelDir, &g_loadedScriptFiles));
+            // Was a bare ifstream on "assets/scripts/flora.lua", which is why a
+            // level-relative flora.lua silently never worked. The shared resolver
+            // honours the same candidates as every other script.
+            const std::string src = loadScriptCode("flora.lua", levelDir);
+            if (!src.empty()) {
+                if (const std::string path = resolveScriptPath("flora.lua", levelDir);
+                    !path.empty())
+                    g_loadedScriptFiles.push_back(path);
                 std::string err;
                 if (!scriptVm->doString(src, &err))
                     LOG_ERROR << "flora.lua load failed: " << err;
             } else {
-                LOG_WARN << "assets/scripts/flora.lua not found; `flora.*` unavailable";
+                LOG_WARN << "flora.lua not found; `flora.*` unavailable";
             }
         }
         return *scriptVm;
@@ -2006,12 +2019,15 @@ static void loadVehicles(const json& vehicles, World& world, AssetManager& asset
                          const std::string& levelDir) {
     if (!vehicles.is_array() || vehicles.empty()) return;
     std::string lib = loadScriptCode("vehicles.lua", levelDir);
+    if (const std::string p = resolveScriptPath("vehicles.lua", levelDir); !p.empty())
+        g_loadedScriptFiles.push_back(p);
     if (lib.empty()) {
         LOG_WARN << "vehicles: assets/scripts/vehicles.lua not found";
         return;
     }
     ScriptVM vm;
     openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(levelDir, &g_loadedScriptFiles));
     std::string err;
     if (!vm.doString(lib, &err)) {
         LOG_WARN << "vehicles.lua: " << err;
@@ -2097,6 +2113,8 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     std::unique_ptr<ScriptVM> styleVm;
     {
         std::string sb = loadScriptCode("style_book.lua", levelDir);
+        if (const std::string p = resolveScriptPath("style_book.lua", levelDir); !p.empty())
+            g_loadedScriptFiles.push_back(p);
         if (!sb.empty()) {
             styleVm = std::make_unique<ScriptVM>();
             openProcgenLibrary(*styleVm);
@@ -2122,9 +2140,14 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     return g;
 }
 
+const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
+    return g_loadedScriptFiles;
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
+    g_loadedScriptFiles.clear();
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;

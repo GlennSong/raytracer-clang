@@ -2798,6 +2798,14 @@ bool VulkanRenderer::Impl::createPipeline() {
     // Phase 2 enables VK_CULL_MODE_BACK_BIT once front-face winding is verified
     // on device (engine winds front faces clockwise; with the clip-space Y-flip
     // that should map to VK_FRONT_FACE_CLOCKWISE — confirm then enable).
+    //
+    // NOTE for Phase 2: RenderMaterial::FLAG_TWO_SIDED must survive that switch.
+    // Everything is implicitly two-sided while culling is off, so meshes that
+    // NEED both faces (glass panes, foliage cards) look correct here today and
+    // would silently lose a face the moment back-face culling is turned on.
+    // Metal honours the flag by setting cull mode per batch in issuePass; do the
+    // same here — either a second pipeline with VK_CULL_MODE_NONE selected per
+    // batch, or dynamic state (VK_DYNAMIC_STATE_CULL_MODE, core in 1.3).
     raster.cullMode = VK_CULL_MODE_NONE;
     raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
     raster.lineWidth = 1.0f;

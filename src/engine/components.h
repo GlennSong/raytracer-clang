@@ -263,10 +263,43 @@ struct Vehicle {
     // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
     // positions + lights each frame; `driverModel` is a capsule shown in the seat
     // while occupied.
-    bool lightsOn = false;
+    bool lightsOn = false;               // manual switch: forces headlights ON
     std::vector<Entity> headlights;      // front lenses (warm)
     std::vector<Entity> taillights;      // rear lenses (red)
     Entity driverModel;                  // driver capsule (stowed when unoccupied)
+
+    // Lamp state, so the player's car behaves like the city's traffic rather than
+    // having only a manual headlight toggle: headlights come on at dusk, brake
+    // lights on deceleration, indicators while turning. Decided by
+    // engine::vehicleLampState (vehicle_lamps.h) — the same predicate citysim
+    // uses — from these per-step inputs.
+    Real speed = 0;                      // chassis speed, m/s
+    Real prevSpeed = 0;                  // last step's, so a hard decel reads as braking
+    int turnSignal = 0;                  // -1 left, +1 right, 0 none
+    Real signalHold = 0;                 // seconds an indicator stays on after the
+                                         // steering straightens, so it doesn't flicker
+    // Lamp lenses placed from the body recipe's markers. Empty falls back to the
+    // hardcoded chassis corners, so a car with no marker data still lights.
+    struct Lamp {
+        Entity entity;
+        Vec3 local{0, 0, 0};
+        bool front = true;               // headlight end vs tail end
+        bool left = false;               // which indicator side it belongs to
+    };
+    std::vector<Lamp> lamps;
+
+    // Hip point for the seated occupant, from the body recipe. Without it the
+    // driver falls back to a guess off the chassis half-extents.
+    Vec3 driverSeat{0, 0, 0};
+    bool hasDriverSeat = false;
+
+    // Extra body meshes rigidly fixed to the chassis, each its own Renderable so
+    // it can carry its own material — the reason `mesh.car` returns separate
+    // parts. Transparent glass and the matte interior live here; they cannot
+    // share the body mesh because a Renderable holds ONE material and glass needs
+    // opacity < 1. Posed at chassis-local origin (0,0,0) every step, exactly like
+    // the lamp lenses.
+    std::vector<Entity> bodyParts;
 };
 
 // Marks a player entity currently seated in a vehicle (ADR-0059). PlayerSystem

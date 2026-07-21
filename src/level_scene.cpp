@@ -22,6 +22,9 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "engine/scripting/script_vm.h"
 #include "engine/scripting/procgen_bindings.h"
+#include "engine/scripting/script_modules.h"
+#include "engine/script_assets.h"
+#include "engine/scripting/script_modules.h"
 #endif
 
 using json = nlohmann::json;
@@ -494,27 +497,6 @@ void bakeCityModel(const CityModel& m, Scene& scene) {
 
 }  // namespace
 
-#ifdef RT_ENABLE_SCRIPTING
-namespace {
-std::string readTextFile(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) return {};
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-// Resolve a script entity's `file`: as given, else under assets/scripts/, else
-// level-relative. Returns the source, or empty if none found.
-std::string loadScriptCode(const std::string& file, const std::string& levelDir) {
-    for (const std::string& p : {file, std::string("assets/scripts/") + file,
-                                 levelDir + "/" + file}) {
-        std::string c = readTextFile(p);
-        if (!c.empty()) return c;
-    }
-    return {};
-}
-}  // namespace
-#endif
 
 // Add a baked TextureData to the Scene as a Texture; -1 if empty.
 static int addProcTexture(const TextureData& td, Scene& scene) {
@@ -668,6 +650,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (!scriptVm) {
             scriptVm = std::make_unique<ScriptVM>();
             openProcgenLibrary(*scriptVm);
+            openModuleLoader(*scriptVm, makeModuleSource(levelDir));
         }
         return *scriptVm;
     };

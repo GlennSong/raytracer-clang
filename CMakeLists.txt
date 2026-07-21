@@ -71,6 +71,9 @@ add_library(engine_core STATIC
     src/engine/procgen/tree.cpp
     src/engine/procgen/surface_maps.cpp
     src/engine/procgen/vehicle_mesh.cpp
+    src/engine/procgen/vehicle/car_mesh.cpp
+    src/engine/procgen/vehicle/car_interior.cpp
+    src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/erosion.cpp
@@ -109,6 +112,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
+    src/engine/script_assets.cpp
+    src/engine/script_watch.cpp
     src/engine/level_loader.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
@@ -232,6 +237,7 @@ if(RT_ENABLE_SCRIPTING)
     # (src/apps/citysim/scripting) to keep engine_core free of any app dependency.
     target_sources(engine_core PRIVATE
         src/engine/scripting/script_vm.cpp
+        src/engine/scripting/script_modules.cpp
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
@@ -420,6 +426,8 @@ add_executable(run_tests
     tests/test_city.cpp
     tests/test_surface_maps.cpp
     tests/test_vehicle_mesh.cpp
+    tests/test_car_mesh.cpp
+    tests/test_vehicle_lamps.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp
     tests/test_instance_tlas.cpp
@@ -495,6 +503,7 @@ target_link_libraries(run_tests PRIVATE citysim engine_core)
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
+        tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp
         tests/test_flora.cpp

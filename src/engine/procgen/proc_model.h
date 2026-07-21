@@ -25,6 +25,15 @@ struct ProcMaterial {
     // time from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
     // welded carriageway's road-local u=lateral / v=arc-length, no stripe geometry.
     int surface = 0;
+    // Transparency, emission and two-sidedness were MISSING from this struct,
+    // so `material.new{ opacity = ..., emission = ... }` parsed fine in Lua and
+    // was then silently dropped on the way to the renderer. Car glass authored
+    // at 0.32 rendered fully opaque, which is why a cabin with seats and a
+    // driver in it looked like a solid panel. Anything a recipe can set must
+    // exist here or it does not survive the trip.
+    float opacity = 1.0f;
+    Vec3 emission{0, 0, 0};
+    bool twoSided = false;     // -> RenderMaterial::FLAG_TWO_SIDED
 };
 
 // A model part: geometry + its material (default = untextured, vertex-coloured).

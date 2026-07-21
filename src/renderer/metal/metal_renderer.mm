@@ -2563,6 +2563,15 @@ void MetalRenderer::endFrame() {
                 (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_OVERLAY)
                     ? impl->depthStateOverlay : depthState];
 
+            // FLAG_TWO_SIDED batches draw both faces. Cull mode is encoder state,
+            // not per-instance, so unlike the shading flags this cannot ride the
+            // instance buffer — it is set per BATCH. Safe because batches are
+            // grouped by mesh and a mesh carries one material, and cheap: a
+            // handful of state changes per frame rather than per triangle.
+            [impl->currentEncoder setCullMode:
+                (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_TWO_SIDED)
+                    ? MTLCullModeNone : MTLCullModeBack];
+
             // Alpha-cut foliage is drawn by the depth-prepass path (issueFoliage)
             // when enabled — skip it here so it isn't also drawn single-pass.
             if (skipFoliage &&

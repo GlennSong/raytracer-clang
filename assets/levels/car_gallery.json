@@ -1,0 +1,95 @@
+{
+  "entities": [
+    {
+      "id": 1,
+      "material": {
+        "albedo": [
+          0.34,
+          0.36,
+          0.33
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 1.0
+      },
+      "name": "ground",
+      "physics": {
+        "friction": 0.9,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        -0.55,
+        0.0
+      ],
+      "shape": "box",
+      "size": [
+        200.0,
+        0.4,
+        120.0
+      ]
+    },
+    {
+      "file": "car_gallery.lua",
+      "id": 2,
+      "name": "car",
+      "opts": {
+        "lod": "high"
+      },
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 7,
+      "shape": "script"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.2,
+      16.0
+    ]
+  },
+  "version": 1,
+  "watch_scripts": true
+}

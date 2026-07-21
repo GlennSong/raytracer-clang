@@ -1,5 +1,8 @@
 #include "vehicle_system.h"
 
+#include "../vehicle_lamps.h"
+#include "../procgen/vehicle/occupant.h"
+
 #include "../components.h"
 #include "../asset_manager.h"
 #include "../mesh_builder.h"
@@ -13,6 +16,8 @@
 #include "../scripting/script_vm.h"
 #include "../scripting/procgen_bindings.h"
 #include "../scripting/vehicle_spec.h"
+#include "../script_assets.h"
+#include "../scripting/script_modules.h"
 #include <fstream>
 #include <sstream>
 #endif
@@ -66,15 +71,12 @@ void VehicleSystem::spawnInFront(FrameContext& ctx) {
     Real yawDeg = radiansToDegrees(std::atan2(fwd.x, fwd.z));
 
     // Read vehicles.lua and build a sedan (rare debug action — rebuild the VM each time).
-    std::string lib;
-    for (const char* path : {"assets/scripts/vehicles.lua", "../assets/scripts/vehicles.lua"}) {
-        std::ifstream f(path);
-        if (f) { std::stringstream ss; ss << f.rdbuf(); lib = ss.str(); break; }
-    }
+    const std::string lib = loadScriptCode("vehicles.lua", "");
     if (lib.empty()) { LOG_WARN << "spawn_vehicle: vehicles.lua not found"; return; }
 
     ScriptVM vm;
     openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(""));
     std::string err;
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
     VehicleSpec spec;
@@ -139,9 +141,11 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
         if (!lensMesh.valid())
             lensMesh = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(0.34, 0.18, 0.10)),
                                               "vehicle:lens");
+        // A SEATED occupant, not a capsule. The capsule proved a car was
+        // occupied; this shows who is driving it, posed from the same SAE manikin
+        // the interior is packaged around so it fits the seat it sits in.
         if (!driverMesh.valid())
-            driverMesh = ctx.assets.acquireMesh(MeshBuilder::capsule(0.28f, 0.7f),
-                                                "vehicle:driver");
+            driverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(), "vehicle:driver");
         auto makeLens = [&](Vec3 albedo) {
             Entity le = ctx.world.create();
             Transform lt;
@@ -155,8 +159,33 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
             ctx.world.add<Renderable>(le, r);
             return le;
         };
-        v->headlights = { makeLens(Vec3(1.0, 0.97, 0.82)), makeLens(Vec3(1.0, 0.97, 0.82)) };
-        v->taillights = { makeLens(Vec3(0.85, 0.06, 0.05)), makeLens(Vec3(0.85, 0.06, 0.05)) };
+        if (!v->lamps.empty()) {
+            // Recipe-driven: one lens per marker, wherever the body generator put
+            // it. This is what lets a generated car's lamps sit in its actual
+            // housings instead of at guessed chassis corners.
+            for (Vehicle::Lamp& lamp : v->lamps)
+                lamp.entity = makeLens(lamp.front ? Vec3(1.0, 0.97, 0.82)
+                                                  : Vec3(0.85, 0.06, 0.05));
+        } else {
+            // No marker data (hand-built or legacy body): fall back to corners so
+            // every car still has lamps.
+            const Vec3& hx = v->config.chassisHalfExtent;
+            const Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
+            for (int i = 0; i < 4; ++i) {
+                const bool front = i < 2;
+                const bool left = (i % 2) == 1;
+                Vehicle::Lamp lamp;
+                lamp.front = front;
+                lamp.left = left;
+                lamp.local = Vec3(left ? -lx : lx, ly,
+                                  front ? hx.z + 0.05 : -hx.z - 0.05);
+                lamp.entity = makeLens(front ? Vec3(1.0, 0.97, 0.82)
+                                             : Vec3(0.85, 0.06, 0.05));
+                v->lamps.push_back(lamp);
+            }
+        }
+        for (const Vehicle::Lamp& lamp : v->lamps)
+            (lamp.front ? v->headlights : v->taillights).push_back(lamp.entity);
 
         v->driverModel = ctx.world.create();
         {
@@ -253,23 +282,54 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 ct->position = t.position + t.orientation.rotate(local);
                 ct->orientation = t.orientation;
             };
-            // Lenses sit at the front (+Z) / rear (-Z) corners, a hair proud.
-            Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
-            if (v.headlights.size() == 2) {
-                place(v.headlights[0], Vec3(lx, ly, hx.z + 0.05));
-                place(v.headlights[1], Vec3(-lx, ly, hx.z + 0.05));
+
+            // Body parts (glass, interior) share the chassis frame exactly — they
+            // were authored in the same space as the body mesh — so they ride at
+            // local origin.
+            for (Entity part : v.bodyParts) place(part, Vec3(0, 0, 0));
+            // --- lamps -----------------------------------------------------
+            // The player's car now runs the SAME predicate as city traffic
+            // (engine::vehicleLampState): headlights at dusk, brake lights on
+            // deceleration, indicators while turning. Previously this was a
+            // manual on/off toggle with no brakes and no indicators at all.
+            v.prevSpeed = v.speed;
+            v.speed = pw.vehicleVelocity(v.vehicleId).length();
+
+            // Indicators come from STEERING, the player's equivalent of the
+            // route bend citysim reads. `signalHold` keeps them on briefly after
+            // the wheel straightens, otherwise they strobe on every correction.
+            constexpr Real kSignalSteer = 0.35;
+            constexpr Real kSignalHold = 0.6;
+            if (std::fabs(v.steer) > kSignalSteer) {
+                v.turnSignal = v.steer > 0 ? +1 : -1;
+                v.signalHold = kSignalHold;
+            } else if (v.signalHold > 0) {
+                v.signalHold -= ctx.clock.fixedStep();
+            } else {
+                v.turnSignal = 0;
             }
-            if (v.taillights.size() == 2) {
-                place(v.taillights[0], Vec3(lx, ly, -hx.z - 0.05));
-                place(v.taillights[1], Vec3(-lx, ly, -hx.z - 0.05));
+
+            const bool braking = v.brake > 0.15 || v.handBrake > 0.15;
+            const LampMotion motion =
+                braking ? LampMotion::Holding
+                        : (v.turnSignal != 0 ? LampMotion::Turning : LampMotion::Rolling);
+            const VehicleLamps lit = vehicleLampState(
+                motion, v.speed, v.prevSpeed, lampsDark(ctx.view.lighting.sun.direction),
+                v.turnSignal, v.lightsOn);
+            const bool blink = lampBlinkOn(ctx.clock.simulatedTime());
+
+            for (const Vehicle::Lamp& lamp : v.lamps) {
+                place(lamp.entity, lamp.local);
+                Renderable* r = ctx.world.get<Renderable>(lamp.entity);
+                if (!r) continue;
+                const bool signalling = (lamp.left ? lit.left : lit.right) && blink;
+                Vec3 e(0, 0, 0);
+                if (signalling)          e = Vec3(2.4, 1.05, 0.07);   // amber wins
+                else if (lamp.front)     e = lit.head ? Vec3(3.0, 2.8, 2.2) : Vec3(0, 0, 0);
+                else if (lit.brake)      e = Vec3(2.6, 0.10, 0.08);   // hard red
+                else if (lit.head)       e = Vec3(0.7, 0.05, 0.04);   // dim tail glow
+                r->material.emission = e;
             }
-            // Glow when on; dark lens when off (the albedo keeps the colour cue).
-            Vec3 head = v.lightsOn ? Vec3(3.0, 2.8, 2.2) : Vec3(0, 0, 0);
-            Vec3 tail = v.lightsOn ? Vec3(2.0, 0.15, 0.15) : Vec3(0, 0, 0);
-            for (Entity le : v.headlights)
-                if (Renderable* r = ctx.world.get<Renderable>(le)) r->material.emission = head;
-            for (Entity le : v.taillights)
-                if (Renderable* r = ctx.world.get<Renderable>(le)) r->material.emission = tail;
 
             // Driver capsule: in the seat when occupied — by a seated PLAYER or by
             // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
@@ -280,9 +340,15 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
                     if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
                         dp->value = *dt;
+                    // The recipe's own hip point when it has one — the occupant
+                    // mesh's origin IS its hip, so this lines the two up exactly
+                    // instead of guessing an offset off the chassis box.
+                    const Vec3 seat =
+                        v.hasDriverSeat
+                            ? v.driverSeat
+                            : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
                     if (occupied)
-                        dt->position = t.position +
-                            t.orientation.rotate(Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05));
+                        dt->position = t.position + t.orientation.rotate(seat);
                     else
                         dt->position = Vec3(0, -100000, 0);
                     dt->orientation = t.orientation;

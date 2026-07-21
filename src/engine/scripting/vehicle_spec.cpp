@@ -76,6 +76,34 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     out.metallic = static_cast<float>(numField(L, t, "metallic", out.metallic));
     out.roughness = static_cast<float>(numField(L, t, "roughness", out.roughness));
 
+    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission= }, ... }
+    // Each becomes a child Renderable so glass/interior keep their own material.
+    lua_getfield(L, t, "parts");
+    if (lua_istable(L, -1)) {
+        const int pt = lua_gettop(L);
+        const int n = static_cast<int>(luaL_len(L, pt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, pt, i);
+            const int pi = lua_gettop(L);
+            if (lua_istable(L, pi)) {
+                VehicleSpec::Part part;
+                lua_getfield(L, pi, "mesh");
+                part.mesh = luaToMesh(L, -1);
+                lua_pop(L, 1);
+                if (part.mesh) {
+                    part.albedo = vec3Field(L, pi, "albedo", part.albedo);
+                    part.metallic = static_cast<float>(numField(L, pi, "metallic", part.metallic));
+                    part.roughness = static_cast<float>(numField(L, pi, "roughness", part.roughness));
+                    part.opacity = static_cast<float>(numField(L, pi, "opacity", part.opacity));
+                    part.emission = vec3Field(L, pi, "emission", part.emission);
+                    out.parts.push_back(std::move(part));
+                }
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     PhysicsWorld::VehicleConfig& c = out.config;
     c.mass = numField(L, t, "mass", c.mass);
     c.engineTorque = numField(L, t, "engine_torque", c.engineTorque);
@@ -84,6 +112,40 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.brakeTorque = numField(L, t, "brake_torque", c.brakeTorque);
     c.handBrakeTorque = numField(L, t, "hand_brake_torque", c.handBrakeTorque);
     c.comOffsetY = numField(L, t, "com_offset", c.comOffsetY);
+
+    // lights = { { name = "headlight_l", pos = {x,y,z} }, ... }
+    // Same shape citysim's fleet recipes use, so `mesh.car`'s output drops
+    // straight into either consumer.
+    lua_getfield(L, t, "lights");
+    if (lua_istable(L, -1)) {
+        const int lt = lua_gettop(L);
+        const int n = static_cast<int>(lua_rawlen(L, lt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, lt, i);
+            if (lua_istable(L, -1)) {
+                const int et = lua_gettop(L);
+                VehicleSpec::LampMarker m;
+                lua_getfield(L, et, "name");
+                if (lua_isstring(L, -1)) m.name = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                m.pos = vec3Field(L, et, "pos", m.pos);
+                // The markers array carries more than lamps — the interior's
+                // driver hip point rides along in it. Route by name rather than
+                // taking everything as a lamp: "driver_seat" neither starts with
+                // "headlight" nor ends in 'l', so a blind reader would have made
+                // it a right-hand TAIL light.
+                if (m.name == "driver_seat") {
+                    out.driverSeat = m.pos;
+                    out.hasDriverSeat = true;
+                } else if (m.name.rfind("headlight", 0) == 0 ||
+                           m.name.rfind("taillight", 0) == 0) {
+                    out.lights.push_back(m);
+                }
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
 
     // chassis = { half = {x,y,z} }
     lua_getfield(L, t, "chassis");
@@ -151,6 +213,39 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
 
     Vehicle v;
     v.config = spec.config;
+    v.driverSeat = spec.driverSeat;
+    v.hasDriverSeat = spec.hasDriverSeat;
+
+    // One child entity per extra part, rigidly pinned to the chassis by
+    // VehicleSystem::writeBack. Separate entities because each carries its own
+    // material — glass transparent, interior matte — which a single Renderable
+    // cannot express.
+    for (const VehicleSpec::Part& part : spec.parts) {
+        if (!part.mesh) continue;
+        Entity pe = world.create();
+        Transform pt = t;
+        world.add<Transform>(pe, pt);
+        world.add<PrevTransform>(pe, {pt});
+        Renderable pr;
+        pr.mesh = assets.acquireMesh(*part.mesh);
+        pr.material.albedo = part.albedo;
+        pr.material.metallic = part.metallic;
+        pr.material.roughness = part.roughness;
+        pr.material.opacity = part.opacity;
+        pr.material.emission = part.emission;
+        world.add<Renderable>(pe, pr);
+        v.bodyParts.push_back(pe);
+    }
+    // Marker slots only: VehicleSystem creates the lens entities on its first
+    // fixed step (it owns the shared mesh and the asset manager), so a car
+    // spawned before systems start still ends up lit.
+    for (const VehicleSpec::LampMarker& m : spec.lights) {
+        Vehicle::Lamp lamp;
+        lamp.local = m.pos;
+        lamp.front = m.name.rfind("headlight", 0) == 0;
+        lamp.left = !m.name.empty() && m.name.back() == 'l';
+        v.lamps.push_back(lamp);
+    }
     world.add<Vehicle>(e, v);
     return e;
 }

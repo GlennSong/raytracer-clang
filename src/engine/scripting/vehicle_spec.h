@@ -6,6 +6,8 @@
 #include "../world.h"                    // Entity, World
 #include <memory>
 #include <string>
+#include <vector>
+#include <string>
 
 namespace engine {
 
@@ -22,6 +24,37 @@ struct VehicleSpec {
     float metallic = 0.6f;
     float roughness = 0.35f;
     PhysicsWorld::VehicleConfig config;
+
+    // Extra body meshes that need their OWN material — transparent glass, the
+    // matte cabin interior — because a Renderable carries one material and glass
+    // needs opacity < 1. `mesh.car` returns these as separate parts precisely so
+    // the body stays opaque and the glass can be see-through; merging them into
+    // `body` (the old path) forced the glass opaque and you saw a solid panel.
+    struct Part {
+        std::shared_ptr<RenderMesh> mesh;
+        Vec3 albedo{1, 1, 1};        // white: hue rides the mesh's vertex colours
+        float metallic = 0.0f;
+        float roughness = 0.5f;
+        float opacity = 1.0f;
+        Vec3 emission{0, 0, 0};
+    };
+    std::vector<Part> parts;
+
+    // Named lamp mount points from the recipe's `lights` array — the same marker
+    // format citysim's traffic already uses, so one generator feeds both. Names
+    // are "headlight_l/r" and "taillight_l/r"; the prefix picks the end and the
+    // trailing l/r picks the indicator side. Empty means "use chassis corners".
+    struct LampMarker {
+        std::string name;
+        Vec3 pos{0, 0, 0};
+    };
+    std::vector<LampMarker> lights;
+
+    // Where the occupant's hip goes. `mesh.car` publishes this alongside the lamp
+    // markers as "driver_seat"; hasDriverSeat distinguishes "at the origin" from
+    // "not supplied", which would otherwise put the driver in the boot.
+    Vec3 driverSeat{0, 0, 0};
+    bool hasDriverSeat = false;
 };
 
 // Run a `vehicle.*` recipe in `vm` (which must already have openProcgenLibrary

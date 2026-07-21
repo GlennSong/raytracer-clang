@@ -641,6 +641,12 @@ Entity EditorSystem::duplicateSelected(FrameContext& ctx) {
 void EditorSystem::render(FrameContext& ctx) {
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
     if (ImGui::GetCurrentContext() == nullptr) return;
+    // Headless visual capture (RT_FRAME_DUMP batteries like tools/car_shots.sh)
+    // needs the exact fly camera that edit mode gives, but not the chrome drawn
+    // over it — the toolbar covers the top-left third of the frame, which is
+    // most of a parked car. Off by default; capture scripts set it and restore
+    // settings.json afterwards.
+    if (ctx.settings.getBool("hideEditorUi", false)) return;
 #ifdef RT_HAS_IMGUIZMO
     ImGuizmo::BeginFrame();
 #endif

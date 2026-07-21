@@ -59,6 +59,9 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
@@ -160,6 +163,8 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_path_edit_tool.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
 	$(TEST_DIR)/test_vehicle_mesh.cpp \
+	$(TEST_DIR)/test_car_mesh.cpp \
+	$(TEST_DIR)/test_vehicle_lamps.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
 	$(TEST_DIR)/test_instance_tlas.cpp \
 	$(TEST_DIR)/test_texture_field.cpp \
@@ -239,6 +244,9 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
+	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \

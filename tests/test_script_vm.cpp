@@ -38,15 +38,23 @@ TEST_CASE(script_vm_sandbox_blocks_io_os_require) {
     ScriptVM vm;
     // The procgen sandbox opens no io/os/package, so those globals are nil and a
     // script cannot reach the filesystem, the clock, or native loading.
+    //
+    // dofile/loadfile are checked because they are NOT in io or package — they
+    // ship with the BASE library, so for a long time this test passed while a
+    // script could still call dofile("/etc/passwd"). Asserting only io/os/require
+    // tested the libraries we chose not to open, not the property we wanted.
+    // `require` stays nil on a bare VM: it is opt-in, added by openModuleLoader
+    // (script_modules.h) as a host-controlled C closure, the way openProcgenLibrary
+    // layers `mesh.*` onto a VM that has none.
+    const char* kForbidden[] = {"io", "os", "package", "require",
+                                "dofile", "loadfile"};
+    for (const char* name : kForbidden) {
+        bool nil = false;
+        CHECK(vm.doString(std::string("ok = (") + name + " == nil)"));
+        CHECK(vm.getGlobalBool("ok", nil));
+        CHECK(nil);
+    }
     bool b = false;
-    CHECK(vm.doString("ok_io = (io == nil)"));
-    CHECK(vm.getGlobalBool("ok_io", b)); CHECK(b);
-    b = false;
-    CHECK(vm.doString("ok_os = (os == nil)"));
-    CHECK(vm.getGlobalBool("ok_os", b)); CHECK(b);
-    b = false;
-    CHECK(vm.doString("ok_req = (require == nil)"));
-    CHECK(vm.getGlobalBool("ok_req", b)); CHECK(b);
 
     // ...but the pure libraries ARE available.
     double pi = 0;

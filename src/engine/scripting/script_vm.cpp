@@ -23,6 +23,20 @@ void openSandboxLibs(lua_State* L) {
         luaL_requiref(L, lib->name, lib->func, 1);
         lua_pop(L, 1);  // requiref leaves the module on the stack
     }
+
+    // `dofile` and `loadfile` are part of the BASE library, not io/package
+    // (lbaselib.c `base_funcs`), so opening base alone hands a script two
+    // functions that read an arbitrary path off disk. The sandbox comment above
+    // has always claimed "no filesystem"; until this line it was not true, and
+    // the sandbox test only ever checked io/os/require. Drop them explicitly.
+    //
+    // Scripts that need a shared module use `require`, which is NOT this: it is
+    // a host-supplied C closure (script_modules.h) taking an identifier, never a
+    // path, and resolving it in C++ against a fixed root.
+    for (const char* fn : {"dofile", "loadfile"}) {
+        lua_pushnil(L);
+        lua_setglobal(L, fn);
+    }
 }
 
 }  // namespace

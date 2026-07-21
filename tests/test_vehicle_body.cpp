@@ -2,6 +2,9 @@
 
 #include "../src/apps/citysim/city_meshes.h"        // carVariantCount
 #include "../src/engine/scripting/script_vm.h"
+#include "../src/engine/scripting/procgen_bindings.h"   // openProcgenLibrary
+#include "../src/engine/scripting/script_modules.h"     // openModuleLoader
+#include "../src/engine/script_assets.h"                // makeModuleSource
 #include "../src/apps/citysim/scripting/vehicle_body.h"
 
 #include <cstdio>
@@ -30,6 +33,12 @@ struct VehiclesVM {
     ScriptVM vm;
     bool loaded = false;
     VehiclesVM() {
+        // vehicles.lua now `require`s vehicle_classes + vehicle_forms, so the VM
+        // needs the same surface the real hosts give it: the procgen bindings
+        // plus a module loader rooted at the asset scripts. RT_SOURCE_DIR keeps
+        // it resolving whatever the test's working directory is.
+        openProcgenLibrary(vm);
+        openModuleLoader(vm, makeModuleSource(std::string(RT_SOURCE_DIR) + "/assets/scripts"));
         std::string src =
             readFile(std::string(RT_SOURCE_DIR) + "/assets/scripts/vehicles.lua");
         std::string err;

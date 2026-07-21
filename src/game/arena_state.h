@@ -2,6 +2,7 @@
 #define RAYTRACER_GAME_ARENA_STATE_H
 
 #include "../engine/states/playing_state.h"
+#include "../engine/script_watch.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -41,11 +42,7 @@ private:
     // itself through the state machine — the same clean reset as the
     // editor→play transition — so a saved Lua edit shows up in seconds.
     // Desktop only (the web bundle bakes assets; nothing changes on disk).
-    struct WatchedFile { std::string path; long long stamp = 0; };
-    std::vector<WatchedFile> watchFiles;   // empty = watching disabled
-    double watchTimer = 0.0;
-    void collectWatchFiles();
-    bool watchedFilesChanged();
+    engine::ScriptWatch watch;   // recipe hot-reload (empty = disabled)
 
     // The living-city render bridge (owned by the system list): polled each frame
     // for its "rebuild road graph" button so update() can reseed + reload.

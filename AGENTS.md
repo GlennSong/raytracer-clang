@@ -180,6 +180,22 @@ over. Every scene you build is playable by construction.
   fly camera is unverified. Confirm the ground is solid and the geometry is walkable
   from a player-height/first-person view before calling a level done — flying over it
   hides that the actor is falling through everything.
+- **The Qt editor (`./build/editor_app`) is how scenes are actually looked at.**
+  Glenn opens every scene there. `./build/viewer` — both `--play` and `--edit` — is a
+  *different host*: different level-loading path, different UI, and it can render a
+  scene the editor does not. A frame captured through the viewer therefore proves
+  nothing about what the author will see. If a change is meant to be looked at,
+  **`editor_app` is the acceptance gate**; verify there, or say plainly that you
+  did not. `RT_FRAME_DUMP` works headlessly against the viewer only, so when a
+  claim rests on a viewer capture, name that limitation rather than presenting it
+  as "verified".
+- **Rebuild `editor_app`, not just the fast targets.** `cmake --build build
+  --target engine_core viewer run_tests` is the quick loop, and it does *not*
+  rebuild `editor_app` — leaving a stale editor binary that silently lacks any new
+  Lua binding. The symptom is a scene that loads with most of its entities missing
+  and `[ERROR] script entity '…': attempt to call a nil value (field 'x')` in the
+  log; the cause is a build, not the recipe. Plain `cmake --build build` covers
+  every target. Read the editor's log before debugging a "missing geometry" report.
 
 ## Engineering Ethos (Engine Rule)
 

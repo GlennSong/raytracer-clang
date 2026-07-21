@@ -7,6 +7,8 @@
 #include "../procgen/lsystem.h"
 #include "../procgen/tree.h"
 #include "../procgen/vehicle_mesh.h"
+#include "../procgen/vehicle/car_mesh.h"
+#include "../procgen/vehicle/occupant.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
@@ -314,6 +316,201 @@ int l_mesh_car_shell(lua_State* L) {
     Vec3 size = checkVec3(L, 3);
     bool wheels = lua_isboolean(L, 4) ? lua_toboolean(L, 4) != 0 : true;
     pushMesh(L, std::make_shared<RenderMesh>(buildCarShell(style, color, size, wheels)));
+    return 1;
+}
+
+// --- mesh.car -------------------------------------------------------------
+// The low-poly car generator. Unlike car_shell it returns PARTS, not one mesh:
+// Renderable/InstanceGroup each carry a single RenderMaterial, so transparent
+// glass physically cannot share a mesh with the painted body. Recipes live in
+// vehicles.lua over the class data in vehicle_classes.lua (ADR-0042: C++ owns
+// the vocabulary, Lua owns the recipe).
+
+// Read an optional array of {z, v} pairs into a key curve. Absent -> keep default.
+bool readKeys(lua_State* L, int idx, const char* key, std::vector<CarKey>* out) {
+    lua_getfield(L, idx, key);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    const int n = static_cast<int>(lua_rawlen(L, -1));
+    std::vector<CarKey> keys;
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, -1, i);
+        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
+            lua_rawgeti(L, -1, 1);
+            lua_rawgeti(L, -2, 2);
+            keys.push_back({static_cast<Real>(lua_tonumber(L, -2)),
+                            static_cast<Real>(lua_tonumber(L, -1))});
+            lua_pop(L, 2);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (keys.empty()) return false;
+    *out = keys;
+    return true;
+}
+
+bool readNumbers(lua_State* L, int idx, const char* key, std::vector<Real>* out) {
+    lua_getfield(L, idx, key);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    const int n = static_cast<int>(lua_rawlen(L, -1));
+    std::vector<Real> v;
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, -1, i);
+        v.push_back(static_cast<Real>(lua_tonumber(L, -1)));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    *out = v;
+    return true;
+}
+
+bool readBand(lua_State* L, int idx, const char* key, CarBand* out) {
+    lua_getfield(L, idx, key);
+    if (!lua_istable(L, -1) || lua_rawlen(L, -1) < 2) { lua_pop(L, 1); return false; }
+    lua_rawgeti(L, -1, 1);
+    lua_rawgeti(L, -2, 2);
+    Real a = static_cast<Real>(lua_tonumber(L, -2));
+    Real b = static_cast<Real>(lua_tonumber(L, -1));
+    lua_pop(L, 3);
+    *out = {std::min(a, b), std::max(a, b)};
+    return true;
+}
+
+bool readBands(lua_State* L, int idx, const char* key, std::vector<CarBand>* out) {
+    lua_getfield(L, idx, key);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    const int n = static_cast<int>(lua_rawlen(L, -1));
+    std::vector<CarBand> v;
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, -1, i);
+        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
+            lua_rawgeti(L, -1, 1);
+            lua_rawgeti(L, -2, 2);
+            Real a = static_cast<Real>(lua_tonumber(L, -2));
+            Real b = static_cast<Real>(lua_tonumber(L, -1));
+            lua_pop(L, 2);
+            v.push_back({std::min(a, b), std::max(a, b)});
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    *out = v;
+    return true;
+}
+
+bool readColor(lua_State* L, int idx, const char* key, Vec3* out) {
+    lua_getfield(L, idx, key);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    *out = checkVec3(L, -1);
+    lua_pop(L, 1);
+    return true;
+}
+
+CarParams readCarParams(lua_State* L, int idx) {
+    CarParams p = defaultSedanParams();
+    if (!lua_istable(L, idx)) return p;
+
+    p.width           = static_cast<Real>(optField(L, idx, "width", p.width));
+    p.height          = static_cast<Real>(optField(L, idx, "height", p.height));
+    p.length          = static_cast<Real>(optField(L, idx, "length", p.length));
+    p.wheelDiameter   = static_cast<Real>(optField(L, idx, "wheel_diameter", p.wheelDiameter));
+    p.frontOverhang   = static_cast<Real>(optField(L, idx, "front_overhang", p.frontOverhang));
+    p.rearOverhang    = static_cast<Real>(optField(L, idx, "rear_overhang", p.rearOverhang));
+    p.groundClearance = static_cast<Real>(optField(L, idx, "ground_clearance", p.groundClearance));
+
+    p.chamfer         = static_cast<Real>(optField(L, idx, "chamfer", p.chamfer));
+    p.topPts          = static_cast<int>(optField(L, idx, "top_pts", p.topPts));
+    p.bottomPts       = static_cast<int>(optField(L, idx, "bottom_pts", p.bottomPts));
+    p.tumblehome      = static_cast<Real>(optField(L, idx, "tumblehome", p.tumblehome));
+    p.pillarHalfWidth = static_cast<Real>(optField(L, idx, "pillar_half_width", p.pillarHalfWidth));
+    p.glassHalfU      = static_cast<Real>(optField(L, idx, "glass_half_u", p.glassHalfU));
+    p.railDrop        = static_cast<Real>(optField(L, idx, "rail_drop", p.railDrop));
+    p.archHalfSpan    = static_cast<Real>(optField(L, idx, "arch_half_span", p.archHalfSpan));
+    p.archTop         = static_cast<Real>(optField(L, idx, "arch_top", p.archTop));
+
+    readNumbers(L, idx, "stations", &p.stations);
+    readKeys(L, idx, "roof", &p.roof);
+    readKeys(L, idx, "sill", &p.sill);
+    readKeys(L, idx, "plan", &p.plan);
+    readBand(L, idx, "windshield", &p.windshield);
+    readBand(L, idx, "backlight", &p.backlight);
+    readBands(L, idx, "side_windows", &p.sideWindows);
+    readNumbers(L, idx, "pillars", &p.pillars);
+    readColor(L, idx, "paint", &p.paint);
+    readColor(L, idx, "trim_color", &p.trimColor);
+
+    lua_getfield(L, idx, "lod");
+    if (lua_isstring(L, -1)) {
+        const std::string lod = lua_tostring(L, -1);
+        if (lod == "mid") p.lod = CarLod::Mid;
+        else if (lod == "low") p.lod = CarLod::Low;
+        else if (lod == "proxy") p.lod = CarLod::Proxy;
+        else p.lod = CarLod::High;
+    }
+    lua_pop(L, 1);
+    return p;
+}
+
+// mesh.car(params) -> { body=, glass=, interior=, lamp=, wheel=,
+//                       lights = {{name=, pos={x,y,z}, normal={x,y,z}}, ...},
+//                       half_extent = {x,y,z} }
+// Empty parts are omitted, so `if c.glass then` is the natural test in Lua.
+int l_mesh_car(lua_State* L) {
+    const CarParams p = readCarParams(L, 1);
+    const CarMesh car = buildCarMesh(p);
+
+    static const char* kNames[kCarPartCount] = {"body", "glass", "interior",
+                                                "lamp", "wheel"};
+    lua_newtable(L);
+    for (int i = 0; i < kCarPartCount; ++i) {
+        if (car.parts[i].vertices.empty()) continue;
+        pushMesh(L, std::make_shared<RenderMesh>(car.parts[i]));
+        lua_setfield(L, -2, kNames[i]);
+    }
+
+    lua_newtable(L);
+    int n = 0;
+    for (const CarAttach& a : car.attaches) {
+        lua_newtable(L);
+        lua_pushstring(L, a.tag.c_str());
+        lua_setfield(L, -2, "name");
+        auto pushVec = [&](const Vec3& v, const char* field) {
+            lua_newtable(L);
+            lua_pushnumber(L, v.x); lua_rawseti(L, -2, 1);
+            lua_pushnumber(L, v.y); lua_rawseti(L, -2, 2);
+            lua_pushnumber(L, v.z); lua_rawseti(L, -2, 3);
+            lua_setfield(L, -2, field);
+        };
+        pushVec(a.position, "pos");
+        pushVec(a.normal, "normal");
+        lua_rawseti(L, -2, ++n);
+    }
+    lua_setfield(L, -2, "lights");
+
+    lua_newtable(L);
+    lua_pushnumber(L, car.halfExtent.x); lua_rawseti(L, -2, 1);
+    lua_pushnumber(L, car.halfExtent.y); lua_rawseti(L, -2, 2);
+    lua_pushnumber(L, car.halfExtent.z); lua_rawseti(L, -2, 3);
+    lua_setfield(L, -2, "half_extent");
+    return 1;
+}
+
+
+// mesh.occupant{ back_angle=, shirt={r,g,b}, trousers=, skin= } -> Mesh
+// A seated figure whose ORIGIN IS ITS HIP, to be placed at a car's "driver_seat"
+// marker. Same mesh VehicleSystem puts in the player's car, so the lab shows
+// exactly what the game does.
+int l_mesh_occupant(lua_State* L) {
+    OccupantParams p;
+    if (lua_istable(L, 1)) {
+        p.backAngle = static_cast<Real>(optField(L, 1, "back_angle", p.backAngle));
+        p.thighRise = static_cast<Real>(optField(L, 1, "thigh_rise", p.thighRise));
+        p.armReach = static_cast<Real>(optField(L, 1, "arm_reach", p.armReach));
+        readColor(L, 1, "shirt", &p.shirt);
+        readColor(L, 1, "trousers", &p.trousers);
+        readColor(L, 1, "skin", &p.skin);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(buildSeatedOccupant(p)));
     return 1;
 }
 
@@ -2092,6 +2289,16 @@ int l_material_new(lua_State* L) {
         m->roughness = static_cast<float>(optField(L, 1, "roughness", m->roughness));
         m->metallic = static_cast<float>(optField(L, 1, "metallic", m->metallic));
         m->tile = optField(L, 1, "tile", m->tile);
+        m->opacity = static_cast<float>(optField(L, 1, "opacity", m->opacity));
+        // Two-sided: draw both faces. What a single transparent pane needs in
+        // order to be visible from inside the car as well as outside, WITHOUT
+        // being emitted twice at the same coordinates and blending twice.
+        lua_getfield(L, 1, "two_sided");
+        if (lua_isboolean(L, -1)) m->twoSided = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "emission");
+        if (lua_istable(L, -1)) m->emission = checkVec3(L, -1);
+        lua_pop(L, 1);
         // An analytic surface ("roadmarkings"/"lanes", "asphalt", ...) read from the
         // mesh's own UV at shade time — distinct from a baked albedo/normal texture.
         lua_getfield(L, 1, "surface");
@@ -2626,6 +2833,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"torus", l_mesh_torus},
         {"capsule", l_mesh_capsule},
         {"car_shell", l_mesh_car_shell},
+        {"car", l_mesh_car},
+        {"occupant", l_mesh_occupant},
         {"merge", l_mesh_merge},
         {"lathe", l_mesh_lathe},
         {"translate", l_mesh_translate},

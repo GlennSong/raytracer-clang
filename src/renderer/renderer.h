@@ -77,6 +77,16 @@ struct RenderMaterial {
     // write) and unlit/emissive, for gizmos like the agent footprints/trajectory
     // vectors that must stay visible through world geometry. Backend-honoured.
     static constexpr uint32_t FLAG_OVERLAY = 8;
+    // Two-sided: draw both faces instead of culling backfaces. For SURFACES that
+    // are genuinely a thin sheet with no inside — glass panes, foliage cards.
+    // Without it such a mesh has to be emitted TWICE at identical coordinates to
+    // be visible from either side, and for a transparent pane that is actively
+    // wrong: the transparent pass does not write depth, so both coincident faces
+    // blend and the pane comes out far more opaque than authored (car glass at
+    // 0.32 read as 0.54 per pane, and ~79% through a whole car). One two-sided
+    // pane blends once. Backend-honoured via cull mode, so it costs a state
+    // change per batch, not per triangle.
+    static constexpr uint32_t FLAG_TWO_SIDED = 16;
 
     // World-space procedural surface library (applySurface in common.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

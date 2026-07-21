@@ -2,6 +2,7 @@
 #include "../engine/components.h"
 #include "../engine/editor_bridge.h"
 #include "../engine/level_loader.h"
+#include "../engine/script_assets.h"
 #include "../engine/asset_manager.h"
 #include "../engine/systems/dev_control_system.h"
 #include "../engine/systems/camera_system.h"
@@ -188,42 +189,6 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 
 // mtime as an opaque tick count; 0 = missing/unreadable (treated as unchanged,
 // so a mid-save window never triggers a reload of a half-written file).
-static long long fileStamp(const std::string& path) {
-    std::error_code ec;
-    auto t = std::filesystem::last_write_time(path, ec);
-    if (ec) return 0;
-    return static_cast<long long>(t.time_since_epoch().count());
-}
-
-void ArenaState::collectWatchFiles() {
-    watchFiles.clear();
-#ifndef __EMSCRIPTEN__
-    std::ifstream f(levelFile);
-    if (!f) return;
-    nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
-    if (!root.is_object() || !root.value("watch_scripts", false)) return;
-    const std::string levelDir =
-        std::filesystem::path(levelFile).parent_path().string();
-    auto add = [&](const std::string& path) {
-        long long s = fileStamp(path);
-        if (s != 0) watchFiles.push_back({path, s});
-    };
-    add(levelFile);   // level edits (opts/knobs) reload too
-    for (const auto& ent : root.value("entities", nlohmann::json::array())) {
-        if (ent.value("shape", std::string()) != "script") continue;
-        const std::string file = ent.value("file", std::string());
-        if (file.empty()) continue;
-        // The same candidate paths the loader tries (loadScriptCode).
-        for (const std::string& path :
-             {file, std::string("assets/scripts/") + file, levelDir + "/" + file})
-            if (fileStamp(path) != 0) { add(path); break; }
-    }
-    if (!watchFiles.empty())
-        LOG_INFO << "watch_scripts: reloading on changes to "
-                 << watchFiles.size() << " file(s)";
-#endif
-}
-
 // Patch the lab level's script-entity `opts` on disk — the regenerate
 // "button": mutate via fn, write back; the caller reloads. The panel/editor
 // route goes through the same file, so keys, Lua edits, and (later) an
@@ -271,15 +236,6 @@ static bool patchRoadSeed(const std::string& levelFile) {
     return true;
 }
 
-bool ArenaState::watchedFilesChanged() {
-    bool changed = false;
-    for (WatchedFile& w : watchFiles) {
-        long long s = fileStamp(w.path);
-        if (s != 0 && s != w.stamp) { w.stamp = s; changed = true; }
-    }
-    return changed;
-}
-
 void ArenaState::update(FrameContext& ctx) {
     PlayingState::update(ctx);
     if (makeEditorState && ctx.actions.pressed("quit"))
@@ -298,7 +254,7 @@ void ArenaState::update(FrameContext& ctx) {
     // the same level — the identical clean reset the editor→play loop uses
     // (systems, physics, and assets all rebuilt), so a saved Lua edit shows up
     // in seconds without touching the app.
-    if (!watchFiles.empty()) {
+    if (!watch.empty()) {
         // Lab regenerate keys (the "button to see different styles"): U bumps
         // the seed, O cycles the cladding style. Both PATCH the level file's
         // opts (persisting the pick) and reload straight away.
@@ -323,13 +279,9 @@ void ArenaState::update(FrameContext& ctx) {
                 window, arenaRenderer, levelFile, makeEditorState, bridge));
             return;
         }
-        watchTimer += 1.0;                 // frames; ~every half second at 60 fps
-        if (watchTimer >= 30.0) {
-            watchTimer = 0.0;
-            if (watchedFilesChanged())
-                ctx.transition.replaceWith(std::make_unique<ArenaState>(
-                    window, arenaRenderer, levelFile, makeEditorState, bridge));
-        }
+        if (watch.tick())
+            ctx.transition.replaceWith(std::make_unique<ArenaState>(
+                window, arenaRenderer, levelFile, makeEditorState, bridge));
     }
 }
 
@@ -339,13 +291,17 @@ void ArenaState::onEnter(FrameContext& ctx) {
     ctx.assets.clear();   // free the previous level's deduped GPU meshes
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", true);
-    collectWatchFiles();   // recipe hot-reload, when the level opts in
-    if (!watchFiles.empty()) {
-        ctx.actions.bindButton("lab_reseed", KeyCode::U);   // new seed, same style
-        ctx.actions.bindButton("lab_style", KeyCode::O);    // cycle cladding style
-    }
     if (!LevelLoader::load(levelFile, ctx.world, arenaRenderer, ctx.view, ctx.assets)) {
         LOG_ERROR << "Failed to load level: " << levelFile;
+    }
+
+    // AFTER the load, not before: the watch list is seeded from the files the
+    // load actually opened, which is the only way it can include a module a
+    // recipe `require`d. Running it first meant guessing from the level JSON.
+    watch.collect(levelFile);   // recipe hot-reload, when the level opts in
+    if (!watch.empty()) {
+        ctx.actions.bindButton("lab_reseed", KeyCode::U);   // new seed, same style
+        ctx.actions.bindButton("lab_style", KeyCode::O);    // cycle cladding style
     }
 
 #if defined(RT_ENABLE_PHYSICS) && defined(RT_ENABLE_SCRIPTING)

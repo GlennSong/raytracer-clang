@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0,
+        -0.55,
+        0
+      ],
+      "size": [
+        200,
+        0.4,
+        120
+      ],
+      "material": {
+        "albedo": [
+          0.34,
+          0.36,
+          0.33
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    }
+  ],
+  "vehicles": [
+    {
+      "recipe": "hatchback",
+      "position": [
+        -13,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 1
+    },
+    {
+      "recipe": "sedan",
+      "position": [
+        -6.5,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 2
+    },
+    {
+      "recipe": "jeep",
+      "position": [
+        0,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 3
+    },
+    {
+      "recipe": "pickup",
+      "position": [
+        6.5,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 4
+    },
+    {
+      "recipe": "van",
+      "position": [
+        13,
+        1.0,
+        0
+      ],
+      "yaw": 18,
+      "seed": 5
+    }
+  ],
+  "player": {
+    "position": [
+      0,
+      1.6,
+      14
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.4
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  }
+}
