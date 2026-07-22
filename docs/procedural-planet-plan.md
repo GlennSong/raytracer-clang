@@ -193,7 +193,18 @@ Physical params: `β_Rayleigh ∝ λ⁻⁴` per channel, Mie `g`, planet radius,
 atmosphere thickness, ozone. Mars = thin, dusty (high Mie, brownish); Earth = the
 classic blue. New shader + LUT compute, mirrored across backends.
 
-### P4 — Clouds (volumetric)  *(shader)*
+### P4 — Clouds (volumetric)  *(shader)* — **shaders authored (3 backends); wiring pending**
+Landed: a fullscreen raymarched cloud pass with a **shared** density/lighting/march
+core over **two domains** (so it serves the planet *and* the procgen city/terrain
+sky, not just planets): `layer.w = 0` **slab** (a ground-scene cloudscape, depth-
+occluded so clouds hide behind buildings/hills) and `1` **shell** (a planet's cloud
+deck from space). Supersedes the flat 2D FBM `sky.frag` clouds for both.
+`shaders/vulkan/clouds.frag` (**SPIR-V compile-verified**), `shaders/metal/clouds.metal`,
+`shaders/webgpu/clouds.wgsl` (compile-unverified). Inline hash-fbm density (a 3D
+Perlin-Worley texture set is the on-device upgrade); Beer + Powder + Henyey-Greenstein
+lighting. **Pending (device):** pipeline wiring per backend (`docs/renderer-parity.md`).
+
+Original design notes:
 Cloud shell raymarched in a fragment/compute pass. Density from **Perlin-Worley**
 3D noise × a 2D coverage/weather field, edge-eroded by detail noise. Lighting: a
 **multiple-scattering approximation** (Beer–Powder silver lining), sun energy
