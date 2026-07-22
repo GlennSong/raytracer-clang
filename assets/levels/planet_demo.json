@@ -10,9 +10,16 @@
       "name": "planet",
       "shape": "script",
       "file": "../scripts/planet.lua",
-      "opts": { "preset": "earth", "seed": 1, "radius": 20, "face_res": 96 },
+      "opts": { "preset": "earth", "seed": 1, "radius": 20, "face_res": 48 },
       "position": [0, 0, -60],
       "angularVelocity": [0, 0.15, 0]
+    },
+    {
+      "name": "marker",
+      "shape": "sphere",
+      "size": [4, 4, 4],
+      "position": [10, 3, -22],
+      "material": { "albedo": [0.1, 0.1, 0.1], "emission": [3.0, 2.4, 1.2] }
     }
   ],
   "atmosphere": { "center": [0, 0, -60], "radius": 20 },
