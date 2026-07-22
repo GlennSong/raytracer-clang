@@ -2319,10 +2319,14 @@ private:
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
             || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_
             || !instancedPipeline_ || !instancedShadowPipeline_
-            || !terrainPipeline_ || !terrainShadowPipeline_ || !ssrPipeline_
-            || !atmospherePipeline_) {
+            || !terrainPipeline_ || !terrainShadowPipeline_ || !ssrPipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
+        }
+        // The atmosphere pass is an OPTIONAL effect — a null pipeline must not brick
+        // the whole renderer (recordAtmosphere() skips when it is null). Warn only.
+        if (!atmospherePipeline_) {
+            LOG_WARN("WebGPU: atmosphere pipeline unavailable — glow pass disabled");
         }
         return true;
     }
