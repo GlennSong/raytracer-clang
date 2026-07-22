@@ -79,6 +79,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/corridor_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
@@ -267,6 +268,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/corridor_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
+	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
