@@ -160,8 +160,19 @@ the star toward the terminator, **Fresnel** grazing-limb brightening,
 **depth-tinted transmission** (Beer–Lambert on the sea-floor height delta →
 turquoise shallows, dark deeps). Feeds the atmosphere's aerial perspective.
 
-### P3 — Atmosphere: physically-based scattering  *(shader/LUT — the centrepiece)*
-Implement **Hillaire 2020**:
+### P3 — Atmosphere: physically-based scattering  *(shader/LUT — the centrepiece)* — **CPU reference DONE; GPU port pending**
+Landed: `atmosphere.{h,cpp}` — a single-scattering Rayleigh + Mie raymarch
+(Nishita/O'Neil core): `transmittance`, `atmosphereScatter` (view-ray march with
+per-sample transmittance to the sun + planet-shadow test), `raySphere`, Earth /
+Mars presets. Pure and headless — unit-tested for the physical invariants
+(`tests/test_atmosphere.cpp`: transmittance ∈ (0,1] decreasing with path, blue
+scatters more than red, blue zenith sky, dim shadowed night side, Earth-blue vs
+Mars-red) and it drives `planet_preview` so the blue limb, soft terminator, and
+Mars's thin haze are visible without a GPU. **Pending (device):** the realtime GPU
+port (a direct translation of this maths into the LUT stages below) + **multiple
+scattering** (Hillaire) for the glowing daylit limb.
+
+Full design (the realtime target) — implement **Hillaire 2020**:
 1. **Transmittance LUT** (2D: altitude × sun-zenith) — Rayleigh + Mie + ozone
    optical depth.
 2. **Multiple-scattering LUT** (2D) — the term that keeps the daylit limb glowing

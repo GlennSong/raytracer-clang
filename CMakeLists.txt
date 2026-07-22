@@ -80,6 +80,7 @@ add_library(engine_core STATIC
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
     src/engine/procgen/planet.cpp
+    src/engine/procgen/atmosphere.cpp
     src/engine/procgen/scatter.cpp
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
@@ -425,6 +426,7 @@ add_executable(run_tests
     tests/test_tree.cpp
     tests/test_rock.cpp
     tests/test_planet.cpp
+    tests/test_atmosphere.cpp
     tests/test_scatter.cpp
     tests/test_sdf.cpp
     tests/test_city.cpp

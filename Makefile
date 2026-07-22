@@ -146,6 +146,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
 	$(TEST_DIR)/test_planet.cpp \
+	$(TEST_DIR)/test_atmosphere.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
@@ -256,6 +257,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/cellular.cpp \
 	$(SRC_DIR)/engine/procgen/planet.cpp \
+	$(SRC_DIR)/engine/procgen/atmosphere.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
@@ -355,6 +357,7 @@ $(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS)
 PLANET_PREVIEW_SRCS = tools/planet_preview.cpp \
 	$(SRC_DIR)/engine/procgen/planet.cpp \
 	$(SRC_DIR)/engine/procgen/cellular.cpp \
+	$(SRC_DIR)/engine/procgen/atmosphere.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/rt_math.cpp
