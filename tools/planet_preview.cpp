@@ -167,8 +167,50 @@ static void renderGas(const GasGiantParams& p, uint32_t seed, const char* file, 
     std::printf("wrote %s\n", file);
 }
 
+// Write an equirectangular starfield HDR (Radiance .hdr) for the level's
+// `environment.hdr` — a dark sky with sparse, colour/brightness-varied stars, so the
+// realtime viewer shows a space backdrop (the sky can't do a flat black otherwise).
+// HDR so the bright stars bloom. Layout matches the engine's equirect convention
+// (u = atan2(z,x)/2π+0.5, v = acos(y)/π), latitude-weighted so stars don't clump at
+// the poles.
+static void writeStarfield(const char* file, int W, int H) {
+    std::vector<float> img(static_cast<size_t>(W) * H * 3, 0.0f);
+    for (int j = 0; j < H; j++) {
+        double v = (j + 0.5) / H;
+        double lat = (0.5 - v) * PI;
+        double cw = std::cos(lat);                     // narrower rows near the poles
+        for (int i = 0; i < W; i++) {
+            Vec3 c(0.0015, 0.0020, 0.0040);            // faint deep-space glow
+            uint32_t h = hashU((uint32_t)i * 73856093u ^ (uint32_t)j * 19349663u ^ 0x9e3779b1u);
+            double s = (h >> 8) * (1.0 / 16777216.0);
+            double thresh = 0.9989 + 0.0010 * (1.0 - cw);
+            if (s > thresh) {
+                uint32_t h2 = hashU(h);
+                double b = 0.6 + 4.0 * std::pow((h2 & 0xffff) / 65535.0, 3.0);  // few very bright
+                double t = ((h2 >> 16) & 0xff) / 255.0;                          // colour temp
+                Vec3 tint = t < 0.5 ? Vec3(0.75 + 0.5 * t, 0.85, 1.0)
+                                    : Vec3(1.0, 0.95 - 0.25 * (t - 0.5), 0.85 - 0.5 * (t - 0.5));
+                c = c + tint * b;
+            }
+            size_t idx = (static_cast<size_t>(j) * W + i) * 3;
+            img[idx + 0] = (float)c.x;
+            img[idx + 1] = (float)c.y;
+            img[idx + 2] = (float)c.z;
+        }
+    }
+    stbi_write_hdr(file, W, H, 3, img.data());
+    std::printf("wrote %s (%dx%d HDR)\n", file, W, H);
+}
+
 int main(int argc, char** argv) {
     const int W = 420;
+
+    // `planet_preview starfield [out.hdr]` writes an equirect star HDR for the
+    // viewer's environment map (default assets/env/starfield.hdr).
+    if (argc >= 2 && std::string(argv[1]) == "starfield") {
+        writeStarfield(argc >= 3 ? argv[2] : "assets/env/starfield.hdr", 4096, 2048);
+        return 0;
+    }
     AtmosphereParams earthAtm = atmosphereEarth(1.0);
     AtmosphereParams marsAtm = atmosphereMars(1.0);
 
