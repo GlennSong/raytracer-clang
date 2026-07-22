@@ -185,7 +185,17 @@ surface** (sample cloud density along the sun ray in the surface shader) — the
 detail that welds clouds to the planet. A shadowed 2D-shell fallback exists if the
 volumetric budget is too high, but volumetric is the target.
 
-### P5 — Gas giant (evolving fluid) + rings  *(headless fields; shader look)*
+### P5 — Gas giant (evolving fluid) + rings  *(headless fields; shader look)* — **static texture DONE; animation/rings pending**
+Landed (headless): `generateGasGiantTexture(GasGiantParams, seed)` bakes a seamless
+equirectangular albedo — latitudinal belts/zones warped by turbulent fbm flow, plus
+vortex storms — onto the smooth cube-sphere (`generateGasGiantMesh`), Jupiter /
+Neptune presets. Tested (`tests/test_planet.cpp`): longitude-seamless (the wrap step
+is no worse than an interior neighbour step), latitudinal banding, determinism,
+watertight sphere. **Still pending (device):** the evolving curl-noise fluid
+*animation* (ping-pong advection), limb darkening in-shader, and rings with mutual
+shadowing.
+
+Original design notes:
 - **Curl-noise advection:** a band+detail field in a ping-pong texture, advected
   each frame by a curl-noise velocity field + **differential rotation** (angular
   speed varies by latitude). Storms are seeded rotating vortices that shear and
@@ -237,6 +247,9 @@ against real stars, none of it touching Ring 3.
 - **GPU / on-device:** atmosphere scattering, terminator shading, ocean glint,
   volumetric clouds, animated flow, bloom/star. Vulkan (Linux, with a GPU) or
   Metal (macOS).
+- **Headless preview:** `make planet_preview` (`tools/planet_preview.cpp`) renders
+  orthographic "from space" discs of the presets to `out_*.png` — a GPU-free way to
+  eyeball relief, biomes, caps, craters, and gas bands as the generators change.
 
 ---
 

@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
+#include <vector>
 
 namespace engine {
 
@@ -101,33 +103,33 @@ double planetHeight(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
     return cont + mountains + craters;
 }
 
-RenderMesh generatePlanet(const PlanetParams& p, uint32_t seed) {
-    RenderMesh mesh = MeshBuilder::cubeSphere(p.radius, p.faceRes);
-
-    // A grey fallback ramp so a bare PlanetParams still meshes to something sane.
+Vec3 planetSurfaceColor(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
+    // A grey fallback ramp so a bare PlanetParams still colours to something sane.
     ColorRamp ramp = p.landRamp;
     if (ramp.stops.empty()) {
         ramp = ColorRamp{{0.0, Vec3(0.32, 0.30, 0.28)}, {0.6, Vec3(0.55, 0.52, 0.48)},
                          {1.0, Vec3(0.80, 0.78, 0.75)}};
     }
+    double h = planetHeight(p, seed, dir);
+    double elev = clampd((h - p.seaLevel) / std::max(1e-3, 1.0 - p.seaLevel), 0.0, 1.0);
+    Vec3 c = ramp.eval(elev);
+    if (p.polarCaps) {
+        double capMask = smoothstep(p.capLatitude - 0.06, p.capLatitude + 0.06,
+                                    std::fabs(dir.y));
+        c = lerp(c, p.capColor, capMask);
+    }
+    return clampVec(c, 0.0, 1.0);
+}
+
+RenderMesh generatePlanet(const PlanetParams& p, uint32_t seed) {
+    RenderMesh mesh = MeshBuilder::cubeSphere(p.radius, p.faceRes);
 
     const double amp = static_cast<double>(p.radius) * p.reliefFraction;
     for (Vertex& v : mesh.vertices) {
         Vec3 dir = normalize(v.position);
         double h = planetHeight(p, seed, dir);
         v.position = dir * (static_cast<double>(p.radius) + amp * h);
-
-        // Biome colour by elevation above sea level.
-        double elev = clampd((h - p.seaLevel) / std::max(1e-3, 1.0 - p.seaLevel), 0.0, 1.0);
-        Vec3 c = ramp.eval(elev);
-
-        // Polar caps: blend toward the cap colour past the cap latitude.
-        if (p.polarCaps) {
-            double capMask = smoothstep(p.capLatitude - 0.06, p.capLatitude + 0.06,
-                                        std::fabs(dir.y));
-            c = lerp(c, p.capColor, capMask);
-        }
-        v.color = clampVec(c, 0.0, 1.0);
+        v.color = planetSurfaceColor(p, seed, dir);
     }
 
     // Radial displacement moved each welded vertex once, so the manifold stays
@@ -194,6 +196,129 @@ PlanetParams planetMoon() {
         {0.00, Vec3(0.16, 0.16, 0.17)},   // mare basalt
         {0.55, Vec3(0.42, 0.42, 0.43)},
         {1.00, Vec3(0.72, 0.72, 0.73)},   // bright highlands
+    };
+    return p;
+}
+
+// --------------------------------------------------------------------------
+// Gas giant (headless slice)
+// --------------------------------------------------------------------------
+
+namespace {
+
+// Equirectangular (u, v) -> unit sphere direction, matching cubeSphere's UVs
+// (u = 0.5 + atan2(z,x)/2π, v = 0.5 - asin(y)/π), so the baked texture lands right.
+Vec3 equirectDir(double u, double v) {
+    double lon = (u - 0.5) * 2.0 * PI;
+    double lat = (0.5 - v) * PI;
+    double cl = std::cos(lat);
+    return Vec3(cl * std::cos(lon), std::sin(lat), cl * std::sin(lon));
+}
+
+}  // namespace
+
+RenderMesh generateGasGiantMesh(const GasGiantParams& p) {
+    return MeshBuilder::cubeSphere(p.radius, p.faceRes);
+}
+
+TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
+    ColorRamp ramp = p.bandRamp;
+    if (ramp.stops.empty()) {
+        ramp = ColorRamp{{0.0, Vec3(0.35, 0.32, 0.30)}, {0.5, Vec3(0.62, 0.58, 0.52)},
+                         {1.0, Vec3(0.88, 0.85, 0.80)}};
+    }
+
+    Noise flow(seed + 11u);       // domain warp of the band latitude
+    Noise detail(seed + 29u);     // fine cloud turbulence
+
+    // Storm centres + per-storm tint, placed deterministically on the sphere.
+    std::mt19937 gen(seed + 991u);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    struct Storm { Vec3 dir; double size; double tint; };
+    std::vector<Storm> storms;
+    for (int s = 0; s < p.stormCount; s++) {
+        double lat = (uni(gen) - 0.5) * 1.4;             // avoid the very poles
+        double lon = uni(gen) * 2.0 * PI;
+        double cl = std::cos(lat);
+        storms.push_back({Vec3(cl * std::cos(lon), std::sin(lat), cl * std::sin(lon)),
+                          p.stormSize * (0.6 + 0.8 * uni(gen)), 0.5 + 0.5 * uni(gen)});
+    }
+
+    const int W = std::max(2, p.texWidth), H = std::max(2, p.texHeight);
+    TextureData tex;
+    tex.width = W;
+    tex.height = H;
+    tex.channels = 3;
+    tex.pixels.resize(static_cast<size_t>(W) * H * 3);
+
+    for (int j = 0; j < H; j++) {
+        double v = (j + 0.5) / H;
+        for (int i = 0; i < W; i++) {
+            double u = (i + 0.5) / W;
+            Vec3 dir = equirectDir(u, v);
+
+            // Warp the band latitude by turbulent flow (sampled in 3D → seamless in
+            // longitude), then read alternating belts/zones out of a sine.
+            double warp = flow.fbm3(dir.x * 1.5, dir.y * 1.5, dir.z * 1.5, p.warpOctaves);
+            double bandCoord = dir.y + warp * p.flowWarp;
+            double phase = 0.5 + 0.5 * std::sin(bandCoord * p.bandFreq * PI);
+            // Fine turbulence breaks the bands up.
+            double d = detail.fbm3(dir.x * p.detailFreq, dir.y * p.detailFreq,
+                                   dir.z * p.detailFreq, 4);
+            double t = clampd(phase + d * p.detailAmp, 0.0, 1.0);
+            Vec3 c = ramp.eval(t);
+
+            // Vortex storms: a smooth angular falloff toward the storm tint.
+            for (const Storm& st : storms) {
+                double ang = std::acos(clampd(dot(dir, st.dir), -1.0, 1.0));  // radians
+                double reach = st.size * PI;
+                if (ang < reach) {
+                    double m = smoothstep(reach, reach * 0.2, ang) * st.tint;
+                    c = lerp(c, p.stormColor, m);
+                }
+            }
+
+            c = clampVec(c, 0.0, 1.0);
+            size_t idx = (static_cast<size_t>(j) * W + i) * 3;
+            tex.pixels[idx + 0] = static_cast<uint8_t>(c.x * 255.0 + 0.5);
+            tex.pixels[idx + 1] = static_cast<uint8_t>(c.y * 255.0 + 0.5);
+            tex.pixels[idx + 2] = static_cast<uint8_t>(c.z * 255.0 + 0.5);
+        }
+    }
+    return tex;
+}
+
+GasGiantParams gasGiantJupiter() {
+    GasGiantParams p;
+    p.bandFreq = 13.0;
+    p.flowWarp = 0.4;
+    p.detailFreq = 6.0;
+    p.detailAmp = 0.18;
+    p.stormCount = 3;
+    p.stormSize = 0.14;
+    p.stormColor = Vec3(0.72, 0.34, 0.22);   // the Great Red Spot family
+    p.bandRamp = ColorRamp{
+        {0.00, Vec3(0.45, 0.30, 0.20)},   // dark belt
+        {0.30, Vec3(0.72, 0.56, 0.40)},   // tan
+        {0.60, Vec3(0.86, 0.78, 0.64)},   // cream zone
+        {1.00, Vec3(0.94, 0.90, 0.82)},   // bright zone
+    };
+    return p;
+}
+
+GasGiantParams gasGiantNeptune() {
+    GasGiantParams p;
+    p.bandFreq = 8.0;
+    p.flowWarp = 0.3;
+    p.detailFreq = 4.0;
+    p.detailAmp = 0.12;
+    p.stormCount = 2;
+    p.stormSize = 0.1;
+    p.stormColor = Vec3(0.10, 0.14, 0.30);   // dark storm spot
+    p.bandRamp = ColorRamp{
+        {0.00, Vec3(0.12, 0.24, 0.52)},   // deep blue belt
+        {0.50, Vec3(0.22, 0.40, 0.70)},   // mid blue
+        {1.00, Vec3(0.44, 0.62, 0.86)},   // light azure zone
     };
     return p;
 }

@@ -312,7 +312,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/rt_math.cpp
 TEST_TARGET = run_tests
 
-.PHONY: all release test clean
+.PHONY: all release test planet_preview clean
 
 all: CXXFLAGS += $(DEBUG_FLAGS)
 all: $(TARGET)
@@ -349,5 +349,17 @@ test: $(TEST_TARGET)
 $(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+# Headless "from space" preview of the procedural planets (procedural-planet-plan):
+# orthographic disc renders to out_*.png — a GPU-free way to eyeball the generator.
+# Standalone: just the generator + its deps, no windowing/renderer.
+PLANET_PREVIEW_SRCS = tools/planet_preview.cpp \
+	$(SRC_DIR)/engine/procgen/planet.cpp \
+	$(SRC_DIR)/engine/procgen/cellular.cpp \
+	$(SRC_DIR)/engine/procgen/noise.cpp \
+	$(SRC_DIR)/engine/mesh_builder.cpp \
+	$(SRC_DIR)/rt_math.cpp
+planet_preview: $(PLANET_PREVIEW_SRCS)
+	$(CXX) $(CXXFLAGS) -O2 -I$(SRC_DIR) -o $@ $^
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET) planet_preview out_*.png

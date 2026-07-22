@@ -167,6 +167,88 @@ TEST_CASE(planet_polar_caps_colour_the_poles) {
     }
 }
 
+// --- Gas giant --------------------------------------------------------------
+
+TEST_CASE(gas_giant_texture_is_well_formed_and_deterministic) {
+    GasGiantParams p = gasGiantJupiter();
+    p.texWidth = 128;
+    p.texHeight = 64;
+    TextureData t = generateGasGiantTexture(p, 5);
+    CHECK(t.width == 128);
+    CHECK(t.height == 64);
+    CHECK(t.channels == 3);
+    CHECK(t.pixels.size() == static_cast<size_t>(128) * 64 * 3);
+
+    // Not a flat fill — the bands give real variation.
+    uint8_t lo = 255, hi = 0;
+    for (uint8_t px : t.pixels) { lo = std::min(lo, px); hi = std::max(hi, px); }
+    CHECK(hi - lo > 40);
+
+    // Deterministic in the seed.
+    TextureData t2 = generateGasGiantTexture(p, 5);
+    CHECK(t.pixels == t2.pixels);
+    TextureData t3 = generateGasGiantTexture(p, 6);
+    CHECK(t.pixels != t3.pixels);
+}
+
+TEST_CASE(gas_giant_texture_wraps_seamlessly_in_longitude) {
+    GasGiantParams p = gasGiantJupiter();
+    p.texWidth = 256;
+    p.texHeight = 128;
+    p.stormCount = 0;   // storms could straddle the seam; test the band field itself
+    TextureData t = generateGasGiantTexture(p, 9);
+
+    // The wrap gap between column 0 and column W-1 is exactly one texel width — the
+    // same spacing as any interior neighbour — because the field is sampled from the
+    // 3D direction. So the seam step must be no larger than a normal neighbour step:
+    // seamlessness means "no discontinuity", not "identical pixels".
+    auto colDiff = [&](int a, int b) {
+        int mx = 0;
+        for (int j = 0; j < t.height; j++) {
+            size_t ia = (static_cast<size_t>(j) * t.width + a) * 3;
+            size_t ib = (static_cast<size_t>(j) * t.width + b) * 3;
+            for (int ch = 0; ch < 3; ch++)
+                mx = std::max(mx, std::abs(static_cast<int>(t.pixels[ia + ch]) -
+                                           static_cast<int>(t.pixels[ib + ch])));
+        }
+        return mx;
+    };
+    int seamDiff = colDiff(0, t.width - 1);
+    int interiorMax = 0;
+    for (int i = 0; i < t.width - 1; i++) interiorMax = std::max(interiorMax, colDiff(i, i + 1));
+    CHECK(seamDiff <= interiorMax + 2);   // the seam is just another neighbour step
+}
+
+TEST_CASE(gas_giant_texture_is_banded_by_latitude) {
+    GasGiantParams p = gasGiantNeptune();
+    p.texWidth = 128;
+    p.texHeight = 128;
+    p.stormCount = 0;
+    TextureData t = generateGasGiantTexture(p, 3);
+    // Average red per row; rows at different latitudes should differ (bands), so the
+    // spread across rows is well above zero.
+    double lo = 1e9, hi = -1e9;
+    for (int j = 0; j < t.height; j++) {
+        double sum = 0;
+        for (int i = 0; i < t.width; i++)
+            sum += t.pixels[(static_cast<size_t>(j) * t.width + i) * 3];
+        double avg = sum / t.width;
+        lo = std::min(lo, avg);
+        hi = std::max(hi, avg);
+    }
+    CHECK(hi - lo > 20.0);   // clear latitudinal banding
+}
+
+TEST_CASE(gas_giant_mesh_is_a_watertight_smooth_sphere) {
+    GasGiantParams p = gasGiantJupiter();
+    p.faceRes = 20;
+    RenderMesh m = generateGasGiantMesh(p);
+    CHECK(mesh_invariants::triangleCount(m) == 6 * 20 * 20 * 2);
+    CHECK(manifoldDefects(m) == 0);
+    // Smooth: every vertex is exactly on the sphere (no displacement).
+    for (const Vertex& v : m.vertices) CHECK_APPROX(v.position.length(), p.radius, 1e-2);
+}
+
 TEST_CASE(ocean_shell_only_when_enabled_and_sits_near_sea_radius) {
     PlanetParams mars = planetMars();
     CHECK(generateOceanShell(mars, 1).vertices.empty());   // Mars: no ocean

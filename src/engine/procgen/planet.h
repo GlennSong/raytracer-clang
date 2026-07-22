@@ -4,6 +4,7 @@
 #include "../../rt_math.h"            // Vec3
 #include "../../renderer/renderer.h"  // RenderMesh
 #include "color_ramp.h"
+#include "tree.h"                     // TextureData
 
 #include <cstdint>
 
@@ -68,6 +69,12 @@ double planetHeight(const PlanetParams& p, uint32_t seed, const Vec3& dir);
 // t≈1.6 through the ejecta blanket. Exposed for testing the crater morphology.
 double craterProfile(double t);
 
+// The surface albedo at a unit direction: the biome ramp by elevation above sea
+// level, blended toward the cap colour past the cap latitude. The single source of
+// truth for surface colour — shared by the mesh baker and any equirect/preview
+// bake so they always agree.
+Vec3 planetSurfaceColor(const PlanetParams& p, uint32_t seed, const Vec3& dir);
+
 // Generate the rocky surface mesh: a displaced cube-sphere with per-vertex biome
 // colour and recomputed normals. Watertight (radial displacement moves welded seam
 // vertices identically). Pair with a white-ish PBR material so the vertex colour
@@ -78,6 +85,45 @@ RenderMesh generatePlanet(const PlanetParams& p, uint32_t seed);
 // `hasOcean` is set; an empty mesh otherwise. Give it a low-roughness, <1-opacity
 // material tinted `oceanColor`.
 RenderMesh generateOceanShell(const PlanetParams& p, uint32_t seed);
+
+// --------------------------------------------------------------------------
+// Gas giant (procedural-planet-plan P5, headless slice). A gas giant has no solid
+// surface — it is a SMOOTH sphere whose look is entirely the top of the cloud deck:
+// latitudinal belts/zones warped by turbulent flow, plus vortex storms. Here we
+// bake that as a seamless equirectangular albedo texture (rides the existing
+// albedoMap slot on a plain cube-sphere, whose UVs are already equirectangular).
+// The evolving-fluid animation + limb darkening + atmosphere halo are the later
+// device-side upgrades; the static banded texture is fully headless + testable.
+// --------------------------------------------------------------------------
+struct GasGiantParams {
+    float radius = 1000.0f;
+    int   faceRes = 64;              // smooth sphere (NO displacement)
+    int   texWidth = 512;            // equirectangular albedo (2:1)
+    int   texHeight = 256;
+
+    double bandFreq = 11.0;          // belt/zone pairs from pole to pole
+    double flowWarp = 0.35;          // domain-warp strength → turbulent belts
+    int    warpOctaves = 4;
+    double detailFreq = 5.0;         // fine cloud turbulence frequency
+    double detailAmp = 0.15;
+
+    int    stormCount = 3;           // vortex spots (e.g. the Great Red Spot)
+    double stormSize = 0.13;         // angular radius (fraction of pi)
+    Vec3   stormColor{0.72, 0.34, 0.24};
+
+    ColorRamp bandRamp;              // by warped latitude phase 0..1 (empty = greys)
+};
+
+// Preset gas giants: warm banded Jupiter, deep-blue Neptune.
+GasGiantParams gasGiantJupiter();
+GasGiantParams gasGiantNeptune();
+
+// The smooth sphere a gas giant is painted on (a plain cube-sphere, no relief).
+RenderMesh generateGasGiantMesh(const GasGiantParams& p);
+
+// Bake the seamless equirectangular albedo (RGB8, texWidth×texHeight). Sampled on
+// the 3D sphere direction so the longitude wrap is seamless; deterministic in seed.
+TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed);
 
 }  // namespace engine
 

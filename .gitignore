@@ -9,6 +9,8 @@ raytracer
 viewer
 run_tests
 run_tests.d
+planet_preview
+planet_preview.d
 *.dSYM/
 *.ppm
 *.png
