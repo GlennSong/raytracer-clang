@@ -100,8 +100,8 @@ Generation (P0–P1 terrain, P5 gas fields, texture bakes) is CPU and
 Anything marked *shader/LUT* is GPU/device work, verified on macOS (Metal) or a
 Vulkan GPU.
 
-### P0 — Cube-sphere base primitive  *(headless)*
-`MeshBuilder::cubeSphere(radius, faceRes, warp)`.
+### P0 — Cube-sphere base primitive  *(headless)* — **DONE**
+`MeshBuilder::cubeSphere(radius, faceRes, warp)` (`tests/test_cube_sphere.cpp`).
 
 - 6 faces, each a `faceRes×faceRes` grid, projected to the sphere and **welded
   across seams** into one watertight manifold.
@@ -117,9 +117,19 @@ Vulkan GPU.
   clockwise-front winding, no degenerate/non-finite triangles, warp shrinks the
   max/min triangle-area ratio, determinism.
 
-### P1 — Rocky surface: feature terrain + PBR shading  *(headless gen; device look)*
-`generatePlanetSurface(PlanetParams, seed)` — a **composed** height field, not
-raw fbm — generalising `generateRock`:
+### P1 — Rocky surface: feature terrain + PBR shading  *(headless gen; device look)* — **DONE (gen); detail bakes pending**
+Landed: `generatePlanet(PlanetParams, seed)` in `src/engine/procgen/planet.{h,cpp}`
+— a **composed** radial height field (fbm continents + ridged mountains + Worley
+impact craters + domain warp) displacing the P0 cube-sphere, with biome vertex
+colours (`ColorRamp`), latitude polar caps, and an optional ocean shell; Mars /
+Moon / Earth-like presets. Fills the noise gaps: `cellular.{h,cpp}` (Worley) and
+`color_ramp.h`. Headless-tested (`tests/test_planet.cpp`): watertight after
+displacement, relief bounds, determinism, crater morphology, caps, ocean.
+**Still pending (device/bake):** the tangent-space detail normal map + AO +
+horizon self-shadow bakes, layered PBR material blend, analytic (gradient) normals.
+
+Original design notes: `generatePlanetSurface(PlanetParams, seed)` — a **composed**
+height field, not raw fbm — generalising `generateRock`:
 
 ```
 h(dir) = continents(warp(dir))       // low-freq fbm, thresholded landmass mask

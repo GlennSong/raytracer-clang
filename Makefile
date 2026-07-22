@@ -145,6 +145,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_lsystem.cpp \
 	$(TEST_DIR)/test_tree.cpp \
 	$(TEST_DIR)/test_rock.cpp \
+	$(TEST_DIR)/test_planet.cpp \
 	$(TEST_DIR)/test_scatter.cpp \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
@@ -253,6 +254,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
+	$(SRC_DIR)/engine/procgen/cellular.cpp \
+	$(SRC_DIR)/engine/procgen/planet.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
