@@ -507,7 +507,7 @@ static int addProcTexture(const TextureData& td, Scene& scene) {
     return scene.addTexture(std::move(tex));
 }
 
-void bakeProcModel(const ProcModel& m, Scene& scene) {
+void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
     for (const ProcPart& part : m.parts) {
         if (part.mesh.indices.empty()) continue;
         const ProcMaterial& pm = part.material;
@@ -525,7 +525,7 @@ void bakeProcModel(const ProcModel& m, Scene& scene) {
             mat.surface = pm.surface;
         }
         int mi = scene.addMaterial(mat);
-        addMeshAsTriangles(part.mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
+        addMeshAsTriangles(part.mesh, offset, Quat::identity(), Vec3(1, 1, 1), mi, scene);
     }
     // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
     for (const ProcInstanceGroup& g : m.instances) {
@@ -540,7 +540,11 @@ void bakeProcModel(const ProcModel& m, Scene& scene) {
         }
         int mi = scene.addMaterial(mat);
         int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
-        for (const Mat4& xf : g.transforms) scene.addInstance(proto, xf);
+        for (const Mat4& xf : g.transforms) {
+            Mat4 placed = xf;                 // translate the instance by the offset
+            placed.m[0][3] += offset.x; placed.m[1][3] += offset.y; placed.m[2][3] += offset.z;
+            scene.addInstance(proto, placed);
+        }
     }
 }
 
@@ -884,12 +888,13 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // offline through the same pipeline (the renderer is the only divergence).
         if (ent.value("shape", std::string()) == "script") {
 #ifdef RT_ENABLE_SCRIPTING
+            Vec3 scriptPos = parseVec3(ent.value("position", json()));  // world placement
             bool baked = false;
             for (auto& pre : scriptCache)            // pre-run on-terrain recipe
-                if (pre.first == &ent) { bakeProcModel(pre.second, scene); baked = true; break; }
+                if (pre.first == &ent) { bakeProcModel(pre.second, scene, scriptPos); baked = true; break; }
             if (!baked) {
                 ProcModel model;
-                if (runScript(ent, model)) bakeProcModel(model, scene);
+                if (runScript(ent, model)) bakeProcModel(model, scene, scriptPos);
             }
 #else
             LOG_WARN << "script entity skipped (scripting disabled in this build)";

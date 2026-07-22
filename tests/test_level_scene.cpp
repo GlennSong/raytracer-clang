@@ -124,6 +124,15 @@ TEST_CASE(planet_demo_level_loads_and_bakes_a_planet) {
 #ifdef RT_ENABLE_SCRIPTING
     // The displaced cube-sphere (face_res 96) bakes to > 100k triangles.
     CHECK(scene.triangles.size() > 5000);
+    // The scene places the planet in front of the scene-view camera via the
+    // entity `position` [0,0,-60] (the fly camera starts inside a body at the
+    // origin). The baked geometry must honour that offset — its centroid sits
+    // near z = -60, not at the origin.
+    Vec3 c(0, 0, 0);
+    for (const auto& tri : scene.triangles) c = c + (tri.v0 + tri.v1 + tri.v2) / 3.0;
+    c = c / static_cast<Real>(scene.triangles.size());
+    CHECK(c.z < -40.0);              // shifted down -Z, nowhere near the origin
+    CHECK(std::abs(c.x) < 5.0);      // still centred on the view axis
 #endif
 }
 

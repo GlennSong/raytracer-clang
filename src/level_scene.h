@@ -30,8 +30,11 @@ struct LevelScene {
 // part becomes world-space triangles, each instance group a shared BLAS proto
 // placed by the TLAS (ADR-0041), with the alpha-cut leaf material for foliage.
 // Renderer-agnostic — the same ProcModel a Lua recipe returns feeds this offline
-// path and the viewer's InstanceGroup spawn.
-void bakeProcModel(const ProcModel& model, Scene& scene);
+// path and the viewer's InstanceGroup spawn. `offset` places the whole model in
+// world space (an entity's `position`), matching the realtime loader so offline
+// and viewer agree — e.g. a planet sat in front of the camera rather than at the
+// origin.
+void bakeProcModel(const ProcModel& model, Scene& scene, const Vec3& offset = Vec3());
 
 // A camera read from the level's sidecar (CameraStore format,
 // <level>.cameras.json) for offline rendering. Pose is position + forward —

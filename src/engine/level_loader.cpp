@@ -855,11 +855,19 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
     };
 
+    // Optional world placement: recipe geometry is authored around the origin, so
+    // an entity `position` [x,y,z] offsets the whole spawned model. A planet recipe
+    // uses it to sit the body in front of the scene-view camera (which starts at a
+    // fixed eye) instead of enclosing it. Parts are the render path; recipes that
+    // also emit instances/colliders would need the same offset (none do today).
+    Vec3 spawnOffset = ent.contains("position") ? parseVec3(ent["position"]) : Vec3(0, 0, 0);
+
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
         const ProcPart& part = model.parts[i];
         if (part.mesh.vertices.empty()) continue;
         Entity e = world.create();
         Transform t;                          // recipe geometry is world-space
+        t.position = spawnOffset;
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;

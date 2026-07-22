@@ -11,12 +11,13 @@
       "shape": "script",
       "file": "../scripts/planet.lua",
       "opts": { "preset": "earth", "seed": 1, "radius": 20, "face_res": 96 },
+      "position": [0, 0, -60],
       "angularVelocity": [0, 0.15, 0]
     }
   ],
-  "atmosphere": { "center": [0, 0, 0], "radius": 20 },
+  "atmosphere": { "center": [0, 0, -60], "radius": 20 },
   "gravity": [0, 0, 0],
-  "player": { "position": [0, 8, 70] },
+  "player": { "position": [0, 2, 8] },
   "lighting": {
     "sun": {
       "direction": [0.6, 0.3, -0.5],
