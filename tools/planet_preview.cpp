@@ -12,6 +12,8 @@
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 
 using namespace engine;
 
@@ -40,10 +42,18 @@ static Vec3 sunTransmittance(const AtmosphereParams& atm, const Vec3& P, const V
     return transmittance(atm, P, P + sun * std::max(0.0, a1));
 }
 
+// Rotate a direction about the Y (spin) axis — used to turn the planet under a
+// fixed camera + sun for the animation.
+static Vec3 rotY(const Vec3& v, double a) {
+    double ca = std::cos(a), sa = std::sin(a);
+    return Vec3(v.x * ca + v.z * sa, v.y, -v.x * sa + v.z * ca);
+}
+
 // Orthographic "from space" disc of a rocky planet. `atm` may be null (airless
-// bodies like the Moon). Camera looks down -Z from outside the atmosphere.
+// bodies like the Moon). Camera looks down -Z from outside the atmosphere. `spin`
+// rotates the surface about its axis (radians) for the animation.
 static void renderRocky(const PlanetParams& p, uint32_t seed, const char* file, int W,
-                        const AtmosphereParams* atm) {
+                        const AtmosphereParams* atm, double spin = 0.0) {
     std::vector<uint8_t> img(static_cast<size_t>(W) * W * 3);
     Vec3 sun = normalize(Vec3(0.62, 0.32, 0.72));
     const double R = 1.0;                 // unit planet in the preview
@@ -51,7 +61,10 @@ static void renderRocky(const PlanetParams& p, uint32_t seed, const char* file, 
     const double halfView = 1.32;         // leaves room around the disc for the halo
     const double camZ = 3.0;
 
-    auto disp = [&](Vec3 d) { d = normalize(d); return d * (R + amp * planetHeight(p, seed, d)); };
+    // Sample the surface field at the spun direction so the terrain turns under the
+    // fixed camera + sun (the base sphere geometry stays put).
+    auto sdir = [&](Vec3 d) { return rotY(normalize(d), spin); };
+    auto disp = [&](Vec3 d) { d = normalize(d); return d * (R + amp * planetHeight(p, seed, sdir(d))); };
 
     for (int py = 0; py < W; py++) {
         for (int px = 0; px < W; px++) {
@@ -79,8 +92,8 @@ static void renderRocky(const PlanetParams& p, uint32_t seed, const char* file, 
                 N = normalize(N);
                 if (dot(N, dirN) < 0) N = N * -1.0;
 
-                double h = planetHeight(p, seed, dirN);
-                Vec3 albedo = planetSurfaceColor(p, seed, dirN);
+                double h = planetHeight(p, seed, sdir(dirN));
+                Vec3 albedo = planetSurfaceColor(p, seed, sdir(dirN));
                 if (p.hasOcean && h < p.seaLevel) { albedo = p.oceanColor; N = dirN; }
 
                 double ndl = std::max(0.0, dot(N, sun));
@@ -154,10 +167,30 @@ static void renderGas(const GasGiantParams& p, uint32_t seed, const char* file, 
     std::printf("wrote %s\n", file);
 }
 
-int main() {
+int main(int argc, char** argv) {
     const int W = 420;
     AtmosphereParams earthAtm = atmosphereEarth(1.0);
     AtmosphereParams marsAtm = atmosphereMars(1.0);
+
+    // `planet_preview spin <mars|moon|earth> <frames>` renders a rotation sequence
+    // spin_000.png ... (assemble to video/gif with ffmpeg). Default: the 5 stills.
+    if (argc >= 2 && std::string(argv[1]) == "spin") {
+        std::string which = argc >= 3 ? argv[2] : "earth";
+        int frames = argc >= 4 ? std::atoi(argv[3]) : 72;
+        PlanetParams p = which == "mars" ? planetMars()
+                       : which == "moon" ? planetMoon() : planetEarthlike();
+        const AtmosphereParams* atm = which == "mars" ? &marsAtm
+                                    : which == "moon" ? nullptr : &earthAtm;
+        uint32_t seed = which == "mars" ? 12u : which == "moon" ? 7u : 3u;
+        for (int f = 0; f < frames; f++) {
+            double spin = 2.0 * PI * f / frames;
+            char name[64];
+            std::snprintf(name, sizeof(name), "spin_%03d.png", f);
+            renderRocky(p, seed, name, W, atm, spin);
+        }
+        return 0;
+    }
+
     renderRocky(planetMars(), 12, "out_mars.png", W, &marsAtm);
     renderRocky(planetMoon(), 7, "out_moon.png", W, nullptr);        // airless
     renderRocky(planetEarthlike(), 3, "out_earth.png", W, &earthAtm);
