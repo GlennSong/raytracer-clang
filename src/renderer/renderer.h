@@ -368,6 +368,45 @@ struct CameraState {
           nearPlane(0.1f), farPlane(1000.0f) {}
 };
 
+// Planetary atmosphere (procedural-planet-plan P3). A single-scattering Rayleigh+Mie
+// glow the backend raymarches as a fullscreen pass and adds over the HDR scene. The
+// values mirror the tested CPU reference (engine/procgen/atmosphere.cpp); build them
+// with atmosphereParamsFor() for an Earth-like body. Sun direction/colour come from
+// the scene's directional light, so they are not carried here. Backends without the
+// pass ignore it (default no-op) — Metal is the first to implement it.
+struct AtmosphereParams {
+    bool  enabled = false;
+    Vec3  planetCenter{0, 0, 0};
+    float planetRadius = 20.0f;
+    float atmosphereRadius = 21.0f;
+    Vec3  rayleighCoeff{20.0f, 47.0f, 115.0f};   // per length (already ∝ λ⁻⁴)
+    float mieCoeff = 42.0f;
+    float mieG = 0.76f;
+    float rayleighScaleHeight = 0.25f;           // absolute world units
+    float mieScaleHeight = 0.07f;
+    float sunIntensity = 22.0f;
+    int   viewSamples = 24;
+    int   lightSamples = 8;
+};
+
+// Earth-like atmosphere for a body of `radius` at `center` (mirrors the CPU
+// atmosphereEarth preset, scaled to the render-space radius). Thickness 2.5%.
+inline AtmosphereParams atmosphereParamsFor(const Vec3& center, float radius) {
+    AtmosphereParams a;
+    a.enabled = true;
+    a.planetCenter = center;
+    a.planetRadius = radius;
+    a.atmosphereRadius = radius * 1.025f;
+    float thickness = a.atmosphereRadius - a.planetRadius;
+    a.rayleighScaleHeight = thickness * 0.25f;
+    a.mieScaleHeight = thickness * 0.07f;
+    a.rayleighCoeff = Vec3(20.0f, 47.0f, 115.0f) * (1.0f / radius);
+    a.mieCoeff = 42.0f / radius;
+    a.mieG = 0.76f;
+    a.sunIntensity = 22.0f;
+    return a;
+}
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -422,6 +461,10 @@ public:
         for (const Mat4& m : transforms) drawMesh(handle, m, material);
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
+
+    // Set (or clear, via `enabled = false`) the planetary atmosphere glow pass
+    // (procedural-planet-plan P3). Backends without the pass ignore it. No-op default.
+    virtual void setAtmosphere(const AtmosphereParams& /*atmosphere*/) {}
 
     // Draw one CDLOD terrain node (ADR-0036): a world-space mesh (identity
     // transform) whose vertices carry a baked morph target in Vertex::tangent.

@@ -57,6 +57,19 @@ struct ModelUniforms {
     simd_float4x4 normalMatrix;
 };
 
+// Planetary atmosphere pass (procedural-planet-plan P3). Filled each frame from the
+// camera + sun + Renderer::AtmosphereParams; consumed by fragmentAtmosphereGlow.
+struct AtmosphereUniforms {
+    simd_float4x4 invViewProjection;
+    simd_float4   cameraPosition;   // xyz
+    simd_float4   sunDirection;     // xyz toward the sun
+    simd_float4   planetCenter;     // xyz
+    simd_float4   sunColor;         // rgb, w = intensity
+    simd_float4   rayleighCoeff;    // rgb per length
+    simd_float4   radii;            // x planetRadius, y atmosphereRadius, z rayleighH, w mieH
+    simd_float4   mie;              // x mieCoeff, y mieG, z viewSamples, w lightSamples
+};
+
 struct MaterialUniforms {
     simd_float3 albedo;
     float       metallic;

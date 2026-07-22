@@ -3785,6 +3785,20 @@ bool LevelLoader::load(const std::string& path,
         renderer.setEnvironmentMap(TextureHandle{});
     }
 
+    // Planetary atmosphere glow (procedural-planet-plan P3): a top-level
+    // "atmosphere" block { center:[x,y,z], radius, enabled? } drives the renderer's
+    // scattering pass (Metal today; other backends ignore it). Absent clears it.
+    if (root.contains("atmosphere")) {
+        const json& at = root["atmosphere"];
+        AtmosphereParams ap = atmosphereParamsFor(parseVec3(at.value("center", json())),
+                                                  at.value("radius", 20.0f));
+        ap.enabled = at.value("enabled", true);
+        renderer.setAtmosphere(ap);
+    } else {
+        AtmosphereParams off;
+        renderer.setAtmosphere(off);   // enabled=false by default
+    }
+
     if (root.contains("reflectionProbes")) {
         std::vector<ReflectionProbe> probes;
         for (auto& rp : root["reflectionProbes"]) {

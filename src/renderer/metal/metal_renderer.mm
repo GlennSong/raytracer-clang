@@ -142,6 +142,12 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> compositePipeline;
     id<MTLSamplerState> linearClampSampler;
 
+    // Planetary atmosphere glow (procedural-planet-plan P3): a fullscreen additive
+    // pass over the HDR scene, driven by setAtmosphere(). `atmosphere` holds the
+    // scene-set params (centre/radii/coeffs); camera + sun are filled per frame.
+    id<MTLRenderPipelineState> atmospherePipeline;
+    AtmosphereParams atmosphere;
+
     // Screen-space reflections (SSR)
     id<MTLTexture> ssrTexture;         // RGBA16Float — SSR result (rgb=color, a=confidence)
     id<MTLTexture> ssrBlurTemp;        // RGBA16Float — ping-pong for bilateral blur
@@ -311,6 +317,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
         @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
         @"shaders/metal/post.metal",       // SSR, GTAO, bloom, composite
+        @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3)
     ];
     NSMutableString* shaderSource = [NSMutableString string];
     for (NSString* path in shaderFiles) {
@@ -471,6 +478,29 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->compositePipeline = [impl->device newRenderPipelineStateWithDescriptor:compDesc
                                                                                error:&error];
         if (!impl->compositePipeline) NSLog(@"Composite pipeline error: %@", error);
+    }
+
+    // Atmosphere-glow pipeline (procedural-planet-plan P3): a fullscreen triangle
+    // that raymarches the atmosphere shell and ADDITIVELY blends the in-scattered
+    // light over the HDR scene target (One+One), so the limb halo blooms in post.
+    // No depth attachment — it draws everywhere the shell is hit.
+    {
+        id<MTLFunction> atmVert = [library newFunctionWithName:@"vertexAtmosphere"];
+        id<MTLFunction> atmFrag = [library newFunctionWithName:@"fragmentAtmosphereGlow"];
+        MTLRenderPipelineDescriptor* atmDesc = [[MTLRenderPipelineDescriptor alloc] init];
+        atmDesc.vertexFunction = atmVert;
+        atmDesc.fragmentFunction = atmFrag;
+        atmDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;   // the HDR scene
+        atmDesc.colorAttachments[0].blendingEnabled = YES;
+        atmDesc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+        atmDesc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+        atmDesc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        atmDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        atmDesc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorZero;
+        atmDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+        impl->atmospherePipeline = [impl->device newRenderPipelineStateWithDescriptor:atmDesc
+                                                                                error:&error];
+        if (!impl->atmospherePipeline) NSLog(@"Atmosphere pipeline error: %@", error);
     }
 
     // Lens-warp pipeline (virtual-camera plan Phase 4): fullscreen resample of
@@ -1914,6 +1944,10 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
 
+void MetalRenderer::setAtmosphere(const AtmosphereParams& atmosphere) {
+    impl->atmosphere = atmosphere;
+}
+
 void MetalRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {
     if (probes.empty()) {
         impl->probeUniforms.probeCount = 0;
@@ -2819,6 +2853,41 @@ void MetalRenderer::endFrame() {
     impl->lastStats = stats;
 
     [impl->currentEncoder endEncoding];
+
+    // --- Planetary atmosphere glow (procedural-planet-plan P3) ---
+    // A fullscreen triangle that raymarches the atmosphere shell and ADDITIVELY
+    // blends the in-scattered light into the HDR scene, after all geometry and
+    // before post — so the limb halo blooms. Camera + sun come from this frame's
+    // uniforms; centre/radii/coeffs from setAtmosphere().
+    if (impl->atmosphere.enabled && impl->atmospherePipeline && impl->sceneColorTexture) {
+        const AtmosphereParams& ap = impl->atmosphere;
+        const GPULight& sun = impl->lightUniforms.lights[0];
+        AtmosphereUniforms au;
+        au.invViewProjection = impl->cameraUniforms.invViewProjection;
+        simd_float3 camPos = impl->cameraUniforms.cameraPosition;
+        au.cameraPosition = simd_make_float4(camPos.x, camPos.y, camPos.z, 0.0f);
+        au.sunDirection = simd_make_float4(sun.direction.x, sun.direction.y, sun.direction.z, 0.0f);
+        au.planetCenter = simd_make_float4((float)ap.planetCenter.x, (float)ap.planetCenter.y,
+                                           (float)ap.planetCenter.z, 0.0f);
+        au.sunColor = simd_make_float4(sun.color.x, sun.color.y, sun.color.z, ap.sunIntensity);
+        au.rayleighCoeff = simd_make_float4((float)ap.rayleighCoeff.x, (float)ap.rayleighCoeff.y,
+                                            (float)ap.rayleighCoeff.z, 0.0f);
+        au.radii = simd_make_float4(ap.planetRadius, ap.atmosphereRadius,
+                                    ap.rayleighScaleHeight, ap.mieScaleHeight);
+        au.mie = simd_make_float4(ap.mieCoeff, ap.mieG,
+                                  (float)ap.viewSamples, (float)ap.lightSamples);
+
+        MTLRenderPassDescriptor* atmPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        atmPass.colorAttachments[0].texture = impl->sceneColorTexture;
+        atmPass.colorAttachments[0].loadAction = MTLLoadActionLoad;    // keep the scene
+        atmPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> atmEnc =
+            [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:atmPass];
+        [atmEnc setRenderPipelineState:impl->atmospherePipeline];
+        [atmEnc setFragmentBytes:&au length:sizeof(au) atIndex:0];
+        [atmEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [atmEnc endEncoding];
+    }
 
     // Lens effects (virtual-camera plan Phase 4). Both passes are skipped
     // entirely — zero GPU cost — when toggled off or visually inert (no
