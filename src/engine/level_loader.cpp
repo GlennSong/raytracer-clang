@@ -889,6 +889,15 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
             r.mesh = assets.acquireMesh(part.mesh, key + ":part" + std::to_string(i));
         }
         world.add<Renderable>(e, r);
+        // Optional axial spin (procedural-planet-plan): an `angularVelocity`
+        // [x,y,z] (axis · rad/s) on the entity makes MotionSystem rotate each part
+        // about its origin. A planet recipe's parts are world-space centred on the
+        // origin, so this spins the body on its axis. No RigidBody, so MotionSystem
+        // (not physics) integrates it.
+        if (ent.contains("angularVelocity")) {
+            Vec3 av = parseVec3(ent["angularVelocity"]);
+            if (av.lengthSquared() > 0.0) world.add<Velocity>(e, Velocity{Vec3(), av});
+        }
     }
 
     for (std::size_t gi = 0; gi < model.instances.size(); ++gi) {

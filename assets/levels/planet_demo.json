@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.01, 0.012, 0.02] },
+  "entities": [
+    {
+      "name": "planet",
+      "shape": "script",
+      "file": "../scripts/planet.lua",
+      "opts": { "preset": "earth", "seed": 1, "radius": 20, "face_res": 96 },
+      "angularVelocity": [0, 0.15, 0]
+    }
+  ],
+  "player": { "position": [0, 8, 70] },
+  "lighting": {
+    "sun": {
+      "direction": [0.6, 0.3, -0.5],
+      "color": [1.0, 0.97, 0.9],
+      "intensity": 10.0,
+      "castsShadow": false
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.15
+  }
+}

@@ -106,6 +106,27 @@ TEST_CASE(level_scene_imports_shapes_and_materials) {
     CHECK(sky.lengthSquared() > 0.0);
 }
 
+TEST_CASE(planet_demo_level_loads_and_bakes_a_planet) {
+    // The shipped planet scene (procedural-planet-plan Tier 1): a shape:"script"
+    // entity runs ../scripts/planet.lua -> planet.rocky, baked to world triangles by
+    // the offline loader (the realtime twin renders it in the viewer). The recipe
+    // runs only when scripting is compiled in (the Lua-free `make test` skips it and
+    // just checks the level parses + the sun loads).
+#ifdef RT_SOURCE_DIR
+    const std::string path = std::string(RT_SOURCE_DIR) + "/assets/levels/planet_demo.json";
+#else
+    const std::string path = "assets/levels/planet_demo.json";
+#endif
+    Scene scene;
+    CHECK(LevelScene::load(path, scene));
+    CHECK(scene.lights.size() >= 1);
+    CHECK(scene.lights[0].type == SceneLight::Type::Directional);
+#ifdef RT_ENABLE_SCRIPTING
+    // The displaced cube-sphere (face_res 96) bakes to > 100k triangles.
+    CHECK(scene.triangles.size() > 5000);
+#endif
+}
+
 TEST_CASE(level_scene_rotated_box_is_tessellated_in_world_space) {
     TmpFiles cleanup;
     writeFile(LEVEL_PATH, R"({

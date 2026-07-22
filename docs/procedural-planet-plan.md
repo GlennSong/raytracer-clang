@@ -271,8 +271,16 @@ Original design notes:
   `Transform.orientation`; clouds and gas bands on their own clocks.
 - **Orbit camera** ✅ `OrbitCameraController` targets the origin; clamp near/far
   around the body + starfield.
-- **Scene** (pending, device) — a `planet_demo` level wiring a planet + atmosphere +
-  starfield + sun into the viewer.
+- **Scene** ✅ (Tier 1) — `assets/levels/planet_demo.json` spawns the planet via the
+  `../scripts/planet.lua` recipe (`planet.rocky`), lit by an authored sun, with an
+  axial spin (`angularVelocity` — new loader hook → `Velocity`, integrated by
+  MotionSystem). Renders on the **existing PBR path** (vertex-colour biomes), so it
+  needs none of the P2–P6 shaders. Verified headless: `LevelScene::load` bakes the
+  planet (`tests/test_level_scene.cpp::planet_demo_level_loads_and_bakes_a_planet`).
+  Run it: `./build/viewer planet_demo` (fly) or `--edit planet_demo` (orbit). A
+  space backdrop wants a starfield HDR (`environment.hdr`); the offline path honours
+  the dark `skyColor`. The atmosphere/cloud/water/star **shaders** wire in on top
+  (Tier 2, device).
 
 ---
 
