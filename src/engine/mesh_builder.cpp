@@ -1,5 +1,7 @@
 #include "mesh_builder.h"
+#include "../renderer/cube_faces.h"   // cubeFaceDirection — the cubemap convention
 #include <cmath>
+#include <map>
 
 namespace engine {
 
@@ -78,6 +80,89 @@ RenderMesh MeshBuilder::sphere(float radius, int stacks, int slices) {
             uint32_t b = a + slices + 1;
             mesh.indices.insert(mesh.indices.end(),
                 {a, b, a+1, b, b+1, a+1});
+        }
+    }
+    return mesh;
+}
+
+RenderMesh MeshBuilder::cubeSphere(float radius, int faceRes, bool warp) {
+    RenderMesh mesh;
+    if (faceRes < 1) faceRes = 1;
+
+    // Weld vertices coincident across the shared face seams (and the 8 corners each
+    // shared by 3 faces) so the result is ONE closed manifold, not 6 loose sheets.
+    // Quantise position to a grid far finer than the vertex spacing (smallest
+    // ~R·(π/2)/faceRes) but coarser than the cross-face float error — so seam pairs
+    // land on the same key while genuinely distinct grid points do not.
+    const double eps = std::max(1e-6, static_cast<double>(radius) * 1e-4);
+    struct Key {
+        long long x, y, z;
+        bool operator<(const Key& o) const {
+            return x != o.x ? x < o.x : (y != o.y ? y < o.y : z < o.z);
+        }
+    };
+    std::map<Key, uint32_t> weld;
+
+    auto tangentFor = [](const Vec3& dir) {
+        Vec3 t = cross(Vec3(0, 1, 0), dir);
+        return t.lengthSquared() > 1e-12 ? normalize(t) : Vec3(1, 0, 0);
+    };
+    auto addVert = [&](const Vec3& dir) -> uint32_t {
+        Vec3 pos = dir * static_cast<double>(radius);
+        Key k{std::llround(pos.x / eps), std::llround(pos.y / eps),
+              std::llround(pos.z / eps)};
+        auto it = weld.find(k);
+        if (it != weld.end()) return it->second;
+        uint32_t idx = static_cast<uint32_t>(mesh.vertices.size());
+        // Equirectangular UV as a sane default; per-face cube maps are sampled by
+        // direction in later phases (planet plan), so this is not on the hot path.
+        double y = std::max(-1.0, std::min(1.0, dir.y));
+        float u = static_cast<float>(0.5 + std::atan2(dir.z, dir.x) / (2.0 * PI));
+        float v = static_cast<float>(0.5 - std::asin(y) / PI);
+        // Normal is the outward radial (exact for the undisplaced sphere).
+        mesh.vertices.push_back(Vertex(pos, dir, tangentFor(dir), u, v));
+        weld.emplace(k, idx);
+        return idx;
+    };
+
+    // COBE tangent adjustment: uniform grid steps map to tan(s·π/4) in cube space,
+    // so after projection the angular spacing (and thus triangle area) evens out.
+    auto warpCoord = [warp](double s) { return warp ? std::tan(s * PI * 0.25) : s; };
+    auto faceDir = [&](int face, int i, int j) {
+        double s = warpCoord(2.0 * i / faceRes - 1.0);
+        double t = warpCoord(2.0 * j / faceRes - 1.0);
+        // cube_faces.h takes (u, v) in [0,1]; feed the warped cube coords back so the
+        // mesh directions match the per-face cubemap texel convention exactly.
+        return cubeFaceDirection(face, (s + 1.0) * 0.5, (t + 1.0) * 0.5);
+    };
+
+    // Emit a triangle wound so its front face (outward normal cross(c-a,b-a), the
+    // engine's clockwise-front convention) points away from the origin.
+    auto addTri = [&](uint32_t a, uint32_t b, uint32_t c) {
+        const Vec3& pa = mesh.vertices[a].position;
+        const Vec3& pb = mesh.vertices[b].position;
+        const Vec3& pc = mesh.vertices[c].position;
+        if (dot(cross(pc - pa, pb - pa), pa) >= 0)
+            mesh.indices.insert(mesh.indices.end(), {a, b, c});
+        else
+            mesh.indices.insert(mesh.indices.end(), {a, c, b});
+    };
+
+    const int stride = faceRes + 1;
+    std::vector<uint32_t> grid(static_cast<size_t>(stride) * stride);
+    for (int face = 0; face < 6; face++) {
+        for (int j = 0; j <= faceRes; j++)
+            for (int i = 0; i <= faceRes; i++)
+                grid[j * stride + i] = addVert(faceDir(face, i, j));
+        for (int j = 0; j < faceRes; j++) {
+            for (int i = 0; i < faceRes; i++) {
+                uint32_t a = grid[j * stride + i];
+                uint32_t b = grid[j * stride + i + 1];
+                uint32_t c = grid[(j + 1) * stride + i + 1];
+                uint32_t d = grid[(j + 1) * stride + i];
+                addTri(a, b, c);
+                addTri(a, c, d);
+            }
         }
     }
     return mesh;

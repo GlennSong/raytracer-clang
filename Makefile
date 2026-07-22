@@ -138,6 +138,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_path_tracer.cpp \
 	$(TEST_DIR)/test_asset_manager.cpp \
 	$(TEST_DIR)/test_mesh_builder.cpp \
+	$(TEST_DIR)/test_cube_sphere.cpp \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
 	$(TEST_DIR)/test_terrain_lod.cpp \

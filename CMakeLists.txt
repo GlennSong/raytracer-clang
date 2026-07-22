@@ -416,6 +416,7 @@ add_executable(run_tests
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
     tests/test_mesh_builder.cpp
+    tests/test_cube_sphere.cpp
     tests/test_noise.cpp
     tests/test_terrain.cpp
     tests/test_lsystem.cpp

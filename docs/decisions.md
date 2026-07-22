@@ -5489,6 +5489,74 @@ scale, move the edit stack to a baked grid or GPU field.
 
 ---
 
+## ADR-0076 — Procedural planet: a from-space, physically-based body on a cube-sphere, not the landable LOD capstone
+**Status:** Accepted · **Date:** 2026-07-22
+
+**Context.** The ROADMAP lists a procedural planet as the Tier-4 capstone
+("cube-sphere quadtree LOD + spherical terrain + atmosphere"). The full capstone
+is a large, open-ended build: planetary quadtree LOD streaming, camera-relative
+rendering, floating-origin rebasing (ADR-0034's documented upgrade path). We want
+a planet **seen from space** — a body you orbit and look at, not one you land on —
+rendered at high fidelity, without paying for the landable apparatus. We also
+decided the bar is *photographic*, not a set of cheap analytic fakes. The full
+plan is `docs/procedural-planet-plan.md`.
+
+**Decision.**
+1. **Scope: from orbit only.** The planet sits at the world **origin and never
+   moves**; the camera orbits it (`OrbitCameraController`) and the planet spins on
+   its axis (a `Quat` on its `Transform`). The star is a **direction**
+   (`SceneLighting.sun`), optionally with a bright emissive disc far along it. No
+   orbital mechanics, n-body, moons, real astronomical scale, or seasons — that
+   "Ring 3" simulation is explicitly out, and one body at the origin sidesteps the
+   large-world `float`-precision problem (ADR-0034).
+2. **Geometry: a cube-sphere, not the UV sphere or a runtime quadtree.** A new
+   `MeshBuilder::cubeSphere` — 6 faces welded into one watertight manifold, with
+   the COBE/tangent-adjustment warp `tan(s·π/4)` to equalise area — built on the
+   existing `cube_faces.h` convention so per-face planet cubemaps align with the
+   mesh. A single fixed-resolution sphere (≈256²/face) resolves the terminator/limb
+   from orbit; **no planetary quadtree LOD** (that is the landable capstone, left
+   dormant — each cube face is already a quadtree root for it).
+3. **Fidelity: physically-based techniques.** Rocky surface = composed height
+   field (fbm + ridged + Worley impact craters + optional erosion) → real vertex
+   displacement + baked detail-normal/AO/horizon-self-shadow maps + layered PBR.
+   Atmosphere = Hillaire-2020 multiple-scattering LUTs (the centrepiece). Ocean =
+   PBR water (GGX glint, Fresnel, depth transmission). Clouds = volumetric
+   raymarch. Gas giant = curl-noise fluid advection. These lean on the engine's
+   HDR pipeline, physical light units (ADR-0017), compute-LUT precedent, and
+   reverse-Z; the new shaders are added per the "new pipeline" path and kept at
+   Metal↔Vulkan parity (ADR-0057, `docs/renderer-parity.md`).
+4. **Generation stays headless.** All mesh/field/texture generation follows the
+   `(params, seed) → content` contract (ADR-0021) and is Linux/CI-testable; only
+   the shading look needs a GPU.
+
+**Alternatives considered.**
+- *Build the full landable capstone.* Rejected for now: the quadtree LOD +
+  floating-origin machinery is a multi-month effort a from-orbit view never
+  exercises; scoping to "from space" removes it entirely.
+- *Icosphere base.* Most-uniform triangle area, but not cubemap-native and not a
+  natural quadtree — the cube-sphere textures cleanly (per-face, no pole/seam) and
+  is the bridge to the capstone if we ever want to land.
+- *Cheap rim-glow atmosphere / scrolling gas bands / normal-map-only relief.*
+  Rejected by explicit direction ("ship something good"): they fail exactly at the
+  terminator and limb where a space view is judged.
+
+**Consequences / tech debt.**
+- The heavy lift is new **device shader work** (Hillaire LUTs, volumetric clouds,
+  PBR water, fluid advection), each mirrored across backends and verified on a GPU
+  — not headless. Expect register rows as each lands unverified-on-device, like the
+  water/terrain surfaces before it.
+- Noise gaps to fill: **Worley/cellular** (craters) and a **multi-stop colour
+  ramp** helper; both are small, pure, testable additions.
+- The cube-sphere weld tolerance is a quantised position match; if a future high
+  `faceRes` ever slips a seam, the watertight test catches it.
+
+**Revisit trigger.** If we decide to **land** (fly down to the surface), reopen
+this: that is the point to build the dormant cube-face quadtree LOD, camera-
+relative rendering, and floating-origin rebasing — i.e. the full capstone this ADR
+scopes out.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

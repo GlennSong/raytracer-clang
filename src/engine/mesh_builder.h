@@ -15,6 +15,17 @@ struct MeshBuilder {
 
     static RenderMesh box(Vec3 size);
     static RenderMesh sphere(float radius, int stacks = 32, int slices = 64);
+    // A cube-sphere: the 6 faces of a cube, each a faceRes×faceRes grid, projected
+    // onto the sphere and welded across the shared face seams into one watertight
+    // manifold. Preferred over sphere() as a planet base (procedural-planet-plan,
+    // ADR-0076) — near-uniform triangle area (no pole pinch, no longitude seam) and
+    // cubemap-native: a face's texel↔direction follows cube_faces.h, so per-face
+    // planet cubemaps line up with the mesh. `warp` applies the COBE / tangent
+    // adjustment tan(s·π/4) that equalises the raw cube→sphere corner bunching
+    // (~5:1 area ratio down to ~1.4:1). Vertex normal is the outward radial; front
+    // faces wound clockwise (engine convention). Each face is a quadtree root for a
+    // future LOD scheme (left dormant — ADR-0076 is from-orbit only).
+    static RenderMesh cubeSphere(float radius, int faceRes = 32, bool warp = true);
     static RenderMesh cylinder(float radius, float height, int slices = 32);
     static RenderMesh plane(float width, float depth);
     static RenderMesh cone(float radius, float height, int slices = 32);
