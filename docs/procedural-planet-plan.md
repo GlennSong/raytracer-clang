@@ -154,7 +154,16 @@ h(dir) = continents(warp(dir))       // low-freq fbm, thresholded landmass mask
   Mars = oxide dust + basins + thin caps; Moon = mare vs highland albedo;
   Earth-like = biomes + oceans.
 
-### P2 — Ocean (PBR water)  *(shader)*
+### P2 — Ocean (PBR water)  *(shader)* — **shaders authored (3 backends); wiring pending**
+Landed: a water SURFACE shader — animated ripple normals, GGX sun glint, Schlick-
+Fresnel sky reflection, depth-tinted transmission, shoreline foam — reading the
+engine's existing `Surface::Water` UV convention (uv.x depth, uv.y shore) so it
+serves a **planet ocean AND city/coast water**, and writing the same MRT as
+`mesh.frag`. `shaders/vulkan/water.{vert,frag}` (**SPIR-V compile-verified**),
+`shaders/metal/water.metal`, `shaders/webgpu/water.wgsl` (compile-unverified).
+**Pending (device):** route Surface::Water draws to the pipeline.
+
+Original design notes:
 Separate shell at sea-level radius, shaded properly: GGX **sun glint** smearing
 the star toward the terminator, **Fresnel** grazing-limb brightening,
 **depth-tinted transmission** (Beer–Lambert on the sea-floor height delta →
@@ -235,7 +244,15 @@ Original design notes:
   **forward-scattering translucency** (rings glow back-lit). Mutual shadowing is
   what makes Saturn read as photographed.
 
-### P6 — Star & deep space  *(shader)*
+### P6 — Star & deep space  *(shader)* — **star shader authored (3 backends); wiring pending**
+Landed: a star/sun fullscreen pass — a bright HDR disc with limb darkening + a
+Planckian **blackbody colour** from temperature + a bloom-friendly glow, gated on the
+reverse-Z far plane. `shaders/vulkan/star.frag` (**SPIR-V compile-verified**),
+`shaders/metal/star.metal`, `shaders/webgpu/star.wgsl` (compile-unverified). The
+starfield backdrop + night-side city lights remain. **Pending (device):** pipeline
+wiring.
+
+Original design notes:
 - **Blackbody star colour** from temperature (Planck → chromaticity); HDR
   intensity so the existing bloom blooms it naturally.
 - **Star disc with limb darkening** (a real sun edge is dimmer than centre).
