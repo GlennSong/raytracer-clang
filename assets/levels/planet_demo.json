@@ -15,6 +15,7 @@
     }
   ],
   "atmosphere": { "center": [0, 0, 0], "radius": 20 },
+  "gravity": [0, 0, 0],
   "player": { "position": [0, 8, 70] },
   "lighting": {
     "sun": {

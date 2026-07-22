@@ -3785,17 +3785,25 @@ bool LevelLoader::load(const std::string& path,
         renderer.setEnvironmentMap(TextureHandle{});
     }
 
+    // Scene gravity: a top-level "gravity" [x,y,z] (m/s²) singleton PhysicsSystem
+    // applies to the world. A space level sets [0,0,0] so the player floats instead
+    // of falling. Absent leaves the engine default (Earth).
+    if (root.contains("gravity")) {
+        Entity g = world.create();
+        world.add<SceneGravity>(g, SceneGravity{parseVec3(root["gravity"], Vec3(0, -9.81, 0))});
+    }
+
     // Planetary atmosphere glow (procedural-planet-plan P3): a top-level
     // "atmosphere" block { center:[x,y,z], radius, enabled? } drives the renderer's
     // scattering pass (Metal today; other backends ignore it). Absent clears it.
     if (root.contains("atmosphere")) {
         const json& at = root["atmosphere"];
-        AtmosphereParams ap = atmosphereParamsFor(parseVec3(at.value("center", json())),
+        AtmosphereRenderParams ap = atmosphereParamsFor(parseVec3(at.value("center", json())),
                                                   at.value("radius", 20.0f));
         ap.enabled = at.value("enabled", true);
         renderer.setAtmosphere(ap);
     } else {
-        AtmosphereParams off;
+        AtmosphereRenderParams off;
         renderer.setAtmosphere(off);   // enabled=false by default
     }
 

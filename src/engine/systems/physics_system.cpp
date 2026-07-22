@@ -11,6 +11,11 @@ bool PhysicsSystem::initialize(engine::JobSystem* jobs) { return physics.initial
 void PhysicsSystem::shutdown() { physics.shutdown(); }
 
 void PhysicsSystem::createBodies(World& world) {
+    // Scene gravity (a level singleton): apply it to the Jolt world so a space
+    // level can zero gravity and the player floats. Idempotent — one Jolt
+    // SetGravity as bodies are created; absent leaves the engine default.
+    world.each<SceneGravity>([this](Entity, SceneGravity& g) { physics.setGravity(g.value); });
+
     bool created = false;
     // Collect newly created entities to set initial velocity after iteration
     struct NewBody { PhysicsBodyId id; Vec3 velocity; };

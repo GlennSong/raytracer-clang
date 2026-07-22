@@ -146,7 +146,7 @@ struct MetalRenderer::Impl {
     // pass over the HDR scene, driven by setAtmosphere(). `atmosphere` holds the
     // scene-set params (centre/radii/coeffs); camera + sun are filled per frame.
     id<MTLRenderPipelineState> atmospherePipeline;
-    AtmosphereParams atmosphere;
+    AtmosphereRenderParams atmosphere;
 
     // Screen-space reflections (SSR)
     id<MTLTexture> ssrTexture;         // RGBA16Float — SSR result (rgb=color, a=confidence)
@@ -1944,7 +1944,7 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
 
-void MetalRenderer::setAtmosphere(const AtmosphereParams& atmosphere) {
+void MetalRenderer::setAtmosphere(const AtmosphereRenderParams& atmosphere) {
     impl->atmosphere = atmosphere;
 }
 
@@ -2860,7 +2860,7 @@ void MetalRenderer::endFrame() {
     // before post — so the limb halo blooms. Camera + sun come from this frame's
     // uniforms; centre/radii/coeffs from setAtmosphere().
     if (impl->atmosphere.enabled && impl->atmospherePipeline && impl->sceneColorTexture) {
-        const AtmosphereParams& ap = impl->atmosphere;
+        const AtmosphereRenderParams& ap = impl->atmosphere;
         const GPULight& sun = impl->lightUniforms.lights[0];
         AtmosphereUniforms au;
         au.invViewProjection = impl->cameraUniforms.invViewProjection;

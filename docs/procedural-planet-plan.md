@@ -277,10 +277,12 @@ Original design notes:
   MotionSystem). Renders on the **existing PBR path** (vertex-colour biomes), so it
   needs none of the P2–P6 shaders. Verified headless: `LevelScene::load` bakes the
   planet (`tests/test_level_scene.cpp::planet_demo_level_loads_and_bakes_a_planet`).
-  Run it: `./build/viewer planet_demo` (fly) or `--edit planet_demo` (orbit). A
-  space backdrop wants a starfield HDR (`environment.hdr`); the offline path honours
-  the dark `skyColor`. The atmosphere/cloud/water/star **shaders** wire in on top
-  (Tier 2, device).
+  Run it: `./build/viewer planet_demo` (fly) or `--edit planet_demo` (orbit). The
+  level sets `"gravity": [0,0,0]` (new `SceneGravity` component → PhysicsSystem) so
+  the player floats instead of falling, and `environment.hdr` → a generated
+  starfield (`planet_preview starfield`). Listed in the web gallery
+  (`web/scenes.json`) for the WebGPU `viewer_web` build. The Metal atmosphere pass is
+  wired (P3 realtime); cloud/water/star + the WebGPU atmosphere wire in on top.
 
 ---
 

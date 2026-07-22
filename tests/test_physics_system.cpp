@@ -70,6 +70,26 @@ TEST_CASE(physics_system_drives_transform) {
     physics.shutdown();
 }
 
+TEST_CASE(physics_system_scene_gravity_zero_stops_the_fall) {
+    // A space level (planet_demo) sets "gravity": [0,0,0]; the loader adds a
+    // SceneGravity singleton, PhysicsSystem applies it, and a body with no floor
+    // under it floats instead of falling forever.
+    World world;
+    Entity g = world.create();
+    world.add<SceneGravity>(g, SceneGravity{Vec3(0, 0, 0)});
+    Entity sphere = addDynamicSphere(world, Vec3(0, 5, 0));   // nothing beneath it
+
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.createBodies(world);                              // applies SceneGravity
+    Real startY = world.get<Transform>(sphere)->position.y;
+    for (int i = 0; i < 240; i++) physics.step(world, 1.0 / 60.0);
+    Real endY = world.get<Transform>(sphere)->position.y;
+
+    CHECK_APPROX(endY, startY, 0.05);   // did NOT fall (contrast: default gravity above)
+    physics.shutdown();
+}
+
 TEST_CASE(physics_system_updates_prev_transform) {
     World world;
     addFloor(world);

@@ -50,6 +50,14 @@ struct Velocity {
     Vec3 angular;
 };
 
+// Scene-wide physics gravity (a singleton the level loader adds from a top-level
+// "gravity" field). PhysicsSystem applies it to the Jolt world each step, so a
+// space level can set [0,0,0] and the player floats instead of falling. Absent =
+// the engine default (Earth). Vec3 is axis·(m/s²).
+struct SceneGravity {
+    Vec3 value{0.0, -9.81, 0.0};
+};
+
 // Debug render layers (device: "layers for roads, buildings, simulation ... so
 // we can turn them on or off"). A bit set on Renderable::renderLayer /
 // InstanceGroup::renderLayer; RenderSystem skips the draw when the same bit is

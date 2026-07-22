@@ -1,6 +1,13 @@
 {
   "scenes": [
     {
+      "id": "planet_demo",
+      "title": "Planet",
+      "tag": "Space",
+      "blurb": "A procedural planet from orbit — a displaced, biome-coloured cube-sphere spinning under a fixed sun, with a physically-based atmosphere glow.",
+      "thumb": "thumbs/planet_demo.webp"
+    },
+    {
       "id": "living_city",
       "title": "Living City",
       "tag": "Agents",
