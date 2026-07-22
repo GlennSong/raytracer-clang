@@ -3,6 +3,7 @@ build-cmake/
 build-imgui/
 build-profiler/
 build-native/
+build-phys/
 build-web/
 build-web-oz/
 raytracer
