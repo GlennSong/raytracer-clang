@@ -226,13 +226,19 @@ Original design notes:
   white → red), not uniform white dots; sits at the reverse-Z far plane.
 - **Night side:** emissive city lights on the dark hemisphere for Earth-likes.
 
-### P7 — Motion, camera, scene, authoring
-- **Axial spin + tilt** — a small `PlanetSystem` advances `Transform.orientation`;
-  clouds and gas bands run their own clocks.
+### P7 — Motion, camera, scene, authoring — **Lua binding DONE; system/scene pending**
+- **Lua binding** ✅ `planet.rocky{ preset=, seed=, radius=, face_res=, relief=,
+  sea_level= }` → displaced biome mesh; `planet.gas{ preset= }` → smooth sphere;
+  `planet.gas_texture{ preset=, seed= }` → equirect albedo Image. Registered in
+  `procgen_bindings`, tested in `tests/test_script_vm.cpp` (runs under CMake, which
+  links Lua — `make test` is Lua-free). Planets are now first-class procgen content
+  like `flora.lua` / `city.lua` (ADR-0023/0025).
+- **Axial spin + tilt** (pending) — a small `PlanetSystem` advancing
+  `Transform.orientation`; clouds and gas bands on their own clocks.
 - **Orbit camera** ✅ `OrbitCameraController` targets the origin; clamp near/far
   around the body + starfield.
-- **Lua `planet{}` binding** in `procgen_bindings` so a body is authored like
-  `flora.lua` / `city.lua`, plus a `planet_demo` scene.
+- **Scene** (pending, device) — a `planet_demo` level wiring a planet + atmosphere +
+  starfield + sun into the viewer.
 
 ---
 

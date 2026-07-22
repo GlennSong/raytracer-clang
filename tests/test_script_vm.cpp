@@ -88,6 +88,50 @@ TEST_CASE(procgen_script_builds_an_sdf_sphere_mesh) {
     CHECK(onSurface);
 }
 
+TEST_CASE(procgen_script_builds_a_rocky_planet) {
+    // planet.rocky (procedural-planet-plan): a preset + seed authored in Lua returns
+    // a displaced, biome-coloured cube-sphere Mesh — planets as first-class procgen
+    // content like flora/city (ADR-0023/0025).
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    CHECK(runProcgenMesh(vm, "return planet.rocky{ preset = 'mars', seed = 1, face_res = 16 }",
+                         mesh, &err));
+    if (!mesh) { CHECK(false); return; }
+    CHECK(mesh->vertices.size() > 100);
+    CHECK(mesh->indices.size() % 3 == 0);
+    // Displaced roughly onto a sphere, and biome colour was baked to vertex colour.
+    double meanR = 0.0;
+    bool coloured = false;
+    for (const Vertex& v : mesh->vertices) {
+        meanR += v.position.length();
+        if (v.color.x > 0.01 || v.color.y > 0.01) coloured = true;
+    }
+    meanR /= mesh->vertices.size();
+    CHECK(meanR > 900.0 && meanR < 1100.0);   // default radius 1000
+    CHECK(coloured);
+
+    // A different preset produces a different mesh (Moon vs Mars).
+    std::shared_ptr<RenderMesh> moon;
+    CHECK(runProcgenMesh(vm, "return planet.rocky{ preset = 'moon', seed = 1, face_res = 16 }",
+                         moon, &err));
+    if (moon) CHECK(moon->vertices.front().color.x != mesh->vertices.front().color.x);
+}
+
+TEST_CASE(procgen_script_bakes_a_gas_giant_texture) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> mesh;
+    std::string err;
+    // The smooth gas-giant sphere...
+    CHECK(runProcgenMesh(vm, "return planet.gas{ preset = 'jupiter', face_res = 12 }", mesh, &err));
+    if (mesh) CHECK(mesh->vertices.size() > 50);
+    // ...and its banded albedo image bakes without error (the value type is an Image).
+    CHECK(runProcgenMesh(vm, "local t = planet.gas_texture{ preset='jupiter', seed=2 }; return planet.gas{}",
+                         mesh, &err));
+}
+
 TEST_CASE(procgen_script_builds_a_curved_car_shell) {
     // mesh.car_shell (ADR-0062): the Lua vehicle recipes (the player's car) use
     // the SAME lofted body generator the NPC fleet instances — one body path.

@@ -23,6 +23,7 @@
 #include "../procgen/texture_field.h"
 #include "../procgen/terrain_field.h"
 #include "../procgen/erosion.h"
+#include "../procgen/planet.h"
 #include "../mesh_builder.h"
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
@@ -2688,6 +2689,73 @@ void registerMetatable(lua_State* L, const char* name, lua_CFunction gc) {
     lua_pop(L, 1);
 }
 
+// --- planet.* : procedural planets seen from space (procedural-planet-plan) ---
+
+// Preset name (field "preset" of the table at `idx`, default `fallback`).
+std::string presetName(lua_State* L, int idx, const char* fallback) {
+    std::string name = fallback;
+    if (lua_istable(L, idx)) {
+        lua_getfield(L, idx, "preset");
+        if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+    return name;
+}
+
+uint32_t seedField(lua_State* L, int idx) {
+    return lua_istable(L, idx) ? static_cast<uint32_t>(optField(L, idx, "seed", 0.0)) : 0u;
+}
+
+PlanetParams planetParamsFromLua(lua_State* L, int idx) {
+    std::string preset = presetName(L, idx, "mars");
+    PlanetParams p = preset == "moon" ? planetMoon()
+                   : (preset == "earth" || preset == "earthlike") ? planetEarthlike()
+                                                                   : planetMars();
+    if (lua_istable(L, idx)) {
+        p.radius = static_cast<float>(optField(L, idx, "radius", p.radius));
+        p.faceRes = static_cast<int>(optField(L, idx, "face_res", p.faceRes));
+        p.reliefFraction = optField(L, idx, "relief", p.reliefFraction);
+        p.seaLevel = optField(L, idx, "sea_level", p.seaLevel);
+    }
+    return p;
+}
+
+GasGiantParams gasParamsFromLua(lua_State* L, int idx) {
+    std::string preset = presetName(L, idx, "jupiter");
+    GasGiantParams p = preset == "neptune" ? gasGiantNeptune() : gasGiantJupiter();
+    if (lua_istable(L, idx)) {
+        p.radius = static_cast<float>(optField(L, idx, "radius", p.radius));
+        p.faceRes = static_cast<int>(optField(L, idx, "face_res", p.faceRes));
+        p.texWidth = static_cast<int>(optField(L, idx, "tex_width", p.texWidth));
+        p.texHeight = static_cast<int>(optField(L, idx, "tex_height", p.texHeight));
+    }
+    return p;
+}
+
+// planet.rocky{ preset='mars'|'moon'|'earth', seed=, radius=, face_res=, relief=,
+// sea_level= } -> a displaced, biome-coloured cube-sphere Mesh.
+int l_planet_rocky(lua_State* L) {
+    PlanetParams p = planetParamsFromLua(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(generatePlanet(p, seedField(L, 1))));
+    return 1;
+}
+
+// planet.gas{ preset='jupiter'|'neptune', radius=, face_res= } -> the smooth
+// cube-sphere Mesh (pair with planet.gas_texture for the banded albedo).
+int l_planet_gas(lua_State* L) {
+    GasGiantParams p = gasParamsFromLua(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(generateGasGiantMesh(p)));
+    return 1;
+}
+
+// planet.gas_texture{ preset=, seed=, tex_width=, tex_height= } -> the seamless
+// equirectangular albedo Image (bind to the gas-giant mesh's albedoMap).
+int l_planet_gas_texture(lua_State* L) {
+    GasGiantParams p = gasParamsFromLua(L, 1);
+    pushImage(L, std::make_shared<TextureData>(generateGasGiantTexture(p, seedField(L, 1))));
+    return 1;
+}
+
 }  // namespace
 
 std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
@@ -2962,6 +3030,15 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setglobal(L, "terrain");
     lua_pushcfunction(L, l_scatter);
     lua_setglobal(L, "scatter");
+
+    static const luaL_Reg kPlanetFns[] = {
+        {"rocky", l_planet_rocky},
+        {"gas", l_planet_gas},
+        {"gas_texture", l_planet_gas_texture},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kPlanetFns);
+    lua_setglobal(L, "planet");
 }
 
 bool runProcgenMesh(ScriptVM& vm, const std::string& code,

@@ -96,6 +96,9 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
+	$(SRC_DIR)/engine/procgen/cellular.cpp \
+	$(SRC_DIR)/engine/procgen/planet.cpp \
+	$(SRC_DIR)/engine/procgen/atmosphere.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
