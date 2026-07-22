@@ -143,6 +143,19 @@ struct GpuSsr {
     float texel[4];           // xy = 1/effectRes, zw = full resolution
 };
 
+// Atmosphere pass uniform (matches the WGSL `Atmosphere` in atmosphere.wgsl).
+// vec4/mat4-aligned (std140). Filled from globals_ + the AtmosphereRenderParams.
+struct GpuAtmosphere {
+    float invViewProjection[16];
+    float cameraPosition[4];   // xyz
+    float sunDirection[4];     // xyz toward the sun
+    float planetCenter[4];     // xyz
+    float sunColor[4];         // rgb, w = intensity
+    float rayleighCoeff[4];    // rgb per length
+    float radii[4];            // x planetRadius, y atmosphereRadius, z rayleighH, w mieH
+    float mie[4];              // x mieCoeff, y mieG, z viewSamples, w lightSamples
+};
+
 // Per-draw uniforms (group 0, binding 1, dynamic). Matches the WGSL `DrawData`.
 struct GpuDraw {
     float    model[16];          // column-major
@@ -305,6 +318,10 @@ public:
         if (ssrUbo_) { wgpuBufferRelease(ssrUbo_); ssrUbo_ = nullptr; }
         if (ssrPipeline_) { wgpuRenderPipelineRelease(ssrPipeline_); ssrPipeline_ = nullptr; }
         if (ssrLayout_) { wgpuBindGroupLayoutRelease(ssrLayout_); ssrLayout_ = nullptr; }
+        if (atmosphereGroup_) { wgpuBindGroupRelease(atmosphereGroup_); atmosphereGroup_ = nullptr; }
+        if (atmosphereUbo_) { wgpuBufferRelease(atmosphereUbo_); atmosphereUbo_ = nullptr; }
+        if (atmospherePipeline_) { wgpuRenderPipelineRelease(atmospherePipeline_); atmospherePipeline_ = nullptr; }
+        if (atmosphereLayout_) { wgpuBindGroupLayoutRelease(atmosphereLayout_); atmosphereLayout_ = nullptr; }
         if (shadowPipeline_) { wgpuRenderPipelineRelease(shadowPipeline_); shadowPipeline_ = nullptr; }
         if (shadowSampleGroup_) { wgpuBindGroupRelease(shadowSampleGroup_); shadowSampleGroup_ = nullptr; }
         if (shadowIdxGroup_) { wgpuBindGroupRelease(shadowIdxGroup_); shadowIdxGroup_ = nullptr; }
@@ -516,6 +533,12 @@ public:
         envCurrentView_ = view ? view : envDefaultView_;
         if (bindGroup_) rebuildBindGroup();
         if (skyBindGroup_) rebuildSkyBindGroup();
+    }
+
+    // Planetary atmosphere glow (procedural-planet-plan P3). Stored here and
+    // consumed by recordAtmosphere() each frame; disabled params skip the pass.
+    void setAtmosphere(const AtmosphereRenderParams& atmosphere) override {
+        atmosphere_ = atmosphere;
     }
 
     RenderStats getRenderStats() const override { return stats_; }
@@ -773,6 +796,7 @@ public:
 
         recordShadowPasses(encoder, plan);
         recordMainPass(encoder, plan);
+        recordAtmosphere(encoder, plan);   // additive glow into HDR, before post
         recordPostStack(encoder, plan);
         recordComposite(encoder, backbuffer, plan);
 
@@ -1335,6 +1359,63 @@ private:
             bloomPass(bloomViewA_, bloomBlurPipeline_, bloomBlurVGroup_);     // B -> A (V)
         }
 
+    }
+
+    // Planetary atmosphere glow (procedural-planet-plan P3): a fullscreen triangle
+    // that raymarches the atmosphere shell and ADDITIVELY blends the in-scattered
+    // light into the HDR scene — after geometry, before post, so the limb halo
+    // blooms (mirrors the Metal integration). No scene fetch: the additive blend
+    // (One, One) composites, so the pass reads only its uniform and writes hdrView_
+    // with loadOp Load. Camera + sun come from this frame's globals_; centre/radii/
+    // coeffs from setAtmosphere().
+    void recordAtmosphere(WGPUCommandEncoder encoder, const FramePlan& /*plan*/) {
+        if (!atmosphere_.enabled || !atmospherePipeline_ || !hdrView_) return;
+        const AtmosphereRenderParams& ap = atmosphere_;
+
+        GpuAtmosphere ua = {};
+        std::memcpy(ua.invViewProjection, globals_.invViewProjection,
+                    sizeof(ua.invViewProjection));
+        std::memcpy(ua.cameraPosition, globals_.cameraPosition, sizeof(ua.cameraPosition));
+        // Sun direction/colour from the scene's primary directional light.
+        ua.sunDirection[0] = (float)sunDir_.x;
+        ua.sunDirection[1] = (float)sunDir_.y;
+        ua.sunDirection[2] = (float)sunDir_.z;
+        ua.sunDirection[3] = 0.0f;
+        ua.planetCenter[0] = (float)ap.planetCenter.x;
+        ua.planetCenter[1] = (float)ap.planetCenter.y;
+        ua.planetCenter[2] = (float)ap.planetCenter.z;
+        ua.planetCenter[3] = 0.0f;
+        // Sun colour: the directional light's colour (lights[0], the sun when
+        // present), matching the Metal integration — not the sky's sun tint.
+        ua.sunColor[0] = globals_.lights[0].colorOuter[0];
+        ua.sunColor[1] = globals_.lights[0].colorOuter[1];
+        ua.sunColor[2] = globals_.lights[0].colorOuter[2];
+        ua.sunColor[3] = ap.sunIntensity;
+        ua.rayleighCoeff[0] = (float)ap.rayleighCoeff.x;
+        ua.rayleighCoeff[1] = (float)ap.rayleighCoeff.y;
+        ua.rayleighCoeff[2] = (float)ap.rayleighCoeff.z;
+        ua.rayleighCoeff[3] = 0.0f;
+        ua.radii[0] = ap.planetRadius;
+        ua.radii[1] = ap.atmosphereRadius;
+        ua.radii[2] = ap.rayleighScaleHeight;
+        ua.radii[3] = ap.mieScaleHeight;
+        ua.mie[0] = ap.mieCoeff;
+        ua.mie[1] = ap.mieG;
+        ua.mie[2] = (float)ap.viewSamples;
+        ua.mie[3] = (float)ap.lightSamples;
+        wgpuQueueWriteBuffer(queue_, atmosphereUbo_, 0, &ua, sizeof(ua));
+
+        WGPURenderPassColorAttachment a = {};
+        a.view = hdrView_; a.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        a.loadOp = WGPULoadOp_Load; a.storeOp = WGPUStoreOp_Store;   // keep the scene
+        WGPURenderPassDescriptor pd = {};
+        pd.colorAttachmentCount = 1; pd.colorAttachments = &a;
+        WGPURenderPassEncoder e = wgpuCommandEncoderBeginRenderPass(encoder, &pd);
+        wgpuRenderPassEncoderSetPipeline(e, atmospherePipeline_);
+        wgpuRenderPassEncoderSetBindGroup(e, 0, atmosphereGroup_, 0, nullptr);
+        wgpuRenderPassEncoderDraw(e, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(e);
+        wgpuRenderPassEncoderRelease(e);
     }
 
     // Tone map / grade the HDR scene (+ AO/SSR/bloom) onto the swapchain.
@@ -2165,10 +2246,81 @@ private:
         wgpuPipelineLayoutRelease(rPipeLayout);
         wgpuShaderModuleRelease(rModule);
 
+        // Atmosphere pipeline (procedural-planet-plan P3): { uniform } -> HDR, an
+        // additive fullscreen glow. No scene texture — the blend (One, One) adds
+        // the in-scatter over the HDR scene, so it shares the HDR target it writes.
+        WGPUShaderSourceWGSL atWgsl = {};
+        atWgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+        atWgsl.code = sv(kAtmosphereWgsl);
+        WGPUShaderModuleDescriptor atModDesc = {};
+        atModDesc.nextInChain = &atWgsl.chain;
+        WGPUShaderModule atModule = wgpuDeviceCreateShaderModule(device_, &atModDesc);
+
+        WGPUBindGroupLayoutEntry atEntry = {};
+        atEntry.binding = 0;
+        atEntry.visibility = WGPUShaderStage_Fragment;
+        atEntry.buffer.type = WGPUBufferBindingType_Uniform;
+        atEntry.buffer.minBindingSize = sizeof(GpuAtmosphere);
+        WGPUBindGroupLayoutDescriptor atblDesc = {};
+        atblDesc.entryCount = 1;
+        atblDesc.entries = &atEntry;
+        atmosphereLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &atblDesc);
+
+        WGPUPipelineLayoutDescriptor atplDesc = {};
+        atplDesc.bindGroupLayoutCount = 1;
+        atplDesc.bindGroupLayouts = &atmosphereLayout_;
+        WGPUPipelineLayout atPipeLayout = wgpuDeviceCreatePipelineLayout(device_, &atplDesc);
+        // Additive blend: dst stays, src (the glow) is added on top.
+        WGPUBlendState atBlend = {};
+        atBlend.color.operation = WGPUBlendOperation_Add;
+        atBlend.color.srcFactor = WGPUBlendFactor_One;
+        atBlend.color.dstFactor = WGPUBlendFactor_One;
+        atBlend.alpha.operation = WGPUBlendOperation_Add;
+        atBlend.alpha.srcFactor = WGPUBlendFactor_One;
+        atBlend.alpha.dstFactor = WGPUBlendFactor_One;
+        WGPUColorTargetState atColor = {};
+        atColor.format = kHdrFormat;
+        atColor.blend = &atBlend;
+        atColor.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState atFrag = {};
+        atFrag.module = atModule; atFrag.entryPoint = sv("fs_main");
+        atFrag.targetCount = 1; atFrag.targets = &atColor;
+        WGPURenderPipelineDescriptor atDesc = {};
+        atDesc.layout = atPipeLayout;
+        atDesc.vertex.module = atModule; atDesc.vertex.entryPoint = sv("vs_main");
+        atDesc.vertex.bufferCount = 0;
+        atDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        atDesc.primitive.frontFace = WGPUFrontFace_CCW;
+        atDesc.primitive.cullMode = WGPUCullMode_None;
+        atDesc.depthStencil = nullptr;
+        atDesc.fragment = &atFrag;
+        atDesc.multisample.count = 1; atDesc.multisample.mask = 0xFFFFFFFF;
+        atmospherePipeline_ = wgpuDeviceCreateRenderPipeline(device_, &atDesc);
+        wgpuPipelineLayoutRelease(atPipeLayout);
+        wgpuShaderModuleRelease(atModule);
+
+        // Atmosphere uniform buffer + bind group (only references the buffer, so it
+        // survives resizes — no rebuild needed).
+        WGPUBufferDescriptor atBufDesc = {};
+        atBufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        atBufDesc.size = sizeof(GpuAtmosphere);
+        atmosphereUbo_ = wgpuDeviceCreateBuffer(device_, &atBufDesc);
+        WGPUBindGroupEntry atGrpEntry = {};
+        atGrpEntry.binding = 0;
+        atGrpEntry.buffer = atmosphereUbo_;
+        atGrpEntry.offset = 0;
+        atGrpEntry.size = sizeof(GpuAtmosphere);
+        WGPUBindGroupDescriptor atGrpDesc = {};
+        atGrpDesc.layout = atmosphereLayout_;
+        atGrpDesc.entryCount = 1;
+        atGrpDesc.entries = &atGrpEntry;
+        atmosphereGroup_ = wgpuDeviceCreateBindGroup(device_, &atGrpDesc);
+
         if (!pipeline_ || !shadowPipeline_ || !skyPipeline_ || !compositePipeline_
             || !bloomBrightPipeline_ || !bloomBlurPipeline_ || !ssaoPipeline_
             || !instancedPipeline_ || !instancedShadowPipeline_
-            || !terrainPipeline_ || !terrainShadowPipeline_ || !ssrPipeline_) {
+            || !terrainPipeline_ || !terrainShadowPipeline_ || !ssrPipeline_
+            || !atmospherePipeline_) {
             LOG_ERROR("WebGPU: render pipeline creation failed");
             return false;
         }
@@ -2662,6 +2814,13 @@ private:
     WGPURenderPipeline ssrPipeline_ = nullptr;
     WGPUBuffer ssrUbo_ = nullptr;
     WGPUBindGroup ssrGroup_ = nullptr;
+
+    // Planetary atmosphere glow (procedural-planet-plan P3): additive HDR pass.
+    WGPUBindGroupLayout atmosphereLayout_ = nullptr;
+    WGPURenderPipeline atmospherePipeline_ = nullptr;
+    WGPUBuffer atmosphereUbo_ = nullptr;
+    WGPUBindGroup atmosphereGroup_ = nullptr;
+    AtmosphereRenderParams atmosphere_;   // enabled=false by default -> pass skipped
 
     WGPUBindGroupLayout bindLayout_ = nullptr;
     WGPURenderPipeline pipeline_ = nullptr;

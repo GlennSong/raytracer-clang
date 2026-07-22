@@ -182,10 +182,15 @@ Mars's thin haze are visible without a GPU.
 Realtime shaders authored (a fullscreen scattering pass porting the CPU reference)
 for all three backends: `shaders/vulkan/atmosphere.frag` (**SPIR-V compile-verified
 with glslang**), `shaders/metal/atmosphere.metal`, `shaders/webgpu/atmosphere.wgsl`
-(compile-unverified — no Metal/WGSL toolchain in CI). **Pending (device):** the
-per-backend **pipeline wiring** (upload `AtmosphereUniforms`, insert the pass after
-the scene / before the composite tone map) — tracked in `docs/renderer-parity.md` —
-plus **multiple scattering** (Hillaire) for the glowing daylit limb.
+(**naga-validated WGSL**; Metal compile-unverified — no Metal toolchain in CI).
+**Pipeline wiring done on Metal AND WebGPU** as an additive glow (loadOp Load, blend
+One+One) — the pass runs after the scene / before post so the limb halo blooms,
+driven by `setAtmosphere()` from the level's top-level `atmosphere` block (Metal:
+`metal_renderer.mm endFrame`; WebGPU: `webgpu_renderer.cpp recordAtmosphere`). The
+WebGPU build couldn't be compiled on-device here (the emdawnwebgpu port host is
+blocked by egress policy), so the C++ is device-unverified; the WGSL is naga-clean.
+**Pending (device):** a Metal/WebGPU run to flip 🟡→✅, Vulkan wiring, plus
+**multiple scattering** (Hillaire) for the glowing daylit limb.
 
 Full design (the realtime target) — implement **Hillaire 2020**:
 1. **Transmittance LUT** (2D: altitude × sun-zenith) — Rayleigh + Mie + ozone

@@ -1,11 +1,13 @@
 // Planetary atmosphere — WebGPU port of the CPU reference (engine/procgen/
 // atmosphere.cpp) and the Vulkan atmosphere.frag, single-scattering Rayleigh + Mie
-// (procedural-planet-plan P3). A fullscreen pass: reconstruct the world ray per
-// pixel, raymarch the atmosphere shell, composite the in-scattered light over the
-// HDR scene by its transmittance. The planet is an analytic sphere so the march
-// clips at the surface without a depth fetch. Output is scene-linear HDR; the
-// composite pass tone maps. Its own group(0) layout, independent of the mesh
-// pipeline. (Verified against the SPIR-V build of atmosphere.frag; no WGSL
+// (procedural-planet-plan P3). A fullscreen pass that raymarches the atmosphere
+// shell and ADDITIVELY blends the in-scattered light into the HDR scene, run after
+// the main pass and before post so the limb halo blooms — mirroring the Metal
+// integration (fragmentAtmosphereGlow). The planet is an analytic sphere so the
+// march clips at the surface without a depth fetch; the scene is not sampled (the
+// additive blend does the compositing), so the pass reads only its uniform and can
+// share the HDR target it writes to. Output is scene-linear HDR; composite tone
+// maps. (Math verified against the SPIR-V build of atmosphere.frag; no WGSL
 // validator in this environment, so the pipeline wiring is the on-device step.)
 
 struct Atmosphere {
@@ -19,9 +21,7 @@ struct Atmosphere {
   mie               : vec4<f32>,   // x mieCoeff, y mieG, z viewSamples, w lightSamples
 };
 
-@group(0) @binding(0) var sceneTex  : texture_2d<f32>;
-@group(0) @binding(1) var sceneSamp : sampler;
-@group(0) @binding(2) var<uniform> a : Atmosphere;
+@group(0) @binding(0) var<uniform> a : Atmosphere;
 
 const PI : f32 = 3.14159265359;
 
@@ -81,8 +81,6 @@ fn fs_main(@location(0) inUV : vec2<f32>) -> @location(0) vec4<f32> {
   let dir = normalize(world.xyz / world.w - camPos);
   let sunDir = normalize(a.sunDirection.xyz);
 
-  let scene = textureSample(sceneTex, sceneSamp, inUV).rgb;
-
   let planetRadius = a.radii.x;
   let atmosRadius  = a.radii.y;
   let rH = a.radii.z;
@@ -96,13 +94,13 @@ fn fs_main(@location(0) inUV : vec2<f32>) -> @location(0) vec4<f32> {
   let origin = camPos - a.planetCenter.xyz;
 
   let atmos = raySphere(origin, dir, atmosRadius);
-  if (!atmos.hit) { return vec4<f32>(scene, 1.0); }
+  if (!atmos.hit) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 
   var tMax = atmos.t1;
   let planet = raySphere(origin, dir, planetRadius);
   if (planet.hit && planet.t0 > 0.0) { tMax = min(tMax, planet.t0); }
   let tEnter = max(0.0, atmos.t0);
-  if (tMax <= tEnter) { return vec4<f32>(scene, 1.0); }
+  if (tMax <= tEnter) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 
   let steps = max(2, viewSamples);
   let ds = (tMax - tEnter) / f32(steps);
@@ -144,8 +142,7 @@ fn fs_main(@location(0) inUV : vec2<f32>) -> @location(0) vec4<f32> {
   let mieTerm = inscatM * (mieCoeff * phaseM);
   let inScatter = a.sunColor.rgb * (rayleigh + mieTerm) * a.sunColor.w;
 
-  let tauView = rayleighCoeff * odViewR + vec3<f32>(mieCoeff * odViewM);
-  let viewTransmittance = exp(-tauView);
-
-  return vec4<f32>(scene * viewTransmittance + inScatter, 1.0);
+  // Additive-only: the pipeline blends src+dst (One, One), so the glow adds over
+  // the HDR scene without a scene fetch (no view-transmittance dimming term).
+  return vec4<f32>(inScatter, 1.0);
 }
