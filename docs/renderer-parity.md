@@ -67,6 +67,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | HDR equirectangular environment | ✅ | 🟡 | Vulkan samples the equirect directly (`uploadTextureHDR`); unverified. |
 | IBL: irradiance + GGX-prefilter + BRDF LUT | ✅ | ⚠️ | **BRDF LUT done** (🟡, baked split-sum at set 0 binding 3, used by `mesh.frag`). Irradiance + GGX-prefilter still use the analytic sky/equirect approximation — the baked prefiltered + irradiance cubes are the next IBL stage. |
 | Reflection probes (parallax) | ✅ | ❌ | `setReflectionProbes` is a no-op in Vulkan. **Parity gap.** |
+| Planetary atmosphere (single scattering) | 🟡 | 🟡 | Fullscreen Rayleigh+Mie raymarch (procedural-planet-plan P3), a port of the tested CPU reference `engine/procgen/atmosphere.cpp`. Shaders authored for all three backends: `shaders/vulkan/atmosphere.frag` (**SPIR-V compile-verified**), `shaders/metal/atmosphere.metal`, `shaders/webgpu/atmosphere.wgsl` (both compile-unverified — no toolchain in CI). **Pipeline wiring not done on any backend**: needs the AtmosphereUniforms upload + the pass inserted after the scene / before composite, per backend. No device run yet. Multiple scattering (Hillaire) is the follow-up. |
 
 ### Screen-space post
 | Feature | Metal | Vulkan | Notes |

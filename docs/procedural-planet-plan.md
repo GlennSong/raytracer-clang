@@ -168,9 +168,15 @@ Mars presets. Pure and headless — unit-tested for the physical invariants
 (`tests/test_atmosphere.cpp`: transmittance ∈ (0,1] decreasing with path, blue
 scatters more than red, blue zenith sky, dim shadowed night side, Earth-blue vs
 Mars-red) and it drives `planet_preview` so the blue limb, soft terminator, and
-Mars's thin haze are visible without a GPU. **Pending (device):** the realtime GPU
-port (a direct translation of this maths into the LUT stages below) + **multiple
-scattering** (Hillaire) for the glowing daylit limb.
+Mars's thin haze are visible without a GPU.
+
+Realtime shaders authored (a fullscreen scattering pass porting the CPU reference)
+for all three backends: `shaders/vulkan/atmosphere.frag` (**SPIR-V compile-verified
+with glslang**), `shaders/metal/atmosphere.metal`, `shaders/webgpu/atmosphere.wgsl`
+(compile-unverified — no Metal/WGSL toolchain in CI). **Pending (device):** the
+per-backend **pipeline wiring** (upload `AtmosphereUniforms`, insert the pass after
+the scene / before the composite tone map) — tracked in `docs/renderer-parity.md` —
+plus **multiple scattering** (Hillaire) for the glowing daylit limb.
 
 Full design (the realtime target) — implement **Hillaire 2020**:
 1. **Transmittance LUT** (2D: altitude × sun-zenith) — Rayleigh + Mie + ozone

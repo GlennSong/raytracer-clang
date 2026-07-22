@@ -674,7 +674,8 @@ function(rt_build_vulkan_shaders)
     file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
     set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
-                   ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag)
+                   ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
+                   atmosphere.frag)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
